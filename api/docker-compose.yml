@@ -1,0 +1,30 @@
+# LawFirmAI FastAPI Docker Compose
+# Local development environment for FastAPI backend
+
+version: '3.8'
+
+services:
+  lawfirm-api:
+    build: .
+    ports:
+      - "8000:8000"  # FastAPI interface
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=sqlite:///./data/lawfirm.db
+      - CHROMA_DB_PATH=./data/chroma_db
+      - LOG_LEVEL=DEBUG
+      - DEBUG=true
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - ../model_cache:/app/model_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
