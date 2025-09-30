@@ -6,7 +6,7 @@ Retrieval-Augmented Generation 서비스
 import logging
 from typing import List, Dict, Any, Optional
 from ..models.model_manager import ModelManager
-from ..data.vector_store import VectorStore
+from ..data.vector_store import LegalVectorStore
 from ..data.database import DatabaseManager
 from ..utils.config import Config
 
@@ -17,7 +17,7 @@ class RAGService:
     """RAG 서비스 클래스"""
     
     def __init__(self, config: Config, model_manager: ModelManager, 
-                 vector_store: VectorStore, database: DatabaseManager):
+                 vector_store: LegalVectorStore, database: DatabaseManager):
         """RAG 서비스 초기화"""
         self.config = config
         self.model_manager = model_manager
@@ -30,27 +30,20 @@ class RAGService:
     def retrieve_relevant_documents(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """관련 문서 검색"""
         try:
-            # 쿼리 임베딩 생성
-            query_embedding = self.model_manager.encode_text(query)
-            if not query_embedding:
-                self.logger.warning("Failed to encode query")
-                return []
-            
             # 벡터 저장소에서 유사한 문서 검색
-            import numpy as np
-            query_array = np.array(query_embedding)
-            similar_docs = self.vector_store.search_similar(query_array, top_k)
+            similar_docs = self.vector_store.search(query, top_k)
             
             # 결과 포맷팅
             results = []
-            for idx, similarity, metadata in similar_docs:
+            for doc in similar_docs:
+                metadata = doc.get("metadata", {})
                 result = {
                     "document_id": metadata.get("document_id"),
-                    "title": metadata.get("title", ""),
-                    "content": metadata.get("content", ""),
-                    "similarity": similarity,
-                    "source": metadata.get("source", ""),
-                    "chunk_index": metadata.get("chunk_index", 0)
+                    "title": metadata.get("law_name", ""),
+                    "content": doc.get("text", ""),
+                    "similarity": doc.get("score", 0.0),
+                    "source": metadata.get("document_type", ""),
+                    "chunk_index": metadata.get("chunk_id", 0)
                 }
                 results.append(result)
             
@@ -129,26 +122,15 @@ class RAGService:
     def add_document(self, document: Dict[str, Any]) -> bool:
         """문서 추가"""
         try:
-            # 문서 임베딩 생성
-            doc_embeddings = self.model_manager.encode_documents([document])
-            if not doc_embeddings:
-                self.logger.warning("Failed to encode document")
-                return False
+            # 벡터 저장소에 문서 추가
+            success = self.vector_store.add_documents([document])
             
-            # 벡터 저장소에 추가
-            for embedding_data in doc_embeddings:
-                embedding = embedding_data["embedding"]
-                metadata = {
-                    "document_id": embedding_data["document_id"],
-                    "title": embedding_data["title"],
-                    "content": embedding_data["content"],
-                    "chunk_index": 0
-                }
-                
-                self.vector_store.add_embedding(embedding, metadata)
+            if success:
+                self.logger.info(f"Document added: {document.get('law_name', document.get('case_name', 'Unknown'))}")
+            else:
+                self.logger.warning("Failed to add document to vector store")
             
-            self.logger.info(f"Document added: {document.get('title', 'Unknown')}")
-            return True
+            return success
             
         except Exception as e:
             self.logger.error(f"Error adding document: {e}")
@@ -162,7 +144,7 @@ class RAGService:
             return {
                 "vector_store": vector_stats,
                 "model_status": self.model_manager.get_model_status(),
-                "total_documents": vector_stats.get("total_embeddings", 0)
+                "total_documents": vector_stats.get("document_count", 0)
             }
             
         except Exception as e:

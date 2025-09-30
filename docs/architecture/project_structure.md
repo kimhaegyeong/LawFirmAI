@@ -43,6 +43,12 @@ LawFirmAI/
 │       └── logger.py
 ├── data/                    # 데이터 파일
 │   ├── raw/                 # 원본 데이터
+│   │   ├── constitutional_decisions/  # 헌재결정례 원본 데이터
+│   │   │   ├── yearly_2025_*/         # 연도별 수집 데이터
+│   │   │   └── checkpoint.json         # 수집 체크포인트
+│   │   ├── precedents/                # 판례 원본 데이터
+│   │   ├── laws/                      # 법령 원본 데이터
+│   │   └── legal_terms/               # 법률 용어 원본 데이터
 │   ├── processed/           # 전처리된 데이터
 │   ├── embeddings/          # 벡터 임베딩
 │   └── models/              # 모델 파일
@@ -54,7 +60,15 @@ LawFirmAI/
 ├── scripts/                 # 유틸리티 스크립트
 │   ├── setup.py            # 환경 설정
 │   ├── benchmark_models.py
-│   └── benchmark_vector_stores.py
+│   ├── benchmark_vector_stores.py
+│   ├── constitutional_decision/  # 헌재결정례 수집 스크립트
+│   │   ├── collect_by_date.py     # 날짜 기반 수집 메인 스크립트
+│   │   ├── date_based_collector.py # 날짜 기반 수집 클래스
+│   │   ├── constitutional_collector.py # 기존 수집 클래스
+│   │   └── collect_constitutional_decisions.py # 기존 수집 스크립트
+│   ├── precedent/           # 판례 수집 스크립트
+│   ├── legal_term/         # 법률 용어 수집 스크립트
+│   └── collect_all_data.py # 전체 데이터 수집 스크립트
 ├── docs/                    # 문서
 │   ├── api/                 # API 문서
 │   ├── architecture/        # 아키텍처 문서

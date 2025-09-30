@@ -18,7 +18,7 @@ graph TB
     subgraph "Service Layer"
         CHAT[Chat Service]
         RAG[RAG Service]
-        SEARCH[Search Service]
+        HYBRID[Hybrid Search Service]
         ANALYSIS[Analysis Service]
     end
     
@@ -45,13 +45,14 @@ graph TB
     MW --> AUTH
     AUTH --> CHAT
     AUTH --> RAG
-    AUTH --> SEARCH
+    AUTH --> HYBRID
     AUTH --> ANALYSIS
     
     CHAT --> MODEL_MGR
     RAG --> SENTBERT
     RAG --> FAISS
-    SEARCH --> SQLITE
+    HYBRID --> SQLITE
+    HYBRID --> FAISS
     ANALYSIS --> KOBART
     
     MODEL_MGR --> KOBART
@@ -59,7 +60,7 @@ graph TB
     
     CHAT --> CACHE
     RAG --> CACHE
-    SEARCH --> CACHE
+    HYBRID --> CACHE
     
     SQLITE --> FAISS
     MODEL_MGR --> HF
@@ -75,6 +76,7 @@ sequenceDiagram
     participant FastAPI
     participant ChatService
     participant RAGService
+    participant HybridSearch
     participant ModelManager
     participant Database
     participant VectorStore
@@ -84,10 +86,12 @@ sequenceDiagram
     FastAPI->>ChatService: process_message()
     
     ChatService->>RAGService: search_relevant_docs()
-    RAGService->>VectorStore: similarity_search()
-    VectorStore-->>RAGService: 관련 문서 반환
-    RAGService->>Database: get_document_details()
-    Database-->>RAGService: 문서 상세 정보
+    RAGService->>HybridSearch: hybrid_search()
+    HybridSearch->>Database: exact_search()
+    HybridSearch->>VectorStore: semantic_search()
+    Database-->>HybridSearch: 정확한 매칭 결과
+    VectorStore-->>HybridSearch: 의미적 검색 결과
+    HybridSearch-->>RAGService: 통합된 검색 결과
     RAGService-->>ChatService: 컨텍스트 문서
     
     ChatService->>ModelManager: generate_response()
@@ -106,7 +110,7 @@ graph LR
     subgraph "Core Services"
         CS[Chat Service]
         RS[RAG Service]
-        SS[Search Service]
+        HS[Hybrid Search Service]
         AS[Analysis Service]
     end
     
@@ -130,9 +134,9 @@ graph LR
     
     CS --> RS
     CS --> MM
-    RS --> VS
-    RS --> DB
-    SS --> DB
+    RS --> HS
+    HS --> VS
+    HS --> DB
     AS --> KM
     
     MM --> KM
@@ -141,7 +145,7 @@ graph LR
     
     EP --> CS
     EP --> RS
-    EP --> SS
+    EP --> HS
     EP --> AS
     
     MW --> EP
@@ -161,7 +165,7 @@ graph TD
     subgraph "source/services"
         D[chat_service.py]
         E[rag_service.py]
-        F[search_service.py]
+        F[hybrid_search_service.py]
         G[analysis_service.py]
     end
     
@@ -185,9 +189,9 @@ graph TD
     
     D --> C
     D --> E
-    E --> B
-    E --> I
-    E --> H
+    E --> F
+    F --> B
+    F --> I
     F --> H
     G --> A
     

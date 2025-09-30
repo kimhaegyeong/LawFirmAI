@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """데이터베이스 관리 클래스"""
     
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str = "data/lawfirm.db"):
         """데이터베이스 관리자 초기화"""
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,30 +54,105 @@ class DatabaseManager:
                 )
             """)
             
-            # 법률 문서 테이블
+            # 법률 문서 테이블 (하이브리드 검색용)
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS legal_documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    document_type TEXT NOT NULL,
                     title TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    document_type TEXT NOT NULL,
                     source_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            # 벡터 임베딩 테이블
+            # 법령 메타데이터 테이블
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS document_embeddings (
+                CREATE TABLE IF NOT EXISTS law_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    document_id INTEGER NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    embedding BLOB NOT NULL,
+                    document_id TEXT NOT NULL,
+                    law_name TEXT,
+                    article_number INTEGER,
+                    promulgation_date TEXT,
+                    enforcement_date TEXT,
+                    department TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (document_id) REFERENCES legal_documents (id)
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
                 )
             """)
+            
+            # 판례 메타데이터 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL,
+                    case_number TEXT,
+                    court_name TEXT,
+                    decision_date TEXT,
+                    case_type TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 헌재결정례 메타데이터 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS constitutional_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL,
+                    case_number TEXT,
+                    decision_date TEXT,
+                    case_type TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 법령해석례 메타데이터 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS interpretation_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL,
+                    interpretation_date TEXT,
+                    department TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 행정규칙 메타데이터 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS administrative_rule_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL,
+                    promulgation_date TEXT,
+                    enforcement_date TEXT,
+                    department TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 자치법규 메타데이터 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS local_ordinance_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL,
+                    promulgation_date TEXT,
+                    enforcement_date TEXT,
+                    local_government TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 인덱스 생성 (검색 성능 향상)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_law_metadata_name ON law_metadata(law_name)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_court ON precedent_metadata(court_name)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_date ON precedent_metadata(decision_date)")
             
             conn.commit()
             logger.info("Database tables created successfully")
@@ -127,3 +202,198 @@ class DatabaseManager:
         """채팅 기록 삭제"""
         query = "DELETE FROM chat_history WHERE session_id = ?"
         return self.execute_update(query, (session_id,))
+    
+    def add_document(self, doc_data: dict, law_meta: dict = None, prec_meta: dict = None, 
+                    const_meta: dict = None, interp_meta: dict = None, 
+                    admin_meta: dict = None, local_meta: dict = None) -> bool:
+        """문서 추가 (하이브리드 검색용)"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 문서 기본 정보 저장
+                cursor.execute("""
+                    INSERT OR REPLACE INTO documents 
+                    (id, document_type, title, content, source_url)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    doc_data['id'],
+                    doc_data['document_type'],
+                    doc_data['title'],
+                    doc_data['content'],
+                    doc_data.get('source_url')
+                ))
+                
+                # 법령 메타데이터 저장
+                if law_meta and doc_data['document_type'] == 'law':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO law_metadata 
+                        (document_id, law_name, article_number, promulgation_date, enforcement_date, department)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        law_meta.get('law_name'),
+                        law_meta.get('article_number'),
+                        law_meta.get('promulgation_date'),
+                        law_meta.get('enforcement_date'),
+                        law_meta.get('department')
+                    ))
+                
+                # 판례 메타데이터 저장
+                if prec_meta and doc_data['document_type'] == 'precedent':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO precedent_metadata 
+                        (document_id, case_number, court_name, decision_date, case_type)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        prec_meta.get('case_number'),
+                        prec_meta.get('court_name'),
+                        prec_meta.get('decision_date'),
+                        prec_meta.get('case_type')
+                    ))
+                
+                # 헌재결정례 메타데이터 저장
+                if const_meta and doc_data['document_type'] == 'constitutional_decision':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO constitutional_metadata 
+                        (document_id, case_number, decision_date, case_type)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        const_meta.get('case_number'),
+                        const_meta.get('decision_date'),
+                        const_meta.get('case_type')
+                    ))
+                
+                # 법령해석례 메타데이터 저장
+                if interp_meta and doc_data['document_type'] == 'legal_interpretation':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO interpretation_metadata 
+                        (document_id, interpretation_date, department)
+                        VALUES (?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        interp_meta.get('interpretation_date'),
+                        interp_meta.get('department')
+                    ))
+                
+                # 행정규칙 메타데이터 저장
+                if admin_meta and doc_data['document_type'] == 'administrative_rule':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO administrative_rule_metadata 
+                        (document_id, promulgation_date, enforcement_date, department)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        admin_meta.get('promulgation_date'),
+                        admin_meta.get('enforcement_date'),
+                        admin_meta.get('department')
+                    ))
+                
+                # 자치법규 메타데이터 저장
+                if local_meta and doc_data['document_type'] == 'local_ordinance':
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO local_ordinance_metadata 
+                        (document_id, promulgation_date, enforcement_date, local_government)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        doc_data['id'],
+                        local_meta.get('promulgation_date'),
+                        local_meta.get('enforcement_date'),
+                        local_meta.get('local_government')
+                    ))
+                
+                conn.commit()
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error adding document: {e}")
+            return False
+    
+    def search_exact(self, query: str, filters: dict = None, limit: int = 20, offset: int = 0) -> tuple:
+        """정확한 매칭 검색 (하이브리드 검색용)"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 기본 쿼리
+                base_query = """
+                    SELECT d.id, d.title, d.content, d.document_type, d.source_url
+                    FROM documents d
+                    WHERE d.content LIKE ?
+                """
+                params = [f"%{query}%"]
+                
+                # 필터 적용
+                if filters:
+                    if 'document_type' in filters:
+                        base_query += " AND d.document_type = ?"
+                        params.append(filters['document_type'])
+                    
+                    if 'law_name' in filters:
+                        base_query += " AND EXISTS (SELECT 1 FROM law_metadata lm WHERE lm.document_id = d.id AND lm.law_name LIKE ?)"
+                        params.append(f"%{filters['law_name']}%")
+                    
+                    if 'court_name' in filters:
+                        base_query += " AND EXISTS (SELECT 1 FROM precedent_metadata pm WHERE pm.document_id = d.id AND pm.court_name LIKE ?)"
+                        params.append(f"%{filters['court_name']}%")
+                    
+                    if 'department' in filters:
+                        base_query += " AND (EXISTS (SELECT 1 FROM law_metadata lm WHERE lm.document_id = d.id AND lm.department LIKE ?) OR EXISTS (SELECT 1 FROM interpretation_metadata im WHERE im.document_id = d.id AND im.department LIKE ?) OR EXISTS (SELECT 1 FROM administrative_rule_metadata arm WHERE arm.document_id = d.id AND arm.department LIKE ?))"
+                        params.extend([f"%{filters['department']}%", f"%{filters['department']}%", f"%{filters['department']}%"])
+                
+                # 정렬 및 제한
+                base_query += " ORDER BY d.updated_at DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+                
+                # 결과 조회
+                cursor.execute(base_query, params)
+                results = [dict(row) for row in cursor.fetchall()]
+                
+                # 전체 개수 조회
+                count_query = base_query.replace("SELECT d.id, d.title, d.content, d.document_type, d.source_url", "SELECT COUNT(*)")
+                count_query = count_query.replace("ORDER BY d.updated_at DESC LIMIT ? OFFSET ?", "")
+                count_params = params[:-2]  # LIMIT, OFFSET 제거
+                
+                cursor.execute(count_query, count_params)
+                total_count = cursor.fetchone()[0]
+                
+                return results, total_count
+                
+        except Exception as e:
+            logger.error(f"Error in exact search: {e}")
+            return [], 0
+    
+    def get_document_by_id(self, doc_id: str) -> dict:
+        """ID로 문서 조회"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT d.*, 
+                           lm.law_name, lm.article_number, lm.promulgation_date, lm.enforcement_date, lm.department,
+                           pm.case_number, pm.court_name, pm.decision_date, pm.case_type,
+                           cm.case_number as const_case_number, cm.decision_date as const_decision_date, cm.case_type as const_case_type,
+                           im.interpretation_date, im.department as interp_department,
+                           arm.promulgation_date as admin_promulgation_date, arm.enforcement_date as admin_enforcement_date, arm.department as admin_department,
+                           lom.promulgation_date as local_promulgation_date, lom.enforcement_date as local_enforcement_date, lom.local_government
+                    FROM documents d
+                    LEFT JOIN law_metadata lm ON d.id = lm.document_id
+                    LEFT JOIN precedent_metadata pm ON d.id = pm.document_id
+                    LEFT JOIN constitutional_metadata cm ON d.id = cm.document_id
+                    LEFT JOIN interpretation_metadata im ON d.id = im.document_id
+                    LEFT JOIN administrative_rule_metadata arm ON d.id = arm.document_id
+                    LEFT JOIN local_ordinance_metadata lom ON d.id = lom.document_id
+                    WHERE d.id = ?
+                """, (doc_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting document by ID: {e}")
+            return None

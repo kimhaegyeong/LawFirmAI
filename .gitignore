@@ -115,3 +115,6 @@ chroma_db/
 
 # Docker
 .dockerignore
+
+# data
+data/

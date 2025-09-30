@@ -4,13 +4,43 @@ Configuration Management
 """
 
 import os
+import sys
 from typing import Any, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from pathlib import Path
+
+# 한글 출력을 위한 인코딩 설정
+if sys.platform == "win32":
+    # Windows에서 한글 출력을 위한 설정
+    try:
+        import codecs
+        # Windows 콘솔에서 UTF-8 지원 확인 후 설정
+        if hasattr(sys.stdout, 'detach'):
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
+        else:
+            # detach()가 지원되지 않는 경우 다른 방법 사용
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    except Exception:
+        # 인코딩 설정 실패 시 기본 설정 유지
+        pass
+    
+    # 환경변수 인코딩 설정
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 
 class Config(BaseSettings):
     """설정 관리 클래스"""
+    
+    # LAW OPEN API Configuration
+    law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
+    law_firm_ai_api_key: str = Field(default="your-api-key-here", env="LAW_FIRM_AI_API_KEY")
+    
+    class Config:
+        extra = "ignore"  # 추가 필드 무시
     
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
@@ -60,6 +90,29 @@ class Config(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        
+        @classmethod
+        def _load_env_file(cls, env_file: str) -> None:
+            """환경변수 파일 로딩"""
+            env_path = Path(env_file)
+            if env_path.exists():
+                try:
+                    with open(env_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith('#') and '=' in line:
+                                key, value = line.split('=', 1)
+                                os.environ[key.strip()] = value.strip()
+                except Exception as e:
+                    print(f"환경변수 파일 로딩 실패: {e}")
+            else:
+                # .env 파일이 없으면 환경변수에서 직접 설정
+                if not os.getenv("LAW_OPEN_API_OC"):
+                    print("⚠️ LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
+                    print("다음 중 하나의 방법으로 설정하세요:")
+                    print("1. .env 파일 생성: LAW_OPEN_API_OC=your_email@example.com")
+                    print("2. 환경변수 직접 설정: set LAW_OPEN_API_OC=your_email@example.com")
+                    print("3. PowerShell에서: $env:LAW_OPEN_API_OC='your_email@example.com'")
     
     def get(self, key: str, default: Any = None) -> Any:
         """설정 값 조회"""
@@ -72,3 +125,9 @@ class Config(BaseSettings):
     def is_production(self) -> bool:
         """프로덕션 환경 여부"""
         return not self.debug
+    
+    def __init__(self, **kwargs):
+        """초기화 시 환경변수 파일 로딩"""
+        # 환경변수 파일 로딩
+        self.Config._load_env_file(".env")
+        super().__init__(**kwargs)

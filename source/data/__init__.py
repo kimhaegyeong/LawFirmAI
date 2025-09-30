@@ -4,8 +4,8 @@ Data Module
 """
 
 from .database import DatabaseManager
-from .vector_store import VectorStore
-from .data_processor import DataProcessor
+from .vector_store import LegalVectorStore as VectorStore
+from .data_processor import LegalDataProcessor as DataProcessor
 
 __all__ = [
     "DatabaseManager",

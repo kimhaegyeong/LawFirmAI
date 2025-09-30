@@ -6,7 +6,7 @@ Analysis Service
 import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from ..data.data_processor import DataProcessor
+from ..data.data_processor import LegalDataProcessor as DataProcessor
 from ..models.model_manager import ModelManager
 from ..utils.config import Config
 

@@ -7,7 +7,7 @@ import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
 from ..data.database import DatabaseManager
-from ..data.vector_store import VectorStore
+from ..data.vector_store import LegalVectorStore as VectorStore
 from ..models.model_manager import ModelManager
 from ..utils.config import Config
 

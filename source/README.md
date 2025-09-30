@@ -207,23 +207,3 @@ print(result["response"])
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
-
-## 📄 라이선스
-
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
-## 📞 연락처
-
-- **이메일**: schema9@gmail.com
-- **프로젝트 링크**: [https://github.com/your-username/LawFirmAI](https://github.com/your-username/LawFirmAI)
-
-## 🙏 감사의 말
-
-- [HuggingFace](https://huggingface.co/) - AI 모델 제공
-- [FastAPI](https://fastapi.tiangolo.com/) - 웹 프레임워크
-- [Gradio](https://gradio.app/) - UI 프레임워크
-- [ChromaDB](https://www.trychroma.com/) - 벡터 데이터베이스
-
----
-
-*LawFirmAI는 법률 전문가의 도구로 사용되며, 법률 자문을 대체하지 않습니다. 중요한 법률 문제는 반드시 자격을 갖춘 법률 전문가와 상담하시기 바랍니다.*
