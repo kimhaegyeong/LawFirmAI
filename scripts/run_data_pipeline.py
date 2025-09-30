@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 통합 데이터 파이프라인 실행 스크립트
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 모델 크기 및 메모리 사용량 분석 및 최적화 스크립트
 LawFirmAI 프로젝트 - TASK 1.2.3

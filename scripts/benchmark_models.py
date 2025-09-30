@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 KoBART vs KoGPT-2 성능 비교 벤치마킹 스크립트
 LawFirmAI 프로젝트 - TASK 1.2.1

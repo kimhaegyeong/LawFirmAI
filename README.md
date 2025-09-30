@@ -12,9 +12,15 @@
 - **Q&A**: 자주 묻는 법률 질문 답변
 - **RAG 기반 답변**: 검색 증강 생성으로 정확한 답변 제공
 
-## 🔧 최신 업데이트 (2025-09-26)
+## 🔧 최신 업데이트
 
-### 네트워크 안정성 향상
+### 2025-09-30: Raw 데이터 전처리 파이프라인 구축
+- ✅ **전처리 스크립트 구현**: 수집된 raw 데이터를 벡터 DB에 적합한 형태로 변환
+- ✅ **배치 전처리 지원**: 특정 데이터 유형만 선택적으로 전처리 가능
+- ✅ **데이터 검증 시스템**: 전처리된 데이터의 품질 자동 검증
+- ✅ **법률 용어 정규화**: 국가법령정보센터 OpenAPI 기반 용어 정규화 시스템
+
+### 2025-09-26: 네트워크 안정성 향상
 - ✅ **DNS 해결 실패 처리**: 네트워크 연결 문제 자동 감지 및 재시도
 - ✅ **타임아웃 설정 개선**: 연결 타임아웃(30초)과 읽기 타임아웃(120초) 분리
 - ✅ **재시도 로직 강화**: 지수 백오프 방식으로 재시도 간격 점진적 증가
@@ -140,6 +146,50 @@ python scripts/collect_data_only.py --mode multiple --oc your_email_id --types l
 # 벡터DB 구축 (개별 타입별)
 python scripts/build_vector_db.py --mode laws
 python scripts/build_vector_db.py --mode multiple --types laws precedents constitutional
+```
+
+### 📦 데이터 전처리 (NEW)
+
+수집된 raw 데이터를 벡터 DB에 적합한 형태로 전처리합니다.
+
+#### 전처리 실행
+
+```bash
+# 전체 전처리 실행 (모든 데이터 유형)
+python scripts/preprocess_raw_data.py
+
+# 특정 데이터 유형만 전처리
+python scripts/batch_preprocess.py --data-type laws
+python scripts/batch_preprocess.py --data-type precedents
+python scripts/batch_preprocess.py --data-type constitutional
+python scripts/batch_preprocess.py --data-type interpretations
+python scripts/batch_preprocess.py --data-type terms
+
+# 드라이런 모드 (계획만 확인)
+python scripts/batch_preprocess.py --data-type all --dry-run
+
+# 전처리된 데이터 검증
+python scripts/validate_processed_data.py
+
+# 특정 데이터 유형만 검증
+python scripts/validate_processed_data.py --data-type laws
+```
+
+#### 전처리 기능
+
+- ✅ **텍스트 정리**: HTML 태그 제거, 공백 정규화, 특수문자 처리
+- ✅ **법률 용어 정규화**: 국가법령정보센터 API 기반 용어 표준화
+- ✅ **텍스트 청킹**: 벡터 검색에 최적화된 크기로 분할 (200-3000자)
+- ✅ **법률 엔티티 추출**: 법률명, 조문, 사건번호, 법원명 등 자동 추출
+- ✅ **품질 검증**: 완성도, 정확도, 일관성 자동 검증
+- ✅ **중복 제거**: 해시 기반 중복 데이터 자동 제거
+
+#### 상세 문서
+
+- [데이터 전처리 계획서](docs/development/raw_data_preprocessing_plan.md)
+- [법률 용어 정규화 전략](docs/development/legal_term_normalization_strategy.md)
+
+```bash
 
 # 기존 통합 스크립트 (레거시)
 python scripts/collect_laws.py                    # 법령 수집

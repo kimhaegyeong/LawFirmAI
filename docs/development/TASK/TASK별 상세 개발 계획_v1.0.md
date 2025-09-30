@@ -764,12 +764,41 @@ python scripts/precedent/collect_by_date.py --strategy yearly --target 5000 --re
 
 ---
 
-### TASK 2.2: 데이터 전처리 및 구조화 (법령/판례 데이터) ✅ **완료**
+### TASK 2.2: 데이터 전처리 및 구조화 (수집된 Raw 데이터) ⏳ **진행 중**
 **담당자**: 데이터 사이언티스트  
-**예상 소요시간**: 5일  
-**실제 소요시간**: 5일  
+**예상 소요시간**: 5-7시간  
 **우선순위**: High  
-**상태**: 완료 (2024-01-XX)
+**상태**: 진행 중 (2025-09-30)
+
+#### 📝 업데이트 내용 (2025-09-30)
+**전처리 대상 Raw 데이터 현황**:
+- ✅ 법령 데이터: 21개 파일 수집 완료
+- ✅ 판례 데이터: 연도별 수집 완료 (2024-2025년)
+- ✅ 헌재결정례: 2024-2025년 데이터 수집 완료
+- ✅ 법령해석례: 배치별 수집 완료
+- ✅ 법률 용어: 세션별 수집 완료
+
+**새로 구현된 전처리 스크립트**:
+- ✅ `scripts/preprocess_raw_data.py` - 메인 전처리 파이프라인
+- ✅ `scripts/batch_preprocess.py` - 배치 전처리 스크립트
+- ✅ `scripts/validate_processed_data.py` - 데이터 검증 스크립트
+- ✅ `docs/development/raw_data_preprocessing_plan.md` - 전처리 계획서
+
+**사용법**:
+```bash
+# 전체 전처리 실행
+python scripts/preprocess_raw_data.py
+
+# 특정 데이터 유형만 전처리
+python scripts/batch_preprocess.py --data-type laws
+python scripts/batch_preprocess.py --data-type precedents
+
+# 드라이런 모드 (계획만 확인)
+python scripts/batch_preprocess.py --data-type all --dry-run
+
+# 전처리된 데이터 검증
+python scripts/validate_processed_data.py
+```
 
 #### 📋 상세 작업 계획
 

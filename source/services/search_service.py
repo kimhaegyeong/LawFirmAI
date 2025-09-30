@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Search Service
 검색 서비스

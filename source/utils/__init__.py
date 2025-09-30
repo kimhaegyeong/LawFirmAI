@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Utils Module
 유틸리티 모듈

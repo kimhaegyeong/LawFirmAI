@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 API Endpoints
 RESTful API 엔드포인트 정의

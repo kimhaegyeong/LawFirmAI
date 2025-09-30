@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 RAG Service
 Retrieval-Augmented Generation 서비스

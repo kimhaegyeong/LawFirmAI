@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 데이터 수집 전용 스크립트 (JSON 저장)
 

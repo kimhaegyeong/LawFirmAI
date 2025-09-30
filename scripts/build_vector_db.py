@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 벡터DB 구축 전용 스크립트 (JSON → 벡터DB)
 

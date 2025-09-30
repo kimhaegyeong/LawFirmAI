@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Chat Service
 채팅 메시지 처리 서비스

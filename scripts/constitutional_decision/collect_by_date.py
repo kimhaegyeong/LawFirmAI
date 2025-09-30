@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 헌재결정례 날짜 기반 수집 스크립트
 

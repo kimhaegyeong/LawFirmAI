@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 행정심판례 수집기 클래스 (collect_precedents.py 구조 참고)
 """

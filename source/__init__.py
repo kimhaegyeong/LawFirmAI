@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 LawFirmAI - 법률 AI 어시스턴트
 HuggingFace Spaces 배포용 법률 AI 시스템

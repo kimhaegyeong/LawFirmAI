@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 API Middleware
 미들웨어 설정 및 관리

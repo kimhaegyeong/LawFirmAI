@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 LawFirmAI - Gradio Web Interface
 HuggingFace Spaces 배포용 메인 애플리케이션

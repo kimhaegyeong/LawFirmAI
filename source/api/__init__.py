@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 API Module
 RESTful API 관련 모듈

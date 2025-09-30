@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 날짜 기반 판례 수집 실행 스크립트
 

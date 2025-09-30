@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 행정규칙 데이터 수집 스크립트 (국가법령정보센터 OpenAPI 기반)
 

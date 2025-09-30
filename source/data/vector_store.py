@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Vector Store
 벡터 임베딩 생성 및 관리 모듈

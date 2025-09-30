@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 FAISS vs ChromaDB 벡터 스토어 성능 비교 벤치마킹 스크립트
 LawFirmAI 프로젝트 - TASK 1.2.2

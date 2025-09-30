@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 LawFirmAI Test Suite
 테스트 모듈

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 판례 수집 스크립트 (리팩토링된 버전)
 

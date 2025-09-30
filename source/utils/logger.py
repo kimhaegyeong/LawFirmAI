@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Logging Configuration
 로깅 설정 및 관리
