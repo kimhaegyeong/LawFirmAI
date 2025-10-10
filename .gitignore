@@ -1,0 +1,120 @@
+# LawFirmAI .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data Files
+data/raw/
+data/processed/
+data/embeddings/
+*.db
+*.sqlite
+*.sqlite3
+
+# Model Files
+models/
+model_cache/
+*.bin
+*.safetensors
+*.onnx
+
+# Logs
+logs/
+*.log
+
+# Vector Store
+chroma_db/
+faiss_index/
+
+# Benchmark Results
+benchmark_results/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary Files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Coverage Reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Documentation
+docs/_build/
+site/
+
+# HuggingFace Cache
+.cache/
+huggingface/
+
+# ChromaDB
+chroma_db/
+
+# Docker
+.dockerignore
+
+# data
+data/
