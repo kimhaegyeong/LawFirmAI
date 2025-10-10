@@ -1,0 +1,698 @@
+# LawFirmAI - Cursor Development Rules
+
+## 프로젝트 개요
+- **프로젝트명**: LawFirmAI (법률 AI 어시스턴트)
+- **목표**: HuggingFace Spaces 배포를 위한 법률 AI 시스템 개발
+- **기술 스택**: FastAPI + Gradio + KoBART/KoGPT-2 + FAISS + SQLite
+
+## 프로젝트 구조 규칙
+
+### 디렉토리 구조
+```
+LawFirmAI/
+├── gradio/                  # Gradio 애플리케이션
+│   ├── app.py              # Gradio 메인 애플리케이션
+│   ├── requirements.txt    # Gradio 의존성
+│   ├── Dockerfile         # Gradio Docker 설정
+│   └── docker-compose.yml # Gradio 로컬 개발 환경
+├── api/                    # FastAPI 애플리케이션
+│   ├── main.py            # FastAPI 메인 애플리케이션
+│   ├── requirements.txt   # FastAPI 의존성
+│   ├── Dockerfile        # FastAPI Docker 설정
+│   └── docker-compose.yml # FastAPI 로컬 개발 환경
+├── source/                 # Core Modules (공통 소스 코드)
+│   ├── __init__.py
+│   ├── models/            # AI 모델 관련
+│   │   ├── __init__.py
+│   │   ├── kobart_model.py
+│   │   ├── sentence_bert.py
+│   │   └── model_manager.py
+│   ├── services/          # 비즈니스 로직
+│   │   ├── __init__.py
+│   │   ├── chat_service.py
+│   │   ├── rag_service.py
+│   │   ├── search_service.py
+│   │   └── analysis_service.py
+│   ├── data/              # 데이터 처리
+│   │   ├── __init__.py
+│   │   ├── database.py
+│   │   ├── vector_store.py
+│   │   └── data_processor.py
+│   ├── api/               # API 관련
+│   │   ├── __init__.py
+│   │   ├── endpoints.py
+│   │   ├── middleware.py
+│   │   └── schemas.py
+│   └── utils/             # 유틸리티
+│       ├── __init__.py
+│       ├── config.py
+│       ├── logger.py
+│       └── helpers.py
+├── data/                  # 데이터 파일
+│   ├── raw/               # 원본 데이터
+│   ├── processed/         # 전처리된 데이터
+│   └── embeddings/        # 벡터 임베딩
+├── tests/                 # 테스트 코드
+├── docs/                  # 문서
+├── scripts/               # 유틸리티 스크립트
+├── .env.example           # 환경 변수 템플릿
+├── .gitignore             # Git 무시 파일
+└── README.md              # 프로젝트 문서
+```
+
+## 코딩 규칙
+
+### 1. 파일 명명 규칙
+- **Python 파일**: snake_case (예: `chat_service.py`)
+- **클래스**: PascalCase (예: `ChatService`)
+- **함수/변수**: snake_case (예: `process_message`)
+- **상수**: UPPER_SNAKE_CASE (예: `MAX_RETRY_COUNT`)
+
+### 2. Import 규칙
+```python
+# 표준 라이브러리
+import os
+import sys
+from typing import List, Dict, Optional
+
+# 서드파티 라이브러리
+import torch
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI
+from transformers import AutoTokenizer
+
+# 로컬 모듈
+from source.models.kobart_model import KoBARTModel
+from source.services.chat_service import ChatService
+from source.utils.config import Config
+```
+
+### 3. 클래스 구조 규칙
+```python
+class ServiceName:
+    """서비스 클래스에 대한 간단한 설명"""
+    
+    def __init__(self, config: Config):
+        """초기화 메서드"""
+        self.config = config
+        self._initialize_components()
+    
+    def _initialize_components(self):
+        """내부 컴포넌트 초기화 (private 메서드)"""
+        pass
+    
+    def public_method(self, param: str) -> str:
+        """공개 메서드에 대한 설명"""
+        pass
+```
+
+### 4. 에러 처리 규칙
+```python
+import logging
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+def safe_operation(self, data: str) -> Optional[str]:
+    """안전한 연산 수행"""
+    try:
+        result = self._process_data(data)
+        return result
+    except ValueError as e:
+        logger.error(f"Value error in safe_operation: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error in safe_operation: {e}")
+        raise
+```
+
+## 기술 스택별 규칙
+
+### 1. FastAPI 규칙
+```python
+# api/main.py
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List, Optional
+import sys
+import os
+
+# source 모듈 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'source'))
+
+from services.chat_service import ChatService
+
+app = FastAPI(title="LawFirmAI API", version="1.0.0")
+
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    confidence: float
+    sources: List[str]
+
+# 서비스 인스턴스 생성
+chat_service = ChatService()
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """채팅 엔드포인트"""
+    try:
+        # 비즈니스 로직 처리
+        response = chat_service.process_message(request.message)
+        return ChatResponse(
+            response=response,
+            confidence=0.9,
+            sources=[]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+### 2. Gradio 규칙
+```python
+# gradio/app.py
+import gradio as gr
+import sys
+import os
+
+# source 모듈 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'source'))
+
+from services.chat_service import ChatService
+
+def create_gradio_interface():
+    """Gradio 인터페이스 생성"""
+    chat_service = ChatService()
+    
+    def process_chat(message, history):
+        """채팅 처리 함수"""
+        response = chat_service.process_message(message)
+        return response
+    
+    interface = gr.ChatInterface(
+        fn=process_chat,
+        title="법률 AI 어시스턴트",
+        description="법률 관련 질문에 답변해드립니다.",
+        examples=["계약서 검토 요청", "판례 검색", "법령 해설"]
+    )
+    
+    return interface
+
+if __name__ == "__main__":
+    interface = create_gradio_interface()
+    interface.launch(server_name="0.0.0.0", server_port=7860)
+```
+
+### 3. 데이터베이스 규칙
+```python
+import sqlite3
+from contextlib import contextmanager
+from typing import List, Dict, Any
+
+class DatabaseManager:
+    """데이터베이스 관리 클래스"""
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._create_tables()
+    
+    @contextmanager
+    def get_connection(self):
+        """데이터베이스 연결 컨텍스트 매니저"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    
+    def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+        """쿼리 실행"""
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+```
+
+### 4. AI 모델 규칙
+```python
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from typing import List, Dict, Any
+
+class ModelManager:
+    """모델 관리 클래스"""
+    
+    def __init__(self, model_name: str, device: str = "cpu"):
+        self.model_name = model_name
+        self.device = device
+        self.model = None
+        self.tokenizer = None
+        self._load_model()
+    
+    def _load_model(self):
+        """모델 로딩"""
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            )
+            self.model.to(self.device)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model {self.model_name}: {e}")
+    
+    def generate_response(self, prompt: str, max_length: int = 512) -> str:
+        """응답 생성"""
+        inputs = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs,
+                max_length=max_length,
+                num_return_sequences=1,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+        
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return response
+```
+
+## 성능 최적화 규칙
+
+### 1. 메모리 관리
+- 모델 로딩 시 지연 로딩 사용
+- 불필요한 변수 즉시 삭제 (`del variable`)
+- 메모리 사용량 모니터링
+
+### 2. 캐싱 전략
+```python
+from functools import lru_cache
+from typing import Optional
+
+class CachedService:
+    """캐싱이 적용된 서비스"""
+    
+    def __init__(self):
+        self._cache = {}
+    
+    @lru_cache(maxsize=128)
+    def cached_operation(self, key: str) -> str:
+        """캐싱된 연산"""
+        if key in self._cache:
+            return self._cache[key]
+        
+        result = self._expensive_operation(key)
+        self._cache[key] = result
+        return result
+```
+
+### 3. 비동기 처리
+```python
+import asyncio
+from typing import List, Dict, Any
+
+class AsyncService:
+    """비동기 서비스"""
+    
+    async def process_batch(self, items: List[str]) -> List[Dict[str, Any]]:
+        """배치 처리"""
+        tasks = [self._process_item(item) for item in items]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return results
+    
+    async def _process_item(self, item: str) -> Dict[str, Any]:
+        """개별 아이템 처리"""
+        # 비동기 처리 로직
+        pass
+```
+
+## 테스트 규칙
+
+### 1. 단위 테스트
+```python
+import pytest
+from unittest.mock import Mock, patch
+from source.services.chat_service import ChatService
+
+class TestChatService:
+    """ChatService 테스트 클래스"""
+    
+    def setup_method(self):
+        """테스트 설정"""
+        self.chat_service = ChatService()
+    
+    def test_process_message_success(self):
+        """메시지 처리 성공 테스트"""
+        message = "계약서 검토 요청"
+        result = self.chat_service.process_message(message)
+        assert isinstance(result, str)
+        assert len(result) > 0
+    
+    def test_process_message_empty_input(self):
+        """빈 입력 처리 테스트"""
+        with pytest.raises(ValueError):
+            self.chat_service.process_message("")
+    
+    @patch('source.models.kobart_model.KoBARTModel')
+    def test_process_message_with_mock(self, mock_model):
+        """모킹을 사용한 테스트"""
+        mock_model.return_value.generate.return_value = "테스트 응답"
+        result = self.chat_service.process_message("테스트")
+        assert result == "테스트 응답"
+```
+
+### 2. 통합 테스트
+```python
+# tests/integration/test_api.py
+import pytest
+import sys
+import os
+from fastapi.testclient import TestClient
+
+# source 모듈 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'source'))
+
+from api.main import app
+
+client = TestClient(app)
+
+def test_chat_endpoint():
+    """채팅 엔드포인트 테스트"""
+    response = client.post(
+        "/api/chat",
+        json={"message": "계약서 검토 요청"}
+    )
+    assert response.status_code == 200
+    assert "response" in response.json()
+
+# tests/integration/test_gradio.py
+import pytest
+import sys
+import os
+
+# source 모듈 경로 추가
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'source'))
+
+from gradio.app import create_gradio_interface
+
+def test_gradio_interface():
+    """Gradio 인터페이스 테스트"""
+    interface = create_gradio_interface()
+    assert interface is not None
+    assert hasattr(interface, 'launch')
+```
+
+## 문서화 규칙
+
+### 1. 함수 문서화
+```python
+def process_legal_document(
+    document: str,
+    document_type: str = "contract",
+    analysis_depth: int = 1
+) -> Dict[str, Any]:
+    """
+    법률 문서를 분석하고 처리합니다.
+    
+    Args:
+        document (str): 분석할 문서 내용
+        document_type (str, optional): 문서 유형. Defaults to "contract".
+        analysis_depth (int, optional): 분석 깊이 (1-5). Defaults to 1.
+    
+    Returns:
+        Dict[str, Any]: 분석 결과 딕셔너리
+            - summary: 문서 요약
+            - issues: 발견된 문제점
+            - recommendations: 권장사항
+            - confidence: 신뢰도 점수
+    
+    Raises:
+        ValueError: 문서가 비어있거나 유효하지 않은 경우
+        RuntimeError: 분석 과정에서 오류가 발생한 경우
+    
+    Example:
+        >>> result = process_legal_document("계약서 내용...", "contract", 2)
+        >>> print(result["summary"])
+    """
+    pass
+```
+
+### 2. 클래스 문서화
+```python
+class LegalDocumentAnalyzer:
+    """
+    법률 문서 분석을 위한 클래스
+    
+    이 클래스는 계약서, 판례, 법령 등의 법률 문서를 분석하고
+    중요한 정보를 추출하는 기능을 제공합니다.
+    
+    Attributes:
+        model_manager (ModelManager): AI 모델 관리자
+        config (Config): 설정 객체
+        cache (Dict): 분석 결과 캐시
+    
+    Example:
+        >>> analyzer = LegalDocumentAnalyzer(config)
+        >>> result = analyzer.analyze_contract(contract_text)
+    """
+    pass
+```
+
+## 보안 규칙
+
+### 1. 입력 검증
+```python
+from pydantic import BaseModel, validator
+from typing import Optional
+
+class SecureRequest(BaseModel):
+    """보안이 적용된 요청 모델"""
+    message: str
+    user_id: Optional[str] = None
+    
+    @validator('message')
+    def validate_message(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('메시지는 비어있을 수 없습니다')
+        if len(v) > 10000:
+            raise ValueError('메시지가 너무 깁니다')
+        return v.strip()
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        if v and not v.isalnum():
+            raise ValueError('사용자 ID는 영숫자만 허용됩니다')
+        return v
+```
+
+### 2. 환경 변수 관리
+```python
+import os
+from typing import Optional
+
+class Config:
+    """설정 관리 클래스"""
+    
+    def __init__(self):
+        self.database_url = os.getenv("DATABASE_URL", "sqlite:///./data/lawfirm.db")
+        self.model_path = os.getenv("MODEL_PATH", "./models")
+        self.api_key = os.getenv("API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("API_KEY 환경변수가 설정되지 않았습니다")
+```
+
+## 배포 규칙
+
+### 1. Docker 최적화
+
+#### Gradio Dockerfile
+```dockerfile
+# gradio/Dockerfile
+# 멀티스테이지 빌드 사용
+FROM python:3.9-slim as builder
+
+WORKDIR /app
+COPY gradio/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+FROM python:3.9-slim
+
+# 보안을 위한 non-root 사용자 생성
+RUN useradd --create-home --shell /bin/bash app
+USER app
+
+WORKDIR /app
+
+# 빌드된 패키지 복사
+COPY --from=builder /root/.local /home/app/.local
+
+# 애플리케이션 코드 복사
+COPY --chown=app:app gradio/ ./gradio/
+COPY --chown=app:app source/ ./source/
+
+# PATH 설정
+ENV PATH=/home/app/.local/bin:$PATH
+
+EXPOSE 7860
+
+CMD ["python", "gradio/app.py"]
+```
+
+#### FastAPI Dockerfile
+```dockerfile
+# api/Dockerfile
+# 멀티스테이지 빌드 사용
+FROM python:3.9-slim as builder
+
+WORKDIR /app
+COPY api/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+FROM python:3.9-slim
+
+# 보안을 위한 non-root 사용자 생성
+RUN useradd --create-home --shell /bin/bash app
+USER app
+
+WORKDIR /app
+
+# 빌드된 패키지 복사
+COPY --from=builder /root/.local /home/app/.local
+
+# 애플리케이션 코드 복사
+COPY --chown=app:app api/ ./api/
+COPY --chown=app:app source/ ./source/
+
+# PATH 설정
+ENV PATH=/home/app/.local/bin:$PATH
+
+EXPOSE 8000
+
+CMD ["python", "api/main.py"]
+```
+
+### 2. 환경별 설정
+```python
+# config.py
+import os
+from enum import Enum
+
+class Environment(Enum):
+    DEVELOPMENT = "development"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+class Config:
+    def __init__(self):
+        self.env = Environment(os.getenv("ENVIRONMENT", "development"))
+        self.debug = self.env == Environment.DEVELOPMENT
+        self.log_level = "DEBUG" if self.debug else "INFO"
+```
+
+## Git 규칙
+
+### 1. 커밋 메시지 규칙
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+**Type**: feat, fix, docs, style, refactor, test, chore
+**Scope**: models, services, api, data, utils
+**Subject**: 50자 이내, 명령형
+**Body**: 72자 이내로 줄바꿈, 무엇을 왜 변경했는지 설명
+**Footer**: Breaking changes, Issues 참조
+
+**예시**:
+```
+feat(chat): add message validation and error handling
+
+- Add input validation for chat messages
+- Implement proper error handling for invalid inputs
+- Add logging for debugging purposes
+
+Closes #123
+```
+
+### 2. 브랜치 규칙
+- `main`: 프로덕션 브랜치
+- `develop`: 개발 브랜치
+- `feature/`: 기능 개발 브랜치
+- `hotfix/`: 긴급 수정 브랜치
+- `release/`: 릴리스 준비 브랜치
+
+## 성능 모니터링 규칙
+
+### 1. 로깅 설정
+```python
+import logging
+import sys
+from datetime import datetime
+
+def setup_logging(log_level: str = "INFO"):
+    """로깅 설정"""
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f'logs/lawfirm_ai_{datetime.now().strftime("%Y%m%d")}.log')
+        ]
+    )
+```
+
+### 2. 메트릭 수집
+```python
+import time
+from functools import wraps
+
+def measure_time(func):
+    """실행 시간 측정 데코레이터"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        
+        logger.info(f"{func.__name__} executed in {end_time - start_time:.2f} seconds")
+        return result
+    return wrapper
+```
+
+## 코드 리뷰 체크리스트
+
+### 필수 체크 항목
+- [ ] 코드가 프로젝트 구조 규칙을 따르는가?
+- [ ] 함수와 클래스에 적절한 문서화가 있는가?
+- [ ] 에러 처리가 적절히 구현되어 있는가?
+- [ ] 테스트 코드가 작성되어 있는가?
+- [ ] 성능 최적화가 고려되었는가?
+- [ ] 보안 검증이 적용되어 있는가?
+- [ ] 로깅이 적절히 구현되어 있는가?
+
+### 권장 체크 항목
+- [ ] 코드가 재사용 가능한가?
+- [ ] 메모리 사용량이 최적화되어 있는가?
+- [ ] 비동기 처리가 필요한 부분에 적용되었는가?
+- [ ] 캐싱 전략이 적절한가?
+- [ ] 모니터링이 가능한가?
+
+---
+
+이 규칙들은 LawFirmAI 프로젝트의 일관성과 품질을 보장하기 위해 작성되었습니다. 
+프로젝트 진행에 따라 필요에 따라 수정 및 보완하시기 바랍니다.
