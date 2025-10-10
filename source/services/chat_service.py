@@ -6,8 +6,8 @@ Chat Service
 
 import time
 from typing import Dict, List, Optional, Any
-from source.utils.config import Config
-from source.utils.logger import get_logger
+from utils.config import Config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

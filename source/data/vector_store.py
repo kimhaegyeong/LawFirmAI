@@ -244,7 +244,7 @@ class LegalVectorStore:
                 if filters:
                     match = True
                     for key, value in filters.items():
-                        if key in self.document_metadata[idx] and self.document_metadata[idx][key] != value:
+                        if idx < len(self.document_metadata) and key in self.document_metadata[idx] and self.document_metadata[idx][key] != value:
                             match = False
                             break
                     if not match:
@@ -252,8 +252,8 @@ class LegalVectorStore:
                 
                 result = {
                     'score': float(score),
-                    'text': self.document_texts[idx],
-                    'metadata': self.document_metadata[idx]
+                    'text': self.document_texts[idx] if idx < len(self.document_texts) else '',
+                    'metadata': self.document_metadata[idx] if idx < len(self.document_metadata) else {}
                 }
                 results.append(result)
                 
@@ -477,18 +477,39 @@ class LegalVectorStore:
         try:
             filepath = Path(filepath)
             
-            # FAISS 인덱스 로딩
-            self.index = faiss.read_index(str(filepath.with_suffix('.faiss')))
+            # FAISS 인덱스 로딩 - 확장자가 없으면 직접 로드, 있으면 기존 방식 사용
+            if filepath.suffix == '':
+                # 확장자가 없는 경우 직접 로드
+                self.index = faiss.read_index(str(filepath))
+                # 메타데이터 파일명 처리 (simple_vector_index -> simple_vector_metadata.json)
+                metadata_file = filepath.parent / f"{filepath.name.replace('_index', '_metadata')}.json"
+            else:
+                # 확장자가 있는 경우 기존 방식 사용
+                self.index = faiss.read_index(str(filepath.with_suffix('.faiss')))
+                metadata_file = filepath.with_suffix('.json')
             
             # 메타데이터 로딩
-            with open(filepath.with_suffix('.json'), 'r', encoding='utf-8') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
             self.model_name = metadata.get('model_name', self.model_name)
             self.dimension = metadata.get('dimension', self.dimension)
             self.index_type = metadata.get('index_type', self.index_type)
-            self.document_metadata = metadata.get('document_metadata', [])
-            self.document_texts = metadata.get('document_texts', [])
+            
+            # 메타데이터 구조 처리
+            if 'document_metadata' in metadata:
+                self.document_metadata = metadata.get('document_metadata', [])
+            else:
+                # simple_vector_metadata.json 형식 처리
+                self.document_metadata = []
+            
+            if 'document_texts' in metadata:
+                self.document_texts = metadata.get('document_texts', [])
+            elif 'texts' in metadata:
+                # simple_vector_metadata.json 형식 처리
+                self.document_texts = metadata.get('texts', [])
+            else:
+                self.document_texts = []
             
             self.logger.info(f"Index loaded from: {filepath}")
             return True
