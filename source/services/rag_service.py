@@ -6,7 +6,7 @@ Retrieval-Augmented Generation 서비스
 
 import logging
 from typing import List, Dict, Any, Optional
-from ..models.model_manager import ModelManager
+from ..models.model_manager import LegalModelManager
 from ..data.vector_store import LegalVectorStore
 from ..data.database import DatabaseManager
 from ..utils.config import Config
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """RAG 서비스 클래스"""
     
-    def __init__(self, config: Config, model_manager: ModelManager, 
+    def __init__(self, config: Config, model_manager: LegalModelManager, 
                  vector_store: LegalVectorStore, database: DatabaseManager):
         """RAG 서비스 초기화"""
         self.config = config

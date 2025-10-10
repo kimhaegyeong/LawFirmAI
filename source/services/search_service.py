@@ -9,7 +9,7 @@ import re
 from typing import List, Dict, Any, Optional, Tuple
 from ..data.database import DatabaseManager
 from ..data.vector_store import LegalVectorStore as VectorStore
-from ..models.model_manager import ModelManager
+from ..models.model_manager import LegalModelManager
 from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class SearchService:
     """검색 서비스 클래스"""
     
     def __init__(self, config: Config, database: DatabaseManager, 
-                 vector_store: VectorStore, model_manager: ModelManager):
+                 vector_store: VectorStore, model_manager: LegalModelManager):
         """검색 서비스 초기화"""
         self.config = config
         self.database = database
