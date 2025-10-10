@@ -89,8 +89,8 @@ sequenceDiagram
     RAGService->>HybridSearch: hybrid_search()
     HybridSearch->>Database: exact_search()
     HybridSearch->>VectorStore: semantic_search()
-    Database-->>HybridSearch: 정확한 매칭 결과
-    VectorStore-->>HybridSearch: 의미적 검색 결과
+    Database-->>HybridSearch: 정확한 매칭 결과 (24개 문서)
+    VectorStore-->>HybridSearch: 의미적 검색 결과 (FAISS 768차원)
     HybridSearch-->>RAGService: 통합된 검색 결과
     RAGService-->>ChatService: 컨텍스트 문서
     
