@@ -33,11 +33,35 @@ try:
 except ImportError:
     Config = None
 
+# TASK 3.2 하이브리드 검색 시스템 모듈들
+try:
+    from .services.exact_search_engine import ExactSearchEngine
+    from .services.semantic_search_engine import SemanticSearchEngine
+    from .services.result_merger import ResultMerger, ResultRanker
+    from .services.hybrid_search_engine import HybridSearchEngine
+except ImportError:
+    ExactSearchEngine = None
+    SemanticSearchEngine = None
+    ResultMerger = None
+    ResultRanker = None
+    HybridSearchEngine = None
+
+try:
+    from .data.legal_term_normalizer import LegalTermNormalizer
+except ImportError:
+    LegalTermNormalizer = None
+
 __all__ = [
     "LegalModelManager",
     "LegalModelFineTuner",
     "ChatService", 
     "DatabaseManager",
     "VectorStore",
-    "Config"
+    "Config",
+    "ExactSearchEngine",
+    "SemanticSearchEngine", 
+    "ResultMerger",
+    "ResultRanker",
+    "HybridSearchEngine",
+    "LegalTermNormalizer"
 ]

@@ -1,0 +1,13 @@
+{
+  "test_results": {
+    "exact_search": true,
+    "semantic_search": true,
+    "result_merger": true,
+    "hybrid_search": true,
+    "performance": true
+  },
+  "success_rate": 100.0,
+  "passed_tests": 5,
+  "total_tests": 5,
+  "timestamp": "2025-10-10 13:27:45"
+}
