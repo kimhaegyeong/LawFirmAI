@@ -41,6 +41,11 @@ torch>=2.0.0
 transformers>=4.35.0
 sentence-transformers>=2.2.0
 
+# PEFT (Parameter-Efficient Fine-Tuning) - LoRA 파인튜닝용
+peft>=0.7.0
+accelerate>=0.24.0
+bitsandbytes>=0.41.0  # QLoRA 양자화용
+
 # 벡터 데이터베이스
 faiss-cpu>=1.7.0
 
