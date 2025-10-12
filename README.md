@@ -14,6 +14,30 @@
 
 ## 🔧 최신 업데이트
 
+### 2025-10-12: 메트릭 수집 및 모니터링 시스템 구현 완료 📊
+- ✅ **메트릭 서버 독립 실행**: 백그라운드에서 지속적으로 실행되는 메트릭 서버
+- ✅ **메트릭 지속성**: 파일 기반 메트릭 상태 저장/복원 (`data/metrics_state.json`)
+- ✅ **실시간 메트릭 누적**: 페이지 처리 및 법률 수집 시마다 메트릭 업데이트
+- ✅ **Grafana 연동**: 법률 수집 성능 모니터링 대시보드에서 실시간 데이터 확인 가능
+- ✅ **문제 해결**: 메트릭이 0으로 표시되던 문제 해결
+- ✅ **테스트 완료**: 36페이지, 360개 법률 수집 메트릭 정상 기록 확인
+
+### 2025-10-12: Assembly 법률 데이터 전처리 시스템 v3.0 완료 🎯
+- ✅ **순차처리 전용**: 병렬처리 제거로 메모리 관리 개선 및 안정성 향상
+- ✅ **단순화된 메모리 관리**: 복잡한 메모리 모니터링을 단순한 체크로 변경
+- ✅ **예측 가능한 메모리 사용량**: 순차처리로 메모리 사용 패턴 예측 가능
+- ✅ **향상된 디버깅**: 순차처리로 문제 발생 시 원인 파악 용이
+- ✅ **안정적인 처리**: 메모리 부족으로 인한 중단 위험 최소화
+- ✅ **210개 법률 파일 처리**: 순차처리로 안정적으로 모든 파일 처리 완료
+
+### 2025-01-10: Assembly 데이터 수집 시스템 구현 완료 🎯
+- ✅ **웹 스크래핑 시스템**: Playwright 기반 국회 법률정보시스템 데이터 수집
+- ✅ **시작 페이지 지정**: `--start-page` 매개변수로 특정 페이지부터 수집 가능
+- ✅ **체크포인트 시스템**: 중단 시 재개 가능한 진행 상황 저장
+- ✅ **페이지별 저장**: 각 페이지의 데이터를 별도 JSON 파일로 저장
+- ✅ **메모리 관리**: 대용량 데이터 처리 시 메모리 사용량 모니터링
+- ✅ **300개 법률 데이터 수집 완료**: 100% 성공률로 안정적 운영
+
 ### 2025-10-10: 임베딩 시스템 구축 완료 🎯
 - ✅ **SQLite 데이터 마이그레이션**: 기존 24개 문서를 하이브리드 검색용 구조로 변환
 - ✅ **FAISS 벡터 인덱스**: jhgan/ko-sroberta-multitask 모델로 768차원 벡터 생성
@@ -139,6 +163,30 @@ LawFirmAI/
 ### 국가법령정보센터 LAW OPEN API 연동
 
 LawFirmAI는 국가법령정보센터의 LAW OPEN API를 통해 법률 데이터를 수집합니다.
+
+### 국회 법률정보시스템 웹 스크래핑 (NEW)
+
+API 서비스 중단으로 인해 국회 법률정보시스템(https://likms.assembly.go.kr/law)을 대안으로 사용합니다.
+
+```bash
+# Assembly 시스템으로 법률 수집
+python scripts/assembly/collect_laws.py --sample 100
+
+# Assembly 시스템으로 판례 수집 (NEW)
+python scripts/assembly/collect_precedents.py --sample 50
+
+# 분야별 판례 수집 (NEW)
+python scripts/assembly/collect_precedents_by_category.py --category civil --sample 20
+python scripts/assembly/collect_precedents_by_category.py --category criminal --sample 20
+python scripts/assembly/collect_precedents_by_category.py --category family --sample 20
+
+# 모든 분야 한번에 수집
+python scripts/assembly/collect_precedents_by_category.py --all-categories --sample 10
+
+# 특정 페이지부터 수집
+python scripts/assembly/collect_laws.py --sample 50 --start-page 5 --no-resume
+python scripts/assembly/collect_precedents.py --sample 30 --start-page 3 --no-resume
+```
 
 #### 지원 데이터 유형
 
@@ -391,6 +439,46 @@ LawFirmAI는 관계형 데이터베이스(SQLite)와 벡터 데이터베이스(F
 - **포괄성**: 두 검색 방식의 장점을 결합하여 더 나은 검색 결과 제공
 
 자세한 내용은 [하이브리드 검색 아키텍처](docs/architecture/hybrid_search_architecture.md)를 참조하세요.
+
+## 📊 모니터링 시스템
+
+### Grafana + Prometheus 기반 실시간 모니터링
+
+LawFirmAI는 법률 수집 성능을 실시간으로 모니터링하는 시스템을 제공합니다.
+
+#### 주요 기능
+- **실시간 메트릭 수집**: 페이지 처리, 법률 수집, 에러율 등
+- **지속적 메트릭 누적**: 여러 실행에 걸쳐 메트릭 값 누적
+- **Grafana 대시보드**: 시각적 모니터링 및 알림
+- **성능 분석**: 처리량, 메모리 사용량, CPU 사용률 추적
+
+#### 빠른 시작
+
+```bash
+# 1. 모니터링 스택 시작
+cd monitoring
+docker-compose up -d
+
+# 2. 메트릭 서버 독립 실행
+python scripts/monitoring/metrics_collector.py --port 8000
+
+# 3. 법률 수집 실행 (메트릭 포함)
+python scripts/assembly/collect_laws_optimized.py --sample 50 --enable-metrics
+```
+
+#### 접근 URL
+- **Grafana**: http://localhost:3000 (admin/admin123)
+- **Prometheus**: http://localhost:9090
+- **메트릭 엔드포인트**: http://localhost:8000/metrics
+
+#### 수집되는 메트릭
+- `law_collection_pages_processed_total`: 처리된 총 페이지 수
+- `law_collection_laws_collected_total`: 수집된 총 법률 수
+- `law_collection_page_processing_seconds`: 페이지 처리 시간
+- `law_collection_memory_usage_bytes`: 메모리 사용량
+- `law_collection_cpu_usage_percent`: CPU 사용률
+
+자세한 내용은 [Windows 모니터링 가이드](docs/development/windows_monitoring_guide.md)를 참조하세요.
 
 ## 🚀 빠른 시작
 

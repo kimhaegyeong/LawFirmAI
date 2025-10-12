@@ -6,10 +6,10 @@ Retrieval-Augmented Generation 서비스
 
 import logging
 from typing import List, Dict, Any, Optional
-from models.model_manager import LegalModelManager
-from data.vector_store import LegalVectorStore
-from data.database import DatabaseManager
-from utils.config import Config
+from source.models.model_manager import LegalModelManager
+from source.data.vector_store import LegalVectorStore
+from source.data.database import DatabaseManager
+from source.utils.config import Config
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "rules/*.yml"
+
+scrape_configs:
+  # Prometheus 자체 모니터링
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+
+  # Node Exporter (시스템 메트릭)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # 법률 수집 애플리케이션 메트릭
+  - job_name: 'law-collection-app'
+    static_configs:
+      - targets: ['host.docker.internal:8000']  # Python 앱이 실행되는 포트
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    scrape_timeout: 5s
+
+  # FastAPI 서비스 메트릭 (향후 확장용)
+  - job_name: 'fastapi-service'
+    static_configs:
+      - targets: ['host.docker.internal:8001']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Gradio 서비스 메트릭 (향후 확장용)
+  - job_name: 'gradio-service'
+    static_configs:
+      - targets: ['host.docker.internal:7860']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
