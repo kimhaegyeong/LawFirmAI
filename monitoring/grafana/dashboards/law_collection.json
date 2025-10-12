@@ -1,0 +1,196 @@
+{
+  "id": null,
+  "title": "법률 수집 성능 모니터링",
+  "tags": ["law-collection", "performance"],
+  "style": "dark",
+  "timezone": "browser",
+  "panels": [
+      {
+        "id": 1,
+        "title": "처리된 페이지 수",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "law_collection_pages_processed_total",
+            "legendFormat": "Total Pages",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "수집된 법률 수",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "law_collection_laws_collected_total",
+            "legendFormat": "Total Laws",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "현재 페이지",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "law_collection_current_page",
+            "legendFormat": "Current Page",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "수집 상태",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "law_collection_status",
+            "legendFormat": "Status",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short",
+            "mappings": [
+              {"type": "value", "value": "0", "text": "Stopped"},
+              {"type": "value", "value": "1", "text": "Running"},
+              {"type": "value", "value": "2", "text": "Paused"}
+            ]
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "페이지 처리 시간",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(law_collection_page_processing_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(law_collection_page_processing_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile",
+            "refId": "B"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Seconds",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "처리량 (분당 법률 수)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "law_collection_throughput_laws_per_minute",
+            "legendFormat": "Throughput",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Laws/min",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "메모리 사용량",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "law_collection_memory_usage_bytes / 1024 / 1024",
+            "legendFormat": "Memory Usage",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "MB",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "CPU 사용률",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "law_collection_cpu_usage_percent",
+            "legendFormat": "CPU Usage",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Percent",
+            "min": 0,
+            "max": 100
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "에러율",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(law_collection_errors_total[5m])",
+            "legendFormat": "{{error_type}}",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Errors/sec",
+            "min": 0
+          }
+        ]
+      }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "5s"
+}

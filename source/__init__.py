@@ -9,12 +9,9 @@ __author__ = "LawFirmAI Team"
 __description__ = "법률 AI 어시스턴트 - 판례, 법령, Q&A 데이터베이스 기반 AI 시스템"
 
 # 주요 모듈 import (선택적)
-try:
-    from .models.model_manager import LegalModelManager
-    from .models.legal_finetuner import LegalModelFineTuner
-except ImportError:
-    LegalModelManager = None
-    LegalModelFineTuner = None
+# 모델 관련 import는 필요시에만 개별적으로 수행
+LegalModelManager = None
+LegalModelFineTuner = None
 
 try:
     from .services.chat_service import ChatService
