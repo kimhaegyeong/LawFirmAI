@@ -12,8 +12,6 @@
 
 import argparse
 import sys
-import signal
-import logging
 import json
 from pathlib import Path
 from datetime import datetime
@@ -25,21 +23,17 @@ sys.path.append(str(project_root))
 from source.data.assembly_playwright_client import AssemblyPlaywrightClient
 from scripts.assembly.assembly_collector import AssemblyCollector
 from scripts.assembly.checkpoint_manager import CheckpointManager
+from scripts.assembly.common_utils import (
+    CollectionConfig, CollectionLogger, SignalHandler, 
+    MemoryManager, RetryManager, DataOptimizer, 
+    check_system_requirements, memory_monitor, retry_on_failure
+)
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("precedent_category_collection")
+logger = CollectionLogger.setup_logging("precedent_category_collection")
 
 # 시그널 핸들러 등록
-interrupted = False
-
-def signal_handler(signum, frame):
-    global interrupted
-    print(f"\n🚨 Signal {signum} received. Initiating graceful shutdown...")
-    interrupted = True
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
+signal_handler = SignalHandler()
 
 # 분야별 코드 매핑
 CATEGORY_CODES = {
@@ -68,15 +62,17 @@ CATEGORY_NAMES = {
     'military': '군사'
 }
 
+@memory_monitor(threshold_mb=500.0)
 def collect_precedents_by_category(
     category: str,
     target_count: int = None,
     page_size: int = 10,
     resume: bool = True,
-    start_page: int = 1
+    start_page: int = 1,
+    config: CollectionConfig = None
 ):
     """
-    분야별 판례 수집
+    분야별 판례 수집 (개선된 버전)
     
     Args:
         category: 분야 코드 (civil, criminal, family 등)
@@ -84,7 +80,14 @@ def collect_precedents_by_category(
         page_size: 페이지당 항목 수 (실제로는 10개 고정)
         resume: 체크포인트에서 재개 여부
         start_page: 시작 페이지 번호
+        config: 수집 설정 객체
     """
+    if config is None:
+        config = CollectionConfig()
+    
+    # 시스템 요구사항 확인
+    if not check_system_requirements(min_memory_gb=2.0):
+        logger.warning("Proceeding with caution due to system constraints")
     category_code = CATEGORY_CODES.get(category)
     category_name = CATEGORY_NAMES.get(category, category)
     
@@ -122,14 +125,24 @@ def collect_precedents_by_category(
     else:
         print(f"📂 Resume disabled, starting from page {start_page}")
     
-    # 수집기 초기화 (메모리 최적화)
-    print(f"\n📦 Initializing collector...")
+    # 메모리 매니저 및 재시도 매니저 초기화
+    memory_manager = MemoryManager(
+        memory_limit_mb=config.get('memory_limit_mb'),
+        cleanup_threshold=config.get('cleanup_threshold')
+    )
+    retry_manager = RetryManager(
+        max_retries=config.get('max_retries'),
+        base_delay=1.0
+    )
+    
+    # 수집기 초기화 (설정 기반)
+    logger.info("Initializing collector...")
     collector = AssemblyCollector(
         base_dir="data/raw/assembly",
         data_type="precedent",
         category=category,
-        batch_size=20,  # 배치 크기 감소 (50 → 20)
-        memory_limit_mb=600  # 메모리 제한 감소 (800 → 600)
+        batch_size=config.get('batch_size'),
+        memory_limit_mb=config.get('memory_limit_mb')
     )
     print(f"✅ Collector initialized")
     
@@ -157,15 +170,15 @@ def collect_precedents_by_category(
     try:
         print(f"\n🌐 Starting Playwright browser...")
         with AssemblyPlaywrightClient(
-            rate_limit=3.0,
+            rate_limit=config.get('rate_limit'),
             headless=True,
-            memory_limit_mb=600  # 메모리 제한 감소 (800 → 600)
+            memory_limit_mb=config.get('memory_limit_mb')
         ) as client:
             print(f"✅ Playwright browser started")
             
             for page in range(actual_start_page, total_pages + 1):
-                if interrupted:
-                    print(f"\n⚠️ INTERRUPTED by user signal")
+                if signal_handler.is_interrupted():
+                    logger.warning("Collection interrupted by user signal")
                     break
                 
                 print(f"\n{'─'*50}")
