@@ -41,6 +41,8 @@ from parsers import (
     TextNormalizer
     # SearchableTextGenerator 제거됨
 )
+from parsers.improved_article_parser import ImprovedArticleParser
+from ml_enhanced_parser import MLEnhancedArticleParser
 
 # Import new legal analysis components
 try:
@@ -442,7 +444,14 @@ class LawPreprocessor:
     def __init__(self, enable_legal_analysis: bool = True, max_memory_mb: int = 2048, max_memory_gb: float = 10.0, processing_manager: Optional['ProcessingManager'] = None):
         """Initialize the preprocessor with all parsers and optional legal analysis"""
         self.html_parser = LawHTMLParser()
-        self.article_parser = ArticleParser()
+        # ML 강화 파서 사용 (모델이 있으면)
+        ml_model_path = "models/article_classifier.pkl"
+        if Path(ml_model_path).exists():
+            self.article_parser = MLEnhancedArticleParser(ml_model_path=ml_model_path)
+            logger.info("Using ML-enhanced article parser")
+        else:
+            self.article_parser = ImprovedArticleParser()
+            logger.info("Using rule-based article parser")
         self.metadata_extractor = MetadataExtractor()
         self.text_normalizer = TextNormalizer()
         # self.searchable_text_generator = SearchableTextGenerator()  # 제거됨
@@ -688,7 +697,13 @@ class LawPreprocessor:
             # Clean law content by removing JavaScript and HTML artifacts
             law_content = self._clean_law_content(law_data.get('law_content', ''))
             html_content = law_data.get('content_html', '')
-            articles = self.article_parser.parse_articles(law_content, html_content)
+            parsed_result = self.article_parser.parse_law(law_content)
+            
+            # Extract articles from parsed result
+            if isinstance(parsed_result, dict) and 'all_articles' in parsed_result:
+                articles = parsed_result['all_articles']
+            else:
+                articles = []
             
             # Extract metadata
             metadata = self.metadata_extractor.extract(law_data)
@@ -777,6 +792,28 @@ class LawPreprocessor:
         
         # Remove HTML entities
         content = re.sub(r'&[a-zA-Z0-9#]+;', '', content)
+        
+        # Remove control characters (both actual and escaped)
+        # Actual control characters
+        content = content.replace('\n', ' ')  # Replace actual newline with space
+        content = content.replace('\t', ' ')  # Replace actual tab with space
+        content = content.replace('\r', ' ')  # Replace actual carriage return with space
+        content = content.replace('\f', ' ')  # Replace form feed with space
+        content = content.replace('\v', ' ')  # Replace vertical tab with space
+        
+        # Escaped control characters
+        content = content.replace('\\n', ' ')  # Replace escaped newline with space
+        content = content.replace('\\t', ' ')  # Replace escaped tab with space
+        content = content.replace('\\r', ' ')  # Replace escaped carriage return with space
+        content = content.replace('\\"', '"')  # Replace escaped quotes
+        content = content.replace("\\'", "'")  # Replace escaped single quotes
+        content = content.replace('\\\\', '\\')  # Replace escaped backslashes
+        
+        # Remove other control characters (ASCII 0-31 except space)
+        import string
+        control_chars = ''.join(chr(i) for i in range(32) if chr(i) not in string.whitespace)
+        for char in control_chars:
+            content = content.replace(char, ' ')
         
         # Remove excessive whitespace and clean up
         content = re.sub(r'\s+', ' ', content)

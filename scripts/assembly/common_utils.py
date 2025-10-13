@@ -25,19 +25,22 @@ import json
 
 
 class MemoryManager:
-    """메모리 관리 유틸리티 클래스"""
+    """메모리 관리 유틸리티 클래스 (최적화된 버전)"""
     
-    def __init__(self, memory_limit_mb: int = 600, cleanup_threshold: float = 0.7):
+    def __init__(self, memory_limit_mb: int = 600, cleanup_threshold: float = 0.6):  # 400MB → 600MB로 조정
         """
         메모리 매니저 초기화
         
         Args:
-            memory_limit_mb: 메모리 제한 (MB)
-            cleanup_threshold: 정리 시작 임계값 (0.0-1.0)
+            memory_limit_mb: 메모리 제한 (MB) - 기본값을 600MB로 설정
+            cleanup_threshold: 정리 시작 임계값 (0.0-1.0) - 60%에서 시작
         """
         self.memory_limit_mb = memory_limit_mb
         self.cleanup_threshold = cleanup_threshold
+        self.warning_threshold = 0.5  # 50%에서 경고
+        self.critical_threshold = 0.8  # 80%에서 중단
         self.logger = logging.getLogger(__name__)
+        self.cleanup_count = 0
         
     def get_memory_usage(self) -> float:
         """현재 메모리 사용량 반환 (MB)"""
@@ -50,16 +53,21 @@ class MemoryManager:
     
     def check_and_cleanup(self) -> bool:
         """
-        메모리 사용량 체크 및 정리
+        메모리 사용량 체크 및 정리 (강화된 버전)
         
         Returns:
             bool: 메모리 제한 내에 있으면 True, 초과하면 False
         """
         memory_mb = self.get_memory_usage()
         
+        # 50%에서 경고
+        if memory_mb > self.memory_limit_mb * self.warning_threshold:
+            self.logger.warning(f"Memory usage warning: {memory_mb:.1f}MB ({memory_mb/self.memory_limit_mb*100:.1f}%)")
+        
+        # 60%에서 정리 시작
         if memory_mb > self.memory_limit_mb * self.cleanup_threshold:
             self.logger.warning(f"High memory usage: {memory_mb:.1f}MB, cleaning up...")
-            gc.collect()
+            self.aggressive_cleanup()
             
             memory_after = self.get_memory_usage()
             self.logger.info(f"After cleanup: {memory_after:.1f}MB")
@@ -68,12 +76,41 @@ class MemoryManager:
                 self.logger.error(f"Memory limit exceeded: {memory_after:.1f}MB")
                 return False
         
+        # 80%에서 중단
+        if memory_mb > self.memory_limit_mb * self.critical_threshold:
+            self.logger.error(f"Critical memory usage: {memory_mb:.1f}MB - stopping")
+            return False
+        
         return True
+    
+    def aggressive_cleanup(self):
+        """강화된 메모리 정리"""
+        self.cleanup_count += 1
+        
+        # 강제 가비지 컬렉션
+        gc.collect()
+        
+        # 메모리 사용량 재확인
+        current_mb = self.get_memory_usage()
+        if current_mb > self.memory_limit_mb * 0.8:
+            if self.cleanup_count > 3:
+                raise MemoryError(f"Memory cleanup failed after {self.cleanup_count} attempts: {current_mb:.1f}MB")
+        
+        self.logger.info(f"Aggressive cleanup completed (attempt {self.cleanup_count})")
     
     def force_cleanup(self):
         """강제 메모리 정리"""
         gc.collect()
         self.logger.info("Forced memory cleanup completed")
+    
+    def adaptive_batch_size(self, current_memory_mb: float, base_batch_size: int = 10) -> int:
+        """메모리 사용량에 따른 배치 크기 동적 조정"""
+        if current_memory_mb > self.memory_limit_mb * 0.7:  # 70% 초과시
+            return max(5, base_batch_size - 3)
+        elif current_memory_mb > self.memory_limit_mb * 0.5:  # 50% 초과시
+            return max(8, base_batch_size - 2)
+        else:
+            return min(15, base_batch_size + 1)
 
 
 class RetryManager:
@@ -206,29 +243,65 @@ class CollectionLogger:
 
 
 class DataOptimizer:
-    """데이터 최적화 유틸리티 클래스"""
+    """데이터 최적화 유틸리티 클래스 (최적화된 버전)"""
     
-    # 대용량 필드 크기 제한 설정
+    # 대용량 필드 크기 제한 설정 (더 엄격하게)
     FIELD_LIMITS = {
-        'content_html': 1_000_000,      # 1MB
-        'precedent_content': 1_000_000,  # 1MB
-        'law_content': 1_000_000,        # 1MB
-        'full_text': 1_000_000,         # 1MB
-        'structured_content': 500_000,   # 500KB
+        'content_html': 500_000,        # 1MB → 500KB로 감소
+        'precedent_content': 500_000,   # 1MB → 500KB로 감소
+        'law_content': 500_000,          # 1MB → 500KB로 감소
+        'full_text': 500_000,           # 1MB → 500KB로 감소
+        'structured_content': 300_000,  # 500KB → 300KB로 감소
+        'case_summary': 50_000,          # 새로 추가: 케이스 요약 50KB 제한
+        'legal_sections': 100_000,       # 새로 추가: 법조문 100KB 제한
+    }
+    
+    # 필수 필드만 유지하는 설정 (완전한 판례 데이터 유지)
+    ESSENTIAL_FIELDS = {
+        'precedent': [
+            'row_number', 'case_name', 'case_number', 'decision_date', 'field', 'court',
+            'detail_url', 'structured_content', 'precedent_content', 'content_html',
+            'full_text_length', 'extracted_content_length', 'params', 'collected_at',
+            'source_url', 'category', 'category_code'
+        ],
+        'law': [
+            'law_name', 'law_number', 'enactment_date', 
+            'summary', 'main_content', 'category'
+        ]
     }
     
     @classmethod
-    def optimize_item(cls, item: Dict[str, Any]) -> Dict[str, Any]:
+    def optimize_item(cls, item: Dict[str, Any], data_type: str = 'precedent') -> Dict[str, Any]:
         """
-        아이템 메모리 최적화
+        아이템 메모리 최적화 (완전한 데이터 유지 버전)
         
         Args:
             item: 최적화할 아이템
+            data_type: 데이터 타입 ('precedent' 또는 'law')
             
         Returns:
             최적화된 아이템
         """
-        optimized = item.copy()
+        # 원본 데이터가 비어있거나 유효하지 않으면 그대로 반환
+        if not item or not isinstance(item, dict):
+            return item
+        
+        # 판례 데이터는 완전한 구조를 유지하되 메모리만 최적화
+        if data_type == 'precedent':
+            optimized = item.copy()
+        else:
+            # 법률 데이터만 필수 필드 추출
+            if data_type in cls.ESSENTIAL_FIELDS and item:
+                optimized = {}
+                for field in cls.ESSENTIAL_FIELDS[data_type]:
+                    if field in item and item[field] is not None:
+                        optimized[field] = item[field]
+                
+                # 필수 필드가 하나도 없으면 원본 데이터 유지
+                if not optimized:
+                    optimized = item.copy()
+            else:
+                optimized = item.copy()
         
         # 대용량 필드 크기 제한
         for field, limit in cls.FIELD_LIMITS.items():
@@ -240,8 +313,12 @@ class DataOptimizer:
         if 'structured_content' in optimized and isinstance(optimized['structured_content'], dict):
             structured = optimized['structured_content']
             for key, value in structured.items():
-                if isinstance(value, str) and len(value) > 200_000:  # 200KB 제한
-                    structured[key] = value[:200_000] + "... [TRUNCATED]"
+                if isinstance(value, str) and len(value) > 100_000:  # 200KB → 100KB로 감소
+                    structured[key] = value[:100_000] + "... [TRUNCATED]"
+        
+        # 불필요한 빈 필드 제거 (판례 데이터는 제외)
+        if data_type != 'precedent':
+            optimized = {k: v for k, v in optimized.items() if v is not None and v != ""}
         
         return optimized
     
@@ -269,15 +346,15 @@ class DataOptimizer:
 class CollectionConfig:
     """수집 설정 관리 클래스"""
     
-    # 기본 설정값들
+    # 기본 설정값들 (최적화된 버전)
     DEFAULT_CONFIG = {
-        'memory_limit_mb': 600,
-        'batch_size': 20,
+        'memory_limit_mb': 600,  # 400MB → 600MB로 조정
+        'batch_size': 10,        # 20 → 10으로 감소
         'page_size': 10,
         'rate_limit': 3.0,
         'timeout': 30000,
         'max_retries': 3,
-        'cleanup_threshold': 0.7,
+        'cleanup_threshold': 0.6,  # 0.7 → 0.6으로 더 보수적으로
         'log_level': 'INFO'
     }
     
@@ -304,9 +381,9 @@ class CollectionConfig:
         return self.config.copy()
 
 
-def memory_monitor(threshold_mb: float = 500.0):
+def memory_monitor(threshold_mb: float = 500.0):  # 300MB → 500MB로 조정
     """
-    메모리 모니터링 데코레이터
+    메모리 모니터링 데코레이터 (최적화된 버전)
     
     Args:
         threshold_mb: 메모리 임계값 (MB)
@@ -328,7 +405,7 @@ def memory_monitor(threshold_mb: float = 500.0):
                 logging.getLogger(__name__).warning(
                     f"High memory usage after {func.__name__}: {memory_mb:.1f}MB"
                 )
-                memory_manager.force_cleanup()
+                memory_manager.aggressive_cleanup()
             
             return result
         return wrapper
