@@ -62,7 +62,7 @@ CATEGORY_NAMES = {
     'military': '군사'
 }
 
-@memory_monitor(threshold_mb=500.0)
+@memory_monitor(threshold_mb=500.0)  # 300MB → 500MB로 조정
 def collect_precedents_by_category(
     category: str,
     target_count: int = None,
@@ -186,11 +186,17 @@ def collect_precedents_by_category(
                 print(f"📋 Category: {category_name}")
                 print(f"{'─'*50}")
                 
-                memory_mb = client.check_memory_usage()
-                print(f"📊 Memory usage: {memory_mb:.1f}MB")
+                # 페이지 정보 설정
+                collector.set_page_info(page)
                 
-                print(f"🔍 Fetching {category_name} precedent list from page {page}...")
-                precedents = client.get_precedent_list_page_by_category(
+                # 메모리 상태 확인
+                memory_mb = memory_manager.get_memory_usage()
+                CollectionLogger.log_memory_usage(logger, memory_mb, config.get('memory_limit_mb'))
+                
+                # 재시도 로직으로 판례 목록 가져오기
+                logger.info(f"Fetching {category_name} precedent list from page {page}...")
+                precedents = retry_manager.retry(
+                    client.get_precedent_list_page_by_category,
                     category_code=category_code,
                     page_num=page, 
                     page_size=10
@@ -201,12 +207,11 @@ def collect_precedents_by_category(
                     print(f"⚠️ No precedents found on page {page}, skipping...")
                     continue
                 
-                # 각 판례 상세 수집 (메모리 최적화)
+                # 각 판례 상세 수집 (스트리밍 처리)
                 print(f"📋 Processing {len(precedents)} precedents...")
-                page_precedents = []  # 현재 페이지의 판례들을 저장할 리스트
                 
                 for idx, precedent_item in enumerate(precedents, 1):
-                    if interrupted:
+                    if signal_handler.is_interrupted():
                         print(f"\n⚠️ INTERRUPTED during precedent processing")
                         break
                     
@@ -221,19 +226,22 @@ def collect_precedents_by_category(
                             'category_code': category_code
                         })
                         
-                        # 메모리 최적화: content_html 크기 제한
-                        if 'content_html' in detail and len(detail['content_html']) > 1000000:  # 1MB 제한
-                            detail['content_html'] = detail['content_html'][:1000000] + "... [TRUNCATED]"
-                            print(f"      ⚠️ HTML content truncated to 1MB")
+                        # 데이터 최적화 적용
+                        from scripts.assembly.common_utils import DataOptimizer
+                        detail = DataOptimizer.optimize_item(detail, 'precedent')
+                        print(f"      🔧 Data optimized for memory efficiency")
                         
-                        page_precedents.append(detail)  # 페이지별 리스트에 추가
+                        # 스트리밍 처리: 즉시 저장하고 메모리에서 해제
                         collector.save_item(detail)
                         collected_this_run += 1
                         
                         print(f"      ✅ Collected (Total: {collector.collected_count})")
                         
-                        # 메모리 정리 (매 5개마다)
-                        if idx % 5 == 0:
+                        # 즉시 메모리에서 해제
+                        del detail
+                        
+                        # 메모리 정리 (매 3개마다 - 더 자주)
+                        if idx % 3 == 0:
                             import gc
                             gc.collect()
                             print(f"      🧹 Memory cleanup at item {idx}")
@@ -248,35 +256,11 @@ def collect_precedents_by_category(
                         collector.add_failed_item(precedent_item, str(e))
                         continue
                 
-                # 현재 페이지의 판례들을 별도 파일로 저장 (메모리 최적화)
-                if page_precedents:
-                    timestamp = datetime.now().strftime("%H%M%S")
-                    page_filename = f"precedent_{category}_page_{page:03d}_{timestamp}.json"
-                    page_filepath = collector.output_dir / page_filename
-                    
-                    # 메모리 최적화: 간소화된 페이지 데이터
-                    page_data = {
-                        "category": category_name,
-                        "category_code": category_code,
-                        "page_number": page,
-                        "total_pages": total_pages,
-                        "precedents_count": len(page_precedents),
-                        "collected_at": datetime.now().isoformat(),
-                        "precedents": page_precedents
-                    }
-                    
-                    # 압축된 JSON으로 저장 (메모리 절약)
-                    with open(page_filepath, 'w', encoding='utf-8') as f:
-                        json.dump(page_data, f, ensure_ascii=False, separators=(',', ':'))
-                    
-                    print(f"📄 Page {page} saved: {page_filename} ({len(page_precedents)} precedents)")
-                    
-                    # 메모리 정리: 페이지 데이터 즉시 삭제
-                    del page_precedents
-                    del page_data
-                    import gc
-                    gc.collect()
-                    print(f"🧹 Page {page} memory cleaned up")
+                # 스트리밍 처리로 인해 페이지별 저장은 생략 (이미 개별 저장됨)
+                # 메모리 정리만 수행
+                import gc
+                gc.collect()
+                print(f"🧹 Page {page} processing completed and memory cleaned up")
                 
                 # 진행률 로그
                 print(f"\n📈 Progress Summary:")
@@ -311,7 +295,7 @@ def collect_precedents_by_category(
             print(f"\n🏁 Finalizing collection...")
             collector.finalize()
             
-            if not interrupted:
+            if not signal_handler.is_interrupted():
                 checkpoint_mgr.clear_checkpoint()
                 print(f"\n✅ COLLECTION COMPLETED SUCCESSFULLY!")
             else:
@@ -363,9 +347,9 @@ def collect_all_categories(target_count_per_category: int = 50):
     print(f"📊 Total collected: {total_collected} precedents")
 
 def main():
-    """메인 함수"""
+    """메인 함수 (개선된 버전)"""
     parser = argparse.ArgumentParser(
-        description='국회 법률정보시스템 분야별 판례 수집 (Playwright)',
+        description='국회 법률정보시스템 분야별 판례 수집 (Playwright + 개선된 메모리 관리)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Available categories:
@@ -382,9 +366,8 @@ Available categories:
 
 Examples:
   python collect_precedents_by_category.py --category civil --sample 50
-  python collect_precedents_by_category.py --category criminal --sample 100
-  python collect_precedents_by_category.py --category family --sample 30
-  python collect_precedents_by_category.py --all-categories --sample 20
+  python collect_precedents_by_category.py --category criminal --sample 100 --memory-limit 500
+  python collect_precedents_by_category.py --all-categories --sample 20 --batch-size 15
         """
     )
     
@@ -403,11 +386,25 @@ Examples:
                         help='페이지당 항목 수 (기본: 100)')
     parser.add_argument('--start-page', type=int, default=1,
                         help='시작 페이지 번호 (기본: 1)')
+    parser.add_argument('--memory-limit', type=int, default=600,
+                        help='메모리 제한 (MB, 기본: 600)')
+    parser.add_argument('--batch-size', type=int, default=20,
+                        help='배치 크기 (기본: 20)')
+    parser.add_argument('--max-retries', type=int, default=3,
+                        help='최대 재시도 횟수 (기본: 3)')
     parser.add_argument('--log-level', type=str, default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='로그 레벨 (기본: INFO)')
     
     args = parser.parse_args()
+    
+    # 설정 객체 생성
+    config = CollectionConfig(
+        memory_limit_mb=args.memory_limit,
+        batch_size=args.batch_size,
+        max_retries=args.max_retries,
+        log_level=args.log_level
+    )
     
     # 로그 레벨 재설정
     if args.log_level != 'INFO':
@@ -428,7 +425,8 @@ Examples:
             target_count=args.sample,
             page_size=args.page_size,
             resume=args.resume,
-            start_page=args.start_page
+            start_page=args.start_page,
+            config=config
         )
     else:
         parser.print_help()

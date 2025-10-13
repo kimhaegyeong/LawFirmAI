@@ -259,8 +259,9 @@ class AssemblyLawImporter:
                         full_text, summary,
                         html_clean_text, content_html,
                         raw_content, detail_url, cont_id, cont_sid, collected_at,
-                        processed_at, processing_version, data_quality
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        processed_at, processing_version, data_quality,
+                        ml_enhanced, parsing_quality_score, article_count, supplementary_count, control_characters_removed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', law_record)
                 
                 # Insert articles
@@ -270,8 +271,9 @@ class AssemblyLawImporter:
                     cursor.execute('''
                         INSERT OR REPLACE INTO assembly_articles (
                         law_id, article_number, article_title, article_content,
-                        sub_articles, law_references, word_count, char_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        sub_articles, law_references, word_count, char_count,
+                        is_supplementary, ml_confidence_score, parsing_method, article_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', article_record)
                 
                 conn.commit()
@@ -283,6 +285,15 @@ class AssemblyLawImporter:
     
     def _prepare_law_record(self, law_data: Dict[str, Any]) -> Tuple:
         """Prepare law record for database insertion"""
+        # ML 강화 필드 추출
+        ml_enhanced = law_data.get('ml_enhanced', False)
+        parsing_quality_score = law_data.get('data_quality', {}).get('parsing_quality_score', 0.0)
+        
+        # 본칙/부칙 카운트
+        articles = law_data.get('articles', [])
+        main_articles = [a for a in articles if not a.get('is_supplementary', False)]
+        supp_articles = [a for a in articles if a.get('is_supplementary', False)]
+        
         return (
             law_data.get('law_id', ''),
             law_data.get('source', 'assembly'),
@@ -308,7 +319,13 @@ class AssemblyLawImporter:
             law_data.get('collected_at', ''),
             law_data.get('processed_at', ''),
             law_data.get('processing_version', ''),
-            json.dumps(law_data.get('data_quality', {}), ensure_ascii=False)
+            json.dumps(law_data.get('data_quality', {}), ensure_ascii=False),
+            # ML 강화 필드
+            ml_enhanced,
+            parsing_quality_score,
+            len(main_articles),
+            len(supp_articles),
+            True  # control_characters_removed
         )
     
     def _prepare_article_record(self, law_id: str, article: Dict[str, Any]) -> Tuple:
@@ -321,7 +338,12 @@ class AssemblyLawImporter:
             json.dumps(article.get('sub_articles', []), ensure_ascii=False),
             json.dumps(article.get('references', []), ensure_ascii=False),
             article.get('word_count', 0),
-            article.get('char_count', 0)
+            article.get('char_count', 0),
+            # ML 강화 필드
+            article.get('is_supplementary', False),
+            article.get('ml_confidence_score'),
+            article.get('parsing_method', 'rule_based'),
+            article.get('article_type', 'main' if not article.get('is_supplementary', False) else 'supplementary')
         )
     
     def import_directory(self, input_dir: Path) -> Dict[str, Any]:
@@ -470,6 +492,8 @@ def main():
     parser.add_argument('--log-level', type=str, default='INFO', 
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging level')
+    parser.add_argument('--replace-existing', action='store_true',
+                       help='Replace existing data instead of updating')
     
     args = parser.parse_args()
     
@@ -485,6 +509,18 @@ def main():
     
     # Create importer and run
     importer = AssemblyLawImporter(args.db_path)
+    
+    # Clear existing data if replace-existing is specified
+    if args.replace_existing:
+        logger.info("Clearing existing data...")
+        with importer.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM assembly_articles')
+            cursor.execute('DELETE FROM assembly_laws')
+            cursor.execute('DELETE FROM assembly_laws_fts')
+            cursor.execute('DELETE FROM assembly_articles_fts')
+            conn.commit()
+        logger.info("Existing data cleared")
     
     try:
         import_results = importer.import_directory(input_dir)

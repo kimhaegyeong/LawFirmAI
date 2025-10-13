@@ -18,6 +18,13 @@ import psutil
 import gc
 from typing import Dict, Any, List, Optional
 
+# 공통 유틸리티 import
+try:
+    from scripts.assembly.common_utils import DataOptimizer, CollectionLogger
+    COMMON_UTILS_AVAILABLE = True
+except ImportError:
+    COMMON_UTILS_AVAILABLE = False
+
 # 압축 모듈 import
 try:
     from scripts.assembly.law_data_compressor import compress_law_data
@@ -73,6 +80,10 @@ class AssemblyCollector:
         self.failed_items = []
         self.batch_count = 0
         
+        # 페이지 정보 추적
+        self.current_page = None
+        self.page_start_item = 0
+        
         self.logger = logging.getLogger(__name__)
         
         print(f"📁 Collector initialized:")
@@ -82,18 +93,27 @@ class AssemblyCollector:
         print(f"   Batch size: {batch_size}")
         print(f"   Memory limit: {memory_limit_mb}MB")
     
+    def set_page_info(self, page_number: int):
+        """페이지 정보 설정"""
+        self.current_page = page_number
+        self.page_start_item = self.collected_count
+        self.logger.info(f"📄 Page {page_number} started, item count: {self.page_start_item}")
+    
     def save_item(self, item: Dict[str, Any]):
         """
-        항목 저장 (압축된 버전, 메모리 최적화)
+        항목 저장 (개선된 버전)
         
         Args:
             item: 저장할 데이터 항목
         """
-        # 메모리 최적화: 대용량 필드 크기 제한
-        optimized_item = self._optimize_item_memory(item)
+        # 데이터 타입에 따른 최적화
+        if COMMON_UTILS_AVAILABLE:
+            optimized_item = DataOptimizer.optimize_item(item, self.data_type)
+        else:
+            optimized_item = self._optimize_item_memory(item)
         
-        # 압축된 데이터로 저장
-        if COMPRESSION_AVAILABLE:
+        # 압축은 판례 데이터에는 적용하지 않음 (법률 데이터만)
+        if COMPRESSION_AVAILABLE and self.data_type == 'law':
             compressed_item = compress_law_data(optimized_item)
             self.batch.append(compressed_item)
         else:
@@ -137,16 +157,20 @@ class AssemblyCollector:
         return optimized
     
     def _save_batch(self):
-        """배치 파일 저장 (타입_카테고리_시간_개수.json)"""
+        """배치 파일 저장 (페이지 정보 포함)"""
         if not self.batch:
             return
         
         self.batch_count += 1
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # 파일명 구성
-        if self.category:
+        # 파일명 구성 (페이지 정보 포함)
+        if self.category and self.current_page is not None:
+            filename = f"{self.data_type}_{self.category}_page_{self.current_page:03d}_{timestamp}_{len(self.batch)}.json"
+        elif self.category:
             filename = f"{self.data_type}_{self.category}_{timestamp}_{len(self.batch)}.json"
+        elif self.current_page is not None:
+            filename = f"{self.data_type}_page_{self.current_page:03d}_{timestamp}_{len(self.batch)}.json"
         else:
             filename = f"{self.data_type}_{timestamp}_{len(self.batch)}.json"
         
@@ -157,6 +181,8 @@ class AssemblyCollector:
                 'metadata': {
                     'data_type': self.data_type,
                     'category': self.category,
+                    'page_number': self.current_page,
+                    'page_start_item': self.page_start_item,
                     'batch_number': self.batch_count,
                     'count': len(self.batch),
                     'collected_at': datetime.now().isoformat(),
@@ -178,24 +204,25 @@ class AssemblyCollector:
             raise
     
     def _check_memory(self):
-        """메모리 체크 및 자동 정리 (강화된 버전)"""
+        """메모리 체크 및 자동 정리 (최적화된 버전)"""
         try:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / 1024 / 1024
             
-            self.logger.info(f"📊 Memory: {memory_mb:.1f}MB / {self.memory_limit_mb}MB")
+            self.logger.info(f"📊 Memory: {memory_mb:.1f}MB / {self.memory_limit_mb}MB ({memory_mb/self.memory_limit_mb*100:.1f}%)")
+            
+            # 동적 배치 크기 조정
+            new_batch_size = self._calculate_adaptive_batch_size(memory_mb)
+            if new_batch_size != self.batch_size:
+                self.logger.info(f"🔄 Batch size adjusted: {self.batch_size} → {new_batch_size}")
+                self.batch_size = new_batch_size
             
             # 메모리 사용량이 높으면 강제 정리
-            if memory_mb > self.memory_limit_mb * 0.7:  # 70%에서 정리 시작
+            if memory_mb > self.memory_limit_mb * 0.6:  # 60%에서 정리 시작
                 self.logger.warning(f"⚠️ High memory ({memory_mb:.1f}MB), forcing cleanup")
                 
                 # 강제 가비지 컬렉션
                 gc.collect()
-                
-                # 배치 크기 동적 조정
-                if memory_mb > self.memory_limit_mb * 0.8:
-                    self.batch_size = max(10, self.batch_size - 5)  # 배치 크기 감소
-                    self.logger.warning(f"⚠️ Reduced batch size to {self.batch_size}")
                 
                 memory_after = process.memory_info().rss / 1024 / 1024
                 self.logger.info(f"✅ After GC: {memory_after:.1f}MB")
@@ -206,6 +233,19 @@ class AssemblyCollector:
         except Exception as e:
             self.logger.error(f"❌ Memory check failed: {e}")
             raise
+    
+    def _calculate_adaptive_batch_size(self, current_memory_mb: float) -> int:
+        """메모리 사용량에 따른 배치 크기 동적 계산"""
+        memory_ratio = current_memory_mb / self.memory_limit_mb
+        
+        if memory_ratio > 0.7:  # 70% 초과시
+            return max(5, self.batch_size - 3)
+        elif memory_ratio > 0.5:  # 50% 초과시
+            return max(8, self.batch_size - 2)
+        elif memory_ratio < 0.3:  # 30% 미만시
+            return min(20, self.batch_size + 2)
+        else:
+            return self.batch_size
     
     def add_failed_item(self, item_data: Dict[str, Any], error: str):
         """

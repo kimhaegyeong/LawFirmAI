@@ -2107,6 +2107,28 @@ class ArticleParser:
         content = re.sub(r'&quot;', '"', content)  # Replace &quot; with "
         content = re.sub(r'&apos;', "'", content)  # Replace &apos; with '
         
+        # Remove control characters (both actual and escaped)
+        # Actual control characters
+        content = content.replace('\n', ' ')  # Replace actual newline with space
+        content = content.replace('\t', ' ')  # Replace actual tab with space
+        content = content.replace('\r', ' ')  # Replace actual carriage return with space
+        content = content.replace('\f', ' ')  # Replace form feed with space
+        content = content.replace('\v', ' ')  # Replace vertical tab with space
+        
+        # Escaped control characters
+        content = content.replace('\\n', ' ')  # Replace escaped newline with space
+        content = content.replace('\\t', ' ')  # Replace escaped tab with space
+        content = content.replace('\\r', ' ')  # Replace escaped carriage return with space
+        content = content.replace('\\"', '"')  # Replace escaped quotes
+        content = content.replace("\\'", "'")  # Replace escaped single quotes
+        content = content.replace('\\\\', '\\')  # Replace escaped backslashes
+        
+        # Remove other control characters (ASCII 0-31 except space)
+        import string
+        control_chars = ''.join(chr(i) for i in range(32) if chr(i) not in string.whitespace)
+        for char in control_chars:
+            content = content.replace(char, ' ')
+        
         # Clean up whitespace but preserve paragraph structure
         content = re.sub(r'\s+', ' ', content).strip()
         
@@ -2588,6 +2610,32 @@ class ArticleParser:
                 logger.debug("No 가. found in potential 목 items, rejecting all 목 items")
                 return items
             
+            # Additional validation: Check for proper Korean legal sequence
+            # Korean legal documents must follow 가. -> 나. -> 다. sequence
+            letters = [item['letter'] for item in potential_items]
+            expected_sequence = ['가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하']
+            
+            # Check if we have a proper sequence starting from 가
+            is_proper_sequence = True
+            for i, letter in enumerate(letters):
+                if i < len(expected_sequence) and letter != expected_sequence[i]:
+                    is_proper_sequence = False
+                    break
+            
+            if not is_proper_sequence:
+                logger.debug(f"Invalid 목 sequence: {letters}, rejecting all 목 items")
+                return items
+            
+            # Additional check: reject if only "다." is found without "가." and "나."
+            if len(letters) == 1 and letters[0] == '다':
+                logger.debug("Only '다.' found without '가.' and '나.', rejecting as invalid 목 sequence")
+                return items
+            
+            # Additional check: reject if "다." appears before "가." or "나."
+            if '다' in letters and ('가' not in letters or '나' not in letters):
+                logger.debug(f"'다.' found without proper preceding '가.' and '나.', rejecting as invalid 목 sequence. Letters: {letters}")
+                return items
+            
             # Sort by position to maintain order
             potential_items.sort(key=lambda x: x['position'])
             
@@ -2624,40 +2672,26 @@ class ArticleParser:
                 
                 valid_items.append(item)
             
-            # Only add items if we have at least 2 valid items AND they form a proper sequence
+            # Only add items if we have at least 2 valid items
             if len(valid_items) >= 2:
-                # Check if the sequence is proper (가., 나., 다. etc.)
-                letters = [item['letter'] for item in valid_items]
-                expected_sequence = ['가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하']
-                
-                # Check if we have a proper sequence starting from 가
-                is_proper_sequence = True
-                for i, letter in enumerate(letters):
-                    if i < len(expected_sequence) and letter != expected_sequence[i]:
-                        is_proper_sequence = False
-                        break
-                
-                if is_proper_sequence:
-                    for item in valid_items:
-                        mok_data = {
-                            'type': '목',
-                            'number': item['number'],
-                            'letter': item['letter'],
-                            'content': item['content'],
-                            'position': item['position']
+                for item in valid_items:
+                    mok_data = {
+                        'type': '목',
+                        'number': item['number'],
+                        'letter': item['letter'],
+                        'content': item['content'],
+                        'position': item['position']
+                    }
+                    
+                    # Only include amendment info if there's an actual amendment
+                    amendment_info = self._extract_amendment_info(item['content'])
+                    if amendment_info and amendment_info.get('has_amendment'):
+                        mok_data['amendment'] = {
+                            'date': amendment_info.get('amendment_date'),
+                            'type': amendment_info.get('amendment_type')
                         }
-                        
-                        # Only include amendment info if there's an actual amendment
-                        amendment_info = self._extract_amendment_info(item['content'])
-                        if amendment_info and amendment_info.get('has_amendment'):
-                            mok_data['amendment'] = {
-                                'date': amendment_info.get('amendment_date'),
-                                'type': amendment_info.get('amendment_type')
-                            }
-                        
-                        items.append(mok_data)
-                else:
-                    logger.debug(f"Invalid 목 sequence: {letters}, rejecting all 목 items")
+                    
+                    items.append(mok_data)
             else:
                 logger.debug(f"Not enough valid 목 items ({len(valid_items)}), rejecting all 목 items")
         
