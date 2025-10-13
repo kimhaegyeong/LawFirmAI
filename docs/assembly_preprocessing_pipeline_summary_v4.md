@@ -1,16 +1,16 @@
 # Assembly Law Data Preprocessing Pipeline - Implementation Summary v4.0
 
 ## Overview
-Successfully implemented a comprehensive preprocessing pipeline for Assembly law data with **ML-enhanced parsing** for improved accuracy, hybrid scoring system, and enhanced supplementary provisions parsing. The pipeline transforms raw HTML + text data into clean, structured, searchable format for database storage and vector embedding.
+Successfully implemented a comprehensive preprocessing pipeline for Assembly law data with **rule-based parsing** and optional ML enhancement capabilities. The pipeline transforms raw HTML + text data into clean, structured, searchable format for database storage and vector embedding. ML enhancement is available when trained models are present, otherwise falls back to stable rule-based parsing.
 
 ## New Features in v4.0
 
-### 🤖 **ML-Enhanced Parsing System**
-- **Machine Learning Model**: RandomForest-based article boundary classification
+### 🤖 **ML-Enhanced Parsing System (선택적)**
+- **Machine Learning Model**: RandomForest-based article boundary classification (모델 파일이 있을 때만)
 - **Hybrid Scoring**: ML model (50%) + Rule-based (50%) combination
 - **Feature Engineering**: 20+ text features for accurate classification
 - **Training Data**: 20,733 high-quality samples generated
-- **Model Performance**: 95%+ accuracy in article boundary detection
+- **Fallback System**: ML 모델이 없으면 규칙 기반 파서로 안정적 동작
 
 ### 🔧 **Enhanced Article Parsing**
 - **Context Analysis**: Surrounding text context consideration
@@ -123,13 +123,9 @@ Successfully implemented a comprehensive preprocessing pipeline for Assembly law
   - Extracts keywords from normalized text
 
 #### Searchable Text Generator (`searchable_text_generator.py`)
-- **Purpose**: Generates search-optimized text
-- **Features**:
-  - Creates full-text search field
-  - Generates article-level search text
-  - Extracts keywords and terms with legal term prioritization
-  - Creates search-optimized summaries
-  - Generates search indices
+- **Status**: 제거됨 (코드에서 주석 처리)
+- **대체**: `TextNormalizer`에서 키워드 추출 기능 제공
+- **Note**: 검색 최적화 텍스트 생성 기능은 다른 파서에서 처리
 
 ### 3. Processing Management System
 
@@ -224,28 +220,26 @@ python scripts/assembly/preprocess_laws.py --input data/raw/assembly/law/2025101
 ## Processing Results
 
 ### Performance Metrics
-- **Files Processed**: 3,368 JSON files
+- **Files Processed**: 3,368 JSON files (실제 처리 완료)
 - **Laws Processed**: 3,368 laws
-- **Success Rate**: 99.9% (with ML enhancement)
-- **Memory Efficiency**: <600MB peak usage with ML model
-- **Processing Speed**: 0.5 seconds/file (ML-enhanced processing)
+- **Success Rate**: 99.9% (규칙 기반 파서로 처리)
+- **Memory Efficiency**: <600MB peak usage
+- **Processing Speed**: 0.5 seconds/file (순차 처리)
 - **Resume Capability**: 100% - can resume from any interruption
 
 ### Data Quality Metrics
 - **Article Count**: 48,000+ articles extracted
-- **ML Accuracy**: 95.2% article boundary detection
-- **Supplementary Parsing**: 98.1% accuracy
+- **Rule-based Accuracy**: 규칙 기반 파서로 안정적인 조문 경계 감지
+- **Supplementary Parsing**: 부칙 파싱 로직 구현됨
 - **Control Character Removal**: 100% completion
-- **Structural Consistency**: 99.3% achievement
+- **Structural Consistency**: 법률 문서 구조 파싱 안정성
 - **FTS Coverage**: 100% of laws and articles indexed
 
 ### ML Model Performance
-- **Training Samples**: 20,733 high-quality samples
-- **Model Accuracy**: 95.2%
-- **Precision**: 94.8%
-- **Recall**: 95.6%
-- **F1-Score**: 95.2%
-- **Feature Importance**: Position ratio (23%), Context length (18%), Newlines (15%)
+- **Training Samples**: 20,733 high-quality samples (훈련 데이터 준비됨)
+- **Model Status**: 모델 파일(`article_classifier.pkl`)이 없어 규칙 기반 파서로 fallback
+- **ML Enhancement**: ML 모델이 있을 때만 활성화되는 선택적 기능
+- **Fallback System**: ML 모델이 없으면 `ImprovedArticleParser` 사용
 
 ## Usage Examples
 
@@ -356,12 +350,12 @@ Quality Metrics:
 
 ## Key Features
 
-### 🤖 ML-Enhanced Parsing
-- Machine learning-based article boundary detection
+### 🤖 ML-Enhanced Parsing (선택적)
+- Machine learning-based article boundary detection (모델 파일이 있을 때만)
 - Hybrid scoring system (ML + Rule-based)
 - Feature engineering with 20+ text features
-- High accuracy (95%+) in article classification
-- Automatic model training and optimization
+- Fallback to rule-based parsing when ML model unavailable
+- ML 모델 훈련 스크립트 제공 (`train_ml_model.py`)
 
 ### 📋 Supplementary Provisions Handling
 - Explicit separation of main body and supplementary provisions
@@ -513,22 +507,22 @@ The ML-enhanced preprocessing pipeline is now ready for:
 ## FAQ (Frequently Asked Questions)
 
 ### Q: What is ML-enhanced parsing?
-**A**: ML-enhanced parsing combines machine learning models with rule-based parsing to achieve higher accuracy in article boundary detection and legal document structure recognition.
+**A**: ML-enhanced parsing은 머신러닝 모델과 규칙 기반 파싱을 결합하여 조문 경계 감지 정확도를 향상시키는 기능입니다. 현재는 모델 파일이 없어 규칙 기반 파서로 동작합니다.
 
-### Q: How much accuracy improvement does ML provide?
-**A**: ML enhancement provides:
-- Article boundary detection: 78.5% → 95.2% (+21%)
-- Supplementary parsing: 67.2% → 98.1% (+46%)
-- Overall parsing quality: 76.3% → 96.4% (+26%)
+### Q: How do I enable ML enhancement?
+**A**: ML 강화 기능을 사용하려면:
+1. `python scripts/assembly/prepare_training_data.py`로 훈련 데이터 생성
+2. `python scripts/assembly/train_ml_model.py`로 모델 훈련
+3. 생성된 `models/article_classifier.pkl` 파일이 있으면 자동으로 ML 파서 사용
 
 ### Q: What is the hybrid scoring system?
-**A**: The hybrid scoring system combines ML model predictions (50%) with rule-based parsing scores (50%) to achieve optimal accuracy while maintaining reliability.
+**A**: 하이브리드 스코어링 시스템은 ML 모델 예측(50%)과 규칙 기반 파싱 점수(50%)를 결합하여 최적의 정확도를 달성합니다. 현재는 규칙 기반 파서만 사용됩니다.
 
-### Q: How fast is the ML-enhanced processing?
-**A**: ML-enhanced processing takes approximately 0.5 seconds per file, with training data generation improved by 1,000x (50 minutes → 4 seconds).
+### Q: How fast is the current processing?
+**A**: 현재 규칙 기반 파서로 파일당 약 0.5초가 소요되며, 안정적인 성능을 제공합니다.
 
 ### Q: Can I use the system without ML models?
-**A**: Yes, the system falls back to rule-based parsing if ML models are not available, ensuring backward compatibility.
+**A**: 네, ML 모델이 없어도 규칙 기반 파서로 완전히 동작하며, 안정적인 파싱 성능을 제공합니다.
 
 ### Q: How do I train new ML models?
 **A**: Use the training pipeline:
@@ -555,15 +549,16 @@ python scripts/assembly/check_parsing_quality.py --processed-dir data/processed/
 ## Version History
 
 ### v4.0 (Current)
-- **Added**: ML-enhanced parsing system with RandomForest classifier
+- **Added**: ML-enhanced parsing system (선택적, 모델 파일이 있을 때만)
 - **Added**: Hybrid scoring system (ML + Rule-based)
 - **Added**: Supplementary provisions parsing
 - **Added**: Complete control character removal
 - **Added**: 20+ feature engineering
-- **Added**: Training data generation optimization (1,000x speed improvement)
+- **Added**: Training data generation optimization
 - **Added**: Quality validation and analysis
-- **Enhanced**: Article boundary detection accuracy (95%+)
-- **Enhanced**: Structural consistency (99.3%)
+- **Enhanced**: Article boundary detection with rule-based parser
+- **Enhanced**: Structural consistency and stability
+- **Note**: ML 모델이 없어도 규칙 기반 파서로 완전 동작
 
 ### v3.0 (Previous)
 - Removed parallel processing capabilities
