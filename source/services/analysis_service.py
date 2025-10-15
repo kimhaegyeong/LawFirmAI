@@ -7,9 +7,9 @@ Analysis Service
 import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from ..data.data_processor import LegalDataProcessor as DataProcessor
-from ..models.model_manager import ModelManager
-from ..utils.config import Config
+from source.data.data_processor import LegalDataProcessor as DataProcessor
+from source.models.model_manager import LegalModelManager
+from source.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class AnalysisService:
     """분석 서비스 클래스"""
     
-    def __init__(self, config: Config, model_manager: ModelManager):
+    def __init__(self, config: Config, model_manager: LegalModelManager):
         """분석 서비스 초기화"""
         self.config = config
         self.model_manager = model_manager

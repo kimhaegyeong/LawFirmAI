@@ -30,6 +30,14 @@ except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
     logging.warning("SentenceTransformers not available. Please install sentence-transformers")
 
+# FlagEmbedding (BGE-M3) 관련 import
+try:
+    from FlagEmbedding import FlagReranker, FlagModel
+    FLAG_EMBEDDING_AVAILABLE = True
+except ImportError:
+    FLAG_EMBEDDING_AVAILABLE = False
+    logging.warning("FlagEmbedding not available. Please install FlagEmbedding")
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +50,7 @@ class LegalVectorStore:
         벡터 스토어 초기화
         
         Args:
-            model_name: 사용할 Sentence-BERT 모델명
+            model_name: 사용할 임베딩 모델명 (Sentence-BERT 또는 BGE-M3)
             dimension: 벡터 차원
             index_type: FAISS 인덱스 타입 ("flat", "ivf", "hnsw")
         """
@@ -55,8 +63,12 @@ class LegalVectorStore:
         self.document_metadata = []
         self.document_texts = []
         
+        # 모델 타입 감지
+        self.is_bge_model = "bge-m3" in model_name.lower()
+        
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"LegalVectorStore initialized with model: {model_name}")
+        self.logger.info(f"Model type: {'BGE-M3' if self.is_bge_model else 'Sentence-BERT'}")
         
         # 모델 로딩
         self._load_model()
@@ -65,13 +77,23 @@ class LegalVectorStore:
         self._initialize_index()
     
     def _load_model(self):
-        """Sentence-BERT 모델 로딩"""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("SentenceTransformers is required but not installed")
-        
+        """임베딩 모델 로딩 (Sentence-BERT 또는 BGE-M3)"""
         try:
-            self.model = SentenceTransformer(self.model_name)
-            self.logger.info(f"Model loaded: {self.model_name}")
+            if self.is_bge_model:
+                # BGE-M3 모델 로딩
+                if not FLAG_EMBEDDING_AVAILABLE:
+                    raise ImportError("FlagEmbedding is required for BGE-M3 models but not installed")
+                
+                self.model = FlagModel(self.model_name, query_instruction_for_retrieval="")
+                self.logger.info(f"BGE-M3 model loaded: {self.model_name}")
+            else:
+                # Sentence-BERT 모델 로딩
+                if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                    raise ImportError("SentenceTransformers is required but not installed")
+                
+                self.model = SentenceTransformer(self.model_name)
+                self.logger.info(f"Sentence-BERT model loaded: {self.model_name}")
+                
         except Exception as e:
             self.logger.error(f"Failed to load model {self.model_name}: {e}")
             raise
@@ -103,7 +125,20 @@ class LegalVectorStore:
             raise RuntimeError("Model not loaded")
         
         try:
-            embeddings = self.model.encode(texts, convert_to_numpy=True)
+            if self.is_bge_model:
+                # BGE-M3 모델의 임베딩 생성
+                embeddings = self.model.encode(texts)
+                # numpy 배열로 변환
+                if hasattr(embeddings, 'numpy'):
+                    embeddings = embeddings.numpy()
+                elif not isinstance(embeddings, np.ndarray):
+                    embeddings = np.array(embeddings)
+                # 정규화 (cosine similarity를 위해)
+                faiss.normalize_L2(embeddings)
+            else:
+                # Sentence-BERT 모델의 임베딩 생성
+                embeddings = self.model.encode(texts, convert_to_numpy=True)
+            
             self.logger.info(f"Generated embeddings for {len(texts)} texts")
             return embeddings
         except Exception as e:
@@ -227,8 +262,16 @@ class LegalVectorStore:
         
         try:
             # 쿼리 임베딩 생성
-            query_embedding = self.model.encode([query], convert_to_numpy=True)
-            faiss.normalize_L2(query_embedding)
+            if self.is_bge_model:
+                query_embedding = self.model.encode([query])
+                if hasattr(query_embedding, 'numpy'):
+                    query_embedding = query_embedding.numpy()
+                elif not isinstance(query_embedding, np.ndarray):
+                    query_embedding = np.array(query_embedding)
+                faiss.normalize_L2(query_embedding)
+            else:
+                query_embedding = self.model.encode([query], convert_to_numpy=True)
+                faiss.normalize_L2(query_embedding)
             
             # 검색 수행 (필터링을 위해 더 많은 결과 가져옴)
             search_k = min(top_k * 5, self.index.ntotal) if self.index.ntotal > 0 else top_k
@@ -244,7 +287,7 @@ class LegalVectorStore:
                 if filters:
                     match = True
                     for key, value in filters.items():
-                        if key in self.document_metadata[idx] and self.document_metadata[idx][key] != value:
+                        if idx < len(self.document_metadata) and key in self.document_metadata[idx] and self.document_metadata[idx][key] != value:
                             match = False
                             break
                     if not match:
@@ -252,8 +295,8 @@ class LegalVectorStore:
                 
                 result = {
                     'score': float(score),
-                    'text': self.document_texts[idx],
-                    'metadata': self.document_metadata[idx]
+                    'text': self.document_texts[idx] if idx < len(self.document_texts) else '',
+                    'metadata': self.document_metadata[idx] if idx < len(self.document_metadata) else {}
                 }
                 results.append(result)
                 
@@ -274,8 +317,16 @@ class LegalVectorStore:
         
         try:
             # 쿼리 임베딩 생성
-            query_embedding = self.model.encode([query], convert_to_numpy=True)
-            faiss.normalize_L2(query_embedding)
+            if self.is_bge_model:
+                query_embedding = self.model.encode([query])
+                if hasattr(query_embedding, 'numpy'):
+                    query_embedding = query_embedding.numpy()
+                elif not isinstance(query_embedding, np.ndarray):
+                    query_embedding = np.array(query_embedding)
+                faiss.normalize_L2(query_embedding)
+            else:
+                query_embedding = self.model.encode([query], convert_to_numpy=True)
+                faiss.normalize_L2(query_embedding)
             
             # 검색 수행
             scores, indices = self.index.search(query_embedding, min(top_k, self.index.ntotal))
@@ -319,13 +370,28 @@ class LegalVectorStore:
             
             # 쿼리 임베딩 생성
             search_query = f"{law_name} {query}" if query else law_name
-            query_embedding = self.model.encode([search_query], convert_to_numpy=True)
-            faiss.normalize_L2(query_embedding)
+            if self.is_bge_model:
+                query_embedding = self.model.encode([search_query], normalize_embeddings=True)
+                if hasattr(query_embedding, 'numpy'):
+                    query_embedding = query_embedding.numpy()
+                elif not isinstance(query_embedding, np.ndarray):
+                    query_embedding = np.array(query_embedding)
+            else:
+                query_embedding = self.model.encode([search_query], convert_to_numpy=True)
+                faiss.normalize_L2(query_embedding)
             
             # 해당 법령의 문서들만 검색
-            law_embeddings = np.array([self.document_texts[i] for i in law_indices])
-            law_embeddings = self.model.encode(law_embeddings, convert_to_numpy=True)
-            faiss.normalize_L2(law_embeddings)
+            law_texts = [self.document_texts[i] for i in law_indices]
+            if self.is_bge_model:
+                law_embeddings = self.model.encode(law_texts)
+                if hasattr(law_embeddings, 'numpy'):
+                    law_embeddings = law_embeddings.numpy()
+                elif not isinstance(law_embeddings, np.ndarray):
+                    law_embeddings = np.array(law_embeddings)
+                faiss.normalize_L2(law_embeddings)
+            else:
+                law_embeddings = self.model.encode(law_texts, convert_to_numpy=True)
+                faiss.normalize_L2(law_embeddings)
             
             # 유사도 계산
             similarities = np.dot(query_embedding, law_embeddings.T)[0]
@@ -368,13 +434,28 @@ class LegalVectorStore:
             
             # 쿼리 임베딩 생성
             search_query = f"{category} {query}" if query else category
-            query_embedding = self.model.encode([search_query], convert_to_numpy=True)
-            faiss.normalize_L2(query_embedding)
+            if self.is_bge_model:
+                query_embedding = self.model.encode([search_query], normalize_embeddings=True)
+                if hasattr(query_embedding, 'numpy'):
+                    query_embedding = query_embedding.numpy()
+                elif not isinstance(query_embedding, np.ndarray):
+                    query_embedding = np.array(query_embedding)
+            else:
+                query_embedding = self.model.encode([search_query], convert_to_numpy=True)
+                faiss.normalize_L2(query_embedding)
             
             # 해당 카테고리의 문서들만 검색
-            category_embeddings = np.array([self.document_texts[i] for i in category_indices])
-            category_embeddings = self.model.encode(category_embeddings, convert_to_numpy=True)
-            faiss.normalize_L2(category_embeddings)
+            category_texts = [self.document_texts[i] for i in category_indices]
+            if self.is_bge_model:
+                category_embeddings = self.model.encode(category_texts)
+                if hasattr(category_embeddings, 'numpy'):
+                    category_embeddings = category_embeddings.numpy()
+                elif not isinstance(category_embeddings, np.ndarray):
+                    category_embeddings = np.array(category_embeddings)
+                faiss.normalize_L2(category_embeddings)
+            else:
+                category_embeddings = self.model.encode(category_texts, convert_to_numpy=True)
+                faiss.normalize_L2(category_embeddings)
             
             # 유사도 계산
             similarities = np.dot(query_embedding, category_embeddings.T)[0]
@@ -417,8 +498,16 @@ class LegalVectorStore:
                 return []
             
             # 해당 문서의 임베딩 추출
-            doc_embedding = self.model.encode([self.document_texts[doc_index]], convert_to_numpy=True)
-            faiss.normalize_L2(doc_embedding)
+            if self.is_bge_model:
+                doc_embedding = self.model.encode([self.document_texts[doc_index]])
+                if hasattr(doc_embedding, 'numpy'):
+                    doc_embedding = doc_embedding.numpy()
+                elif not isinstance(doc_embedding, np.ndarray):
+                    doc_embedding = np.array(doc_embedding)
+                faiss.normalize_L2(doc_embedding)
+            else:
+                doc_embedding = self.model.encode([self.document_texts[doc_index]], convert_to_numpy=True)
+                faiss.normalize_L2(doc_embedding)
             
             # 검색 수행 (자기 자신 제외)
             scores, indices = self.index.search(doc_embedding, top_k + 1)
@@ -477,18 +566,39 @@ class LegalVectorStore:
         try:
             filepath = Path(filepath)
             
-            # FAISS 인덱스 로딩
-            self.index = faiss.read_index(str(filepath.with_suffix('.faiss')))
+            # FAISS 인덱스 로딩 - 확장자가 없으면 직접 로드, 있으면 기존 방식 사용
+            if filepath.suffix == '':
+                # 확장자가 없는 경우 직접 로드
+                self.index = faiss.read_index(str(filepath))
+                # 메타데이터 파일명 처리 (simple_vector_index -> simple_vector_metadata.json)
+                metadata_file = filepath.parent / f"{filepath.name.replace('_index', '_metadata')}.json"
+            else:
+                # 확장자가 있는 경우 기존 방식 사용
+                self.index = faiss.read_index(str(filepath.with_suffix('.faiss')))
+                metadata_file = filepath.with_suffix('.json')
             
             # 메타데이터 로딩
-            with open(filepath.with_suffix('.json'), 'r', encoding='utf-8') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
             self.model_name = metadata.get('model_name', self.model_name)
             self.dimension = metadata.get('dimension', self.dimension)
             self.index_type = metadata.get('index_type', self.index_type)
-            self.document_metadata = metadata.get('document_metadata', [])
-            self.document_texts = metadata.get('document_texts', [])
+            
+            # 메타데이터 구조 처리
+            if 'document_metadata' in metadata:
+                self.document_metadata = metadata.get('document_metadata', [])
+            else:
+                # simple_vector_metadata.json 형식 처리
+                self.document_metadata = []
+            
+            if 'document_texts' in metadata:
+                self.document_texts = metadata.get('document_texts', [])
+            elif 'texts' in metadata:
+                # simple_vector_metadata.json 형식 처리
+                self.document_texts = metadata.get('texts', [])
+            else:
+                self.document_texts = []
             
             self.logger.info(f"Index loaded from: {filepath}")
             return True
