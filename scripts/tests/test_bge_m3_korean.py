@@ -9,7 +9,7 @@ from pathlib import Path
 import logging
 
 # 프로젝트 루트를 Python 경로에 추가
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # Windows 콘솔에서 UTF-8 인코딩 설정

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 # Add source to path
-sys.path.append(str(Path(__file__).parent / "source"))
+sys.path.append(str(Path(__file__).parent.parent.parent / "source"))
 
 from data.vector_store import LegalVectorStore
 
