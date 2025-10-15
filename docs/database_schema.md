@@ -89,7 +89,81 @@ CREATE VIRTUAL TABLE precedents_fts USING fts5(
 
 ---
 
-## ⚖️ 2. 법령 테이블 (laws)
+## 📄 2. 통합 문서 테이블 (documents) - 하이브리드 검색용
+
+### 2.1 기본 정보
+- **테이블명**: `documents`
+- **목적**: 모든 법률 문서를 통합하여 하이브리드 검색 지원
+- **현재 데이터량**: 24개 문서 (laws 13개, precedents 11개)
+- **주요 검색 필드**: document_type, title, content
+
+### 2.2 스키마 정의
+
+```sql
+CREATE TABLE documents (
+    -- 기본 식별자
+    id TEXT PRIMARY KEY, -- 'law_1', 'precedent_1' 등
+    document_type TEXT NOT NULL, -- 'law', 'precedent', 'constitutional_decision' 등
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_url TEXT,
+    
+    -- 메타데이터
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 2.3 인덱스 설계
+
+```sql
+-- 기본 검색 인덱스
+CREATE INDEX idx_documents_type ON documents(document_type);
+CREATE INDEX idx_documents_title ON documents(title);
+
+-- 풀텍스트 검색 인덱스
+CREATE VIRTUAL TABLE documents_fts USING fts5(
+    title, 
+    content, 
+    content='documents', 
+    content_rowid='id'
+);
+```
+
+### 2.4 메타데이터 테이블들
+
+#### 법령 메타데이터 (law_metadata)
+```sql
+CREATE TABLE law_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    law_name TEXT,
+    article_number INTEGER,
+    promulgation_date TEXT,
+    enforcement_date TEXT,
+    department TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (document_id) REFERENCES documents (id)
+);
+```
+
+#### 판례 메타데이터 (precedent_metadata)
+```sql
+CREATE TABLE precedent_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    case_number TEXT,
+    court_name TEXT,
+    decision_date TEXT,
+    case_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (document_id) REFERENCES documents (id)
+);
+```
+
+---
+
+## ⚖️ 3. 법령 테이블 (laws) - 레거시
 
 ### 2.1 기본 정보
 - **테이블명**: `laws`

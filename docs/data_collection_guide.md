@@ -40,7 +40,38 @@ mkdir -p data/embeddings
 mkdir -p logs
 ```
 
-## 새로운 분리된 데이터 파이프라인
+## 새로운 Assembly 데이터 수집 시스템 (NEW)
+
+국가법령정보센터 API 서비스 중단으로 인해 국회 법률정보시스템을 대안으로 사용하는 새로운 데이터 수집 시스템이 추가되었습니다.
+
+### Assembly 시스템 특징
+
+- **웹 스크래핑**: Playwright를 사용한 브라우저 자동화
+- **점진적 수집**: 중단 시 재개 가능한 체크포인트 시스템
+- **시작 페이지 지정**: 특정 페이지부터 수집 시작 가능
+- **페이지별 저장**: 각 페이지의 데이터를 별도 파일로 저장
+
+### Assembly 시스템 사용법
+
+```bash
+# 기본 사용법
+python scripts/assembly/collect_laws.py --sample 100
+
+# 시작 페이지 지정 (NEW)
+python scripts/assembly/collect_laws.py --sample 50 --start-page 5 --no-resume
+
+# 특정 페이지 범위 수집
+python scripts/assembly/collect_laws.py --sample 180 --start-page 3 --no-resume
+
+# 전체 수집
+python scripts/assembly/collect_laws.py --full
+```
+
+### 자세한 사용법
+
+Assembly 데이터 수집 시스템의 자세한 사용법은 [Assembly 데이터 수집 가이드](development/assembly_data_collection_guide.md)를 참조하세요.
+
+## 기존 API 기반 데이터 수집 시스템
 
 ### 1. 통합 파이프라인 (권장)
 

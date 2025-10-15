@@ -1,0 +1,74 @@
+groups:
+- name: law_collection_alerts
+  rules:
+  - alert: HighErrorRate
+    expr: rate(law_collection_errors_total[5m]) > 0.1
+    for: 2m
+    labels:
+      severity: warning
+      service: law_collection
+    annotations:
+      summary: "High error rate detected in law collection"
+      description: "Error rate is {{ $value }} errors per second for more than 2 minutes"
+
+  - alert: HighMemoryUsage
+    expr: law_collection_memory_usage_bytes > 1000000000  # 1GB
+    for: 5m
+    labels:
+      severity: critical
+      service: law_collection
+    annotations:
+      summary: "High memory usage in law collection"
+      description: "Memory usage is {{ $value | humanize1024 }}B for more than 5 minutes"
+
+  - alert: SlowProcessing
+    expr: histogram_quantile(0.95, rate(law_collection_page_processing_seconds_bucket[5m])) > 60
+    for: 3m
+    labels:
+      severity: warning
+      service: law_collection
+    annotations:
+      summary: "Slow page processing detected"
+      description: "95th percentile processing time is {{ $value }} seconds for more than 3 minutes"
+
+  - alert: CollectionStalled
+    expr: increase(law_collection_pages_processed_total[10m]) == 0 and law_collection_current_page > 0
+    for: 5m
+    labels:
+      severity: critical
+      service: law_collection
+    annotations:
+      summary: "Law collection appears to be stalled"
+      description: "No pages processed in the last 10 minutes while collection is active"
+
+  - alert: LowThroughput
+    expr: law_collection_throughput_laws_per_minute < 1
+    for: 5m
+    labels:
+      severity: warning
+      service: law_collection
+    annotations:
+      summary: "Low throughput detected"
+      description: "Throughput is {{ $value }} laws per minute for more than 5 minutes"
+
+- name: system_alerts
+  rules:
+  - alert: HighSystemMemoryUsage
+    expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.9
+    for: 5m
+    labels:
+      severity: warning
+      service: system
+    annotations:
+      summary: "High system memory usage"
+      description: "System memory usage is {{ $value | humanizePercentage }} for more than 5 minutes"
+
+  - alert: HighCPUUsage
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 5m
+    labels:
+      severity: warning
+      service: system
+    annotations:
+      summary: "High CPU usage"
+      description: "CPU usage is {{ $value }}% for more than 5 minutes"

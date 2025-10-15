@@ -48,9 +48,6 @@ venv.bak/
 .ipynb_checkpoints
 
 # Data Files
-data/raw/
-data/processed/
-data/embeddings/
 *.db
 *.sqlite
 *.sqlite3
@@ -116,5 +113,4 @@ chroma_db/
 # Docker
 .dockerignore
 
-# data
 data/
