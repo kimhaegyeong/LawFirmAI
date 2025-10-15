@@ -5,26 +5,15 @@
 
 import json
 import sys
-import os
 from pathlib import Path
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
-if os.name == 'nt':  # Windows
-    try:
-        import codecs
-        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
-    except AttributeError:
-        # 이미 UTF-8로 설정된 경우 무시
-        pass
-
 # Add source to path
-sys.path.append(str(Path(__file__).parent / "source"))
+sys.path.append(str(Path(__file__).parent.parent.parent / "source"))
 
 from scripts.build_ml_enhanced_vector_db import MLEnhancedVectorBuilder
 
-def debug_exact_error():
-    """정확한 에러 위치 찾기"""
+def test_vector_builder():
+    """벡터 빌더 테스트"""
     input_dir = Path("data/processed/assembly/law/20251013_ml")
     
     # 첫 번째 파일 로드 (law_page 파일만)
@@ -33,8 +22,7 @@ def debug_exact_error():
         print("No law page JSON files found!")
         return
     
-    first_file = json_files[0]
-    print(f"Testing with file: {first_file}")
+    print(f"Found {len(json_files)} files")
     
     # 벡터 빌더 초기화
     try:
@@ -44,15 +32,28 @@ def debug_exact_error():
         print(f"[ERROR] Failed to initialize vector builder: {e}")
         return
     
-    # 단일 파일 처리 테스트
+    # 처음 2개 파일로 테스트
+    test_files = json_files[:2]
+    print(f"Testing with {len(test_files)} files")
+    
     try:
-        documents = vector_builder._process_single_file(first_file)
-        print(f"[OK] Single file processing completed: {len(documents)} documents")
+        # 배치 처리 테스트
+        batch_documents = vector_builder._process_batch(test_files)
+        print(f"[OK] Batch processing completed: {len(batch_documents)} documents")
+        
+        # 벡터 인덱스에 추가 테스트
+        if batch_documents:
+            success = vector_builder._add_documents_to_index(batch_documents)
+            if success:
+                print("[OK] Documents added to vector index successfully")
+            else:
+                print("[ERROR] Failed to add documents to vector index")
         
     except Exception as e:
-        print(f"[ERROR] Error during single file processing: {e}")
+        print(f"[ERROR] Error during vector builder processing: {e}")
         import traceback
         traceback.print_exc()
 
 if __name__ == "__main__":
-    debug_exact_error()
+    test_vector_builder()
+
