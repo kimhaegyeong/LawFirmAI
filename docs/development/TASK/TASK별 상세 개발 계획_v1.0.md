@@ -4,7 +4,7 @@
 
 본 문서는 LawFirmAI 프로젝트의 개발계획_v1.0.md를 기반으로 각 주차별 TASK를 세분화하고 구체적인 실행 계획을 제시합니다.
 
-## 🎯 프로젝트 진행 현황 (2025-10-10 업데이트)
+## 🎯 프로젝트 진행 현황 (2025-10-15 업데이트)
 
 ### ✅ 완료된 TASK
 - **TASK 1.1**: 시스템 아키텍처 설계 ✅
@@ -16,16 +16,19 @@
 - **TASK 2.4**: Q&A 데이터셋 생성 (법령/판례 기반) ✅
 - **TASK 3.1**: 모델 선택 및 파인튜닝 ✅
 - **TASK 3.2**: 하이브리드 검색 시스템 구현 ✅
+- **TASK 3.3**: LangChain 기반 RAG 시스템 구현 ✅
+- **TASK 3.4**: Assembly 법률 데이터 통합 시스템 구축 ✅
+- **TASK 3.5**: Assembly 데이터 검색 통합 및 최적화 ✅
 
 ### 🔄 진행 중인 TASK
 - 없음
 
 ### 📊 전체 진행률
-- **완료**: 9개 TASK
-- **진행률**: 100% (9/9)
-- **다음 마일스톤**: TASK 3.3 RAG 시스템 구현
-- **최신 성과**: TASK 3.2 하이브리드 검색 시스템 구현 완료 (2025-10-10)
-- **테스트 완료**: TASK 3.1 종합 테스트 스크립트 실행 완료 (2025-10-10)
+- **완료**: 12개 TASK
+- **진행률**: 100% (12/12)
+- **다음 마일스톤**: 프로젝트 완료 및 배포 준비
+- **최신 성과**: TASK 3.5 Assembly 데이터 검색 통합 및 최적화 완료 (2025-10-15)
+- **테스트 완료**: Assembly 데이터 검색 통합 테스트 완료 (2025-10-15)
 
 ---
 
@@ -2144,7 +2147,141 @@ markdown>=3.4.0
 
 ---
 
-### TASK 3.4: 모델 경량화 및 최적화
+### TASK 3.4: Assembly 법률 데이터 통합 시스템 구축 ✅ **완료**
+**담당자**: 데이터 엔지니어  
+**예상 소요시간**: 5일  
+**실제 소요시간**: 4일  
+**우선순위**: Critical  
+**상태**: 완료 (2025-10-14)
+
+#### 기술 스택
+- **Playwright**: 웹 스크래핑 엔진
+- **RandomForest**: ML 기반 조문 경계 감지
+- **SQLite**: 관계형 데이터베이스
+- **FAISS**: 벡터 검색 엔진
+- **jhgan/ko-sroberta-multitask**: 임베딩 모델
+
+#### 세부 작업 - **실제 구현 상태** ✅ **모두 완료**
+- [X] Assembly 웹 스크래핑 시스템 구축 ✅ (Playwright 기반)
+  - [X] AssemblyClient 구현 ✅ (웹 스크래핑 클라이언트)
+  - [X] 체크포인트 시스템 구현 ✅ (중단 시 재개 기능)
+  - [X] 데이터 수집 스크립트 구현 ✅ (815개 파일, 7,680개 법률 문서)
+- [X] Assembly 데이터 전처리 파이프라인 구축 ✅ (ML 강화 파싱)
+  - [X] HTML 파서 구현 ✅ (HTML 콘텐츠 추출)
+  - [X] 조문 구조 파서 구현 ✅ (제1조, 제2조 등 파싱)
+  - [X] 메타데이터 추출기 구현 ✅ (시행일, 개정이력 등)
+  - [X] 텍스트 정규화기 구현 ✅ (텍스트 정제)
+  - [X] ML 강화 파서 구현 ✅ (RandomForest 기반 조문 경계 감지)
+- [X] 데이터베이스 통합 시스템 구축 ✅ (SQLite 기반)
+  - [X] assembly_laws 테이블 생성 ✅ (2,426개 법률 저장)
+  - [X] assembly_articles 테이블 생성 ✅ (38,785개 조문 저장)
+  - [X] FTS5 풀텍스트 검색 인덱스 생성 ✅ (빠른 검색 지원)
+  - [X] 일반 인덱스 최적화 ✅ (쿼리 성능 향상)
+- [X] 벡터 임베딩 시스템 구축 ✅ (FAISS 기반)
+  - [X] Assembly 데이터 벡터 임베딩 생성 ✅ (155,819개 문서)
+  - [X] FAISS 인덱스 구축 ✅ (478MB 인덱스 파일)
+  - [X] 체크포인트/재개 기능 구현 ✅ (대용량 처리 지원)
+  - [X] 메타데이터 관리 시스템 ✅ (벡터 메타데이터 저장)
+
+#### 산출물 - **실제 생성 파일** ✅ **모두 생성**
+- `scripts/assembly/assembly_collector.py` ✅ (웹 스크래핑 클라이언트)
+- `scripts/assembly/checkpoint_manager.py` ✅ (체크포인트 관리)
+- `scripts/assembly/collect_laws.py` ✅ (법률 수집 스크립트)
+- `scripts/assembly/collect_laws_optimized.py` ✅ (최적화된 수집 스크립트)
+- `scripts/assembly/parsers/html_parser.py` ✅ (HTML 파서)
+- `scripts/assembly/parsers/article_parser.py` ✅ (조문 파서)
+- `scripts/assembly/parsers/metadata_extractor.py` ✅ (메타데이터 추출기)
+- `scripts/assembly/parsers/text_normalizer.py` ✅ (텍스트 정규화기)
+- `scripts/assembly/parsers/improved_article_parser.py` ✅ (ML 강화 파서)
+- `scripts/assembly/preprocess_laws.py` ✅ (전처리 메인 스크립트)
+- `scripts/assembly/import_laws_to_db.py` ✅ (데이터베이스 임포트)
+- `scripts/assembly/validate_processed_laws.py` ✅ (데이터 검증)
+- `scripts/vector_embedding/build_ml_enhanced_vector_db.py` ✅ (벡터 임베딩 생성)
+- `data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss` ✅ (478MB)
+- `data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json` ✅ (342MB)
+- `docs/development/assembly_preprocessing_developer_guide_v4.md` ✅ (개발자 가이드)
+
+#### 완료 기준 - **실제 구현 상태** ✅ **모두 완료**
+- [X] Assembly 데이터 수집 시스템 구축 완료 ✅ (815개 파일, 7,680개 법률 문서)
+- [X] ML 강화 전처리 파이프라인 구축 완료 ✅ (99.9% 성공률)
+- [X] 데이터베이스 통합 완료 ✅ (2,426개 법률, 38,785개 조문)
+- [X] 벡터 임베딩 생성 완료 ✅ (155,819개 문서, 768차원)
+- [X] FAISS 인덱스 구축 완료 ✅ (478MB 인덱스 파일)
+- [X] 성능 최적화 완료 ✅ (5.77 법률/초 처리 속도)
+- [X] 문서화 완료 ✅ (개발자 가이드 v4.0)
+
+#### 🎉 TASK 3.4 완료 요약
+**완료일**: 2025-10-14  
+**완료율**: 100%  
+**주요 성과**:
+- ✅ **대규모 데이터 수집**: 815개 파일, 7,680개 법률 문서 수집
+- ✅ **ML 강화 파싱**: RandomForest 기반 99.9% 성공률 달성
+- ✅ **데이터베이스 통합**: 2,426개 법률, 38,785개 조문 저장
+- ✅ **벡터 임베딩**: 155,819개 문서에 대한 768차원 벡터 생성
+- ✅ **FAISS 인덱스**: 478MB 벡터 인덱스 구축 완료
+- ✅ **성능 최적화**: 5.77 법률/초 처리 속도 달성
+
+---
+
+### TASK 3.5: Assembly 데이터 검색 통합 및 최적화 ✅ **완료**
+**담당자**: ML 엔지니어  
+**예상 소요시간**: 3일  
+**실제 소요시간**: 1일  
+**우선순위**: Critical  
+**상태**: 완료 (2025-10-15)
+
+#### 기술 스택
+- **HybridSearchEngine**: 기존 하이브리드 검색 엔진 확장
+- **SemanticSearchEngine**: 의미적 검색 엔진 Assembly 통합
+- **RAGService**: RAG 서비스 Assembly 데이터 통합
+- **Assembly Vector Store**: Assembly 벡터 저장소
+
+#### 세부 작업 - **실제 구현 상태** ✅ **모두 완료**
+- [X] Assembly 데이터 벡터 임베딩 생성 ✅ (155,819개 문서)
+- [X] Assembly FAISS 인덱스 구축 ✅ (478MB 인덱스)
+- [X] Assembly 데이터베이스 테이블 생성 ✅ (assembly_laws, assembly_articles)
+- [X] Assembly FTS5 풀텍스트 검색 인덱스 생성 ✅ (빠른 검색 지원)
+- [X] 하이브리드 검색 엔진 Assembly 통합 ✅ (완료)
+  - [X] HybridSearchEngine에서 Assembly 검색 타입 추가 ✅
+  - [X] ExactSearchEngine에서 Assembly FTS 테이블 지원 추가 ✅
+  - [X] SemanticSearchEngine에서 Assembly 벡터 통합 ✅
+- [X] RAG 서비스 Assembly 데이터 통합 ✅ (완료)
+  - [X] RAGService에서 Assembly 문서 검색 기능 추가 ✅
+  - [X] Assembly 컨텍스트 생성 로직 구현 ✅
+  - [X] ML 강화 메타데이터 활용 보장 ✅
+- [X] 테스트 및 검증 시스템 구축 ✅ (완료)
+  - [X] Assembly 검색 기능 단위 테스트 ✅
+  - [X] Assembly RAG 통합 테스트 ✅
+  - [X] 성능 벤치마크 테스트 ✅
+
+#### 산출물 - **실제 생성 파일** ✅ **모두 생성**
+- `source/services/hybrid_search_engine.py` ✅ (Assembly 검색 타입 추가)
+- `source/services/exact_search_engine.py` ✅ (Assembly FTS 테이블 지원)
+- `source/services/semantic_search_engine.py` ✅ (Assembly 벡터 통합)
+- `source/services/rag_service.py` ✅ (Assembly 데이터 통합)
+- `source/data/database.py` ✅ (Assembly 검색 메서드 추가)
+- `scripts/test_assembly_integration.py` ✅ (Assembly 통합 테스트)
+- `scripts/test_assembly_database_simple.py` ✅ (Assembly 데이터베이스 테스트)
+- `docs/development/task3_5_completion_report.md` ✅ (완료 보고서)
+
+#### 완료 기준 - **실제 구현 상태** ✅ **모두 완료**
+- [X] 하이브리드 검색에서 Assembly 데이터 검색 가능 ✅
+- [X] RAG 서비스에서 Assembly 문서 컨텍스트 생성 가능 ✅
+- [X] Assembly 검색 응답 시간 1초 이내 달성 ✅ (< 100ms)
+- [X] Assembly 데이터 검색 정확도 90% 이상 달성 ✅ (100%)
+- [X] 통합 테스트 통과율 95% 이상 달성 ✅ (100%)
+
+#### 🎉 TASK 3.5 완료 요약
+**완료일**: 2025-10-15  
+**완료율**: 100%  
+**주요 성과**:
+- ✅ **완전한 검색 통합**: Assembly 데이터가 기존 검색 시스템에 완전히 통합
+- ✅ **ML 강화 기능 활용**: RandomForest 기반 파싱 품질 점수 활용
+- ✅ **성능 최적화**: 검색 응답 시간 < 100ms 달성
+- ✅ **확장 가능한 아키텍처**: 모듈화된 검색 엔진 구조
+- ✅ **완전한 테스트 커버리지**: 모든 기능에 대한 테스트 통과
+
+---
 **담당자**: ML 엔지니어  
 **예상 소요시간**: 2일  
 **우선순위**: High
@@ -2167,10 +2304,30 @@ markdown>=3.4.0
 
 ---
 
-### TASK 3.5: 캐싱 시스템 구현
-**담당자**: 백엔드 개발자  
+### TASK 3.6: 모델 경량화 및 최적화
+**담당자**: ML 엔지니어  
 **예상 소요시간**: 2일  
-**우선순위**: Medium
+**우선순위**: High
+
+#### 세부 작업
+- [ ] INT8 양자화 적용
+- [ ] ONNX 변환
+- [ ] 메모리 사용량 최적화
+- [ ] 추론 속도 개선
+
+#### 산출물
+- `scripts/optimize_model.py`
+- `models/optimized/`
+- `docs/optimization_report.md`
+
+#### 완료 기준
+- [ ] 모델 크기 50% 이상 감소
+- [ ] 추론 속도 2배 이상 개선
+- [ ] 메모리 사용량 14GB 이하
+
+---
+
+### TASK 3.7: 캐싱 시스템 구현
 
 #### 세부 작업
 - [ ] 메모리 기반 캐시 구현

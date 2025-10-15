@@ -398,3 +398,50 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting document by ID: {e}")
             return None
+    
+    def search_assembly_documents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Assembly 데이터베이스에서 문서 검색"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Assembly 테이블에서 검색
+                sql = """
+                    SELECT al.law_id, al.law_name, aa.article_number, aa.article_title, 
+                           aa.article_content, aa.article_type, aa.is_supplementary,
+                           aa.ml_confidence_score, aa.parsing_method, aa.parsing_quality_score,
+                           aa.word_count, aa.char_count
+                    FROM assembly_laws al
+                    JOIN assembly_articles aa ON al.law_id = aa.law_id
+                    WHERE (al.law_name LIKE ? OR aa.article_content LIKE ? OR aa.article_title LIKE ?)
+                    ORDER BY aa.parsing_quality_score DESC, aa.word_count DESC
+                    LIMIT ?
+                """
+                
+                search_term = f"%{query}%"
+                cursor.execute(sql, (search_term, search_term, search_term, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    result = {
+                        "law_id": row["law_id"],
+                        "law_name": row["law_name"],
+                        "article_number": row["article_number"],
+                        "article_title": row["article_title"],
+                        "content": row["article_content"],
+                        "article_type": row["article_type"],
+                        "is_supplementary": bool(row["is_supplementary"]),
+                        "ml_confidence_score": row["ml_confidence_score"],
+                        "parsing_method": row["parsing_method"],
+                        "quality_score": row["parsing_quality_score"],
+                        "word_count": row["word_count"],
+                        "char_count": row["char_count"],
+                        "relevance_score": 1.0  # 정확한 매칭이므로 높은 점수
+                    }
+                    results.append(result)
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Error searching assembly documents: {e}")
+            return []
