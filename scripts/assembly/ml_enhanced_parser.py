@@ -165,8 +165,8 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         """
         articles = []
         
-        # 조문 패턴으로 모든 후보 찾기
-        article_pattern = re.compile(r'제(\d+(?:의\d+)?)조(?:\s*\(([^)]+)\))?')
+        # 조문 패턴으로 모든 후보 찾기 (제2조의13 형태도 올바르게 인식, \xa0 등 공백 허용)
+        article_pattern = re.compile(r'제(\d+)조(?:\s*의\s*(\d+))?(?:\s*\(([^)]+)\))?')
         matches = list(article_pattern.finditer(content))
         
         if not matches:
@@ -178,8 +178,11 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         valid_matches = []
         
         for i, match in enumerate(matches):
-            article_number = f"제{match.group(1)}조"
-            article_title = match.group(2) if match.group(2) else ""
+            # 조문 번호 조합 (제2조의13 형태 처리)
+            article_num = match.group(1)
+            article_sub = match.group(2) if match.group(2) else ""
+            article_number = f"제{article_num}조" if not article_sub else f"제{article_num}조의{article_sub}"
+            article_title = match.group(3) if match.group(3) else ""
             position = match.start()
             
             # ML 예측
@@ -204,8 +207,11 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         
         # 유효한 조문들 처리
         for i, match in enumerate(valid_matches):
-            article_number = f"제{match.group(1)}조"
-            article_title = match.group(2) if match.group(2) else ""
+            # 조문 번호 조합 (제2조의13 형태 처리)
+            article_num = match.group(1)
+            article_sub = match.group(2) if match.group(2) else ""
+            article_number = f"제{article_num}조" if not article_sub else f"제{article_num}조의{article_sub}"
+            article_title = match.group(3) if match.group(3) else ""
             
             # 조문 내용 추출
             if i + 1 < len(valid_matches):

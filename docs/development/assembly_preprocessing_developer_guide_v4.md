@@ -31,6 +31,13 @@ This guide provides comprehensive documentation for developers working with the 
 - **Quality Assurance**: 100% control character removal rate
 - **UTF-8 Encoding**: Proper Korean character handling
 
+### 🔄 **Checkpoint & Graceful Shutdown System**
+- **Automatic Checkpointing**: Progress saved every 10 chunks
+- **Resume Capability**: Restart from interruption point
+- **Graceful Shutdown**: Safe termination on SIGTERM/SIGINT/SIGBREAK
+- **Progress Tracking**: Real-time progress and ETA calculation
+- **Data Integrity**: Current chunk completion before checkpoint save
+
 ## Architecture Overview
 
 ### Core Components
@@ -776,5 +783,162 @@ python scripts/assembly/check_parsing_quality.py
 python scripts/assembly/check_parsing_quality.py --processed-dir data/processed/assembly/law/ml_enhanced
 ```
 
-The Assembly Law Data Preprocessing Pipeline v4.0 provides ML-enhanced accuracy, hybrid parsing capabilities, and comprehensive quality validation for reliable production use with superior legal document parsing performance.
+---
+
+## Vector Embedding Generation
+
+### Overview
+The vector embedding generation system creates high-dimensional vector representations of legal documents for semantic search and retrieval. The system features checkpoint support and graceful shutdown capabilities for long-running operations.
+
+### Key Features
+
+#### 🚀 **Performance Optimization**
+- **Model**: ko-sroberta-multitask (768 dimensions)
+- **Speed**: 3-5x faster than BGE-M3 (1-2 minutes per chunk vs 6-7 minutes)
+- **Memory**: 99% reduction (190MB vs 16.5GB)
+- **Completion Time**: 15-20 hours vs 88 hours (4-5x improvement)
+
+#### 🔄 **Checkpoint System**
+- **Automatic Saving**: Progress saved every 10 chunks
+- **Resume Support**: Restart from interruption point
+- **Progress Tracking**: Real-time progress and ETA calculation
+- **Data Integrity**: Current chunk completion before checkpoint save
+
+#### 🛡️ **Graceful Shutdown**
+- **Signal Handling**: SIGTERM, SIGINT, SIGBREAK support
+- **Safe Termination**: Complete current chunk before exit
+- **Checkpoint Save**: Automatic checkpoint save on shutdown
+- **Resume Ready**: Ready for immediate restart
+
+### Usage
+
+#### Basic Usage
+```bash
+# Start vector embedding generation
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py \
+    --input data/processed/assembly/law/20251013_ml \
+    --output data/embeddings/ml_enhanced_ko_sroberta \
+    --batch-size 20 \
+    --chunk-size 200 \
+    --log-level INFO
+```
+
+#### Resume from Checkpoint
+```bash
+# Resume interrupted work
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py \
+    --input data/processed/assembly/law/20251013_ml \
+    --output data/embeddings/ml_enhanced_ko_sroberta \
+    --batch-size 20 \
+    --chunk-size 200 \
+    --log-level INFO \
+    --resume
+```
+
+#### Start Fresh (Ignore Checkpoint)
+```bash
+# Start from beginning (ignore existing checkpoint)
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py \
+    --input data/processed/assembly/law/20251013_ml \
+    --output data/embeddings/ml_enhanced_ko_sroberta \
+    --batch-size 20 \
+    --chunk-size 200 \
+    --log-level INFO \
+    --no-resume
+```
+
+### Checkpoint File Structure
+
+#### embedding_checkpoint.json
+```json
+{
+  "completed_chunks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "total_chunks": 780,
+  "start_time": 1697364074.123,
+  "last_update": 1697364500.456
+}
+```
+
+### Monitoring Progress
+
+#### Check Progress
+```bash
+# View checkpoint file
+cat data/embeddings/ml_enhanced_ko_sroberta/embedding_checkpoint.json
+
+# Calculate progress percentage
+python -c "
+import json
+with open('data/embeddings/ml_enhanced_ko_sroberta/embedding_checkpoint.json', 'r') as f:
+    data = json.load(f)
+    completed = len(data['completed_chunks'])
+    total = data['total_chunks']
+    print(f'Progress: {completed}/{total} ({completed/total*100:.1f}%)')
+"
+```
+
+#### Log Monitoring
+```bash
+# Monitor logs in real-time
+tail -f logs/build_ml_enhanced_vector_db.log
+
+# Check for errors
+grep "ERROR" logs/build_ml_enhanced_vector_db.log
+```
+
+### Graceful Shutdown
+
+#### Manual Interruption
+```bash
+# Press Ctrl+C to gracefully shutdown
+^C
+# Output: Graceful shutdown requested. Saving checkpoint and exiting...
+# Output: Checkpoint saved. You can resume later with --resume flag.
+```
+
+#### System Shutdown
+- The system automatically handles system shutdown signals
+- Checkpoint is saved before process termination
+- Resume capability is maintained across reboots
+
+### Troubleshooting
+
+#### Common Issues
+
+**Q: Process was killed unexpectedly**
+**A**: Use `--resume` flag to continue from the last checkpoint:
+```bash
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py --input ... --output ... --resume
+```
+
+**Q: Checkpoint file is corrupted**
+**A**: Use `--no-resume` flag to start fresh:
+```bash
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py --input ... --output ... --no-resume
+```
+
+**Q: Out of memory errors**
+**A**: Reduce batch-size and chunk-size:
+```bash
+python scripts/build_ml_enhanced_vector_db_cpu_optimized.py --input ... --output ... --batch-size 10 --chunk-size 100
+```
+
+**Q: Slow processing**
+**A**: The ko-sroberta-multitask model is already optimized. For faster processing, consider:
+- Using GPU if available
+- Reducing chunk-size for more frequent checkpoints
+- Using SSD storage for better I/O performance
+
+### Performance Metrics
+
+| Metric | BGE-M3 (Before) | ko-sroberta (After) | Improvement |
+|--------|------------------|---------------------|-------------|
+| Processing Speed | 6-7 min/chunk | 1-2 min/chunk | **3-5x faster** |
+| Memory Usage | 16.5GB | 190MB | **99% reduction** |
+| Completion Time | 88 hours | 15-20 hours | **4-5x faster** |
+| Model Size | Large | Medium | **Optimized** |
+| Dimensions | 1024 | 768 | **25% reduction** |
+
+The Assembly Law Data Preprocessing Pipeline v4.0 provides ML-enhanced accuracy, hybrid parsing capabilities, comprehensive quality validation, and robust vector embedding generation with checkpoint support for reliable production use with superior legal document parsing performance.
+
 

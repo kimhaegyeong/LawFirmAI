@@ -191,7 +191,15 @@ class AssemblyLawImporter:
             logger.info(f"Importing file: {file_path}")
             
             with open(file_path, 'r', encoding='utf-8') as f:
-                processed_laws = json.load(f)
+                file_data = json.load(f)
+            
+            # ML 강화 데이터 구조 처리
+            if isinstance(file_data, dict) and 'laws' in file_data:
+                processed_laws = file_data['laws']
+            elif isinstance(file_data, list):
+                processed_laws = file_data
+            else:
+                processed_laws = [file_data]
             
             file_results = {
                 'file_name': file_path.name,
@@ -256,18 +264,19 @@ class AssemblyLawImporter:
                         law_id, source, law_name, law_type, category, row_number,
                         promulgation_number, promulgation_date, enforcement_date, amendment_type,
                         ministry, parent_law, related_laws,
-                        full_text, summary,
+                        full_text, searchable_text, keywords, summary,
                         html_clean_text, content_html,
                         raw_content, detail_url, cont_id, cont_sid, collected_at,
                         processed_at, processing_version, data_quality,
                         ml_enhanced, parsing_quality_score, article_count, supplementary_count, control_characters_removed
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', law_record)
                 
                 # Insert articles
                 articles = law_data.get('articles', [])
+                actual_law_id = law_record[0]  # _prepare_law_record에서 생성된 law_id 사용
                 for article in articles:
-                    article_record = self._prepare_article_record(law_data['law_id'], article)
+                    article_record = self._prepare_article_record(actual_law_id, article)
                     cursor.execute('''
                         INSERT OR REPLACE INTO assembly_articles (
                         law_id, article_number, article_title, article_content,
@@ -295,7 +304,7 @@ class AssemblyLawImporter:
         supp_articles = [a for a in articles if a.get('is_supplementary', False)]
         
         return (
-            law_data.get('law_id', ''),
+            law_data.get('law_id') or f"ml_enhanced_{law_data.get('law_name', 'unknown').replace(' ', '_')}",
             law_data.get('source', 'assembly'),
             law_data.get('law_name', ''),
             law_data.get('law_type', ''),
@@ -309,6 +318,8 @@ class AssemblyLawImporter:
             law_data.get('parent_law', ''),
             json.dumps(law_data.get('related_laws', []), ensure_ascii=False),
             law_data.get('full_text', ''),
+            law_data.get('searchable_text', law_data.get('full_text', '')),
+            json.dumps(law_data.get('keywords', []), ensure_ascii=False),
             law_data.get('summary', ''),
             law_data.get('html_clean_text', ''),
             law_data.get('content_html', ''),

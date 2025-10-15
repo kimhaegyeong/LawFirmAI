@@ -40,9 +40,6 @@ class Config(BaseSettings):
     law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
     law_firm_ai_api_key: str = Field(default="your-api-key-here", env="LAW_FIRM_AI_API_KEY")
     
-    class Config:
-        extra = "ignore"  # 추가 필드 무시
-    
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
     api_port: int = Field(default=8000, env="API_PORT")
@@ -87,10 +84,11 @@ class Config(BaseSettings):
     enable_metrics: bool = Field(default=True, env="ENABLE_METRICS")
     metrics_port: int = Field(default=9090, env="METRICS_PORT")
     
-    class Config:
+    class Settings:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # 추가 필드 무시
         
         @classmethod
         def _load_env_file(cls, env_file: str) -> None:
@@ -130,5 +128,5 @@ class Config(BaseSettings):
     def __init__(self, **kwargs):
         """초기화 시 환경변수 파일 로딩"""
         # 환경변수 파일 로딩
-        self.Config._load_env_file(".env")
+        self.Settings._load_env_file(".env")
         super().__init__(**kwargs)

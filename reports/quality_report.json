@@ -1,0 +1,687 @@
+{
+  "generated_at": "2025-10-15T07:16:29.527040",
+  "overall_stats": {
+    "total_articles": 38785,
+    "ml_enhanced_articles": 38785,
+    "avg_quality_score": 0.0,
+    "min_quality_score": 0.0,
+    "max_quality_score": 0.0,
+    "main_articles": 20451,
+    "supplementary_articles": 18334,
+    "ml_parsing_method": 0,
+    "rule_parsing_method": 38785,
+    "quality_distribution": {
+      "excellent": 0,
+      "good": 0,
+      "fair": 0,
+      "poor": 38785
+    },
+    "ml_enhancement_rate": 100.0
+  },
+  "law_stats": [
+    {
+      "law_name": "1959년 12월 31일 이전에 퇴직한 군인의 퇴직급여금지급에 관한 특별법",
+      "law_id": "ml_enhanced_1959년_12월_31일_이전에_퇴직한_군인의_퇴직급여금지급에_관한_특별법",
+      "article_count": 12,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 12,
+      "main_count": 8,
+      "supplementary_count": 4,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "1980년해직공무원의보상등에관한특별조치법시행령",
+      "law_id": "ml_enhanced_1980년해직공무원의보상등에관한특별조치법시행령",
+      "article_count": 23,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 23,
+      "main_count": 11,
+      "supplementary_count": 12,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "20111026 재보궐선거일 중앙선거관리위원회와 박원순 서울시장 후보 홈페이지에 대한 사이버테러 진상규명을 위한 특별검사의 임명 등에 관한 법률",
+      "law_id": "ml_enhanced_20111026_재보궐선거일_중앙선거관리위원회와_박원순_서울시장_후보_홈페이지에_대한_사이버테러_진상규명을_위한_특별검사의_임명_등에_관한_법률",
+      "article_count": 16,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 16,
+      "main_count": 13,
+      "supplementary_count": 3,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2011대구세계육상선수권대회, 2013충주세계조정선수권대회, 2014인천아시아경기대회, 2014인천장애인아시아경기대회 및 2015광주하계유니버시아드대회 지원법",
+      "law_id": "ml_enhanced_2011대구세계육상선수권대회,_2013충주세계조정선수권대회,_2014인천아시아경기대회,_2014인천장애인아시아경기대회_및_2015광주하계유니버시아드대회_지원법",
+      "article_count": 174,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 174,
+      "main_count": 42,
+      "supplementary_count": 132,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2011대구세계육상선수권대회, 2013충주세계조정선수권대회, 2014인천아시아경기대회, 2014인천장애인아시아경기대회 및 2015광주하계유니버시아드대회 지원법 시행령",
+      "law_id": "ml_enhanced_2011대구세계육상선수권대회,_2013충주세계조정선수권대회,_2014인천아시아경기대회,_2014인천장애인아시아경기대회_및_2015광주하계유니버시아드대회_지원법_시행령",
+      "article_count": 74,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 74,
+      "main_count": 22,
+      "supplementary_count": 52,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2011대구세계육상선수권대회, 2014인천아시아경기대회, 2014인천장애인아시아경기대회 및 2015광주하계유니버시아드대회 지원법 시행령",
+      "law_id": "ml_enhanced_2011대구세계육상선수권대회,_2014인천아시아경기대회,_2014인천장애인아시아경기대회_및_2015광주하계유니버시아드대회_지원법_시행령",
+      "article_count": 27,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 27,
+      "main_count": 10,
+      "supplementary_count": 17,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2011대구세계육상선수권대회, 2014인천아시아경기대회 및 2015광주하계유니버시아드대회 지원법 시행령",
+      "law_id": "ml_enhanced_2011대구세계육상선수권대회,_2014인천아시아경기대회_및_2015광주하계유니버시아드대회_지원법_시행령",
+      "article_count": 24,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 24,
+      "main_count": 10,
+      "supplementary_count": 14,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2012세계자연보전총회 지원특별법",
+      "law_id": "ml_enhanced_2012세계자연보전총회_지원특별법",
+      "article_count": 10,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 10,
+      "main_count": 8,
+      "supplementary_count": 2,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2012세계자연보전총회 지원특별법 시행령",
+      "law_id": "ml_enhanced_2012세계자연보전총회_지원특별법_시행령",
+      "article_count": 9,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 9,
+      "main_count": 5,
+      "supplementary_count": 4,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    },
+    {
+      "law_name": "2013 평창 동계스페셜올림픽 세계대회 지원법",
+      "law_id": "ml_enhanced_2013_평창_동계스페셜올림픽_세계대회_지원법",
+      "article_count": 18,
+      "avg_quality_score": 0.0,
+      "ml_enhanced_count": 18,
+      "main_count": 8,
+      "supplementary_count": 10,
+      "law_quality_score": 0.0,
+      "ml_enhancement_rate": 100.0
+    }
+  ],
+  "parsing_method_comparison": {
+    "rule_based": {
+      "count": 38785,
+      "avg_quality_score": 0.0,
+      "avg_ml_confidence": 0.0,
+      "main_count": 20451,
+      "supplementary_count": 18334
+    }
+  },
+  "quality_trends": {
+    "daily_stats": [
+      {
+        "date": "2025-10-13",
+        "articles_processed": 38785,
+        "avg_quality_score": 0.0,
+        "ml_enhanced_count": 38785,
+        "ml_adoption_rate": 100.0
+      }
+    ],
+    "quality_trend": [
+      {
+        "date": "2025-10-13",
+        "quality_score": 0.0
+      }
+    ],
+    "ml_adoption_trend": [
+      {
+        "date": "2025-10-13",
+        "adoption_rate": 100.0
+      }
+    ]
+  },
+  "error_analysis": {
+    "low_quality_articles": [
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제1조",
+        "article_title": "목적",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 13,
+        "char_count": 59
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제2조",
+        "article_title": "서류송달",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 10,
+        "char_count": 48
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제3조",
+        "article_title": "압류·가압류",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 8,
+        "char_count": 29
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제4조",
+        "article_title": "압류의 경합",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 53,
+        "char_count": 251
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제5조",
+        "article_title": "집행취소등에 의한 물건의 인도",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 27,
+        "char_count": 130
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제6조",
+        "article_title": "압류물등의 점검",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 37,
+        "char_count": 171
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제14조",
+        "article_title": "보전처분",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 15,
+        "char_count": 71
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제15조",
+        "article_title": "부동산의 현황조사 등 ",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 63,
+        "char_count": 343
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제18조",
+        "article_title": "야간·휴일의 집무",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 22,
+        "char_count": 91
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제19조",
+        "article_title": "유사집무의 수수료",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 27,
+        "char_count": 118
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제4조",
+        "article_title": "",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 26,
+        "char_count": 120
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제22조",
+        "article_title": "여비의 기준",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 12,
+        "char_count": 53
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제24조",
+        "article_title": "수수료의 변제기",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 32,
+        "char_count": 116
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 5,
+        "char_count": 19
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "다른 규칙의 개정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 32,
+        "char_count": 153
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 6,
+        "char_count": 25
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "다른 규칙의 개정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 18,
+        "char_count": 77
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 6,
+        "char_count": 27
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "적용례",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 25,
+        "char_count": 112
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제1조",
+        "article_title": "목적",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 13,
+        "char_count": 59
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제2조",
+        "article_title": "서류송달",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 10,
+        "char_count": 48
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제3조",
+        "article_title": "압류·가압류",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 8,
+        "char_count": 29
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제4조",
+        "article_title": "압류의 경합",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 53,
+        "char_count": 251
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제5조",
+        "article_title": "집행취소등에 의한 물건의 인도",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 27,
+        "char_count": 130
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제6조",
+        "article_title": "압류물등의 점검",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 37,
+        "char_count": 171
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제14조",
+        "article_title": "보전처분",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 15,
+        "char_count": 71
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제15조",
+        "article_title": "부동산의 현황조사 등 ",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 63,
+        "char_count": 343
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제18조",
+        "article_title": "야간·휴일의 집무",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 22,
+        "char_count": 91
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제19조",
+        "article_title": "유사집무의 수수료",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 27,
+        "char_count": 118
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제4조",
+        "article_title": "",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 26,
+        "char_count": 120
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제22조",
+        "article_title": "여비의 기준",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 12,
+        "char_count": 53
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "제24조",
+        "article_title": "수수료의 변제기",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 32,
+        "char_count": 116
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 5,
+        "char_count": 19
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "다른 규칙의 개정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 32,
+        "char_count": 153
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 6,
+        "char_count": 25
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "다른 규칙의 개정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 18,
+        "char_count": 77
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 6,
+        "char_count": 27
+      },
+      {
+        "law_name": "집행관수수료규칙",
+        "article_number": "부칙제2조",
+        "article_title": "적용례",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 25,
+        "char_count": 112
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제1조",
+        "article_title": "목적",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 26,
+        "char_count": 114
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제2조",
+        "article_title": "정의",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 11,
+        "char_count": 49
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제2조",
+        "article_title": "",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 3,
+        "char_count": 15
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제3조",
+        "article_title": "적용 범위",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 25,
+        "char_count": 111
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제4조",
+        "article_title": "수수료",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 131,
+        "char_count": 605
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제4조",
+        "article_title": "",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 3,
+        "char_count": 15
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "제5조",
+        "article_title": "특수매체기록 수수료",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 109,
+        "char_count": 474
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 6,
+        "char_count": 25
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "부칙제2조",
+        "article_title": "다른 규칙의 개정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 78,
+        "char_count": 399
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "부칙제3조",
+        "article_title": "다른 규칙과의 관계",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 37,
+        "char_count": 126
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "부칙제1조",
+        "article_title": "시행일",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 9,
+        "char_count": 40
+      },
+      {
+        "law_name": "재판기록 열람ㆍ복사 규칙",
+        "article_number": "부칙제2조",
+        "article_title": "경과규정",
+        "parsing_quality_score": 0.0,
+        "parsing_method": "rule_based",
+        "ml_confidence_score": 0.0,
+        "word_count": 25,
+        "char_count": 89
+      }
+    ],
+    "error_patterns": {
+      "common_issues": {},
+      "method_performance": {
+        "rule_based": 50
+      },
+      "content_characteristics": {
+        "short_articles": 12,
+        "long_articles": 0,
+        "avg_word_count": 26.74
+      }
+    },
+    "recommendations": [
+      "규칙 기반 파서의 성능이 ML 강화 파서보다 낮습니다. ML 모델 재훈련을 고려하세요.",
+      "짧은 조문들의 파싱 품질이 낮습니다. 최소 길이 임계값을 조정하세요.",
+      "정기적인 품질 모니터링을 통해 파싱 성능을 추적하세요.",
+      "ML 모델의 신뢰도 점수를 활용하여 품질 임계값을 조정하세요.",
+      "부칙 파싱 로직을 별도로 최적화하세요."
+    ]
+  }
+}
