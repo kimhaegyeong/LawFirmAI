@@ -220,12 +220,71 @@ class ExactSearchEngine:
             
             return results
     
+    def search_assembly_laws(self, query: str, law_name: str = None, article_number: str = None) -> List[Dict[str, Any]]:
+        """Assembly 법률 검색"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            conditions = []
+            params = []
+            
+            if law_name:
+                conditions.append("law_name LIKE ?")
+                params.append(f"%{law_name}%")
+            
+            if article_number:
+                conditions.append("article_number LIKE ?")
+                params.append(f"%{article_number}%")
+            
+            if query:
+                conditions.append("(law_name LIKE ? OR article_content LIKE ? OR article_title LIKE ?)")
+                params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+            
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            
+            sql = f"""
+                SELECT al.law_id, al.law_name, aa.article_number, aa.article_title, 
+                       aa.article_content, aa.article_type, aa.is_supplementary,
+                       aa.ml_confidence_score, aa.parsing_method, aa.parsing_quality_score,
+                       aa.word_count, aa.char_count
+                FROM assembly_laws al
+                JOIN assembly_articles aa ON al.law_id = aa.law_id
+                WHERE {where_clause}
+                ORDER BY aa.parsing_quality_score DESC, aa.word_count DESC
+                LIMIT 50
+            """
+            
+            cursor.execute(sql, params)
+            results = []
+            
+            for row in cursor.fetchall():
+                results.append({
+                    "id": row["law_id"],
+                    "law_id": row["law_id"],
+                    "law_name": row["law_name"],
+                    "article_number": row["article_number"],
+                    "article_title": row["article_title"],
+                    "content": row["article_content"],
+                    "article_type": row["article_type"],
+                    "is_supplementary": bool(row["is_supplementary"]),
+                    "ml_confidence_score": row["ml_confidence_score"],
+                    "parsing_method": row["parsing_method"],
+                    "quality_score": row["parsing_quality_score"],
+                    "word_count": row["word_count"],
+                    "char_count": row["char_count"],
+                    "search_type": "exact_match",
+                    "relevance_score": 1.0
+                })
+            
+            return results
+    
     def search_all(self, query: str) -> Dict[str, List[Dict[str, Any]]]:
         """전체 검색"""
         results = {
             "laws": self.search_laws(query),
             "precedents": self.search_precedents(query),
-            "constitutional_decisions": self.search_constitutional_decisions(query)
+            "constitutional_decisions": self.search_constitutional_decisions(query),
+            "assembly_laws": self.search_assembly_laws(query)
         }
         
         return results

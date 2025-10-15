@@ -18,8 +18,8 @@ class SemanticSearchEngine:
     
     def __init__(self, 
                  model_name: str = "jhgan/ko-sroberta-multitask",
-                 index_path: str = "data/embeddings/faiss_index.bin",
-                 metadata_path: str = "data/embeddings/metadata.json"):
+                 index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
+                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
         self.model_name = model_name
         self.index_path = index_path
         self.metadata_path = metadata_path

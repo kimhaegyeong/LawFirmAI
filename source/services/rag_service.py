@@ -35,7 +35,7 @@ class MLEnhancedRAGService:
     
     def retrieve_relevant_documents(self, query: str, top_k: int = 5, 
                                    filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """ML 강화 관련 문서 검색"""
+        """ML 강화 관련 문서 검색 (Assembly 데이터 포함)"""
         try:
             # 기본 필터 설정
             search_filters = filters or {}
@@ -47,19 +47,25 @@ class MLEnhancedRAGService:
             # 벡터 저장소에서 유사한 문서 검색
             similar_docs = self.vector_store.search(query, top_k * 2, search_filters)  # 더 많은 결과 가져오기
             
+            # Assembly 데이터베이스에서 추가 검색
+            assembly_docs = self._search_assembly_documents(query, top_k)
+            
+            # 모든 결과 통합
+            all_docs = similar_docs + assembly_docs
+            
             # ML 강화 결과 필터링 및 스코어링
-            filtered_docs = self._filter_and_score_documents(similar_docs, query)
+            filtered_docs = self._filter_and_score_documents(all_docs, query)
             
             # 결과 포맷팅
             results = []
             for doc in filtered_docs[:top_k]:
                 metadata = doc.get("metadata", {})
                 result = {
-                    "document_id": metadata.get("document_id"),
-                    "title": metadata.get("law_name", ""),
-                    "content": doc.get("text", ""),
+                    "document_id": metadata.get("document_id", metadata.get("law_id", "")),
+                    "title": metadata.get("law_name", metadata.get("title", "")),
+                    "content": doc.get("text", doc.get("content", "")),
                     "similarity": doc.get("score", 0.0),
-                    "source": metadata.get("document_type", ""),
+                    "source": metadata.get("document_type", metadata.get("source", "assembly")),
                     "chunk_index": metadata.get("chunk_id", 0),
                     "article_number": metadata.get("article_number", ""),
                     "article_title": metadata.get("article_title", ""),
@@ -67,7 +73,7 @@ class MLEnhancedRAGService:
                     "is_supplementary": metadata.get("is_supplementary", False),
                     "ml_confidence_score": metadata.get("ml_confidence_score"),
                     "parsing_method": metadata.get("parsing_method", "ml_enhanced"),
-                    "quality_score": metadata.get("parsing_quality_score", 0.0)
+                    "quality_score": metadata.get("parsing_quality_score", metadata.get("quality_score", 0.0))
                 }
                 results.append(result)
             
@@ -75,6 +81,40 @@ class MLEnhancedRAGService:
             
         except Exception as e:
             self.logger.error(f"Error retrieving documents: {e}")
+            return []
+    
+    def _search_assembly_documents(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """Assembly 데이터베이스에서 문서 검색"""
+        try:
+            # Assembly 데이터베이스에서 검색
+            assembly_results = self.database.search_assembly_documents(query, top_k)
+            
+            # 결과를 벡터 검색 결과와 동일한 형식으로 변환
+            formatted_results = []
+            for result in assembly_results:
+                formatted_result = {
+                    "text": result.get("content", ""),
+                    "score": result.get("relevance_score", 0.0),
+                    "metadata": {
+                        "law_id": result.get("law_id", ""),
+                        "law_name": result.get("law_name", ""),
+                        "article_number": result.get("article_number", ""),
+                        "article_title": result.get("article_title", ""),
+                        "article_type": result.get("article_type", "main"),
+                        "is_supplementary": result.get("is_supplementary", False),
+                        "ml_confidence_score": result.get("ml_confidence_score"),
+                        "parsing_method": result.get("parsing_method", "ml_enhanced"),
+                        "parsing_quality_score": result.get("quality_score", 0.0),
+                        "source": "assembly",
+                        "document_type": "assembly_law"
+                    }
+                }
+                formatted_results.append(formatted_result)
+            
+            return formatted_results
+            
+        except Exception as e:
+            self.logger.error(f"Error searching assembly documents: {e}")
             return []
     
     def _filter_and_score_documents(self, documents: List[Dict[str, Any]], 

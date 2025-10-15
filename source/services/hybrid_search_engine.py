@@ -17,8 +17,8 @@ class HybridSearchEngine:
     def __init__(self, 
                  db_path: str = "data/lawfirm.db",
                  model_name: str = "jhgan/ko-sroberta-multitask",
-                 index_path: str = "data/embeddings/faiss_index.bin",
-                 metadata_path: str = "data/embeddings/metadata.json"):
+                 index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
+                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
         
         self.exact_search = ExactSearchEngine(db_path)
         self.semantic_search = SemanticSearchEngine(model_name, index_path, metadata_path)
@@ -48,7 +48,7 @@ class HybridSearchEngine:
                 max_results = self.search_config["max_results"]
             
             if search_types is None:
-                search_types = ["law", "precedent", "constitutional"]
+                search_types = ["law", "precedent", "constitutional", "assembly_law"]
             
             # 검색 결과 수집
             exact_results = {}
@@ -137,6 +137,14 @@ class HybridSearchEngine:
                         case_number=parsed_query["case_number"]
                     )
                     exact_results["constitutional"] = results
+                    
+                elif search_type == "assembly_law":
+                    results = self.exact_search.search_assembly_laws(
+                        query=parsed_query["raw_query"],
+                        law_name=parsed_query["law_name"],
+                        article_number=parsed_query["article_number"]
+                    )
+                    exact_results["assembly_law"] = results
             
             logger.info(f"Exact search completed: {sum(len(r) for r in exact_results.values())} results")
             return exact_results
