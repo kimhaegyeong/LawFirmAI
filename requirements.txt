@@ -44,6 +44,9 @@ torch>=2.0.0
 transformers>=4.35.0
 sentence-transformers>=2.2.0
 
+# BGE-M3-Korean 모델 지원
+FlagEmbedding>=1.2.0
+
 # PEFT (Parameter-Efficient Fine-Tuning) - LoRA 파인튜닝용
 peft>=0.7.0
 accelerate>=0.24.0

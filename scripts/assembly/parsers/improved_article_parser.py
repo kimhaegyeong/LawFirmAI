@@ -126,6 +126,7 @@ class ImprovedArticleParser:
         cleaned = cleaned.replace('\r', ' ')  # Replace actual carriage return with space
         cleaned = cleaned.replace('\f', ' ')  # Replace form feed with space
         cleaned = cleaned.replace('\v', ' ')  # Replace vertical tab with space
+        cleaned = cleaned.replace('\xa0', ' ')  # Replace non-breaking space with regular space
         
         # Escaped control characters
         cleaned = cleaned.replace('\\n', ' ')  # Replace escaped newline with space
