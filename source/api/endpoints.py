@@ -7,14 +7,14 @@ RESTful API 엔드포인트 정의 - ML 강화 버전
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
-from source.utils.config import Config
-from source.utils.logger import get_logger
-from source.services.chat_service import ChatService
-from source.services.rag_service import MLEnhancedRAGService
-from source.services.search_service import MLEnhancedSearchService
-from source.data.database import DatabaseManager
-from source.data.vector_store import LegalVectorStore
-from source.models.model_manager import LegalModelManager
+from utils.config import Config
+from utils.logger import get_logger
+from services.chat_service import ChatService
+from services.rag_service import MLEnhancedRAGService
+from services.search_service import MLEnhancedSearchService
+from data.database import DatabaseManager
+from data.vector_store import LegalVectorStore
+from models.model_manager import LegalModelManager
 
 logger = get_logger(__name__)
 

@@ -6,10 +6,10 @@ Retrieval-Augmented Generation 서비스 - ML 강화 버전
 
 import logging
 from typing import List, Dict, Any, Optional
-from source.models.model_manager import LegalModelManager
-from source.data.vector_store import LegalVectorStore
-from source.data.database import DatabaseManager
-from source.utils.config import Config
+from models.model_manager import LegalModelManager
+from data.vector_store import LegalVectorStore
+from data.database import DatabaseManager
+from utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,11 @@ class MLEnhancedRAGService:
                 
                 # 품질 필터링
                 quality_score = metadata.get("parsing_quality_score", 0.0)
+                try:
+                    quality_score = float(quality_score) if quality_score is not None else 0.0
+                except (ValueError, TypeError):
+                    quality_score = 0.0
+                
                 if quality_score < self.quality_threshold:
                     continue
                 
@@ -212,7 +217,7 @@ class MLEnhancedRAGService:
             context = self.generate_context(query, retrieved_docs)
             
             # 3. 응답 생성
-            response = self.model_manager.generate_response(query, context)
+            response_text = self.model_manager.generate_response(query, context)
             
             # 4. 소스 정보 추가 (ML 강화 정보 포함)
             sources = []
@@ -234,10 +239,15 @@ class MLEnhancedRAGService:
             # 5. ML 강화 통계 추가
             ml_stats = self._calculate_ml_stats(retrieved_docs)
             
-            response["sources"] = sources
-            response["retrieved_docs_count"] = len(retrieved_docs)
-            response["ml_enhanced"] = True
-            response["ml_stats"] = ml_stats
+            # 6. 응답 딕셔너리 구성
+            response = {
+                "response": response_text,
+                "sources": sources,
+                "retrieved_docs_count": len(retrieved_docs),
+                "ml_enhanced": True,
+                "ml_stats": ml_stats,
+                "confidence": 0.8
+            }
             
             return response
             

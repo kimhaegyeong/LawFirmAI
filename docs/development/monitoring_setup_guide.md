@@ -119,6 +119,44 @@ python scripts/assembly/collect_laws_optimized.py --sample 50 --disable-metrics
 
 ## 로그 분석
 
+### 실시간 로그 확인
+
+#### Gradio 애플리케이션 로그
+```bash
+# Windows PowerShell
+Get-Content logs\gradio_app.log -Wait -Tail 50
+type logs\gradio_app.log
+
+# Windows CMD
+type logs\gradio_app.log
+
+# Linux/Mac
+tail -f logs/gradio_app.log
+tail -n 50 logs/gradio_app.log
+cat logs/gradio_app.log
+```
+
+#### 로그 레벨 설정
+```bash
+# DEBUG 레벨로 실행 (더 자세한 로그)
+# Windows
+set LOG_LEVEL=DEBUG
+python gradio/app.py
+
+# PowerShell
+$env:LOG_LEVEL="DEBUG"
+python gradio/app.py
+
+# Linux/Mac
+export LOG_LEVEL=DEBUG
+python gradio/app.py
+```
+
+#### 로그 파일 위치
+- **Gradio 앱 로그**: `logs/gradio_app.log`
+- **데이터 처리 로그**: `logs/` 디렉토리의 각종 `.log` 파일들
+- **시스템 로그**: 콘솔 출력 (실시간)
+
 ### 분석 도구 사용법
 
 ```bash
