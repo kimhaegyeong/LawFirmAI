@@ -5,9 +5,9 @@
 
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from source.services.exact_search_engine import ExactSearchEngine
-from source.services.semantic_search_engine import SemanticSearchEngine
-from source.services.result_merger import ResultMerger, ResultRanker
+from services.exact_search_engine import ExactSearchEngine
+from services.semantic_search_engine import SemanticSearchEngine
+from services.result_merger import ResultMerger, ResultRanker
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Path, Body
 from pydantic import BaseModel, Field
-from source.services.hybrid_search_engine import HybridSearchEngine
+from services.hybrid_search_engine import HybridSearchEngine
 
 logger = logging.getLogger(__name__)
 

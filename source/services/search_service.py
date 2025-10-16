@@ -7,10 +7,10 @@ Search Service (ML Enhanced)
 import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from source.data.database import DatabaseManager
-from source.data.vector_store import LegalVectorStore as VectorStore
-from source.models.model_manager import LegalModelManager
-from source.utils.config import Config
+from data.database import DatabaseManager
+from data.vector_store import LegalVectorStore as VectorStore
+from models.model_manager import LegalModelManager
+from utils.config import Config
 
 logger = logging.getLogger(__name__)
 

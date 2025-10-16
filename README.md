@@ -12,7 +12,41 @@
 - **Q&A**: 자주 묻는 법률 질문 답변
 - **RAG 기반 답변**: 검색 증강 생성으로 정확한 답변 제공
 
+## 📋 개발 규칙 및 가이드라인
+
+### ⚠️ 중요: Gradio 서버 관리 규칙
+
+**절대 사용하지 말 것**:
+```bash
+# 모든 Python 프로세스 종료 (위험!)
+taskkill /f /im python.exe
+```
+
+**올바른 서버 종료 방법**:
+```bash
+# PID 기반 종료 (권장)
+python gradio/stop_server.py
+
+# 또는 배치 파일 사용
+gradio/stop_server.bat
+```
+
+### 📚 상세 개발 규칙
+
+자세한 개발 규칙, 코딩 스타일, 운영 가이드라인은 다음 문서를 참조하세요:
+- **[개발 규칙 및 가이드라인](docs/development_rules.md)**: 프로세스 관리, 로깅, 보안, 테스트 규칙
+- **[TASK별 상세 개발 계획](docs/development/TASK/TASK별%20상세%20개발%20계획_v1.0.md)**: 프로젝트 진행 현황 및 계획
+
 ## 🔧 최신 업데이트
+
+### 2025-10-16: Gradio 애플리케이션 리팩토링 완료 🎉
+- ✅ **코드 리팩토링**: simple_langchain_app.py를 클래스 기반 구조로 전환
+- ✅ **파일 정리**: 사용하지 않는 Gradio 파일들 삭제 (11개 파일)
+- ✅ **코드 라인 감소**: 1,488라인 → 559라인 (62.4% 감소)
+- ✅ **테스트 스크립트**: 간단한 질의-답변 테스트 스크립트 생성
+- ✅ **성능 최적화**: 메모리 사용량 최적화 및 초기화 시간 단축
+- ✅ **유지보수성**: 모듈화된 구조로 코드 이해도 및 수정 용이성 향상
+- ✅ **테스트 검증**: "난민법 제1조" 질의에 대한 정확한 응답 생성 확인
 
 ### 2025-10-12: 메트릭 수집 및 모니터링 시스템 구현 완료 📊
 - ✅ **메트릭 서버 독립 실행**: 백그라운드에서 지속적으로 실행되는 메트릭 서버
@@ -502,13 +536,17 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (선택사항)
 
 ```bash
-# 환경 변수 파일 복사
-copy .env.example .env
+# OpenAI API 키 설정
+export OPENAI_API_KEY="your_openai_key"
 
-# .env 파일 편집하여 설정값 수정
+# Google AI API 키 설정
+export GOOGLE_API_KEY="your_google_key"
+
+# 디버그 모드 활성화
+export DEBUG="true"
 ```
 
 ### 4. 데이터 수집 (NEW)
@@ -564,12 +602,19 @@ python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민�
 
 ### 5. 애플리케이션 실행
 
-#### Gradio 인터페이스 실행
+#### Gradio 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
 pip install -r requirements.txt
-python app.py
+python simple_langchain_app.py
+```
+
+#### 간단한 테스트 실행
+
+```bash
+cd gradio
+python test_simple_query.py
 ```
 
 #### FastAPI 서버 실행
@@ -588,7 +633,7 @@ python main.py
 
 ## 🐳 Docker 사용
 
-### Gradio 인터페이스 실행
+### Gradio 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
@@ -748,6 +793,44 @@ result = response.json()
 for law in result["results"]:
     print(f"법령명: {law['법령명한글']}")
 ```
+
+## 📊 로그 확인
+
+### Gradio 애플리케이션 로그
+```bash
+# Windows PowerShell - 실시간 로그 모니터링
+Get-Content logs\gradio_app.log -Wait -Tail 50
+
+# Windows CMD - 전체 로그 확인
+type logs\gradio_app.log
+
+# Linux/Mac - 실시간 로그 모니터링
+tail -f logs/gradio_app.log
+
+# Linux/Mac - 최근 50줄 확인
+tail -n 50 logs/gradio_app.log
+```
+
+### 로그 레벨 설정
+```bash
+# DEBUG 레벨로 실행 (더 자세한 로그)
+# Windows
+set LOG_LEVEL=DEBUG
+python gradio/app.py
+
+# PowerShell
+$env:LOG_LEVEL="DEBUG"
+python gradio/app.py
+
+# Linux/Mac
+export LOG_LEVEL=DEBUG
+python gradio/app.py
+```
+
+### 로그 파일 위치
+- **Gradio 앱 로그**: `logs/gradio_app.log`
+- **데이터 처리 로그**: `logs/` 디렉토리의 각종 `.log` 파일들
+- **상세 로깅 가이드**: [docs/development/logging_guide.md](docs/development/logging_guide.md)
 
 ## 🤝 기여하기
 
