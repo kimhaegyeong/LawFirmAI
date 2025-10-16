@@ -21,6 +21,33 @@ data_sources:
     metadata_key: "data_type"
     expected_value: "precedents"
     
+  precedent_civil:
+    enabled: true
+    priority: 2
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/civil"
+    file_pattern: "precedent_civil_page_*.json"
+    metadata_key: "category"
+    expected_value: "civil"
+    
+  precedent_criminal:
+    enabled: true
+    priority: 3
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/criminal"
+    file_pattern: "precedent_criminal_page_*.json"
+    metadata_key: "category"
+    expected_value: "criminal"
+    
+  precedent_family:
+    enabled: true
+    priority: 4
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/family"
+    file_pattern: "precedent_family_page_*.json"
+    metadata_key: "category"
+    expected_value: "family"
+    
   constitutional:
     enabled: false
     priority: 3
@@ -70,6 +97,9 @@ vectorization:
   existing_index_path: "data/embeddings/ml_enhanced_ko_sroberta"
   output_path: "data/embeddings/ml_enhanced_ko_sroberta"
   
+  # 판례 전용 인덱스 경로
+  precedent_index_path: "data/embeddings/ml_enhanced_ko_sroberta_precedents"
+  
   # 모델 설정
   model_settings:
     device: "cpu"  # "cpu" 또는 "cuda"
@@ -101,6 +131,15 @@ database:
     assembly_articles:
       enabled: true
       fts_enabled: true
+    precedent_cases:
+      enabled: true
+      fts_enabled: true
+    precedent_sections:
+      enabled: true
+      fts_enabled: true
+    precedent_parties:
+      enabled: true
+      fts_enabled: false
     processed_files:
       enabled: true
       

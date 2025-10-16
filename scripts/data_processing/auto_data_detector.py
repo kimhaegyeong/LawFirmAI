@@ -49,6 +49,24 @@ class AutoDataDetector:
                 'metadata_key': 'data_type',
                 'expected_value': 'law_only'
             },
+            'precedent_civil': {
+                'file_pattern': r'precedent_civil_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/civil',
+                'metadata_key': 'category',
+                'expected_value': 'civil'
+            },
+            'precedent_criminal': {
+                'file_pattern': r'precedent_criminal_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/criminal',
+                'metadata_key': 'category',
+                'expected_value': 'criminal'
+            },
+            'precedent_family': {
+                'file_pattern': r'precedent_family_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/family',
+                'metadata_key': 'category',
+                'expected_value': 'family'
+            },
             'precedents': {
                 'file_pattern': r'precedent_page_\d+_\d+\.json',
                 'directory_pattern': r'\d{8}',
@@ -66,6 +84,9 @@ class AutoDataDetector:
         # 기본 경로 설정
         self.base_paths = {
             'law_only': 'data/raw/assembly/law_only',
+            'precedent_civil': 'data/raw/assembly/precedent',
+            'precedent_criminal': 'data/raw/assembly/precedent',
+            'precedent_family': 'data/raw/assembly/precedent',
             'precedents': 'data/raw/assembly/precedents',
             'constitutional': 'data/raw/constitutional'
         }
@@ -103,21 +124,8 @@ class AutoDataDetector:
             
             logger.info(f"Scanning date folder: {date_folder.name}")
             
-            # 폴더 내 파일 스캔
-            for file_path in date_folder.glob("*.json"):
-                if not file_path.is_file():
-                    continue
-                
-                # 파일 유형 분류
-                file_data_type = self.classify_data_type(file_path)
-                
-                if file_data_type and (data_type is None or file_data_type == data_type):
-                    # 이미 처리된 파일인지 확인
-                    if not self.db_manager.is_file_processed(str(file_path)):
-                        detected_files[file_data_type].append(file_path)
-                        logger.debug(f"New file detected: {file_path} (type: {file_data_type})")
-                    else:
-                        logger.debug(f"File already processed: {file_path}")
+            # 폴더 내 파일 스캔 (직접 파일 또는 카테고리 하위 폴더)
+            self._scan_folder_for_files(date_folder, detected_files, data_type)
         
         # 결과 요약
         total_files = sum(len(files) for files in detected_files.values())
@@ -126,6 +134,37 @@ class AutoDataDetector:
             logger.info(f"  {data_type}: {len(files)} files")
         
         return dict(detected_files)
+    
+    def _scan_folder_for_files(self, folder: Path, detected_files: Dict[str, List[Path]], data_type: str = None):
+        """
+        폴더 내 파일들을 스캔하여 감지된 파일 목록에 추가
+        
+        Args:
+            folder: 스캔할 폴더
+            detected_files: 감지된 파일들을 저장할 딕셔너리
+            data_type: 특정 데이터 유형 필터
+        """
+        # 직접 파일 스캔
+        for file_path in folder.glob("*.json"):
+            if not file_path.is_file():
+                continue
+            
+            # 파일 유형 분류
+            file_data_type = self.classify_data_type(file_path)
+            
+            if file_data_type and (data_type is None or file_data_type == data_type):
+                # 이미 처리된 파일인지 확인
+                if not self.db_manager.is_file_processed(str(file_path)):
+                    detected_files[file_data_type].append(file_path)
+                    logger.debug(f"New file detected: {file_path} (type: {file_data_type})")
+                else:
+                    logger.debug(f"File already processed: {file_path}")
+        
+        # 하위 카테고리 폴더 스캔 (precedent의 경우 civil, criminal, family 등)
+        for subfolder in folder.iterdir():
+            if subfolder.is_dir() and subfolder.name in ['civil', 'criminal', 'family']:
+                logger.debug(f"Scanning category subfolder: {subfolder.name}")
+                self._scan_folder_for_files(subfolder, detected_files, data_type)
     
     def get_file_hash(self, file_path: Path) -> str:
         """파일 내용의 SHA256 해시를 계산하여 반환"""
@@ -160,6 +199,13 @@ class AutoDataDetector:
             if isinstance(data, dict) and 'metadata' in data:
                 metadata = data['metadata']
                 data_type = metadata.get('data_type')
+                category = metadata.get('category')
+                
+                # precedent 데이터의 경우 카테고리 기반으로 분류
+                if data_type == 'precedent' and category:
+                    precedent_type = f'precedent_{category}'
+                    if precedent_type in self.data_patterns:
+                        return precedent_type
                 
                 if data_type in self.data_patterns:
                     return data_type
@@ -171,7 +217,7 @@ class AutoDataDetector:
                 if re.match(pattern_info['file_pattern'], filename):
                     return data_type
             
-            # items 구조로 분류 (law_only 특화)
+            # items 구조로 분류 (law_only 및 precedent 특화)
             if isinstance(data, dict) and 'items' in data:
                 items = data['items']
                 if items and isinstance(items, list):
@@ -182,6 +228,15 @@ class AutoDataDetector:
                             return 'law_only'
                         # case_number가 있으면 판례 데이터로 분류
                         elif 'case_number' in first_item:
+                            # 카테고리 정보가 있으면 구체적인 precedent 타입 반환
+                            if 'field' in first_item:
+                                field = first_item['field']
+                                if field == '민사':
+                                    return 'precedent_civil'
+                                elif field == '형사':
+                                    return 'precedent_criminal'
+                                elif field == '가사':
+                                    return 'precedent_family'
                             return 'precedents'
             
             logger.warning(f"Could not classify file: {file_path}")

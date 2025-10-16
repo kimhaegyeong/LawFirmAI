@@ -24,8 +24,11 @@ sys.path.append(str(project_root))
 
 from scripts.data_processing.auto_data_detector import AutoDataDetector
 from scripts.data_processing.incremental_preprocessor import IncrementalPreprocessor
+from scripts.data_processing.incremental_precedent_preprocessor import IncrementalPrecedentPreprocessor
 from scripts.ml_training.vector_embedding.incremental_vector_builder import IncrementalVectorBuilder
+from scripts.ml_training.vector_embedding.incremental_precedent_vector_builder import IncrementalPrecedentVectorBuilder
 from scripts.data_processing.utilities.import_laws_to_db import AssemblyLawImporter
+from scripts.data_processing.utilities.import_precedents_to_db import PrecedentDataImporter
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 from source.data.database import DatabaseManager
 
@@ -67,18 +70,29 @@ class AutoPipelineOrchestrator:
         self.checkpoint_manager = CheckpointManager(str(self.checkpoint_dir))
         
         # 각 단계별 컴포넌트
-        self.data_detector = AutoDataDetector(self.db_manager)
+        self.data_detector = AutoDataDetector("data/raw/assembly", self.db_manager)
         self.preprocessor = IncrementalPreprocessor(
+            checkpoint_manager=self.checkpoint_manager,
+            db_manager=self.db_manager,
+            batch_size=self.config['preprocessing']['batch_size']
+        )
+        self.precedent_preprocessor = IncrementalPrecedentPreprocessor(
             checkpoint_manager=self.checkpoint_manager,
             db_manager=self.db_manager,
             batch_size=self.config['preprocessing']['batch_size']
         )
         self.vector_builder = IncrementalVectorBuilder(
             model_name=self.config['vectorization']['model_name'],
-            batch_size=self.config['vectorization']['batch_size'],
-            chunk_size=self.config['vectorization']['chunk_size']
+            dimension=self.config['vectorization']['dimension'],
+            index_type=self.config['vectorization']['index_type']
+        )
+        self.precedent_vector_builder = IncrementalPrecedentVectorBuilder(
+            model_name=self.config['vectorization']['model_name'],
+            dimension=self.config['vectorization']['dimension'],
+            index_type=self.config['vectorization']['index_type']
         )
         self.db_importer = AssemblyLawImporter(db_path)
+        self.precedent_db_importer = PrecedentDataImporter(db_path)
         
         # 로깅 설정
         self.logger = logging.getLogger(__name__)
@@ -245,6 +259,143 @@ class AutoPipelineOrchestrator:
             
         except Exception as e:
             error_msg = f"Pipeline execution error: {e}"
+            self.logger.error(error_msg)
+            error_messages.append(error_msg)
+            
+            return PipelineResult(
+                success=False,
+                total_files_detected=0,
+                files_processed=0,
+                vectors_added=0,
+                laws_imported=0,
+                processing_time=0,
+                stage_results=stage_results,
+                error_messages=error_messages
+            )
+    
+    def run_precedent_pipeline(self, 
+                              category: str = "civil",
+                              auto_detect: bool = True,
+                              specific_path: str = None) -> PipelineResult:
+        """
+        판례 데이터 자동화 파이프라인 실행
+        
+        Args:
+            category: 판례 카테고리 (civil, criminal, family)
+            auto_detect: 자동 감지 여부
+            specific_path: 특정 경로 지정
+        
+        Returns:
+            PipelineResult: 파이프라인 실행 결과
+        """
+        self.pipeline_state['start_time'] = datetime.now()
+        self.logger.info(f"Starting precedent pipeline for category: {category}")
+        
+        stage_results = {}
+        error_messages = []
+        
+        try:
+            # Step 1: 판례 데이터 감지
+            self.pipeline_state['current_stage'] = 'detection'
+            self.logger.info("Step 1: Detecting new precedent data sources...")
+            
+            data_type = f"precedent_{category}"
+            if specific_path:
+                detected_files = self._detect_specific_path(specific_path, data_type)
+            elif auto_detect:
+                detected_files = self._detect_new_data_sources(data_type)
+            else:
+                self.logger.error("No detection method specified")
+                return PipelineResult(
+                    success=False,
+                    total_files_detected=0,
+                    files_processed=0,
+                    vectors_added=0,
+                    laws_imported=0,
+                    processing_time=0,
+                    stage_results=stage_results,
+                    error_messages=["No detection method specified"]
+                )
+            
+            stage_results['detection'] = {
+                'total_files': sum(len(files) for files in detected_files.values()),
+                'files_by_type': {k: len(v) for k, v in detected_files.items()}
+            }
+            
+            if not detected_files or sum(len(files) for files in detected_files.values()) == 0:
+                self.logger.info("No new precedent files detected")
+                return PipelineResult(
+                    success=True,
+                    total_files_detected=0,
+                    files_processed=0,
+                    vectors_added=0,
+                    laws_imported=0,
+                    processing_time=0,
+                    stage_results=stage_results,
+                    error_messages=[]
+                )
+            
+            # Step 2: 판례 전처리
+            self.pipeline_state['current_stage'] = 'preprocessing'
+            self.logger.info("Step 2: Precedent preprocessing...")
+            
+            preprocessing_results = self.precedent_preprocessor.process_new_data_only(category)
+            stage_results['preprocessing'] = preprocessing_results
+            
+            if preprocessing_results['failed_to_process'] > 0:
+                error_messages.extend(preprocessing_results['errors'])
+            
+            # Step 3: 판례 벡터 임베딩
+            self.pipeline_state['current_stage'] = 'vectorization'
+            self.logger.info("Step 3: Precedent vector embedding...")
+            
+            vectorization_results = self.precedent_vector_builder.build_incremental_embeddings(category)
+            stage_results['vectorization'] = vectorization_results
+            
+            if vectorization_results['failed_embedding_files'] > 0:
+                error_messages.extend(vectorization_results['errors'])
+            
+            # Step 4: 판례 DB 증분 임포트
+            self.pipeline_state['current_stage'] = 'import'
+            self.logger.info("Step 4: Precedent database import...")
+            
+            import_results = self._run_precedent_import_stage(category)
+            stage_results['import'] = import_results
+            
+            if not import_results['success']:
+                error_messages.extend(import_results['errors'])
+            
+            # Step 5: 최종 통계 생성
+            self.pipeline_state['current_stage'] = 'finalization'
+            self.logger.info("Step 5: Generating final statistics...")
+            
+            final_stats = self._generate_final_statistics()
+            stage_results['finalization'] = final_stats
+            
+            # 파이프라인 완료
+            self.pipeline_state['end_time'] = datetime.now()
+            processing_time = (
+                self.pipeline_state['end_time'] - self.pipeline_state['start_time']
+            ).total_seconds()
+            
+            success = len(error_messages) == 0
+            
+            result = PipelineResult(
+                success=success,
+                total_files_detected=sum(len(files) for files in detected_files.values()),
+                files_processed=preprocessing_results['successfully_processed'],
+                vectors_added=vectorization_results['total_chunks_added'],
+                laws_imported=import_results['cases_imported'],
+                processing_time=processing_time,
+                stage_results=stage_results,
+                error_messages=error_messages
+            )
+            
+            self.logger.info(f"Precedent pipeline completed successfully: {result}")
+            return result
+            
+        except Exception as e:
+            error_msg = f"Precedent pipeline execution error: {e}"
             self.logger.error(error_msg)
             error_messages.append(error_msg)
             
@@ -446,6 +597,71 @@ class AutoPipelineOrchestrator:
                 'errors': [error_msg]
             }
     
+    def _run_precedent_import_stage(self, category: str) -> Dict[str, Any]:
+        """판례 DB 임포트 단계 실행"""
+        try:
+            # 전처리된 판례 파일들이 있는 디렉토리 찾기
+            processed_dir = Path(f"data/processed/assembly/precedent/{category}")
+            
+            if not processed_dir.exists():
+                self.logger.info(f"No processed precedent directory found: {processed_dir}")
+                return {
+                    'success': True,
+                    'cases_imported': 0,
+                    'errors': []
+                }
+            
+            # 날짜별 디렉토리에서 파일들 찾기
+            total_imported = 0
+            total_updated = 0
+            total_skipped = 0
+            errors = []
+            
+            for date_dir in processed_dir.iterdir():
+                if not date_dir.is_dir():
+                    continue
+                
+                # 해당 날짜 디렉토리의 모든 JSON 파일 임포트
+                json_files = list(date_dir.glob("ml_enhanced_*.json"))
+                
+                for file_path in json_files:
+                    try:
+                        result = self.precedent_db_importer.import_file(file_path, incremental=True)
+                        
+                        if 'error' not in result:
+                            total_imported += result.get('imported_cases', 0)
+                            total_updated += result.get('updated_cases', 0)
+                            total_skipped += result.get('skipped_cases', 0)
+                        else:
+                            errors.append(result['error'])
+                            
+                    except Exception as e:
+                        error_msg = f"Error importing {file_path}: {e}"
+                        errors.append(error_msg)
+                        self.logger.error(error_msg)
+            
+            success = len(errors) == 0
+            
+            self.logger.info(f"Precedent import completed: {total_imported} imported, "
+                           f"{total_updated} updated, {total_skipped} skipped")
+            
+            return {
+                'success': success,
+                'cases_imported': total_imported + total_updated,
+                'cases_updated': total_updated,
+                'cases_skipped': total_skipped,
+                'errors': errors
+            }
+            
+        except Exception as e:
+            error_msg = f"Precedent import stage error: {e}"
+            self.logger.error(error_msg)
+            return {
+                'success': False,
+                'cases_imported': 0,
+                'errors': [error_msg]
+            }
+    
     def _generate_final_statistics(self) -> Dict[str, Any]:
         """최종 통계 생성"""
         try:
@@ -478,6 +694,24 @@ class AutoPipelineOrchestrator:
                     'priority': 1,
                     'raw_path': 'data/raw/assembly/law_only',
                     'processed_path': 'data/processed/assembly/law_only'
+                },
+                'precedent_civil': {
+                    'enabled': True,
+                    'priority': 2,
+                    'raw_path': 'data/raw/assembly/precedent',
+                    'processed_path': 'data/processed/assembly/precedent/civil'
+                },
+                'precedent_criminal': {
+                    'enabled': True,
+                    'priority': 3,
+                    'raw_path': 'data/raw/assembly/precedent',
+                    'processed_path': 'data/processed/assembly/precedent/criminal'
+                },
+                'precedent_family': {
+                    'enabled': True,
+                    'priority': 4,
+                    'raw_path': 'data/raw/assembly/precedent',
+                    'processed_path': 'data/processed/assembly/precedent/family'
                 }
             },
             'preprocessing': {
@@ -492,7 +726,8 @@ class AutoPipelineOrchestrator:
                 'chunk_size': 200,
                 'index_type': 'flat',
                 'existing_index_path': 'data/embeddings/ml_enhanced_ko_sroberta',
-                'output_path': 'data/embeddings/ml_enhanced_ko_sroberta'
+                'output_path': 'data/embeddings/ml_enhanced_ko_sroberta',
+                'precedent_index_path': 'data/embeddings/ml_enhanced_ko_sroberta_precedents'
             },
             'incremental': {
                 'enabled': True,
@@ -539,8 +774,11 @@ def main():
     """메인 함수"""
     parser = argparse.ArgumentParser(description='자동화 파이프라인 오케스트레이터')
     parser.add_argument('--data-source', default='law_only',
-                       choices=['law_only', 'precedents', 'constitutional'],
+                       choices=['law_only', 'precedents', 'constitutional', 'precedent_civil', 'precedent_criminal', 'precedent_family'],
                        help='데이터 소스 유형')
+    parser.add_argument('--category', default='civil',
+                       choices=['civil', 'criminal', 'family'],
+                       help='판례 카테고리 (precedent 데이터 소스 사용 시)')
     parser.add_argument('--auto-detect', action='store_true',
                        help='자동 데이터 감지 활성화')
     parser.add_argument('--data-path', help='특정 데이터 경로 지정')
@@ -577,11 +815,21 @@ def main():
         )
         
         # 파이프라인 실행
-        result = orchestrator.run_auto_pipeline(
-            data_source=args.data_source,
-            auto_detect=args.auto_detect,
-            specific_path=args.data_path
-        )
+        if args.data_source.startswith('precedent_'):
+            # 판례 파이프라인 실행
+            category = args.data_source.split('_')[1]  # precedent_civil -> civil
+            result = orchestrator.run_precedent_pipeline(
+                category=category,
+                auto_detect=args.auto_detect,
+                specific_path=args.data_path
+            )
+        else:
+            # 법률 파이프라인 실행
+            result = orchestrator.run_auto_pipeline(
+                data_source=args.data_source,
+                auto_detect=args.auto_detect,
+                specific_path=args.data_path
+            )
         
         # 리포트 저장
         orchestrator.save_pipeline_report(result, args.output_report)

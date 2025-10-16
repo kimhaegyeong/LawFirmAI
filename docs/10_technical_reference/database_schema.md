@@ -9,9 +9,14 @@ LawFirmAI 프로젝트는 SQLite 데이터베이스를 사용하여 법률 데�
 ### 주요 테이블
 - `assembly_laws`: 법률 데이터 저장
 - `assembly_articles`: 법률 조문 데이터 저장
+- `precedent_cases`: 판례 사건 데이터 저장
+- `precedent_sections`: 판례 섹션 데이터 저장 (판시사항, 판결요지 등)
+- `precedent_parties`: 판례 당사자 데이터 저장
 - `processed_files`: 파일 처리 이력 추적
 - `fts_laws`: 법률 전체 텍스트 검색 인덱스
 - `fts_articles`: 조문 전체 텍스트 검색 인덱스
+- `fts_precedent_cases`: 판례 사건 전체 텍스트 검색 인덱스
+- `fts_precedent_sections`: 판례 섹션 전체 텍스트 검색 인덱스
 
 ## 🗃️ 테이블 상세 정보
 
@@ -67,6 +72,43 @@ CREATE TABLE assembly_articles (
 );
 ```
 
+### precedent_cases 테이블 (신규)
+판례 사건의 기본 정보를 저장합니다.
+
+```sql
+CREATE TABLE precedent_cases (
+    case_id TEXT PRIMARY KEY,                    -- 판례 고유 ID
+    category TEXT NOT NULL,                      -- 카테고리 (civil, criminal, family)
+    case_name TEXT NOT NULL,                     -- 사건명
+    case_number TEXT NOT NULL,                   -- 사건번호
+    decision_date TEXT,                          -- 판결일
+    field TEXT,                                  -- 분야 (민사, 형사, 가사)
+    court TEXT,                                  -- 법원
+    detail_url TEXT,                             -- 상세 URL
+    full_text TEXT,                              -- 전체 텍스트
+    searchable_text TEXT,                        -- 검색용 텍스트
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### precedent_sections 테이블 (신규)
+판례의 각 섹션 정보를 저장합니다 (판시사항, 판결요지 등).
+
+```sql
+CREATE TABLE precedent_sections (
+    section_id TEXT PRIMARY KEY,                 -- 섹션 고유 ID
+    case_id TEXT NOT NULL,                       -- 판례 ID (외래키)
+    section_type TEXT NOT NULL,                  -- 섹션 유형 (판시사항, 판결요지 등)
+    section_type_korean TEXT,                    -- 섹션 유형 한글명
+    section_content TEXT NOT NULL,               -- 섹션 내용
+    section_length INTEGER DEFAULT 0,            -- 섹션 길이
+    has_content BOOLEAN DEFAULT FALSE,           -- 내용 존재 여부
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
+);
+```
+
 ### processed_files 테이블 (신규)
 파일 처리 이력을 추적하여 증분 처리를 지원합니다.
 
@@ -105,6 +147,19 @@ CREATE INDEX idx_assembly_articles_supplementary ON assembly_articles(is_supplem
 CREATE INDEX idx_processed_files_path ON processed_files(file_path);
 CREATE INDEX idx_processed_files_type ON processed_files(data_type);
 CREATE INDEX idx_processed_files_status ON processed_files(processing_status);
+
+-- precedent_cases 테이블 인덱스
+CREATE INDEX idx_precedent_cases_category ON precedent_cases(category);
+CREATE INDEX idx_precedent_cases_date ON precedent_cases(decision_date);
+CREATE INDEX idx_precedent_cases_court ON precedent_cases(court);
+
+-- precedent_sections 테이블 인덱스
+CREATE INDEX idx_precedent_sections_case_id ON precedent_sections(case_id);
+CREATE INDEX idx_precedent_sections_type ON precedent_sections(section_type);
+
+-- precedent_parties 테이블 인덱스
+CREATE INDEX idx_precedent_parties_case_id ON precedent_parties(case_id);
+CREATE INDEX idx_precedent_parties_type ON precedent_parties(party_type);
 ```
 
 ### 전체 텍스트 검색 (FTS5) 테이블
@@ -129,6 +184,26 @@ CREATE VIRTUAL TABLE fts_articles USING fts5(
     article_title,
     article_content,
     content='assembly_articles',
+    content_rowid='rowid'
+);
+
+-- 판례 사건 전체 텍스트 검색
+CREATE VIRTUAL TABLE fts_precedent_cases USING fts5(
+    case_id,
+    case_name,
+    case_number,
+    full_text,
+    searchable_text,
+    content='precedent_cases',
+    content_rowid='rowid'
+);
+
+-- 판례 섹션 전체 텍스트 검색
+CREATE VIRTUAL TABLE fts_precedent_sections USING fts5(
+    section_id,
+    case_id,
+    section_content,
+    content='precedent_sections',
     content_rowid='rowid'
 );
 ```

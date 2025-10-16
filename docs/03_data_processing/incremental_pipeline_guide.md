@@ -29,13 +29,17 @@ LawFirmAI 프로젝트의 **증분 전처리 파이프라인**은 새로운 법�
 ```
 scripts/
 ├── data_processing/
-│   ├── auto_data_detector.py          # 자동 데이터 감지
-│   ├── incremental_preprocessor.py     # 증분 전처리
-│   └── auto_pipeline_orchestrator.py  # 통합 오케스트레이터
+│   ├── auto_data_detector.py                    # 자동 데이터 감지
+│   ├── incremental_preprocessor.py               # 증분 전처리 (법률)
+│   ├── incremental_precedent_preprocessor.py     # 증분 전처리 (판례)
+│   ├── precedent_preprocessor.py                 # 판례 전용 전처리기
+│   └── auto_pipeline_orchestrator.py            # 통합 오케스트레이터
 ├── ml_training/vector_embedding/
-│   └── incremental_vector_builder.py  # 증분 벡터 임베딩
+│   ├── incremental_vector_builder.py            # 증분 벡터 임베딩 (법률)
+│   └── incremental_precedent_vector_builder.py  # 증분 벡터 임베딩 (판례)
 └── data_processing/utilities/
-    └── import_laws_to_db.py           # DB 임포트 (증분 모드)
+    ├── import_laws_to_db.py                      # DB 임포트 (법률)
+    └── import_precedents_to_db.py                # DB 임포트 (판례)
 ```
 
 ## 🛠️ 설치 및 설정
@@ -69,6 +73,15 @@ python -c "from source.data.database import DatabaseManager; DatabaseManager()"
 # law_only 데이터에 대한 전체 파이프라인 실행
 python scripts/data_processing/auto_pipeline_orchestrator.py --data-type law_only
 
+# 판례 데이터에 대한 전체 파이프라인 실행 (민사)
+python scripts/data_processing/auto_pipeline_orchestrator.py --data-type precedent_civil
+
+# 판례 데이터에 대한 전체 파이프라인 실행 (형사)
+python scripts/data_processing/auto_pipeline_orchestrator.py --data-type precedent_criminal
+
+# 판례 데이터에 대한 전체 파이프라인 실행 (가사)
+python scripts/data_processing/auto_pipeline_orchestrator.py --data-type precedent_family
+
 # 모든 데이터 유형 처리
 python scripts/data_processing/auto_pipeline_orchestrator.py --data-type all
 ```
@@ -82,27 +95,83 @@ python scripts/data_processing/auto_data_detector.py --base-path data/raw/assemb
 
 #### 증분 전처리
 ```bash
+# 법률 데이터 전처리
 python scripts/data_processing/incremental_preprocessor.py --data-type law_only --verbose
+
+# 판례 데이터 전처리 (민사)
+python scripts/data_processing/incremental_precedent_preprocessor.py --category civil --verbose
+
+# 판례 데이터 전처리 (형사)
+python scripts/data_processing/incremental_precedent_preprocessor.py --category criminal --verbose
+
+# 판례 데이터 전처리 (가사)
+python scripts/data_processing/incremental_precedent_preprocessor.py --category family --verbose
 ```
 
 #### 증분 벡터 임베딩
 ```bash
+# 법률 데이터 벡터 임베딩
 python scripts/ml_training/vector_embedding/incremental_vector_builder.py
+
+# 판례 데이터 벡터 임베딩 (민사)
+python scripts/ml_training/vector_embedding/incremental_precedent_vector_builder.py --category civil
+
+# 판례 데이터 벡터 임베딩 (형사)
+python scripts/ml_training/vector_embedding/incremental_precedent_vector_builder.py --category criminal
+
+# 판례 데이터 벡터 임베딩 (가사)
+python scripts/ml_training/vector_embedding/incremental_precedent_vector_builder.py --category family
 ```
 
 #### DB 임포트 (증분 모드)
 ```bash
+# 법률 데이터 DB 임포트
 python scripts/data_processing/utilities/import_laws_to_db.py --input data/processed/assembly/law_only/20251016 --incremental
+
+# 판례 데이터 DB 임포트 (민사)
+python scripts/data_processing/utilities/import_precedents_to_db.py --input data/processed/assembly/precedent/civil/20251016 --category civil --incremental
+
+# 판례 데이터 DB 임포트 (형사)
+python scripts/data_processing/utilities/import_precedents_to_db.py --input data/processed/assembly/precedent/criminal/20251016 --category criminal --incremental
+
+# 판례 데이터 DB 임포트 (가사)
+python scripts/data_processing/utilities/import_precedents_to_db.py --input data/processed/assembly/precedent/family/20251016 --category family --incremental
 ```
 
 ### 3. 설정 파일 사용
 
 ```yaml
 # config/pipeline_config.yaml
+data_sources:
+  law_only:
+    enabled: true
+    priority: 1
+    raw_path: "data/raw/assembly/law_only"
+    processed_path: "data/processed/assembly/law_only"
+    
+  precedent_civil:
+    enabled: true
+    priority: 2
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/civil"
+    
+  precedent_criminal:
+    enabled: true
+    priority: 3
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/criminal"
+    
+  precedent_family:
+    enabled: true
+    priority: 4
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/family"
+
 paths:
   raw_data_base: "data/raw/assembly"
   processed_data_base: "data/processed/assembly"
   embedding_output: "data/embeddings/ml_enhanced_ko_sroberta"
+  precedent_embedding_output: "data/embeddings/ml_enhanced_ko_sroberta_precedents"
   database: "data/lawfirm.db"
 
 embedding:
@@ -129,10 +198,15 @@ preprocessing:
 - **특징**: 체크포인트 지원, 배치 처리, 오류 복구
 - **출력**: ML 강화된 전처리된 데이터
 
-### IncrementalVectorBuilder
-- **기능**: 전처리된 데이터로부터 벡터 임베딩 생성
-- **특징**: FAISS 인덱스 업데이트, 배치 임베딩, 메모리 최적화
-- **출력**: 업데이트된 벡터 인덱스
+### IncrementalPrecedentPreprocessor
+- **기능**: 판례 데이터에 대한 새로운 파일만 선별하여 전처리
+- **특징**: 카테고리별 처리 (민사/형사/가사), 판례 전용 파싱, 체크포인트 지원
+- **출력**: ML 강화된 전처리된 판례 데이터
+
+### IncrementalPrecedentVectorBuilder
+- **기능**: 전처리된 판례 데이터로부터 벡터 임베딩 생성
+- **특징**: 별도 FAISS 인덱스, 판례 섹션별 임베딩, 카테고리별 관리
+- **출력**: 업데이트된 판례 벡터 인덱스
 
 ### AutoPipelineOrchestrator
 - **기능**: 전체 파이프라인 통합 관리
@@ -141,8 +215,44 @@ preprocessing:
 
 ## 📊 처리 결과 예시
 
-### 성공적인 실행 결과
+### 판례 처리 결과 예시
+```bash
+==================================================
+PRECEDENT PIPELINE EXECUTION SUMMARY
+==================================================
+Overall Status: completed
+Duration: 1066.3 seconds (17.8 minutes)
+Category: civil
+
+Step 1 - Data Detection:
+  Total new files: 397
+  Files by type: {'precedent_civil': 397}
+
+Step 2 - Precedent Preprocessing:
+  Successfully processed: 397 files
+  Failed to process: 0 files
+  Processing time: 16.2 seconds
+
+Step 3 - Vector Embedding:
+  Successfully embedded: 397 files
+  Total chunks added: 15,589
+  Embedding time: 1044.9 seconds
+
+Step 4 - Database Import:
+  Imported cases: 0
+  Updated cases: 0
+  Skipped cases: 0
+  Import time: 0.0 seconds
+
+==================================================
+DATABASE STATISTICS
+==================================================
+Total precedent cases: 0
+Total precedent sections: 0
+Total precedent parties: 0
 ```
+### 법률 처리 결과 예시
+```bash
 ==================================================
 AUTOMATED PIPELINE EXECUTION SUMMARY
 ==================================================

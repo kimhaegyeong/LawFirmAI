@@ -148,6 +148,101 @@ class DatabaseManager:
                 )
             """)
             
+            # 판례 케이스 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_cases (
+                    case_id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    case_name TEXT NOT NULL,
+                    case_number TEXT NOT NULL,
+                    decision_date TEXT,
+                    field TEXT,
+                    court TEXT,
+                    detail_url TEXT,
+                    full_text TEXT,
+                    searchable_text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 판례 섹션 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_sections (
+                    section_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    section_type_korean TEXT,
+                    section_content TEXT NOT NULL,
+                    section_length INTEGER DEFAULT 0,
+                    has_content BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
+                )
+            """)
+            
+            # 판례 당사자 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_parties (
+                    party_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    case_id TEXT NOT NULL,
+                    party_type TEXT NOT NULL,
+                    party_type_korean TEXT,
+                    party_content TEXT,
+                    party_length INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
+                )
+            """)
+            
+            # Assembly 법률 테이블 (기존)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS assembly_laws (
+                    law_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    law_name TEXT NOT NULL,
+                    law_type TEXT,
+                    category TEXT,
+                    row_number TEXT,
+                    promulgation_number TEXT,
+                    promulgation_date TEXT,
+                    enforcement_date TEXT,
+                    amendment_type TEXT,
+                    ministry TEXT,
+                    parent_law TEXT,
+                    related_laws TEXT,
+                    full_text TEXT,
+                    searchable_text TEXT,
+                    keywords TEXT,
+                    summary TEXT,
+                    html_clean_text TEXT,
+                    main_article_count INTEGER DEFAULT 0,
+                    supplementary_article_count INTEGER DEFAULT 0,
+                    ml_enhanced BOOLEAN DEFAULT FALSE,
+                    parsing_quality_score REAL DEFAULT 0.0,
+                    processing_version TEXT DEFAULT '1.0',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Assembly 조문 테이블 (기존)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS assembly_articles (
+                    article_id TEXT PRIMARY KEY,
+                    law_id TEXT NOT NULL,
+                    article_number INTEGER NOT NULL,
+                    article_title TEXT,
+                    article_content TEXT NOT NULL,
+                    is_supplementary BOOLEAN DEFAULT FALSE,
+                    ml_confidence_score REAL DEFAULT 0.0,
+                    parsing_method TEXT DEFAULT 'rule_based',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (law_id) REFERENCES assembly_laws(law_id)
+                )
+            """)
+            
             # 처리된 파일 추적 테이블
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS processed_files (
@@ -165,12 +260,76 @@ class DatabaseManager:
                 )
             """)
             
+            # FTS5 전체 텍스트 검색 테이블
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_precedent_cases USING fts5(
+                    case_id,
+                    case_name,
+                    case_number,
+                    full_text,
+                    searchable_text,
+                    content='precedent_cases',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_precedent_sections USING fts5(
+                    section_id,
+                    case_id,
+                    section_content,
+                    content='precedent_sections',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_assembly_laws USING fts5(
+                    law_id,
+                    law_name,
+                    full_text,
+                    searchable_text,
+                    content='assembly_laws',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_assembly_articles USING fts5(
+                    article_id,
+                    law_id,
+                    article_title,
+                    article_content,
+                    content='assembly_articles',
+                    content_rowid='rowid'
+                )
+            """)
+            
             # 인덱스 생성 (검색 성능 향상)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_law_metadata_name ON law_metadata(law_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_court ON precedent_metadata(court_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_date ON precedent_metadata(decision_date)")
+            
+            # 판례 테이블 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_category ON precedent_cases(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_date ON precedent_cases(decision_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_court ON precedent_cases(court)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_sections_case_id ON precedent_sections(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_sections_type ON precedent_sections(section_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_parties_case_id ON precedent_parties(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_parties_type ON precedent_parties(party_type)")
+            
+            # Assembly 테이블 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_source ON assembly_laws(source)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_category ON assembly_laws(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_ministry ON assembly_laws(ministry)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_created_at ON assembly_laws(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_law_id ON assembly_articles(law_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_number ON assembly_articles(article_number)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_supplementary ON assembly_articles(is_supplementary)")
+            
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_path ON processed_files(file_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_type ON processed_files(data_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_status ON processed_files(processing_status)")
