@@ -16,7 +16,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 # 프로젝트 루트를 Python 경로에 추가
-sys.path.append(str(Path(__file__).parent.parent))
+project_root = Path(__file__).parent.parent.parent
+sys.path.append(str(project_root))
 
 from source.data.data_processor import LegalDataProcessor
 from source.data.legal_term_normalizer import LegalTermNormalizer

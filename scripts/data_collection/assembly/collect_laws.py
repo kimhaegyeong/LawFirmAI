@@ -26,14 +26,14 @@ from pathlib import Path
 from datetime import datetime
 
 # 프로젝트 루트를 Python 경로에 추가
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(project_root))
 
 from source.data.assembly_playwright_client import AssemblyPlaywrightClient
-from scripts.assembly.assembly_collector import AssemblyCollector
-from scripts.assembly.checkpoint_manager import CheckpointManager
-from scripts.assembly.assembly_logger import setup_logging, log_progress, log_memory_usage, log_collection_stats, log_checkpoint_info
-from scripts.assembly.law_data_compressor import compress_law_data, compress_and_save_page_data
+from scripts.data_collection.common.assembly_collector import AssemblyCollector
+from scripts.data_collection.common.checkpoint_manager import CheckpointManager
+from scripts.data_collection.common.assembly_logger import setup_logging, log_progress, log_memory_usage, log_collection_stats, log_checkpoint_info
+from scripts.data_processing.utilities.law_data_compressor import compress_law_data, compress_and_save_page_data
 
 # 로거 설정
 logger = setup_logging("law_collection")
