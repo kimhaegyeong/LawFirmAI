@@ -148,12 +148,32 @@ class DatabaseManager:
                 )
             """)
             
+            # 처리된 파일 추적 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    file_hash TEXT NOT NULL,
+                    data_type TEXT NOT NULL,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processing_status TEXT DEFAULT 'completed',
+                    record_count INTEGER DEFAULT 0,
+                    processing_version TEXT DEFAULT '1.0',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # 인덱스 생성 (검색 성능 향상)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_law_metadata_name ON law_metadata(law_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_court ON precedent_metadata(court_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_date ON precedent_metadata(decision_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_path ON processed_files(file_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_type ON processed_files(data_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_status ON processed_files(processing_status)")
             
             conn.commit()
             logger.info("Database tables created successfully")
@@ -445,3 +465,173 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error searching assembly documents: {e}")
             return []
+    
+    # 파일 처리 이력 추적 메서드들
+    def mark_file_as_processed(self, file_path: str, file_hash: str, 
+                              data_type: str, record_count: int = 0,
+                              processing_version: str = "1.0",
+                              error_message: str = None) -> int:
+        """
+        파일을 처리 완료로 표시
+        
+        Args:
+            file_path: 처리된 파일 경로
+            file_hash: 파일 해시값
+            data_type: 데이터 유형
+            record_count: 처리된 레코드 수
+            processing_version: 처리 버전
+            error_message: 에러 메시지 (실패한 경우)
+        
+        Returns:
+            int: 삽입된 레코드의 ID
+        """
+        query = """
+            INSERT OR REPLACE INTO processed_files 
+            (file_path, file_hash, data_type, record_count, 
+             processing_version, error_message, processing_status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        
+        status = "failed" if error_message else "completed"
+        params = (file_path, file_hash, data_type, record_count, 
+                 processing_version, error_message, status)
+        
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.lastrowid
+    
+    def is_file_processed(self, file_path: str) -> bool:
+        """
+        파일이 이미 처리되었는지 확인
+        
+        Args:
+            file_path: 확인할 파일 경로
+        
+        Returns:
+            bool: 처리 여부
+        """
+        query = "SELECT COUNT(*) as count FROM processed_files WHERE file_path = ?"
+        result = self.execute_query(query, (file_path,))
+        return result[0]['count'] > 0 if result else False
+    
+    def get_file_processing_status(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        파일의 처리 상태 조회
+        
+        Args:
+            file_path: 파일 경로
+        
+        Returns:
+            Optional[Dict]: 처리 상태 정보 또는 None
+        """
+        query = """
+            SELECT file_path, file_hash, data_type, processing_status, 
+                   record_count, processing_version, error_message, 
+                   processed_at, created_at, updated_at
+            FROM processed_files 
+            WHERE file_path = ?
+        """
+        result = self.execute_query(query, (file_path,))
+        return result[0] if result else None
+    
+    def get_unprocessed_files(self, data_type: str, base_path: str) -> List[str]:
+        """
+        특정 데이터 유형의 미처리 파일 목록 조회
+        
+        Args:
+            data_type: 데이터 유형
+            base_path: 검색할 기본 경로
+        
+        Returns:
+            List[str]: 미처리 파일 경로 목록
+        """
+        # 실제 파일 시스템에서 파일 목록을 가져와야 하므로
+        # 이 메서드는 외부에서 파일 목록을 받아 처리하는 방식으로 구현
+        pass
+    
+    def get_processed_files_by_type(self, data_type: str, 
+                                   status: str = "completed") -> List[Dict[str, Any]]:
+        """
+        특정 데이터 유형의 처리된 파일 목록 조회
+        
+        Args:
+            data_type: 데이터 유형
+            status: 처리 상태 (기본값: completed)
+        
+        Returns:
+            List[Dict]: 처리된 파일 목록
+        """
+        query = """
+            SELECT file_path, file_hash, data_type, processing_status, 
+                   record_count, processing_version, error_message, 
+                   processed_at, created_at, updated_at
+            FROM processed_files 
+            WHERE data_type = ? AND processing_status = ?
+            ORDER BY processed_at DESC
+        """
+        return self.execute_query(query, (data_type, status))
+    
+    def get_processing_statistics(self, data_type: str = None) -> Dict[str, Any]:
+        """
+        처리 통계 조회
+        
+        Args:
+            data_type: 데이터 유형 (None이면 전체)
+        
+        Returns:
+            Dict: 처리 통계
+        """
+        if data_type:
+            query = """
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN processing_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
+                    SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) as failed_files,
+                    SUM(record_count) as total_records,
+                    AVG(record_count) as avg_records_per_file
+                FROM processed_files 
+                WHERE data_type = ?
+            """
+            result = self.execute_query(query, (data_type,))
+        else:
+            query = """
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN processing_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
+                    SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) as failed_files,
+                    SUM(record_count) as total_records,
+                    AVG(record_count) as avg_records_per_file
+                FROM processed_files
+            """
+            result = self.execute_query(query)
+        
+        return result[0] if result else {}
+    
+    def update_file_processing_status(self, file_path: str, 
+                                    status: str, error_message: str = None) -> bool:
+        """
+        파일 처리 상태 업데이트
+        
+        Args:
+            file_path: 파일 경로
+            status: 새로운 상태
+            error_message: 에러 메시지 (실패한 경우)
+        
+        Returns:
+            bool: 업데이트 성공 여부
+        """
+        query = """
+            UPDATE processed_files 
+            SET processing_status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE file_path = ?
+        """
+        params = (status, error_message, file_path)
+        
+        try:
+            rows_affected = self.execute_update(query, params)
+            return rows_affected > 0
+        except Exception as e:
+            logger.error(f"Error updating file processing status: {e}")
+            return False
