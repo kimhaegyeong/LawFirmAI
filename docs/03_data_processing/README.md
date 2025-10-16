@@ -5,6 +5,7 @@
 ## 📋 문서 목록
 
 - **[데이터 전처리 가이드](preprocessing_guide.md)**: Assembly 법률 데이터 전처리 파이프라인 v4.0의 상세 가이드
+- **[증분 전처리 파이프라인 가이드](incremental_pipeline_guide.md)**: 자동화된 증분 전처리 시스템 사용법
 
 ## 🔗 관련 섹션
 
