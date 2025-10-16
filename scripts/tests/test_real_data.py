@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from scripts.assembly.import_laws_to_db import AssemblyLawImporter
+from scripts.data_processing.utilities.import_laws_to_db import AssemblyLawImporter
 
 def test_real_data():
     """실제 데이터로 _prepare_law_record 테스트"""

@@ -6,7 +6,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from scripts.assembly.import_laws_to_db import AssemblyLawImporter
+from scripts.data_processing.utilities.import_laws_to_db import AssemblyLawImporter
 
 # 테스트용 데이터
 test_data = {

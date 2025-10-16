@@ -85,6 +85,10 @@ Thumbs.db
 temp/
 tmp/
 
+# Runtime files
+runtime/
+*.pid
+
 # Coverage Reports
 htmlcov/
 .coverage
