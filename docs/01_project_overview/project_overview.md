@@ -85,6 +85,7 @@ LawFirmAI/
 ├── gradio/                          # Gradio 웹 애플리케이션
 │   ├── simple_langchain_app.py      # 메인 LangChain 기반 앱
 │   ├── test_simple_query.py         # 테스트 스크립트
+│   ├── components/                  # UI 컴포넌트
 │   ├── prompt_manager.py            # 프롬프트 관리
 │   ├── requirements.txt             # Gradio 의존성
 │   ├── Dockerfile                   # Gradio Docker 설정
@@ -93,40 +94,92 @@ LawFirmAI/
 │   ├── services/                    # 비즈니스 로직
 │   │   ├── chat_service.py          # 채팅 서비스
 │   │   ├── rag_service.py           # ML 강화 RAG 서비스
+│   │   ├── langchain_rag_service.py # LangChain RAG 서비스
 │   │   ├── search_service.py        # ML 강화 검색 서비스
 │   │   ├── hybrid_search_engine.py  # 하이브리드 검색 엔진
 │   │   ├── semantic_search_engine.py # 의미적 검색 엔진
-│   │   ├── exact_search_engine.py  # 정확 매칭 검색 엔진
+│   │   ├── exact_search_engine.py   # 정확 매칭 검색 엔진
 │   │   └── analysis_service.py      # 분석 서비스
 │   ├── data/                        # 데이터 처리
 │   │   ├── database.py              # 데이터베이스 관리
-│   │   └── vector_store.py          # 벡터 저장소 관리
+│   │   ├── vector_store.py          # 벡터 저장소 관리
+│   │   └── data_processor.py        # 데이터 처리
 │   ├── models/                      # AI 모델
 │   │   └── model_manager.py         # 모델 관리자
 │   ├── api/                         # API 관련
 │   │   ├── endpoints.py             # API 엔드포인트
+│   │   ├── search_endpoints.py      # 검색 API
 │   │   ├── schemas.py               # 데이터 스키마
-│   │   └── middleware.py             # 미들웨어
+│   │   └── middleware.py            # 미들웨어
 │   └── utils/                       # 유틸리티
 │       ├── config.py                # 설정 관리
-│       └── logger.py                # 로깅 설정
+│       ├── logger.py                # 로깅 설정
+│       └── langchain_config.py      # LangChain 설정
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
-│   └── embeddings/                  # 벡터 임베딩
-│       ├── ml_enhanced_ko_sroberta/ # ko-sroberta 벡터
-│       └── ml_enhanced_bge_m3/     # BGE-M3 벡터
+│   ├── backups/                     # 데이터베이스 백업
+│   ├── embeddings/                  # 벡터 임베딩
+│   │   ├── ml_enhanced_ko_sroberta/ # ko-sroberta 벡터
+│   │   └── ml_enhanced_bge_m3/      # BGE-M3 벡터
+│   ├── raw/                         # 원본 데이터
+│   │   └── assembly/                # Assembly 원본 데이터
+│   ├── processed/                   # 전처리된 데이터
+│   │   └── assembly/                # Assembly 전처리 데이터
+│   ├── training/                    # 훈련 데이터
+│   ├── checkpoints/                 # 수집 체크포인트
+│   └── qa_dataset/                  # QA 데이터셋
 ├── monitoring/                      # 모니터링 시스템
 │   ├── prometheus/                  # Prometheus 설정
 │   ├── grafana/                     # Grafana 대시보드
 │   └── docker-compose.yml           # 모니터링 스택
 ├── scripts/                         # 유틸리티 스크립트
-│   ├── assembly/                    # Assembly 데이터 수집
-│   ├── vector_embedding/            # 벡터 임베딩 생성
-│   └── data_processing/             # 데이터 전처리
+│   ├── data_collection/             # 데이터 수집
+│   │   ├── assembly/                # Assembly 수집
+│   │   ├── precedent/               # 판례 수집
+│   │   ├── constitutional/          # 헌재결정례 수집
+│   │   ├── legal_interpretation/    # 법령해석례 수집
+│   │   ├── administrative_appeal/   # 행정심판례 수집
+│   │   ├── legal_term/              # 법률용어 수집
+│   │   ├── qa_generation/           # QA 데이터 생성
+│   │   └── common/                  # 공통 유틸리티
+│   ├── data_processing/             # 데이터 전처리
+│   │   ├── parsers/                 # 법률 문서 파서
+│   │   ├── preprocessing/           # 전처리 파이프라인
+│   │   ├── validation/              # 데이터 검증
+│   │   └── utilities/               # 처리 유틸리티
+│   ├── ml_training/                 # ML 및 벡터 임베딩
+│   │   ├── model_training/          # 모델 훈련
+│   │   ├── vector_embedding/        # 벡터 임베딩 생성
+│   │   └── training_data/           # 훈련 데이터 준비
+│   ├── analysis/                    # 데이터 분석
+│   ├── benchmarking/                # 성능 벤치마킹
+│   ├── database/                    # 데이터베이스 관리
+│   ├── monitoring/                  # 모니터링 스크립트
+│   └── tests/                       # 테스트 스크립트
+├── models/                          # 훈련된 모델
+│   └── article_classifier.pkl       # 조문 분류 모델
+├── runtime/                         # 런타임 파일
+│   └── gradio_server.pid            # 서버 PID
+├── reports/                         # 리포트 파일
+│   ├── quality_report.json          # 품질 리포트
+│   └── law_parsing_quality_report.txt # 파싱 품질 리포트
+├── logs/                            # 로그 파일
+├── tests/                           # 테스트 코드
+│   ├── unit/                        # 단위 테스트
+│   ├── integration/                 # 통합 테스트
+│   └── fixtures/                    # 테스트 픽스처
 └── docs/                            # 문서
-    ├── architecture/                # 아키텍처 문서
-    ├── development/                 # 개발 문서
-    └── api/                         # API 문서
+    ├── 01_project_overview/         # 프로젝트 개요
+    ├── 02_data_collection/          # 데이터 수집
+    ├── 03_data_processing/          # 데이터 전처리
+    ├── 04_vector_embedding/         # 벡터 임베딩
+    ├── 05_rag_system/               # RAG 시스템
+    ├── 06_models_performance/       # 모델 성능
+    ├── 07_deployment_operations/    # 배포 운영
+    ├── 08_api_documentation/        # API 문서
+    ├── 09_user_guide/               # 사용자 가이드
+    ├── 10_technical_reference/      # 기술 참조
+    └── archive/                     # 아카이브
 ```
 
 ## 🎉 최종 성과 요약
