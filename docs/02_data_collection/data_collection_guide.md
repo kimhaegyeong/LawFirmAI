@@ -50,26 +50,97 @@ mkdir -p logs
 - **점진적 수집**: 중단 시 재개 가능한 체크포인트 시스템
 - **시작 페이지 지정**: 특정 페이지부터 수집 시작 가능
 - **페이지별 저장**: 각 페이지의 데이터를 별도 파일로 저장
+- **카테고리별 수집**: 법률 분야별로 구분된 판례 수집
 
 ### Assembly 시스템 사용법
 
+#### 기본 법령 수집
 ```bash
 # 기본 사용법
-python scripts/assembly/collect_laws.py --sample 100
+python scripts/data_collection/assembly/collect_laws.py --sample 100
 
-# 시작 페이지 지정 (NEW)
-python scripts/assembly/collect_laws.py --sample 50 --start-page 5 --no-resume
+# 시작 페이지 지정
+python scripts/data_collection/assembly/collect_laws.py --sample 50 --start-page 5 --no-resume
 
 # 특정 페이지 범위 수집
-python scripts/assembly/collect_laws.py --sample 180 --start-page 3 --no-resume
+python scripts/data_collection/assembly/collect_laws.py --sample 180 --start-page 3 --no-resume
 
 # 전체 수집
-python scripts/assembly/collect_laws.py --full
+python scripts/data_collection/assembly/collect_laws.py --full
 ```
 
-### 자세한 사용법
+#### 분야별 판례 수집 (NEW - 2025.10.17 업데이트)
 
-Assembly 데이터 수집 시스템의 자세한 사용법은 [Assembly 데이터 수집 가이드](development/assembly_data_collection_guide.md)를 참조하세요.
+실제 국회 시스템의 카테고리 코드에 맞게 수정되었습니다:
+
+```bash
+# 조세 사건 수집 (기존 family와 동일한 데이터)
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category tax --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+
+# 실제 가사 사건 수집
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category family --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+
+# 민사 사건 수집
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category civil --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+
+# 형사 사건 수집
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category criminal --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+
+# 행정 사건 수집
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category administrative --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+
+# 특허 사건 수집
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category patent --sample 300 --memory-limit 500 --batch-size 20 --start-page 251
+```
+
+#### 사용 가능한 카테고리
+
+| 카테고리 | 한국어 | 코드 | 설명 |
+|---------|--------|------|------|
+| `civil` | 민사 | PREC00_001 | 민사 사건 |
+| `criminal` | 형사 | PREC00_002 | 형사 사건 |
+| `tax` | 조세 | PREC00_003 | 조세 사건 |
+| `administrative` | 행정 | PREC00_004 | 행정 사건 |
+| `family` | 가사 | PREC00_005 | 가사 사건 |
+| `patent` | 특허 | PREC00_006 | 특허 사건 |
+| `maritime` | 해사 | PREC00_009 | 해사 사건 |
+| `military` | 군사 | PREC00_010 | 군사 사건 |
+
+#### 모든 카테고리 동시 수집
+```bash
+# 모든 분야별로 동시 수집 (각 분야당 50건)
+python scripts/data_collection/assembly/collect_precedents_by_category.py --all-categories --sample 50
+```
+
+#### 고급 옵션
+```bash
+# 메모리 제한 설정
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category civil --sample 100 --memory-limit 1000
+
+# 배치 크기 조정
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category criminal --sample 200 --batch-size 10
+
+# 재시도 횟수 설정
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category tax --sample 150 --max-retries 5
+
+# 로그 레벨 설정
+python scripts/data_collection/assembly/collect_precedents_by_category.py --category family --sample 100 --log-level DEBUG
+```
+
+### 데이터 마이그레이션 (2025.10.17)
+
+기존 `family` 카테고리로 수집된 데이터가 실제로는 조세 사건이었으므로, 올바른 카테고리로 마이그레이션되었습니다:
+
+```bash
+# 마이그레이션 스크립트 실행 (완료됨)
+python scripts/data_processing/migrate_family_to_tax.py
+```
+
+**마이그레이션 결과:**
+- 처리된 파일: 472개
+- 업데이트된 파일: 472개
+- 원본 백업: `data/raw/assembly/precedent/20251017/family_backup_20251017_231702`
+- 새 위치: `data/raw/assembly/precedent/20251017/tax`
 
 ## 기존 API 기반 데이터 수집 시스템
 

@@ -35,16 +35,14 @@ logger = CollectionLogger.setup_logging("precedent_category_collection")
 # 시그널 핸들러 등록
 signal_handler = SignalHandler()
 
-# 분야별 코드 매핑
+# 분야별 코드 매핑 (실제 국회 시스템 기준)
 CATEGORY_CODES = {
     'civil': 'PREC00_001',      # 민사
     'criminal': 'PREC00_002',   # 형사
-    'family': 'PREC00_003',     # 가사
+    'tax': 'PREC00_003',        # 조세
     'administrative': 'PREC00_004',  # 행정
-    'constitutional': 'PREC00_005',  # 헌법
-    'labor': 'PREC00_006',      # 노동
-    'tax': 'PREC00_007',        # 세무
-    'patent': 'PREC00_008',     # 특허
+    'family': 'PREC00_005',     # 가사
+    'patent': 'PREC00_006',     # 특허
     'maritime': 'PREC00_009',   # 해사
     'military': 'PREC00_010'    # 군사
 }
@@ -52,11 +50,9 @@ CATEGORY_CODES = {
 CATEGORY_NAMES = {
     'civil': '민사',
     'criminal': '형사', 
-    'family': '가사',
+    'tax': '조세',
     'administrative': '행정',
-    'constitutional': '헌법',
-    'labor': '노동',
-    'tax': '세무',
+    'family': '가사',
     'patent': '특허',
     'maritime': '해사',
     'military': '군사'
@@ -318,7 +314,7 @@ def collect_precedents_by_category(
 
 def collect_all_categories(target_count_per_category: int = 50):
     """모든 분야별로 판례 수집"""
-    categories = ['civil', 'criminal', 'family']
+    categories = ['civil', 'criminal', 'tax', 'administrative', 'family', 'patent']
     
     print(f"\n{'='*60}")
     print(f"🚀 COLLECTING PRECEDENTS FOR ALL CATEGORIES")
@@ -355,12 +351,10 @@ def main():
 Available categories:
   civil          - 민사 (PREC00_001)
   criminal        - 형사 (PREC00_002)  
-  family          - 가사 (PREC00_003)
+  tax             - 조세 (PREC00_003)
   administrative  - 행정 (PREC00_004)
-  constitutional  - 헌법 (PREC00_005)
-  labor           - 노동 (PREC00_006)
-  tax             - 세무 (PREC00_007)
-  patent          - 특허 (PREC00_008)
+  family          - 가사 (PREC00_005)
+  patent          - 특허 (PREC00_006)
   maritime        - 해사 (PREC00_009)
   military        - 군사 (PREC00_010)
 

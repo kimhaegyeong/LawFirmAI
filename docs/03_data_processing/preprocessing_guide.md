@@ -32,6 +32,39 @@ LawFirmAI 프로젝트의 Assembly 법률 데이터 전처리 파이프라인 v4
 - **Quality Assurance**: 100% control character removal rate
 - **UTF-8 Encoding**: Proper Korean character handling
 
+## 데이터 마이그레이션 (2025.10.17)
+
+### 카테고리 수정 및 마이그레이션
+
+기존 `family` 카테고리로 수집된 데이터가 실제로는 조세 사건이었으므로, 올바른 카테고리로 마이그레이션되었습니다.
+
+#### 마이그레이션 실행
+
+```bash
+# 마이그레이션 스크립트 실행 (완료됨)
+python scripts/data_processing/migrate_family_to_tax.py
+```
+
+#### 마이그레이션 결과
+
+- **처리된 파일**: 472개
+- **업데이트된 파일**: 472개
+- **원본 백업**: `data/raw/assembly/precedent/20251017/family_backup_20251017_231702`
+- **새 위치**: `data/raw/assembly/precedent/20251017/tax`
+
+#### 수정된 카테고리 매핑
+
+| 카테고리 | 한국어 | 코드 | 설명 |
+|---------|--------|------|------|
+| `civil` | 민사 | PREC00_001 | 민사 사건 |
+| `criminal` | 형사 | PREC00_002 | 형사 사건 |
+| `tax` | 조세 | PREC00_003 | 조세 사건 |
+| `administrative` | 행정 | PREC00_004 | 행정 사건 |
+| `family` | 가사 | PREC00_005 | 가사 사건 |
+| `patent` | 특허 | PREC00_006 | 특허 사건 |
+| `maritime` | 해사 | PREC00_009 | 해사 사건 |
+| `military` | 군사 | PREC00_010 | 군사 사건 |
+
 ## 설치 및 설정
 
 ### 1. 필요한 패키지 설치
