@@ -399,7 +399,7 @@ class LegalVectorStore:
             self.logger.error(f"Failed to add documents: {e}")
             return False
     
-    def search(self, query: str, top_k: int = 10, filters: Dict = None) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 10, filters: Dict = None, enhanced: bool = True) -> List[Dict[str, Any]]:
         """벡터 검색 수행 (하이브리드 검색용)"""
         try:
             model = self.get_model()
@@ -458,12 +458,148 @@ class LegalVectorStore:
                 if len(results) >= top_k:
                     break
             
+            # 향상된 검색 적용
+            if enhanced and results:
+                results = self._apply_enhanced_scoring(query, results)
+            
             self.logger.info(f"Search completed: {len(results)} results found")
             return results
             
         except Exception as e:
             self.logger.error(f"Search failed: {e}")
             return []
+    
+    def _apply_enhanced_scoring(self, query: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """향상된 점수 계산 적용"""
+        try:
+            # 법률 용어 확장 사전
+            legal_expansions = {
+                "손해배상": ["손해배상", "배상", "피해보상", "손실보상", "금전적 손해", "물질적 손해", "정신적 손해"],
+                "이혼": ["이혼", "혼인해소", "혼인무효", "별거", "가정파탄", "부부갈등", "혼인관계"],
+                "계약": ["계약", "계약서", "약정", "합의", "계약관계", "계약체결", "계약이행"],
+                "변호인": ["변호인", "변호사", "법정변호인", "국선변호인", "선임변호인", "변호"],
+                "형사처벌": ["형사처벌", "형사처분", "형사제재", "형사처리", "형사처분", "형사처벌"],
+                "재산분할": ["재산분할", "재산분배", "재산정리", "재산처분", "재산분할", "재산분할"],
+                "친권": ["친권", "친권자", "친권행사", "친권포기", "친권상실", "친권"],
+                "양육비": ["양육비", "양육비용", "양육비지급", "양육비부담", "양육비지원", "양육비"],
+                "소송": ["소송", "소송절차", "소송진행", "소송제기", "소송제출", "소송"],
+                "법원": ["법원", "법정", "재판부", "법원판결", "법원결정", "법원"],
+                "청구": ["청구", "청구권", "청구서", "청구사유", "청구이유"],
+                "요건": ["요건", "요소", "조건", "기준", "요구사항"]
+            }
+            
+            # 카테고리별 가중치
+            category_weights = {
+                "civil": 1.1,
+                "criminal": 1.1, 
+                "family": 1.1,
+                "constitutional": 1.3,
+                "assembly_law": 1.2
+            }
+            
+            # 키워드 매칭 가중치
+            keyword_weights = {
+                "exact_match": 2.0,      # 정확한 매칭
+                "partial_match": 1.5,    # 부분 매칭
+                "synonym_match": 1.3     # 동의어 매칭
+            }
+            
+            enhanced_results = []
+            for result in results:
+                # 기본 점수
+                base_score = result.get('score', 0.0)
+                
+                # 키워드 매칭 점수 계산
+                text = result.get('text', '')
+                keyword_score = self._calculate_keyword_score(query, text, legal_expansions, keyword_weights)
+                
+                # 카테고리 부스트
+                metadata = result.get('metadata', {})
+                category_boost = category_weights.get(metadata.get('category', 'unknown'), 1.0)
+                
+                # 품질 부스트
+                quality_score = metadata.get('parsing_quality_score', 0.0)
+                if isinstance(quality_score, (int, float)):
+                    quality_boost = 0.9 + (quality_score * 0.1)
+                else:
+                    quality_boost = 0.95
+                
+                # 길이 부스트
+                text_length = len(text)
+                if 100 <= text_length <= 1000:
+                    length_boost = 1.1
+                elif 50 <= text_length < 100 or 1000 < text_length <= 2000:
+                    length_boost = 1.0
+                else:
+                    length_boost = 0.9
+                
+                # 최종 점수 계산 (매우 보수적인 가중치)
+                final_score = (
+                    base_score * 0.95 +          # 기본 벡터 점수 95% (매우 높게)
+                    keyword_score * 0.03 +       # 키워드 매칭 3% (매우 낮게)
+                    (category_boost - 1.0) * 0.01 +  # 카테고리 부스트 1% (매우 낮게)
+                    (quality_boost - 0.95) * 0.005 + # 품질 부스트 0.5% (매우 낮게)
+                    (length_boost - 1.0) * 0.005     # 길이 부스트 0.5% (매우 낮게)
+                )
+                
+                # 결과에 개선된 점수 추가
+                enhanced_result = result.copy()
+                enhanced_result['enhanced_score'] = final_score
+                enhanced_result['base_score'] = base_score
+                enhanced_result['keyword_score'] = keyword_score
+                enhanced_result['category_boost'] = category_boost
+                enhanced_result['quality_boost'] = quality_boost
+                enhanced_result['length_boost'] = length_boost
+                
+                enhanced_results.append(enhanced_result)
+            
+            # 개선된 점수로 정렬
+            enhanced_results.sort(key=lambda x: x['enhanced_score'], reverse=True)
+            
+            return enhanced_results
+            
+        except Exception as e:
+            self.logger.error(f"Enhanced scoring failed: {e}")
+            return results
+    
+    def _calculate_keyword_score(self, query: str, text: str, legal_expansions: Dict, keyword_weights: Dict) -> float:
+        """키워드 매칭 점수 계산"""
+        query_terms = query.lower().split()
+        text_lower = text.lower()
+        
+        exact_matches = 0
+        partial_matches = 0
+        synonym_matches = 0
+        
+        for term in query_terms:
+            # 정확한 매칭
+            if term in text_lower:
+                exact_matches += 1
+            else:
+                # 부분 매칭 (2글자 이상)
+                if len(term) >= 2:
+                    for i in range(len(text_lower) - len(term) + 1):
+                        if text_lower[i:i+len(term)] == term:
+                            partial_matches += 1
+                            break
+                
+                # 동의어 매칭
+                for key, expansions in legal_expansions.items():
+                    if term in expansions:
+                        for expansion in expansions:
+                            if expansion in text_lower:
+                                synonym_matches += 1
+                                break
+                        break
+        
+        # 가중치 적용한 점수 계산
+        keyword_score = (
+            exact_matches * keyword_weights["exact_match"] +
+            partial_matches * keyword_weights["partial_match"] +
+            synonym_matches * keyword_weights["synonym_match"]
+        ) / len(query_terms) if query_terms else 0
+        
+        return min(keyword_score, 2.0)  # 최대 2.0으로 제한
     
     def search_legacy(self, query: str, top_k: int = 10, score_threshold: float = 0.0) -> List[Dict[str, Any]]:
         """벡터 검색 수행 (레거시)"""
