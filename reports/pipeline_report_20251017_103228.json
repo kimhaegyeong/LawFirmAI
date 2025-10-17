@@ -1,0 +1,62 @@
+{
+  "pipeline_result": {
+    "success": true,
+    "total_files_detected": 50,
+    "files_processed": 50,
+    "vectors_added": 1158,
+    "laws_imported": 0,
+    "processing_time": 95.396441,
+    "error_messages": []
+  },
+  "stage_results": {
+    "detection": {
+      "total_files": 50,
+      "files_by_type": {
+        "precedent_family": 50
+      }
+    },
+    "preprocessing": {
+      "total_scanned_files": 50,
+      "new_files_to_process": 50,
+      "successfully_processed": 50,
+      "failed_to_process": 0,
+      "skipped_already_processed": 0,
+      "errors": [],
+      "end_time": "2025-10-17T10:31:06.602452",
+      "duration": 6.875997
+    },
+    "vectorization": {
+      "total_files_scanned": 50,
+      "new_files_for_embedding": 50,
+      "successfully_embedded_files": 50,
+      "failed_embedding_files": 0,
+      "skipped_already_embedded": 0,
+      "total_chunks_added": 1158,
+      "processing_time": 0,
+      "errors": [],
+      "end_time": "2025-10-17T10:32:28.964327",
+      "duration": 82.361251
+    },
+    "import": {
+      "success": true,
+      "cases_imported": 0,
+      "cases_updated": 0,
+      "cases_skipped": 0,
+      "errors": []
+    },
+    "finalization": {
+      "success": true,
+      "database_statistics": {
+        "total_files": 1087,
+        "completed_files": 0,
+        "failed_files": 0,
+        "total_records": 7764,
+        "avg_records_per_file": 7.142594296228151
+      },
+      "processed_files_count": 0,
+      "generation_time": "2025-10-17T10:32:28.968222"
+    }
+  },
+  "pipeline_state": {
+    "current_stage": "finalization",
+    "start_time": 

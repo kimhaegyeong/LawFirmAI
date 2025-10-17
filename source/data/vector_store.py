@@ -569,12 +569,18 @@ class LegalVectorStore:
             # FAISS 인덱스 로딩 - 확장자가 없으면 직접 로드, 있으면 기존 방식 사용
             if filepath.suffix == '':
                 # 확장자가 없는 경우 직접 로드
-                self.index = faiss.read_index(str(filepath))
+                faiss_file = str(filepath) + '.faiss'
+                if not Path(faiss_file).exists():
+                    faiss_file = str(filepath)
+                self.index = faiss.read_index(faiss_file)
                 # 메타데이터 파일명 처리 (simple_vector_index -> simple_vector_metadata.json)
                 metadata_file = filepath.parent / f"{filepath.name.replace('_index', '_metadata')}.json"
             else:
                 # 확장자가 있는 경우 기존 방식 사용
-                self.index = faiss.read_index(str(filepath.with_suffix('.faiss')))
+                faiss_file = str(filepath.with_suffix('.faiss'))
+                if not Path(faiss_file).exists():
+                    faiss_file = str(filepath)
+                self.index = faiss.read_index(faiss_file)
                 metadata_file = filepath.with_suffix('.json')
             
             # 메타데이터 로딩
@@ -599,6 +605,9 @@ class LegalVectorStore:
                 self.document_texts = metadata.get('texts', [])
             else:
                 self.document_texts = []
+            
+            # 디버깅을 위한 로그 추가
+            self.logger.info(f"Loaded {len(self.document_texts)} texts and {len(self.document_metadata)} metadata entries")
             
             self.logger.info(f"Index loaded from: {filepath}")
             return True
