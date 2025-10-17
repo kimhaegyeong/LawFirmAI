@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
+from datetime import datetime
 
 # Windows 콘솔에서 UTF-8 인코딩 설정
 if os.name == 'nt':  # Windows
@@ -21,11 +22,26 @@ if os.name == 'nt':  # Windows
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
 
-from parsers.improved_article_parser import ImprovedArticleParser
+# Try to import parsers module
+try:
+    from parsers.improved_article_parser import ImprovedArticleParser
+    PARSERS_AVAILABLE = True
+except ImportError:
+    PARSERS_AVAILABLE = False
+    logging.warning("parsers module not available. Some features will be limited.")
+
+# Import quality validator
+try:
+    sys.path.append(str(Path(__file__).parent.parent.parent / 'data_processing' / 'quality'))
+    from data_quality_validator import DataQualityValidator, QualityReport
+    QUALITY_VALIDATOR_AVAILABLE = True
+except ImportError:
+    QUALITY_VALIDATOR_AVAILABLE = False
+    logger.warning("Quality validator not available. Validation features disabled.")
 
 logger = logging.getLogger(__name__)
 
-class MLEnhancedArticleParser(ImprovedArticleParser):
+class MLEnhancedArticleParser:
     """ML 모델이 강화된 조문 파서"""
     
     def __init__(self, ml_model_path: str = "models/article_classifier.pkl"):
@@ -35,13 +51,26 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         Args:
             ml_model_path: 훈련된 ML 모델 경로
         """
-        super().__init__()
+        # Initialize base parser if available
+        self.base_parser = None
+        if PARSERS_AVAILABLE:
+            try:
+                self.base_parser = ImprovedArticleParser()
+            except Exception as e:
+                logging.warning(f"Could not initialize base parser: {e}")
+                self.base_parser = None
         
         # ML 모델 로드
         self.ml_model = None
         self.vectorizer = None
         self.feature_names = None
-        self.ml_threshold = 0.5  # ML 예측 임계값 (0.7 → 0.5로 낮춤)
+        self.ml_threshold = 0.4  # ML 예측 임계값 (0.5 → 0.4로 낮춤, 더 나은 recall)
+        
+        # Quality validation
+        self.quality_validator = None
+        if QUALITY_VALIDATOR_AVAILABLE:
+            self.quality_validator = DataQualityValidator()
+            logger.info("Quality validator initialized")
         
         if Path(ml_model_path).exists():
             self._load_ml_model(ml_model_path)
@@ -335,6 +364,42 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         
         return articles
 
+    def _basic_parse_law(self, law_content: str) -> Dict[str, Any]:
+        """
+        기본 파싱 (parsers 모듈이 없을 때 사용)
+        
+        Args:
+            law_content: 법률 문서 내용
+            
+        Returns:
+            Dict[str, Any]: 기본 파싱 결과
+        """
+        # 간단한 정규식 기반 파싱
+        articles = []
+        
+        # 조문 패턴 찾기
+        article_pattern = r'제(\d+)조\s*\([^)]*\)\s*([^\n]+(?:\n(?!제\d+조)[^\n]*)*)'
+        matches = re.findall(article_pattern, law_content, re.MULTILINE)
+        
+        for match in matches:
+            article_number = match[0]
+            content = match[1].strip()
+            
+            articles.append({
+                'article_number': article_number,
+                'content': content,
+                'title': f"제{article_number}조"
+            })
+        
+        return {
+            'articles': articles,
+            'parsing_method': 'basic_regex',
+            'parsing_timestamp': datetime.now().isoformat(),
+            'quality_score': 0.5,  # 기본 점수
+            'auto_corrected': False,
+            'manual_review_required': True
+        }
+    
     def parse_law_document(self, law_content: str) -> Dict[str, Any]:
         """
         법률 문서 파싱 (ML 강화 버전 + 부칙 파싱)
@@ -374,6 +439,227 @@ class MLEnhancedArticleParser(ImprovedArticleParser):
         logger.info(f"ML-enhanced parsing completed: {len(main_articles)} main articles, {len(supplementary_articles)} supplementary articles")
         
         return result
+
+
+    def validate_parsed_result(self, parsed_result: Dict[str, Any]) -> QualityReport:
+        """
+        Validate parsed result using quality validator
+        
+        Args:
+            parsed_result: Parsed law data dictionary
+            
+        Returns:
+            QualityReport: Quality validation report
+        """
+        if not self.quality_validator:
+            logger.warning("Quality validator not available")
+            return None
+        
+        try:
+            report = self.quality_validator.validate_parsing_quality(parsed_result)
+            logger.info(f"Validation completed. Quality score: {report.overall_score:.3f}")
+            return report
+        except Exception as e:
+            logger.error(f"Error during validation: {e}")
+            return None
+    
+    def fix_missing_articles(self, parsed_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Attempt to recover missing articles from parsing result
+        
+        Args:
+            parsed_result: Parsed law data dictionary
+            
+        Returns:
+            Dict[str, Any]: Improved parsing result with recovered articles
+        """
+        try:
+            articles = parsed_result.get('all_articles', [])
+            if not articles:
+                logger.warning("No articles found to fix")
+                return parsed_result
+            
+            # Extract article numbers
+            article_numbers = []
+            for article in articles:
+                try:
+                    number_text = str(article.get('article_number', ''))
+                    number_match = re.search(r'\d+', number_text)
+                    if number_match:
+                        article_numbers.append(int(number_match.group()))
+                except (ValueError, TypeError):
+                    continue
+            
+            if not article_numbers:
+                logger.warning("No article numbers found")
+                return parsed_result
+            
+            # Find missing numbers in sequence
+            article_numbers.sort()
+            missing_numbers = []
+            for i in range(1, len(article_numbers)):
+                gap = article_numbers[i] - article_numbers[i-1]
+                if gap > 1:
+                    missing_numbers.extend(range(article_numbers[i-1] + 1, article_numbers[i]))
+            
+            if missing_numbers:
+                logger.info(f"Found {len(missing_numbers)} missing article numbers: {missing_numbers}")
+                
+                # Try to recover missing articles from original content
+                original_content = parsed_result.get('original_content', '')
+                if original_content:
+                    recovered_articles = self._recover_missing_articles(original_content, missing_numbers)
+                    if recovered_articles:
+                        parsed_result['all_articles'].extend(recovered_articles)
+                        parsed_result['recovered_articles'] = recovered_articles
+                        logger.info(f"Recovered {len(recovered_articles)} missing articles")
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.error(f"Error fixing missing articles: {e}")
+            return parsed_result
+    
+    def remove_duplicate_articles(self, parsed_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Remove duplicate articles from parsing result
+        
+        Args:
+            parsed_result: Parsed law data dictionary
+            
+        Returns:
+            Dict[str, Any]: Parsing result with duplicates removed
+        """
+        try:
+            articles = parsed_result.get('all_articles', [])
+            if not articles:
+                return parsed_result
+            
+            # Group articles by content similarity
+            unique_articles = []
+            seen_contents = set()
+            duplicates_removed = 0
+            
+            for article in articles:
+                content = str(article.get('content', '')) + str(article.get('text', ''))
+                content_hash = hash(content.strip())
+                
+                if content_hash not in seen_contents:
+                    seen_contents.add(content_hash)
+                    unique_articles.append(article)
+                else:
+                    duplicates_removed += 1
+                    logger.debug(f"Removed duplicate article: {article.get('article_number', 'Unknown')}")
+            
+            if duplicates_removed > 0:
+                logger.info(f"Removed {duplicates_removed} duplicate articles")
+                parsed_result['all_articles'] = unique_articles
+                parsed_result['duplicates_removed'] = duplicates_removed
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.error(f"Error removing duplicate articles: {e}")
+            return parsed_result
+    
+    def _recover_missing_articles(self, content: str, missing_numbers: List[int]) -> List[Dict[str, Any]]:
+        """
+        Attempt to recover missing articles from original content
+        
+        Args:
+            content: Original law content
+            missing_numbers: List of missing article numbers
+            
+        Returns:
+            List[Dict[str, Any]]: Recovered articles
+        """
+        recovered_articles = []
+        
+        for missing_number in missing_numbers:
+            # Look for article pattern in content
+            pattern = rf'제\s*{missing_number}\s*조[^제]*?(?=제\s*\d+\s*조|$)'
+            match = re.search(pattern, content, re.DOTALL)
+            
+            if match:
+                article_text = match.group(0).strip()
+                
+                # Extract title if present
+                title_match = re.search(r'제\s*\d+\s*조\s*\(([^)]+)\)', article_text)
+                title = title_match.group(1) if title_match else f"제{missing_number}조"
+                
+                recovered_article = {
+                    'article_number': f'제{missing_number}조',
+                    'article_title': title,
+                    'content': article_text,
+                    'text': article_text,
+                    'is_recovered': True,
+                    'recovery_method': 'pattern_matching'
+                }
+                
+                recovered_articles.append(recovered_article)
+                logger.debug(f"Recovered article {missing_number}: {title}")
+        
+        return recovered_articles
+    
+    def parse_law_with_validation(self, law_content: str) -> Dict[str, Any]:
+        """
+        Parse law content with validation and auto-correction
+        
+        Args:
+            law_content: Law content to parse
+            
+        Returns:
+            Dict[str, Any]: Parsed result with quality information
+        """
+        try:
+            # Initial parsing - use fallback if base parser not available
+            if self.base_parser:
+                parsed_result = self.parse_law_document(law_content)
+            else:
+                logger.warning("Base parser not available, using basic parsing")
+                parsed_result = self._basic_parse_law(law_content)
+            
+            parsed_result['original_content'] = law_content
+            
+            # Validate result
+            if self.quality_validator:
+                quality_report = self.validate_parsed_result(parsed_result)
+                if quality_report:
+                    parsed_result['quality_report'] = quality_report
+                    parsed_result['quality_score'] = quality_report.overall_score
+                    
+                    # Auto-correction based on quality
+                    if quality_report.overall_score < 0.7:
+                        logger.info("Low quality detected, applying auto-corrections")
+                        
+                        # Fix missing articles
+                        parsed_result = self.fix_missing_articles(parsed_result)
+                        
+                        # Remove duplicates
+                        parsed_result = self.remove_duplicate_articles(parsed_result)
+                        
+                        # Re-validate after corrections
+                        updated_report = self.validate_parsed_result(parsed_result)
+                        if updated_report:
+                            parsed_result['quality_report'] = updated_report
+                            parsed_result['quality_score'] = updated_report.overall_score
+                            parsed_result['auto_corrected'] = True
+                            
+                            logger.info(f"Auto-correction completed. New quality score: {updated_report.overall_score:.3f}")
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.error(f"Error in parse_law_with_validation: {e}")
+            return {
+                'all_articles': [],
+                'main_articles': [],
+                'supplementary_articles': [],
+                'total_articles': 0,
+                'ml_enhanced': False,
+                'error': str(e),
+                'quality_score': 0.0
+            }
 
 
 def main():

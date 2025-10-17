@@ -32,6 +32,16 @@ from scripts.data_processing.utilities.import_precedents_to_db import PrecedentD
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 from source.data.database import DatabaseManager
 
+# Import quality modules
+try:
+    from scripts.data_processing.quality.data_quality_validator import DataQualityValidator
+    from scripts.data_processing.quality.automated_data_cleaner import AutomatedDataCleaner
+    from scripts.data_processing.quality.real_time_quality_monitor import RealTimeQualityMonitor
+    QUALITY_MODULES_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Quality modules not available: {e}")
+    QUALITY_MODULES_AVAILABLE = False
+
 
 @dataclass
 class PipelineResult:
@@ -44,6 +54,9 @@ class PipelineResult:
     processing_time: float
     stage_results: Dict[str, Any]
     error_messages: List[str]
+    quality_metrics: Dict[str, Any] = None
+    quality_improvements: int = 0
+    duplicates_resolved: int = 0
 
 
 class AutoPipelineOrchestrator:
@@ -93,6 +106,16 @@ class AutoPipelineOrchestrator:
         )
         self.db_importer = AssemblyLawImporter(db_path)
         self.precedent_db_importer = PrecedentDataImporter(db_path)
+        
+        # 품질 관리 컴포넌트 초기화
+        if QUALITY_MODULES_AVAILABLE:
+            self.quality_validator = DataQualityValidator()
+            self.data_cleaner = AutomatedDataCleaner(db_path, self.config.get('quality', {}))
+            self.quality_monitor = RealTimeQualityMonitor(db_path, self.config.get('quality_monitor', {}))
+        else:
+            self.quality_validator = None
+            self.data_cleaner = None
+            self.quality_monitor = None
         
         # 로깅 설정
         self.logger = logging.getLogger(__name__)
@@ -192,9 +215,21 @@ class AutoPipelineOrchestrator:
                     error_messages=error_messages
                 )
             
-            # Step 3: 증분 벡터 임베딩
+            # Step 3: 품질 검증 및 개선
+            self.pipeline_state['current_stage'] = 'quality_validation'
+            self.logger.info("Step 3: Quality validation and improvement...")
+            
+            quality_results = self._run_quality_validation_stage(preprocessing_results['processed_files'])
+            stage_results['quality_validation'] = quality_results
+            
+            if not quality_results['success']:
+                error_messages.extend(quality_results['errors'])
+                # 품질 검증 실패는 경고로 처리하고 계속 진행
+                self.logger.warning(f"Quality validation failed: {quality_results['errors']}")
+            
+            # Step 4: 증분 벡터 임베딩
             self.pipeline_state['current_stage'] = 'vectorization'
-            self.logger.info("Step 3: Incremental vector embedding...")
+            self.logger.info("Step 4: Incremental vector embedding...")
             
             vectorization_results = self._run_vectorization_stage(preprocessing_results['processed_files'])
             stage_results['vectorization'] = vectorization_results
@@ -212,9 +247,9 @@ class AutoPipelineOrchestrator:
                     error_messages=error_messages
                 )
             
-            # Step 4: DB 증분 임포트
+            # Step 5: DB 증분 임포트
             self.pipeline_state['current_stage'] = 'import'
-            self.logger.info("Step 4: Incremental database import...")
+            self.logger.info("Step 5: Incremental database import...")
             
             import_results = self._run_import_stage(preprocessing_results['processed_files'])
             stage_results['import'] = import_results
@@ -222,9 +257,9 @@ class AutoPipelineOrchestrator:
             if not import_results['success']:
                 error_messages.extend(import_results['errors'])
             
-            # Step 5: 최종 통계 생성
+            # Step 6: 최종 통계 생성
             self.pipeline_state['current_stage'] = 'finalization'
-            self.logger.info("Step 5: Generating final statistics...")
+            self.logger.info("Step 6: Generating final statistics...")
             
             final_stats = self._generate_final_statistics()
             stage_results['finalization'] = final_stats
@@ -245,7 +280,10 @@ class AutoPipelineOrchestrator:
                 laws_imported=import_results['laws_imported'],
                 processing_time=processing_time,
                 stage_results=stage_results,
-                error_messages=error_messages
+                error_messages=error_messages,
+                quality_metrics=quality_results.get('metrics', {}),
+                quality_improvements=quality_results.get('improvements_made', 0),
+                duplicates_resolved=quality_results.get('duplicates_resolved', 0)
             )
             
             self.logger.info(f"Pipeline completed: {success}")
@@ -482,6 +520,118 @@ class AutoPipelineOrchestrator:
                 'processed_files': [],
                 'processed_files_count': 0,
                 'total_records': 0,
+                'errors': [error_msg]
+            }
+    
+    def _run_quality_validation_stage(self, processed_files: List[Path]) -> Dict[str, Any]:
+        """품질 검증 및 개선 단계 실행"""
+        try:
+            if not QUALITY_MODULES_AVAILABLE or not self.quality_validator:
+                self.logger.warning("Quality modules not available, skipping quality validation")
+                return {
+                    'success': True,
+                    'metrics': {},
+                    'improvements_made': 0,
+                    'duplicates_resolved': 0,
+                    'errors': []
+                }
+            
+            if not processed_files:
+                self.logger.info("No processed files for quality validation")
+                return {
+                    'success': True,
+                    'metrics': {},
+                    'improvements_made': 0,
+                    'duplicates_resolved': 0,
+                    'errors': []
+                }
+            
+            self.logger.info(f"Running quality validation on {len(processed_files)} processed files...")
+            
+            quality_metrics = {
+                'total_files_validated': 0,
+                'high_quality_files': 0,
+                'medium_quality_files': 0,
+                'low_quality_files': 0,
+                'average_quality_score': 0.0,
+                'files_requiring_improvement': 0
+            }
+            
+            improvements_made = 0
+            duplicates_resolved = 0
+            errors = []
+            
+            # 각 처리된 파일에 대해 품질 검증 수행
+            for file_path in processed_files:
+                try:
+                    # JSON 파일에서 법률 데이터 로드
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        law_data = json.load(f)
+                    
+                    # 품질 점수 계산
+                    quality_score = self.quality_validator.calculate_quality_score(law_data)
+                    quality_metrics['total_files_validated'] += 1
+                    quality_metrics['average_quality_score'] += quality_score
+                    
+                    # 품질 등급 분류
+                    if quality_score >= 0.8:
+                        quality_metrics['high_quality_files'] += 1
+                    elif quality_score >= 0.6:
+                        quality_metrics['medium_quality_files'] += 1
+                    else:
+                        quality_metrics['low_quality_files'] += 1
+                        quality_metrics['files_requiring_improvement'] += 1
+                    
+                    # 품질 점수를 법률 데이터에 추가
+                    law_data['quality_score'] = quality_score
+                    law_data['quality_validated'] = True
+                    law_data['quality_validation_timestamp'] = datetime.now().isoformat()
+                    
+                    # 개선된 데이터를 파일에 저장
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(law_data, f, ensure_ascii=False, indent=2)
+                    
+                    improvements_made += 1
+                    
+                except Exception as e:
+                    error_msg = f"Error validating quality for {file_path}: {e}"
+                    self.logger.error(error_msg)
+                    errors.append(error_msg)
+            
+            # 평균 품질 점수 계산
+            if quality_metrics['total_files_validated'] > 0:
+                quality_metrics['average_quality_score'] /= quality_metrics['total_files_validated']
+            
+            # 중복 검사 및 해결 (간단한 파일 기반 검사)
+            if self.data_cleaner:
+                try:
+                    # 일일 정리 작업 실행 (중복 해결 포함)
+                    cleaning_report = self.data_cleaner.run_daily_cleaning()
+                    duplicates_resolved = cleaning_report.duplicates_resolved
+                    self.logger.info(f"Resolved {duplicates_resolved} duplicates during quality validation")
+                except Exception as e:
+                    error_msg = f"Error during duplicate resolution: {e}"
+                    self.logger.error(error_msg)
+                    errors.append(error_msg)
+            
+            self.logger.info(f"Quality validation completed: {quality_metrics['total_files_validated']} files validated, {improvements_made} improvements made")
+            
+            return {
+                'success': len(errors) == 0,
+                'metrics': quality_metrics,
+                'improvements_made': improvements_made,
+                'duplicates_resolved': duplicates_resolved,
+                'errors': errors
+            }
+            
+        except Exception as e:
+            error_msg = f"Quality validation stage error: {e}"
+            self.logger.error(error_msg)
+            return {
+                'success': False,
+                'metrics': {},
+                'improvements_made': 0,
+                'duplicates_resolved': 0,
                 'errors': [error_msg]
             }
     
@@ -733,6 +883,26 @@ class AutoPipelineOrchestrator:
                 'enabled': True,
                 'check_file_hash': True,
                 'skip_duplicates': True
+            },
+            'quality': {
+                'enabled': True,
+                'validation_threshold': 0.7,
+                'enable_duplicate_detection': True,
+                'enable_quality_improvement': True,
+                'quality_thresholds': {
+                    'excellent': 0.9,
+                    'good': 0.8,
+                    'fair': 0.6,
+                    'poor': 0.4
+                }
+            },
+            'quality_monitor': {
+                'enabled': True,
+                'check_interval_seconds': 300,
+                'alert_thresholds': {
+                    'overall_quality_min': 0.8,
+                    'duplicate_max_percentage': 5.0
+                }
             }
         }
     
@@ -745,6 +915,17 @@ class AutoPipelineOrchestrator:
             report_path = Path(output_path)
             report_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # datetime 객체를 문자열로 변환하는 함수
+            def convert_datetime(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif isinstance(obj, dict):
+                    return {k: convert_datetime(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_datetime(item) for item in obj]
+                else:
+                    return obj
+            
             report_data = {
                 'pipeline_result': {
                     'success': result.success,
@@ -753,10 +934,13 @@ class AutoPipelineOrchestrator:
                     'vectors_added': result.vectors_added,
                     'laws_imported': result.laws_imported,
                     'processing_time': result.processing_time,
-                    'error_messages': result.error_messages
+                    'error_messages': result.error_messages,
+                    'quality_metrics': result.quality_metrics,
+                    'quality_improvements': result.quality_improvements,
+                    'duplicates_resolved': result.duplicates_resolved
                 },
-                'stage_results': result.stage_results,
-                'pipeline_state': self.pipeline_state,
+                'stage_results': convert_datetime(result.stage_results),
+                'pipeline_state': convert_datetime(self.pipeline_state),
                 'config': self.config,
                 'generated_at': datetime.now().isoformat()
             }

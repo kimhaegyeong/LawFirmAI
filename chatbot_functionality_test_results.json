@@ -1,0 +1,145 @@
+{
+  "FastAPI_Server": {
+    "success": false,
+    "success_rate": 0.5,
+    "total_tests": 4,
+    "successful_tests": 2,
+    "results": [
+      {
+        "feature": "FastAPI",
+        "success": true,
+        "found": true
+      },
+      {
+        "feature": "chat",
+        "success": false,
+        "found": false
+      },
+      {
+        "feature": "search",
+        "success": false,
+        "found": false
+      },
+      {
+        "feature": "uvicorn",
+        "success": true,
+        "found": true
+      }
+    ]
+  },
+  "Gradio_Interface": {
+    "success": false,
+    "success_rate": 0.6,
+    "total_tests": 5,
+    "successful_tests": 3,
+    "results": [
+      {
+        "feature": "import gradio",
+        "success": true,
+        "found": true
+      },
+      {
+        "feature": "gr.ChatInterface",
+        "success": false,
+        "found": false
+      },
+      {
+        "feature": "gr.Interface",
+        "success": false,
+        "found": false
+      },
+      {
+        "feature": "def respond",
+        "success": true,
+        "found": true
+      },
+      {
+        "feature": "def process_query",
+        "success": true,
+        "found": true
+      }
+    ]
+  },
+  "Database_Connectivity": {
+    "success": true,
+    "success_rate": 1.0,
+    "total_tests": 2,
+    "successful_tests": 2,
+    "db_size": 221212672,
+    "total_tables": 52,
+    "results": [
+      {
+        "table": "assembly_laws",
+        "success": true,
+        "found": true,
+        "record_count": 4321
+      },
+      {
+        "table": "precedent_cases",
+        "success": true,
+        "found": true,
+        "record_count": 0
+      }
+    ]
+  },
+  "Vector_Embeddings": {
+    "success": false,
+    "success_rate": 0.3333333333333333,
+    "total_tests": 3,
+    "successful_tests": 1,
+    "total_faiss_files": 2,
+    "total_metadata_files": 4,
+    "results": [
+      {
+        "model": "ml_enhanced_bge_m3",
+        "success": false,
+        "faiss_files": 0,
+        "json_files": 0
+      },
+      {
+        "model": "ml_enhanced_ko_sroberta",
+        "success": true,
+        "faiss_files": 1,
+        "json_files": 3
+      },
+      {
+        "model": "ml_enhanced_ko_sroberta_precedents",
+        "success": false,
+        "faiss_files": 0,
+        "json_files": 0
+      }
+    ]
+  },
+  "Chatbot_Components": {
+    "success": true,
+    "success_rate": 1.0,
+    "total_tests": 4,
+    "successful_tests": 4,
+    "results": [
+      {
+        "component": "chat_service.py",
+        "success": true,
+        "file_size": 3051,
+        "has_class": true
+      },
+      {
+        "component": "rag_service.py",
+        "success": true,
+        "file_size": 16467,
+        "has_class": true
+      },
+      {
+        "component": "question_classifier.py",
+        "success": true,
+        "file_size": 15901,
+        "has_class": true
+      },
+      {
+        "component": "hybrid_search_engine.py",
+        "success": true,
+        "file_size": 24497,
+        "has_class": true
+      }
+    ]
+  }
+}
