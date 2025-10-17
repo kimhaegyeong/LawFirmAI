@@ -21,9 +21,9 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from source.data.assembly_playwright_client import AssemblyPlaywrightClient
-from scripts.assembly.assembly_collector import AssemblyCollector
-from scripts.assembly.checkpoint_manager import CheckpointManager
-from scripts.assembly.common_utils import (
+from scripts.data_collection.common.assembly_collector import AssemblyCollector
+from scripts.data_collection.common.checkpoint_manager import CheckpointManager
+from scripts.data_collection.common.common_utils import (
     CollectionConfig, CollectionLogger, SignalHandler, 
     MemoryManager, RetryManager, DataOptimizer, 
     check_system_requirements, memory_monitor, retry_on_failure
@@ -227,7 +227,7 @@ def collect_precedents_by_category(
                         })
                         
                         # 데이터 최적화 적용
-                        from scripts.assembly.common_utils import DataOptimizer
+                        from scripts.data_collection.common.common_utils import DataOptimizer
                         detail = DataOptimizer.optimize_item(detail, 'precedent')
                         print(f"      🔧 Data optimized for memory efficiency")
                         
