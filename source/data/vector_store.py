@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import pickle
 from datetime import datetime
+from dataclasses import dataclass
 
 # FAISS 관련 import
 try:

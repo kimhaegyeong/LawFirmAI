@@ -1,0 +1,119 @@
+{
+  "ChatService": {
+    "success": true,
+    "success_rate": 1.0,
+    "total_tests": 5,
+    "successful_tests": 5,
+    "results": [
+      {
+        "query": "계약서 작성 시 주의사항은 무엇인가요?",
+        "success": true,
+        "response": "안녕하세요! '계약서 작성 시 주의사항은 무엇인가요?'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다.",
+        "confidence": 0.8,
+        "processing_time": 0.1
+      },
+      {
+        "query": "민사소송 제기 절차를 알려주세요",
+        "success": true,
+        "response": "안녕하세요! '민사소송 제기 절차를 알려주세요'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다.",
+        "confidence": 0.8,
+        "processing_time": 0.1
+      },
+      {
+        "query": "형사처벌의 종류는 무엇인가요?",
+        "success": true,
+        "response": "안녕하세요! '형사처벌의 종류는 무엇인가요?'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다.",
+        "confidence": 0.8,
+        "processing_time": 0.1
+      },
+      {
+        "query": "",
+        "success": true,
+        "response": "올바른 질문을 입력해주세요.",
+        "confidence": 0.0,
+        "processing_time": 0.0
+      },
+      {
+        "query": "안녕하세요",
+        "success": true,
+        "response": "안녕하세요! '안녕하세요'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다.",
+        "confidence": 0.8,
+        "processing_time": 0.1
+      }
+    ]
+  },
+  "VectorStore": {
+    "success": false,
+    "error": "name 'dataclass' is not defined"
+  },
+  "Database": {
+    "success": false,
+    "error": "name 'dataclass' is not defined"
+  },
+  "GradioApp": {
+    "success": false,
+    "success_rate": 0.5,
+    "total_tests": 4,
+    "successful_tests": 2,
+    "results": [
+      {
+        "element": "class LawFirmAIApp",
+        "success": false,
+        "found": false
+      },
+      {
+        "element": "def process_query",
+        "success": true,
+        "found": true
+      },
+      {
+        "element": "def get_system_status",
+        "success": true,
+        "found": true
+      },
+      {
+        "element": "def create_interface",
+        "success": false,
+        "found": false
+      }
+    ]
+  },
+  "APIEndpoints": {
+    "success": false,
+    "success_rate": 0.5,
+    "total_tests": 6,
+    "successful_tests": 3,
+    "results": [
+      {
+        "endpoint": "/api/v1/chat",
+        "success": false,
+        "found": false
+      },
+      {
+        "endpoint": "/api/v1/chat/ml-enhanced",
+        "success": false,
+        "found": false
+      },
+      {
+        "endpoint": "/api/v1/chat/intelligent",
+        "success": false,
+        "found": false
+      },
+      {
+        "endpoint": "def chat_endpoint",
+        "success": true,
+        "found": true
+      },
+      {
+        "endpoint": "def ml_enhanced_chat_endpoint",
+        "success": true,
+        "found": true
+      },
+      {
+        "endpoint": "def intelligent_chat_endpoint",
+        "success": true,
+        "found": true
+      }
+    ]
+  }
+}

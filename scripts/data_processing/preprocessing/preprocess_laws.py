@@ -44,6 +44,15 @@ from parsers import (
 from parsers.improved_article_parser import ImprovedArticleParser
 from ml_enhanced_parser import MLEnhancedArticleParser
 
+# Import hybrid parser
+try:
+    sys.path.append(str(Path(__file__).parent.parent / 'quality'))
+    from hybrid_parser import HybridArticleParser
+    HYBRID_PARSER_AVAILABLE = True
+except ImportError:
+    HYBRID_PARSER_AVAILABLE = False
+    logger.warning("Hybrid parser not available. Using individual parsers.")
+
 # Import new legal analysis components
 try:
     from parsers.version_detector import DataVersionDetector
@@ -444,14 +453,22 @@ class LawPreprocessor:
     def __init__(self, enable_legal_analysis: bool = True, max_memory_mb: int = 2048, max_memory_gb: float = 10.0, processing_manager: Optional['ProcessingManager'] = None):
         """Initialize the preprocessor with all parsers and optional legal analysis"""
         self.html_parser = LawHTMLParser()
-        # ML 강화 파서 사용 (모델이 있으면)
-        ml_model_path = "models/article_classifier.pkl"
-        if Path(ml_model_path).exists():
-            self.article_parser = MLEnhancedArticleParser(ml_model_path=ml_model_path)
-            logger.info("Using ML-enhanced article parser")
+        
+        # Initialize hybrid parser if available, otherwise fall back to individual parsers
+        if HYBRID_PARSER_AVAILABLE:
+            ml_model_path = "models/article_classifier.pkl"
+            self.article_parser = HybridArticleParser(ml_model_path=ml_model_path)
+            logger.info("Using hybrid article parser")
         else:
-            self.article_parser = ImprovedArticleParser()
-            logger.info("Using rule-based article parser")
+            # Fallback to individual parsers
+            ml_model_path = "models/article_classifier.pkl"
+            if Path(ml_model_path).exists():
+                self.article_parser = MLEnhancedArticleParser(ml_model_path=ml_model_path)
+                logger.info("Using ML-enhanced article parser")
+            else:
+                self.article_parser = ImprovedArticleParser()
+                logger.info("Using rule-based article parser")
+        
         self.metadata_extractor = MetadataExtractor()
         self.text_normalizer = TextNormalizer()
         # self.searchable_text_generator = SearchableTextGenerator()  # 제거됨
@@ -697,13 +714,31 @@ class LawPreprocessor:
             # Clean law content by removing JavaScript and HTML artifacts
             law_content = self._clean_law_content(law_data.get('law_content', ''))
             html_content = law_data.get('content_html', '')
-            parsed_result = self.article_parser.parse_law(law_content)
             
-            # Extract articles from parsed result
-            if isinstance(parsed_result, dict) and 'all_articles' in parsed_result:
-                articles = parsed_result['all_articles']
+            # Use hybrid parser if available, otherwise use individual parser
+            if HYBRID_PARSER_AVAILABLE and isinstance(self.article_parser, HybridArticleParser):
+                # Use hybrid parser with validation
+                parsed_result = self.article_parser.parse_law_content(law_content, law_data.get('law_name', ''))
+                
+                # Extract final result from hybrid parser
+                if parsed_result.get('final_result'):
+                    final_result = parsed_result['final_result']
+                    articles = final_result.get('all_articles', [])
+                    quality_score = final_result.get('quality_score', 0.0)
+                    auto_corrected = final_result.get('auto_corrected', False)
+                    manual_review_required = parsed_result.get('manual_review_required', False)
+                else:
+                    articles = []
+                    quality_score = 0.0
+                    auto_corrected = False
+                    manual_review_required = True
             else:
-                articles = []
+                # Fallback to individual parser
+                parsed_result = self.article_parser.parse_law(law_content)
+                articles = parsed_result.get('all_articles', []) if isinstance(parsed_result, dict) else []
+                quality_score = 0.0
+                auto_corrected = False
+                manual_review_required = False
             
             # Extract metadata
             metadata = self.metadata_extractor.extract(law_data)
@@ -730,7 +765,19 @@ class LawPreprocessor:
                 'ministry': law_data.get('ministry', ''),
                 
                 # Parsed content (압축된 구조)
-                'articles': articles
+                'articles': articles,
+                
+                # Quality information
+                'quality_score': quality_score,
+                'auto_corrected': auto_corrected,
+                'manual_review_required': manual_review_required,
+                'parsing_method': 'hybrid' if HYBRID_PARSER_AVAILABLE else 'individual',
+                'parsing_version': parsing_version,
+                'version_confidence': version_confidence,
+                
+                # Processing metadata
+                'processing_timestamp': datetime.now().isoformat(),
+                'processing_version': '2.0_hybrid'
             }
             
             return processed_law

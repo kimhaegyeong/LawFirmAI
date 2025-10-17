@@ -273,8 +273,7 @@ def main():
         builder = IncrementalPrecedentVectorBuilder(
             model_name=args.model_name,
             dimension=args.dimension,
-            index_type=args.index_type,
-            batch_size=args.batch_size
+            index_type=args.index_type
         )
         
         # 증분 벡터 임베딩 생성
