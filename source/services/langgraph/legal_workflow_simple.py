@@ -186,21 +186,39 @@ class LegalQuestionWorkflow:
 위 법률 문서를 바탕으로 질문에 대해 정확하고 전문적인 답변을 제공해주세요.
 답변은 한국어로 작성하고, 법률적 근거를 포함해주세요."""
 
-            # Ollama로 답변 생성 (간단한 구현)
+            # Google Gemini로 답변 생성 (최적화된 구현)
             try:
-                from langchain_community.llms import Ollama
+                from langchain_google_genai import ChatGoogleGenerativeAI
                 
-                ollama_llm = Ollama(
-                    model="qwen2.5:7b",
-                    base_url="http://localhost:11434"
+                gemini_llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash-lite",  # .env 파일의 설정에 맞게 변경
+                    temperature=0.3,              # 낮은 temperature로 일관성 향상
+                    max_output_tokens=100,        # 응답 길이 제한
+                    timeout=10                    # 타임아웃 단축 (10초)
                 )
                 
-                response = ollama_llm.invoke(prompt)
-                state["answer"] = response
+                response = gemini_llm.invoke(prompt)
+                state["answer"] = response.content
                 
-            except Exception as ollama_error:
-                # Ollama 실패 시 기본 답변
-                state["answer"] = f"""질문: {state["query"]}
+            except Exception as gemini_error:
+                # Gemini 실패 시 Ollama 백업
+                try:
+                    from langchain_community.llms import Ollama
+                    
+                    ollama_llm = Ollama(
+                        model="qwen2.5:3b",  # 더 작은 모델로 변경
+                        base_url="http://localhost:11434",
+                        temperature=0.3,    # 낮은 temperature로 일관성 향상
+                        num_predict=100,    # 응답 길이 제한 (200 → 100)
+                        timeout=15          # 타임아웃 단축 (30 → 15초)
+                    )
+                    
+                    response = ollama_llm.invoke(prompt)
+                    state["answer"] = response
+                    
+                except Exception as ollama_error:
+                    # 모든 LLM 실패 시 기본 답변
+                    state["answer"] = f"""질문: {state["query"]}
 
 이 질문은 {state["query_type"]} 영역에 해당합니다.
 
@@ -210,8 +228,8 @@ class LegalQuestionWorkflow:
 위 정보를 바탕으로 답변드리면, 해당 질문에 대한 구체적인 법률적 조언을 위해서는 전문가와 상담하시는 것을 권장합니다.
 
 참고: 이 답변은 일반적인 정보 제공 목적이며, 구체적인 법률적 조언이 아닙니다."""
-                
-                self.logger.warning(f"Ollama generation failed, using fallback: {ollama_error}")
+                    
+                    self.logger.warning(f"All LLM providers failed. Gemini: {gemini_error}, Ollama: {ollama_error}")
             
             state["processing_steps"].append("답변 생성 완료")
             
