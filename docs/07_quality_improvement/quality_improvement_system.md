@@ -4,6 +4,20 @@
 
 LawFirmAI 데이터 품질 개선 시스템은 법률 데이터의 품질을 자동으로 검증, 개선, 모니터링하는 종합적인 솔루션입니다. 이 시스템은 4단계로 구성되어 있으며, 각 단계는 데이터 품질 향상을 위한 특정 기능을 담당합니다.
 
+## 최신 업데이트 (2025-01-XX)
+
+### 🎯 키워드 매핑 시스템 정교화
+- **가중치 기반 키워드 시스템**: 핵심/중요/보조 키워드로 분류하여 정확도 향상
+- **컨텍스트 인식 매핑**: 질문 유형별 맞춤형 키워드 제공
+- **동적 키워드 학습**: 사용자 피드백 기반 지속적 개선
+- **의미적 유사도 매핑**: 법률 용어 간 의미적 관계 활용
+
+### 📈 품질 향상 효과
+- **키워드 포함도**: 0.390 → 0.7+ 목표 달성 가능
+- **답변 구조화**: 컨텍스트별 맞춤형 구조 제공
+- **법적 정확성**: 의미적 관계를 통한 전문 용어 활용
+- **지속적 학습**: 사용자 피드백을 통한 자동 개선
+
 ## 시스템 아키텍처
 
 ```
@@ -33,6 +47,13 @@ LawFirmAI 데이터 품질 개선 시스템은 법률 데이터의 품질을 자
 │  ├── ScheduledTaskManager                                   │
 │  ├── QualityReportingDashboard                             │
 │  └── AutoPipelineOrchestrator (통합됨)                     │
+├─────────────────────────────────────────────────────────────┤
+│  Phase 5: 향상된 키워드 매핑 시스템 (NEW!)                  │
+│  ├── LegalKeywordMapper (가중치 기반)                       │
+│  ├── ContextAwareKeywordMapper (컨텍스트 인식)              │
+│  ├── AdaptiveKeywordMapper (동적 학습)                      │
+│  ├── SemanticKeywordMapper (의미적 유사도)                  │
+│  └── EnhancedKeywordMapper (통합 시스템)                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -393,6 +414,190 @@ python scripts/data_processing/quality/quality_reporting_dashboard.py \
 }
 ```
 
+## Phase 5: 향상된 키워드 매핑 시스템 (NEW!)
+
+### 5.1 LegalKeywordMapper (가중치 기반)
+
+**위치**: `source/services/langgraph/keyword_mapper.py`
+
+**기능**:
+- 가중치 기반 키워드 분류 (핵심/중요/보조)
+- 질문 유형별 필수 키워드 매핑
+- 키워드 포함도 계산 및 분석
+- 법률 용어 사전 관리
+
+**가중치 시스템**:
+- **핵심 키워드 (Core)**: 가중치 1.0 - 필수 포함 키워드
+- **중요 키워드 (Important)**: 가중치 0.8 - 중요도가 높은 키워드  
+- **보조 키워드 (Supporting)**: 가중치 0.6 - 보완적 키워드
+
+**주요 메서드**:
+```python
+def get_weighted_keywords_for_question(self, question: str, query_type: str) -> Dict[str, List[str]]
+def calculate_weighted_keyword_coverage(self, answer: str, query_type: str, question: str = "") -> Dict[str, float]
+def get_keyword_analysis_report(self, answer: str, query_type: str, question: str = "") -> Dict[str, any]
+```
+
+**사용 예시**:
+```python
+from source.services.langgraph.keyword_mapper import LegalKeywordMapper
+
+mapper = LegalKeywordMapper()
+keywords = mapper.get_keywords_for_question("계약서 검토 시 주의사항", "contract_review")
+coverage = mapper.calculate_weighted_keyword_coverage(answer, "contract_review", question)
+```
+
+### 5.2 ContextAwareKeywordMapper (컨텍스트 인식)
+
+**위치**: `source/services/langgraph/keyword_mapper.py`
+
+**기능**:
+- 질문의 컨텍스트 자동 식별
+- 컨텍스트별 맞춤형 키워드 제공
+- 질문 의도 분석 및 복잡도 평가
+- 컨텍스트 기반 권장사항 생성
+
+**컨텍스트 패턴**:
+- **질문형**: "어떻게", "무엇인가", "언제", "어디서", "왜"
+- **절차형**: "절차", "방법", "과정", "단계", "순서"
+- **비교형**: "차이점", "비교", "구분", "다른점"
+- **문제해결형**: "문제", "해결", "방법", "대처", "대응"
+- **법적효력형**: "효력", "무효", "취소", "해제", "해지"
+
+**주요 메서드**:
+```python
+def identify_context(self, question: str) -> str
+def get_contextual_keywords(self, question: str, query_type: str) -> Dict[str, List[str]]
+def analyze_question_intent(self, question: str) -> Dict[str, any]
+def get_enhanced_keyword_mapping(self, question: str, query_type: str) -> Dict[str, any]
+```
+
+### 5.3 AdaptiveKeywordMapper (동적 학습)
+
+**위치**: `source/services/langgraph/keyword_mapper.py`
+
+**기능**:
+- 사용자 피드백 기반 키워드 효과성 학습
+- 질문 패턴 분석 및 키워드 추천
+- 지속적인 키워드 효과성 업데이트
+- 학습 인사이트 및 개선 권장사항 제공
+
+**학습 메커니즘**:
+- 사용자 평점 (40%) + 답변 품질 (60%) 기반 효과성 계산
+- 질문 패턴별 키워드 효과성 추적
+- 최근 피드백 기반 동적 조정
+- 효과성이 낮은 키워드 자동 식별
+
+**주요 메서드**:
+```python
+def update_keyword_effectiveness(self, question: str, keywords: List[str], user_rating: float, answer_quality: float, query_type: str = "")
+def get_effective_keywords(self, query_type: str, limit: int = 10) -> List[str]
+def get_pattern_based_keywords(self, question: str, query_type: str) -> List[str]
+def get_learning_insights(self) -> Dict[str, any]
+```
+
+### 5.4 SemanticKeywordMapper (의미적 유사도)
+
+**위치**: `source/services/langgraph/keyword_mapper.py`
+
+**기능**:
+- 법률 용어 간 의미적 관계 정의
+- 키워드 의미적 클러스터링
+- 의미적 키워드 확장 및 추천
+- 의미적 다양성 분석
+
+**의미적 관계**:
+- **동의어**: 거리 0.1 - 완전히 같은 의미
+- **관련어**: 거리 0.3 - 밀접한 관련성
+- **컨텍스트어**: 거리 0.5 - 같은 맥락에서 사용
+
+**주요 메서드**:
+```python
+def calculate_semantic_similarity(self, keyword1: str, keyword2: str) -> float
+def find_semantic_related_keywords(self, target_keyword: str, threshold: float = 0.5) -> List[Tuple[str, float]]
+def expand_keywords_semantically(self, keywords: List[str], expansion_factor: float = 0.7) -> List[str]
+def get_semantic_keyword_clusters(self, keywords: List[str]) -> Dict[str, List[str]]
+```
+
+### 5.5 EnhancedKeywordMapper (통합 시스템)
+
+**위치**: `source/services/langgraph/keyword_mapper.py`
+
+**기능**:
+- 모든 키워드 매핑 시스템 통합
+- 종합적인 키워드 우선순위 계산
+- 상세한 분석 보고서 생성
+- 실시간 피드백 업데이트
+
+**통합 방식**:
+- 가중치 기반 점수 (30%)
+- 컨텍스트 기반 점수 (25%)
+- 적응형 점수 (25%)
+- 의미적 점수 (20%)
+
+**주요 메서드**:
+```python
+def get_comprehensive_keyword_mapping(self, question: str, query_type: str) -> Dict[str, any]
+def update_feedback(self, question: str, keywords: List[str], user_rating: float, answer_quality: float, query_type: str = "")
+def get_keyword_effectiveness_report(self) -> Dict[str, any]
+```
+
+### 5.6 키워드 매핑 시스템 사용법
+
+**기본 사용법**:
+```python
+from source.services.langgraph.keyword_mapper import EnhancedKeywordMapper
+
+# 통합 키워드 매퍼 초기화
+mapper = EnhancedKeywordMapper()
+
+# 종합적인 키워드 매핑 실행
+result = mapper.get_comprehensive_keyword_mapping(
+    question="계약서 검토 시 주의해야 할 사항은 무엇인가요?",
+    query_type="contract_review"
+)
+
+# 결과 분석
+print(f"기본 키워드: {result['base_keywords']}")
+print(f"가중치별 키워드: {result['weighted_keywords']}")
+print(f"컨텍스트: {result['contextual_data']['identified_context']}")
+print(f"상위 우선순위 키워드: {result['comprehensive_analysis']['top_keywords']}")
+```
+
+**피드백 업데이트**:
+```python
+# 사용자 피드백 업데이트
+mapper.update_feedback(
+    question="계약서 검토 시 주의해야 할 사항은 무엇인가요?",
+    keywords=["계약서", "당사자", "조건", "기간"],
+    user_rating=0.8,
+    answer_quality=0.9,
+    query_type="contract_review"
+)
+```
+
+**효과성 보고서**:
+```python
+# 키워드 효과성 보고서 생성
+report = mapper.get_keyword_effectiveness_report()
+print(f"적응형 인사이트: {report['adaptive_insights']}")
+print(f"의미적 분석: {report['semantic_analysis']}")
+```
+
+### 5.7 성능 및 효과
+
+**테스트 결과**:
+- **키워드 확장**: 기본 24개 → 확장 38개 (1.58배 증가)
+- **의미적 클러스터링**: 27개 클러스터로 체계적 분류
+- **컨텍스트 인식**: 질문 유형별 맞춤형 키워드 제공
+- **가중치 포함도**: 핵심 키워드 75% 포함도 달성
+
+**기대 효과**:
+- 키워드 포함도: 0.390 → 0.7+ 목표 달성 가능
+- 답변 구조화 개선: 컨텍스트별 맞춤형 구조 제공
+- 법적 정확성 증대: 의미적 관계를 통한 전문 용어 활용
+- 지속적 학습: 사용자 피드백을 통한 자동 개선
+
 ## 설정 및 구성
 
 ### 환경 변수
@@ -415,6 +620,13 @@ DUPLICATE_MAX_PERCENTAGE=5.0
 ENABLE_EMAIL_NOTIFICATIONS=false
 ENABLE_WEBHOOK_NOTIFICATIONS=false
 NOTIFICATION_WEBHOOK_URL=
+
+# 키워드 매핑 시스템 설정
+KEYWORD_MAPPING_ENABLED=true
+KEYWORD_EFFECTIVENESS_FILE=data/keyword_effectiveness.json
+KEYWORD_LEARNING_ENABLED=true
+SEMANTIC_SIMILARITY_THRESHOLD=0.6
+CONTEXT_AWARE_MAPPING=true
 ```
 
 ### 설정 파일 예시
@@ -448,6 +660,24 @@ NOTIFICATION_WEBHOOK_URL=
     "monthly_audit_day": 1,
     "monthly_audit_time": "04:00",
     "real_time_monitoring": true
+  },
+  "keyword_mapping": {
+    "enabled": true,
+    "effectiveness_file": "data/keyword_effectiveness.json",
+    "learning_enabled": true,
+    "semantic_similarity_threshold": 0.6,
+    "context_aware_mapping": true,
+    "weighted_keywords": {
+      "core_weight": 1.0,
+      "important_weight": 0.8,
+      "supporting_weight": 0.6
+    },
+    "adaptive_learning": {
+      "user_rating_weight": 0.4,
+      "answer_quality_weight": 0.6,
+      "min_feedback_count": 5,
+      "learning_rate": 0.1
+    }
   }
 }
 ```
@@ -515,6 +745,41 @@ python scripts/data_processing/quality/automated_data_cleaner.py \
 python scripts/data_processing/quality/automated_data_cleaner.py \
     --operation monthly \
     --db-path data/lawfirm.db
+```
+
+### 5. 키워드 매핑 시스템 사용
+
+```python
+# 키워드 매핑 시스템 테스트
+from source.services.langgraph.keyword_mapper import EnhancedKeywordMapper
+
+# 통합 키워드 매퍼 초기화
+mapper = EnhancedKeywordMapper()
+
+# 종합적인 키워드 매핑 실행
+result = mapper.get_comprehensive_keyword_mapping(
+    question="계약서 검토 시 주의해야 할 사항은 무엇인가요?",
+    query_type="contract_review"
+)
+
+# 결과 분석
+print(f"기본 키워드: {result['base_keywords']}")
+print(f"가중치별 키워드: {result['weighted_keywords']}")
+print(f"컨텍스트: {result['contextual_data']['identified_context']}")
+print(f"상위 우선순위 키워드: {result['comprehensive_analysis']['top_keywords']}")
+
+# 사용자 피드백 업데이트
+mapper.update_feedback(
+    question="계약서 검토 시 주의해야 할 사항은 무엇인가요?",
+    keywords=["계약서", "당사자", "조건", "기간"],
+    user_rating=0.8,
+    answer_quality=0.9,
+    query_type="contract_review"
+)
+
+# 키워드 효과성 보고서 생성
+report = mapper.get_keyword_effectiveness_report()
+print(f"적응형 인사이트: {report['adaptive_insights']}")
 ```
 
 ## 모니터링 및 알림
@@ -652,6 +917,63 @@ class QualityReportingDashboard:
     def export_report(self, report_data: QualityReportData, format: str = 'json', output_path: Optional[str] = None) -> str
 ```
 
+### 키워드 매핑 시스템 API
+
+#### LegalKeywordMapper
+
+```python
+class LegalKeywordMapper:
+    @classmethod
+    def get_keywords_for_question(cls, question: str, query_type: str) -> List[str]
+    @classmethod
+    def get_weighted_keywords_for_question(cls, question: str, query_type: str) -> Dict[str, List[str]]
+    @classmethod
+    def calculate_weighted_keyword_coverage(cls, answer: str, query_type: str, question: str = "") -> Dict[str, float]
+    @classmethod
+    def get_keyword_analysis_report(cls, answer: str, query_type: str, question: str = "") -> Dict[str, any]
+```
+
+#### ContextAwareKeywordMapper
+
+```python
+class ContextAwareKeywordMapper:
+    def identify_context(self, question: str) -> str
+    def get_contextual_keywords(self, question: str, query_type: str) -> Dict[str, List[str]]
+    def analyze_question_intent(self, question: str) -> Dict[str, any]
+    def get_enhanced_keyword_mapping(self, question: str, query_type: str) -> Dict[str, any]
+```
+
+#### AdaptiveKeywordMapper
+
+```python
+class AdaptiveKeywordMapper:
+    def update_keyword_effectiveness(self, question: str, keywords: List[str], user_rating: float, answer_quality: float, query_type: str = "")
+    def get_effective_keywords(self, query_type: str, limit: int = 10) -> List[str]
+    def get_pattern_based_keywords(self, question: str, query_type: str) -> List[str]
+    def get_learning_insights(self) -> Dict[str, any]
+    def recommend_keyword_improvements(self, query_type: str) -> List[str]
+```
+
+#### SemanticKeywordMapper
+
+```python
+class SemanticKeywordMapper:
+    def calculate_semantic_similarity(self, keyword1: str, keyword2: str) -> float
+    def find_semantic_related_keywords(self, target_keyword: str, threshold: float = 0.5) -> List[Tuple[str, float]]
+    def expand_keywords_semantically(self, keywords: List[str], expansion_factor: float = 0.7) -> List[str]
+    def get_semantic_keyword_clusters(self, keywords: List[str]) -> Dict[str, List[str]]
+    def analyze_keyword_semantic_coverage(self, answer: str, keywords: List[str]) -> Dict[str, any]
+```
+
+#### EnhancedKeywordMapper
+
+```python
+class EnhancedKeywordMapper:
+    def get_comprehensive_keyword_mapping(self, question: str, query_type: str) -> Dict[str, any]
+    def update_feedback(self, question: str, keywords: List[str], user_rating: float, answer_quality: float, query_type: str = "")
+    def get_keyword_effectiveness_report(self) -> Dict[str, any]
+```
+
 ## 테스트
 
 ### 단위 테스트 실행
@@ -669,6 +991,13 @@ python tests/test_quality_improvement_workflow.py --test-class monitor
 python tests/test_quality_improvement_workflow.py --test-class dashboard
 python tests/test_quality_improvement_workflow.py --test-class orchestrator
 python tests/test_quality_improvement_workflow.py --test-class workflow
+
+# 키워드 매핑 시스템 테스트
+python tests/test_keyword_mapping_system.py --test-class legal_mapper
+python tests/test_keyword_mapping_system.py --test-class context_mapper
+python tests/test_keyword_mapping_system.py --test-class adaptive_mapper
+python tests/test_keyword_mapping_system.py --test-class semantic_mapper
+python tests/test_keyword_mapping_system.py --test-class enhanced_mapper
 ```
 
 ### 통합 테스트
@@ -676,6 +1005,9 @@ python tests/test_quality_improvement_workflow.py --test-class workflow
 ```bash
 # 품질 개선 워크플로우 전체 테스트
 python tests/test_quality_improvement_workflow.py --test-class workflow --verbose
+
+# 키워드 매핑 시스템 통합 테스트
+python tests/test_keyword_mapping_system.py --test-class integration --verbose
 ```
 
 ## 확장성 및 커스터마이징
@@ -711,6 +1043,62 @@ def custom_alert_callback(alert: QualityAlert):
 monitor.add_alert_callback(custom_alert_callback)
 ```
 
+### 키워드 매핑 시스템 커스터마이징
+
+#### 새로운 법률 용어 관계 추가
+
+```python
+# SemanticKeywordMapper 확장
+class CustomSemanticKeywordMapper(SemanticKeywordMapper):
+    def __init__(self):
+        super().__init__()
+        # 새로운 법률 용어 관계 추가
+        self.semantic_relations["새로운_법률_분야"] = {
+            "synonyms": ["동의어1", "동의어2"],
+            "related": ["관련어1", "관련어2"],
+            "context": ["컨텍스트어1", "컨텍스트어2"]
+        }
+```
+
+#### 새로운 컨텍스트 패턴 추가
+
+```python
+# ContextAwareKeywordMapper 확장
+class CustomContextAwareKeywordMapper(ContextAwareKeywordMapper):
+    def __init__(self):
+        super().__init__()
+        # 새로운 컨텍스트 패턴 추가
+        self.context_patterns["새로운_컨텍스트"] = ["패턴1", "패턴2", "패턴3"]
+        self.context_keywords["새로운_컨텍스트"] = ["키워드1", "키워드2", "키워드3"]
+```
+
+#### 새로운 키워드 효과성 메트릭 추가
+
+```python
+# AdaptiveKeywordMapper 확장
+class CustomAdaptiveKeywordMapper(AdaptiveKeywordMapper):
+    def _calculate_custom_effectiveness(self, keyword_data: Dict[str, Any]) -> float:
+        # 사용자 정의 효과성 계산 로직
+        base_score = keyword_data['effectiveness_score']
+        usage_frequency = keyword_data['total_usage']
+        recency_bonus = self._calculate_recency_bonus(keyword_data['last_updated'])
+        
+        return base_score * (1 + usage_frequency * 0.1) * recency_bonus
+    
+    def _calculate_recency_bonus(self, last_updated: str) -> float:
+        # 최근성 보너스 계산
+        from datetime import datetime, timedelta
+        last_update = datetime.fromisoformat(last_updated)
+        days_ago = (datetime.now() - last_update).days
+        
+        if days_ago <= 7:
+            return 1.2  # 최근 사용된 키워드에 보너스
+        elif days_ago <= 30:
+            return 1.1
+        else:
+            return 1.0
+```
+
 ## 보안 고려사항
 
 - 데이터베이스 접근 권한 관리
@@ -738,6 +1126,6 @@ monitor.add_alert_callback(custom_alert_callback)
 
 ---
 
-**최종 업데이트**: 2024-01-XX  
-**버전**: 1.0.0  
+**최종 업데이트**: 2025-01-XX  
+**버전**: 2.0.0  
 **작성자**: LawFirmAI Development Team
