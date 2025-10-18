@@ -6,6 +6,7 @@
 
 - **[프로젝트 개요](project_overview.md)**: LawFirmAI 프로젝트의 목표, 완성된 기능, 기술적 개선사항 및 향후 계획
 - **[개발 규칙 및 가이드라인](development_rules.md)**: 서버 관리, PID 파일 처리, 디렉토리 구조, 로깅, 보안, 테스팅 등 개발 관련 규칙
+- **[한국어 인코딩 개발 규칙](encoding_development_rules.md)**: Windows 환경의 CP949 인코딩 문제 해결을 위한 개발 규칙
 
 ## 🔗 관련 섹션
 
