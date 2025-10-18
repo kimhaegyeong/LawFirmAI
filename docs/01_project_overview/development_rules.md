@@ -327,6 +327,59 @@ logger.info("[OK] Process completed")
 logger.info("[ERROR] Process failed")
 ```
 
+### 한국어 인코딩 처리 규칙
+
+**⚠️ 중요**: Windows 환경에서 한국어 콘솔 출력 문제 해결을 위한 규칙
+
+#### 환경 변수 설정 (필수)
+```python
+# 모든 Python 파일 상단에 추가
+import os
+import sys
+
+# 인코딩 설정 (최우선)
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+if sys.platform == 'win32':
+    os.environ['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
+```
+
+#### 안전한 콘솔 출력
+```python
+def safe_print(message: str):
+    """안전한 콘솔 출력 (인코딩 처리)"""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode('utf-8', errors='replace').decode('utf-8'))
+
+# 사용 예시
+safe_print("법률 문서 분석을 시작합니다.")
+safe_print("벡터 저장소 로딩 완료")
+```
+
+#### Subprocess 실행 규칙
+```python
+import subprocess
+
+def run_command_safe(command: list, **kwargs) -> subprocess.CompletedProcess:
+    """안전한 명령어 실행 (인코딩 처리)"""
+    if sys.platform == 'win32':
+        kwargs.setdefault('encoding', 'cp949')
+        kwargs.setdefault('errors', 'replace')
+    else:
+        kwargs.setdefault('encoding', 'utf-8')
+    
+    kwargs.setdefault('text', True)
+    kwargs.setdefault('capture_output', True)
+    
+    return subprocess.run(command, **kwargs)
+
+# 사용 예시 (현재 stop_server.py에서 사용 중)
+result = run_command_safe(['tasklist', '/FI', f'PID eq {pid}'])
+```
+
+**자세한 인코딩 규칙은 `encoding_development_rules.md` 문서를 참조하세요.**
+
 ### 현재 구현된 로깅 시스템
 ```python
 # gradio/simple_langchain_app.py에서 사용 중

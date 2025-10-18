@@ -44,7 +44,8 @@ gradio/stop_server.bat
 ### 📚 상세 개발 규칙
 
 자세한 개발 규칙, 코딩 스타일, 운영 가이드라인은 다음 문서를 참조하세요:
-- **[개발 규칙 및 가이드라인](docs/development_rules.md)**: 프로세스 관리, 로깅, 보안, 테스트 규칙
+- **[개발 규칙 및 가이드라인](docs/01_project_overview/development_rules.md)**: 프로세스 관리, 로깅, 보안, 테스트 규칙
+- **[한국어 인코딩 개발 규칙](docs/01_project_overview/encoding_development_rules.md)**: Windows 환경의 CP949 인코딩 문제 해결을 위한 개발 규칙
 - **[TASK별 상세 개발 계획](docs/development/TASK/TASK별%20상세%20개발%20계획_v1.0.md)**: 프로젝트 진행 현황 및 계획
 
 ## 🔧 최신 업데이트
