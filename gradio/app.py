@@ -19,6 +19,9 @@ from contextlib import contextmanager
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
+# LangGraph 활성화 설정
+os.environ["USE_LANGGRAPH"] = os.getenv("USE_LANGGRAPH", "true")
+
 # Gradio 및 기타 라이브러리
 import gradio as gr
 import torch
@@ -36,6 +39,8 @@ from source.services.ollama_client import OllamaClient
 from source.services.improved_answer_generator import ImprovedAnswerGenerator
 from source.services.answer_formatter import AnswerFormatter
 from source.services.context_builder import ContextBuilder
+from source.services.chat_service import ChatService
+from source.utils.config import Config
 
 # 로깅 설정
 logging.basicConfig(
@@ -138,6 +143,9 @@ class HuggingFaceSpacesApp:
         self.answer_formatter = None
         self.context_builder = None
         
+        # ChatService 초기화 (LangGraph 통합)
+        self.chat_service = None
+        
         # 초기화 상태
         self.is_initialized = False
         self.initialization_error = None
@@ -217,6 +225,11 @@ class HuggingFaceSpacesApp:
                     context_builder=self.context_builder
                 )
                 self.logger.info("Improved answer generator initialized")
+                
+                # ChatService 초기화 (LangGraph 통합)
+                config = Config()
+                self.chat_service = ChatService(config)
+                self.logger.info("ChatService initialized with LangGraph integration")
             
             initialization_time = time.time() - start_time
             self.logger.info(f"All components initialized successfully in {initialization_time:.2f} seconds")
@@ -240,6 +253,49 @@ class HuggingFaceSpacesApp:
         
         start_time = time.time()
         
+        try:
+            with self.memory_optimizer.memory_efficient_inference():
+                # ChatService를 사용한 처리 (LangGraph 통합)
+                if self.chat_service:
+                    import asyncio
+                    result = asyncio.run(self.chat_service.process_message(query, session_id=session_id))
+                    
+                    response_time = time.time() - start_time
+                    self.performance_monitor.log_request(response_time, success=True)
+                    
+                    return {
+                        "answer": result.get("response", ""),
+                        "confidence": {
+                            "confidence": result.get("confidence", 0.0),
+                            "reliability_level": "HIGH" if result.get("confidence", 0) > 0.7 else "MEDIUM" if result.get("confidence", 0) > 0.4 else "LOW"
+                        },
+                        "processing_time": response_time,
+                        "memory_usage": self.memory_optimizer.monitor_memory_usage(),
+                        "session_id": result.get("session_id"),
+                        "query_type": result.get("query_type", ""),
+                        "legal_references": result.get("legal_references", []),
+                        "processing_steps": result.get("processing_steps", []),
+                        "metadata": result.get("metadata", {}),
+                        "errors": result.get("errors", [])
+                    }
+                else:
+                    # 기존 방식으로 폴백
+                    return self._process_query_legacy(query, start_time)
+                
+        except Exception as e:
+            response_time = time.time() - start_time
+            self.performance_monitor.log_request(response_time, success=False)
+            self.logger.error(f"Error processing query: {e}")
+            
+            return {
+                "answer": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
+                "error": str(e),
+                "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"},
+                "processing_time": response_time
+            }
+    
+    def _process_query_legacy(self, query: str, start_time: float) -> Dict[str, Any]:
+        """기존 방식으로 질의 처리 (폴백)"""
         try:
             with self.memory_optimizer.memory_efficient_inference():
                 # 질문 분류
@@ -278,10 +334,10 @@ class HuggingFaceSpacesApp:
         except Exception as e:
             response_time = time.time() - start_time
             self.performance_monitor.log_request(response_time, success=False)
-            self.logger.error(f"Error processing query: {e}")
+            self.logger.error(f"Error in legacy processing: {e}")
             
             return {
-                "answer": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
+                "answer": "기존 처리 방식에서 오류가 발생했습니다.",
                 "error": str(e),
                 "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"},
                 "processing_time": response_time
@@ -292,13 +348,23 @@ class HuggingFaceSpacesApp:
         stats = self.performance_monitor.get_stats()
         memory_usage = self.memory_optimizer.monitor_memory_usage()
         
-        return {
+        status = {
             "initialized": self.is_initialized,
             "initialization_error": self.initialization_error,
             "memory_usage_percent": memory_usage,
             "performance_stats": stats,
             "timestamp": datetime.now().isoformat()
         }
+        
+        # ChatService 상태 추가
+        if self.chat_service:
+            try:
+                chat_status = self.chat_service.get_service_status()
+                status["chat_service"] = chat_status
+            except Exception as e:
+                status["chat_service_error"] = str(e)
+        
+        return status
 
 # 전역 앱 인스턴스
 app_instance = HuggingFaceSpacesApp()
