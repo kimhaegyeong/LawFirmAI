@@ -740,3 +740,127 @@ implementation_status = {
 **마지막 업데이트**: 2025-10-16  
 **버전**: 2.0 (완전 구현 기준)  
 **상태**: 🟢 완전 구현 완료 - 운영 준비 단계
+
+## 🔧 Git 규칙
+
+### 1. 커밋 메시지 규칙 (한국어)
+
+**⚠️ 중요**: LawFirmAI 프로젝트는 한국어 커밋 메시지를 사용합니다.
+
+#### 기본 형식
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+#### Type (유형)
+- **feat**: 새로운 기능 추가
+- **fix**: 버그 수정
+- **docs**: 문서 변경
+- **style**: 코드 스타일 변경 (포맷팅, 세미콜론 등)
+- **refactor**: 코드 리팩토링
+- **test**: 테스트 코드 추가/수정
+- **chore**: 빌드 프로세스, 도구, 설정 변경
+- **perf**: 성능 개선
+- **ci**: CI/CD 설정 변경
+
+#### Scope (범위)
+- **models**: AI 모델 관련
+- **services**: 비즈니스 로직 서비스
+- **api**: API 엔드포인트
+- **data**: 데이터 처리
+- **utils**: 유틸리티 함수
+- **gradio**: Gradio 애플리케이션
+- **config**: 설정 파일
+- **docs**: 문서
+
+#### Subject (제목)
+- 50자 이내
+- 명령형 (과거형 X)
+- 마침표 없음
+- 한국어로 작성
+
+#### Body (본문)
+- 72자 이내로 줄바꿈
+- 무엇을 왜 변경했는지 설명
+- 한국어로 작성
+- 불릿 포인트 사용
+
+#### Footer (푸터)
+- Breaking changes 설명
+- Issues 참조 (#123)
+
+#### 한국어 커밋 메시지 예시
+```
+feat(chat): 메시지 검증 및 에러 처리 기능 추가
+
+- 채팅 메시지 입력 검증 로직 추가
+- 잘못된 입력에 대한 적절한 에러 처리 구현
+- 디버깅을 위한 로깅 기능 추가
+
+Closes #123
+```
+
+```
+fix(api): 데이터베이스 연결 오류 수정
+
+- SQLite 연결 시 타임아웃 설정 추가
+- 연결 실패 시 재시도 로직 구현
+- 에러 메시지 개선
+
+Fixes #456
+```
+
+```
+docs(encoding): Windows CP949 인코딩 문제 해결 가이드 추가
+
+- Windows 환경에서 한국어 콘솔 출력 문제 해결 방법 문서화
+- 환경 변수 설정 및 안전한 출력 함수 가이드 제공
+- 코드 템플릿 및 문제 해결 가이드 포함
+```
+
+#### 금지 사항
+- 영어와 한국어 혼용 금지
+- 과거형 사용 금지 (예: "추가됨" → "추가")
+- 마침표로 끝내기 금지
+- 너무 긴 제목 금지 (50자 초과)
+
+### 2. 브랜치 규칙
+- `main`: 프로덕션 브랜치
+- `develop`: 개발 브랜치
+- `feature/`: 기능 개발 브랜치
+- `hotfix/`: 긴급 수정 브랜치
+- `release/`: 릴리스 준비 브랜치
+
+### 3. Git 설정 규칙
+
+#### 프로젝트 레벨 설정
+```bash
+# 한국어 커밋 메시지를 위한 Git 설정
+git config core.quotepath false
+git config core.autocrlf true
+git config i18n.commitencoding utf-8
+git config i18n.logoutputencoding utf-8
+```
+
+#### 글로벌 설정 (개발자별)
+```bash
+# 전역 Git 설정
+git config --global core.quotepath false
+git config --global core.autocrlf true
+git config --global i18n.commitencoding utf-8
+git config --global i18n.logoutputencoding utf-8
+git config --global core.editor "code --wait"
+```
+
+### 4. 커밋 전 체크리스트
+- [ ] 커밋 메시지가 한국어로 작성되었는가?
+- [ ] Type과 Scope가 올바르게 지정되었는가?
+- [ ] Subject가 50자 이내인가?
+- [ ] Body가 변경 사항을 명확히 설명하는가?
+- [ ] 관련 이슈가 있다면 Footer에 참조했는가?
+- [ ] 코드가 프로젝트 규칙을 준수하는가?
+- [ ] 테스트가 통과하는가?
