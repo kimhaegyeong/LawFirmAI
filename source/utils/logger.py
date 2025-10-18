@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import structlog
-from utils.config import Config
+from .config import Config
 
 
 def setup_logging(config: Optional[Config] = None) -> None:
