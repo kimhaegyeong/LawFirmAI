@@ -10,7 +10,7 @@ import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from .legal_workflow_simple import LegalQuestionWorkflow
+from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 from .checkpoint_manager import CheckpointManager
 from .state_definitions import create_initial_legal_state
 from ...utils.langgraph_config import LangGraphConfig
@@ -33,10 +33,15 @@ class LangGraphWorkflowService:
         
         # 컴포넌트 초기화
         self.checkpoint_manager = CheckpointManager(self.config.checkpoint_db_path)
-        self.legal_workflow = LegalQuestionWorkflow(self.config)
+        self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
         
         # 워크플로우 컴파일
-        self.app = self.legal_workflow.compile()
+        checkpointer = self.checkpoint_manager.get_memory()
+        if checkpointer is not None:
+            self.app = self.legal_workflow.graph.compile(checkpointer=checkpointer)
+        else:
+            self.app = self.legal_workflow.graph.compile()
+            self.logger.warning("워크플로우가 체크포인트 없이 컴파일되었습니다")
         
         if self.app is None:
             self.logger.error("Failed to compile workflow")
