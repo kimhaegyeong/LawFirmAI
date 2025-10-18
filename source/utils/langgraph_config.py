@@ -38,10 +38,15 @@ class LangGraphConfig:
     recursion_limit: int = 25
     enable_streaming: bool = True
     
-    # LLM 설정 (기존 ollama_client 활용)
+    # LLM 설정 (Google Gemini 우선)
+    llm_provider: str = "google"
+    google_model: str = "gemini-2.5-flash-lite"  # .env 파일의 설정에 맞게 변경
+    google_api_key: str = ""
+    
+    # 기존 Ollama 설정 (백업용)
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b"
-    ollama_timeout: int = 120
+    ollama_model: str = "qwen2.5:3b"
+    ollama_timeout: int = 15
     
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
@@ -71,7 +76,12 @@ class LangGraphConfig:
         config.recursion_limit = int(os.getenv("RECURSION_LIMIT", config.recursion_limit))
         config.enable_streaming = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
         
-        # Ollama 설정
+        # LLM 설정
+        config.llm_provider = os.getenv("LLM_PROVIDER", config.llm_provider)
+        config.google_model = os.getenv("GOOGLE_MODEL", config.google_model)
+        config.google_api_key = os.getenv("GOOGLE_API_KEY", config.google_api_key)
+        
+        # Ollama 설정 (백업용)
         config.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.ollama_base_url)
         config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
         config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
