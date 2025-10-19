@@ -1,0 +1,28 @@
+{
+  "search_optimization": {
+    "vector_search": {
+      "default_top_k": 10,
+      "max_top_k": 50,
+      "score_threshold": 0.3,
+      "enable_reranking": true
+    },
+    "hybrid_search": {
+      "exact_weight": 0.3,
+      "semantic_weight": 0.7,
+      "diversity_threshold": 0.8,
+      "max_results": 20
+    },
+    "performance": {
+      "enable_caching": true,
+      "cache_ttl": 3600,
+      "batch_size": 100,
+      "parallel_processing": true
+    }
+  },
+  "index_optimization": {
+    "index_type": "ivf",
+    "nlist": 1000,
+    "quantization": "pq",
+    "enable_lazy_loading": true
+  }
+}
