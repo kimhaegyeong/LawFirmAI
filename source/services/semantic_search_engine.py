@@ -5,8 +5,13 @@ Semantic Search Engine
 """
 
 import logging
+import numpy as np
+import faiss
+import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -23,45 +28,232 @@ class SemanticSearchResult:
 class SemanticSearchEngine:
     """의미적 검색 엔진"""
     
-    def __init__(self):
+    def __init__(self, 
+                 model_name: str = "jhgan/ko-sroberta-multitask",
+                 index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
+                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
         """검색 엔진 초기화"""
         self.logger = logging.getLogger(__name__)
+        self.model_name = model_name
+        self.index_path = Path(index_path)
+        self.metadata_path = Path(metadata_path)
+        
+        # 벡터 인덱스와 메타데이터 로드
+        self.index = None
+        self.metadata = []
+        self.model = None
+        
+        self._load_components()
         self.logger.info("SemanticSearchEngine initialized")
     
-    def search(self, query: str, documents: List[Dict[str, Any]], k: int = 10) -> List[SemanticSearchResult]:
+    def _load_components(self):
+        """벡터 인덱스와 모델 로드"""
+        try:
+            # FAISS 인덱스 로드
+            if self.index_path.exists():
+                self.index = faiss.read_index(str(self.index_path))
+                self.logger.info(f"FAISS index loaded: {self.index.ntotal} vectors")
+            else:
+                self.logger.warning(f"FAISS index not found: {self.index_path}")
+                return
+            
+            # 메타데이터 로드
+            if self.metadata_path.exists():
+                with open(self.metadata_path, 'r', encoding='utf-8') as f:
+                    metadata_content = json.load(f)
+                
+                # 메타데이터가 딕셔너리인 경우 (설정 정보)
+                if isinstance(metadata_content, dict):
+                    if 'documents' in metadata_content:
+                        self.metadata = metadata_content['documents']
+                    else:
+                        # 설정 정보만 있는 경우, 빈 리스트로 초기화
+                        self.metadata = []
+                        self.logger.warning("Metadata contains only configuration, no document data")
+                else:
+                    self.metadata = metadata_content
+                
+                self.logger.info(f"Metadata loaded: {len(self.metadata)} items")
+            else:
+                self.logger.warning(f"Metadata not found: {self.metadata_path}")
+                return
+            
+            # 모델 로드
+            try:
+                self.model = SentenceTransformer(self.model_name)
+                self.logger.info(f"Model loaded: {self.model_name}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load model {self.model_name}: {e}")
+                self.model = None
+                
+        except Exception as e:
+            self.logger.error(f"Error loading components: {e}")
+            self.index = None
+            self.metadata = []
+            self.model = None
+    
+    def search(self, query: str, documents: List[Dict[str, Any]] = None, k: int = 10) -> List[Dict[str, Any]]:
         """
         의미적 검색 수행
         
         Args:
             query: 검색 쿼리
-            documents: 검색할 문서 목록
+            documents: 검색할 문서 목록 (사용하지 않음, 벡터 인덱스 사용)
             k: 반환할 결과 수
             
         Returns:
-            List[SemanticSearchResult]: 검색 결과
+            List[Dict[str, Any]]: 검색 결과
         """
-        results = []
-        
-        for doc in documents:
-            text = doc.get('text', '')
-            metadata = doc.get('metadata', {})
+        try:
+            if self.index is None or self.model is None or not self.metadata:
+                self.logger.warning("Vector index or model not available, falling back to keyword search")
+                return self._fallback_keyword_search(query, k)
             
-            # 의미적 유사도 계산
-            score = self._calculate_semantic_score(query, text)
+            # 쿼리 벡터화
+            query_embedding = self.model.encode([query])
+            query_embedding = query_embedding.astype('float32')
             
-            if score > 0.3:  # 임계값 설정
-                similarity_type = self._determine_similarity_type(query, text)
-                result = SemanticSearchResult(
-                    text=text,
-                    score=score,
-                    similarity_type=similarity_type,
-                    metadata=metadata
-                )
-                results.append(result)
-        
-        # 점수순 정렬 및 상위 k개 반환
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:k]
+            # FAISS 검색 수행
+            scores, indices = self.index.search(query_embedding, k)
+            
+            results = []
+            for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
+                if idx == -1:  # FAISS에서 -1은 유효하지 않은 인덱스
+                    continue
+                
+                if idx < len(self.metadata):
+                    metadata = self.metadata[idx]
+                    
+                    # 결과 딕셔너리 생성
+                    result = {
+                        'text': metadata.get('text', ''),
+                        'similarity': float(score),
+                        'score': float(score),
+                        'type': metadata.get('type', 'unknown'),
+                        'source': metadata.get('source', ''),
+                        'metadata': metadata,
+                        'search_type': 'vector_search'
+                    }
+                    
+                    # 추가 메타데이터
+                    if 'law_name' in metadata:
+                        result['law_name'] = metadata['law_name']
+                    if 'article_number' in metadata:
+                        result['article_number'] = metadata['article_number']
+                    if 'case_id' in metadata:
+                        result['case_id'] = metadata['case_id']
+                    if 'case_name' in metadata:
+                        result['case_name'] = metadata['case_name']
+                    
+                    results.append(result)
+            
+            self.logger.info(f"Semantic search completed: {len(results)} results for query '{query}'")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in semantic search: {e}")
+            return self._fallback_keyword_search(query, k)
+    
+    def _fallback_keyword_search(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """키워드 기반 폴백 검색"""
+        try:
+            results = []
+            query_words = set(query.lower().split())
+            
+            # 메타데이터가 없는 경우 데이터베이스에서 직접 검색
+            if not self.metadata:
+                return self._database_fallback_search(query, k)
+            
+            for i, metadata in enumerate(self.metadata[:100]):  # 상위 100개만 검색
+                text = metadata.get('text', '')
+                text_words = set(text.lower().split())
+                
+                # Jaccard 유사도 계산
+                intersection = len(query_words.intersection(text_words))
+                union = len(query_words.union(text_words))
+                score = intersection / union if union > 0 else 0.0
+                
+                if score > 0.1:  # 낮은 임계값
+                    result = {
+                        'text': text,
+                        'similarity': score,
+                        'score': score,
+                        'type': metadata.get('type', 'unknown'),
+                        'source': metadata.get('source', ''),
+                        'metadata': metadata,
+                        'search_type': 'keyword_fallback'
+                    }
+                    results.append(result)
+            
+            # 점수순 정렬
+            results.sort(key=lambda x: x['score'], reverse=True)
+            return results[:k]
+            
+        except Exception as e:
+            self.logger.error(f"Error in fallback search: {e}")
+            return []
+    
+    def _database_fallback_search(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """데이터베이스 폴백 검색"""
+        try:
+            import sqlite3
+            results = []
+            
+            # 데이터베이스에서 직접 검색
+            db_path = "data/lawfirm.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # 법률 검색
+                cursor.execute("""
+                    SELECT law_name, article_number, content, 'law' as type
+                    FROM laws 
+                    WHERE content LIKE ? OR law_name LIKE ?
+                    LIMIT ?
+                """, (f"%{query}%", f"%{query}%", k))
+                
+                for row in cursor.fetchall():
+                    result = {
+                        'text': f"{row['law_name']} {row['article_number']}: {row['content'][:200]}...",
+                        'similarity': 0.8,  # 데이터베이스 검색은 높은 신뢰도
+                        'score': 0.8,
+                        'type': 'law',
+                        'source': f"{row['law_name']} {row['article_number']}",
+                        'metadata': dict(row),
+                        'search_type': 'database_fallback'
+                    }
+                    results.append(result)
+                
+                # 판례 검색
+                cursor.execute("""
+                    SELECT case_name, case_number, full_text, searchable_text, 'precedent' as type
+                    FROM precedent_cases 
+                    WHERE searchable_text LIKE ? OR case_name LIKE ? OR full_text LIKE ?
+                    LIMIT ?
+                """, (f"%{query}%", f"%{query}%", f"%{query}%", k))
+                
+                for row in cursor.fetchall():
+                    # searchable_text가 있으면 사용, 없으면 full_text 사용
+                    text_content = row['searchable_text'] or row['full_text']
+                    result = {
+                        'text': f"{row['case_name']} ({row['case_number']}): {text_content[:200]}...",
+                        'similarity': 0.8,
+                        'score': 0.8,
+                        'type': 'precedent',
+                        'source': f"{row['case_name']} {row['case_number']}",
+                        'metadata': dict(row),
+                        'search_type': 'database_fallback'
+                    }
+                    results.append(result)
+            
+            # 점수순 정렬
+            results.sort(key=lambda x: x['score'], reverse=True)
+            return results[:k]
+            
+        except Exception as e:
+            self.logger.error(f"Error in database fallback search: {e}")
+            return []
     
     def _calculate_semantic_score(self, query: str, text: str) -> float:
         """

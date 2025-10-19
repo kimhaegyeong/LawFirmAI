@@ -25,8 +25,12 @@ class HybridSearchEngine:
                  precedent_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
                  precedent_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"):
         
-        self.exact_search = ExactSearchEngine()
-        self.semantic_search = SemanticSearchEngine()
+        self.exact_search = ExactSearchEngine(db_path)
+        self.semantic_search = SemanticSearchEngine(
+            model_name=model_name,
+            index_path=index_path,
+            metadata_path=metadata_path
+        )
         self.question_classifier = QuestionClassifier()
         self.precedent_search = PrecedentSearchEngine(
             db_path=db_path,
@@ -248,26 +252,41 @@ class HybridSearchEngine:
             )
             
             # PrecedentSearchResult를 Dict로 변환
-            converted_results = []
+            dict_results = []
             for result in precedent_results:
-                converted_result = {
-                    "case_id": result.case_id,
-                    "case_name": result.case_name,
-                    "case_number": result.case_number,
-                    "category": result.category,
-                    "court": result.court,
-                    "decision_date": result.decision_date,
-                    "field": result.field,
-                    "summary": result.summary,
-                    "judgment_summary": result.judgment_summary,
-                    "judgment_gist": result.judgment_gist,
-                    "similarity": result.similarity * weight,  # 가중치 적용
-                    "search_type": "precedent",
-                    "type": "precedent"
+                dict_result = {
+                    'text': result.summary or result.case_name,
+                    'similarity': result.similarity,
+                    'score': result.similarity,
+                    'type': 'precedent',
+                    'source': f"{result.court} {result.case_number}",
+                    'metadata': {
+                        'case_id': result.case_id,
+                        'case_name': result.case_name,
+                        'case_number': result.case_number,
+                        'court': result.court,
+                        'decision_date': result.decision_date,
+                        'category': result.category,
+                        'field': result.field,
+                        'summary': result.summary
+                    },
+                    'search_type': result.search_type,
+                    'case_id': result.case_id,
+                    'case_name': result.case_name,
+                    'case_number': result.case_number,
+                    'court': result.court
                 }
-                converted_results.append(converted_result)
+                dict_results.append(dict_result)
             
-            return converted_results
+            # 가중치 적용
+            for result in dict_results:
+                original_score = result.get("similarity", 0.5)
+                result["similarity"] = original_score * weight
+                result["search_type"] = "precedent"
+            
+            # 정렬 및 제한
+            sorted_results = sorted(dict_results, key=lambda x: x.get("similarity", 0), reverse=True)
+            return sorted_results[:max_results]
             
         except Exception as e:
             logger.error(f"Error searching precedents with weight: {e}")
@@ -410,7 +429,6 @@ class HybridSearchEngine:
             # 전체 의미적 검색
             all_semantic_results = self.semantic_search.search(
                 query, 
-                documents=[],  # 빈 문서 리스트 전달
                 k=self.search_config["max_results"] * 2
             )
             

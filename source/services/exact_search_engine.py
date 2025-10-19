@@ -6,8 +6,10 @@ Exact Search Engine
 
 import logging
 import re
+import sqlite3
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +26,10 @@ class ExactSearchResult:
 class ExactSearchEngine:
     """정확한 검색 엔진"""
     
-    def __init__(self):
+    def __init__(self, db_path: str = "data/lawfirm.db"):
         """검색 엔진 초기화"""
         self.logger = logging.getLogger(__name__)
+        self.db_path = Path(db_path)
         self.logger.info("ExactSearchEngine initialized")
     
     def parse_query(self, query: str) -> Dict[str, Any]:
@@ -39,8 +42,13 @@ class ExactSearchEngine:
         """
         return {
             "original_query": query,
+            "raw_query": query,  # hybrid_search_engine에서 사용하는 키 추가
             "keywords": query.split(),
-            "search_type": "exact"
+            "search_type": "exact",
+            "law_name": None,
+            "article_number": None,
+            "case_number": None,
+            "court_name": None
         }
     
     def search(self, query: str, documents: List[Dict[str, Any]], top_k: int = 10) -> List[ExactSearchResult]:
@@ -78,17 +86,203 @@ class ExactSearchEngine:
         results.sort(key=lambda x: x.score, reverse=True)
         return results
     
-    def search_laws(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    def search_laws(self, query: str, law_name: str = None, article_number: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
         """법령 검색"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # 실제 테이블 구조에 맞는 쿼리
+                sql_query = """
+                SELECT 
+                    id,
+                    law_name,
+                    article_number,
+                    content,
+                    law_type,
+                    effective_date
+                FROM laws
+                WHERE 1=1
+                """
+                params = []
+                
+                # 검색 조건 추가
+                if query:
+                    sql_query += " AND (law_name LIKE ? OR content LIKE ?)"
+                    search_term = f"%{query}%"
+                    params.extend([search_term, search_term])
+                
+                if law_name:
+                    sql_query += " AND law_name LIKE ?"
+                    params.append(f"%{law_name}%")
+                
+                if article_number:
+                    sql_query += " AND article_number LIKE ?"
+                    params.append(f"%{article_number}%")
+                
+                sql_query += " ORDER BY law_name, article_number LIMIT ?"
+                params.append(top_k)
+                
+                cursor.execute(sql_query, params)
+                rows = cursor.fetchall()
+                
+                results = []
+                for row in rows:
+                    result = {
+                        'law_id': row['id'],
+                        'law_name': row['law_name'],
+                        'article_number': row['article_number'],
+                        'content': row['content'],
+                        'law_type': row['law_type'],
+                        'effective_date': row['effective_date'],
+                        'search_type': 'exact_law'
+                    }
+                    results.append(result)
+                
+                self.logger.info(f"Found {len(results)} law results for query: {query}")
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Error searching laws: {e}")
+            return []
+    
+    def search_precedents(self, query: str, case_number: str = None, court_name: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
+        """판례 검색"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # 실제 테이블 구조에 맞는 쿼리
+                sql_query = """
+                SELECT 
+                    case_id,
+                    case_name,
+                    case_number,
+                    court,
+                    decision_date,
+                    category,
+                    field,
+                    full_text
+                FROM precedent_cases
+                WHERE 1=1
+                """
+                params = []
+                
+                # 검색 조건 추가
+                if query:
+                    sql_query += " AND (case_name LIKE ? OR full_text LIKE ?)"
+                    search_term = f"%{query}%"
+                    params.extend([search_term, search_term])
+                
+                if case_number:
+                    sql_query += " AND case_number LIKE ?"
+                    params.append(f"%{case_number}%")
+                
+                if court_name:
+                    sql_query += " AND court LIKE ?"
+                    params.append(f"%{court_name}%")
+                
+                sql_query += " ORDER BY decision_date DESC LIMIT ?"
+                params.append(top_k)
+                
+                cursor.execute(sql_query, params)
+                rows = cursor.fetchall()
+                
+                results = []
+                for row in rows:
+                    result = {
+                        'case_id': row['case_id'],
+                        'case_name': row['case_name'],
+                        'case_number': row['case_number'],
+                        'court': row['court'],
+                        'decision_date': row['decision_date'],
+                        'category': row['category'],
+                        'field': row['field'],
+                        'full_text': row['full_text'],
+                        'search_type': 'exact_precedent'
+                    }
+                    results.append(result)
+                
+                self.logger.info(f"Found {len(results)} precedent results for query: {query}")
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Error searching precedents: {e}")
+            return []
+    
+    def search_constitutional_decisions(self, query: str, case_number: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
+        """헌법재판소 결정 검색"""
         # 임시 구현 - 실제로는 데이터베이스에서 검색
-        self.logger.info(f"Searching laws for query: {query}")
+        self.logger.info(f"Searching constitutional decisions for query: {query}, case_number: {case_number}")
         return []
     
-    def search_precedents(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """판례 검색"""
-        # 임시 구현 - 실제로는 데이터베이스에서 검색
-        self.logger.info(f"Searching precedents for query: {query}")
-        return [][:top_k]
+    def search_assembly_laws(self, query: str, law_name: str = None, article_number: str = None, top_k: int = 10) -> List[Dict[str, Any]]:
+        """국회 법률 검색"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # 실제 테이블 구조에 맞는 쿼리
+                sql_query = """
+                SELECT 
+                    id,
+                    law_id,
+                    law_name,
+                    law_type,
+                    category,
+                    promulgation_date,
+                    enforcement_date,
+                    full_text,
+                    summary
+                FROM assembly_laws
+                WHERE 1=1
+                """
+                params = []
+                
+                # 검색 조건 추가
+                if query:
+                    sql_query += " AND (law_name LIKE ? OR full_text LIKE ? OR summary LIKE ?)"
+                    search_term = f"%{query}%"
+                    params.extend([search_term, search_term, search_term])
+                
+                if law_name:
+                    sql_query += " AND law_name LIKE ?"
+                    params.append(f"%{law_name}%")
+                
+                if article_number:
+                    sql_query += " AND law_id LIKE ?"
+                    params.append(f"%{article_number}%")
+                
+                sql_query += " ORDER BY promulgation_date DESC LIMIT ?"
+                params.append(top_k)
+                
+                cursor.execute(sql_query, params)
+                rows = cursor.fetchall()
+                
+                results = []
+                for row in rows:
+                    result = {
+                        'law_id': row['id'],
+                        'law_name': row['law_name'],
+                        'law_type': row['law_type'],
+                        'category': row['category'],
+                        'promulgation_date': row['promulgation_date'],
+                        'enforcement_date': row['enforcement_date'],
+                        'full_text': row['full_text'],
+                        'summary': row['summary'],
+                        'search_type': 'exact_assembly_law'
+                    }
+                    results.append(result)
+                
+                self.logger.info(f"Found {len(results)} assembly law results for query: {query}")
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Error searching assembly laws: {e}")
+            return []
     
     def _calculate_exact_score(self, query: str, text: str) -> float:
         """
@@ -147,9 +341,9 @@ class ExactSearchEngine:
 
 
 # 기본 인스턴스 생성
-def create_exact_search_engine() -> ExactSearchEngine:
+def create_exact_search_engine(db_path: str = "data/lawfirm.db") -> ExactSearchEngine:
     """기본 정확한 검색 엔진 생성"""
-    return ExactSearchEngine()
+    return ExactSearchEngine(db_path)
 
 
 if __name__ == "__main__":
