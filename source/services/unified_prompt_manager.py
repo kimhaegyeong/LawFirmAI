@@ -240,7 +240,7 @@ class UnifiedPromptManager:
             return self._get_fallback_prompt(query)
     
     def _add_domain_specificity(self, base_prompt: str, domain_info: Dict[str, Any]) -> str:
-        """도메인 특화 강화"""
+        """도메인 특화 강화 - 답변 품질 향상을 위한 개선"""
         domain_specificity = f"""
 
 ## 도메인 특화 지침
@@ -248,12 +248,19 @@ class UnifiedPromptManager:
 - **주요 법령**: {', '.join(domain_info['key_laws'])}
 - **최신 개정사항**: {domain_info['recent_changes']}
 
+### 답변 품질 향상 요구사항
+1. **법적 정확성**: 관련 법령의 정확한 조문 인용 필수
+2. **판례 활용**: 최신 대법원 판례 및 하급심 판례 적극 활용
+3. **실무 관점**: 실제 법원, 검찰, 법무부 실무 기준 반영
+4. **구체적 조언**: 실행 가능한 구체적 방안 제시
+5. **리스크 관리**: 법적 리스크와 주의사항 명확히 제시
+
 {domain_info['template']}
 """
         return base_prompt + domain_specificity
     
     def _add_question_structure(self, base_prompt: str, question_template: Dict[str, Any]) -> str:
-        """질문 유형별 구조화"""
+        """질문 유형별 구조화 - 답변 품질 향상을 위한 개선"""
         structure_guidance = f"""
 
 ## 답변 구조 가이드
@@ -262,6 +269,13 @@ class UnifiedPromptManager:
 ## 컨텍스트 처리
 - 최대 컨텍스트 길이: {question_template['max_context_length']}자
 - 우선순위: {question_template['priority']}
+
+### 답변 품질 검증 체크리스트
+1. **완성도**: 질문에 대한 완전한 답변 제공 여부
+2. **정확성**: 법적 정보의 정확성 및 최신성 확인
+3. **구조화**: 논리적이고 체계적인 답변 구조
+4. **실용성**: 실행 가능한 구체적 조언 포함
+5. **신뢰성**: 근거 있는 법적 분석 및 판례 인용
 """
         return base_prompt + structure_guidance
     
@@ -301,7 +315,7 @@ class UnifiedPromptManager:
         return base_prompt + optimization
     
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
-        """최종 프롬프트 구성"""
+        """최종 프롬프트 구성 - 답변 품질 향상을 위한 개선"""
         final_prompt = f"""{base_prompt}
 
 ## 사용자 질문
@@ -312,6 +326,22 @@ class UnifiedPromptManager:
 2. 관련 법령과 판례를 정확히 인용하세요
 3. 실무적 관점에서 실행 가능한 조언을 제공하세요
 4. 불확실한 부분은 명확히 표시하고 전문가 상담을 권하세요
+
+## 답변 품질 향상 지침
+### 필수 포함 요소
+- **법적 근거**: 관련 법령의 정확한 조문 인용 (예: 민법 제○○조)
+- **판례 인용**: 최신 대법원 판례 및 하급심 판례 참조
+- **구체적 조언**: 실행 가능한 단계별 방안 제시
+- **주의사항**: 법적 리스크 및 주의할 점 명시
+- **전문가 상담**: 복잡한 사안의 경우 변호사 상담 권유
+
+### 답변 구조
+1. **상황 정리**: 질문 내용의 핵심 파악 및 정리
+2. **법적 분석**: 적용 가능한 법률 및 법리 분석
+3. **판례 검토**: 관련 판례의 검토 및 적용 가능성
+4. **실무 조언**: 구체적이고 실행 가능한 조언
+5. **주의사항**: 법적 리스크 및 추가 고려사항
+6. **전문가 상담**: 필요시 변호사 상담 권유
 
 답변을 시작하세요:
 """
@@ -949,6 +979,108 @@ class UnifiedPromptManager:
         except Exception as e:
             logger.error(f"Failed to get prompt analytics: {e}")
             return {}
+    
+    def enhance_answer_quality(self, query: str, question_type: QuestionType, 
+                             domain: Optional[LegalDomain] = None) -> str:
+        """답변 품질 향상을 위한 특화 프롬프트 생성"""
+        try:
+            # 기본 품질 향상 지침
+            quality_guidance = """
+## 답변 품질 향상 특화 지침
+
+### 1. 법적 정확성 강화
+- 관련 법령의 정확한 조문 번호 인용 (예: 민법 제○○조 제○항)
+- 최신 법령 개정사항 반영 (2024년 기준)
+- 법령 해석의 정확성 확보
+
+### 2. 판례 활용 극대화
+- 대법원 판례 우선 참조 (최근 5년 이내)
+- 하급심 판례의 실무적 시사점 포함
+- 판례 번호와 핵심 판결요지 명시
+
+### 3. 실무 관점 강화
+- 법원, 검찰, 법무부 실무 기준 반영
+- 변호사 실무 경험 기반 조언
+- 실제 사건 처리 경험 반영
+
+### 4. 답변 구조화
+- 논리적이고 체계적인 답변 구조
+- 단계별 설명으로 이해도 향상
+- 중요 내용의 시각적 강조
+
+### 5. 실용성 극대화
+- 실행 가능한 구체적 방안 제시
+- 단계별 절차 안내
+- 필요한 서류 및 증거 자료 명시
+
+### 6. 리스크 관리
+- 법적 리스크 명확히 제시
+- 주의사항 및 제한사항 안내
+- 전문가 상담 필요성 판단
+"""
+            
+            # 도메인별 특화 강화
+            if domain and domain in self.domain_templates:
+                domain_info = self.domain_templates[domain]
+                quality_guidance += f"""
+
+### {domain.value} 특화 품질 요구사항
+- **핵심 분야**: {domain_info['focus']}
+- **주요 법령**: {', '.join(domain_info['key_laws'])}
+- **최신 개정**: {domain_info['recent_changes']}
+"""
+            
+            # 질문 유형별 특화
+            question_template = self.question_type_templates.get(question_type)
+            if question_template:
+                quality_guidance += f"""
+
+### {question_type.value} 답변 품질 기준
+- **우선순위**: {question_template['priority']}
+- **컨텍스트 활용**: 최대 {question_template['max_context_length']}자
+- **구조화 요구사항**: {question_template['template']}
+"""
+            
+            return quality_guidance
+            
+        except Exception as e:
+            logger.error(f"Error enhancing answer quality: {e}")
+            return ""
+    
+    def get_quality_metrics_template(self) -> Dict[str, Any]:
+        """답변 품질 메트릭 템플릿 반환"""
+        return {
+            "legal_accuracy": {
+                "weight": 0.25,
+                "description": "법적 정확성 - 법령 조문 인용의 정확성",
+                "criteria": ["정확한 조문 인용", "최신 법령 반영", "법령 해석 정확성"]
+            },
+            "precedent_usage": {
+                "weight": 0.20,
+                "description": "판례 활용도 - 관련 판례의 적절한 인용",
+                "criteria": ["대법원 판례 인용", "최신 판례 활용", "판례 적용 적절성"]
+            },
+            "practical_guidance": {
+                "weight": 0.20,
+                "description": "실무 조언 - 실행 가능한 구체적 방안 제시",
+                "criteria": ["구체적 방안 제시", "단계별 절차 안내", "실행 가능성"]
+            },
+            "structure_quality": {
+                "weight": 0.15,
+                "description": "구조화 품질 - 논리적이고 체계적인 답변 구조",
+                "criteria": ["논리적 구조", "명확한 구분", "이해하기 쉬운 설명"]
+            },
+            "completeness": {
+                "weight": 0.10,
+                "description": "완성도 - 질문에 대한 완전한 답변 제공",
+                "criteria": ["질문 완전 답변", "필수 요소 포함", "추가 정보 제공"]
+            },
+            "risk_management": {
+                "weight": 0.10,
+                "description": "리스크 관리 - 법적 리스크 및 주의사항 제시",
+                "criteria": ["법적 리스크 제시", "주의사항 안내", "전문가 상담 권유"]
+            }
+        }
 
 
 # 전역 인스턴스

@@ -49,20 +49,22 @@ class OptimizedPrecedentSearchEngine:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 최적화된 쿼리
+            # 최적화된 쿼리 (FTS5 안전 바인딩)
             optimized_query = """
             SELECT 
-                fts.case_id,
-                fts.case_name,
-                fts.case_number,
-                fts.rank
-            FROM fts_precedent_cases fts
+                case_id,
+                case_name,
+                case_number,
+                rank
+            FROM fts_precedent_cases
             WHERE fts_precedent_cases MATCH ?
-            ORDER BY fts.rank
+            ORDER BY rank
             LIMIT ?
             """
             
-            cursor.execute(optimized_query, (query, top_k))
+            # FTS5 안전 쿼리 변환
+            safe_query = self._make_fts5_safe_query(query)
+            cursor.execute(optimized_query, (safe_query, top_k))
             rows = cursor.fetchall()
             
             # 결과 처리
@@ -84,6 +86,28 @@ class OptimizedPrecedentSearchEngine:
         self._save_to_cache(query_hash, results)
         
         return results
+    
+    def _make_fts5_safe_query(self, query: str) -> str:
+        """FTS5 안전 쿼리 변환"""
+        if not query or not query.strip():
+            return '""'
+        
+        # 특수 문자 제거 및 이스케이핑
+        safe_query = query.strip()
+        
+        # FTS5 특수 문자들 이스케이핑
+        fts5_special_chars = ['"', '*', '^', '(', ')', 'AND', 'OR', 'NOT']
+        
+        # 단순 키워드 검색으로 변환 (따옴표로 감싸기)
+        if any(char in safe_query for char in fts5_special_chars):
+            # 특수 문자가 있으면 단순 키워드로 변환
+            safe_query = safe_query.replace('"', '""')  # 따옴표 이스케이핑
+            safe_query = f'"{safe_query}"'
+        else:
+            # 특수 문자가 없으면 그대로 사용하되 따옴표로 감싸기
+            safe_query = f'"{safe_query}"'
+        
+        return safe_query
     
     def _normalize_fts_score(self, rank: float) -> float:
         """FTS 점수를 0-1 범위로 정규화"""

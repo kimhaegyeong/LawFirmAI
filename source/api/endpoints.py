@@ -22,6 +22,7 @@ from source.services.improved_answer_generator import ImprovedAnswerGenerator
 from source.services.context_builder import ContextBuilder
 from source.services.performance_monitoring import get_performance_monitor, start_monitoring, stop_monitoring
 from source.services.feedback_system import get_feedback_collector, get_feedback_analyzer, FeedbackType, FeedbackRating
+from source.services.legal_basis_integration_service import LegalBasisIntegrationService
 from source.data.database import DatabaseManager
 from source.data.vector_store import LegalVectorStore
 from source.models.model_manager import LegalModelManager
@@ -94,6 +95,39 @@ class HealthResponse(BaseModel):
     ml_enhanced: bool
     vector_store_status: Dict[str, Any]
     database_status: Dict[str, Any]
+
+class LegalBasisRequest(BaseModel):
+    query: str
+    answer: str
+    question_type: Optional[str] = None
+    include_validation: bool = True
+    include_citations: bool = True
+
+class LegalBasisResponse(BaseModel):
+    success: bool
+    original_answer: str
+    enhanced_answer: str
+    structured_answer: str
+    legal_basis: Dict[str, Any]
+    confidence: float
+    is_legally_sound: bool
+    analysis: Dict[str, Any]
+    processing_timestamp: str
+    error: Optional[str] = None
+
+class LegalCitationRequest(BaseModel):
+    text: str
+    include_validation: bool = True
+
+class LegalCitationResponse(BaseModel):
+    success: bool
+    citations_found: int
+    valid_citations: int
+    invalid_citations: int
+    validation_details: List[Dict[str, Any]]
+    enhanced_text: str
+    legal_basis_summary: Dict[str, Any]
+    error: Optional[str] = None
 
 class IntelligentChatRequest(BaseModel):
     message: str
@@ -789,6 +823,160 @@ def setup_routes(app, config: Config):
             
         except Exception as e:
             logger.error(f"Alert resolution error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # 법적 근거 관련 엔드포인트
+    @api_router.post("/legal-basis/enhance", response_model=LegalBasisResponse)
+    async def enhance_answer_with_legal_basis(request: LegalBasisRequest):
+        """법적 근거를 포함한 답변 강화 엔드포인트"""
+        try:
+            logger.info(f"Legal basis enhancement requested for query: {request.query[:100]}...")
+            
+            # 법적 근거 통합 서비스 초기화
+            legal_basis_service = LegalBasisIntegrationService()
+            
+            # 질문 유형 변환
+            question_type = None
+            if request.question_type:
+                try:
+                    from source.services.answer_structure_enhancer import QuestionType
+                    question_type = QuestionType(request.question_type)
+                except ValueError:
+                    logger.warning(f"Invalid question type: {request.question_type}")
+            
+            # 법적 근거 강화 처리
+            result = legal_basis_service.process_query_with_legal_basis(
+                request.query, 
+                request.answer, 
+                question_type
+            )
+            
+            return LegalBasisResponse(
+                success=True,
+                original_answer=result["original_answer"],
+                enhanced_answer=result["enhanced_answer"],
+                structured_answer=result["structured_answer"],
+                legal_basis=result["legal_basis"],
+                confidence=result["confidence"],
+                is_legally_sound=result["is_legally_sound"],
+                analysis=result["analysis"],
+                processing_timestamp=result["processing_timestamp"]
+            )
+            
+        except Exception as e:
+            logger.error(f"Legal basis enhancement error: {e}")
+            return LegalBasisResponse(
+                success=False,
+                original_answer=request.answer,
+                enhanced_answer=request.answer,
+                structured_answer=request.answer,
+                legal_basis={"citations": {}, "validation": {}, "summary": {}},
+                confidence=0.0,
+                is_legally_sound=False,
+                analysis={"error": str(e)},
+                processing_timestamp=datetime.now().isoformat(),
+                error=str(e)
+            )
+    
+    @api_router.post("/legal-citations/validate", response_model=LegalCitationResponse)
+    async def validate_legal_citations(request: LegalCitationRequest):
+        """법적 인용 검증 엔드포인트"""
+        try:
+            logger.info(f"Legal citation validation requested for text: {request.text[:100]}...")
+            
+            # 법적 근거 통합 서비스 초기화
+            legal_basis_service = LegalBasisIntegrationService()
+            
+            # 법적 인용 검증
+            result = legal_basis_service.validate_legal_citations(request.text)
+            
+            if result["success"]:
+                return LegalCitationResponse(
+                    success=True,
+                    citations_found=result["citations_found"],
+                    valid_citations=result["valid_citations"],
+                    invalid_citations=result["invalid_citations"],
+                    validation_details=result["validation_details"],
+                    enhanced_text=result["enhanced_text"],
+                    legal_basis_summary={}  # 필요시 추가 구현
+                )
+            else:
+                return LegalCitationResponse(
+                    success=False,
+                    citations_found=0,
+                    valid_citations=0,
+                    invalid_citations=0,
+                    validation_details=[],
+                    enhanced_text=request.text,
+                    legal_basis_summary={},
+                    error=result.get("error", "Unknown error")
+                )
+            
+        except Exception as e:
+            logger.error(f"Legal citation validation error: {e}")
+            return LegalCitationResponse(
+                success=False,
+                citations_found=0,
+                valid_citations=0,
+                invalid_citations=0,
+                validation_details=[],
+                enhanced_text=request.text,
+                legal_basis_summary={},
+                error=str(e)
+            )
+    
+    @api_router.get("/legal-basis/statistics")
+    async def get_legal_basis_statistics(days: int = Query(default=30, ge=1, le=365)):
+        """법적 근거 통계 조회 엔드포인트"""
+        try:
+            logger.info(f"Legal basis statistics requested for {days} days")
+            
+            # 법적 근거 통합 서비스 초기화
+            legal_basis_service = LegalBasisIntegrationService()
+            
+            # 통계 조회
+            stats = legal_basis_service.get_legal_basis_statistics(days)
+            
+            return {
+                "success": True,
+                "statistics": stats,
+                "period_days": days,
+                "generated_at": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Legal basis statistics error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @api_router.post("/legal-basis/enhance-existing")
+    async def enhance_existing_answer(request: LegalBasisRequest):
+        """기존 답변을 법적 근거로 강화하는 엔드포인트"""
+        try:
+            logger.info(f"Existing answer enhancement requested for query: {request.query[:100]}...")
+            
+            # 법적 근거 통합 서비스 초기화
+            legal_basis_service = LegalBasisIntegrationService()
+            
+            # 기존 답변 강화
+            result = legal_basis_service.enhance_existing_answer(
+                request.answer, 
+                request.query
+            )
+            
+            return {
+                "success": result["success"],
+                "original_answer": result["original_answer"],
+                "enhanced_answer": result["enhanced_answer"],
+                "legal_citations": result.get("legal_citations", {}),
+                "validation": result.get("validation", {}),
+                "confidence": result.get("confidence", 0.0),
+                "is_legally_sound": result.get("is_legally_sound", False),
+                "error": result.get("error"),
+                "processing_timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Existing answer enhancement error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
     # Include router in app

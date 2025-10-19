@@ -88,7 +88,9 @@ class DatabaseManager:
                     promulgation_date TEXT,
                     enforcement_date TEXT,
                     department TEXT,
+                    is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
                 )
             """)
@@ -98,11 +100,14 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS precedent_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     document_id TEXT NOT NULL,
-                    case_number TEXT,
+                    precedent_number TEXT,
+                    case_name TEXT,
                     court_name TEXT,
                     decision_date TEXT,
                     case_type TEXT,
+                    is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
                 )
             """)
@@ -173,6 +178,33 @@ class DatabaseManager:
                     searchable_text TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 법적 근거 검증 로그 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_basis_validation_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_text TEXT NOT NULL,
+                    answer_text TEXT NOT NULL,
+                    validation_result TEXT NOT NULL,
+                    confidence_score REAL,
+                    validation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    citations_found INTEGER DEFAULT 0,
+                    valid_citations INTEGER DEFAULT 0
+                )
+            """)
+            
+            # 법적 근거 처리 로그 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_basis_processing_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_text TEXT NOT NULL,
+                    question_type TEXT,
+                    confidence_score REAL,
+                    is_legally_sound BOOLEAN,
+                    citations_count INTEGER DEFAULT 0,
+                    processing_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
