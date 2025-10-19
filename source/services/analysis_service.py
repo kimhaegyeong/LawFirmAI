@@ -7,9 +7,9 @@ Analysis Service
 import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from data.data_processor import LegalDataProcessor as DataProcessor
-from models.model_manager import LegalModelManager
-from utils.config import Config
+from ..data.data_processor import LegalDataProcessor as DataProcessor
+from ..models.model_manager import LegalModelManager
+from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
 

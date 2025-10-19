@@ -10,7 +10,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-from services.question_classifier import QuestionType, QuestionClassification
+from .question_classifier import QuestionType, QuestionClassification
 
 logger = logging.getLogger(__name__)
 

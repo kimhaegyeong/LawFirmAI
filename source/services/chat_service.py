@@ -9,6 +9,13 @@ import time
 from typing import Dict, List, Optional, Any
 from ..utils.config import Config
 from ..utils.logger import get_logger
+from .rag_service import MLEnhancedRAGService
+from .hybrid_search_engine import HybridSearchEngine
+from .improved_answer_generator import ImprovedAnswerGenerator
+from .question_classifier import QuestionClassifier
+from ..models.model_manager import LegalModelManager
+from ..data.vector_store import LegalVectorStore
+from ..data.database import DatabaseManager
 
 logger = get_logger(__name__)
 
@@ -21,8 +28,8 @@ class ChatService:
         self.config = config
         self.logger = get_logger(__name__)
         
-        # LangGraph 사용 여부 확인
-        self.use_langgraph = os.getenv("USE_LANGGRAPH", "false").lower() == "true"
+        # LangGraph 사용 여부 확인 (비활성화)
+        self.use_langgraph = False  # os.getenv("USE_LANGGRAPH", "false").lower() == "true"
         
         if self.use_langgraph:
             try:
@@ -39,10 +46,29 @@ class ChatService:
         else:
             self.langgraph_service = None
         
-        # 기존 컴포넌트 초기화 (LangGraph 사용하지 않을 때)
-        if not self.use_langgraph:
-            self.model_manager = None
+        # 실제 RAG 컴포넌트 초기화
+        try:
+            # 필요한 컴포넌트들 초기화
+            model_manager = LegalModelManager()
+            vector_store = LegalVectorStore()
+            database_manager = DatabaseManager()
+            
+            self.rag_service = MLEnhancedRAGService(
+                config=config,
+                model_manager=model_manager,
+                vector_store=vector_store,
+                database=database_manager
+            )
+            self.hybrid_search_engine = HybridSearchEngine()
+            self.question_classifier = QuestionClassifier()
+            self.improved_answer_generator = ImprovedAnswerGenerator()
+            self.logger.info("RAG components initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize RAG components: {e}")
             self.rag_service = None
+            self.hybrid_search_engine = None
+            self.question_classifier = None
+            self.improved_answer_generator = None
         
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
     
@@ -132,9 +158,44 @@ class ChatService:
             }
     
     def _generate_response(self, message: str, context: Optional[str] = None) -> str:
-        """응답 생성 (placeholder)"""
-        # This will be implemented with actual AI model in future tasks
-        return f"안녕하세요! '{message}'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다."
+        """실제 RAG 시스템을 사용한 응답 생성"""
+        try:
+            # 질문 분류
+            if self.question_classifier:
+                question_classification = self.question_classifier.classify_question(message)
+            else:
+                # 기본 분류
+                question_classification = type('QuestionClassification', (), {
+                    'question_type': type('QuestionType', (), {'value': 'general'})()
+                })()
+            
+            # 검색 실행
+            if self.hybrid_search_engine:
+                search_results = self.hybrid_search_engine.search_with_question_type(
+                    query=message,
+                    question_type=question_classification,
+                    max_results=10
+                )
+            else:
+                search_results = []
+            
+            # 답변 생성
+            if self.improved_answer_generator:
+                answer_result = self.improved_answer_generator.generate_answer(
+                    query=message,
+                    question_type=question_classification,
+                    context=context or "",
+                    sources=search_results,
+                    conversation_history=None
+                )
+                return answer_result.answer
+            else:
+                # 폴백: 기본 응답
+                return f"안녕하세요! '{message}'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다."
+                
+        except Exception as e:
+            self.logger.error(f"Error generating response: {e}")
+            return "죄송합니다. 답변 생성 중 오류가 발생했습니다."
     
     def validate_input(self, message: str) -> bool:
         """입력 검증"""

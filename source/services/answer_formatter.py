@@ -9,8 +9,8 @@ import re
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
-from services.question_classifier import QuestionType
-from services.confidence_calculator import ConfidenceInfo
+from .question_classifier import QuestionType
+from .confidence_calculator import ConfidenceInfo
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class AnswerFormatter:
             # 메타데이터 생성
             metadata = {
                 "question_type": question_type.value,
-                "confidence_level": confidence.reliability_level.value,
+                "confidence_level": confidence.reliability_level,
                 "confidence_score": confidence.confidence,
                 "source_count": {
                     "laws": len(sources.get("law_results", [])),
@@ -425,10 +425,10 @@ class AnswerFormatter:
                 "MEDIUM": "🟡", 
                 "LOW": "🟠",
                 "VERY_LOW": "🔴"
-            }.get(confidence.reliability_level.value, "⚪")
+            }.get(confidence.reliability_level, "⚪")
             
             formatted = f"""
-{level_emoji} **신뢰도: {confidence.confidence:.1%}** ({confidence.reliability_level.value})
+{level_emoji} **신뢰도: {confidence.confidence:.1%}** ({confidence.reliability_level})
 
 **상세 점수:**
 - 검색 결과 유사도: {confidence.similarity_score:.1%}
@@ -725,13 +725,13 @@ class AnswerFormatter:
 
 ### 💡 신뢰도 정보
 - 신뢰도: {confidence.confidence:.1%}
-- 수준: {confidence.reliability_level.value}
+- 수준: {confidence.reliability_level}
 
 ---
 💼 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.""",
                 sections={"answer": raw_answer},
-                metadata={"question_type": "general", "confidence_level": confidence.reliability_level.value}
+                metadata={"question_type": "general", "confidence_level": confidence.reliability_level}
             )
             
         except Exception as e:
