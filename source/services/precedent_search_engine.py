@@ -130,54 +130,61 @@ class PrecedentSearchEngine:
             return []
     
     def _search_fts(self, query: str, category: str, top_k: int) -> List[PrecedentSearchResult]:
-        """FTS5 전체 텍스트 검색"""
+        """FTS5 전체 텍스트 검색 (최적화된 버전)"""
         try:
             with self.db_manager.get_connection() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # FTS5 검색 쿼리
+                # 최적화된 FTS5 검색 쿼리 (JOIN 제거, 필요한 컬럼만 선택)
                 fts_query = """
                 SELECT 
-                    pc.case_id,
-                    pc.case_name,
-                    pc.case_number,
-                    pc.category,
-                    pc.court,
-                    pc.decision_date,
-                    pc.field,
-                    pc.full_text,
+                    fts.case_id,
+                    fts.case_name,
+                    fts.case_number,
                     fts.rank
                 FROM fts_precedent_cases fts
-                JOIN precedent_cases pc ON fts.case_id = pc.case_id
-                WHERE pc.category = ? 
-                AND fts_precedent_cases MATCH ?
+                WHERE fts_precedent_cases MATCH ?
                 ORDER BY fts.rank
                 LIMIT ?
                 """
                 
-                cursor.execute(fts_query, (category, query, top_k * 2))  # 여유분 확보
+                cursor.execute(fts_query, (query, top_k * 2))  # 여유분 확보
                 rows = cursor.fetchall()
                 
+                # 추가 정보를 위한 별도 쿼리 (필요한 경우에만)
                 results = []
                 for row in rows:
-                    result = PrecedentSearchResult(
-                        case_id=row['case_id'],
-                        case_name=row['case_name'],
-                        case_number=row['case_number'],
-                        category=row['category'],
-                        court=row['court'],
-                        decision_date=row['decision_date'],
-                        field=row['field'],
-                        summary=self._extract_summary(row['full_text']),
-                        similarity=self._normalize_fts_score(row['rank']),
-                        search_type="fts"
-                    )
+                    # 카테고리 필터링을 위한 추가 쿼리
+                    category_query = """
+                    SELECT category, court, decision_date, field, full_text
+                    FROM precedent_cases 
+                    WHERE case_id = ?
+                    """
+                    cursor.execute(category_query, (row['case_id'],))
+                    case_info = cursor.fetchone()
                     
-                    # 판시사항과 판결요지 추출
-                    self._extract_judgment_info(result, row['case_id'])
-                    
-                    results.append(result)
+                    if case_info and case_info['category'] == category:
+                        result = PrecedentSearchResult(
+                            case_id=row['case_id'],
+                            case_name=row['case_name'],
+                            case_number=row['case_number'],
+                            category=case_info['category'],
+                            court=case_info['court'],
+                            decision_date=case_info['decision_date'],
+                            field=case_info['field'],
+                            summary=self._extract_summary(case_info['full_text']),
+                            similarity=self._normalize_fts_score(row['rank']),
+                            search_type="fts_optimized"
+                        )
+                        
+                        # 판시사항과 판결요지 추출
+                        self._extract_judgment_info(result, row['case_id'])
+                        
+                        results.append(result)
+                        
+                        if len(results) >= top_k:
+                            break
                 
                 self.logger.info(f"FTS search found {len(results)} results")
                 return results
