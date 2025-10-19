@@ -11,8 +11,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from data.database import DatabaseManager
-from data.vector_store import LegalVectorStore
+from ..data.database import DatabaseManager
+from ..data.vector_store import LegalVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,8 @@ class PrecedentSearchEngine:
     
     def __init__(self, 
                  db_path: str = "data/lawfirm.db",
-                 vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
-                 vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"):
+                 vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
+                 vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
         """판례 검색 엔진 초기화"""
         self.logger = logging.getLogger(__name__)
         
@@ -60,7 +60,8 @@ class PrecedentSearchEngine:
             
             # 기존 벡터 인덱스 로드
             if Path(vector_index_path).exists() and Path(vector_metadata_path).exists():
-                self.vector_store.load_index(vector_index_path, vector_metadata_path)
+                # 벡터 스토어에 인덱스 로드
+                self.vector_store.load_index(vector_index_path)
                 self.logger.info(f"Loaded precedent vector index from {vector_index_path}")
             else:
                 self.logger.warning(f"Precedent vector index not found at {vector_index_path}")
@@ -217,7 +218,7 @@ class PrecedentSearchEngine:
                     decision_date=case_info['decision_date'],
                     field=case_info['field'],
                     summary=self._extract_summary(case_info['full_text']),
-                    similarity=result.get('similarity', 0.0),
+                    similarity=result.get('score', 0.0),
                     search_type="vector"
                 )
                 
