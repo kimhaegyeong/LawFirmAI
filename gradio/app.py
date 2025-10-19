@@ -34,6 +34,9 @@ from source.services.question_classifier import QuestionClassifier, QuestionType
 from source.services.hybrid_search_engine import HybridSearchEngine
 from source.services.optimized_search_engine import OptimizedSearchEngine
 from source.services.prompt_templates import PromptTemplateManager
+from source.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from source.services.dynamic_prompt_updater import create_dynamic_prompt_updater
+from source.services.prompt_optimizer import create_prompt_optimizer
 from source.services.confidence_calculator import ConfidenceCalculator
 from source.services.legal_term_expander import LegalTermExpander
 from source.services.gemini_client import GeminiClient
@@ -141,6 +144,9 @@ class HuggingFaceSpacesApp:
         self.question_classifier = None
         self.hybrid_search_engine = None
         self.prompt_template_manager = None
+        self.unified_prompt_manager = None
+        self.dynamic_prompt_updater = None
+        self.prompt_optimizer = None
         self.confidence_calculator = None
         self.legal_term_expander = None
         self.gemini_client = None
@@ -213,6 +219,18 @@ class HuggingFaceSpacesApp:
                 # 프롬프트 템플릿 관리자 초기화
                 self.prompt_template_manager = PromptTemplateManager()
                 self.logger.info("Prompt template manager initialized")
+                
+                # 통합 프롬프트 관리자
+                self.unified_prompt_manager = UnifiedPromptManager()
+                self.logger.info("Unified prompt manager initialized")
+                
+                # 동적 프롬프트 업데이터
+                self.dynamic_prompt_updater = create_dynamic_prompt_updater(self.unified_prompt_manager)
+                self.logger.info("Dynamic prompt updater initialized")
+                
+                # 프롬프트 최적화기
+                self.prompt_optimizer = create_prompt_optimizer(self.unified_prompt_manager)
+                self.logger.info("Prompt optimizer initialized")
                 
                 # 신뢰도 계산기 초기화
                 self.confidence_calculator = ConfidenceCalculator()
@@ -376,7 +394,14 @@ class HuggingFaceSpacesApp:
             "initialization_error": self.initialization_error,
             "memory_usage_percent": memory_usage,
             "performance_stats": stats,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "prompt_system": {
+                "unified_manager_available": self.unified_prompt_manager is not None,
+                "dynamic_updater_available": self.dynamic_prompt_updater is not None,
+                "prompt_optimizer_available": self.prompt_optimizer is not None,
+                "prompt_analytics": self.unified_prompt_manager.get_prompt_analytics() if self.unified_prompt_manager else {},
+                "optimization_recommendations": self.prompt_optimizer.get_optimization_recommendations() if self.prompt_optimizer else []
+            }
         }
         
         # ChatService 상태 추가

@@ -2,13 +2,24 @@
 """
 법률 질문별 맞춤형 프롬프트 템플릿
 답변 품질 향상을 위한 구조화된 프롬프트 시스템
+통합 프롬프트 관리 시스템과 연동
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
+import sys
+import os
+
+# 상위 디렉토리의 모듈 import를 위한 경로 추가
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
 
 
 class LegalPromptTemplates:
-    """법률 질문별 맞춤형 프롬프트 템플릿"""
+    """법률 질문별 맞춤형 프롬프트 템플릿 (통합 시스템과 연동)"""
+    
+    def __init__(self):
+        """통합 프롬프트 관리자 초기화"""
+        self.unified_manager = UnifiedPromptManager()
     
     # 계약서 검토 관련 템플릿
     CONTRACT_REVIEW_TEMPLATE = """
@@ -365,9 +376,86 @@ class LegalPromptTemplates:
 답변을 한국어로 작성하고, 전문 법률 용어를 사용해주세요.
 """
 
+    def get_template_for_query_type(self, query_type: str, domain: Optional[str] = None, model_type: str = "gemini") -> str:
+        """질문 유형별 템플릿 반환 (통합 시스템 사용)"""
+        try:
+            # 통합 프롬프트 관리자 사용
+            if hasattr(self, 'unified_manager'):
+                # 질문 유형 매핑
+                question_type_mapping = {
+                    "contract_review": "LEGAL_ADVICE",
+                    "family_law": "LEGAL_ADVICE", 
+                    "criminal_law": "LEGAL_ADVICE",
+                    "civil_law": "LEGAL_ADVICE",
+                    "labor_law": "LEGAL_ADVICE",
+                    "property_law": "LEGAL_ADVICE",
+                    "intellectual_property": "LEGAL_ADVICE",
+                    "tax_law": "LEGAL_ADVICE",
+                    "civil_procedure": "PROCEDURE_GUIDE",
+                    "general_question": "GENERAL_QUESTION"
+                }
+                
+                # 도메인 매핑
+                domain_mapping = {
+                    "contract_review": LegalDomain.CIVIL_LAW,
+                    "family_law": LegalDomain.FAMILY_LAW,
+                    "criminal_law": LegalDomain.CRIMINAL_LAW,
+                    "civil_law": LegalDomain.CIVIL_LAW,
+                    "labor_law": LegalDomain.LABOR_LAW,
+                    "property_law": LegalDomain.PROPERTY_LAW,
+                    "intellectual_property": LegalDomain.INTELLECTUAL_PROPERTY,
+                    "tax_law": LegalDomain.TAX_LAW,
+                    "civil_procedure": LegalDomain.CIVIL_PROCEDURE,
+                    "general_question": LegalDomain.GENERAL
+                }
+                
+                # 모델 타입 매핑
+                model_mapping = {
+                    "gemini": ModelType.GEMINI,
+                    "ollama": ModelType.OLLAMA,
+                    "openai": ModelType.OPENAI
+                }
+                
+                from question_classifier import QuestionType
+                question_type = getattr(QuestionType, question_type_mapping.get(query_type, "GENERAL_QUESTION"))
+                legal_domain = domain_mapping.get(query_type, LegalDomain.GENERAL)
+                model_type_enum = model_mapping.get(model_type, ModelType.GEMINI)
+                
+                # 통합 프롬프트 관리자에서 템플릿 가져오기
+                return self.unified_manager.get_optimized_prompt(
+                    query="",  # 빈 쿼리로 템플릿만 가져오기
+                    question_type=question_type,
+                    domain=legal_domain,
+                    context={},
+                    model_type=model_type_enum
+                )
+            else:
+                # 기존 방식으로 폴백
+                return self._get_template_legacy(query_type)
+                
+        except Exception as e:
+            print(f"Error getting template for query type {query_type}: {e}")
+            return self._get_template_legacy(query_type)
+    
+    def _get_template_legacy(self, query_type: str) -> str:
+        """기존 방식의 템플릿 반환 (폴백)"""
+        template_mapping = {
+            "contract_review": self.CONTRACT_REVIEW_TEMPLATE,
+            "family_law": self.FAMILY_LAW_TEMPLATE,
+            "criminal_law": self.CRIMINAL_LAW_TEMPLATE,
+            "civil_law": self.CIVIL_LAW_TEMPLATE,
+            "labor_law": self.LABOR_LAW_TEMPLATE,
+            "property_law": self.PROPERTY_LAW_TEMPLATE,
+            "intellectual_property": self.INTELLECTUAL_PROPERTY_TEMPLATE,
+            "tax_law": self.TAX_LAW_TEMPLATE,
+            "civil_procedure": self.CIVIL_PROCEDURE_TEMPLATE,
+            "general_question": self.GENERAL_TEMPLATE
+        }
+        return template_mapping.get(query_type, self.GENERAL_TEMPLATE)
+    
     @classmethod
-    def get_template_for_query_type(cls, query_type: str) -> str:
-        """질문 유형별 템플릿 반환"""
+    def get_template_for_query_type_classmethod(cls, query_type: str) -> str:
+        """클래스 메서드로 질문 유형별 템플릿 반환 (하위 호환성)"""
         template_mapping = {
             "contract_review": cls.CONTRACT_REVIEW_TEMPLATE,
             "family_law": cls.FAMILY_LAW_TEMPLATE,
