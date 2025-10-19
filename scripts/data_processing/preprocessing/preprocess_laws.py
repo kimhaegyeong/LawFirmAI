@@ -64,15 +64,23 @@ except ImportError as e:
     LEGAL_ANALYSIS_AVAILABLE = False
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/preprocessing.log')
-    ]
-)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """로깅 설정"""
+    # logs 디렉토리 생성
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_dir / 'preprocessing.log', encoding='utf-8')
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 
 def get_system_memory_info() -> Dict[str, float]:
