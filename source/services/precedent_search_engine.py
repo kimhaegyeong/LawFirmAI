@@ -136,20 +136,40 @@ class PrecedentSearchEngine:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # 최적화된 FTS5 검색 쿼리 (JOIN 제거, 필요한 컬럼만 선택)
+                # FTS5 검색 쿼리 (안전한 파라미터 바인딩)
                 fts_query = """
                 SELECT 
-                    fts.case_id,
-                    fts.case_name,
-                    fts.case_number,
-                    fts.rank
-                FROM fts_precedent_cases fts
+                    case_id,
+                    case_name,
+                    case_number,
+                    rank
+                FROM fts_precedent_cases
                 WHERE fts_precedent_cases MATCH ?
-                ORDER BY fts.rank
+                ORDER BY rank
                 LIMIT ?
                 """
                 
-                cursor.execute(fts_query, (query, top_k * 2))  # 여유분 확보
+                # FTS5 쿼리 실행 (사용자 입력을 안전하게 처리)
+                try:
+                    # 사용자 입력을 FTS5 안전 쿼리로 변환
+                    safe_query = self._make_fts5_safe_query(query)
+                    cursor.execute(fts_query, (safe_query, top_k * 2))
+                except Exception as e:
+                    # FTS5 파라미터 바인딩 실패 시 대안 방법 사용
+                    self.logger.warning(f"FTS5 parameter binding failed: {e}, trying alternative method")
+                    safe_query = self._make_fts5_safe_query(query)
+                    alternative_query = f"""
+                    SELECT 
+                        case_id,
+                        case_name,
+                        case_number,
+                        rank
+                    FROM fts_precedent_cases
+                    WHERE fts_precedent_cases MATCH '{safe_query}'
+                    ORDER BY rank
+                    LIMIT {top_k * 2}
+                    """
+                    cursor.execute(alternative_query)
                 rows = cursor.fetchall()
                 
                 # 추가 정보를 위한 별도 쿼리 (필요한 경우에만)
@@ -310,6 +330,28 @@ class PrecedentSearchEngine:
             return summary
         
         return full_text[:max_length] + "..." if len(full_text) > max_length else full_text
+    
+    def _make_fts5_safe_query(self, query: str) -> str:
+        """FTS5 안전 쿼리 변환"""
+        if not query or not query.strip():
+            return '""'
+        
+        # 특수 문자 제거 및 이스케이핑
+        safe_query = query.strip()
+        
+        # FTS5 특수 문자들 이스케이핑
+        fts5_special_chars = ['"', '*', '^', '(', ')', 'AND', 'OR', 'NOT']
+        
+        # 단순 키워드 검색으로 변환 (따옴표로 감싸기)
+        if any(char in safe_query for char in fts5_special_chars):
+            # 특수 문자가 있으면 단순 키워드로 변환
+            safe_query = safe_query.replace('"', '""')  # 따옴표 이스케이핑
+            safe_query = f'"{safe_query}"'
+        else:
+            # 특수 문자가 없으면 그대로 사용하되 따옴표로 감싸기
+            safe_query = f'"{safe_query}"'
+        
+        return safe_query
     
     def _normalize_fts_score(self, rank: float) -> float:
         """FTS 점수를 0-1 범위로 정규화"""
