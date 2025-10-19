@@ -32,14 +32,16 @@ from source.data.database import DatabaseManager
 from source.data.vector_store import LegalVectorStore
 from source.services.question_classifier import QuestionClassifier, QuestionType
 from source.services.hybrid_search_engine import HybridSearchEngine
+from source.services.optimized_search_engine import OptimizedSearchEngine
 from source.services.prompt_templates import PromptTemplateManager
 from source.services.confidence_calculator import ConfidenceCalculator
 from source.services.legal_term_expander import LegalTermExpander
-from source.services.ollama_client import OllamaClient
+from source.services.gemini_client import GeminiClient
 from source.services.improved_answer_generator import ImprovedAnswerGenerator
 from source.services.answer_formatter import AnswerFormatter
 from source.services.context_builder import ContextBuilder
 from source.services.chat_service import ChatService
+from source.services.performance_monitor import PerformanceMonitor, PerformanceContext
 from source.utils.config import Config
 
 # 로깅 설정
@@ -129,6 +131,9 @@ class HuggingFaceSpacesApp:
         self.logger = logging.getLogger(__name__)
         self.memory_optimizer = MemoryOptimizer()
         self.performance_monitor = PerformanceMonitor()
+        # 성능 모니터링 시작 (옵션)
+        if hasattr(self.performance_monitor, 'start_monitoring'):
+            self.performance_monitor.start_monitoring()
         
         # 컴포넌트 초기화
         self.db_manager = None
@@ -138,7 +143,7 @@ class HuggingFaceSpacesApp:
         self.prompt_template_manager = None
         self.confidence_calculator = None
         self.legal_term_expander = None
-        self.ollama_client = None
+        self.gemini_client = None
         self.improved_answer_generator = None
         self.answer_formatter = None
         self.context_builder = None
@@ -176,8 +181,16 @@ class HuggingFaceSpacesApp:
                 self.db_manager = DatabaseManager("data/lawfirm.db")
                 self.logger.info("Database manager initialized")
                 
-                # 벡터 스토어 초기화
-                self.vector_store = LegalVectorStore("data/embeddings/ml_enhanced_ko_sroberta")
+                # 벡터 스토어 초기화 (판례 데이터용)
+                self.vector_store = LegalVectorStore(
+                    model_name='jhgan/ko-sroberta-multitask',
+                    dimension=768,
+                    index_type='flat'
+                )
+                # 판례 벡터 인덱스 로드
+                if not self.vector_store.load_index('data/embeddings/ml_enhanced_ko_sroberta_precedents'):
+                    self.logger.warning("Failed to load precedent vector index, using law index")
+                    self.vector_store.load_index('data/embeddings/ml_enhanced_ko_sroberta')
                 self.logger.info("Vector store initialized")
                 
                 # 질문 분류기 초기화
@@ -185,11 +198,17 @@ class HuggingFaceSpacesApp:
                 self.logger.info("Question classifier initialized")
                 
                 # 하이브리드 검색 엔진 초기화
-                self.hybrid_search_engine = HybridSearchEngine(
-                    db_manager=self.db_manager,
-                    vector_store=self.vector_store
-                )
+                self.hybrid_search_engine = HybridSearchEngine()
                 self.logger.info("Hybrid search engine initialized")
+                
+                # 최적화된 검색 엔진 초기화
+                self.optimized_search_engine = OptimizedSearchEngine(
+                    vector_store=self.vector_store,
+                    hybrid_engine=self.hybrid_search_engine,
+                    cache_size=1000,
+                    cache_ttl=3600
+                )
+                self.logger.info("Optimized search engine initialized")
                 
                 # 프롬프트 템플릿 관리자 초기화
                 self.prompt_template_manager = PromptTemplateManager()
@@ -203,10 +222,10 @@ class HuggingFaceSpacesApp:
                 self.legal_term_expander = LegalTermExpander()
                 self.logger.info("Legal term expander initialized")
                 
-                # Ollama 클라이언트 초기화 (로컬 환경에서만)
-                if os.getenv('OLLAMA_ENABLED', 'false').lower() == 'true':
-                    self.ollama_client = OllamaClient()
-                    self.logger.info("Ollama client initialized")
+                # Gemini 클라이언트 초기화
+                if os.getenv('GEMINI_ENABLED', 'true').lower() == 'true':
+                    self.gemini_client = GeminiClient()
+                    self.logger.info("Gemini client initialized")
                 
                 # 답변 포맷터 초기화
                 self.answer_formatter = AnswerFormatter()
@@ -218,7 +237,7 @@ class HuggingFaceSpacesApp:
                 
                 # 개선된 답변 생성기 초기화
                 self.improved_answer_generator = ImprovedAnswerGenerator(
-                    ollama_client=self.ollama_client,
+                    gemini_client=self.gemini_client,
                     prompt_template_manager=self.prompt_template_manager,
                     confidence_calculator=self.confidence_calculator,
                     answer_formatter=self.answer_formatter,
@@ -251,48 +270,52 @@ class HuggingFaceSpacesApp:
                 "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"}
             }
         
-        start_time = time.time()
-        
-        try:
-            with self.memory_optimizer.memory_efficient_inference():
-                # ChatService를 사용한 처리 (LangGraph 통합)
-                if self.chat_service:
-                    import asyncio
-                    result = asyncio.run(self.chat_service.process_message(query, session_id=session_id))
-                    
-                    response_time = time.time() - start_time
-                    self.performance_monitor.log_request(response_time, success=True)
-                    
-                    return {
-                        "answer": result.get("response", ""),
-                        "confidence": {
-                            "confidence": result.get("confidence", 0.0),
-                            "reliability_level": "HIGH" if result.get("confidence", 0) > 0.7 else "MEDIUM" if result.get("confidence", 0) > 0.4 else "LOW"
-                        },
-                        "processing_time": response_time,
-                        "memory_usage": self.memory_optimizer.monitor_memory_usage(),
-                        "session_id": result.get("session_id"),
-                        "query_type": result.get("query_type", ""),
-                        "legal_references": result.get("legal_references", []),
-                        "processing_steps": result.get("processing_steps", []),
-                        "metadata": result.get("metadata", {}),
-                        "errors": result.get("errors", [])
-                    }
-                else:
-                    # 기존 방식으로 폴백
-                    return self._process_query_legacy(query, start_time)
+        # 성능 모니터링 컨텍스트
+        with PerformanceContext(
+            self.performance_monitor, 
+            "query_processing",
+            {"query_length": len(query), "session_id": session_id}
+        ) as perf_ctx:
+            try:
+                with self.memory_optimizer.memory_efficient_inference():
+                    # ChatService를 사용한 처리 (실제 RAG 시스템)
+                    if self.chat_service and hasattr(self.chat_service, 'improved_answer_generator') and self.chat_service.improved_answer_generator:
+                        import asyncio
+                        result = asyncio.run(self.chat_service.process_message(query, session_id=session_id))
+                        
+                        response_time = time.time() - start_time
+                        self.performance_monitor.log_request(response_time, success=True)
+                        
+                        return {
+                            "answer": result.get("response", ""),
+                            "confidence": {
+                                "confidence": result.get("confidence", 0.0),
+                                "reliability_level": "HIGH" if result.get("confidence", 0) > 0.7 else "MEDIUM" if result.get("confidence", 0) > 0.4 else "LOW"
+                            },
+                            "processing_time": response_time,
+                            "memory_usage": self.memory_optimizer.monitor_memory_usage(),
+                            "session_id": result.get("session_id"),
+                            "query_type": result.get("query_type", ""),
+                            "legal_references": result.get("legal_references", []),
+                            "processing_steps": result.get("processing_steps", []),
+                            "metadata": result.get("metadata", {}),
+                            "errors": result.get("errors", [])
+                        }
+                    else:
+                        # 기존 방식으로 폴백
+                        return self._process_query_legacy(query, start_time)
+                        
+            except Exception as e:
+                response_time = time.time() - start_time
+                self.performance_monitor.log_request(response_time, success=False)
+                self.logger.error(f"Error processing query: {e}")
                 
-        except Exception as e:
-            response_time = time.time() - start_time
-            self.performance_monitor.log_request(response_time, success=False)
-            self.logger.error(f"Error processing query: {e}")
-            
-            return {
-                "answer": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
-                "error": str(e),
-                "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"},
-                "processing_time": response_time
-            }
+                return {
+                    "answer": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
+                    "error": str(e),
+                    "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"},
+                    "processing_time": response_time
+                }
     
     def _process_query_legacy(self, query: str, start_time: float) -> Dict[str, Any]:
         """기존 방식으로 질의 처리 (폴백)"""
@@ -323,10 +346,10 @@ class HuggingFaceSpacesApp:
                 return {
                     "answer": answer_result.answer,
                     "question_type": question_classification.question_type.value,
-                    "confidence": {
-                        "confidence": answer_result.confidence.confidence,
-                        "reliability_level": answer_result.confidence.reliability_level.value
-                    },
+                        "confidence": {
+                            "confidence": answer_result.confidence.confidence,
+                            "reliability_level": answer_result.confidence.level.value
+                        },
                     "processing_time": response_time,
                     "memory_usage": self.memory_optimizer.monitor_memory_usage()
                 }
@@ -409,7 +432,21 @@ def create_gradio_interface():
     }
     """
     
-    with gr.Blocks(css=css, title="LawFirmAI - 법률 AI 어시스턴트") as interface:
+    # HTML 헤드에 매니페스트 및 메타 태그 추가
+    head_html = """
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="LawFirmAI">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    """
+    
+    with gr.Blocks(
+        css=css, 
+        title="LawFirmAI - 법률 AI 어시스턴트",
+        head=head_html
+    ) as interface:
         gr.Markdown("""
         # ⚖️ LawFirmAI - 법률 AI 어시스턴트
         
@@ -424,7 +461,8 @@ def create_gradio_interface():
                 chatbot = gr.Chatbot(
                     label="법률 AI 어시스턴트",
                     height=500,
-                    show_label=True
+                    show_label=True,
+                    type="messages"  # 최신 Gradio 형식 사용
                 )
                 
                 with gr.Row():
@@ -473,8 +511,9 @@ def create_gradio_interface():
             # 질의 처리
             result = app_instance.process_query(message)
             
-            # 응답 추가
-            history.append([message, result["answer"]])
+            # 메시지 형식 변환 (type="messages"에 맞게)
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": result["answer"]})
             
             # 신뢰도 정보
             confidence_info = {
@@ -507,20 +546,71 @@ def create_gradio_interface():
             outputs=[chatbot, msg, confidence_output]
         )
         
-        # 주기적 상태 업데이트
-        interface.load(
+        # 상태 업데이트 버튼 추가 (주기적 업데이트 대신 수동 업데이트)
+        with gr.Row():
+            refresh_status_btn = gr.Button("상태 새로고침", variant="secondary")
+            refresh_performance_btn = gr.Button("성능 통계 새로고침", variant="secondary")
+        
+        # 수동 상태 업데이트 이벤트
+        refresh_status_btn.click(
             update_status,
-            outputs=status_output,
-            every=30
+            outputs=status_output
         )
         
-        interface.load(
+        refresh_performance_btn.click(
             update_performance,
-            outputs=performance_output,
-            every=60
+            outputs=performance_output
         )
     
-    return interface
+        return interface
+    
+    def get_performance_dashboard(self):
+        """성능 모니터링 대시보드"""
+        with gr.Blocks(title="성능 모니터링 대시보드") as dashboard:
+            gr.Markdown("# LawFirmAI 성능 모니터링 대시보드")
+            
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("## 시스템 상태")
+                    system_health = gr.JSON(label="시스템 상태", value=self.performance_monitor.get_system_health())
+                    
+                    refresh_btn = gr.Button("새로고침", variant="secondary")
+                    
+                with gr.Column():
+                    gr.Markdown("## 성능 요약 (최근 24시간)")
+                    performance_summary = gr.JSON(label="성능 요약", value=self.performance_monitor.get_performance_summary())
+            
+            with gr.Row():
+                gr.Markdown("## 성능 메트릭 내보내기")
+                export_btn = gr.Button("메트릭 내보내기", variant="primary")
+                export_status = gr.Textbox(label="내보내기 상태", interactive=False)
+            
+            def refresh_data():
+                return (
+                    self.performance_monitor.get_system_health(),
+                    self.performance_monitor.get_performance_summary()
+                )
+            
+            def export_metrics():
+                try:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filepath = f"performance_metrics_{timestamp}.json"
+                    self.performance_monitor.export_metrics(filepath)
+                    return f"메트릭이 {filepath}에 저장되었습니다."
+                except Exception as e:
+                    return f"내보내기 실패: {str(e)}"
+            
+            refresh_btn.click(
+                fn=refresh_data,
+                outputs=[system_health, performance_summary]
+            )
+            
+            export_btn.click(
+                fn=export_metrics,
+                outputs=[export_status]
+            )
+        
+        return dashboard
 
 def main():
     """메인 함수"""
@@ -529,13 +619,18 @@ def main():
     # Gradio 인터페이스 생성 및 실행
     interface = create_gradio_interface()
     
-    # HuggingFace Spaces 환경에서 실행
+    # 안정적인 실행 설정
     interface.launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
         show_error=True,
-        quiet=False
+        quiet=False,
+        max_threads=40,
+        # 공유 기능 완전 비활성화
+        show_api=False,
+        # 정적 파일 서빙 설정
+        favicon_path="gradio/static/favicon.ico" if os.path.exists("gradio/static/favicon.ico") else None
     )
 
 if __name__ == "__main__":

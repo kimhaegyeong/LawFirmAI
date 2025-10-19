@@ -34,11 +34,11 @@ except ImportError:
     logging.warning("HybridSearchEngine not available")
 
 try:
-    from ..ollama_client import OllamaClient
-    OLLAMA_CLIENT_AVAILABLE = True
+    from ..gemini_client import GeminiClient
+    GEMINI_CLIENT_AVAILABLE = True
 except ImportError:
-    OLLAMA_CLIENT_AVAILABLE = False
-    logging.warning("OllamaClient not available")
+    GEMINI_CLIENT_AVAILABLE = False
+    logging.warning("GeminiClient not available")
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +69,11 @@ class LegalQuestionWorkflow:
             self.search_engine = None
             self.logger.warning("HybridSearchEngine not available, using mock")
         
-        if OLLAMA_CLIENT_AVAILABLE:
-            self.ollama_client = OllamaClient(
-                base_url=config.ollama_base_url,
-                model_name=config.ollama_model,
-                timeout=config.ollama_timeout
-            )
+        if GEMINI_CLIENT_AVAILABLE:
+            self.gemini_client = GeminiClient()
         else:
-            self.ollama_client = None
-            self.logger.warning("OllamaClient not available, using mock")
+            self.gemini_client = None
+            self.logger.warning("GeminiClient not available, using mock")
         
         # 워크플로우 그래프 구축
         if LANGGRAPH_AVAILABLE:
@@ -273,7 +269,7 @@ class LegalQuestionWorkflow:
 4. 답변의 근거가 되는 문서를 참조로 표시하세요"""
             
             # Ollama로 답변 생성
-            response = self.ollama_client.generate(
+            response = self.gemini_client.generate(
                 prompt=prompt,
                 system_prompt="당신은 법률 전문가입니다. 정확하고 신뢰할 수 있는 법률 정보를 제공합니다."
             )

@@ -9,12 +9,12 @@ import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from services.ollama_client import OllamaClient, OllamaResponse
-from services.prompt_templates import PromptTemplateManager
-from services.confidence_calculator import ConfidenceCalculator, ConfidenceInfo
-from services.question_classifier import QuestionType, QuestionClassification
-from services.answer_formatter import AnswerFormatter, FormattedAnswer
-from services.context_builder import ContextBuilder, ContextWindow
+from .gemini_client import GeminiClient, GeminiResponse
+from .prompt_templates import PromptTemplateManager
+from .confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
+from .question_classifier import QuestionType, QuestionClassification
+from .answer_formatter import AnswerFormatter, FormattedAnswer
+from .context_builder import ContextBuilder, ContextWindow
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class ImprovedAnswerGenerator:
     """개선된 답변 생성기"""
     
     def __init__(self, 
-                 ollama_client: Optional[OllamaClient] = None,
+                 gemini_client: Optional[GeminiClient] = None,
                  prompt_template_manager: Optional[PromptTemplateManager] = None,
                  confidence_calculator: Optional[ConfidenceCalculator] = None,
                  answer_formatter: Optional[AnswerFormatter] = None,
@@ -45,7 +45,7 @@ class ImprovedAnswerGenerator:
         self.logger = logging.getLogger(__name__)
         
         # 컴포넌트 초기화
-        self.ollama_client = ollama_client or OllamaClient()
+        self.gemini_client = gemini_client or GeminiClient()
         self.prompt_template_manager = prompt_template_manager or PromptTemplateManager()
         self.confidence_calculator = confidence_calculator or ConfidenceCalculator()
         self.answer_formatter = answer_formatter or AnswerFormatter()
@@ -133,9 +133,9 @@ class ImprovedAnswerGenerator:
             
             # 신뢰도 계산
             confidence = self.confidence_calculator.calculate_confidence(
-                query=query,
-                retrieved_docs=sources.get("results", []),
-                answer=raw_answer
+                answer=raw_answer,
+                sources=sources.get("results", []),
+                question_type=question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
             )
             
             # 답변 후처리
@@ -159,7 +159,7 @@ class ImprovedAnswerGenerator:
                 question_type=question_type.question_type,
                 processing_time=processing_time,
                 tokens_used=self._estimate_tokens(raw_answer),
-                model_info={"model": self.ollama_client.model_name}
+                model_info={"model": self.gemini_client.model_name}
             )
             
             self.logger.info(f"Answer generated successfully: {len(processed_answer)} chars, "
@@ -250,7 +250,7 @@ class ImprovedAnswerGenerator:
         try:
             for attempt in range(self.generation_config["retry_count"]):
                 try:
-                    response = self.ollama_client.generate(
+                    response = self.gemini_client.generate(
                         prompt=prompt,
                         temperature=config.get("temperature", self.generation_config["temperature"]),
                         max_tokens=config.get("max_tokens", self.generation_config["max_tokens"])
@@ -382,7 +382,9 @@ class ImprovedAnswerGenerator:
                 formatted_answer=None,
                 raw_answer=fallback_answer,
                 confidence=self.confidence_calculator.calculate_confidence(
-                    query, [], fallback_answer
+                    answer=fallback_answer,
+                    sources=[],
+                    question_type=question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
                 ),
                 question_type=question_type.question_type,
                 processing_time=0.0,
@@ -399,12 +401,9 @@ class ImprovedAnswerGenerator:
                 raw_answer="답변 생성에 실패했습니다. 다시 시도해주세요.",
                 confidence=ConfidenceInfo(
                     confidence=0.0,
-                    reliability_level="VERY_LOW",
-                    similarity_score=0.0,
-                    matching_score=0.0,
-                    answer_quality=0.0,
-                    warnings=["답변 생성 실패"],
-                    recommendations=["다시 시도하거나 전문가 상담"]
+                    level=ConfidenceLevel.VERY_LOW,
+                    factors={"error": 1.0},
+                    explanation="답변 생성 실패"
                 ),
                 question_type=QuestionType.GENERAL_QUESTION,
                 processing_time=0.0,
