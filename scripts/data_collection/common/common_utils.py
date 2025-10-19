@@ -27,18 +27,18 @@ import json
 class MemoryManager:
     """메모리 관리 유틸리티 클래스 (최적화된 버전)"""
     
-    def __init__(self, memory_limit_mb: int = 600, cleanup_threshold: float = 0.6):  # 400MB → 600MB로 조정
+    def __init__(self, memory_limit_mb: int = 1000, cleanup_threshold: float = 0.3):  # 1000MB로 증가, 30%에서 정리 시작
         """
         메모리 매니저 초기화
         
         Args:
-            memory_limit_mb: 메모리 제한 (MB) - 기본값을 600MB로 설정
-            cleanup_threshold: 정리 시작 임계값 (0.0-1.0) - 60%에서 시작
+            memory_limit_mb: 메모리 제한 (MB) - 기본값을 1000MB로 설정
+            cleanup_threshold: 정리 시작 임계값 (0.0-1.0) - 30%에서 시작
         """
         self.memory_limit_mb = memory_limit_mb
         self.cleanup_threshold = cleanup_threshold
-        self.warning_threshold = 0.5  # 50%에서 경고
-        self.critical_threshold = 0.8  # 80%에서 중단
+        self.warning_threshold = 0.2  # 20%에서 경고
+        self.critical_threshold = 0.6  # 60%에서 중단
         self.logger = logging.getLogger(__name__)
         self.cleanup_count = 0
         
@@ -60,11 +60,11 @@ class MemoryManager:
         """
         memory_mb = self.get_memory_usage()
         
-        # 50%에서 경고
+        # 20%에서 경고
         if memory_mb > self.memory_limit_mb * self.warning_threshold:
             self.logger.warning(f"Memory usage warning: {memory_mb:.1f}MB ({memory_mb/self.memory_limit_mb*100:.1f}%)")
         
-        # 60%에서 정리 시작
+        # 30%에서 정리 시작
         if memory_mb > self.memory_limit_mb * self.cleanup_threshold:
             self.logger.warning(f"High memory usage: {memory_mb:.1f}MB, cleaning up...")
             self.aggressive_cleanup()
@@ -72,11 +72,11 @@ class MemoryManager:
             memory_after = self.get_memory_usage()
             self.logger.info(f"After cleanup: {memory_after:.1f}MB")
             
-            if memory_after > self.memory_limit_mb:
+            if memory_after > self.memory_limit_mb * 0.7:  # 70% 이상이면 중단
                 self.logger.error(f"Memory limit exceeded: {memory_after:.1f}MB")
                 return False
         
-        # 80%에서 중단
+        # 60%에서 중단
         if memory_mb > self.memory_limit_mb * self.critical_threshold:
             self.logger.error(f"Critical memory usage: {memory_mb:.1f}MB - stopping")
             return False
@@ -381,7 +381,7 @@ class CollectionConfig:
         return self.config.copy()
 
 
-def memory_monitor(threshold_mb: float = 500.0):  # 300MB → 500MB로 조정
+def memory_monitor(threshold_mb: float = 600.0):  # 600MB로 조정
     """
     메모리 모니터링 데코레이터 (최적화된 버전)
     
