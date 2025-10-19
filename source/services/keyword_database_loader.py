@@ -107,20 +107,30 @@ class KeywordDatabaseLoader:
         return keywords
     
     def _load_legal_terms_db_format(self, data: Dict) -> Dict[str, Set[str]]:
-        """legal_terms_database.json 형식 로드"""
+        """legal_terms_database.json 형식 로드 (도메인별 구조)"""
         keywords = defaultdict(set)
         
-        # 데이터베이스 구조에 따라 적절히 파싱
+        # 새로운 형식: 도메인별로 키워드가 구성됨
         if isinstance(data, dict):
-            for term, info in data.items():
-                if isinstance(info, dict):
-                    domain = self._map_term_to_domain(term, info)
-                    keywords[domain].add(term)
-                    
-                    # 관련 정보 추가
-                    for key in ['synonyms', 'related_terms', 'precedent_keywords']:
-                        if key in info and isinstance(info[key], list):
-                            keywords[domain].update(info[key])
+            for domain, terms_dict in data.items():
+                if isinstance(terms_dict, dict):
+                    # 각 용어와 관련 정보 추출
+                    for term, term_info in terms_dict.items():
+                        if isinstance(term_info, dict):
+                            # 기본 용어 추가
+                            keywords[domain].add(term)
+                            
+                            # 동의어 추가
+                            if 'synonyms' in term_info and isinstance(term_info['synonyms'], list):
+                                keywords[domain].update(term_info['synonyms'])
+                            
+                            # 관련 용어 추가
+                            if 'related_terms' in term_info and isinstance(term_info['related_terms'], list):
+                                keywords[domain].update(term_info['related_terms'])
+                            
+                            # 문맥 키워드 추가
+                            if 'context_keywords' in term_info and isinstance(term_info['context_keywords'], list):
+                                keywords[domain].update(term_info['context_keywords'])
         
         return keywords
     
