@@ -862,6 +862,12 @@ class AutoPipelineOrchestrator:
                     'priority': 4,
                     'raw_path': 'data/raw/assembly/precedent',
                     'processed_path': 'data/processed/assembly/precedent/family'
+                },
+                'precedent_tax': {
+                    'enabled': True,
+                    'priority': 5,
+                    'raw_path': 'data/raw/assembly/precedent',
+                    'processed_path': 'data/processed/assembly/precedent/tax'
                 }
             },
             'preprocessing': {
@@ -958,10 +964,10 @@ def main():
     """메인 함수"""
     parser = argparse.ArgumentParser(description='자동화 파이프라인 오케스트레이터')
     parser.add_argument('--data-source', default='law_only',
-                       choices=['law_only', 'precedents', 'constitutional', 'precedent_civil', 'precedent_criminal', 'precedent_family'],
+                       choices=['law_only', 'precedents', 'constitutional', 'precedent_civil', 'precedent_criminal', 'precedent_family', 'precedent_tax', 'precedent_administrative', 'precedent_patent'],
                        help='데이터 소스 유형')
     parser.add_argument('--category', default='civil',
-                       choices=['civil', 'criminal', 'family'],
+                       choices=['civil', 'criminal', 'family', 'tax', 'administrative', 'patent'],
                        help='판례 카테고리 (precedent 데이터 소스 사용 시)')
     parser.add_argument('--auto-detect', action='store_true',
                        help='자동 데이터 감지 활성화')

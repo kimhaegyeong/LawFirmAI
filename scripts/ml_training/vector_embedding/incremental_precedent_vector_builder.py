@@ -245,7 +245,7 @@ def main():
     """메인 함수"""
     parser = argparse.ArgumentParser(description="증분 판례 벡터 임베딩 생성기")
     parser.add_argument('--category', default='civil', 
-                        choices=['civil', 'criminal', 'family'],
+                        choices=['civil', 'criminal', 'family', 'tax', 'administrative', 'patent'],
                         help='처리할 판례 카테고리')
     parser.add_argument('--batch-size', type=int, default=100,
                         help='배치 처리 크기')
