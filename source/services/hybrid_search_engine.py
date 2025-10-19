@@ -6,11 +6,11 @@
 
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from services.exact_search_engine import ExactSearchEngine
-from services.semantic_search_engine import SemanticSearchEngine
-from services.result_merger import ResultMerger, ResultRanker
-from services.question_classifier import QuestionClassifier, QuestionType, QuestionClassification
-from services.precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResult
+from .exact_search_engine import ExactSearchEngine
+from .semantic_search_engine import SemanticSearchEngine
+from .result_merger import ResultMerger, ResultRanker
+from .question_classifier import QuestionClassifier, QuestionType, QuestionClassification
+from .precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ class HybridSearchEngine:
                  precedent_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
                  precedent_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"):
         
-        self.exact_search = ExactSearchEngine(db_path)
-        self.semantic_search = SemanticSearchEngine(model_name, index_path, metadata_path)
+        self.exact_search = ExactSearchEngine()
+        self.semantic_search = SemanticSearchEngine()
         self.question_classifier = QuestionClassifier()
         self.precedent_search = PrecedentSearchEngine(
             db_path=db_path,
@@ -75,11 +75,11 @@ class HybridSearchEngine:
             
             # 결과 통합
             merged_results = self.result_merger.merge_results(
-                exact_results, semantic_results, query
+                exact_results, semantic_results
             )
             
             # 결과 랭킹
-            ranked_results = self.result_ranker.rank_results(merged_results, query)
+            ranked_results = self.result_ranker.rank_results(merged_results)
             
             # 다양성 필터 적용
             filtered_results = self.result_ranker.apply_diversity_filter(
@@ -89,20 +89,33 @@ class HybridSearchEngine:
             # 최종 결과 제한
             final_results = filtered_results[:max_results]
             
+            # MergedResult를 Dict로 변환
+            final_results_dict = []
+            for result in final_results:
+                if hasattr(result, 'text'):
+                    final_results_dict.append({
+                        'text': result.text,
+                        'score': result.score,
+                        'source': result.source,
+                        'metadata': result.metadata
+                    })
+                else:
+                    final_results_dict.append(result)
+            
             # 검색 통계
             search_stats = self._generate_search_stats(
-                exact_results, semantic_results, final_results
+                exact_results, semantic_results, final_results_dict
             )
             
             result = {
                 "query": query,
-                "results": final_results,
-                "total_results": len(final_results),
+                "results": final_results_dict,
+                "total_results": len(final_results_dict),
                 "search_stats": search_stats,
                 "search_config": self.search_config
             }
             
-            logger.info(f"Hybrid search completed: {len(final_results)} results")
+            logger.info(f"Hybrid search completed: {len(final_results_dict)} results")
             return result
             
         except Exception as e:
@@ -397,8 +410,8 @@ class HybridSearchEngine:
             # 전체 의미적 검색
             all_semantic_results = self.semantic_search.search(
                 query, 
-                k=self.search_config["max_results"] * 2,
-                threshold=self.search_config["semantic_threshold"]
+                documents=[],  # 빈 문서 리스트 전달
+                k=self.search_config["max_results"] * 2
             )
             
             # 타입별 필터링
