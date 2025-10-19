@@ -30,7 +30,7 @@ class LegalDomain(Enum):
     TAX_LAW = "세법"
     CIVIL_PROCEDURE = "민사소송법"
     CRIMINAL_PROCEDURE = "형사소송법"
-    GENERAL = "일반"
+    GENERAL = "기타/일반"
 
 
 class ModelType(Enum):
