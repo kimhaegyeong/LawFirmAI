@@ -44,12 +44,12 @@ class AnswerFormatter:
             },
             QuestionType.LEGAL_ADVICE: {
                 "title": "## 법적 조언",
-                "sections": ["advice", "laws", "precedents", "steps", "confidence"],
+                "sections": ["advice", "laws", "precedents", "steps", "warnings", "recommendations", "confidence"],
                 "disclaimer": True
             },
             QuestionType.PROCEDURE_GUIDE: {
                 "title": "## 절차 안내",
-                "sections": ["overview", "steps", "documents", "timeline", "confidence"],
+                "sections": ["overview", "steps", "documents", "timeline", "warnings", "recommendations", "confidence"],
                 "disclaimer": True
             },
             QuestionType.TERM_EXPLANATION: {
@@ -64,7 +64,7 @@ class AnswerFormatter:
             }
         }
         
-        # 이모지 매핑
+        # 이모지 매핑 (강화된 시각적 요소)
         self.emoji_map = {
             "analysis": "🔍",
             "precedents": "📋",
@@ -80,7 +80,13 @@ class AnswerFormatter:
             "definition": "📚",
             "related": "🔗",
             "answer": "💬",
-            "sources": "📚"
+            "sources": "📚",
+            # 추가된 구조화 이모지
+            "warnings": "⚠️",
+            "recommendations": "💡",
+            "important": "❗",
+            "checklist": "✅",
+            "caution": "🚨"
         }
     
     def format_answer(self, 
@@ -217,11 +223,11 @@ class AnswerFormatter:
                             answer: str, 
                             sources: Dict[str, List[Dict[str, Any]]], 
                             confidence: ConfidenceInfo) -> Dict[str, str]:
-        """법적 조언 구조화"""
+        """법적 조언 구조화 (강화된 불릿 포인트)"""
         try:
             sections = {}
             
-            # 조언 섹션
+            # 조언 섹션 (강화)
             sections["advice"] = self._clean_and_structure_text(answer)
             
             # 법률 섹션
@@ -238,8 +244,13 @@ class AnswerFormatter:
             else:
                 sections["precedents"] = "관련 판례를 찾을 수 없습니다."
             
-            # 단계별 가이드 섹션
+            # 단계별 가이드 섹션 (강화)
             sections["steps"] = self._extract_steps_from_answer(answer)
+            
+            # 주의사항 및 권장사항 추가
+            warnings_recs = self._extract_warnings_and_recommendations(answer)
+            sections["warnings"] = warnings_recs["warnings"]
+            sections["recommendations"] = warnings_recs["recommendations"]
             
             # 신뢰도 섹션
             sections["confidence"] = self._format_confidence_info(confidence)
@@ -254,21 +265,26 @@ class AnswerFormatter:
                                answer: str, 
                                sources: Dict[str, List[Dict[str, Any]]], 
                                confidence: ConfidenceInfo) -> Dict[str, str]:
-        """절차 안내 구조화"""
+        """절차 안내 구조화 (강화된 단계별 세분화)"""
         try:
             sections = {}
             
-            # 개요 섹션
-            sections["overview"] = self._extract_overview_from_answer(answer)
+            # 개요 섹션 (강화)
+            sections["overview"] = self._extract_enhanced_overview(answer)
             
-            # 단계별 절차
-            sections["steps"] = self._extract_steps_from_answer(answer)
+            # 단계별 절차 (강화)
+            sections["steps"] = self._extract_enhanced_steps(answer)
             
-            # 필요 서류
-            sections["documents"] = self._extract_documents_from_answer(answer)
+            # 필요 서류 (강화)
+            sections["documents"] = self._extract_enhanced_documents(answer)
             
-            # 처리 기간
-            sections["timeline"] = self._extract_timeline_from_answer(answer)
+            # 처리 기간 (강화)
+            sections["timeline"] = self._extract_enhanced_timeline(answer)
+            
+            # 주의사항 및 권장사항 추가
+            warnings_recs = self._extract_warnings_and_recommendations(answer)
+            sections["warnings"] = warnings_recs["warnings"]
+            sections["recommendations"] = warnings_recs["recommendations"]
             
             # 신뢰도 섹션
             sections["confidence"] = self._format_confidence_info(confidence)
@@ -278,6 +294,207 @@ class AnswerFormatter:
         except Exception as e:
             self.logger.error(f"Error formatting procedure guide: {e}")
             return {"overview": answer}
+    
+    def _extract_enhanced_overview(self, answer: str) -> str:
+        """강화된 개요 추출"""
+        try:
+            # 첫 번째 문단을 개요로 사용하되 더 구조화
+            paragraphs = answer.split('\n\n')
+            if paragraphs:
+                overview = paragraphs[0].strip()
+                
+                # 개요에 핵심 키워드 강조 추가
+                enhanced_overview = f"""
+### 📊 절차 개요
+{overview}
+
+### 🎯 핵심 포인트
+{self._extract_key_points(overview)}
+"""
+                return enhanced_overview
+            
+            return f"### 📊 절차 개요\n{answer[:300]}{'...' if len(answer) > 300 else ''}"
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting enhanced overview: {e}")
+            return answer
+    
+    def _extract_enhanced_steps(self, answer: str) -> str:
+        """강화된 단계별 절차 추출"""
+        try:
+            # 기존 단계 추출 메서드 사용
+            basic_steps = self._extract_steps_from_answer(answer)
+            
+            # 추가적인 단계 정보 추출
+            additional_info = self._extract_step_details(answer)
+            
+            enhanced_steps = f"""
+### 📝 단계별 절차
+
+{basic_steps}
+
+{additional_info}
+"""
+            return enhanced_steps
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting enhanced steps: {e}")
+            return self._extract_steps_from_answer(answer)
+    
+    def _extract_enhanced_documents(self, answer: str) -> str:
+        """강화된 필요 서류 추출"""
+        try:
+            # 기본 서류 추출
+            basic_docs = self._extract_documents_from_answer(answer)
+            
+            # 서류별 상세 정보 추출
+            doc_details = self._extract_document_details(answer)
+            
+            enhanced_docs = f"""
+### 📄 필요 서류
+
+{basic_docs}
+
+### 📋 서류별 상세 정보
+{doc_details}
+"""
+            return enhanced_docs
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting enhanced documents: {e}")
+            return self._extract_documents_from_answer(answer)
+    
+    def _extract_enhanced_timeline(self, answer: str) -> str:
+        """강화된 처리 기간 추출"""
+        try:
+            # 기본 기간 추출
+            basic_timeline = self._extract_timeline_from_answer(answer)
+            
+            # 단계별 소요 시간 추출
+            step_times = self._extract_step_timings(answer)
+            
+            enhanced_timeline = f"""
+### ⏰ 전체 처리 기간
+{basic_timeline}
+
+### 📅 단계별 소요 시간
+{step_times}
+"""
+            return enhanced_timeline
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting enhanced timeline: {e}")
+            return self._extract_timeline_from_answer(answer)
+    
+    def _extract_key_points(self, text: str) -> str:
+        """핵심 포인트 추출"""
+        try:
+            # 핵심 키워드 추출
+            key_phrases = [
+                '중요한', '핵심', '주의', '필수', '반드시', '꼭', '특히',
+                '가장', '주요', '기본', '원칙', '요건', '조건'
+            ]
+            
+            sentences = re.split(r'[.!?]\s*', text)
+            key_sentences = []
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) < 10:
+                    continue
+                    
+                for phrase in key_phrases:
+                    if phrase in sentence:
+                        key_sentences.append(sentence)
+                        break
+            
+            if key_sentences:
+                return self._format_enhanced_bullet_points("\n".join(key_sentences[:3]), "important")
+            
+            return "핵심 포인트를 추출할 수 없습니다."
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting key points: {e}")
+            return "핵심 포인트 추출 오류"
+    
+    def _extract_step_details(self, answer: str) -> str:
+        """단계별 상세 정보 추출"""
+        try:
+            # 단계별 상세 설명 패턴 찾기
+            detail_patterns = [
+                r'(\d+)\.\s*([^\n]+)\s*\n\s*([^\n]+)',
+                r'단계\s*(\d+)[:.]\s*([^\n]+)\s*\n\s*([^\n]+)'
+            ]
+            
+            details = []
+            for pattern in detail_patterns:
+                matches = re.findall(pattern, answer, re.MULTILINE)
+                for match in matches:
+                    if len(match) >= 3:
+                        details.append(f"**{match[0]}단계 상세**: {match[2].strip()}")
+            
+            if details:
+                return "\n\n".join(details[:3])
+            
+            return "단계별 상세 정보를 찾을 수 없습니다."
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting step details: {e}")
+            return "단계별 상세 정보 추출 오류"
+    
+    def _extract_document_details(self, answer: str) -> str:
+        """서류별 상세 정보 추출"""
+        try:
+            # 서류 관련 상세 정보 패턴
+            doc_patterns = [
+                r'([^.]*서류[^.]*)',
+                r'([^.]*신청서[^.]*)',
+                r'([^.]*증명서[^.]*)',
+                r'([^.]*계약서[^.]*)'
+            ]
+            
+            doc_details = []
+            for pattern in doc_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    if len(match.strip()) > 15:
+                        doc_details.append(match.strip())
+            
+            if doc_details:
+                return self._format_enhanced_bullet_points("\n".join(doc_details[:5]), "documents")
+            
+            return "서류별 상세 정보를 찾을 수 없습니다."
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting document details: {e}")
+            return "서류별 상세 정보 추출 오류"
+    
+    def _extract_step_timings(self, answer: str) -> str:
+        """단계별 소요 시간 추출"""
+        try:
+            # 시간 관련 패턴 찾기
+            time_patterns = [
+                r'(\d+)\s*일\s*([^\n]+)',
+                r'(\d+)\s*주\s*([^\n]+)',
+                r'(\d+)\s*개월\s*([^\n]+)',
+                r'(\d+)\s*시간\s*([^\n]+)'
+            ]
+            
+            timings = []
+            for pattern in time_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    if len(match) >= 2:
+                        timings.append(f"**{match[0]}**: {match[1].strip()}")
+            
+            if timings:
+                return "\n\n".join(timings[:5])
+            
+            return "단계별 소요 시간 정보를 찾을 수 없습니다."
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting step timings: {e}")
+            return "단계별 소요 시간 추출 오류"
     
     def _format_term_explanation(self, 
                                 answer: str, 
@@ -421,30 +638,29 @@ class AnswerFormatter:
         """신뢰도 정보 포맷팅"""
         try:
             level_emoji = {
-                "HIGH": "🟢",
-                "MEDIUM": "🟡", 
-                "LOW": "🟠",
-                "VERY_LOW": "🔴"
+                "very_high": "🟢",
+                "high": "🟢", 
+                "medium": "🟡",
+                "low": "🟠",
+                "very_low": "🔴"
             }.get(confidence.reliability_level, "⚪")
             
             formatted = f"""
 {level_emoji} **신뢰도: {confidence.confidence:.1%}** ({confidence.reliability_level})
 
-**상세 점수:**
-- 검색 결과 유사도: {confidence.similarity_score:.1%}
-- 법률/판례 매칭 정확도: {confidence.matching_score:.1%}
-- 답변 품질: {confidence.answer_quality:.1%}
-"""
+**상세 점수:**"""
             
-            if confidence.warnings:
-                formatted += f"\n**⚠️ 주의사항:**\n"
-                for warning in confidence.warnings:
-                    formatted += f"- {warning}\n"
+            # factors에서 점수 정보 추출
+            if 'similarity_score' in confidence.factors:
+                formatted += f"\n- 검색 결과 유사도: {confidence.factors['similarity_score']:.1%}"
+            if 'matching_score' in confidence.factors:
+                formatted += f"\n- 법률/판례 매칭 정확도: {confidence.factors['matching_score']:.1%}"
+            if 'answer_quality' in confidence.factors:
+                formatted += f"\n- 답변 품질: {confidence.factors['answer_quality']:.1%}"
             
-            if confidence.recommendations:
-                formatted += f"\n**💡 권장사항:**\n"
-                for recommendation in confidence.recommendations:
-                    formatted += f"- {recommendation}\n"
+            # explanation 추가
+            if confidence.explanation:
+                formatted += f"\n\n**설명:** {confidence.explanation}"
             
             return formatted
             
@@ -500,7 +716,10 @@ class AnswerFormatter:
             "definition": "용어 정의",
             "related": "관련 용어",
             "answer": "답변",
-            "sources": "참고 자료"
+            "sources": "참고 자료",
+            # 새로 추가된 섹션들
+            "warnings": "주의사항",
+            "recommendations": "권장사항"
         }
         return titles.get(section_name, section_name)
     
@@ -512,23 +731,42 @@ class AnswerFormatter:
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
     
     def _extract_steps_from_answer(self, answer: str) -> str:
-        """답변에서 단계별 가이드 추출"""
+        """답변에서 단계별 가이드 추출 (강화된 번호 목록)"""
         try:
-            # 번호 목록 찾기
-            steps = re.findall(r'(\d+)\.\s*([^\n]+)', answer)
+            # 강화된 번호 목록 패턴 찾기
+            steps = re.findall(r'(\d+)\.\s*([^\n]+(?:\n(?:   |\t)[^\n]+)*)', answer, re.MULTILINE)
             if steps:
                 formatted_steps = []
                 for num, step in steps:
-                    formatted_steps.append(f"{num}. {step.strip()}")
-                return "\n".join(formatted_steps)
+                    # 단계별 상세 설명 포함
+                    step_content = step.strip()
+                    # 하위 항목이 있는지 확인
+                    sub_items = re.findall(r'   - ([^\n]+)', step_content)
+                    if sub_items:
+                        formatted_steps.append(f"**{num}단계: {step_content.split('\n')[0].strip()}**")
+                        for sub_item in sub_items:
+                            formatted_steps.append(f"   • {sub_item.strip()}")
+                    else:
+                        formatted_steps.append(f"**{num}단계: {step_content}**")
+                return "\n\n".join(formatted_steps)
             
-            # 불릿 포인트 찾기
+            # 불릿 포인트를 번호 목록으로 변환
             bullets = re.findall(r'[-•]\s*([^\n]+)', answer)
             if bullets:
                 formatted_bullets = []
                 for i, bullet in enumerate(bullets, 1):
-                    formatted_bullets.append(f"{i}. {bullet.strip()}")
-                return "\n".join(formatted_bullets)
+                    formatted_bullets.append(f"**{i}단계: {bullet.strip()}**")
+                return "\n\n".join(formatted_bullets)
+            
+            # 문장 단위로 단계 추출 시도
+            sentences = re.split(r'[.!?]\s*', answer)
+            if len(sentences) >= 3:
+                formatted_sentences = []
+                for i, sentence in enumerate(sentences[:5], 1):
+                    if len(sentence.strip()) > 10:  # 의미있는 문장만
+                        formatted_sentences.append(f"**{i}단계: {sentence.strip()}**")
+                if formatted_sentences:
+                    return "\n\n".join(formatted_sentences)
             
             return "단계별 가이드를 추출할 수 없습니다."
             
@@ -714,6 +952,107 @@ class AnswerFormatter:
         except Exception as e:
             self.logger.error(f"Error formatting general sources: {e}")
             return "소스 정보 포맷팅 오류"
+    
+    def _format_enhanced_bullet_points(self, text: str, section_type: str = "general") -> str:
+        """강화된 불릿 포인트 포맷팅"""
+        try:
+            # 불릿 포인트 패턴 찾기
+            bullet_patterns = [
+                r'[-•]\s*([^\n]+)',
+                r'(\d+)\s*[.)]\s*([^\n]+)',
+                r'[가-힣]\s*[.)]\s*([^\n]+)'
+            ]
+            
+            formatted_items = []
+            
+            for pattern in bullet_patterns:
+                matches = re.findall(pattern, text)
+                if matches:
+                    for match in matches:
+                        if isinstance(match, tuple):
+                            item_text = match[1] if len(match) > 1 else match[0]
+                        else:
+                            item_text = match
+                        
+                        # 섹션 타입에 따른 이모지 선택
+                        emoji = self._get_bullet_emoji(section_type)
+                        formatted_items.append(f"{emoji} **{item_text.strip()}**")
+            
+            if formatted_items:
+                return "\n\n".join(formatted_items)
+            
+            # 불릿 포인트가 없으면 문장을 불릿 포인트로 변환
+            sentences = re.split(r'[.!?]\s*', text)
+            if len(sentences) >= 2:
+                formatted_sentences = []
+                for sentence in sentences[:5]:
+                    if len(sentence.strip()) > 10:
+                        emoji = self._get_bullet_emoji(section_type)
+                        formatted_sentences.append(f"{emoji} **{sentence.strip()}**")
+                if formatted_sentences:
+                    return "\n\n".join(formatted_sentences)
+            
+            return text
+            
+        except Exception as e:
+            self.logger.error(f"Error formatting bullet points: {e}")
+            return text
+    
+    def _get_bullet_emoji(self, section_type: str) -> str:
+        """섹션 타입에 따른 불릿 이모지 반환"""
+        emoji_map = {
+            "warnings": "⚠️",
+            "recommendations": "💡",
+            "important": "❗",
+            "steps": "📝",
+            "documents": "📄",
+            "caution": "🚨",
+            "checklist": "✅",
+            "general": "•"
+        }
+        return emoji_map.get(section_type, "•")
+    
+    def _extract_warnings_and_recommendations(self, answer: str) -> Dict[str, str]:
+        """답변에서 주의사항과 권장사항 추출"""
+        try:
+            warnings = []
+            recommendations = []
+            
+            # 주의사항 키워드
+            warning_keywords = ['주의', '경고', '위험', '주의사항', '주의할 점', '조심', '피해야']
+            # 권장사항 키워드
+            recommendation_keywords = ['권장', '추천', '제안', '권장사항', '권고', '바람직', '좋은']
+            
+            sentences = re.split(r'[.!?]\s*', answer)
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) < 10:
+                    continue
+                    
+                # 주의사항 추출
+                for keyword in warning_keywords:
+                    if keyword in sentence:
+                        warnings.append(sentence)
+                        break
+                
+                # 권장사항 추출
+                for keyword in recommendation_keywords:
+                    if keyword in sentence:
+                        recommendations.append(sentence)
+                        break
+            
+            return {
+                "warnings": self._format_enhanced_bullet_points("\n".join(warnings), "warnings") if warnings else "특별한 주의사항이 없습니다.",
+                "recommendations": self._format_enhanced_bullet_points("\n".join(recommendations), "recommendations") if recommendations else "추가 권장사항이 없습니다."
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting warnings and recommendations: {e}")
+            return {
+                "warnings": "주의사항 추출 오류",
+                "recommendations": "권장사항 추출 오류"
+            }
     
     def _create_fallback_answer(self, raw_answer: str, confidence: ConfidenceInfo) -> FormattedAnswer:
         """오류 시 기본 답변 생성"""
