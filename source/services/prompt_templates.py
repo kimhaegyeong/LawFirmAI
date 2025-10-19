@@ -2,21 +2,25 @@
 """
 질문 유형별 프롬프트 템플릿
 각 질문 유형에 최적화된 프롬프트 생성 시스템
+통합 프롬프트 관리 시스템과 연동
 """
 
 import logging
 from typing import Dict, Any, Optional
 from .question_classifier import QuestionType
+from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
 
 logger = logging.getLogger(__name__)
 
 
 class PromptTemplateManager:
-    """프롬프트 템플릿 관리자"""
+    """프롬프트 템플릿 관리자 (통합 시스템과 연동)"""
     
     def __init__(self):
         """프롬프트 템플릿 초기화"""
         self.logger = logging.getLogger(__name__)
+        # 통합 프롬프트 관리자와 연동
+        self.unified_manager = UnifiedPromptManager()
         
         # 질문 유형별 프롬프트 템플릿
         self.templates = {
@@ -149,18 +153,45 @@ class PromptTemplateManager:
     def format_prompt(self, 
                      question_type: QuestionType, 
                      context_data: Dict[str, Any],
-                     user_query: Optional[str] = None) -> str:
+                     user_query: Optional[str] = None,
+                     domain: Optional[LegalDomain] = None,
+                     model_type: ModelType = ModelType.GEMINI) -> str:
         """
-        프롬프트 템플릿을 실제 데이터로 포맷팅
+        프롬프트 템플릿을 실제 데이터로 포맷팅 (통합 시스템 사용)
         
         Args:
             question_type: 질문 유형
             context_data: 컨텍스트 데이터
             user_query: 사용자 질문 (선택사항)
+            domain: 법률 도메인 (선택사항)
+            model_type: 모델 타입 (기본값: GEMINI)
             
         Returns:
             str: 포맷팅된 프롬프트
         """
+        try:
+            # 통합 프롬프트 관리자 사용
+            if user_query:
+                return self.unified_manager.get_optimized_prompt(
+                    query=user_query,
+                    question_type=question_type,
+                    domain=domain,
+                    context=context_data,
+                    model_type=model_type
+                )
+            else:
+                # 기존 방식으로 폴백
+                return self._format_prompt_legacy(question_type, context_data, user_query)
+                
+        except Exception as e:
+            self.logger.error(f"Error formatting prompt: {e}")
+            return f"질문에 대한 답변을 제공하겠습니다.\n\n사용자 질문: {user_query or '질문이 없습니다.'}"
+    
+    def _format_prompt_legacy(self, 
+                             question_type: QuestionType, 
+                             context_data: Dict[str, Any],
+                             user_query: Optional[str] = None) -> str:
+        """기존 방식의 프롬프트 포맷팅 (폴백)"""
         try:
             template_info = self.get_template(question_type)
             template = template_info["template"]
@@ -209,7 +240,7 @@ class PromptTemplateManager:
             return formatted_prompt
             
         except Exception as e:
-            self.logger.error(f"Error formatting prompt: {e}")
+            self.logger.error(f"Error formatting prompt (legacy): {e}")
             return f"질문에 대한 답변을 제공하겠습니다.\n\n사용자 질문: {user_query or '질문이 없습니다.'}"
     
     def _format_list_content(self, content_list: list, max_length: int) -> str:

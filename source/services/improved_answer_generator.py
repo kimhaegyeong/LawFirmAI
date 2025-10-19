@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 from .gemini_client import GeminiClient, GeminiResponse
 from .prompt_templates import PromptTemplateManager
+from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from .prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
+from .semantic_domain_classifier import SemanticDomainClassifier
 from .confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
 from .question_classifier import QuestionType, QuestionClassification
 from .answer_formatter import AnswerFormatter, FormattedAnswer
@@ -40,7 +43,9 @@ class ImprovedAnswerGenerator:
                  prompt_template_manager: Optional[PromptTemplateManager] = None,
                  confidence_calculator: Optional[ConfidenceCalculator] = None,
                  answer_formatter: Optional[AnswerFormatter] = None,
-                 context_builder: Optional[ContextBuilder] = None):
+                 context_builder: Optional[ContextBuilder] = None,
+                 unified_prompt_manager: Optional[UnifiedPromptManager] = None,
+                 prompt_optimizer: Optional[PromptOptimizer] = None):
         """답변 생성기 초기화"""
         self.logger = logging.getLogger(__name__)
         
@@ -50,6 +55,9 @@ class ImprovedAnswerGenerator:
         self.confidence_calculator = confidence_calculator or ConfidenceCalculator()
         self.answer_formatter = answer_formatter or AnswerFormatter()
         self.context_builder = context_builder or ContextBuilder()
+        self.unified_prompt_manager = unified_prompt_manager or UnifiedPromptManager()
+        self.prompt_optimizer = prompt_optimizer or PromptOptimizer(self.unified_prompt_manager)
+        self.semantic_domain_classifier = SemanticDomainClassifier()
         
         # 답변 생성 설정
         self.generation_config = {
@@ -126,7 +134,23 @@ class ImprovedAnswerGenerator:
             
             # 최적화된 컨텍스트로 프롬프트 생성
             optimized_context = self.context_builder.format_context_for_llm(context_window)
-            prompt = self._build_enhanced_prompt(query, question_type, optimized_context, sources)
+            
+            # 의미 기반 도메인 분류 사용
+            domain, domain_confidence, domain_reasoning = self.semantic_domain_classifier.classify_domain(
+                query, question_type.question_type
+            )
+            model_type = ModelType.GEMINI  # 기본값
+            
+            # 도메인 분류 결과 로깅
+            self.logger.info(f"Domain classification: {domain.value} (confidence: {domain_confidence:.2f}) - {domain_reasoning}")
+            
+            prompt = self.unified_prompt_manager.get_optimized_prompt(
+                query=query,
+                question_type=question_type.question_type,
+                domain=domain,
+                context=sources,
+                model_type=model_type
+            )
             
             # Ollama로 답변 생성 (재시도 로직 포함)
             raw_answer = self._generate_with_retry(prompt, config)
@@ -162,6 +186,19 @@ class ImprovedAnswerGenerator:
                 model_info={"model": self.gemini_client.model_name}
             )
             
+            # 성능 메트릭 기록
+            self._record_performance_metrics(
+                query=query,
+                question_type=question_type,
+                domain=domain,
+                model_type=model_type,
+                response_time=processing_time,
+                answer_quality=confidence.confidence,
+                context_length=len(str(sources)),
+                token_count=self._estimate_tokens(raw_answer),
+                domain_confidence=domain_confidence
+            )
+            
             self.logger.info(f"Answer generated successfully: {len(processed_answer)} chars, "
                            f"confidence: {confidence.confidence:.3f}, "
                            f"time: {processing_time:.2f}s")
@@ -172,6 +209,42 @@ class ImprovedAnswerGenerator:
             self.logger.error(f"Error generating answer: {e}")
             # 오류 시 기본 답변 반환
             return self._create_fallback_answer(query, question_type, e)
+    
+    
+    def _record_performance_metrics(self, query: str, question_type: QuestionClassification, 
+                                  domain: LegalDomain, model_type: ModelType,
+                                  response_time: float, answer_quality: float,
+                                  context_length: int, token_count: int,
+                                  domain_confidence: float = 0.0) -> None:
+        """성능 메트릭 기록 (도메인 분류 신뢰도 포함)"""
+        try:
+            # 고유 프롬프트 ID 생성
+            prompt_id = f"{domain.value}_{question_type.question_type.value}_{hash(query) % 10000}"
+            
+            # 성능 메트릭 생성
+            metrics = PromptPerformanceMetrics(
+                prompt_id=prompt_id,
+                model_type=model_type,
+                domain=domain,
+                question_type=question_type.question_type,
+                response_time=response_time,
+                token_count=token_count,
+                context_length=context_length,
+                answer_quality_score=answer_quality
+            )
+            
+            # 도메인 분류 신뢰도 추가 (메타데이터로)
+            if hasattr(metrics, 'metadata'):
+                metrics.metadata = {
+                    "domain_confidence": domain_confidence,
+                    "classification_method": "semantic"
+                }
+            
+            # 성능 메트릭 기록
+            self.prompt_optimizer.record_performance(metrics)
+            
+        except Exception as e:
+            self.logger.error(f"Error recording performance metrics: {e}")
     
     def _build_enhanced_prompt(self, 
                               query: str,
