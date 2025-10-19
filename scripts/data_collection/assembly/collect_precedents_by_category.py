@@ -122,9 +122,10 @@ def collect_precedents_by_category(
         print(f"📂 Resume disabled, starting from page {start_page}")
     
     # 메모리 매니저 및 재시도 매니저 초기화
+    from scripts.data_collection.common.common_utils import MemoryManager
     memory_manager = MemoryManager(
-        memory_limit_mb=config.get('memory_limit_mb'),
-        cleanup_threshold=config.get('cleanup_threshold')
+        memory_limit_mb=config.get('memory_limit_mb', 1000),
+        cleanup_threshold=config.get('cleanup_threshold', 0.3)
     )
     retry_manager = RetryManager(
         max_retries=config.get('max_retries'),
@@ -236,11 +237,19 @@ def collect_precedents_by_category(
                         # 즉시 메모리에서 해제
                         del detail
                         
-                        # 메모리 정리 (매 3개마다 - 더 자주)
-                        if idx % 3 == 0:
+                        # 메모리 정리 (매 2개마다 - 더 자주)
+                        if idx % 2 == 0:
                             import gc
                             gc.collect()
                             print(f"      🧹 Memory cleanup at item {idx}")
+                            
+                            # 메모리 사용량 체크
+                            from scripts.data_collection.common.common_utils import MemoryManager
+                            memory_mgr = MemoryManager()
+                            memory_mb = memory_mgr.get_memory_usage()
+                            if memory_mb > 500:  # 500MB 이상이면 추가 정리
+                                print(f"      ⚠️ High memory usage: {memory_mb:.1f}MB, performing additional cleanup")
+                                memory_mgr.aggressive_cleanup()
                         
                         # 목표 달성 체크
                         if target_count and collected_this_run >= target_count:
@@ -256,7 +265,18 @@ def collect_precedents_by_category(
                 # 메모리 정리만 수행
                 import gc
                 gc.collect()
-                print(f"🧹 Page {page} processing completed and memory cleaned up")
+                
+                # 추가 메모리 정리
+                from scripts.data_collection.common.common_utils import MemoryManager
+                memory_mgr = MemoryManager()
+                memory_mb = memory_mgr.get_memory_usage()
+                if memory_mb > 400:  # 400MB 이상이면 강제 정리
+                    print(f"🧹 Page {page} - High memory usage: {memory_mb:.1f}MB, performing cleanup")
+                    memory_mgr.aggressive_cleanup()
+                    memory_after = memory_mgr.get_memory_usage()
+                    print(f"🧹 After cleanup: {memory_after:.1f}MB")
+                else:
+                    print(f"🧹 Page {page} processing completed and memory cleaned up")
                 
                 # 진행률 로그
                 print(f"\n📈 Progress Summary:")
@@ -376,14 +396,14 @@ Examples:
                         help='체크포인트에서 재개 (기본값)')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
                         help='처음부터 시작')
-    parser.add_argument('--page-size', type=int, default=100,
-                        help='페이지당 항목 수 (기본: 100)')
+    parser.add_argument('--page-size', type=int, default=50,
+                        help='페이지당 항목 수 (기본: 50)')
     parser.add_argument('--start-page', type=int, default=1,
                         help='시작 페이지 번호 (기본: 1)')
-    parser.add_argument('--memory-limit', type=int, default=600,
-                        help='메모리 제한 (MB, 기본: 600)')
-    parser.add_argument('--batch-size', type=int, default=20,
-                        help='배치 크기 (기본: 20)')
+    parser.add_argument('--memory-limit', type=int, default=1000,
+                        help='메모리 제한 (MB, 기본: 1000)')
+    parser.add_argument('--batch-size', type=int, default=5,
+                        help='배치 크기 (기본: 5)')
     parser.add_argument('--max-retries', type=int, default=3,
                         help='최대 재시도 횟수 (기본: 3)')
     parser.add_argument('--log-level', type=str, default='INFO',
@@ -402,6 +422,7 @@ Examples:
     
     # 로그 레벨 재설정
     if args.log_level != 'INFO':
+        import logging
         logger.setLevel(getattr(logging, args.log_level))
     
     if args.all_categories:
