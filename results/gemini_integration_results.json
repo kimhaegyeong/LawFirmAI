@@ -1,0 +1,614 @@
+{
+  "start_time": "2025-10-19T22:51:09.499737",
+  "input_text_count": 3,
+  "use_gemini": true,
+  "extraction": {
+    "extraction_results": [
+      {
+        "text_index": 0,
+        "original_text": "계약서에서 손해배상 조항을 검토해주세요. 계약 위반 시 배상 책임이 어떻게 규정되어 있는지 확인이 필요합니다.",
+        "cleaned_text": "계약서에서 손해배상 조항을 검토해주세요. 계약 위반 시 배상 책임이 어떻게 규정되어 있는지 확인이 필요합니다.",
+        "extracted_terms": [
+          "손해배상",
+          "계약",
+          "위반"
+        ],
+        "term_count": 3
+      },
+      {
+        "text_index": 1,
+        "original_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다. 자녀의 최선의 이익을 고려한 판단 기준은 무엇인가요?",
+        "cleaned_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다. 자녀의 최선의 이익을 고려한 판단 기준은 무엇인가요?",
+        "extracted_terms": [
+          "양육권",
+          "면접교섭권",
+          "이혼소송",
+          "이혼",
+          "소송"
+        ],
+        "term_count": 5
+      },
+      {
+        "text_index": 2,
+        "original_text": "특허 침해 소송에서 증거 수집 방법과 증거능력에 대해 알고 싶습니다.",
+        "cleaned_text": "특허 침해 소송에서 증거 수집 방법과 증거능력에 대해 알고 싶습니다.",
+        "extracted_terms": [
+          "특허",
+          "침해",
+          "침해소송",
+          "증거",
+          "방법",
+          "소송"
+        ],
+        "term_count": 6
+      }
+    ],
+    "all_extracted_terms": [
+      "양육권",
+      "특허",
+      "계약",
+      "위반",
+      "면접교섭권",
+      "침해",
+      "침해소송",
+      "이혼소송",
+      "손해배상",
+      "이혼",
+      "증거",
+      "방법",
+      "소송"
+    ],
+    "total_terms": 13
+  },
+  "validation": {
+    "validated_terms": [
+      {
+        "term": "특허",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 1.0,
+        "domain": "지적재산권법",
+        "domain_confidence": 1.0,
+        "quality_score": 100,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 25
+        },
+        "definition": "** 발명자가 자신의 발명에 대해 일정 기간 동안 타인이 그 발명을 실시하는 것을 금지할 수 있는 독점적인 권리. 이는 국가 기관(특허청)에 의해 부여되며, 발명의 신규성, 진보성, 산업상 이용 가능성을 요건으로 합니다.",
+        "synonyms": [
+          "** (법률 용어로서 직접적인 동의어는 드물지만",
+          "맥락에 따라 유사한 의미로 사용될 수 있는 표현)"
+        ],
+        "related_terms": [
+          "**"
+        ],
+        "context_keywords": [
+          "** (주어진 문맥이 \"없음\"이므로",
+          "\"특허\"라는 용어 자체와 관련된 일반적인 키워드를 나열합니다.)"
+        ],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:51:34.489404",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"특허\"는 대한민국 특허법에 의해 규정되는 발명에 대한 독점적 권리를 의미하는 매우 정확하고 널리 사용되는 한국 법률 용어입니다. 한국어 맞춤법에도 전혀 문제가 없으며, 법률 분야에서 핵심적으로 사용되는 용어입니다."
+          },
+          "domain_classification": {
+            "domain": "지적재산권법",
+            "confidence": 1.0,
+            "reason": "\"특허\"는 발명이나 기술에 대한 독점적인 권리를 부여하는 법률로, 이는 지적재산권법의 핵심적인 부분을 구성합니다. 지적재산권법은 특허, 상표, 저작권 등을 포괄하는 영역입니다."
+          },
+          "quality_assessment": {
+            "total_score": 100,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 25
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** 발명자가 자신의 발명에 대해 일정 기간 동안 타인이 그 발명을 실시하는 것을 금지할 수 있는 독점적인 권리. 이는 국가 기관(특허청)에 의해 부여되며, 발명의 신규성, 진보성, 산업상 이용 가능성을 요건으로 합니다.",
+            "synonyms": [
+              "** (법률 용어로서 직접적인 동의어는 드물지만",
+              "맥락에 따라 유사한 의미로 사용될 수 있는 표현)"
+            ],
+            "related_terms": [
+              "**"
+            ],
+            "context_keywords": [
+              "** (주어진 문맥이 \"없음\"이므로",
+              "\"특허\"라는 용어 자체와 관련된 일반적인 키워드를 나열합니다.)"
+            ],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 85.0
+      },
+      {
+        "term": "위반",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.95,
+        "domain": "기타/일반",
+        "domain_confidence": 0.9,
+        "quality_score": 95,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 20
+        },
+        "definition": "** \"위반\"은 법률, 규정, 약속, 규칙 등을 지키지 않고 어기는 것을 의미합니다. 이는 법적 구속력이 있는 의무를 이행하지 않거나, 금지된 행위를 하는 경우에 해당합니다.",
+        "synonyms": [
+          "**"
+        ],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:51:57.998216",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"위반\"은 한국 법률에서 매우 흔하게 사용되는 법률 용어입니다. 법률, 규정, 계약 등을 지키지 않았을 때 사용되는 일반적인 표현이며, 한국어 맞춤법에도 전혀 문제가 없습니다. 따라서 법률 용어로서의 정확성, 한국어 맞춤법 정확성, 법률 분야에서 사용되는 용어인지 여부 모두 충족합니다."
+          },
+          "domain_classification": {
+            "domain": "기타/일반",
+            "confidence": 0.9,
+            "reason": "\"위반\"이라는 용어는 법률 전반에 걸쳐 광범위하게 사용되는 일반적인 법률 용어입니다. 특정 법률 도메인에 국한되지 않고, 민사, 형사, 행정 등 다양한 분야에서 법규나 계약 등을 따르지 않는 행위를 지칭할 때 사용될 수 있습니다. 따라서 특정 도메인으로 한정하기보다는 일반적인 법률 용어로 분류하는 것이 가장 적합합니다."
+          },
+          "quality_assessment": {
+            "total_score": 95,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 20
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** \"위반\"은 법률, 규정, 약속, 규칙 등을 지키지 않고 어기는 것을 의미합니다. 이는 법적 구속력이 있는 의무를 이행하지 않거나, 금지된 행위를 하는 경우에 해당합니다.",
+            "synonyms": [
+              "**"
+            ],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 81.5
+      },
+      {
+        "term": "침해소송",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.975,
+        "domain": "민사소송법",
+        "domain_confidence": 0.95,
+        "quality_score": 100,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 25
+        },
+        "definition": "** 침해소송은 특정 권리(예: 특허권, 상표권, 저작권, 영업비밀 등)를 가진 사람이 그 권리가 타인에 의해 부당하게 침해당했다고 주장하며 법원에 제기하는 소송을 의미합니다. 권리자의 권리를 회복하거나 침해 행위의 중단을 구하는 것을 목적으로 합니다.",
+        "synonyms": [
+          "**"
+        ],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:52:33.286162",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"침해소송\"은 법률 분야에서 널리 사용되는 정확한 용어입니다. 특정 권리(예: 특허권, 상표권, 저작권 등)에 대한 침해가 발생했을 때 제기하는 소송을 의미합니다. 한국어 맞춤법에도 어긋나지 않습니다."
+          },
+          "domain_classification": {
+            "domain": "민사소송법",
+            "confidence": 0.95,
+            "reason": "\"침해소송\"은 타인의 권리나 이익을 침해받았을 때 제기하는 소송을 의미합니다. 이는 주로 민사적인 영역에서 발생하며, 구체적인 소송 절차와 관련된 용어이므로 민사소송법 도메인에 가장 적합합니다. 예를 들어, 특허권 침해, 상표권 침해, 저작권 침해 등은 지적재산권법 영역에서도 다루어지지만, '침해소송'이라는 용어 자체는 소송의 형태를 지칭하므로 민사소송법에 더 포괄적으로 속한다고 볼 수 있습니다."
+          },
+          "quality_assessment": {
+            "total_score": 100,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 25
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** 침해소송은 특정 권리(예: 특허권, 상표권, 저작권, 영업비밀 등)를 가진 사람이 그 권리가 타인에 의해 부당하게 침해당했다고 주장하며 법원에 제기하는 소송을 의미합니다. 권리자의 권리를 회복하거나 침해 행위의 중단을 구하는 것을 목적으로 합니다.",
+            "synonyms": [
+              "**"
+            ],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 84.25
+      },
+      {
+        "term": "증거",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.975,
+        "domain": "민사소송법",
+        "domain_confidence": 0.95,
+        "quality_score": 95,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 20
+        },
+        "definition": "",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:53:21.915286",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"증거\"는 한국 법률에서 매우 중요하고 보편적으로 사용되는 핵심 용어입니다. 민사소송법, 형사소송법 등 다양한 법률에서 사실을 입증하기 위한 자료를 지칭하는 용어로 정확하게 사용되고 있으며, 한국어 맞춤법에도 전혀 문제가 없습니다. 따라서 법률 용어로서 정확하고 유효합니다. 문맥이 \"없음\"으로 제시되었지만, 이는 해당 용어 자체의 유효성을 판단하는 데 영향을 주지 않습니다."
+          },
+          "domain_classification": {
+            "domain": "민사소송법",
+            "confidence": 0.95,
+            "reason": "\"증거\"라는 용어는 법률 절차에서 사실관계를 입증하기 위해 제출되는 자료를 의미하며, 이는 소송의 진행과 재판의 결과에 직접적인 영향을 미칩니다. 특히 \"증거\"는 민사소송법에서 가장 핵심적인 요소 중 하나로 다루어집니다. 형사소송법에서도 증거가 중요하지만, 문맥이 제공되지 않았고 \"소송\"이라는 단어가 직접적으로 언급되지 않았기 때문에, \"민사소송법\"이 더 포괄적이고 일반적인 맥락에서 \"증거\"를 포함하는 도메인으로 판단됩니다. 만약 \"수사\", \"기소\" 등과 같은 형사소송법 관련 용어가 함께 제시되었다면 형사소송법으로 분류될 가능성이 높습니다."
+          },
+          "quality_assessment": {
+            "total_score": 95,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 20
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 82.25
+      }
+    ],
+    "validated_count": 4
+  },
+  "integration": {
+    "extracted_terms_count": 13,
+    "processed_extracted_count": 13,
+    "validated_terms_count": 4,
+    "high_quality_terms_count": 4,
+    "filtered_out_count": 0,
+    "database_stats": {
+      "total_terms": 33,
+      "domain_count": 11,
+      "domain_stats": {
+        "민사법": 5,
+        "형사법": 4,
+        "가족법": 3,
+        "상사법": 3,
+        "노동법": 3,
+        "부동산법": 2,
+        "지적재산권법": 3,
+        "세법": 3,
+        "민사소송법": 4,
+        "형사소송법": 2,
+        "기타/일반": 1
+      },
+      "added_terms": 3,
+      "updated_terms": 1
+    },
+    "high_quality_terms": [
+      {
+        "term": "특허",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 1.0,
+        "domain": "지적재산권법",
+        "domain_confidence": 1.0,
+        "quality_score": 100,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 25
+        },
+        "definition": "** 발명자가 자신의 발명에 대해 일정 기간 동안 타인이 그 발명을 실시하는 것을 금지할 수 있는 독점적인 권리. 이는 국가 기관(특허청)에 의해 부여되며, 발명의 신규성, 진보성, 산업상 이용 가능성을 요건으로 합니다.",
+        "synonyms": [
+          "** (법률 용어로서 직접적인 동의어는 드물지만",
+          "맥락에 따라 유사한 의미로 사용될 수 있는 표현)"
+        ],
+        "related_terms": [
+          "**"
+        ],
+        "context_keywords": [
+          "** (주어진 문맥이 \"없음\"이므로",
+          "\"특허\"라는 용어 자체와 관련된 일반적인 키워드를 나열합니다.)"
+        ],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:51:34.489404",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"특허\"는 대한민국 특허법에 의해 규정되는 발명에 대한 독점적 권리를 의미하는 매우 정확하고 널리 사용되는 한국 법률 용어입니다. 한국어 맞춤법에도 전혀 문제가 없으며, 법률 분야에서 핵심적으로 사용되는 용어입니다."
+          },
+          "domain_classification": {
+            "domain": "지적재산권법",
+            "confidence": 1.0,
+            "reason": "\"특허\"는 발명이나 기술에 대한 독점적인 권리를 부여하는 법률로, 이는 지적재산권법의 핵심적인 부분을 구성합니다. 지적재산권법은 특허, 상표, 저작권 등을 포괄하는 영역입니다."
+          },
+          "quality_assessment": {
+            "total_score": 100,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 25
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** 발명자가 자신의 발명에 대해 일정 기간 동안 타인이 그 발명을 실시하는 것을 금지할 수 있는 독점적인 권리. 이는 국가 기관(특허청)에 의해 부여되며, 발명의 신규성, 진보성, 산업상 이용 가능성을 요건으로 합니다.",
+            "synonyms": [
+              "** (법률 용어로서 직접적인 동의어는 드물지만",
+              "맥락에 따라 유사한 의미로 사용될 수 있는 표현)"
+            ],
+            "related_terms": [
+              "**"
+            ],
+            "context_keywords": [
+              "** (주어진 문맥이 \"없음\"이므로",
+              "\"특허\"라는 용어 자체와 관련된 일반적인 키워드를 나열합니다.)"
+            ],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 85.0
+      },
+      {
+        "term": "침해소송",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.975,
+        "domain": "민사소송법",
+        "domain_confidence": 0.95,
+        "quality_score": 100,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 25
+        },
+        "definition": "** 침해소송은 특정 권리(예: 특허권, 상표권, 저작권, 영업비밀 등)를 가진 사람이 그 권리가 타인에 의해 부당하게 침해당했다고 주장하며 법원에 제기하는 소송을 의미합니다. 권리자의 권리를 회복하거나 침해 행위의 중단을 구하는 것을 목적으로 합니다.",
+        "synonyms": [
+          "**"
+        ],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:52:33.286162",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"침해소송\"은 법률 분야에서 널리 사용되는 정확한 용어입니다. 특정 권리(예: 특허권, 상표권, 저작권 등)에 대한 침해가 발생했을 때 제기하는 소송을 의미합니다. 한국어 맞춤법에도 어긋나지 않습니다."
+          },
+          "domain_classification": {
+            "domain": "민사소송법",
+            "confidence": 0.95,
+            "reason": "\"침해소송\"은 타인의 권리나 이익을 침해받았을 때 제기하는 소송을 의미합니다. 이는 주로 민사적인 영역에서 발생하며, 구체적인 소송 절차와 관련된 용어이므로 민사소송법 도메인에 가장 적합합니다. 예를 들어, 특허권 침해, 상표권 침해, 저작권 침해 등은 지적재산권법 영역에서도 다루어지지만, '침해소송'이라는 용어 자체는 소송의 형태를 지칭하므로 민사소송법에 더 포괄적으로 속한다고 볼 수 있습니다."
+          },
+          "quality_assessment": {
+            "total_score": 100,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 25
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** 침해소송은 특정 권리(예: 특허권, 상표권, 저작권, 영업비밀 등)를 가진 사람이 그 권리가 타인에 의해 부당하게 침해당했다고 주장하며 법원에 제기하는 소송을 의미합니다. 권리자의 권리를 회복하거나 침해 행위의 중단을 구하는 것을 목적으로 합니다.",
+            "synonyms": [
+              "**"
+            ],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 84.25
+      },
+      {
+        "term": "증거",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.975,
+        "domain": "민사소송법",
+        "domain_confidence": 0.95,
+        "quality_score": 95,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 20
+        },
+        "definition": "",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:53:21.915286",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"증거\"는 한국 법률에서 매우 중요하고 보편적으로 사용되는 핵심 용어입니다. 민사소송법, 형사소송법 등 다양한 법률에서 사실을 입증하기 위한 자료를 지칭하는 용어로 정확하게 사용되고 있으며, 한국어 맞춤법에도 전혀 문제가 없습니다. 따라서 법률 용어로서 정확하고 유효합니다. 문맥이 \"없음\"으로 제시되었지만, 이는 해당 용어 자체의 유효성을 판단하는 데 영향을 주지 않습니다."
+          },
+          "domain_classification": {
+            "domain": "민사소송법",
+            "confidence": 0.95,
+            "reason": "\"증거\"라는 용어는 법률 절차에서 사실관계를 입증하기 위해 제출되는 자료를 의미하며, 이는 소송의 진행과 재판의 결과에 직접적인 영향을 미칩니다. 특히 \"증거\"는 민사소송법에서 가장 핵심적인 요소 중 하나로 다루어집니다. 형사소송법에서도 증거가 중요하지만, 문맥이 제공되지 않았고 \"소송\"이라는 단어가 직접적으로 언급되지 않았기 때문에, \"민사소송법\"이 더 포괄적이고 일반적인 맥락에서 \"증거\"를 포함하는 도메인으로 판단됩니다. 만약 \"수사\", \"기소\" 등과 같은 형사소송법 관련 용어가 함께 제시되었다면 형사소송법으로 분류될 가능성이 높습니다."
+          },
+          "quality_assessment": {
+            "total_score": 95,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 20
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 82.25
+      },
+      {
+        "term": "위반",
+        "context": null,
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.95,
+        "domain": "기타/일반",
+        "domain_confidence": 0.9,
+        "quality_score": 95,
+        "quality_details": {
+          "법률적 정확성": 25,
+          "실무 사용 빈도": 25,
+          "용어의 중요도": 25,
+          "명확성 및 이해도": 20
+        },
+        "definition": "** \"위반\"은 법률, 규정, 약속, 규칙 등을 지키지 않고 어기는 것을 의미합니다. 이는 법적 구속력이 있는 의무를 이행하지 않거나, 금지된 행위를 하는 경우에 해당합니다.",
+        "synonyms": [
+          "**"
+        ],
+        "related_terms": [],
+        "context_keywords": [],
+        "weight": 0.5,
+        "suggestions": "**",
+        "validation_timestamp": "2025-10-19T22:51:57.998216",
+        "all_stages": {
+          "basic_validation": {
+            "valid": true,
+            "confidence": 1.0,
+            "reason": "\"위반\"은 한국 법률에서 매우 흔하게 사용되는 법률 용어입니다. 법률, 규정, 계약 등을 지키지 않았을 때 사용되는 일반적인 표현이며, 한국어 맞춤법에도 전혀 문제가 없습니다. 따라서 법률 용어로서의 정확성, 한국어 맞춤법 정확성, 법률 분야에서 사용되는 용어인지 여부 모두 충족합니다."
+          },
+          "domain_classification": {
+            "domain": "기타/일반",
+            "confidence": 0.9,
+            "reason": "\"위반\"이라는 용어는 법률 전반에 걸쳐 광범위하게 사용되는 일반적인 법률 용어입니다. 특정 법률 도메인에 국한되지 않고, 민사, 형사, 행정 등 다양한 분야에서 법규나 계약 등을 따르지 않는 행위를 지칭할 때 사용될 수 있습니다. 따라서 특정 도메인으로 한정하기보다는 일반적인 법률 용어로 분류하는 것이 가장 적합합니다."
+          },
+          "quality_assessment": {
+            "total_score": 95,
+            "details": {
+              "법률적 정확성": 25,
+              "실무 사용 빈도": 25,
+              "용어의 중요도": 25,
+              "명확성 및 이해도": 20
+            },
+            "suggestions": "**"
+          },
+          "context_analysis": {
+            "definition": "** \"위반\"은 법률, 규정, 약속, 규칙 등을 지키지 않고 어기는 것을 의미합니다. 이는 법적 구속력이 있는 의무를 이행하지 않거나, 금지된 행위를 하는 경우에 해당합니다.",
+            "synonyms": [
+              "**"
+            ],
+            "related_terms": [],
+            "context_keywords": [],
+            "weight": 0.5
+          }
+        },
+        "priority_score": 81.5
+      }
+    ],
+    "filtered_out": []
+  },
+  "performance": {
+    "term_quality_analysis": {
+      "total_terms": 4,
+      "valid_terms": 4,
+      "high_quality_terms": 4,
+      "validity_rate": 1.0,
+      "high_quality_rate": 1.0,
+      "avg_quality_score": 97.5,
+      "quality_distribution": {
+        "excellent": 4,
+        "good": 0,
+        "fair": 0,
+        "poor": 0
+      },
+      "avg_confidence": 0.975,
+      "confidence_distribution": {
+        "high": 4,
+        "medium": 0,
+        "low": 0
+      },
+      "domain_distribution": {
+        "지적재산권법": 1,
+        "기타/일반": 1,
+        "민사소송법": 2
+      },
+      "avg_weight": 0.5
+    },
+    "problematic_terms": [
+      {
+        "term": "증거",
+        "issues": [
+          "정의 없음",
+          "동의어 없음"
+        ],
+        "quality_score": 95,
+        "confidence": 0.975
+      }
+    ],
+    "classification_performance": {
+      "error": "최근 데이터가 없습니다"
+    }
+  },
+  "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:53:45\n\n2. 용어 품질 분석\n   - 총 용어 수: 4\n   - 유효 용어 수: 4\n   - 고품질 용어 수: 4\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 97.5\n   - 평균 신뢰도: 0.975\n\n3. 문제 용어\n   - 문제 용어 수: 1\n   - 주요 문제:\n     * 증거: 정의 없음, 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+  "end_time": "2025-10-19T22:53:45.779778",
+  "status": "success"
+}

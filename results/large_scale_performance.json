@@ -1,0 +1,5207 @@
+{
+  "performance_report": {
+    "total_texts": 50,
+    "total_batches": 10,
+    "batch_size": 5,
+    "total_processing_time": 4.170164585113525,
+    "avg_processing_time_per_batch": 0.41701645851135255,
+    "total_extracted_terms": 74,
+    "total_validated_terms": 74,
+    "terms_per_second": 17.74510297846805,
+    "texts_per_second": 11.989934444910844
+  },
+  "batch_results": [
+    {
+      "start_time": "2025-10-19T22:54:14.596356",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "계약서에서 손해배상 조항을 검토해주세요. 계약 위반 시 배상 책임이 어떻게 규정되어 있는지 확인이 필요합니다.",
+            "cleaned_text": "계약서에서 손해배상 조항을 검토해주세요. 계약 위반 시 배상 책임이 어떻게 규정되어 있는지 확인이 필요합니다.",
+            "extracted_terms": [
+              "손해배상",
+              "위반",
+              "계약"
+            ],
+            "term_count": 3
+          },
+          {
+            "text_index": 1,
+            "original_text": "불법행위로 인한 손해배상 청구 시 입증책임과 과실상계에 대해 알고 싶습니다.",
+            "cleaned_text": "불법행위로 인한 손해배상 청구 시 입증책임과 과실상계에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "손해배상",
+              "불법"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 2,
+            "original_text": "소유권 이전 등기 절차와 관련하여 주의사항을 알려주세요.",
+            "cleaned_text": "소유권 이전 등기 절차와 관련하여 주의사항을 알려주세요.",
+            "extracted_terms": [
+              "소유권",
+              "등기절차",
+              "등기"
+            ],
+            "term_count": 3
+          },
+          {
+            "text_index": 3,
+            "original_text": "임대차계약에서 보증금 반환과 관련된 법적 문제를 문의드립니다.",
+            "cleaned_text": "임대차계약에서 보증금 반환과 관련된 법적 문제를 문의드립니다.",
+            "extracted_terms": [
+              "임대차계약",
+              "계약"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 4,
+            "original_text": "채권자대위권과 채권자취소권의 차이점과 적용 요건을 설명해주세요.",
+            "cleaned_text": "채권자대위권과 채권자취소권의 차이점과 적용 요건을 설명해주세요.",
+            "extracted_terms": [
+              "채권자대위권",
+              "채권자취소권"
+            ],
+            "term_count": 2
+          }
+        ],
+        "all_extracted_terms": [
+          "위반",
+          "채권자대위권",
+          "불법",
+          "등기",
+          "손해배상",
+          "소유권",
+          "계약",
+          "등기절차",
+          "채권자취소권",
+          "임대차계약"
+        ],
+        "total_terms": 10
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "위반",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "위반에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "위반"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727738",
+            "priority_score": 67.0
+          },
+          {
+            "term": "채권자대위권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "채권자대위권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "채권자대위권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727754",
+            "priority_score": 67.0
+          },
+          {
+            "term": "불법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "불법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "불법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727760",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727777",
+            "priority_score": 67.0
+          },
+          {
+            "term": "손해배상",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "손해배상에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "손해배상"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727782",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소유권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소유권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소유권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727786",
+            "priority_score": 67.0
+          },
+          {
+            "term": "계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727790",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727794",
+            "priority_score": 67.0
+          },
+          {
+            "term": "채권자취소권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "채권자취소권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "채권자취소권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727799",
+            "priority_score": 67.0
+          },
+          {
+            "term": "임대차계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "임대차계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "임대차계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727803",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 10
+      },
+      "integration": {
+        "extracted_terms_count": 10,
+        "processed_extracted_count": 10,
+        "validated_terms_count": 10,
+        "high_quality_terms_count": 10,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 40,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 10
+          },
+          "added_terms": 10,
+          "updated_terms": 0
+        },
+        "high_quality_terms": [
+          {
+            "term": "위반",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "위반에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "위반"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727738",
+            "priority_score": 67.0
+          },
+          {
+            "term": "채권자대위권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "채권자대위권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "채권자대위권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727754",
+            "priority_score": 67.0
+          },
+          {
+            "term": "불법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "불법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "불법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727760",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727777",
+            "priority_score": 67.0
+          },
+          {
+            "term": "손해배상",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "손해배상에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "손해배상"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727782",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소유권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소유권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소유권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727786",
+            "priority_score": 67.0
+          },
+          {
+            "term": "계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727790",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727794",
+            "priority_score": 67.0
+          },
+          {
+            "term": "채권자취소권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "채권자취소권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "채권자취소권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727799",
+            "priority_score": 67.0
+          },
+          {
+            "term": "임대차계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "임대차계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "임대차계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.727803",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 10,
+          "valid_terms": 10,
+          "high_quality_terms": 10,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 10,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 10,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 10
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "위반",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "채권자대위권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "불법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "등기",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "손해배상",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "소유권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "계약",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "등기절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "채권자취소권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "임대차계약",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:17\n\n2. 용어 품질 분석\n   - 총 용어 수: 10\n   - 유효 용어 수: 10\n   - 고품질 용어 수: 10\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 10\n   - 주요 문제:\n     * 위반: 동의어 없음\n     * 채권자대위권: 동의어 없음\n     * 불법: 동의어 없음\n     * 등기: 동의어 없음\n     * 손해배상: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:17.734739",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:17.735332",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "살인죄의 구성요건과 법정형에 대해 알고 싶습니다.",
+            "cleaned_text": "살인죄의 구성요건과 법정형에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "살인죄"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 1,
+            "original_text": "절도죄와 강도죄의 차이점과 구별 기준을 설명해주세요.",
+            "cleaned_text": "절도죄와 강도죄의 차이점과 구별 기준을 설명해주세요.",
+            "extracted_terms": [
+              "절도죄",
+              "강도죄"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 2,
+            "original_text": "사기죄의 성립 요건과 입증 방법에 대해 문의드립니다.",
+            "cleaned_text": "사기죄의 성립 요건과 입증 방법에 대해 문의드립니다.",
+            "extracted_terms": [
+              "사기죄",
+              "방법"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 3,
+            "original_text": "방조범과 공동정범의 구별과 처벌 기준을 알려주세요.",
+            "cleaned_text": "방조범과 공동정범의 구별과 처벌 기준을 알려주세요.",
+            "extracted_terms": [
+              "공동정범",
+              "방조범"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 4,
+            "original_text": "자백의 증거능력과 자백배제법칙에 대해 설명해주세요.",
+            "cleaned_text": "자백의 증거능력과 자백배제법칙에 대해 설명해주세요.",
+            "extracted_terms": [
+              "자백배제법"
+            ],
+            "term_count": 1
+          }
+        ],
+        "all_extracted_terms": [
+          "사기죄",
+          "강도죄",
+          "절도죄",
+          "공동정범",
+          "방조범",
+          "방법",
+          "자백배제법",
+          "살인죄"
+        ],
+        "total_terms": 8
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "사기죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "사기죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "사기죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831917",
+            "priority_score": 67.0
+          },
+          {
+            "term": "강도죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "강도죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "강도죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831948",
+            "priority_score": 67.0
+          },
+          {
+            "term": "절도죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "절도죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "절도죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831953",
+            "priority_score": 67.0
+          },
+          {
+            "term": "공동정범",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "공동정범에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "공동정범"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831957",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방조범",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방조범에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방조범"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831961",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831965",
+            "priority_score": 67.0
+          },
+          {
+            "term": "자백배제법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "자백배제법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "자백배제법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831969",
+            "priority_score": 67.0
+          },
+          {
+            "term": "살인죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "살인죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "살인죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831973",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 8
+      },
+      "integration": {
+        "extracted_terms_count": 8,
+        "processed_extracted_count": 8,
+        "validated_terms_count": 8,
+        "high_quality_terms_count": 8,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 48,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 18
+          },
+          "added_terms": 8,
+          "updated_terms": 0
+        },
+        "high_quality_terms": [
+          {
+            "term": "사기죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "사기죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "사기죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831917",
+            "priority_score": 67.0
+          },
+          {
+            "term": "강도죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "강도죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "강도죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831948",
+            "priority_score": 67.0
+          },
+          {
+            "term": "절도죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "절도죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "절도죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831953",
+            "priority_score": 67.0
+          },
+          {
+            "term": "공동정범",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "공동정범에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "공동정범"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831957",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방조범",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방조범에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방조범"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831961",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831965",
+            "priority_score": 67.0
+          },
+          {
+            "term": "자백배제법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "자백배제법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "자백배제법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831969",
+            "priority_score": 67.0
+          },
+          {
+            "term": "살인죄",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "살인죄에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "살인죄"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.831973",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 8,
+          "valid_terms": 8,
+          "high_quality_terms": 8,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 8,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 8,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 8
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "사기죄",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "강도죄",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "절도죄",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "공동정범",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방조범",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "자백배제법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "살인죄",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:17\n\n2. 용어 품질 분석\n   - 총 용어 수: 8\n   - 유효 용어 수: 8\n   - 고품질 용어 수: 8\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 8\n   - 주요 문제:\n     * 사기죄: 동의어 없음\n     * 강도죄: 동의어 없음\n     * 절도죄: 동의어 없음\n     * 공동정범: 동의어 없음\n     * 방조범: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:17.836834",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:17.837377",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다.",
+            "cleaned_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다.",
+            "extracted_terms": [
+              "면접교섭권",
+              "양육권",
+              "이혼",
+              "소송",
+              "이혼소송"
+            ],
+            "term_count": 5
+          },
+          {
+            "text_index": 1,
+            "original_text": "친생자 확인과 친생자 부인의 차이점을 설명해주세요.",
+            "cleaned_text": "친생자 확인과 친생자 부인의 차이점을 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 2,
+            "original_text": "양육비 산정 기준과 지급 방법에 대해 알고 싶습니다.",
+            "cleaned_text": "양육비 산정 기준과 지급 방법에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "방법"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 3,
+            "original_text": "혼인 무효와 혼인 취소의 구별과 법적 효과를 알려주세요.",
+            "cleaned_text": "혼인 무효와 혼인 취소의 구별과 법적 효과를 알려주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 4,
+            "original_text": "가족관계등록부 정정 절차와 필요 서류를 문의드립니다.",
+            "cleaned_text": "가족관계등록부 정정 절차와 필요 서류를 문의드립니다.",
+            "extracted_terms": [
+              "정정절차"
+            ],
+            "term_count": 1
+          }
+        ],
+        "all_extracted_terms": [
+          "정정절차",
+          "이혼",
+          "면접교섭권",
+          "소송",
+          "양육권",
+          "방법",
+          "이혼소송"
+        ],
+        "total_terms": 7
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "정정절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "정정절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "정정절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916140",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이혼",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이혼에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이혼"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916150",
+            "priority_score": 67.0
+          },
+          {
+            "term": "면접교섭권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "면접교섭권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "면접교섭권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916153",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916156",
+            "priority_score": 67.0
+          },
+          {
+            "term": "양육권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "양육권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "양육권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916160",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916164",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이혼소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이혼소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이혼소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916168",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 7
+      },
+      "integration": {
+        "extracted_terms_count": 7,
+        "processed_extracted_count": 7,
+        "validated_terms_count": 7,
+        "high_quality_terms_count": 7,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 54,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 24
+          },
+          "added_terms": 6,
+          "updated_terms": 1
+        },
+        "high_quality_terms": [
+          {
+            "term": "정정절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "정정절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "정정절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916140",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이혼",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이혼에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이혼"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916150",
+            "priority_score": 67.0
+          },
+          {
+            "term": "면접교섭권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "면접교섭권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "면접교섭권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916153",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916156",
+            "priority_score": 67.0
+          },
+          {
+            "term": "양육권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "양육권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "양육권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916160",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916164",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이혼소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이혼소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이혼소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:17.916168",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 7,
+          "valid_terms": 7,
+          "high_quality_terms": 7,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 7,
+            "poor": 0
+          },
+          "avg_confidence": 0.7999999999999999,
+          "confidence_distribution": {
+            "high": 7,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 7
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "정정절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "이혼",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "면접교섭권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "소송",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "양육권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "이혼소송",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:17\n\n2. 용어 품질 분석\n   - 총 용어 수: 7\n   - 유효 용어 수: 7\n   - 고품질 용어 수: 7\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 7\n   - 주요 문제:\n     * 정정절차: 동의어 없음\n     * 이혼: 동의어 없음\n     * 면접교섭권: 동의어 없음\n     * 소송: 동의어 없음\n     * 양육권: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:17.921514",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:17.921959",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "주식회사 설립 절차와 필요 자본금에 대해 알고 싶습니다.",
+            "cleaned_text": "주식회사 설립 절차와 필요 자본금에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "주식회사",
+              "설립절차"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 1,
+            "original_text": "이사의 책임과 의무에 대해 설명해주세요.",
+            "cleaned_text": "이사의 책임과 의무에 대해 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 2,
+            "original_text": "주주총회 소집 절차와 결의 요건을 문의드립니다.",
+            "cleaned_text": "주주총회 소집 절차와 결의 요건을 문의드립니다.",
+            "extracted_terms": [
+              "소집절차"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 3,
+            "original_text": "회사 해산과 청산 절차에 대해 알려주세요.",
+            "cleaned_text": "회사 해산과 청산 절차에 대해 알려주세요.",
+            "extracted_terms": [
+              "청산절차",
+              "회사"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 4,
+            "original_text": "상행위와 민사행위의 차이점을 설명해주세요.",
+            "cleaned_text": "상행위와 민사행위의 차이점을 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          }
+        ],
+        "all_extracted_terms": [
+          "청산절차",
+          "설립절차",
+          "소집절차",
+          "회사",
+          "주식회사"
+        ],
+        "total_terms": 5
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "청산절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "청산절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "청산절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202301",
+            "priority_score": 67.0
+          },
+          {
+            "term": "설립절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "설립절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "설립절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202313",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소집절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소집절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소집절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202318",
+            "priority_score": 67.0
+          },
+          {
+            "term": "회사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "회사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "회사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202322",
+            "priority_score": 67.0
+          },
+          {
+            "term": "주식회사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "주식회사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "주식회사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202326",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 5
+      },
+      "integration": {
+        "extracted_terms_count": 5,
+        "processed_extracted_count": 5,
+        "validated_terms_count": 5,
+        "high_quality_terms_count": 5,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 59,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 29
+          },
+          "added_terms": 5,
+          "updated_terms": 0
+        },
+        "high_quality_terms": [
+          {
+            "term": "청산절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "청산절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "청산절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202301",
+            "priority_score": 67.0
+          },
+          {
+            "term": "설립절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "설립절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "설립절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202313",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소집절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소집절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소집절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202318",
+            "priority_score": 67.0
+          },
+          {
+            "term": "회사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "회사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "회사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202322",
+            "priority_score": 67.0
+          },
+          {
+            "term": "주식회사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "주식회사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "주식회사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.202326",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 5,
+          "valid_terms": 5,
+          "high_quality_terms": 5,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 5,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 5,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 5
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "청산절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "설립절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "소집절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "회사",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "주식회사",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 5\n   - 유효 용어 수: 5\n   - 고품질 용어 수: 5\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 5\n   - 주요 문제:\n     * 청산절차: 동의어 없음\n     * 설립절차: 동의어 없음\n     * 소집절차: 동의어 없음\n     * 회사: 동의어 없음\n     * 주식회사: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.206680",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.207036",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "근로계약서 작성 시 주의사항을 알려주세요.",
+            "cleaned_text": "근로계약서 작성 시 주의사항을 알려주세요.",
+            "extracted_terms": [
+              "근로계약"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 1,
+            "original_text": "부당해고의 요건과 구제 절차에 대해 문의드립니다.",
+            "cleaned_text": "부당해고의 요건과 구제 절차에 대해 문의드립니다.",
+            "extracted_terms": [
+              "부당해고",
+              "구제절차",
+              "구제"
+            ],
+            "term_count": 3
+          },
+          {
+            "text_index": 2,
+            "original_text": "임금 지급과 최저임금제에 대해 설명해주세요.",
+            "cleaned_text": "임금 지급과 최저임금제에 대해 설명해주세요.",
+            "extracted_terms": [
+              "최저임금"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 3,
+            "original_text": "근로시간과 휴게시간 규정을 알고 싶습니다.",
+            "cleaned_text": "근로시간과 휴게시간 규정을 알고 싶습니다.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 4,
+            "original_text": "산업재해 보상과 관련된 법적 문제를 문의드립니다.",
+            "cleaned_text": "산업재해 보상과 관련된 법적 문제를 문의드립니다.",
+            "extracted_terms": [
+              "보상"
+            ],
+            "term_count": 1
+          }
+        ],
+        "all_extracted_terms": [
+          "최저임금",
+          "근로계약",
+          "부당해고",
+          "보상",
+          "구제절차",
+          "구제"
+        ],
+        "total_terms": 6
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "최저임금",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "최저임금에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "최저임금"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299237",
+            "priority_score": 67.0
+          },
+          {
+            "term": "근로계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "근로계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "근로계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299249",
+            "priority_score": 67.0
+          },
+          {
+            "term": "부당해고",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "부당해고에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "부당해고"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299253",
+            "priority_score": 67.0
+          },
+          {
+            "term": "보상",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "보상에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "보상"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299258",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299266",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 6
+      },
+      "integration": {
+        "extracted_terms_count": 6,
+        "processed_extracted_count": 6,
+        "validated_terms_count": 6,
+        "high_quality_terms_count": 6,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 65,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 35
+          },
+          "added_terms": 6,
+          "updated_terms": 0
+        },
+        "high_quality_terms": [
+          {
+            "term": "최저임금",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "최저임금에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "최저임금"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299237",
+            "priority_score": 67.0
+          },
+          {
+            "term": "근로계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "근로계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "근로계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299249",
+            "priority_score": 67.0
+          },
+          {
+            "term": "부당해고",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "부당해고에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "부당해고"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299253",
+            "priority_score": 67.0
+          },
+          {
+            "term": "보상",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "보상에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "보상"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299258",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.299266",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 6,
+          "valid_terms": 6,
+          "high_quality_terms": 6,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 6,
+            "poor": 0
+          },
+          "avg_confidence": 0.7999999999999999,
+          "confidence_distribution": {
+            "high": 6,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 6
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "최저임금",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "근로계약",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "부당해고",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "보상",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "구제절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "구제",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 6\n   - 유효 용어 수: 6\n   - 고품질 용어 수: 6\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 6\n   - 주요 문제:\n     * 최저임금: 동의어 없음\n     * 근로계약: 동의어 없음\n     * 부당해고: 동의어 없음\n     * 보상: 동의어 없음\n     * 구제절차: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.303718",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.304112",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "부동산 매매계약에서 등기 이전 절차를 설명해주세요.",
+            "cleaned_text": "부동산 매매계약에서 등기 이전 절차를 설명해주세요.",
+            "extracted_terms": [
+              "매매계약",
+              "계약",
+              "등기",
+              "이전절차"
+            ],
+            "term_count": 4
+          },
+          {
+            "text_index": 1,
+            "original_text": "임대차보증금 반환과 관련된 법적 문제를 문의드립니다.",
+            "cleaned_text": "임대차보증금 반환과 관련된 법적 문제를 문의드립니다.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 2,
+            "original_text": "건물 소유권 이전과 등기 절차에 대해 알고 싶습니다.",
+            "cleaned_text": "건물 소유권 이전과 등기 절차에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "소유권",
+              "등기절차",
+              "등기"
+            ],
+            "term_count": 3
+          },
+          {
+            "text_index": 3,
+            "original_text": "부동산 개발과 관련된 허가 절차를 알려주세요.",
+            "cleaned_text": "부동산 개발과 관련된 허가 절차를 알려주세요.",
+            "extracted_terms": [
+              "허가절차"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 4,
+            "original_text": "토지 분할과 합병의 법적 요건을 설명해주세요.",
+            "cleaned_text": "토지 분할과 합병의 법적 요건을 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          }
+        ],
+        "all_extracted_terms": [
+          "허가절차",
+          "등기",
+          "이전절차",
+          "매매계약",
+          "소유권",
+          "계약",
+          "등기절차"
+        ],
+        "total_terms": 7
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "허가절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "허가절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "허가절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356273",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이전절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이전절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이전절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356278",
+            "priority_score": 67.0
+          },
+          {
+            "term": "매매계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "매매계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "매매계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356282",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소유권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소유권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소유권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356286",
+            "priority_score": 67.0
+          },
+          {
+            "term": "계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356290",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356294",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 7
+      },
+      "integration": {
+        "extracted_terms_count": 7,
+        "processed_extracted_count": 7,
+        "validated_terms_count": 7,
+        "high_quality_terms_count": 7,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 68,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 38
+          },
+          "added_terms": 3,
+          "updated_terms": 4
+        },
+        "high_quality_terms": [
+          {
+            "term": "허가절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "허가절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "허가절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356273",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이전절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이전절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이전절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356278",
+            "priority_score": 67.0
+          },
+          {
+            "term": "매매계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "매매계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "매매계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356282",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소유권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소유권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소유권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356286",
+            "priority_score": 67.0
+          },
+          {
+            "term": "계약",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "계약에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "계약"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356290",
+            "priority_score": 67.0
+          },
+          {
+            "term": "등기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "등기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "등기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.356294",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 7,
+          "valid_terms": 7,
+          "high_quality_terms": 7,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 7,
+            "poor": 0
+          },
+          "avg_confidence": 0.7999999999999999,
+          "confidence_distribution": {
+            "high": 7,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 7
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "허가절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "등기",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "이전절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "매매계약",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "소유권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "계약",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "등기절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 7\n   - 유효 용어 수: 7\n   - 고품질 용어 수: 7\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 7\n   - 주요 문제:\n     * 허가절차: 동의어 없음\n     * 등기: 동의어 없음\n     * 이전절차: 동의어 없음\n     * 매매계약: 동의어 없음\n     * 소유권: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.360967",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.361391",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "특허 출원 절차와 심사 기준에 대해 알고 싶습니다.",
+            "cleaned_text": "특허 출원 절차와 심사 기준에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "출원절차",
+              "특허"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 1,
+            "original_text": "상표권 등록과 침해 구제 방법을 설명해주세요.",
+            "cleaned_text": "상표권 등록과 침해 구제 방법을 설명해주세요.",
+            "extracted_terms": [
+              "상표권",
+              "방법",
+              "침해",
+              "구제"
+            ],
+            "term_count": 4
+          },
+          {
+            "text_index": 2,
+            "original_text": "저작권 보호와 침해 행위의 구별을 문의드립니다.",
+            "cleaned_text": "저작권 보호와 침해 행위의 구별을 문의드립니다.",
+            "extracted_terms": [
+              "저작권",
+              "침해"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 3,
+            "original_text": "디자인권 등록과 침해 소송 절차를 알려주세요.",
+            "cleaned_text": "디자인권 등록과 침해 소송 절차를 알려주세요.",
+            "extracted_terms": [
+              "디자인권",
+              "소송절차",
+              "소송",
+              "침해",
+              "침해소송"
+            ],
+            "term_count": 5
+          },
+          {
+            "text_index": 4,
+            "original_text": "영업비밀 보호와 관련된 법적 문제를 설명해주세요.",
+            "cleaned_text": "영업비밀 보호와 관련된 법적 문제를 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          }
+        ],
+        "all_extracted_terms": [
+          "소송절차",
+          "침해소송",
+          "소송",
+          "저작권",
+          "특허",
+          "침해",
+          "디자인권",
+          "상표권",
+          "방법",
+          "출원절차",
+          "구제"
+        ],
+        "total_terms": 11
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "소송절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411598",
+            "priority_score": 67.0
+          },
+          {
+            "term": "침해소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "침해소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "침해소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411610",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411614",
+            "priority_score": 67.0
+          },
+          {
+            "term": "저작권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "저작권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "저작권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411618",
+            "priority_score": 67.0
+          },
+          {
+            "term": "특허",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "특허에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "특허"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411622",
+            "priority_score": 67.0
+          },
+          {
+            "term": "침해",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "침해에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "침해"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411626",
+            "priority_score": 67.0
+          },
+          {
+            "term": "디자인권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "디자인권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "디자인권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411629",
+            "priority_score": 67.0
+          },
+          {
+            "term": "상표권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "상표권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "상표권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411633",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411636",
+            "priority_score": 67.0
+          },
+          {
+            "term": "출원절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "출원절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "출원절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411639",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411642",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 11
+      },
+      "integration": {
+        "extracted_terms_count": 11,
+        "processed_extracted_count": 11,
+        "validated_terms_count": 11,
+        "high_quality_terms_count": 11,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 76,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 46
+          },
+          "added_terms": 8,
+          "updated_terms": 3
+        },
+        "high_quality_terms": [
+          {
+            "term": "소송절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411598",
+            "priority_score": 67.0
+          },
+          {
+            "term": "침해소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "침해소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "침해소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411610",
+            "priority_score": 67.0
+          },
+          {
+            "term": "소송",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "소송에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "소송"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411614",
+            "priority_score": 67.0
+          },
+          {
+            "term": "저작권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "저작권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "저작권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411618",
+            "priority_score": 67.0
+          },
+          {
+            "term": "특허",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "특허에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "특허"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411622",
+            "priority_score": 67.0
+          },
+          {
+            "term": "침해",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "침해에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "침해"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411626",
+            "priority_score": 67.0
+          },
+          {
+            "term": "디자인권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "디자인권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "디자인권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411629",
+            "priority_score": 67.0
+          },
+          {
+            "term": "상표권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "상표권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "상표권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411633",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411636",
+            "priority_score": 67.0
+          },
+          {
+            "term": "출원절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "출원절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "출원절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411639",
+            "priority_score": 67.0
+          },
+          {
+            "term": "구제",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "구제에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "구제"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.411642",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 11,
+          "valid_terms": 11,
+          "high_quality_terms": 11,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 11,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 11,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 11
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "소송절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "침해소송",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "소송",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "저작권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "특허",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "침해",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "디자인권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "상표권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "출원절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "구제",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 11\n   - 유효 용어 수: 11\n   - 고품질 용어 수: 11\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 11\n   - 주요 문제:\n     * 소송절차: 동의어 없음\n     * 침해소송: 동의어 없음\n     * 소송: 동의어 없음\n     * 저작권: 동의어 없음\n     * 특허: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.417724",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.418339",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "소득세 신고와 납부 절차에 대해 알고 싶습니다.",
+            "cleaned_text": "소득세 신고와 납부 절차에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "납부절차",
+              "신고"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 1,
+            "original_text": "법인세 계산과 신고 방법을 설명해주세요.",
+            "cleaned_text": "법인세 계산과 신고 방법을 설명해주세요.",
+            "extracted_terms": [
+              "신고",
+              "방법"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 2,
+            "original_text": "부가가치세 과세와 면세 구분을 문의드립니다.",
+            "cleaned_text": "부가가치세 과세와 면세 구분을 문의드립니다.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 3,
+            "original_text": "세무조사와 조세불복 신청 절차를 알려주세요.",
+            "cleaned_text": "세무조사와 조세불복 신청 절차를 알려주세요.",
+            "extracted_terms": [
+              "신청",
+              "신청절차"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 4,
+            "original_text": "세무조정과 이의신청의 차이점을 설명해주세요.",
+            "cleaned_text": "세무조정과 이의신청의 차이점을 설명해주세요.",
+            "extracted_terms": [
+              "이의신청"
+            ],
+            "term_count": 1
+          }
+        ],
+        "all_extracted_terms": [
+          "신청",
+          "방법",
+          "납부절차",
+          "신고",
+          "이의신청",
+          "신청절차"
+        ],
+        "total_terms": 6
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "신청",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신청에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신청"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476666",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476677",
+            "priority_score": 67.0
+          },
+          {
+            "term": "납부절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "납부절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "납부절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476681",
+            "priority_score": 67.0
+          },
+          {
+            "term": "신고",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신고에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신고"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476687",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이의신청",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이의신청에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이의신청"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476691",
+            "priority_score": 67.0
+          },
+          {
+            "term": "신청절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신청절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신청절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476695",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 6
+      },
+      "integration": {
+        "extracted_terms_count": 6,
+        "processed_extracted_count": 6,
+        "validated_terms_count": 6,
+        "high_quality_terms_count": 6,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 81,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 51
+          },
+          "added_terms": 5,
+          "updated_terms": 1
+        },
+        "high_quality_terms": [
+          {
+            "term": "신청",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신청에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신청"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476666",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476677",
+            "priority_score": 67.0
+          },
+          {
+            "term": "납부절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "납부절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "납부절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476681",
+            "priority_score": 67.0
+          },
+          {
+            "term": "신고",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신고에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신고"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476687",
+            "priority_score": 67.0
+          },
+          {
+            "term": "이의신청",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "이의신청에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "이의신청"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476691",
+            "priority_score": 67.0
+          },
+          {
+            "term": "신청절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "신청절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "신청절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.476695",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 6,
+          "valid_terms": 6,
+          "high_quality_terms": 6,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 6,
+            "poor": 0
+          },
+          "avg_confidence": 0.7999999999999999,
+          "confidence_distribution": {
+            "high": 6,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 6
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "신청",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "납부절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "신고",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "이의신청",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "신청절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 6\n   - 유효 용어 수: 6\n   - 고품질 용어 수: 6\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 6\n   - 주요 문제:\n     * 신청: 동의어 없음\n     * 방법: 동의어 없음\n     * 납부절차: 동의어 없음\n     * 신고: 동의어 없음\n     * 이의신청: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.482100",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.482501",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "소장 작성과 제출 절차에 대해 알고 싶습니다.",
+            "cleaned_text": "소장 작성과 제출 절차에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "제출절차"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 1,
+            "original_text": "증거 수집과 증거조사 방법을 설명해주세요.",
+            "cleaned_text": "증거 수집과 증거조사 방법을 설명해주세요.",
+            "extracted_terms": [
+              "증거",
+              "방법"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 2,
+            "original_text": "준비서면 제출과 변론 절차를 문의드립니다.",
+            "cleaned_text": "준비서면 제출과 변론 절차를 문의드립니다.",
+            "extracted_terms": [
+              "변론절차"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 3,
+            "original_text": "항소와 상고의 차이점을 알려주세요.",
+            "cleaned_text": "항소와 상고의 차이점을 알려주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          },
+          {
+            "text_index": 4,
+            "original_text": "집행 절차와 강제집행 방법을 설명해주세요.",
+            "cleaned_text": "집행 절차와 강제집행 방법을 설명해주세요.",
+            "extracted_terms": [
+              "방법",
+              "집행절차"
+            ],
+            "term_count": 2
+          }
+        ],
+        "all_extracted_terms": [
+          "변론절차",
+          "제출절차",
+          "방법",
+          "집행절차",
+          "증거"
+        ],
+        "total_terms": 5
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "변론절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "변론절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "변론절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526871",
+            "priority_score": 67.0
+          },
+          {
+            "term": "제출절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제출절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제출절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526884",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526889",
+            "priority_score": 67.0
+          },
+          {
+            "term": "집행절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "집행절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "집행절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526894",
+            "priority_score": 67.0
+          },
+          {
+            "term": "증거",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "증거에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "증거"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526898",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 5
+      },
+      "integration": {
+        "extracted_terms_count": 5,
+        "processed_extracted_count": 5,
+        "validated_terms_count": 5,
+        "high_quality_terms_count": 5,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 85,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 55
+          },
+          "added_terms": 4,
+          "updated_terms": 1
+        },
+        "high_quality_terms": [
+          {
+            "term": "변론절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "변론절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "변론절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526871",
+            "priority_score": 67.0
+          },
+          {
+            "term": "제출절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제출절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제출절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526884",
+            "priority_score": 67.0
+          },
+          {
+            "term": "방법",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "방법에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "방법"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526889",
+            "priority_score": 67.0
+          },
+          {
+            "term": "집행절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "집행절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "집행절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526894",
+            "priority_score": 67.0
+          },
+          {
+            "term": "증거",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "증거에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "증거"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.526898",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 5,
+          "valid_terms": 5,
+          "high_quality_terms": 5,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 5,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 5,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 5
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "변론절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "제출절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "방법",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "집행절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "증거",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 5\n   - 유효 용어 수: 5\n   - 고품질 용어 수: 5\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 5\n   - 주요 문제:\n     * 변론절차: 동의어 없음\n     * 제출절차: 동의어 없음\n     * 방법: 동의어 없음\n     * 집행절차: 동의어 없음\n     * 증거: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.531952",
+      "status": "success"
+    },
+    {
+      "start_time": "2025-10-19T22:54:18.532316",
+      "input_text_count": 5,
+      "use_gemini": false,
+      "extraction": {
+        "extraction_results": [
+          {
+            "text_index": 0,
+            "original_text": "수사 절차와 피의자 권리에 대해 알고 싶습니다.",
+            "cleaned_text": "수사 절차와 피의자 권리에 대해 알고 싶습니다.",
+            "extracted_terms": [
+              "수사절차",
+              "수사"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 1,
+            "original_text": "기소와 공소제기 절차를 설명해주세요.",
+            "cleaned_text": "기소와 공소제기 절차를 설명해주세요.",
+            "extracted_terms": [
+              "공소제기",
+              "제기절차",
+              "기소",
+              "제기"
+            ],
+            "term_count": 4
+          },
+          {
+            "text_index": 2,
+            "original_text": "변호인 선임과 변호인 접견권을 문의드립니다.",
+            "cleaned_text": "변호인 선임과 변호인 접견권을 문의드립니다.",
+            "extracted_terms": [
+              "접견권",
+              "변호인"
+            ],
+            "term_count": 2
+          },
+          {
+            "text_index": 3,
+            "original_text": "증거능력과 증거력의 구별을 알려주세요.",
+            "cleaned_text": "증거능력과 증거력의 구별을 알려주세요.",
+            "extracted_terms": [
+              "증거"
+            ],
+            "term_count": 1
+          },
+          {
+            "text_index": 4,
+            "original_text": "항소와 상고의 절차와 요건을 설명해주세요.",
+            "cleaned_text": "항소와 상고의 절차와 요건을 설명해주세요.",
+            "extracted_terms": [],
+            "term_count": 0
+          }
+        ],
+        "all_extracted_terms": [
+          "제기",
+          "수사절차",
+          "공소제기",
+          "제기절차",
+          "접견권",
+          "수사",
+          "기소",
+          "증거",
+          "변호인"
+        ],
+        "total_terms": 9
+      },
+      "validation": {
+        "validated_terms": [
+          {
+            "term": "제기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763244",
+            "priority_score": 67.0
+          },
+          {
+            "term": "수사절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "수사절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "수사절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763253",
+            "priority_score": 67.0
+          },
+          {
+            "term": "공소제기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "공소제기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "공소제기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763256",
+            "priority_score": 67.0
+          },
+          {
+            "term": "제기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763259",
+            "priority_score": 67.0
+          },
+          {
+            "term": "접견권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "접견권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "접견권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "수사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "수사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "수사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763265",
+            "priority_score": 67.0
+          },
+          {
+            "term": "기소",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "기소에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "기소"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763268",
+            "priority_score": 67.0
+          },
+          {
+            "term": "증거",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "증거에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "증거"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763271",
+            "priority_score": 67.0
+          },
+          {
+            "term": "변호인",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "변호인에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "변호인"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763273",
+            "priority_score": 67.0
+          }
+        ],
+        "validated_count": 9
+      },
+      "integration": {
+        "extracted_terms_count": 9,
+        "processed_extracted_count": 9,
+        "validated_terms_count": 9,
+        "high_quality_terms_count": 9,
+        "filtered_out_count": 0,
+        "database_stats": {
+          "total_terms": 93,
+          "domain_count": 11,
+          "domain_stats": {
+            "민사법": 5,
+            "형사법": 4,
+            "가족법": 3,
+            "상사법": 3,
+            "노동법": 3,
+            "부동산법": 2,
+            "지적재산권법": 3,
+            "세법": 3,
+            "민사소송법": 2,
+            "형사소송법": 2,
+            "기타/일반": 63
+          },
+          "added_terms": 8,
+          "updated_terms": 1
+        },
+        "high_quality_terms": [
+          {
+            "term": "제기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763244",
+            "priority_score": 67.0
+          },
+          {
+            "term": "수사절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "수사절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "수사절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763253",
+            "priority_score": 67.0
+          },
+          {
+            "term": "공소제기",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "공소제기에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "공소제기"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763256",
+            "priority_score": 67.0
+          },
+          {
+            "term": "제기절차",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "제기절차에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "제기절차"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763259",
+            "priority_score": 67.0
+          },
+          {
+            "term": "접견권",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "접견권에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "접견권"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763262",
+            "priority_score": 67.0
+          },
+          {
+            "term": "수사",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "수사에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "수사"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763265",
+            "priority_score": 67.0
+          },
+          {
+            "term": "기소",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "기소에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "기소"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763268",
+            "priority_score": 67.0
+          },
+          {
+            "term": "증거",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "증거에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "증거"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763271",
+            "priority_score": 67.0
+          },
+          {
+            "term": "변호인",
+            "is_valid": true,
+            "is_high_quality": true,
+            "final_confidence": 0.8,
+            "domain": "기타/일반",
+            "domain_confidence": 0.5,
+            "quality_score": 70,
+            "quality_details": {
+              "기본검증": 70
+            },
+            "definition": "변호인에 대한 정의가 필요합니다.",
+            "synonyms": [],
+            "related_terms": [],
+            "context_keywords": [
+              "변호인"
+            ],
+            "weight": 0.5,
+            "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+            "validation_timestamp": "2025-10-19T22:54:18.763273",
+            "priority_score": 67.0
+          }
+        ],
+        "filtered_out": []
+      },
+      "performance": {
+        "term_quality_analysis": {
+          "total_terms": 9,
+          "valid_terms": 9,
+          "high_quality_terms": 9,
+          "validity_rate": 1.0,
+          "high_quality_rate": 1.0,
+          "avg_quality_score": 70.0,
+          "quality_distribution": {
+            "excellent": 0,
+            "good": 0,
+            "fair": 9,
+            "poor": 0
+          },
+          "avg_confidence": 0.8,
+          "confidence_distribution": {
+            "high": 9,
+            "medium": 0,
+            "low": 0
+          },
+          "domain_distribution": {
+            "기타/일반": 9
+          },
+          "avg_weight": 0.5
+        },
+        "problematic_terms": [
+          {
+            "term": "제기",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "수사절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "공소제기",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "제기절차",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "접견권",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "수사",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "기소",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "증거",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          },
+          {
+            "term": "변호인",
+            "issues": [
+              "동의어 없음"
+            ],
+            "quality_score": 70,
+            "confidence": 0.8
+          }
+        ],
+        "classification_performance": {
+          "error": "최근 데이터가 없습니다"
+        }
+      },
+      "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:54:18\n\n2. 용어 품질 분석\n   - 총 용어 수: 9\n   - 유효 용어 수: 9\n   - 고품질 용어 수: 9\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 9\n   - 주요 문제:\n     * 제기: 동의어 없음\n     * 수사절차: 동의어 없음\n     * 공소제기: 동의어 없음\n     * 제기절차: 동의어 없음\n     * 접견권: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+      "end_time": "2025-10-19T22:54:18.767423",
+      "status": "success"
+    }
+  ]
+}
