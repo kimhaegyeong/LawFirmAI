@@ -6,7 +6,7 @@
 
 import logging
 from typing import Dict, Any, Optional
-from services.question_classifier import QuestionType
+from .question_classifier import QuestionType
 
 logger = logging.getLogger(__name__)
 

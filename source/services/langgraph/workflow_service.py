@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from .checkpoint_manager import CheckpointManager
+# from .checkpoint_manager import CheckpointManager
 from .state_definitions import create_initial_legal_state
 from ...utils.langgraph_config import LangGraphConfig
 
@@ -31,17 +31,13 @@ class LangGraphWorkflowService:
         self.config = config or LangGraphConfig.from_env()
         self.logger = logging.getLogger(__name__)
         
-        # 컴포넌트 초기화
-        self.checkpoint_manager = CheckpointManager(self.config.checkpoint_db_path)
+        # 컴포넌트 초기화 (체크포인트 제거)
+        # self.checkpoint_manager = CheckpointManager(self.config.checkpoint_db_path)
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
         
-        # 워크플로우 컴파일
-        checkpointer = self.checkpoint_manager.get_memory()
-        if checkpointer is not None:
-            self.app = self.legal_workflow.graph.compile(checkpointer=checkpointer)
-        else:
-            self.app = self.legal_workflow.graph.compile()
-            self.logger.warning("워크플로우가 체크포인트 없이 컴파일되었습니다")
+        # 워크플로우 컴파일 (체크포인트 없이)
+        self.app = self.legal_workflow.graph.compile()
+        self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다")
         
         if self.app is None:
             self.logger.error("Failed to compile workflow")
@@ -78,10 +74,10 @@ class LangGraphWorkflowService:
             # 초기 상태 설정
             initial_state = create_initial_legal_state(query, session_id)
             
-            # 워크플로우 실행 설정
+            # 워크플로우 실행 설정 (체크포인트 비활성화)
             config = {}
-            if enable_checkpoint:
-                config = {"configurable": {"thread_id": session_id}}
+            # if enable_checkpoint:
+            #     config = {"configurable": {"thread_id": session_id}}
             
             # 워크플로우 실행
             if self.app:
