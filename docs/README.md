@@ -10,19 +10,25 @@
 
 LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니다. LangChain 기반 RAG 시스템과 하이브리드 검색을 통해 법률 질문에 정확하고 신뢰할 수 있는 답변을 제공합니다.
 
-## 🆕 최신 업데이트 (2025-01-XX)
+## 🆕 최신 업데이트 (2025-10-19)
 
-### 🎯 키워드 매핑 시스템 정교화
-- **가중치 기반 키워드 시스템**: 핵심/중요/보조 키워드로 분류하여 정확도 향상
-- **컨텍스트 인식 매핑**: 질문 유형별 맞춤형 키워드 제공
-- **동적 키워드 학습**: 사용자 피드백 기반 지속적 개선
-- **의미적 유사도 매핑**: 법률 용어 간 의미적 관계 활용
+### 🎯 하이브리드 키워드 관리 시스템 구축
+- **데이터베이스 통합**: 3개 법률 용어 사전에서 1,119개 키워드 자동 로드
+- **AI 키워드 확장**: Gemini API를 활용한 부족 도메인 자동 확장
+- **지능형 캐싱**: 메모리 + 파일 이중 캐시로 성능 최적화
+- **동적 확장 전략**: 데이터베이스 우선, AI 확장, 폴백 방식 선택 가능
 
-### 📈 품질 향상 효과
-- **키워드 포함도**: 0.390 → 0.7+ 목표 달성 가능
-- **답변 구조화**: 컨텍스트별 맞춤형 구조 제공
-- **법적 정확성**: 의미적 관계를 통한 전문 용어 활용
-- **지속적 학습**: 사용자 피드백을 통한 자동 개선
+### 📈 하이브리드 시스템 성과
+- **총 키워드 수**: 1,119개 (데이터베이스 1,094개 + AI 확장 25개)
+- **도메인 커버리지**: 11개 법률 도메인 완전 지원
+- **AI 확장 성공**: 지적재산권법, 세법, 형사소송법 자동 확장
+- **캐시 성능**: 0.015초 평균 로드 시간, 28KB 캐시 크기
+
+### 🔧 확장 전략 옵션
+- **DATABASE_ONLY**: 기존 데이터베이스만 사용
+- **AI_ONLY**: AI 모델만 사용한 키워드 생성
+- **HYBRID**: 데이터베이스 + AI 통합 (권장)
+- **FALLBACK**: 기본 키워드로 폴백
 
 ### 주요 특징
 
@@ -104,7 +110,12 @@ LawFirmAI/
 │   ├── services/                    # 비즈니스 로직
 │   │   ├── rag_service.py           # ML 강화 RAG 서비스
 │   │   ├── search_service.py        # ML 강화 검색 서비스
-│   │   └── hybrid_search_engine.py  # 하이브리드 검색 엔진
+│   │   ├── hybrid_search_engine.py  # 하이브리드 검색 엔진
+│   │   ├── domain_specific_extractor.py  # 도메인별 용어 추출기
+│   │   ├── hybrid_keyword_manager.py     # 하이브리드 키워드 관리
+│   │   ├── keyword_database_loader.py    # 키워드 데이터베이스 로더
+│   │   ├── ai_keyword_generator.py       # AI 키워드 생성기
+│   │   └── keyword_cache.py              # 키워드 캐시 시스템
 │   ├── data/                        # 데이터 처리
 │   │   ├── database.py              # SQLite 데이터베이스 관리
 │   │   └── vector_store.py          # 벡터 저장소 관리
@@ -139,6 +150,7 @@ LawFirmAI/
 | **데이터 처리** | [전처리 가이드](docs/03_data_processing/preprocessing_guide.md) | 데이터 전처리 파이프라인 |
 | **RAG 시스템** | [RAG 아키텍처](docs/05_rag_system/rag_architecture.md) | RAG 시스템 사용법 |
 | **모델 성능** | [모델 벤치마크](docs/06_models_performance/model_benchmark.md) | 모델 선택 및 성능 분석 |
+| **키워드 관리** | [하이브리드 키워드 시스템](docs/07_hybrid_keyword_system/hybrid_keyword_management.md) | 하이브리드 키워드 관리 시스템 |
 
 ### 🔍 빠른 참조
 
@@ -148,6 +160,7 @@ LawFirmAI/
 - **데이터 처리**: [전처리 가이드](docs/03_data_processing/preprocessing_guide.md)
 - **RAG 시스템**: [RAG 아키텍처](docs/05_rag_system/rag_architecture.md)
 - **성능 최적화**: [모델 벤치마크](docs/06_models_performance/model_benchmark.md)
+- **키워드 관리**: [하이브리드 키워드 시스템](docs/07_hybrid_keyword_system/hybrid_keyword_management.md)
 
 ## 🛠️ 기술 스택
 
