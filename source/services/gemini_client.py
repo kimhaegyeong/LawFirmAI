@@ -39,7 +39,8 @@ class GeminiClient:
     def __init__(self, 
                  model_name: str = "gemini-2.5-flash-lite",
                  api_key: Optional[str] = None,
-                 timeout: int = 120):
+                 timeout: int = 120,
+                 request_interval: float = 1.0):
         """
         Gemini 클라이언트 초기화
         
@@ -47,9 +48,12 @@ class GeminiClient:
             model_name: 사용할 Gemini 모델명
             api_key: Google API 키 (None이면 환경변수에서 로드)
             timeout: 요청 타임아웃 (초)
+            request_interval: 요청 간 인터벌 (초)
         """
         self.model_name = model_name
         self.timeout = timeout
+        self.request_interval = request_interval
+        self.last_request_time = 0
         self.logger = logging.getLogger(__name__)
         
         # API 키 설정
@@ -88,6 +92,9 @@ class GeminiClient:
             GeminiResponse: 생성된 응답
         """
         try:
+            # 요청 간 인터벌 처리
+            self._wait_for_interval()
+            
             self.logger.info(f"Generating response with model {self.model_name}")
             
             # 프롬프트 구성
@@ -159,6 +166,18 @@ class GeminiClient:
         parts.append(f"Question: {prompt}")
         
         return "\n\n".join(parts)
+    
+    def _wait_for_interval(self):
+        """요청 간 인터벌 대기"""
+        current_time = time.time()
+        time_since_last_request = current_time - self.last_request_time
+        
+        if time_since_last_request < self.request_interval:
+            sleep_time = self.request_interval - time_since_last_request
+            self.logger.debug(f"Waiting {sleep_time:.2f} seconds for rate limit")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
     
     def is_available(self) -> bool:
         """Gemini API 사용 가능 여부 확인"""
