@@ -29,6 +29,15 @@ class DatabaseManager:
         """데이터베이스 연결 컨텍스트 매니저"""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        
+        # FTS5 확장 활성화 (Windows 호환)
+        try:
+            # Windows에서는 FTS5가 기본적으로 포함되어 있음
+            conn.execute("SELECT fts5(1)")
+        except Exception as e:
+            logger.warning(f"FTS5 not available: {e}")
+            # FTS5가 없어도 계속 진행
+        
         try:
             yield conn
         except Exception as e:

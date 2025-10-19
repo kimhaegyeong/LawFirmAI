@@ -29,15 +29,15 @@ class ResultMerger:
         self.logger.info("ResultMerger initialized")
     
     def merge_results(self, 
-                     exact_results: List[Any], 
-                     semantic_results: List[Any],
+                     exact_results: Dict[str, List[Dict[str, Any]]], 
+                     semantic_results: List[Dict[str, Any]],
                      weights: Dict[str, float] = None) -> List[MergedResult]:
         """
         검색 결과 병합
         
         Args:
-            exact_results: 정확한 검색 결과
-            semantic_results: 의미적 검색 결과
+            exact_results: 정확한 검색 결과 (딕셔너리)
+            semantic_results: 의미적 검색 결과 (리스트)
             weights: 가중치 딕셔너리
             
         Returns:
@@ -48,25 +48,28 @@ class ResultMerger:
         
         merged_results = []
         
-        # 정확한 검색 결과 처리
-        for result in exact_results:
-            merged_result = MergedResult(
-                text=result.text,
-                score=result.score * weights["exact"],
-                source="exact",
-                metadata=result.metadata
-            )
-            merged_results.append(merged_result)
+        # 정확한 검색 결과 처리 (딕셔너리 형태)
+        for search_type, results in exact_results.items():
+            for result in results:
+                if isinstance(result, dict):
+                    merged_result = MergedResult(
+                        text=result.get('text', ''),
+                        score=result.get('similarity', result.get('score', 0.0)) * weights["exact"],
+                        source=f"exact_{search_type}",
+                        metadata=result.get('metadata', result)
+                    )
+                    merged_results.append(merged_result)
         
-        # 의미적 검색 결과 처리
+        # 의미적 검색 결과 처리 (리스트 형태)
         for result in semantic_results:
-            merged_result = MergedResult(
-                text=result.text,
-                score=result.score * weights["semantic"],
-                source="semantic",
-                metadata=result.metadata
-            )
-            merged_results.append(merged_result)
+            if isinstance(result, dict):
+                merged_result = MergedResult(
+                    text=result.get('text', ''),
+                    score=result.get('similarity', result.get('score', 0.0)) * weights["semantic"],
+                    source="semantic",
+                    metadata=result.get('metadata', result)
+                )
+                merged_results.append(merged_result)
         
         return merged_results
 
@@ -90,6 +93,9 @@ class ResultRanker:
         Returns:
             List[MergedResult]: 순위가 매겨진 결과
         """
+        if not results:
+            return []
+        
         # 중복 제거 (텍스트 기준)
         unique_results = {}
         for result in results:
