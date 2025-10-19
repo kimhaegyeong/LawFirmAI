@@ -67,6 +67,24 @@ class AutoDataDetector:
                 'metadata_key': 'category',
                 'expected_value': 'family'
             },
+            'precedent_tax': {
+                'file_pattern': r'precedent_tax_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/tax',
+                'metadata_key': 'category',
+                'expected_value': 'tax'
+            },
+            'precedent_administrative': {
+                'file_pattern': r'precedent_administrative_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/administrative',
+                'metadata_key': 'category',
+                'expected_value': 'administrative'
+            },
+            'precedent_patent': {
+                'file_pattern': r'precedent_patent_page_\d+_\d+_\d+_\d+\.json',
+                'directory_pattern': r'\d{8}/patent',
+                'metadata_key': 'category',
+                'expected_value': 'patent'
+            },
             'precedents': {
                 'file_pattern': r'precedent_page_\d+_\d+\.json',
                 'directory_pattern': r'\d{8}',
@@ -87,6 +105,9 @@ class AutoDataDetector:
             'precedent_civil': 'data/raw/assembly/precedent',
             'precedent_criminal': 'data/raw/assembly/precedent',
             'precedent_family': 'data/raw/assembly/precedent',
+            'precedent_tax': 'data/raw/assembly/precedent',
+            'precedent_administrative': 'data/raw/assembly/precedent',
+            'precedent_patent': 'data/raw/assembly/precedent',
             'precedents': 'data/raw/assembly/precedents',
             'constitutional': 'data/raw/constitutional'
         }
@@ -160,9 +181,9 @@ class AutoDataDetector:
                 else:
                     logger.debug(f"File already processed: {file_path}")
         
-        # 하위 카테고리 폴더 스캔 (precedent의 경우 civil, criminal, family 등)
+        # 하위 카테고리 폴더 스캔 (precedent의 경우 civil, criminal, family, tax 등)
         for subfolder in folder.iterdir():
-            if subfolder.is_dir() and subfolder.name in ['civil', 'criminal', 'family']:
+            if subfolder.is_dir() and subfolder.name in ['civil', 'criminal', 'family', 'tax']:
                 logger.debug(f"Scanning category subfolder: {subfolder.name}")
                 self._scan_folder_for_files(subfolder, detected_files, data_type)
     
@@ -237,6 +258,8 @@ class AutoDataDetector:
                                     return 'precedent_criminal'
                                 elif field == '가사':
                                     return 'precedent_family'
+                                elif field == '조세':
+                                    return 'precedent_tax'
                             return 'precedents'
             
             logger.warning(f"Could not classify file: {file_path}")
