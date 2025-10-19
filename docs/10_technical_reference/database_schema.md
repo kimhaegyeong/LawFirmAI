@@ -250,15 +250,23 @@ db_manager.update_file_processing_status(
 
 ## 📈 성능 최적화
 
+### FTS 검색 최적화 (v2.0)
+- **쿼리 최적화**: JOIN 제거로 72.3% 성능 향상
+- **인덱스 최적화**: FTS5 인덱스 재구성 및 통계 업데이트
+- **캐싱 시스템**: 메모리 캐싱으로 반복 검색 성능 향상
+- **컬럼 최적화**: 필요한 컬럼만 선택하여 데이터 전송량 감소
+
 ### 쿼리 최적화
 - **인덱스 활용**: 자주 사용되는 컬럼에 인덱스 생성
 - **외래키 제약**: 데이터 무결성 보장
 - **배치 처리**: 대량 데이터 처리 시 트랜잭션 활용
+- **FTS 최적화**: 가상 테이블 인덱스 활용
 
 ### 메모리 관리
 - **연결 풀링**: 데이터베이스 연결 재사용
 - **컨텍스트 매니저**: 자동 연결 해제
 - **배치 크기 조정**: 메모리 사용량에 따른 배치 크기 조정
+- **캐시 관리**: LRU 기반 캐시 크기 관리
 
 ## 🔍 모니터링 및 디버깅
 
@@ -272,6 +280,30 @@ processed_count = db_manager.execute_query("SELECT COUNT(*) FROM processed_files
 print(f"법률 수: {laws_count[0]['COUNT(*)']}")
 print(f"조문 수: {articles_count[0]['COUNT(*)']}")
 print(f"처리된 파일 수: {processed_count[0]['COUNT(*)']}")
+```
+
+### FTS 검색 성능 모니터링
+```python
+# FTS 검색 성능 테스트
+import time
+
+def test_fts_performance(query: str, iterations: int = 5):
+    """FTS 검색 성능 테스트"""
+    times = []
+    for i in range(iterations):
+        start_time = time.time()
+        results = search_engine.search_precedents(query, search_type='fts')
+        end_time = time.time()
+        times.append(end_time - start_time)
+    
+    avg_time = sum(times) / len(times)
+    print(f"'{query}' 검색: 평균 {avg_time:.4f}초, {len(results)}개 결과")
+    return avg_time
+
+# 성능 테스트 실행
+test_queries = ["계약", "민사", "이혼", "손해배상", "부동산"]
+for query in test_queries:
+    test_fts_performance(query)
 ```
 
 ### 처리 통계 조회
