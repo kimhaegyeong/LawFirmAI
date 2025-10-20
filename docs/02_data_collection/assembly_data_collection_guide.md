@@ -25,7 +25,10 @@ playwright install chromium
 ### 2. 환경 설정
 
 ```bash
-# 환경변수 파일 복사
+# 환경변수 파일 복사 (프로젝트 루트)
+cp env.example .env
+
+# 또는 Gradio용 환경변수 파일 복사
 cp gradio/env_example.txt .env
 
 # .env 파일 편집하여 실제 값 입력
@@ -141,16 +144,21 @@ python scripts/data_processing/migrate_family_to_tax.py
 ### 수집된 파일 구조
 
 ```
-data/raw/assembly/precedent/20251017/
-├── tax/                                    # 조세 판례 (마이그레이션됨)
-│   ├── collection_summary_*.json           # 수집 요약 정보
-│   ├── precedent_tax_page_*.json          # 페이지별 판례 데이터
+data/raw/assembly/
+├── law/                                    # 법령 데이터
+│   ├── 20251010/                          # 날짜별 수집
+│   ├── 20251011/
 │   └── ...
-├── family/                                 # 가사 판례 (실제 가사 사건)
-├── civil/                                  # 민사 판례
-├── criminal/                               # 형사 판례
-├── administrative/                         # 행정 판례
-└── patent/                                 # 특허 판례
+└── precedent/                              # 판례 데이터
+    ├── 20251017/                          # 날짜별 수집
+    │   ├── tax/                           # 조세 판례 (마이그레이션됨)
+    │   ├── family/                        # 가사 판례 (실제 가사 사건)
+    │   ├── civil/                         # 민사 판례
+    │   ├── criminal/                      # 형사 판례
+    │   ├── administrative/                # 행정 판례
+    │   └── patent/                        # 특허 판례
+    ├── 20251018/
+    └── ...
 ```
 
 ### 판례 데이터 구조
@@ -234,7 +242,10 @@ grep "civil" logs/precedent_category_collection.log
 # 체크포인트 파일 확인
 ls data/checkpoints/precedents_*/
 
-# 수집된 파일 수 확인
+# 수집된 파일 수 확인 (최신 날짜 기준)
+find data/raw/assembly/precedent/$(date +%Y%m%d) -name "*.json" | wc -l
+
+# 특정 카테고리 파일 수 확인
 find data/raw/assembly/precedent/20251017/tax -name "*.json" | wc -l
 ```
 
@@ -243,6 +254,9 @@ find data/raw/assembly/precedent/20251017/tax -name "*.json" | wc -l
 ```bash
 # 수집 요약 정보 확인
 cat data/raw/assembly/precedent/20251017/tax/collection_summary_*.json | jq '.collection_info'
+
+# 최신 수집 데이터 확인
+ls -la data/raw/assembly/precedent/$(date +%Y%m%d)/
 ```
 
 ## 다음 단계

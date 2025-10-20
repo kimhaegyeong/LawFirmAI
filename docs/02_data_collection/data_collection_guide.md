@@ -21,8 +21,11 @@ export LAW_OPEN_API_OC='your_email_id_here'
 ### 2. 환경 설정
 
 ```bash
-# 환경변수 파일 복사
+# 환경변수 파일 복사 (프로젝트 루트)
 cp env.example .env
+
+# 또는 Gradio용 환경변수 파일 복사
+cp gradio/env_example.txt .env
 
 # .env 파일 편집하여 실제 값 입력
 nano .env
@@ -34,9 +37,12 @@ $env:LAW_OPEN_API_OC={OC}
 ### 3. 필요한 디렉토리 생성
 
 ```bash
-mkdir -p data/raw/{laws,precedents,constitutional_decisions,legal_interpretations,administrative_rules,local_ordinances}
-mkdir -p data/processed/{laws,precedents,constitutional_decisions,legal_interpretations,administrative_rules,local_ordinances}
+# 기본 데이터 디렉토리
+mkdir -p data/raw/assembly/{law,precedent}
+mkdir -p data/processed/assembly
 mkdir -p data/embeddings
+mkdir -p data/cache
+mkdir -p data/checkpoints
 mkdir -p logs
 ```
 
@@ -149,13 +155,13 @@ python scripts/data_processing/migrate_family_to_tax.py
 #### 전체 파이프라인 실행
 ```bash
 # 데이터 수집 + 벡터DB 구축 (전체)
-python scripts/run_data_pipeline.py --mode full --oc your_email_id
+python scripts/data_processing/run_data_pipeline.py --mode full --oc your_email_id
 
 # 데이터 수집만
-python scripts/run_data_pipeline.py --mode collect --oc your_email_id
+python scripts/data_processing/run_data_pipeline.py --mode collect --oc your_email_id
 
 # 벡터DB 구축만
-python scripts/run_data_pipeline.py --mode build
+python scripts/data_processing/run_data_pipeline.py --mode build
 ```
 
 ### 2. 판례 수집 (NEW - 개선된 기능)
@@ -221,31 +227,31 @@ page_003_행정_20250101-20250150_50건_20250925_162715.json
 #### 개별 데이터 타입별 수집
 ```bash
 # 법령 데이터만 수집
-python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민법" --display 50
+python scripts/data_processing/run_data_pipeline.py --mode laws --oc your_email_id --query "민법" --display 50
 
 # 판례 데이터만 수집 (기존 방식)
-python scripts/run_data_pipeline.py --mode precedents --oc your_email_id --query "계약 해지" --display 100
+python scripts/data_processing/run_data_pipeline.py --mode precedents --oc your_email_id --query "계약 해지" --display 100
 
 # 헌재결정례만 수집
-python scripts/run_data_pipeline.py --mode constitutional --oc your_email_id --query "헌법" --display 50
+python scripts/data_processing/run_data_pipeline.py --mode constitutional --oc your_email_id --query "헌법" --display 50
 
 # 법령해석례만 수집
-python scripts/run_data_pipeline.py --mode interpretations --oc your_email_id --query "법령해석" --display 50
+python scripts/data_processing/run_data_pipeline.py --mode interpretations --oc your_email_id --query "법령해석" --display 50
 
 # 행정규칙만 수집
-python scripts/run_data_pipeline.py --mode administrative --oc your_email_id --query "행정규칙" --display 50
+python scripts/data_processing/run_data_pipeline.py --mode administrative --oc your_email_id --query "행정규칙" --display 50
 
 # 자치법규만 수집
-python scripts/run_data_pipeline.py --mode local --oc your_email_id --query "자치법규" --display 50
+python scripts/data_processing/run_data_pipeline.py --mode local --oc your_email_id --query "자치법규" --display 50
 ```
 
 #### 여러 데이터 타입 동시 수집
 ```bash
 # 법령, 판례, 헌재결정례 동시 수집
-python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents constitutional
+python scripts/data_processing/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents constitutional
 
 # 특정 쿼리로 여러 타입 수집
-python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents --query "계약"
+python scripts/data_processing/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents --query "계약"
 ```
 
 ### 2. 개별 스크립트 사용
@@ -253,27 +259,23 @@ python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types 
 #### 데이터 수집 전용 스크립트
 ```bash
 # 개별 타입 수집
-python scripts/collect_data_only.py --mode laws --oc your_email_id --query "민법"
-python scripts/collect_data_only.py --mode precedents --oc your_email_id --query "계약 해지"
+python scripts/data_collection/qa_generation/collect_data_only.py --mode laws --oc your_email_id --query "민법"
+python scripts/data_collection/qa_generation/collect_data_only.py --mode precedents --oc your_email_id --query "계약 해지"
 
 # 여러 타입 동시 수집
-python scripts/collect_data_only.py --mode multiple --oc your_email_id --types laws precedents constitutional
+python scripts/data_collection/qa_generation/collect_data_only.py --mode multiple --oc your_email_id --types laws precedents constitutional
 
 # 모든 타입 수집
-python scripts/collect_data_only.py --mode collect --oc your_email_id
+python scripts/data_collection/qa_generation/collect_data_only.py --mode collect --oc your_email_id
 ```
 
-#### 벡터DB 구축 전용 스크립트
+#### 벡터DB 구축
 ```bash
-# 개별 타입 벡터DB 구축
-python scripts/build_vector_db.py --mode laws
-python scripts/build_vector_db.py --mode precedents
+# 벡터DB 구축은 통합 파이프라인을 통해 수행
+python scripts/data_processing/run_data_pipeline.py --mode build
 
-# 여러 타입 동시 벡터DB 구축
-python scripts/build_vector_db.py --mode multiple --types laws precedents constitutional
-
-# 모든 타입 벡터DB 구축
-python scripts/build_vector_db.py --mode build
+# 또는 개별 데이터 처리 스크립트 사용
+python scripts/data_processing/build_vector_index.py
 ```
 
 ### 3. 레거시 스크립트 (호환성)
@@ -320,35 +322,35 @@ python scripts/validate_data_quality.py
 ### 1. 전체 파이프라인 (`--mode full`)
 ```bash
 # 모든 데이터 타입 수집 + 벡터DB 구축
-python scripts/run_data_pipeline.py --mode full --oc your_email_id
+python scripts/data_processing/run_data_pipeline.py --mode full --oc your_email_id
 ```
 
 ### 2. 데이터 수집만 (`--mode collect`)
 ```bash
 # 모든 데이터 타입 수집 (JSON 저장)
-python scripts/run_data_pipeline.py --mode collect --oc your_email_id
+python scripts/data_processing/run_data_pipeline.py --mode collect --oc your_email_id
 ```
 
 ### 3. 벡터DB 구축만 (`--mode build`)
 ```bash
 # 수집된 JSON 파일을 기반으로 벡터DB 구축
-python scripts/run_data_pipeline.py --mode build
+python scripts/data_processing/run_data_pipeline.py --mode build
 ```
 
 ### 4. 개별 데이터 타입 수집
 ```bash
 # 특정 데이터 타입만 수집
-python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민법" --display 100
-python scripts/run_data_pipeline.py --mode precedents --oc your_email_id --query "계약 해지" --display 200
+python scripts/data_processing/run_data_pipeline.py --mode laws --oc your_email_id --query "민법" --display 100
+python scripts/data_processing/run_data_pipeline.py --mode precedents --oc your_email_id --query "계약 해지" --display 200
 ```
 
 ### 5. 여러 데이터 타입 동시 수집 (`--mode all_types`)
 ```bash
 # 지정된 여러 타입 동시 수집
-python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents constitutional
+python scripts/data_processing/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents constitutional
 
 # 특정 쿼리로 여러 타입 수집
-python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents --query "계약"
+python scripts/data_processing/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents --query "계약"
 ```
 
 ## 데이터 구조
