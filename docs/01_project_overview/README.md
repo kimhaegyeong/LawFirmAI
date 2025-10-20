@@ -7,13 +7,12 @@
 - **[프로젝트 개요](project_overview.md)**: LawFirmAI 프로젝트의 목표, 완성된 기능, 기술적 개선사항 및 향후 계획
 - **[개발 규칙 및 가이드라인](development_rules.md)**: 서버 관리, PID 파일 처리, 디렉토리 구조, 로깅, 보안, 테스팅 등 개발 관련 규칙
 - **[한국어 인코딩 개발 규칙](encoding_development_rules.md)**: Windows 환경의 CP949 인코딩 문제 해결을 위한 개발 규칙
+- **[Phase 구현 가이드](Phase_Implementation_Guide.md)**: Phase 1-3 구현 방법 및 사용법
+- **[서비스 아키텍처](Service_Architecture.md)**: 80+ 서비스로 구성된 시스템 아키텍처
+- **[프로젝트 완료 보고서](Project_Completion_Report.md)**: 프로젝트 성과 및 완료 상태
 
 ## 🔗 관련 섹션
 
 - [02_Data_Collection](../02_data_collection/README.md): 데이터 수집 방법
 - [07_Deployment_Operations](../07_deployment_operations/README.md): 배포 및 운영
 - [09_User_Guide](../09_user_guide/README.md): 사용자 가이드
-
----
-
-**LawFirmAI 개발팀**

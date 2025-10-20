@@ -4,15 +4,6 @@
 
 LawFirmAI의 Phase 1-3 구현 가이드입니다. 각 Phase의 목표, 구현 방법, 사용법을 상세히 설명합니다.
 
-## 목차
-
-1. [Phase 개요](#phase-개요)
-2. [Phase 1: 대화 맥락 강화](#phase-1-대화-맥락-강화)
-3. [Phase 2: 개인화 및 지능형 분석](#phase-2-개인화-및-지능형-분석)
-4. [Phase 3: 장기 기억 및 품질 모니터링](#phase-3-장기-기억-및-품질-모니터링)
-5. [Phase 통합 및 최적화](#phase-통합-및-최적화)
-6. [문제 해결](#문제-해결)
-
 ## Phase 개요
 
 ### Phase 구조
@@ -132,35 +123,6 @@ compressed_context = compressor.compress_context(long_context)
 print(f"압축률: {compressor.get_compression_ratio()}")
 ```
 
-### Phase 1 테스트
-
-**파일**: `tests/test_phase1_context_enhancement.py`
-
-```python
-import pytest
-from source.services.integrated_session_manager import IntegratedSessionManager
-from source.services.multi_turn_handler import MultiTurnQuestionHandler
-from source.services.context_compressor import ContextCompressor
-
-def test_phase1_integration():
-    """Phase 1 통합 테스트"""
-    # 세션 관리자 테스트
-    session_manager = IntegratedSessionManager(":memory:")
-    session_id = session_manager.create_session("test_user")
-    
-    # 다중 턴 처리 테스트
-    multi_turn_handler = MultiTurnQuestionHandler()
-    result = multi_turn_handler.process_question("그럼 어떻게 되나요?", "민법 제750조에 대해 설명해주세요")
-    
-    # 컨텍스트 압축 테스트
-    compressor = ContextCompressor(max_tokens=100)
-    compressed = compressor.compress_context("긴 대화 내용...")
-    
-    assert session_id is not None
-    assert "민법 제750조" in result
-    assert len(compressed) < len("긴 대화 내용...")
-```
-
 ## Phase 2: 개인화 및 지능형 분석
 
 ### 목표
@@ -252,35 +214,6 @@ conversation_history = [
 result = flow_tracker.analyze_flow(conversation_history)
 print(f"예상 다음 의도: {result.predicted_intent}")
 print(f"제안 질문: {result.suggested_questions}")
-```
-
-### Phase 2 테스트
-
-**파일**: `tests/test_phase2_personalization_analysis.py`
-
-```python
-import pytest
-from source.services.user_profile_manager import UserProfileManager, ExpertiseLevel
-from source.services.emotion_intent_analyzer import EmotionIntentAnalyzer
-from source.services.conversation_flow_tracker import ConversationFlowTracker
-
-def test_phase2_integration():
-    """Phase 2 통합 테스트"""
-    # 프로필 관리 테스트
-    profile_manager = UserProfileManager()
-    profile_manager.create_profile("test_user", ExpertiseLevel.BEGINNER)
-    
-    # 감정/의도 분석 테스트
-    analyzer = EmotionIntentAnalyzer()
-    result = analyzer.analyze("도와주세요!")
-    
-    # 대화 흐름 추적 테스트
-    flow_tracker = ConversationFlowTracker()
-    flow_result = flow_tracker.analyze_flow([{"role": "user", "content": "테스트"}])
-    
-    assert profile_manager.get_profile("test_user") is not None
-    assert result.emotion is not None
-    assert flow_result.predicted_intent is not None
 ```
 
 ## Phase 3: 장기 기억 및 품질 모니터링
@@ -381,35 +314,6 @@ memory_optimizer.optimize_memory()
 cache_manager.set_cache_size(1000)
 ```
 
-### Phase 3 테스트
-
-**파일**: `tests/test_phase3_memory_quality.py`
-
-```python
-import pytest
-from source.services.contextual_memory_manager import ContextualMemoryManager
-from source.services.conversation_quality_monitor import ConversationQualityMonitor
-from source.utils.performance_optimizer import PerformanceMonitor
-
-def test_phase3_integration():
-    """Phase 3 통합 테스트"""
-    # 메모리 관리 테스트
-    memory_manager = ContextualMemoryManager()
-    memory_manager.store_memory("test_user", "테스트 메모리", 0.8)
-    
-    # 품질 모니터링 테스트
-    quality_monitor = ConversationQualityMonitor()
-    quality_result = quality_monitor.evaluate_quality({"messages": []})
-    
-    # 성능 모니터링 테스트
-    perf_monitor = PerformanceMonitor()
-    perf_monitor.start_monitoring()
-    
-    assert memory_manager.search_memories("test_user", "테스트") is not None
-    assert quality_result.completeness_score >= 0
-    assert perf_monitor.is_monitoring()
-```
-
 ## Phase 통합 및 최적화
 
 ### ChatService 통합
@@ -495,33 +399,6 @@ perf_monitor.start_monitoring()
 metrics = perf_monitor.get_metrics()
 print(f"평균 응답 시간: {metrics['avg_response_time']}초")
 print(f"캐시 히트율: {metrics['cache_hit_rate']}")
-```
-
-### 디버깅 팁
-
-#### 1. 로그 레벨 설정
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-#### 2. Phase별 디버깅
-```python
-# Phase 1 디버깅
-session_manager = IntegratedSessionManager(":memory:")  # 메모리 DB 사용
-session_id = session_manager.create_session("debug_user")
-print(f"세션 생성: {session_id}")
-
-# Phase 2 디버깅
-analyzer = EmotionIntentAnalyzer()
-result = analyzer.analyze("테스트 메시지")
-print(f"분석 결과: {result}")
-
-# Phase 3 디버깅
-memory_manager = ContextualMemoryManager()
-memory_manager.store_memory("debug_user", "디버그 메모리", 0.5)
-memories = memory_manager.search_memories("debug_user", "디버그")
-print(f"검색된 메모리: {memories}")
 ```
 
 ## 성능 벤치마크

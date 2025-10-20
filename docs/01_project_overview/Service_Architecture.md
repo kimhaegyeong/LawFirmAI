@@ -2,18 +2,7 @@
 
 ## 개요
 
-LawFirmAI의 서비스 아키텍처는 50+ 개의 모듈화된 서비스로 구성되어 있으며, Phase 1-3의 지능형 대화 시스템을 지원합니다.
-
-## 목차
-
-1. [아키텍처 개요](#아키텍처-개요)
-2. [핵심 서비스](#핵심-서비스)
-3. [Phase별 서비스](#phase별-서비스)
-4. [최적화 서비스](#최적화-서비스)
-5. [데이터 관리 서비스](#데이터-관리-서비스)
-6. [API 서비스](#api-서비스)
-7. [서비스 간 통신](#서비스-간-통신)
-8. [확장성 및 유지보수성](#확장성-및-유지보수성)
+LawFirmAI의 서비스 아키텍처는 80+ 개의 모듈화된 서비스로 구성되어 있으며, Phase 1-3의 지능형 대화 시스템을 지원합니다.
 
 ## 아키텍처 개요
 
@@ -21,7 +10,7 @@ LawFirmAI의 서비스 아키텍처는 50+ 개의 모듈화된 서비스로 구�
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Gradio UI (7개 탭)                        │
+│                    Gradio UI (웹 인터페이스)                  │
 ├─────────────────────────────────────────────────────────────┤
 │                    ChatService (통합)                        │
 ├─────────────────────────────────────────────────────────────┤
@@ -48,7 +37,7 @@ LawFirmAI의 서비스 아키텍처는 50+ 개의 모듈화된 서비스로 구�
 | **최적화 서비스** | 12개 | 성능 최적화, 캐싱 |
 | **데이터 서비스** | 8개 | 데이터 관리, 벡터 스토어 |
 | **API 서비스** | 6개 | REST API, 엔드포인트 |
-| **기타 서비스** | 10개 | 유틸리티, 모니터링 |
+| **기타 서비스** | 30개 | 유틸리티, 모니터링, LangGraph |
 
 ## 핵심 서비스
 
@@ -122,14 +111,6 @@ class ChatService:
 - 세션 복원
 - 캐시 전략
 
-**아키텍처**:
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Memory    │◄──►│   Session   │◄──►│  Database   │
-│   Cache     │    │  Manager    │    │   Storage   │
-└─────────────┘    └─────────────┘    └─────────────┘
-```
-
 #### 2. MultiTurnQuestionHandler
 **파일**: `source/services/multi_turn_handler.py`
 
@@ -155,18 +136,6 @@ class ChatService:
 - 사용자 프로필 관리
 - 전문성 수준 추적
 - 선호도 학습
-
-**프로필 구조**:
-```python
-class UserProfile:
-    user_id: str
-    expertise_level: ExpertiseLevel
-    detail_level: DetailLevel
-    interest_areas: List[str]
-    preferred_style: str
-    device_info: Dict
-    location_info: Dict
-```
 
 #### 2. EmotionIntentAnalyzer
 **파일**: `source/services/emotion_intent_analyzer.py`
@@ -228,15 +197,7 @@ class UserProfile:
 - 모델 공유
 - 메모리 관리
 
-### 3. OptimizedHybridSearchEngine
-**파일**: `source/services/optimized_hybrid_search_engine.py`
-
-**최적화 기능**:
-- 병렬 검색
-- 결과 캐싱
-- 인덱스 최적화
-
-### 4. IntegratedCacheSystem
+### 3. IntegratedCacheSystem
 **파일**: `source/services/integrated_cache_system.py`
 
 **캐시 전략**:
@@ -301,33 +262,31 @@ CREATE TABLE user_profiles (
 - 세션 관리
 - 메타데이터 관리
 
-## API 서비스
+## LangGraph 워크플로우
 
-### 1. API Endpoints
-**파일**: `source/api/endpoints.py`
+### 1. LegalWorkflow
+**파일**: `source/services/langgraph/legal_workflow.py`
 
-**엔드포인트**:
-- `POST /api/v1/chat` - 기본 채팅
-- `POST /api/v1/chat/ml-enhanced` - ML 강화 채팅
-- `POST /api/v1/chat/intelligent` - 지능형 채팅
-- `POST /api/v1/search` - 검색
-- `GET /api/v1/performance/metrics` - 성능 지표
+**기능**:
+- 법률 질문 처리 워크플로우
+- 상태 기반 처리
+- 체크포인트 관리
 
-### 2. API Schemas
-**파일**: `source/api/schemas.py`
+### 2. KeywordMapper
+**파일**: `source/services/langgraph/keyword_mapper.py`
 
-**스키마 정의**:
-- 요청/응답 모델
-- 데이터 검증
-- 타입 힌트
+**기능**:
+- 키워드 매핑
+- 동의어 처리
+- 검색 최적화
 
-### 3. API Middleware
-**파일**: `source/api/middleware.py`
+### 3. SynonymExpander
+**파일**: `source/services/langgraph/real_gemini_synonym_expander.py`
 
-**미들웨어**:
-- 요청 로깅
-- 에러 처리
-- 성능 모니터링
+**기능**:
+- LLM 기반 동의어 확장
+- 법률 용어 처리
+- 품질 관리
 
 ## 서비스 간 통신
 
@@ -349,18 +308,6 @@ async def process_message_async(message):
     
     search_result, classification = await asyncio.gather(search_task, classify_task)
     return await answer_generator.generate_async(search_result, classification)
-```
-
-### 3. 이벤트 기반 통신
-
-```python
-# 이벤트 발행/구독
-class EventBus:
-    def publish(self, event_type: str, data: Dict):
-        """이벤트 발행"""
-        
-    def subscribe(self, event_type: str, handler: Callable):
-        """이벤트 구독"""
 ```
 
 ## 확장성 및 유지보수성
@@ -407,21 +354,6 @@ class Config:
         self.database_url = os.getenv("DATABASE_URL", "sqlite:///./data/lawfirm.db")
         self.model_path = os.getenv("MODEL_PATH", "./models")
         self.cache_size = int(os.getenv("CACHE_SIZE", "1000"))
-```
-
-### 4. 로깅 및 모니터링
-
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-
-class ServiceBase:
-    def __init__(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
-    
-    def log_performance(self, operation: str, duration: float):
-        self.logger.info(f"{operation} completed in {duration:.2f}s")
 ```
 
 ## 성능 최적화
@@ -575,7 +507,7 @@ RUN pip install -r requirements.txt
 COPY source/ ./source/
 COPY gradio/ ./gradio/
 
-CMD ["python", "gradio/app.py"]
+CMD ["python", "gradio/simple_langchain_app.py"]
 ```
 
 ### 2. 환경별 설정
