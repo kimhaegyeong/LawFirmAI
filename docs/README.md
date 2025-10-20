@@ -12,6 +12,12 @@ LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니�
 
 ## 🆕 최신 업데이트 (2025-10-20)
 
+### 🎯 AKLS 통합 완료: 법률전문대학원협의회 표준판례 통합
+- **AKLS 데이터 통합**: 14개 PDF 파일 처리 완료 (형법, 민법, 상법, 민사소송법 등)
+- **전용 검색 엔진**: AKLS 표준판례 전용 벡터 인덱스 및 검색 시스템 구축
+- **통합 RAG 서비스**: 기존 Assembly 데이터와 AKLS 데이터 통합 검색
+- **Gradio 인터페이스**: AKLS 전용 검색 탭 추가
+
 ### 🎯 Phase 1-3 완료: 지능형 대화 시스템 구축
 - **Phase 1 완료**: 대화 맥락 강화, 다중 턴 질문 처리, 컨텍스트 압축, 영구적 세션 저장
 - **Phase 2 완료**: 개인화 및 지능형 분석, 감정/의도 분석, 대화 흐름 추적, 사용자 프로필 관리
@@ -37,6 +43,7 @@ LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니�
 ### 주요 특징
 
 - ✅ **완전한 RAG 시스템**: LangChain 기반 고도화된 검색 증강 생성
+- ✅ **AKLS 통합**: 법률전문대학원협의회 표준판례 완전 통합
 - ✅ **하이브리드 검색**: 의미적 검색 + 정확 매칭 통합 시스템
 - ✅ **실제 소스 검색**: 법률/판례 데이터베이스에서 실제 근거 자료 제공
 - ✅ **ML 강화 서비스**: 품질 기반 문서 필터링 및 검색
@@ -94,6 +101,7 @@ python app.py
 
 ### 데이터 처리 성과
 - ✅ **7,680개 법률 문서**: 완전한 전처리 및 구조화
+- ✅ **AKLS 표준판례**: 14개 PDF 파일 처리 완료
 - ✅ **155,819개 벡터 임베딩**: 고품질 의미적 표현 생성
 - ✅ **456.5 MB FAISS 인덱스**: 고속 검색을 위한 최적화
 - ✅ **326.7 MB 메타데이터**: 상세한 문서 정보 관리
@@ -262,6 +270,7 @@ LawFirmAI/
 - **성능 최적화**: [모델 벤치마크](docs/06_models_performance/model_benchmark.md)
 - **키워드 관리**: [하이브리드 키워드 시스템](docs/07_hybrid_keyword_system/hybrid_keyword_management.md)
 - **API 사용**: [API 문서](docs/08_api_documentation/API_Documentation.md)
+- **AKLS 통합**: [AKLS 통합 가이드](docs/08_akls_integration/akls_integration_guide.md)
 - **UI 사용**: [사용자 가이드](docs/09_user_guide/User_Guide_main.md)
 - **배포**: [배포 가이드](docs/07_deployment_operations/Deployment_Guide.md)
 - **문제 해결**: [문제 해결 가이드](docs/10_technical_reference/Troubleshooting_Guide.md)
@@ -356,6 +365,7 @@ python simple_langchain_app.py
 
 ## 📞 문서
 - **문서**: [프로젝트 문서](docs/)
+- **AKLS 통합**: [AKLS 통합 가이드](docs/08_akls_integration/akls_integration_guide.md)
 
 ## 🙏 감사의 말
 
@@ -363,3 +373,4 @@ python simple_langchain_app.py
 - [Gradio](https://github.com/gradio-app/gradio) - 웹 인터페이스
 - [HuggingFace](https://huggingface.co/) - 모델 및 데이터셋
 - [국가법령정보센터](https://www.law.go.kr/) - 법률 데이터 제공
+- [법률전문대학원협의회](https://www.akls.or.kr/) - AKLS 표준판례 데이터 제공
