@@ -1,0 +1,344 @@
+# LawFirmAI 데이터 파이프라인 설정 파일
+# 자동화된 데이터 처리 파이프라인의 모든 설정을 관리합니다.
+
+# 데이터 소스 설정
+data_sources:
+  law_only:
+    enabled: true
+    priority: 1
+    raw_path: "data/raw/assembly/law_only"
+    processed_path: "data/processed/assembly/law_only"
+    file_pattern: "law_only_page_*.json"
+    metadata_key: "data_type"
+    expected_value: "law_only"
+    
+  precedents:
+    enabled: false
+    priority: 2
+    raw_path: "data/raw/assembly/precedents"
+    processed_path: "data/processed/assembly/precedents"
+    file_pattern: "precedent_page_*.json"
+    metadata_key: "data_type"
+    expected_value: "precedents"
+    
+  precedent_civil:
+    enabled: true
+    priority: 2
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/civil"
+    file_pattern: "precedent_civil_page_*.json"
+    metadata_key: "category"
+    expected_value: "civil"
+    
+  precedent_criminal:
+    enabled: true
+    priority: 3
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/criminal"
+    file_pattern: "precedent_criminal_page_*.json"
+    metadata_key: "category"
+    expected_value: "criminal"
+    
+  precedent_family:
+    enabled: true
+    priority: 4
+    raw_path: "data/raw/assembly/precedent"
+    processed_path: "data/processed/assembly/precedent/family"
+    file_pattern: "precedent_family_page_*.json"
+    metadata_key: "category"
+    expected_value: "family"
+    
+  constitutional:
+    enabled: false
+    priority: 3
+    raw_path: "data/raw/constitutional"
+    processed_path: "data/processed/constitutional"
+    file_pattern: "constitutional_page_*.json"
+    metadata_key: "data_type"
+    expected_value: "constitutional"
+    
+  akls_precedents:
+    enabled: true
+    priority: 5
+    raw_path: "data/raw/akls"
+    processed_path: "data/processed/akls"
+    file_pattern: "*.pdf"
+    metadata_key: "source"
+    expected_value: "akls"
+    document_type: "standard_precedent"
+
+# 전처리 설정
+preprocessing:
+  batch_size: 100
+  enable_term_normalization: true
+  enable_ml_enhancement: true
+  chunk_size: 200
+  max_file_size_mb: 100
+  output_format: "json"
+  
+  # 법률 용어 정규화 설정
+  term_normalization:
+    enabled: true
+    custom_patterns:
+      - pattern: "제(\\d+)조"
+        replacement: "제\\1조"
+      - pattern: "제(\\d+)항"
+        replacement: "제\\1항"
+      - pattern: "제(\\d+)호"
+        replacement: "제\\1호"
+    
+  # 품질 검증 설정
+  quality_validation:
+    enabled: true
+    min_content_length: 10
+    max_content_length: 1000000
+    required_fields: ["law_name", "law_content"]
+    validate_json_structure: true
+
+# 벡터화 설정
+vectorization:
+  model_name: "jhgan/ko-sroberta-multitask"
+  dimension: 768
+  batch_size: 20
+  chunk_size: 200
+  index_type: "flat"
+  
+  # 기존 인덱스 경로
+  existing_index_path: "data/embeddings/ml_enhanced_ko_sroberta"
+  output_path: "data/embeddings/ml_enhanced_ko_sroberta"
+  
+  # 판례 전용 인덱스 경로
+  precedent_index_path: "data/embeddings/ml_enhanced_ko_sroberta_precedents"
+  
+  # AKLS 표준판례 전용 인덱스 경로
+  akls_index_path: "data/embeddings/ml_enhanced_ko_sroberta_akls"
+  
+  # 모델 설정
+  model_settings:
+    device: "cpu"  # "cpu" 또는 "cuda"
+    normalize_embeddings: true
+    max_seq_length: 512
+    
+  # FAISS 인덱스 설정
+  faiss_settings:
+    index_type: "flat"  # "flat", "ivf", "hnsw"
+    metric: "cosine"    # "cosine", "l2", "ip"
+    
+  # 체크포인트 설정
+  checkpoint:
+    enabled: true
+    save_interval: 10  # 매 N개 청크마다 저장
+    max_checkpoints: 5
+
+# 데이터베이스 설정
+database:
+  path: "data/lawfirm.db"
+  incremental_mode: true
+  batch_insert_size: 1000
+  
+  # 테이블 설정
+  tables:
+    assembly_laws:
+      enabled: true
+      fts_enabled: true
+    assembly_articles:
+      enabled: true
+      fts_enabled: true
+    precedent_cases:
+      enabled: true
+      fts_enabled: true
+    precedent_sections:
+      enabled: true
+      fts_enabled: true
+    precedent_parties:
+      enabled: true
+      fts_enabled: false
+    akls_precedents:
+      enabled: true
+      fts_enabled: true
+    akls_sections:
+      enabled: true
+      fts_enabled: true
+    processed_files:
+      enabled: true
+      
+  # 인덱스 설정
+  indices:
+    create_fts_indices: true
+    rebuild_fts_on_update: true
+    optimize_indices: true
+
+# 증분 처리 설정
+incremental:
+  enabled: true
+  check_file_hash: true
+  skip_duplicates: true
+  update_existing: true
+  
+  # 파일 해시 설정
+  file_hash:
+    algorithm: "sha256"
+    check_on_startup: true
+    
+  # 중복 검사 설정
+  duplicate_detection:
+    enabled: true
+    methods: ["file_hash", "content_comparison"]
+    similarity_threshold: 0.95
+
+# 체크포인트 설정
+checkpoint:
+  enabled: true
+  directory: "data/checkpoints"
+  save_interval: 300  # 5분마다 저장
+  max_checkpoints: 10
+  
+  # 체크포인트 데이터
+  save_data:
+    pipeline_state: true
+    processed_files: true
+    error_logs: true
+    statistics: true
+
+# 로깅 설정
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 로그 파일 설정
+  file_logging:
+    enabled: true
+    directory: "logs"
+    filename_pattern: "auto_pipeline_%Y%m%d.log"
+    max_file_size_mb: 100
+    backup_count: 7
+    
+  # 콘솔 로깅 설정
+  console_logging:
+    enabled: true
+    colored_output: true
+
+# 모니터링 설정
+monitoring:
+  enabled: true
+  
+  # 성능 메트릭
+  performance_metrics:
+    track_processing_time: true
+    track_memory_usage: true
+    track_cpu_usage: true
+    track_disk_usage: true
+    
+  # 진행률 표시
+  progress_tracking:
+    enabled: true
+    show_percentage: true
+    show_eta: true
+    update_interval: 1  # 초
+    
+  # 알림 설정
+  notifications:
+    enabled: false
+    email:
+      smtp_server: ""
+      smtp_port: 587
+      username: ""
+      password: ""
+      recipients: []
+
+# 에러 처리 설정
+error_handling:
+  max_retries: 3
+  retry_delay: 5  # 초
+  continue_on_error: true
+  
+  # 에러 분류
+  error_categories:
+    critical: ["database_connection", "file_system"]
+    warning: ["processing_timeout", "memory_limit"]
+    info: ["file_skipped", "duplicate_detected"]
+    
+  # 복구 전략
+  recovery_strategies:
+    database_error: "retry_with_backoff"
+    file_error: "skip_and_continue"
+    memory_error: "reduce_batch_size"
+
+# 성능 최적화 설정
+performance:
+  # 메모리 관리
+  memory_management:
+    max_memory_usage_percent: 80
+    gc_frequency: 100  # 매 N개 파일마다 가비지 컬렉션
+    clear_cache_on_stage: true
+    
+  # 병렬 처리
+  parallel_processing:
+    enabled: false  # 현재는 순차 처리만 지원
+    max_workers: 4
+    chunk_size: 50
+    
+  # I/O 최적화
+  io_optimization:
+    buffer_size: 8192
+    use_compression: false
+    async_io: false
+
+# 보안 설정
+security:
+  # 파일 권한
+  file_permissions:
+    input_files: "644"
+    output_files: "644"
+    log_files: "644"
+    
+  # 데이터 검증
+  data_validation:
+    validate_input_files: true
+    sanitize_output: true
+    check_file_integrity: true
+
+# 테스트 설정
+testing:
+  enabled: false
+  
+  # 테스트 데이터
+  test_data:
+    directory: "tests/data"
+    sample_files: 10
+    
+  # 테스트 실행
+  test_execution:
+    run_unit_tests: true
+    run_integration_tests: true
+    run_performance_tests: false
+    
+  # 테스트 결과
+  test_results:
+    save_reports: true
+    output_directory: "tests/results"
+
+# 환경별 설정 오버라이드
+environments:
+  development:
+    logging:
+      level: "DEBUG"
+    performance:
+      memory_management:
+        max_memory_usage_percent: 90
+        
+  staging:
+    logging:
+      level: "INFO"
+    monitoring:
+      enabled: true
+      
+  production:
+    logging:
+      level: "WARNING"
+    error_handling:
+      continue_on_error: false
+    monitoring:
+      enabled: true
+      notifications:
+        enabled: true

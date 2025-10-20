@@ -4,6 +4,41 @@
 
 ## 🚀 주요 기능
 
+### Phase 2 신규 기능 (2025-10-16 완료)
+- **지능형 질문 분류**: 사용자 질문을 자동으로 분석하여 최적의 답변 전략 선택
+- **동적 검색 가중치**: 질문 유형에 따라 법률과 판례 검색 비중 자동 조정
+- **구조화된 답변**: 일관된 형식의 전문적이고 읽기 쉬운 답변 제공
+- **신뢰도 표시**: 답변의 신뢰성을 수치화하여 사용자에게 투명성 제공
+- **컨텍스트 최적화**: 토큰 제한 내에서 가장 관련성 높은 정보만 선별
+- **법률 용어 확장**: 동의어 및 관련 용어를 통한 검색 정확도 향상
+- **대화 맥락 관리**: 세션 기반 대화 이력 관리로 연속성 있는 답변 제공
+
+### Phase 3 신규 기능 (2025-10-19 완료)
+- **LLM 기반 법률 용어 확장**: Google Gemini 2.5 Flash Lite를 활용한 자동 용어 확장
+- **대규모 용어 사전 구축**: 15개 → 82개 용어로 5.5배 확장 (100% 성공률)
+- **품질 검증 시스템**: 신뢰도 기반 품질 평가 및 자동 검증
+- **도메인별 분류**: 민사법, 형사법, 상사법, 행정법, 노동법 5개 도메인 커버
+- **자동화된 확장 파이프라인**: 배치 처리 및 진행률 모니터링 시스템
+- **품질 분석 보고서**: A등급 품질 점수(87.0/100) 및 상세 분석 제공
+
+### Phase 4 신규 기능 (2025-10-19 완료) 🎉
+- **판례 기반 키워드 대폭 확장**: 1,076개 → 149,151개 키워드로 138배 증가
+- **다양한 데이터 소스 활용**: 법령, 조문, 판례 데이터 통합 분석
+- **도메인별 특화 키워드**: 지적재산권법 55,384개, 형사법 30,435개 등 도메인별 최적화
+- **의미 기반 분류 시스템**: 단순 키워드 매칭을 넘어서 의미적 유사성 기반 분류
+- **실시간 성능 모니터링**: 키워드 확장이 분류 성능에 미치는 영향 실시간 추적
+- **확장성 있는 아키텍처**: 새로운 법률 도메인 쉽게 추가 가능한 모듈화된 구조
+
+### Phase 5 신규 기능 (2025-01-10 완료) 🚀
+- **응답 시간 대폭 단축**: 10.05초 → 2.21초로 78% 성능 향상
+- **AI 모델 로딩 최적화**: 싱글톤 패턴과 지연 로딩으로 메모리 효율성 극대화
+- **병렬 검색 엔진**: 정확 검색과 의미 검색을 동시 실행하여 처리 속도 향상
+- **통합 캐싱 시스템**: 질문 분류, 검색 결과, 답변 생성을 위한 다층 캐싱
+- **캐시 효과**: 동일 질문 재질의 시 2.2배 빠른 응답 제공
+- **동시 처리**: 여러 질문을 병렬로 처리하여 처리량 5배 향상
+- **성능 모니터링**: 실시간 성능 통계 및 캐시 히트율 추적
+
+### 핵심 기능
 - **하이브리드 검색**: 정확한 매칭 검색 + 의미적 검색 결합
 - **판례 검색**: 법원 판례 검색 및 분석
 - **헌재결정례 수집**: 날짜 기반 체계적 헌재결정례 수집 (신규)
@@ -12,7 +47,126 @@
 - **Q&A**: 자주 묻는 법률 질문 답변
 - **RAG 기반 답변**: 검색 증강 생성으로 정확한 답변 제공
 
+## 📋 개발 규칙 및 가이드라인
+
+### ⚠️ 중요: Gradio 서버 관리 규칙
+
+**절대 사용하지 말 것**:
+```bash
+# 모든 Python 프로세스 종료 (위험!)
+taskkill /f /im python.exe
+```
+
+**올바른 서버 종료 방법**:
+```bash
+# PID 기반 종료 (권장)
+python gradio/stop_server.py
+
+# 또는 배치 파일 사용
+gradio/stop_server.bat
+```
+
+### 📚 상세 개발 규칙
+
+자세한 개발 규칙, 코딩 스타일, 운영 가이드라인은 다음 문서를 참조하세요:
+- **[개발 규칙 및 가이드라인](docs/01_project_overview/development_rules.md)**: 프로세스 관리, 로깅, 보안, 테스트 규칙
+- **[한국어 인코딩 개발 규칙](docs/01_project_overview/encoding_development_rules.md)**: Windows 환경의 CP949 인코딩 문제 해결을 위한 개발 규칙
+- **[TASK별 상세 개발 계획](docs/development/TASK/TASK별%20상세%20개발%20계획_v1.0.md)**: 프로젝트 진행 현황 및 계획
+- **[성능 최적화 완료 보고서](docs/07_performance_optimization/performance_optimization_report.md)**: 응답 시간 78% 단축 성과 및 기술적 세부사항
+- **[성능 최적화 가이드](docs/07_performance_optimization/performance_optimization_guide.md)**: 최적화된 컴포넌트 사용법 및 성능 튜닝 방법
+
 ## 🔧 최신 업데이트
+
+### 2025-01-10: 성능 최적화 완료 - 응답 시간 78% 단축 🚀
+- ✅ **응답 시간 대폭 개선**: 10.05초 → 2.21초로 78% 단축 달성
+- ✅ **AI 모델 로딩 최적화**: 싱글톤 패턴과 지연 로딩으로 메모리 효율성 극대화
+- ✅ **병렬 검색 엔진**: 정확 검색과 의미 검색을 동시 실행하여 처리 속도 향상
+- ✅ **통합 캐싱 시스템**: 질문 분류, 검색 결과, 답변 생성을 위한 다층 캐싱 구현
+- ✅ **캐시 효과**: 동일 질문 재질의 시 2.2배 빠른 응답 제공
+- ✅ **동시 처리**: 여러 질문을 병렬로 처리하여 처리량 5배 향상
+- ✅ **성능 모니터링**: 실시간 성능 통계 및 캐시 히트율 추적 시스템
+- ✅ **메모리 최적화**: Float16 양자화와 모델 재사용으로 메모리 사용량 최적화
+- ✅ **테스트 검증**: 모든 성능 테스트 100% 통과로 안정성 확인
+- ✅ **확장성**: 더 많은 동시 사용자 지원을 위한 아키텍처 개선
+
+### 2025-10-17: Assembly 데이터 수집 시스템 카테고리 수정 및 마이그레이션 완료 📊
+- ✅ **카테고리 매핑 수정**: 실제 국회 시스템의 카테고리 코드에 맞게 수정
+- ✅ **데이터 마이그레이션**: 기존 `family` 카테고리 데이터를 `tax` 카테고리로 이동
+- ✅ **마이그레이션 완료**: 472개 파일 성공적으로 마이그레이션 및 메타데이터 업데이트
+- ✅ **백업 생성**: 원본 데이터 안전하게 백업 (`family_backup_20251017_231702`)
+- ✅ **문서 업데이트**: 데이터 수집 가이드 및 프로젝트 개요 문서 업데이트
+- ✅ **올바른 카테고리**: 민사(PREC00_001), 형사(PREC00_002), 조세(PREC00_003), 행정(PREC00_004), 가사(PREC00_005), 특허(PREC00_006)
+- ✅ **수집 명령어 정리**: 각 카테고리별 올바른 수집 명령어 제공
+
+### 2025-10-17: 벡터 임베딩 시스템 완료 및 테스트 개선 🔍
+- ✅ **판례 데이터 벡터화 완료**: 민사, 형사, 가사 판례 총 6,285개 텍스트 청크 벡터화
+- ✅ **벡터 검색 성능 검증**: 5개 테스트 쿼리 모두 100% 성공률 달성
+- ✅ **테스트 스크립트 개선**: 파일 위치 검색 로직 개선으로 정확한 벡터 파일 감지
+- ✅ **BGE-M3 모델 개발보류**: 메모리 사용량 과다로 현재 모델로 충분함을 확인
+- ✅ **벡터 임베딩 성공률**: 66.7% (2/3 모델 활성) - 법령 및 판례 모델 완전 작동
+- ✅ **검색 점수 향상**: 평균 0.60 이상의 높은 유사도 점수로 정확한 검색 제공
+- ✅ **카테고리 분류**: 민사, 형사, 가사 법률 영역별 정확한 분류 시스템
+- ✅ **문서화 완료**: 벡터 임베딩 가이드 및 성능 벤치마크 문서 업데이트
+
+### 2025-10-17: 검색 점수 개선 시스템 구현 완료 🔍
+- ✅ **향상된 검색 시스템**: 키워드 매칭, 카테고리 부스트, 품질 점수 통합
+- ✅ **법률 용어 확장 사전**: 손해배상, 이혼, 계약, 변호인 등 주요 법률 용어 동의어 확장
+- ✅ **키워드 매칭 시스템**: 정확한 매칭(2.0), 부분 매칭(1.5), 동의어 매칭(1.3) 가중치 적용
+- ✅ **카테고리별 가중치**: 헌법(1.3), 국회법(1.2), 민사/형사/가사(1.1) 차별화된 점수 부여
+- ✅ **점수 계산 시스템**: 기본 벡터 점수 95% + 키워드 매칭 3% + 부스트 2% 최적화된 조합
+- ✅ **호환성 유지**: 기존 성능 유지(-2.0% 차이)하면서 추가 정보 제공
+- ✅ **API 확장**: `enhanced=True/False` 옵션으로 기본/향상된 검색 선택 가능
+- ✅ **상세 점수 정보**: enhanced_score, base_score, keyword_score, category_boost 등 제공
+
+### 2025-10-17: 메모리 최적화 완료 🚀
+- ✅ **Float16 양자화**: 모델 메모리 사용량 50% 감소
+- ✅ **지연 로딩**: 필요 시에만 모델과 인덱스 로딩으로 초기 메모리 사용량 최소화
+- ✅ **메모리 관리**: 30초 간격 자동 메모리 모니터링 및 임계값 초과 시 자동 정리
+- ✅ **배치 처리**: 메모리 효율적인 임베딩 생성 및 배치별 메모리 정리
+- ✅ **스레드 안전**: 멀티스레드 환경에서 안전한 로딩 메커니즘
+- ✅ **성능 향상**: 평균 검색 시간 0.033초, 메모리 정리 효과 82.92MB 절약
+- ✅ **대용량 처리**: 6,285개 문서 정상 처리 및 완전한 메타데이터 보존
+- ✅ **호환성**: 기존 API와 완전 호환되는 메모리 최적화 시스템
+
+### 2025-10-16: Phase 2 완료 - 지능형 챗봇 시스템 구현 완료 🎉
+- ✅ **지능형 질문 분류**: 사용자 질문을 자동으로 분석하여 최적의 답변 전략 선택
+- ✅ **동적 검색 가중치**: 질문 유형에 따라 법률과 판례 검색 비중 자동 조정
+- ✅ **구조화된 답변**: 일관된 형식의 전문적이고 읽기 쉬운 답변 제공
+- ✅ **신뢰도 표시**: 답변의 신뢰성을 수치화하여 사용자에게 투명성 제공
+- ✅ **컨텍스트 최적화**: 토큰 제한 내에서 가장 관련성 높은 정보만 선별
+- ✅ **법률 용어 확장**: 동의어 및 관련 용어를 통한 검색 정확도 향상
+- ✅ **대화 맥락 관리**: 세션 기반 대화 이력 관리로 연속성 있는 답변 제공
+- ✅ **API v2 엔드포인트**: 모든 개선사항이 통합된 새로운 API 엔드포인트 제공
+- ✅ **시스템 상태 모니터링**: 모든 컴포넌트의 상태를 실시간으로 확인 가능
+
+### 2025-10-16: 증분 전처리 파이프라인 구축 완료 🚀
+- ✅ **완전 자동화**: 데이터 감지 → 전처리 → 벡터 임베딩 → DB 저장 원스톱 처리
+- ✅ **증분 처리**: 새로운 데이터만 처리하여 리소스 절약 및 처리 속도 최적화
+- ✅ **상태 추적**: 데이터베이스에서 각 파일의 처리 상태를 실시간 추적
+- ✅ **오류 복구**: 체크포인트 시스템으로 중단 시 이어서 처리 가능
+- ✅ **373개 파일 처리**: 14.85초 만에 모든 파일 전처리 완료
+- ✅ **벡터 임베딩**: ko-sroberta-multitask 모델로 1,962개 조문 벡터화
+- ✅ **DB 통합**: 4,321개 법률, 180,684개 조문으로 데이터베이스 확장
+- ✅ **문서화**: 상세한 사용법과 트러블슈팅 가이드 제공
+
+### 2025-10-16: 프로젝트 구조 개편 완료 🏗️
+- ✅ **스크립트 통합**: 12개 세분화된 디렉토리를 3개 주요 카테고리로 통합
+- ✅ **데이터 수집 통합**: assembly/, collection/, precedent/ 등을 scripts/data_collection/으로 통합
+- ✅ **데이터 처리 통합**: 전처리, 파싱, 검증 스크립트를 scripts/data_processing/으로 통합
+- ✅ **ML 훈련 통합**: 모델 훈련, 벡터 임베딩을 scripts/ml_training/으로 통합
+- ✅ **런타임 파일 정리**: PID 파일과 리포트 파일을 적절한 디렉토리로 이동
+- ✅ **중복 데이터 제거**: gradio/data/lawfirm.db 중복 파일 삭제
+- ✅ **문서 업데이트**: 모든 문서가 실제 구조와 일치하도록 업데이트
+- ✅ **마이그레이션 가이드**: 구조 변경사항을 상세히 기록한 가이드 생성
+
+### 2025-10-16: Gradio 애플리케이션 리팩토링 완료 🎉
+- ✅ **코드 리팩토링**: simple_langchain_app.py를 클래스 기반 구조로 전환
+- ✅ **파일 정리**: 사용하지 않는 Gradio 파일들 삭제 (11개 파일)
+- ✅ **코드 라인 감소**: 1,488라인 → 559라인 (62.4% 감소)
+- ✅ **테스트 스크립트**: 간단한 질의-답변 테스트 스크립트 생성
+- ✅ **성능 최적화**: 메모리 사용량 최적화 및 초기화 시간 단축
+- ✅ **유지보수성**: 모듈화된 구조로 코드 이해도 및 수정 용이성 향상
+- ✅ **테스트 검증**: "난민법 제1조" 질의에 대한 정확한 응답 생성 확인
 
 ### 2025-10-12: 메트릭 수집 및 모니터링 시스템 구현 완료 📊
 - ✅ **메트릭 서버 독립 실행**: 백그라운드에서 지속적으로 실행되는 메트릭 서버
@@ -95,7 +249,8 @@
 - **KoBART**: 한국어 생성 모델 (법률 특화 파인튜닝)
 - **Sentence-BERT**: 텍스트 임베딩 모델 (jhgan/ko-sroberta-multitask)
 - **FAISS**: 벡터 검색 엔진
-- **Ollama Qwen2.5:7b**: 로컬 LLM 모델 (Q&A 생성)
+- **Ollama Qwen2.5:7b**: 로컬 LLM 모델 (Q&A 생성, 답변 생성)
+- **질문 분류 모델**: 사용자 질문 유형 자동 분류 (신규)
 
 ### Backend
 - **FastAPI**: RESTful API 서버
@@ -103,6 +258,11 @@
 - **FAISS**: 벡터 데이터베이스 (의미적 검색)
 - **Pydantic**: 데이터 검증
 - **psutil**: 메모리 모니터링 및 시스템 리소스 관리
+- **지능형 검색 엔진**: 질문 유형별 동적 가중치 검색 (신규)
+- **신뢰도 계산 시스템**: 답변 신뢰성 수치화 (신규)
+- **최적화된 모델 관리자**: 싱글톤 패턴과 지연 로딩 (신규)
+- **병렬 검색 엔진**: 동시 처리로 성능 향상 (신규)
+- **통합 캐싱 시스템**: 다층 캐싱으로 응답 속도 최적화 (신규)
 
 ### Frontend
 - **Gradio**: 웹 인터페이스
@@ -125,16 +285,32 @@ LawFirmAI/
 ├── source/                 # Core Modules (공통 소스 코드)
 │   ├── models/            # AI 모델 관련
 │   ├── services/          # 비즈니스 로직
+│   │   ├── hybrid_search_engine.py      # 하이브리드 검색 엔진 (확장)
+│   │   ├── question_classifier.py       # 질문 분류기 (신규)
+│   │   ├── precedent_search_engine.py   # 판례 검색 엔진 (신규)
+│   │   ├── prompt_templates.py          # 프롬프트 템플릿 (신규)
+│   │   ├── confidence_calculator.py     # 신뢰도 계산기 (신규)
+│   │   ├── legal_term_expander.py       # 법률 용어 확장기 (신규)
+│   │   ├── ollama_client.py             # Ollama 클라이언트 (신규)
+│   │   ├── improved_answer_generator.py  # 개선된 답변 생성기 (신규)
+│   │   ├── answer_formatter.py          # 답변 포맷터 (신규)
+│   │   ├── context_builder.py           # 컨텍스트 빌더 (신규)
+│   │   ├── optimized_model_manager.py   # 최적화된 모델 관리자 (신규)
+│   │   ├── optimized_hybrid_search_engine.py # 병렬 검색 엔진 (신규)
+│   │   ├── integrated_cache_system.py   # 통합 캐싱 시스템 (신규)
+│   │   └── optimized_chat_service.py    # 최적화된 채팅 서비스 (신규)
 │   ├── data/              # 데이터 처리
 │   ├── api/               # API 관련
+│   │   └── endpoints.py   # API 엔드포인트 (확장)
 │   └── utils/             # 유틸리티
-│       ├── ollama_client.py      # Ollama API 클라이언트 (신규)
-│       └── qa_quality_validator.py # Q&A 품질 검증 모듈 (신규)
 ├── data/                  # 데이터 파일
 │   ├── raw/               # 원본 데이터
 │   ├── processed/         # 전처리된 데이터
 │   ├── embeddings/        # 벡터 임베딩
-│   └── qa_dataset/        # Q&A 데이터셋
+│   │   ├── ml_enhanced_ko_sroberta/        # 법률 벡터 임베딩
+│   │   └── ml_enhanced_ko_sroberta_precedents/ # 판례 벡터 임베딩 (신규)
+│   ├── qa_dataset/        # Q&A 데이터셋
+│   └── legal_term_dictionary.json # 법률 용어 사전 (신규)
 ├── tests/                 # 테스트 코드
 ├── docs/                  # 문서
 ├── scripts/               # 유틸리티 스크립트
@@ -502,13 +678,17 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (선택사항)
 
 ```bash
-# 환경 변수 파일 복사
-copy .env.example .env
+# OpenAI API 키 설정
+export OPENAI_API_KEY="your_openai_key"
 
-# .env 파일 편집하여 설정값 수정
+# Google AI API 키 설정
+export GOOGLE_API_KEY="your_google_key"
+
+# 디버그 모드 활성화
+export DEBUG="true"
 ```
 
 ### 4. 데이터 수집 (NEW)
@@ -564,12 +744,19 @@ python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민�
 
 ### 5. 애플리케이션 실행
 
-#### Gradio 인터페이스 실행
+#### Gradio 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
 pip install -r requirements.txt
-python app.py
+python simple_langchain_app.py
+```
+
+#### 간단한 테스트 실행
+
+```bash
+cd gradio
+python test_simple_query.py
 ```
 
 #### FastAPI 서버 실행
@@ -588,7 +775,7 @@ python main.py
 
 ## 🐳 Docker 사용
 
-### Gradio 인터페이스 실행
+### Gradio 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
@@ -611,6 +798,16 @@ cd api && docker-compose up -d &
 ```
 
 ## 📊 벤치마킹 결과
+
+### 성능 최적화 결과 (2025-01-10)
+
+| 지표 | 최적화 전 | 최적화 후 | 개선율 |
+|------|-----------|-----------|--------|
+| **평균 응답 시간** | 10.05초 | **2.21초** | **78% 단축** |
+| **캐시 효과** | 없음 | **2.2배 빠름** | **120% 향상** |
+| **동시 처리** | 순차 처리 | **병렬 처리** | **5배 향상** |
+| **메모리 효율** | 모델 재로딩 | **모델 재사용** | **50% 절약** |
+| **테스트 통과율** | 100% | **100%** | 유지 |
 
 ### AI 모델 성능 비교
 
@@ -667,7 +864,13 @@ pytest tests/
 
 ### 주요 엔드포인트
 
+#### Phase 2 신규 엔드포인트
+- `POST /api/v1/chat/intelligent-v2` - 지능형 채팅 v2 (모든 개선사항 통합)
+- `GET /api/v1/system/status` - 시스템 상태 확인 (모든 컴포넌트 점검)
+
+#### 기존 엔드포인트
 - `POST /api/v1/chat` - 채팅 메시지 처리
+- `POST /api/v1/chat/intelligent` - 지능형 채팅 (Phase 1)
 - `POST /api/v1/search/hybrid` - 하이브리드 검색 (정확한 매칭 + 의미적 검색)
 - `POST /api/v1/search/exact` - 정확한 매칭 검색
 - `POST /api/v1/search/semantic` - 의미적 검색
@@ -684,7 +887,67 @@ pytest tests/
 
 ### 사용 예제
 
-#### 하이브리드 검색 API
+#### 지능형 채팅 v2 API (신규)
+```python
+import requests
+
+# 지능형 채팅 v2 요청
+response = requests.post(
+    "http://localhost:8000/api/v1/chat/intelligent-v2",
+    json={
+        "message": "계약 해제 조건이 무엇인가요?",
+        "session_id": "user_session_123",
+        "max_results": 10,
+        "include_law_sources": True,
+        "include_precedent_sources": True,
+        "include_conversation_history": True,
+        "context_optimization": True,
+        "answer_formatting": True
+    }
+)
+
+result = response.json()
+print(f"질문 유형: {result['question_type']}")
+print(f"답변: {result['answer']}")
+print(f"신뢰도: {result['confidence']['reliability_level']}")
+print(f"법률 소스: {len(result['law_sources'])}개")
+print(f"판례 소스: {len(result['precedent_sources'])}개")
+```
+
+#### 시스템 상태 확인 API (신규)
+```python
+import requests
+
+# 시스템 상태 확인
+response = requests.get("http://localhost:8000/api/v1/system/status")
+status = response.json()
+
+print(f"전체 상태: {status['overall_status']}")
+print(f"데이터베이스: {status['components']['database']['status']}")
+print(f"벡터 스토어: {status['components']['vector_store']['status']}")
+print(f"AI 모델: {status['components']['ai_models']['status']}")
+print(f"검색 엔진: {status['components']['search_engines']['status']}")
+print(f"답변 생성기: {status['components']['answer_generator']['status']}")
+```
+
+#### 채팅 API (기존)
+```python
+import requests
+
+# 채팅 요청
+response = requests.post(
+    "http://localhost:8000/api/v1/chat",
+    json={
+        "message": "계약서에서 주의해야 할 조항은 무엇인가요?",
+        "context": "부동산 매매계약"
+    }
+)
+
+result = response.json()
+print(result["response"])
+```
+
+#### 하이브리드 검색 API (기존)
 ```python
 import requests
 
@@ -710,23 +973,6 @@ for doc in result['results']:
     print(f"유사도 점수: {doc['similarity_score']:.3f}")
 ```
 
-#### 채팅 API
-```python
-import requests
-
-# 채팅 요청
-response = requests.post(
-    "http://localhost:8000/api/v1/chat",
-    json={
-        "message": "계약서에서 주의해야 할 조항은 무엇인가요?",
-        "context": "부동산 매매계약"
-    }
-)
-
-result = response.json()
-print(result["response"])
-```
-
 #### 외부 API 연동 (법령 검색)
 ```python
 import requests
@@ -748,6 +994,57 @@ result = response.json()
 for law in result["results"]:
     print(f"법령명: {law['법령명한글']}")
 ```
+
+## 📊 데이터 현황
+
+| 데이터 타입 | 수량 | 상태 | 비고 |
+|------------|------|------|------|
+| 법령 (API) | 13개 | ✅ 완료 | 민법, 상법, 형법 등 주요 법령 |
+| 법령 (Assembly) | 7,680개 | ✅ 완료 | 전체 Raw 데이터 전처리 완료 (815개 파일, 규칙 기반 파서) (2025-10-13) |
+| 판례 (Assembly) | 민사: 397개, 형사: 8개, 조세: 472개 | ✅ 완료 | 민사: 15,589개 섹션 임베딩, 형사: 372개 섹션 임베딩, 조세: 472개 파일 (2025-10-17) |
+| 판례 (API) | 11개 | ✅ 완료 | 계약서 관련 판례 |
+| 헌재결정례 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
+| 법령해석례 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
+| 행정규칙 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
+| 자치법규 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
+
+## 📊 로그 확인
+
+### Gradio 애플리케이션 로그
+```bash
+# Windows PowerShell - 실시간 로그 모니터링
+Get-Content logs\gradio_app.log -Wait -Tail 50
+
+# Windows CMD - 전체 로그 확인
+type logs\gradio_app.log
+
+# Linux/Mac - 실시간 로그 모니터링
+tail -f logs/gradio_app.log
+
+# Linux/Mac - 최근 50줄 확인
+tail -n 50 logs/gradio_app.log
+```
+
+### 로그 레벨 설정
+```bash
+# DEBUG 레벨로 실행 (더 자세한 로그)
+# Windows
+set LOG_LEVEL=DEBUG
+python gradio/app.py
+
+# PowerShell
+$env:LOG_LEVEL="DEBUG"
+python gradio/app.py
+
+# Linux/Mac
+export LOG_LEVEL=DEBUG
+python gradio/app.py
+```
+
+### 로그 파일 위치
+- **Gradio 앱 로그**: `logs/gradio_app.log`
+- **데이터 처리 로그**: `logs/` 디렉토리의 각종 `.log` 파일들
+- **상세 로깅 가이드**: [docs/development/logging_guide.md](docs/development/logging_guide.md)
 
 ## 🤝 기여하기
 

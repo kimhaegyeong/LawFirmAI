@@ -50,6 +50,45 @@ docker-compose down
 
 `.env.example` 파일을 참고하여 환경 변수를 설정하세요.
 
+## 로그 확인
+
+### 실시간 로그 모니터링
+```bash
+# Windows PowerShell
+Get-Content logs\gradio_app.log -Wait -Tail 50
+
+# Windows CMD
+type logs\gradio_app.log
+
+# Linux/Mac
+tail -f logs/gradio_app.log
+```
+
+### 로그 레벨 설정
+```bash
+# DEBUG 레벨로 실행 (더 자세한 로그)
+# Windows
+set LOG_LEVEL=DEBUG
+python app.py
+
+# PowerShell
+$env:LOG_LEVEL="DEBUG"
+python app.py
+
+# Linux/Mac
+export LOG_LEVEL=DEBUG
+python app.py
+```
+
+### 로그 파일 위치
+- **메인 로그**: `logs/gradio_app.log`
+- **콘솔 출력**: 실시간 로그 확인
+
 ## 개발
 
 개발 환경에서는 `DEBUG=true`로 설정하여 디버그 모드를 활성화할 수 있습니다.
+
+### 디버깅 팁
+- 로그 레벨을 DEBUG로 설정하여 상세한 디버깅 정보 확인
+- 특정 모듈의 로그만 필터링: `grep "ChatService" logs/gradio_app.log`
+- 에러 로그만 확인: `grep "ERROR" logs/gradio_app.log`

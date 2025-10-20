@@ -85,6 +85,10 @@ Thumbs.db
 temp/
 tmp/
 
+# Runtime files
+runtime/
+*.pid
+
 # Coverage Reports
 htmlcov/
 .coverage
@@ -114,3 +118,5 @@ chroma_db/
 .dockerignore
 
 data/
+reports/
+results/

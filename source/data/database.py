@@ -9,6 +9,7 @@ import logging
 from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,15 @@ class DatabaseManager:
         """데이터베이스 연결 컨텍스트 매니저"""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        
+        # FTS5 확장 활성화 (Windows 호환)
+        try:
+            # Windows에서는 FTS5가 기본적으로 포함되어 있음
+            conn.execute("SELECT fts5(1)")
+        except Exception as e:
+            logger.warning(f"FTS5 not available: {e}")
+            # FTS5가 없어도 계속 진행
+        
         try:
             yield conn
         except Exception as e:
@@ -78,7 +88,9 @@ class DatabaseManager:
                     promulgation_date TEXT,
                     enforcement_date TEXT,
                     department TEXT,
+                    is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
                 )
             """)
@@ -88,11 +100,14 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS precedent_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     document_id TEXT NOT NULL,
-                    case_number TEXT,
+                    precedent_number TEXT,
+                    case_name TEXT,
                     court_name TEXT,
                     decision_date TEXT,
                     case_type TEXT,
+                    is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
                 )
             """)
@@ -148,6 +163,257 @@ class DatabaseManager:
                 )
             """)
             
+            # 판례 케이스 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_cases (
+                    case_id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    case_name TEXT NOT NULL,
+                    case_number TEXT NOT NULL,
+                    decision_date TEXT,
+                    field TEXT,
+                    court TEXT,
+                    detail_url TEXT,
+                    full_text TEXT,
+                    searchable_text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 법적 근거 검증 로그 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_basis_validation_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_text TEXT NOT NULL,
+                    answer_text TEXT NOT NULL,
+                    validation_result TEXT NOT NULL,
+                    confidence_score REAL,
+                    validation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    citations_found INTEGER DEFAULT 0,
+                    valid_citations INTEGER DEFAULT 0
+                )
+            """)
+            
+            # 법적 근거 처리 로그 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_basis_processing_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_text TEXT NOT NULL,
+                    question_type TEXT,
+                    confidence_score REAL,
+                    is_legally_sound BOOLEAN,
+                    citations_count INTEGER DEFAULT 0,
+                    processing_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 판례 섹션 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_sections (
+                    section_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    section_type TEXT NOT NULL,
+                    section_type_korean TEXT,
+                    section_content TEXT NOT NULL,
+                    section_length INTEGER DEFAULT 0,
+                    has_content BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
+                )
+            """)
+            
+            # 판례 당사자 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precedent_parties (
+                    party_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    case_id TEXT NOT NULL,
+                    party_type TEXT NOT NULL,
+                    party_type_korean TEXT,
+                    party_content TEXT,
+                    party_length INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
+                )
+            """)
+            
+            # Assembly 법률 테이블 (기존 + 새로운 품질 관리 컬럼)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS assembly_laws (
+                    law_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    law_name TEXT NOT NULL,
+                    law_type TEXT,
+                    category TEXT,
+                    row_number TEXT,
+                    promulgation_number TEXT,
+                    promulgation_date TEXT,
+                    enforcement_date TEXT,
+                    amendment_type TEXT,
+                    ministry TEXT,
+                    parent_law TEXT,
+                    related_laws TEXT,
+                    full_text TEXT,
+                    searchable_text TEXT,
+                    keywords TEXT,
+                    summary TEXT,
+                    html_clean_text TEXT,
+                    main_article_count INTEGER DEFAULT 0,
+                    supplementary_article_count INTEGER DEFAULT 0,
+                    ml_enhanced BOOLEAN DEFAULT FALSE,
+                    parsing_quality_score REAL DEFAULT 0.0,
+                    processing_version TEXT DEFAULT '1.0',
+                    
+                    -- 새로운 품질 관리 컬럼들
+                    law_name_hash TEXT UNIQUE,
+                    content_hash TEXT UNIQUE,
+                    quality_score REAL DEFAULT 0.0,
+                    duplicate_group_id TEXT,
+                    is_primary_version BOOLEAN DEFAULT TRUE,
+                    version_number INTEGER DEFAULT 1,
+                    parsing_method TEXT DEFAULT 'legacy',
+                    auto_corrected BOOLEAN DEFAULT FALSE,
+                    manual_review_required BOOLEAN DEFAULT FALSE,
+                    migration_timestamp TEXT,
+                    
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Assembly 조문 테이블 (기존)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS assembly_articles (
+                    article_id TEXT PRIMARY KEY,
+                    law_id TEXT NOT NULL,
+                    article_number INTEGER NOT NULL,
+                    article_title TEXT,
+                    article_content TEXT NOT NULL,
+                    is_supplementary BOOLEAN DEFAULT FALSE,
+                    ml_confidence_score REAL DEFAULT 0.0,
+                    parsing_method TEXT DEFAULT 'rule_based',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (law_id) REFERENCES assembly_laws(law_id)
+                )
+            """)
+            
+            # 처리된 파일 추적 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    file_hash TEXT NOT NULL,
+                    data_type TEXT NOT NULL,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processing_status TEXT DEFAULT 'completed',
+                    record_count INTEGER DEFAULT 0,
+                    processing_version TEXT DEFAULT '1.0',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 중복 그룹 테이블 (새로운)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS duplicate_groups (
+                    group_id TEXT PRIMARY KEY,
+                    group_type TEXT NOT NULL,
+                    primary_law_id TEXT NOT NULL,
+                    duplicate_law_ids TEXT NOT NULL,
+                    resolution_strategy TEXT NOT NULL,
+                    confidence_score REAL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (primary_law_id) REFERENCES assembly_laws (law_id)
+                )
+            """)
+            
+            # 품질 보고서 테이블 (새로운)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS quality_reports (
+                    report_id TEXT PRIMARY KEY,
+                    law_id TEXT NOT NULL,
+                    overall_score REAL NOT NULL,
+                    article_count_score REAL NOT NULL,
+                    title_extraction_score REAL NOT NULL,
+                    article_sequence_score REAL NOT NULL,
+                    structure_completeness_score REAL NOT NULL,
+                    issues TEXT,
+                    suggestions TEXT,
+                    validation_timestamp TIMESTAMP NOT NULL,
+                    FOREIGN KEY (law_id) REFERENCES assembly_laws (law_id)
+                )
+            """)
+            
+            # 마이그레이션 히스토리 테이블 (새로운)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS migration_history (
+                    migration_id TEXT PRIMARY KEY,
+                    migration_version TEXT NOT NULL,
+                    migration_timestamp TIMESTAMP NOT NULL,
+                    description TEXT,
+                    success BOOLEAN NOT NULL,
+                    error_message TEXT,
+                    records_affected INTEGER DEFAULT 0
+                )
+            """)
+            
+            # 스키마 버전 테이블 (새로운)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version TEXT PRIMARY KEY,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    description TEXT
+                )
+            """)
+            
+            # FTS5 전체 텍스트 검색 테이블
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_precedent_cases USING fts5(
+                    case_id,
+                    case_name,
+                    case_number,
+                    full_text,
+                    searchable_text,
+                    content='precedent_cases',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_precedent_sections USING fts5(
+                    section_id,
+                    case_id,
+                    section_content,
+                    content='precedent_sections',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_assembly_laws USING fts5(
+                    law_id,
+                    law_name,
+                    full_text,
+                    searchable_text,
+                    content='assembly_laws',
+                    content_rowid='rowid'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_assembly_articles USING fts5(
+                    article_id,
+                    law_id,
+                    article_title,
+                    article_content,
+                    content='assembly_articles',
+                    content_rowid='rowid'
+                )
+            """)
+            
             # 인덱스 생성 (검색 성능 향상)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title)")
@@ -155,8 +421,48 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_court ON precedent_metadata(court_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_metadata_date ON precedent_metadata(decision_date)")
             
+            # 판례 테이블 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_category ON precedent_cases(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_date ON precedent_cases(decision_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_cases_court ON precedent_cases(court)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_sections_case_id ON precedent_sections(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_sections_type ON precedent_sections(section_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_parties_case_id ON precedent_parties(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_precedent_parties_type ON precedent_parties(party_type)")
+            
+            # Assembly 테이블 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_source ON assembly_laws(source)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_category ON assembly_laws(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_ministry ON assembly_laws(ministry)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_created_at ON assembly_laws(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_law_id ON assembly_articles(law_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_number ON assembly_articles(article_number)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_articles_supplementary ON assembly_articles(is_supplementary)")
+            
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_path ON processed_files(file_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_type ON processed_files(data_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_status ON processed_files(processing_status)")
+            
+            # 새로운 품질 관리 인덱스들
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_law_name_hash ON assembly_laws(law_name_hash)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_content_hash ON assembly_laws(content_hash)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_quality_score ON assembly_laws(quality_score)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_duplicate_group_id ON assembly_laws(duplicate_group_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_is_primary_version ON assembly_laws(is_primary_version)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_parsing_method ON assembly_laws(parsing_method)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_assembly_laws_manual_review_required ON assembly_laws(manual_review_required)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_duplicate_groups_group_type ON duplicate_groups(group_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_duplicate_groups_primary_law_id ON duplicate_groups(primary_law_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_duplicate_groups_confidence_score ON duplicate_groups(confidence_score)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_quality_reports_law_id ON quality_reports(law_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_quality_reports_overall_score ON quality_reports(overall_score)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_quality_reports_validation_timestamp ON quality_reports(validation_timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_history_version ON migration_history(migration_version)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_history_success ON migration_history(success)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_schema_version_updated_at ON schema_version(updated_at)")
+            
             conn.commit()
-            logger.info("Database tables created successfully")
+            logger.info("Database tables and indices created successfully")
     
     def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         """쿼리 실행"""
@@ -445,3 +751,404 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error searching assembly documents: {e}")
             return []
+    
+    # 파일 처리 이력 추적 메서드들
+    def mark_file_as_processed(self, file_path: str, file_hash: str, 
+                              data_type: str, record_count: int = 0,
+                              processing_version: str = "1.0",
+                              error_message: str = None) -> int:
+        """
+        파일을 처리 완료로 표시
+        
+        Args:
+            file_path: 처리된 파일 경로
+            file_hash: 파일 해시값
+            data_type: 데이터 유형
+            record_count: 처리된 레코드 수
+            processing_version: 처리 버전
+            error_message: 에러 메시지 (실패한 경우)
+        
+        Returns:
+            int: 삽입된 레코드의 ID
+        """
+        query = """
+            INSERT OR REPLACE INTO processed_files 
+            (file_path, file_hash, data_type, record_count, 
+             processing_version, error_message, processing_status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        
+        status = "failed" if error_message else "completed"
+        params = (file_path, file_hash, data_type, record_count, 
+                 processing_version, error_message, status)
+        
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.lastrowid
+    
+    def is_file_processed(self, file_path: str) -> bool:
+        """
+        파일이 이미 처리되었는지 확인
+        
+        Args:
+            file_path: 확인할 파일 경로
+        
+        Returns:
+            bool: 처리 여부
+        """
+        query = "SELECT COUNT(*) as count FROM processed_files WHERE file_path = ?"
+        result = self.execute_query(query, (file_path,))
+        return result[0]['count'] > 0 if result else False
+    
+    def get_file_processing_status(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        파일의 처리 상태 조회
+        
+        Args:
+            file_path: 파일 경로
+        
+        Returns:
+            Optional[Dict]: 처리 상태 정보 또는 None
+        """
+        query = """
+            SELECT file_path, file_hash, data_type, processing_status, 
+                   record_count, processing_version, error_message, 
+                   processed_at, created_at, updated_at
+            FROM processed_files 
+            WHERE file_path = ?
+        """
+        result = self.execute_query(query, (file_path,))
+        return result[0] if result else None
+    
+    def get_unprocessed_files(self, data_type: str, base_path: str) -> List[str]:
+        """
+        특정 데이터 유형의 미처리 파일 목록 조회
+        
+        Args:
+            data_type: 데이터 유형
+            base_path: 검색할 기본 경로
+        
+        Returns:
+            List[str]: 미처리 파일 경로 목록
+        """
+        # 실제 파일 시스템에서 파일 목록을 가져와야 하므로
+        # 이 메서드는 외부에서 파일 목록을 받아 처리하는 방식으로 구현
+        pass
+    
+    def get_processed_files_by_type(self, data_type: str, 
+                                   status: str = "completed") -> List[Dict[str, Any]]:
+        """
+        특정 데이터 유형의 처리된 파일 목록 조회
+        
+        Args:
+            data_type: 데이터 유형
+            status: 처리 상태 (기본값: completed)
+        
+        Returns:
+            List[Dict]: 처리된 파일 목록
+        """
+        query = """
+            SELECT file_path, file_hash, data_type, processing_status, 
+                   record_count, processing_version, error_message, 
+                   processed_at, created_at, updated_at
+            FROM processed_files 
+            WHERE data_type = ? AND processing_status = ?
+            ORDER BY processed_at DESC
+        """
+        return self.execute_query(query, (data_type, status))
+    
+    def get_processing_statistics(self, data_type: str = None) -> Dict[str, Any]:
+        """
+        처리 통계 조회
+        
+        Args:
+            data_type: 데이터 유형 (None이면 전체)
+        
+        Returns:
+            Dict: 처리 통계
+        """
+        if data_type:
+            query = """
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN processing_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
+                    SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) as failed_files,
+                    SUM(record_count) as total_records,
+                    AVG(record_count) as avg_records_per_file
+                FROM processed_files 
+                WHERE data_type = ?
+            """
+            result = self.execute_query(query, (data_type,))
+        else:
+            query = """
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN processing_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
+                    SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) as failed_files,
+                    SUM(record_count) as total_records,
+                    AVG(record_count) as avg_records_per_file
+                FROM processed_files
+            """
+            result = self.execute_query(query)
+        
+        return result[0] if result else {}
+    
+    # 새로운 품질 관리 메서드들
+    
+    def get_quality_statistics(self) -> Dict[str, Any]:
+        """
+        품질 통계 조회
+        
+        Returns:
+            Dict: 품질 통계
+        """
+        query = """
+            SELECT 
+                COUNT(*) as total_laws,
+                AVG(quality_score) as avg_quality_score,
+                MIN(quality_score) as min_quality_score,
+                MAX(quality_score) as max_quality_score,
+                SUM(CASE WHEN quality_score >= 0.8 THEN 1 ELSE 0 END) as high_quality_count,
+                SUM(CASE WHEN quality_score < 0.6 THEN 1 ELSE 0 END) as low_quality_count,
+                SUM(CASE WHEN manual_review_required = TRUE THEN 1 ELSE 0 END) as manual_review_count,
+                SUM(CASE WHEN auto_corrected = TRUE THEN 1 ELSE 0 END) as auto_corrected_count
+            FROM assembly_laws
+        """
+        result = self.execute_query(query)
+        return result[0] if result else {}
+    
+    def get_duplicate_statistics(self) -> Dict[str, Any]:
+        """
+        중복 통계 조회
+        
+        Returns:
+            Dict: 중복 통계
+        """
+        query = """
+            SELECT 
+                COUNT(*) as total_duplicate_groups,
+                AVG(confidence_score) as avg_confidence_score,
+                SUM(CASE WHEN group_type = 'file' THEN 1 ELSE 0 END) as file_duplicates,
+                SUM(CASE WHEN group_type = 'content' THEN 1 ELSE 0 END) as content_duplicates,
+                SUM(CASE WHEN group_type = 'semantic' THEN 1 ELSE 0 END) as semantic_duplicates
+            FROM duplicate_groups
+        """
+        result = self.execute_query(query)
+        return result[0] if result else {}
+    
+    def get_laws_by_quality_score(self, min_score: float = 0.0, max_score: float = 1.0, 
+                                 limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        품질 점수 범위로 법률 조회
+        
+        Args:
+            min_score: 최소 품질 점수
+            max_score: 최대 품질 점수
+            limit: 조회 제한 수
+        
+        Returns:
+            List[Dict]: 법률 목록
+        """
+        query = """
+            SELECT law_id, law_name, quality_score, parsing_method, 
+                   auto_corrected, manual_review_required, created_at
+            FROM assembly_laws 
+            WHERE quality_score BETWEEN ? AND ?
+            ORDER BY quality_score DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (min_score, max_score, limit))
+    
+    def get_laws_requiring_review(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        수동 검토가 필요한 법률 조회
+        
+        Args:
+            limit: 조회 제한 수
+        
+        Returns:
+            List[Dict]: 법률 목록
+        """
+        query = """
+            SELECT law_id, law_name, quality_score, parsing_method, 
+                   auto_corrected, created_at
+            FROM assembly_laws 
+            WHERE manual_review_required = TRUE
+            ORDER BY quality_score ASC, created_at DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (limit,))
+    
+    def get_duplicate_groups(self, group_type: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        중복 그룹 조회
+        
+        Args:
+            group_type: 그룹 유형 (None이면 전체)
+            limit: 조회 제한 수
+        
+        Returns:
+            List[Dict]: 중복 그룹 목록
+        """
+        if group_type:
+            query = """
+                SELECT group_id, group_type, primary_law_id, duplicate_law_ids,
+                       resolution_strategy, confidence_score, created_at
+                FROM duplicate_groups 
+                WHERE group_type = ?
+                ORDER BY confidence_score DESC, created_at DESC
+                LIMIT ?
+            """
+            return self.execute_query(query, (group_type, limit))
+        else:
+            query = """
+                SELECT group_id, group_type, primary_law_id, duplicate_law_ids,
+                       resolution_strategy, confidence_score, created_at
+                FROM duplicate_groups 
+                ORDER BY confidence_score DESC, created_at DESC
+                LIMIT ?
+            """
+            return self.execute_query(query, (limit,))
+    
+    def get_quality_reports(self, law_id: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        품질 보고서 조회
+        
+        Args:
+            law_id: 법률 ID (None이면 전체)
+            limit: 조회 제한 수
+        
+        Returns:
+            List[Dict]: 품질 보고서 목록
+        """
+        if law_id:
+            query = """
+                SELECT report_id, law_id, overall_score, article_count_score,
+                       title_extraction_score, article_sequence_score,
+                       structure_completeness_score, issues, suggestions, validation_timestamp
+                FROM quality_reports 
+                WHERE law_id = ?
+                ORDER BY validation_timestamp DESC
+                LIMIT ?
+            """
+            return self.execute_query(query, (law_id, limit))
+        else:
+            query = """
+                SELECT report_id, law_id, overall_score, article_count_score,
+                       title_extraction_score, article_sequence_score,
+                       structure_completeness_score, issues, suggestions, validation_timestamp
+                FROM quality_reports 
+                ORDER BY validation_timestamp DESC
+                LIMIT ?
+            """
+            return self.execute_query(query, (limit,))
+    
+    def update_law_quality_score(self, law_id: str, quality_score: float, 
+                                parsing_method: str = None, auto_corrected: bool = False) -> int:
+        """
+        법률 품질 점수 업데이트
+        
+        Args:
+            law_id: 법률 ID
+            quality_score: 품질 점수
+            parsing_method: 파싱 방법
+            auto_corrected: 자동 수정 여부
+        
+        Returns:
+            int: 업데이트된 행 수
+        """
+        query = """
+            UPDATE assembly_laws 
+            SET quality_score = ?, parsing_method = ?, auto_corrected = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE law_id = ?
+        """
+        params = [quality_score]
+        if parsing_method:
+            params.append(parsing_method)
+        else:
+            params.append(None)
+        params.append(auto_corrected)
+        params.append(law_id)
+        
+        return self.execute_update(query, tuple(params))
+    
+    def mark_law_for_review(self, law_id: str, requires_review: bool = True) -> int:
+        """
+        법률을 검토 대상으로 표시
+        
+        Args:
+            law_id: 법률 ID
+            requires_review: 검토 필요 여부
+        
+        Returns:
+            int: 업데이트된 행 수
+        """
+        query = """
+            UPDATE assembly_laws 
+            SET manual_review_required = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE law_id = ?
+        """
+        return self.execute_update(query, (requires_review, law_id))
+    
+    def get_schema_version(self) -> str:
+        """
+        현재 스키마 버전 조회
+        
+        Returns:
+            str: 스키마 버전
+        """
+        query = """
+            SELECT version FROM schema_version 
+            ORDER BY updated_at DESC 
+            LIMIT 1
+        """
+        result = self.execute_query(query)
+        return result[0]['version'] if result else "1.0"
+    
+    def get_migration_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        마이그레이션 히스토리 조회
+        
+        Args:
+            limit: 조회 제한 수
+        
+        Returns:
+            List[Dict]: 마이그레이션 히스토리
+        """
+        query = """
+            SELECT migration_id, migration_version, migration_timestamp,
+                   description, success, error_message, records_affected
+            FROM migration_history 
+            ORDER BY migration_timestamp DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (limit,))
+    
+    def update_file_processing_status(self, file_path: str, 
+                                    status: str, error_message: str = None) -> bool:
+        """
+        파일 처리 상태 업데이트
+        
+        Args:
+            file_path: 파일 경로
+            status: 새로운 상태
+            error_message: 에러 메시지 (실패한 경우)
+        
+        Returns:
+            bool: 업데이트 성공 여부
+        """
+        query = """
+            UPDATE processed_files 
+            SET processing_status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE file_path = ?
+        """
+        params = (status, error_message, file_path)
+        
+        try:
+            rows_affected = self.execute_update(query, params)
+            return rows_affected > 0
+        except Exception as e:
+            logger.error(f"Error updating file processing status: {e}")
+            return False

@@ -1,0 +1,44 @@
+# Cursor ignore file - controls which files Cursor can edit
+# .env 파일은 보안상 편집하지 않도록 설정
+.env
+
+# 기타 민감한 파일들
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# 로그 파일들
+logs/
+*.log
+
+# 캐시 및 임시 파일들
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 데이터베이스 파일들 (읽기 전용)
+*.db
+*.sqlite
+*.sqlite3
+
+# 모델 파일들 (큰 파일들)
+*.bin
+*.safetensors
+*.h5
+*.pkl
+*.joblib
+
+# 체크포인트 파일들
+checkpoints/
+*.ckpt
+*.pt
+*.pth

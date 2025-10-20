@@ -1,13 +1,16 @@
 """
 하이브리드 검색 엔진
 정확한 매칭과 의미적 검색을 결합한 통합 검색 시스템
+질문 유형별 가중치를 적용한 지능형 검색
 """
 
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from source.services.exact_search_engine import ExactSearchEngine
-from source.services.semantic_search_engine import SemanticSearchEngine
-from source.services.result_merger import ResultMerger, ResultRanker
+from .exact_search_engine import ExactSearchEngine
+from .semantic_search_engine import SemanticSearchEngine
+from .result_merger import ResultMerger, ResultRanker
+from .question_classifier import QuestionClassifier, QuestionType, QuestionClassification
+from .precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +21,22 @@ class HybridSearchEngine:
                  db_path: str = "data/lawfirm.db",
                  model_name: str = "jhgan/ko-sroberta-multitask",
                  index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
-                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
+                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json",
+                 precedent_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
+                 precedent_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"):
         
         self.exact_search = ExactSearchEngine(db_path)
-        self.semantic_search = SemanticSearchEngine(model_name, index_path, metadata_path)
+        self.semantic_search = SemanticSearchEngine(
+            model_name=model_name,
+            index_path=index_path,
+            metadata_path=metadata_path
+        )
+        self.question_classifier = QuestionClassifier()
+        self.precedent_search = PrecedentSearchEngine(
+            db_path=db_path,
+            vector_index_path=precedent_index_path,
+            vector_metadata_path=precedent_metadata_path
+        )
         self.result_merger = ResultMerger()
         self.result_ranker = ResultRanker()
         
@@ -64,11 +79,11 @@ class HybridSearchEngine:
             
             # 결과 통합
             merged_results = self.result_merger.merge_results(
-                exact_results, semantic_results, query
+                exact_results, semantic_results
             )
             
             # 결과 랭킹
-            ranked_results = self.result_ranker.rank_results(merged_results, query)
+            ranked_results = self.result_ranker.rank_results(merged_results)
             
             # 다양성 필터 적용
             filtered_results = self.result_ranker.apply_diversity_filter(
@@ -78,20 +93,33 @@ class HybridSearchEngine:
             # 최종 결과 제한
             final_results = filtered_results[:max_results]
             
+            # MergedResult를 Dict로 변환
+            final_results_dict = []
+            for result in final_results:
+                if hasattr(result, 'text'):
+                    final_results_dict.append({
+                        'text': result.text,
+                        'score': result.score,
+                        'source': result.source,
+                        'metadata': result.metadata
+                    })
+                else:
+                    final_results_dict.append(result)
+            
             # 검색 통계
             search_stats = self._generate_search_stats(
-                exact_results, semantic_results, final_results
+                exact_results, semantic_results, final_results_dict
             )
             
             result = {
                 "query": query,
-                "results": final_results,
-                "total_results": len(final_results),
+                "results": final_results_dict,
+                "total_results": len(final_results_dict),
                 "search_stats": search_stats,
                 "search_config": self.search_config
             }
             
-            logger.info(f"Hybrid search completed: {len(final_results)} results")
+            logger.info(f"Hybrid search completed: {len(final_results_dict)} results")
             return result
             
         except Exception as e:
@@ -103,6 +131,244 @@ class HybridSearchEngine:
                 "error": str(e),
                 "search_stats": {}
             }
+    
+    def search_with_question_type(self, 
+                                 query: str, 
+                                 question_type: Optional[QuestionClassification] = None,
+                                 max_results: int = None) -> Dict[str, Any]:
+        """
+        질문 유형을 고려한 지능형 검색
+        
+        Args:
+            query: 검색 쿼리
+            question_type: 질문 분류 결과 (None이면 자동 분류)
+            max_results: 최대 결과 수
+            
+        Returns:
+            Dict[str, Any]: 검색 결과
+        """
+        try:
+            logger.info(f"Starting intelligent search for query: '{query}'")
+            
+            # 질문 분류
+            if question_type is None:
+                question_type = self.question_classifier.classify_question(query)
+            
+            logger.info(f"Question classified as: {question_type.question_type.value} "
+                       f"(law_weight={question_type.law_weight}, precedent_weight={question_type.precedent_weight})")
+            
+            if max_results is None:
+                max_results = self.search_config["max_results"]
+            
+            # 법률 검색
+            law_results = self._search_laws_with_weight(query, question_type.law_weight, max_results)
+            
+            # 판례 검색 (민사 판례 우선)
+            precedent_results = self._search_precedents_with_weight(query, question_type.precedent_weight, max_results)
+            
+            # 결과 통합 및 재랭킹
+            merged_results = self._merge_and_rerank_results(law_results, precedent_results, question_type)
+            
+            # 최종 결과 제한
+            final_results = merged_results[:max_results]
+            
+            # 검색 통계
+            search_stats = self._generate_intelligent_search_stats(
+                law_results, precedent_results, final_results, question_type
+            )
+            
+            result = {
+                "query": query,
+                "question_type": question_type.question_type.value,
+                "question_classification": {
+                    "type": question_type.question_type.value,
+                    "law_weight": question_type.law_weight,
+                    "precedent_weight": question_type.precedent_weight,
+                    "confidence": question_type.confidence,
+                    "keywords": question_type.keywords
+                },
+                "results": final_results,
+                "law_results": law_results,
+                "precedent_results": precedent_results,
+                "total_results": len(final_results),
+                "search_stats": search_stats
+            }
+            
+            logger.info(f"Intelligent search completed: {len(final_results)} results")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Intelligent search failed: {e}")
+            return {
+                "query": query,
+                "results": [],
+                "total_results": 0,
+                "error": str(e),
+                "search_stats": {}
+            }
+    
+    def _search_laws_with_weight(self, query: str, weight: float, max_results: int) -> List[Dict[str, Any]]:
+        """가중치를 적용한 법률 검색"""
+        try:
+            if weight <= 0:
+                return []
+            
+            # 정확한 매칭 검색
+            exact_results = self._execute_exact_search(query, ["law", "assembly_law"])
+            law_results = exact_results.get("law", []) + exact_results.get("assembly_law", [])
+            
+            # 의미적 검색
+            semantic_results = self._execute_semantic_search(query, ["law", "assembly_law"])
+            
+            # 결과 통합
+            all_law_results = law_results + semantic_results
+            
+            # 가중치 적용
+            for result in all_law_results:
+                original_score = result.get("similarity", 0.5)
+                result["similarity"] = original_score * weight
+                result["search_type"] = "law"
+            
+            # 정렬 및 제한
+            sorted_results = sorted(all_law_results, key=lambda x: x.get("similarity", 0), reverse=True)
+            return sorted_results[:max_results]
+            
+        except Exception as e:
+            logger.error(f"Error searching laws with weight: {e}")
+            return []
+    
+    def _search_precedents_with_weight(self, query: str, weight: float, max_results: int) -> List[Dict[str, Any]]:
+        """가중치를 적용한 판례 검색"""
+        try:
+            if weight <= 0:
+                return []
+            
+            # 판례 검색 엔진 사용
+            precedent_results = self.precedent_search.search_precedents(
+                query=query,
+                category='civil',  # 민사 판례 우선
+                top_k=max_results,
+                search_type='hybrid'
+            )
+            
+            # PrecedentSearchResult를 Dict로 변환
+            dict_results = []
+            for result in precedent_results:
+                dict_result = {
+                    'text': result.summary or result.case_name,
+                    'similarity': result.similarity,
+                    'score': result.similarity,
+                    'type': 'precedent',
+                    'source': f"{result.court} {result.case_number}",
+                    'metadata': {
+                        'case_id': result.case_id,
+                        'case_name': result.case_name,
+                        'case_number': result.case_number,
+                        'court': result.court,
+                        'decision_date': result.decision_date,
+                        'category': result.category,
+                        'field': result.field,
+                        'summary': result.summary
+                    },
+                    'search_type': result.search_type,
+                    'case_id': result.case_id,
+                    'case_name': result.case_name,
+                    'case_number': result.case_number,
+                    'court': result.court
+                }
+                dict_results.append(dict_result)
+            
+            # 가중치 적용
+            for result in dict_results:
+                original_score = result.get("similarity", 0.5)
+                result["similarity"] = original_score * weight
+                result["search_type"] = "precedent"
+            
+            # 정렬 및 제한
+            sorted_results = sorted(dict_results, key=lambda x: x.get("similarity", 0), reverse=True)
+            return sorted_results[:max_results]
+            
+        except Exception as e:
+            logger.error(f"Error searching precedents with weight: {e}")
+            return []
+    
+    def _merge_and_rerank_results(self, 
+                                 law_results: List[Dict[str, Any]], 
+                                 precedent_results: List[Dict[str, Any]], 
+                                 question_type: QuestionClassification) -> List[Dict[str, Any]]:
+        """결과 통합 및 재랭킹"""
+        try:
+            # 모든 결과 통합
+            all_results = law_results + precedent_results
+            
+            # 중복 제거 (ID 기반)
+            unique_results = {}
+            for result in all_results:
+                result_id = result.get("case_id") or result.get("article_id") or result.get("id")
+                if result_id and result_id not in unique_results:
+                    unique_results[result_id] = result
+                elif result_id and result_id in unique_results:
+                    # 더 높은 점수 유지
+                    if result.get("similarity", 0) > unique_results[result_id].get("similarity", 0):
+                        unique_results[result_id] = result
+            
+            # 질문 유형별 추가 가중치 적용
+            for result in unique_results.values():
+                result_type = result.get("type", "unknown")
+                
+                if result_type == "law" and question_type.question_type == QuestionType.LAW_INQUIRY:
+                    result["similarity"] *= 1.2  # 법률 조회 질문에 법률 결과 가중치 증가
+                elif result_type == "precedent" and question_type.question_type == QuestionType.PRECEDENT_SEARCH:
+                    result["similarity"] *= 1.2  # 판례 검색 질문에 판례 결과 가중치 증가
+                elif result_type == "law" and question_type.question_type == QuestionType.LEGAL_ADVICE:
+                    result["similarity"] *= 1.1  # 법적 조언 질문에 법률 결과 약간 가중치 증가
+                elif result_type == "precedent" and question_type.question_type == QuestionType.LEGAL_ADVICE:
+                    result["similarity"] *= 1.1  # 법적 조언 질문에 판례 결과 약간 가중치 증가
+            
+            # 최종 정렬
+            final_results = sorted(unique_results.values(), key=lambda x: x.get("similarity", 0), reverse=True)
+            
+            return final_results
+            
+        except Exception as e:
+            logger.error(f"Error merging and reranking results: {e}")
+            return law_results + precedent_results
+    
+    def _generate_intelligent_search_stats(self, 
+                                         law_results: List[Dict[str, Any]], 
+                                         precedent_results: List[Dict[str, Any]], 
+                                         final_results: List[Dict[str, Any]], 
+                                         question_type: QuestionClassification) -> Dict[str, Any]:
+        """지능형 검색 통계 생성"""
+        try:
+            stats = {
+                "question_classification": {
+                    "type": question_type.question_type.value,
+                    "law_weight": question_type.law_weight,
+                    "precedent_weight": question_type.precedent_weight,
+                    "confidence": question_type.confidence
+                },
+                "law_search": {
+                    "total_results": len(law_results),
+                    "avg_similarity": sum(r.get("similarity", 0) for r in law_results) / len(law_results) if law_results else 0
+                },
+                "precedent_search": {
+                    "total_results": len(precedent_results),
+                    "avg_similarity": sum(r.get("similarity", 0) for r in precedent_results) / len(precedent_results) if precedent_results else 0
+                },
+                "final_results": {
+                    "total_results": len(final_results),
+                    "law_count": len([r for r in final_results if r.get("type") == "law"]),
+                    "precedent_count": len([r for r in final_results if r.get("type") == "precedent"]),
+                    "avg_similarity": sum(r.get("similarity", 0) for r in final_results) / len(final_results) if final_results else 0
+                }
+            }
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error generating intelligent search stats: {e}")
+            return {}
     
     def _execute_exact_search(self, query: str, search_types: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         """정확한 매칭 검색 실행"""
@@ -163,8 +429,7 @@ class HybridSearchEngine:
             # 전체 의미적 검색
             all_semantic_results = self.semantic_search.search(
                 query, 
-                k=self.search_config["max_results"] * 2,
-                threshold=self.search_config["semantic_threshold"]
+                k=self.search_config["max_results"] * 2
             )
             
             # 타입별 필터링
