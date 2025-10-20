@@ -330,15 +330,56 @@ class LegalTermsDatabase:
         query_lower = query.lower()
         domain_scores = {}
         
+        # 법조문 패턴 인식 (우선 처리)
+        law_patterns = {
+            r'민법\s+제\d+조': LegalDomain.CIVIL_LAW,
+            r'형법\s+제\d+조': LegalDomain.CRIMINAL_LAW,
+            r'상법\s+제\d+조': LegalDomain.COMMERCIAL_LAW,
+            r'근로기준법\s+제\d+조': LegalDomain.LABOR_LAW,
+            r'부동산등기법\s+제\d+조': LegalDomain.PROPERTY_LAW,
+            r'특허법\s+제\d+조': LegalDomain.INTELLECTUAL_PROPERTY,
+            r'소득세법\s+제\d+조': LegalDomain.TAX_LAW,
+            r'민사소송법\s+제\d+조': LegalDomain.CIVIL_PROCEDURE,
+            r'형사소송법\s+제\d+조': LegalDomain.CRIMINAL_PROCEDURE
+        }
+        
+        # 법조문 패턴 매칭
+        for pattern, domain in law_patterns.items():
+            if re.search(pattern, query):
+                if domain not in domain_scores:
+                    domain_scores[domain] = DomainScore(
+                        domain=domain,
+                        score=0.0,
+                        matched_terms=[],
+                        confidence=0.0,
+                        reasoning=""
+                    )
+                
+                match = re.search(pattern, query)
+                matched_text = match.group(0)
+                domain_scores[domain].score += 2.0  # 법조문은 높은 가중치
+                domain_scores[domain].matched_terms.append(matched_text)
+                domain_scores[domain].confidence = 0.9  # 법조문은 높은 신뢰도
+                domain_scores[domain].reasoning = f"법조문 패턴 매칭: '{matched_text}'"
+        
         for domain in LegalDomain:
             if domain == LegalDomain.GENERAL:
                 continue
                 
+            if domain not in domain_scores:
+                domain_scores[domain] = DomainScore(
+                    domain=domain,
+                    score=0.0,
+                    matched_terms=[],
+                    confidence=0.0,
+                    reasoning="매칭된 용어 없음"
+                )
+            
             matched_terms = []
             total_score = 0.0
             reasoning_parts = []
             
-            # 도메인별 용어 검사
+            # 도메인별 용어 검사 (기존 점수에 추가)
             if domain in self.terms_by_domain:
                 for term, legal_term in self.terms_by_domain[domain].items():
                     term_score = 0.0
@@ -371,16 +412,21 @@ class LegalTermsDatabase:
                     
                     total_score += term_score
             
-            # 신뢰도 계산 (매칭된 용어 수와 점수 기반)
-            confidence = min(1.0, total_score / 2.0) if total_score > 0 else 0.0
+            # 기존 점수에 추가
+            domain_scores[domain].score += total_score
+            domain_scores[domain].matched_terms.extend(matched_terms)
             
-            domain_scores[domain] = DomainScore(
-                domain=domain,
-                score=total_score,
-                matched_terms=matched_terms,
-                confidence=confidence,
-                reasoning="; ".join(reasoning_parts) if reasoning_parts else "매칭된 용어 없음"
-            )
+            # 신뢰도 재계산 (법조문 패턴이 있으면 높은 신뢰도 유지)
+            if domain_scores[domain].confidence < 0.9:  # 법조문 패턴이 아닌 경우만 재계산
+                confidence = min(1.0, domain_scores[domain].score / 2.0) if domain_scores[domain].score > 0 else 0.0
+                domain_scores[domain].confidence = confidence
+            
+            # 추론 정보 업데이트
+            if reasoning_parts:
+                if domain_scores[domain].reasoning:
+                    domain_scores[domain].reasoning += "; " + "; ".join(reasoning_parts)
+                else:
+                    domain_scores[domain].reasoning = "; ".join(reasoning_parts)
         
         return domain_scores
 

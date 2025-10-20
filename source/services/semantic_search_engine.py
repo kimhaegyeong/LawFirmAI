@@ -208,7 +208,7 @@ class SemanticSearchEngine:
                 # 법률 검색
                 cursor.execute("""
                     SELECT law_name, article_number, content, 'law' as type
-                    FROM laws 
+                    FROM assembly_laws 
                     WHERE content LIKE ? OR law_name LIKE ?
                     LIMIT ?
                 """, (f"%{query}%", f"%{query}%", k))
