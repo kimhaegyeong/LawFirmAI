@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 # 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 # 로깅 설정

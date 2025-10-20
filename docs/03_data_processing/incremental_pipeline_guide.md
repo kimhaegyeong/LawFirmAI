@@ -33,13 +33,20 @@ scripts/
 │   ├── incremental_preprocessor.py               # 증분 전처리 (법률)
 │   ├── incremental_precedent_preprocessor.py     # 증분 전처리 (판례)
 │   ├── precedent_preprocessor.py                 # 판례 전용 전처리기
-│   └── auto_pipeline_orchestrator.py            # 통합 오케스트레이터
-├── ml_training/vector_embedding/
-│   ├── incremental_vector_builder.py            # 증분 벡터 임베딩 (법률)
-│   └── incremental_precedent_vector_builder.py  # 증분 벡터 임베딩 (판례)
-└── data_processing/utilities/
-    ├── import_laws_to_db.py                      # DB 임포트 (법률)
-    └── import_precedents_to_db.py                # DB 임포트 (판례)
+│   ├── auto_pipeline_orchestrator.py            # 통합 오케스트레이터
+│   ├── preprocessing/                            # 기본 전처리 스크립트
+│   │   └── preprocess_laws.py                   # ML-enhanced 전처리
+│   ├── quality/                                  # 품질 관리 모듈
+│   │   ├── data_quality_validator.py
+│   │   ├── automated_data_cleaner.py
+│   │   └── real_time_quality_monitor.py
+│   └── utilities/                                # 유틸리티 스크립트
+│       ├── import_laws_to_db.py                  # DB 임포트 (법률)
+│       └── import_precedents_to_db.py            # DB 임포트 (판례)
+└── ml_training/
+    └── vector_embedding/
+        ├── incremental_vector_builder.py          # 증분 벡터 임베딩 (법률)
+        └── incremental_precedent_vector_builder.py  # 증분 벡터 임베딩 (판례)
 ```
 
 ## 🛠️ 설치 및 설정
@@ -394,8 +401,3 @@ print(f"Total vectors in index: {vector_store.index.ntotal}")
 - [벡터 임베딩 가이드](../04_vector_embedding/README.md): 벡터 임베딩 생성
 - [데이터베이스 스키마](../10_technical_reference/README.md): 데이터베이스 구조
 - [API 문서](../08_api_documentation/README.md): API 사용법
-
----
-
-**LawFirmAI 개발팀**  
-*최종 업데이트: 2025-10-16*

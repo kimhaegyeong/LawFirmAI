@@ -6,6 +6,18 @@ LawFirmAI 프로젝트의 Assembly 법률 데이터 전처리 파이프라인 v4
 
 ## 주요 특징
 
+### 🚀 증분 전처리 시스템 (새로운 기능)
+- **자동 데이터 감지**: 새로운 파일만 자동으로 감지하고 처리
+- **체크포인트 시스템**: 중단 시 이어서 처리 가능
+- **메모리 최적화**: 대용량 파일도 효율적으로 처리
+- **상태 추적**: 데이터베이스에서 각 파일의 처리 상태를 추적
+
+### 🔄 통합 파이프라인 오케스트레이터 (새로운 기능)
+- **원스톱 처리**: 데이터 감지 → 전처리 → 벡터 임베딩 → DB 저장
+- **자동화된 워크플로우**: 수동 개입 없이 전체 파이프라인 실행
+- **오류 복구**: 실패한 파일은 별도 추적하여 재처리 가능
+- **통계 제공**: 처리 결과에 대한 상세한 통계 정보
+
 ### 🤖 ML-Enhanced Parsing System (선택적)
 - **Machine Learning Model**: RandomForest-based article boundary classification (모델 파일이 있을 때만)
 - **Hybrid Scoring**: ML model (50%) + Rule-based (50%) combination
@@ -87,64 +99,99 @@ export LOG_LEVEL=INFO
 data/
 ├── raw/
 │   └── assembly/
-│       └── law/
-│           ├── 20251010/
-│           ├── 20251011/
-│           └── 20251012/
+│       ├── law_only/          # 법률 전용 데이터
+│       │   ├── 20251010/
+│       │   ├── 20251011/
+│       │   └── 20251012/
+│       └── precedent/         # 판례 데이터
+│           ├── civil/
+│           ├── criminal/
+│           └── family/
 └── processed/
     └── assembly/
-        └── law/
-            ├── ml_enhanced/
-            └── rule_based/
+        ├── law_only/          # 처리된 법률 데이터
+        │   ├── ml_enhanced/
+        │   └── rule_based/
+        └── precedent/         # 처리된 판례 데이터
+            ├── civil/
+            ├── criminal/
+            └── family/
+
+scripts/
+├── data_processing/
+│   ├── preprocessing/         # 기본 전처리 스크립트
+│   ├── incremental_preprocessor.py      # 증분 전처리
+│   ├── auto_pipeline_orchestrator.py    # 통합 파이프라인
+│   ├── quality/               # 품질 관리 모듈
+│   └── utilities/             # 유틸리티 스크립트
+└── ml_training/
+    └── vector_embedding/       # 벡터 임베딩 생성
 ```
 
 ## 기본 사용법
 
-### 1. ML-Enhanced Processing (권장)
+### 1. 증분 전처리 (권장)
+
+```bash
+# 증분 전처리 실행 (새로운 파일만 처리)
+python scripts/data_processing/incremental_preprocessor.py \
+    --data-type law_only \
+    --verbose
+```
+
+### 2. ML-Enhanced Processing
 
 ```bash
 # ML 강화 전처리 실행
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --input data/raw/assembly/law/20251012 \
     --output data/processed/assembly/law \
     --ml-enhanced \
     --log-level INFO
 ```
 
-### 2. 기본 Processing
+### 3. 기본 Processing
 
 ```bash
 # 기본 전처리 (ML 모델 없이)
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --input data/raw/assembly/law/20251012 \
     --output data/processed/assembly/law \
     --log-level INFO
 ```
 
-### 3. 품질 분석
+### 4. 통합 파이프라인 실행
+
+```bash
+# 전체 파이프라인 자동 실행 (데이터 감지 → 전처리 → 벡터 임베딩 → DB 저장)
+python scripts/data_processing/auto_pipeline_orchestrator.py \
+    --data-type law_only
+```
+
+### 5. 품질 분석
 
 ```bash
 # 처리 결과 품질 분석
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --output data/processed/assembly/law \
     --show-summary \
     --quality-analysis
 ```
 
-### 4. 실패한 파일 재처리
+### 6. 실패한 파일 재처리
 
 ```bash
 # 실패한 파일들 재처리
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --output data/processed/assembly/law \
     --reset-failed
 ```
 
-### 5. 메모리 안전 처리
+### 7. 메모리 안전 처리
 
 ```bash
 # 메모리 임계값 설정으로 안전한 처리
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --input data/raw/assembly/law/20251012 \
     --output data/processed/assembly/law \
     --memory-threshold 90.0 \
@@ -157,21 +204,25 @@ python scripts/assembly/preprocess_laws.py \
 
 #### 훈련 데이터 생성
 ```bash
-python scripts/assembly/prepare_training_data.py \
+# 훈련 데이터 생성 (ML 모델 훈련용)
+python scripts/data_processing/preprocessing/preprocess_laws.py \
+    --prepare-training-data \
     --input data/processed/assembly/law \
     --output data/training/article_classification_training_data.json
 ```
 
 #### 모델 훈련
 ```bash
-python scripts/assembly/train_ml_model.py \
+# ML 모델 훈련 (훈련 데이터가 준비된 경우)
+python scripts/ml_training/train_article_classifier.py \
     --input data/training/article_classification_training_data.json \
     --output models/article_classifier.pkl
 ```
 
 #### 품질 검증
 ```bash
-python scripts/assembly/check_parsing_quality.py \
+# 파싱 품질 검증
+python scripts/data_processing/validation/check_parsing_quality.py \
     --processed-dir data/processed/assembly/law/ml_enhanced \
     --sample-size 100
 ```
@@ -181,7 +232,7 @@ python scripts/assembly/check_parsing_quality.py \
 #### 버전별 처리
 ```bash
 # 특정 버전으로 강제 처리
-python scripts/assembly/preprocess_laws.py \
+python scripts/data_processing/preprocessing/preprocess_laws.py \
     --input data/raw/assembly/law/20251010 \
     --output data/processed/assembly/law \
     --force-version v1.1
@@ -189,14 +240,17 @@ python scripts/assembly/preprocess_laws.py \
 
 #### 버전별 리포트 생성
 ```bash
-python scripts/assembly/version_analytics.py --generate-report
+# 버전 분석 리포트 생성
+python scripts/data_processing/validation/validate_processed_laws.py \
+    --processed-dir data/processed/assembly/law \
+    --generate-report
 ```
 
 ### 3. 데이터 마이그레이션
 
 ```bash
 # 데이터 버전 마이그레이션
-python scripts/assembly/migrate_data.py \
+python scripts/data_processing/unified_preprocessing_manager.py \
     --input data/processed/assembly/law \
     --from-version v1.0 \
     --to-version v1.2
@@ -478,20 +532,33 @@ ML-enhanced preprocessing pipeline은 다음을 위해 준비되었습니다:
 
 ## FAQ (자주 묻는 질문)
 
+### Q: 증분 전처리란 무엇인가요?
+**A**: 증분 전처리는 이미 처리된 파일은 건드리지 않고 새로운 파일만 선별하여 처리하는 시스템입니다. 이를 통해 처리 시간을 단축하고 리소스를 절약할 수 있습니다.
+
+### Q: 통합 파이프라인 오케스트레이터는 어떻게 사용하나요?
+**A**: 통합 파이프라인은 데이터 감지부터 DB 저장까지 전체 과정을 자동화합니다:
+```bash
+# 법률 데이터 전체 파이프라인 실행
+python scripts/data_processing/auto_pipeline_orchestrator.py --data-type law_only
+
+# 판례 데이터 전체 파이프라인 실행
+python scripts/data_processing/auto_pipeline_orchestrator.py --data-type precedent_civil
+```
+
 ### Q: ML-enhanced parsing이란 무엇인가요?
 **A**: ML-enhanced parsing은 머신러닝 모델과 규칙 기반 파싱을 결합하여 조문 경계 감지 정확도를 향상시키는 기능입니다. 현재는 모델 파일이 없어 규칙 기반 파서로 동작합니다.
 
 ### Q: ML 강화 기능을 어떻게 활성화하나요?
 **A**: ML 강화 기능을 사용하려면:
-1. `python scripts/assembly/prepare_training_data.py`로 훈련 데이터 생성
-2. `python scripts/assembly/train_ml_model.py`로 모델 훈련
+1. `python scripts/data_processing/preprocessing/preprocess_laws.py --prepare-training-data`로 훈련 데이터 생성
+2. `python scripts/ml_training/train_article_classifier.py`로 모델 훈련
 3. 생성된 `models/article_classifier.pkl` 파일이 있으면 자동으로 ML 파서 사용
 
 ### Q: 하이브리드 스코어링 시스템이란 무엇인가요?
 **A**: 하이브리드 스코어링 시스템은 ML 모델 예측(50%)과 규칙 기반 파싱 점수(50%)를 결합하여 최적의 정확도를 달성합니다. 현재는 규칙 기반 파서만 사용됩니다.
 
 ### Q: 현재 처리 속도는 얼마나 빠른가요?
-**A**: 현재 규칙 기반 파서로 파일당 약 0.5초가 소요되며, 안정적인 성능을 제공합니다.
+**A**: 현재 규칙 기반 파서로 파일당 약 0.5초가 소요되며, 안정적인 성능을 제공합니다. 증분 전처리를 사용하면 이미 처리된 파일은 스킵하므로 더욱 빠릅니다.
 
 ### Q: ML 모델 없이도 시스템을 사용할 수 있나요?
 **A**: 네, ML 모델이 없어도 규칙 기반 파서로 완전히 동작하며, 안정적인 파싱 성능을 제공합니다.
@@ -500,13 +567,13 @@ ML-enhanced preprocessing pipeline은 다음을 위해 준비되었습니다:
 **A**: 훈련 파이프라인을 사용하세요:
 ```bash
 # Generate training data
-python scripts/assembly/prepare_training_data.py
+python scripts/data_processing/preprocessing/preprocess_laws.py --prepare-training-data
 
 # Train ML model
-python scripts/assembly/train_ml_model.py
+python scripts/ml_training/train_article_classifier.py
 
 # Validate model performance
-python scripts/assembly/check_parsing_quality.py
+python scripts/data_processing/validation/check_parsing_quality.py
 ```
 
 ### Q: 부칙 파싱이란 무엇인가요?
@@ -515,12 +582,26 @@ python scripts/assembly/check_parsing_quality.py
 ### Q: 파싱 품질을 어떻게 확인하나요?
 **A**: 품질 분석 도구를 사용하세요:
 ```bash
-python scripts/assembly/check_parsing_quality.py --processed-dir data/processed/assembly/law/ml_enhanced
+python scripts/data_processing/validation/check_parsing_quality.py --processed-dir data/processed/assembly/law/ml_enhanced
 ```
+
+### Q: 체크포인트 시스템은 어떻게 작동하나요?
+**A**: 체크포인트 시스템은 처리 중단 시 이어서 처리할 수 있도록 각 파일의 처리 상태를 데이터베이스에 저장합니다. 중단된 지점부터 자동으로 재개됩니다.
 
 ## 버전 히스토리
 
-### v4.0 (Current)
+### v4.1 (Current)
+- **Added**: 증분 전처리 시스템 (`incremental_preprocessor.py`)
+- **Added**: 통합 파이프라인 오케스트레이터 (`auto_pipeline_orchestrator.py`)
+- **Added**: 자동 데이터 감지 시스템 (`auto_data_detector.py`)
+- **Added**: 품질 관리 모듈 (`quality/` 디렉토리)
+- **Added**: 법률 용어 추출 및 정규화 시스템
+- **Enhanced**: 체크포인트 시스템으로 중단 시 재개 가능
+- **Enhanced**: 메모리 최적화 및 성능 개선
+- **Enhanced**: 판례 데이터 처리 지원 (민사/형사/가사)
+- **Note**: 기존 ML-enhanced 기능은 그대로 유지
+
+### v4.0 (Previous)
 - **Added**: ML-enhanced parsing system (선택적, 모델 파일이 있을 때만)
 - **Added**: Hybrid scoring system (ML + Rule-based)
 - **Added**: Supplementary provisions parsing
@@ -550,7 +631,3 @@ python scripts/assembly/check_parsing_quality.py --processed-dir data/processed/
 - Parser modules implementation
 - Database import functionality
 - Basic error handling
-
----
-
-Assembly Law Data Preprocessing Pipeline v4.0은 ML-enhanced accuracy, hybrid parsing capabilities, 그리고 comprehensive quality validation을 제공하여 reliable production use와 superior legal document parsing performance를 달성합니다.

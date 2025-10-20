@@ -102,7 +102,7 @@ class ExactSearchEngine:
                     content,
                     law_type,
                     effective_date
-                FROM laws
+                FROM assembly_laws
                 WHERE 1=1
                 """
                 params = []

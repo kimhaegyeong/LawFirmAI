@@ -33,6 +33,16 @@ class ConfidenceInfo:
     def reliability_level(self) -> str:
         """신뢰도 레벨을 문자열로 반환"""
         return self.level.value
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """딕셔너리로 변환 (JSON 직렬화용)"""
+        return {
+            "confidence": self.confidence,
+            "level": self.level.value,
+            "factors": self.factors,
+            "explanation": self.explanation,
+            "reliability_level": self.reliability_level
+        }
 
 
 class ConfidenceCalculator:
