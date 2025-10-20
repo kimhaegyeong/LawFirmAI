@@ -1,0 +1,699 @@
+{
+  "start_time": "2025-10-19T22:53:45.794728",
+  "input_text_count": 3,
+  "use_gemini": false,
+  "extraction": {
+    "extraction_results": [
+      {
+        "text_index": 0,
+        "original_text": "계약서에서 손해배상 조항을 검토해주세요.",
+        "cleaned_text": "계약서에서 손해배상 조항을 검토해주세요.",
+        "extracted_terms": [
+          "손해배상"
+        ],
+        "term_count": 1
+      },
+      {
+        "text_index": 1,
+        "original_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다.",
+        "cleaned_text": "이혼 소송에서 양육권과 면접교섭권에 대해 문의드립니다.",
+        "extracted_terms": [
+          "양육권",
+          "면접교섭권",
+          "이혼소송",
+          "이혼",
+          "소송"
+        ],
+        "term_count": 5
+      },
+      {
+        "text_index": 2,
+        "original_text": "특허 침해 소송에서 증거 수집 방법에 대해 알고 싶습니다.",
+        "cleaned_text": "특허 침해 소송에서 증거 수집 방법에 대해 알고 싶습니다.",
+        "extracted_terms": [
+          "특허",
+          "침해",
+          "침해소송",
+          "증거",
+          "방법",
+          "소송"
+        ],
+        "term_count": 6
+      }
+    ],
+    "all_extracted_terms": [
+      "양육권",
+      "특허",
+      "면접교섭권",
+      "침해",
+      "침해소송",
+      "이혼소송",
+      "손해배상",
+      "이혼",
+      "증거",
+      "방법",
+      "소송"
+    ],
+    "total_terms": 11
+  },
+  "validation": {
+    "validated_terms": [
+      {
+        "term": "양육권",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "양육권에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "양육권"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988492",
+        "priority_score": 67.0
+      },
+      {
+        "term": "특허",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "특허에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "특허"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988517",
+        "priority_score": 67.0
+      },
+      {
+        "term": "면접교섭권",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "면접교섭권에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "면접교섭권"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988525",
+        "priority_score": 67.0
+      },
+      {
+        "term": "침해",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "침해에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "침해"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988531",
+        "priority_score": 67.0
+      },
+      {
+        "term": "침해소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "침해소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "침해소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988538",
+        "priority_score": 67.0
+      },
+      {
+        "term": "이혼소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "이혼소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "이혼소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988545",
+        "priority_score": 67.0
+      },
+      {
+        "term": "손해배상",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "손해배상에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "손해배상"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988551",
+        "priority_score": 67.0
+      },
+      {
+        "term": "이혼",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "이혼에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "이혼"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988557",
+        "priority_score": 67.0
+      },
+      {
+        "term": "증거",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "증거에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "증거"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988562",
+        "priority_score": 67.0
+      },
+      {
+        "term": "방법",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "방법에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "방법"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988568",
+        "priority_score": 67.0
+      },
+      {
+        "term": "소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988574",
+        "priority_score": 67.0
+      }
+    ],
+    "validated_count": 11
+  },
+  "integration": {
+    "extracted_terms_count": 11,
+    "processed_extracted_count": 11,
+    "validated_terms_count": 11,
+    "high_quality_terms_count": 11,
+    "filtered_out_count": 0,
+    "database_stats": {
+      "total_terms": 44,
+      "domain_count": 11,
+      "domain_stats": {
+        "민사법": 5,
+        "형사법": 4,
+        "가족법": 3,
+        "상사법": 3,
+        "노동법": 3,
+        "부동산법": 2,
+        "지적재산권법": 3,
+        "세법": 3,
+        "민사소송법": 4,
+        "형사소송법": 2,
+        "기타/일반": 12
+      },
+      "added_terms": 11,
+      "updated_terms": 0
+    },
+    "high_quality_terms": [
+      {
+        "term": "양육권",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "양육권에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "양육권"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988492",
+        "priority_score": 67.0
+      },
+      {
+        "term": "특허",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "특허에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "특허"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988517",
+        "priority_score": 67.0
+      },
+      {
+        "term": "면접교섭권",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "면접교섭권에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "면접교섭권"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988525",
+        "priority_score": 67.0
+      },
+      {
+        "term": "침해",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "침해에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "침해"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988531",
+        "priority_score": 67.0
+      },
+      {
+        "term": "침해소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "침해소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "침해소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988538",
+        "priority_score": 67.0
+      },
+      {
+        "term": "이혼소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "이혼소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "이혼소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988545",
+        "priority_score": 67.0
+      },
+      {
+        "term": "손해배상",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "손해배상에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "손해배상"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988551",
+        "priority_score": 67.0
+      },
+      {
+        "term": "이혼",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "이혼에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "이혼"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988557",
+        "priority_score": 67.0
+      },
+      {
+        "term": "증거",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "증거에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "증거"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988562",
+        "priority_score": 67.0
+      },
+      {
+        "term": "방법",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "방법에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "방법"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988568",
+        "priority_score": 67.0
+      },
+      {
+        "term": "소송",
+        "is_valid": true,
+        "is_high_quality": true,
+        "final_confidence": 0.8,
+        "domain": "기타/일반",
+        "domain_confidence": 0.5,
+        "quality_score": 70,
+        "quality_details": {
+          "기본검증": 70
+        },
+        "definition": "소송에 대한 정의가 필요합니다.",
+        "synonyms": [],
+        "related_terms": [],
+        "context_keywords": [
+          "소송"
+        ],
+        "weight": 0.5,
+        "suggestions": "Gemini 검증을 통해 더 정확한 정보를 얻을 수 있습니다.",
+        "validation_timestamp": "2025-10-19T22:53:45.988574",
+        "priority_score": 67.0
+      }
+    ],
+    "filtered_out": []
+  },
+  "performance": {
+    "term_quality_analysis": {
+      "total_terms": 11,
+      "valid_terms": 11,
+      "high_quality_terms": 11,
+      "validity_rate": 1.0,
+      "high_quality_rate": 1.0,
+      "avg_quality_score": 70.0,
+      "quality_distribution": {
+        "excellent": 0,
+        "good": 0,
+        "fair": 11,
+        "poor": 0
+      },
+      "avg_confidence": 0.8,
+      "confidence_distribution": {
+        "high": 11,
+        "medium": 0,
+        "low": 0
+      },
+      "domain_distribution": {
+        "기타/일반": 11
+      },
+      "avg_weight": 0.5
+    },
+    "problematic_terms": [
+      {
+        "term": "양육권",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "특허",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "면접교섭권",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "침해",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "침해소송",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "이혼소송",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "손해배상",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "이혼",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "증거",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "방법",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      },
+      {
+        "term": "소송",
+        "issues": [
+          "동의어 없음"
+        ],
+        "quality_score": 70,
+        "confidence": 0.8
+      }
+    ],
+    "classification_performance": {
+      "error": "최근 데이터가 없습니다"
+    }
+  },
+  "performance_report": "==================================================\n법률 용어 추출 시스템 성능 보고서\n==================================================\n생성 시간: 2025-10-19 22:53:45\n\n2. 용어 품질 분석\n   - 총 용어 수: 11\n   - 유효 용어 수: 11\n   - 고품질 용어 수: 11\n   - 유효성 비율: 1.000\n   - 고품질 비율: 1.000\n   - 평균 품질 점수: 70.0\n   - 평균 신뢰도: 0.800\n\n3. 문제 용어\n   - 문제 용어 수: 11\n   - 주요 문제:\n     * 양육권: 동의어 없음\n     * 특허: 동의어 없음\n     * 면접교섭권: 동의어 없음\n     * 침해: 동의어 없음\n     * 침해소송: 동의어 없음\n\n4. 분류 성능\n   - 총 분류 수: 0\n   - 정확도: 0.000\n   - 평균 신뢰도: 0.000\n   - 평균 처리 시간: 0.000초\n",
+  "end_time": "2025-10-19T22:53:45.998846",
+  "status": "success"
+}

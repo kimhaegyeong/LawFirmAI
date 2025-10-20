@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import structlog
-from source.utils.config import Config
+from .config import Config
 
 
 def setup_logging(config: Optional[Config] = None) -> None:
@@ -99,6 +99,7 @@ def setup_logging(config: Optional[Config] = None) -> None:
     print("로깅 시스템이 환경 변수 레벨에서 완전히 차단되었습니다")
 
 
-def get_logger(name: str) -> structlog.BoundLogger:
-    """로거 반환"""
-    return structlog.get_logger(name)
+def get_logger(name: str):
+    """로거 반환 - 로거 문제 해결을 위해 기본 로거 사용"""
+    import logging
+    return logging.getLogger(name)
