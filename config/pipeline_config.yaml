@@ -56,6 +56,16 @@ data_sources:
     file_pattern: "constitutional_page_*.json"
     metadata_key: "data_type"
     expected_value: "constitutional"
+    
+  akls_precedents:
+    enabled: true
+    priority: 5
+    raw_path: "data/raw/akls"
+    processed_path: "data/processed/akls"
+    file_pattern: "*.pdf"
+    metadata_key: "source"
+    expected_value: "akls"
+    document_type: "standard_precedent"
 
 # 전처리 설정
 preprocessing:
@@ -100,6 +110,9 @@ vectorization:
   # 판례 전용 인덱스 경로
   precedent_index_path: "data/embeddings/ml_enhanced_ko_sroberta_precedents"
   
+  # AKLS 표준판례 전용 인덱스 경로
+  akls_index_path: "data/embeddings/ml_enhanced_ko_sroberta_akls"
+  
   # 모델 설정
   model_settings:
     device: "cpu"  # "cpu" 또는 "cuda"
@@ -140,6 +153,12 @@ database:
     precedent_parties:
       enabled: true
       fts_enabled: false
+    akls_precedents:
+      enabled: true
+      fts_enabled: true
+    akls_sections:
+      enabled: true
+      fts_enabled: true
     processed_files:
       enabled: true
       
