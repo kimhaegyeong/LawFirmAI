@@ -32,6 +32,13 @@ from .conversation_flow_tracker import ConversationFlowTracker
 from .contextual_memory_manager import ContextualMemoryManager
 from .conversation_quality_monitor import ConversationQualityMonitor
 
+# 자연스러운 답변 개선 모듈
+from .conversation_connector import ConversationConnector
+from .emotional_tone_adjuster import EmotionalToneAdjuster
+from .personalized_style_learner import PersonalizedStyleLearner
+from .realtime_feedback_system import RealtimeFeedbackSystem
+from .naturalness_evaluator import NaturalnessEvaluator
+
 # 성능 최적화 모듈
 from ..utils.performance_optimizer import (
     PerformanceMonitor, MemoryOptimizer, CacheManager,
@@ -132,6 +139,22 @@ class ChatService:
             self.contextual_memory_manager = None
             self.quality_monitor = None
         
+        # 자연스러운 답변 개선 컴포넌트 초기화
+        try:
+            self.conversation_connector = ConversationConnector()
+            self.emotional_tone_adjuster = EmotionalToneAdjuster()
+            self.personalized_style_learner = PersonalizedStyleLearner(self.user_profile_manager)
+            self.realtime_feedback_system = RealtimeFeedbackSystem(self.quality_monitor)
+            self.naturalness_evaluator = NaturalnessEvaluator()
+            self.logger.info("Natural conversation improvement components initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize natural conversation components: {e}")
+            self.conversation_connector = None
+            self.emotional_tone_adjuster = None
+            self.personalized_style_learner = None
+            self.realtime_feedback_system = None
+            self.naturalness_evaluator = None
+        
         # 성능 최적화 컴포넌트 초기화
         try:
             self.performance_monitor = PerformanceMonitor()
@@ -209,6 +232,12 @@ class ChatService:
             
             # 실제 답변 생성 (RAG 시스템 사용)
             response_result = await self._generate_response(message, phase1_info, phase2_info, phase3_info)
+            
+            # 자연스러운 답변 개선 적용
+            if response_result.get("response"):
+                response_result["response"] = await self._apply_naturalness_improvements(
+                    response_result["response"], phase1_info, phase2_info, user_id
+                )
             
             # 최종 결과 통합
             processing_time = time.time() - start_time
@@ -922,6 +951,310 @@ class ChatService:
         else:
             # 기존 방식 (placeholder)
             pass
+    
+    async def _apply_naturalness_improvements(self, answer: str, phase1_info: Dict[str, Any], 
+                                           phase2_info: Dict[str, Any], user_id: str) -> str:
+        """
+        자연스러운 답변 개선사항 적용
+        
+        Args:
+            answer: 원본 답변
+            phase1_info: Phase 1 정보 (대화 맥락)
+            phase2_info: Phase 2 정보 (개인화 및 감정 분석)
+            user_id: 사용자 ID
+            
+        Returns:
+            str: 개선된 답변
+        """
+        try:
+            if not answer or not isinstance(answer, str):
+                return answer
+            
+            # 1. 대화 연결어 추가
+            answer = await self._add_conversation_connectors(answer, phase1_info, phase2_info)
+            
+            # 2. 감정 톤 조절
+            answer = await self._adjust_emotional_tone(answer, phase2_info)
+            
+            # 3. 개인화된 스타일 적용
+            if self.personalized_style_learner:
+                answer = self.personalized_style_learner.apply_personalized_style(answer, user_id)
+            
+            # 4. 실시간 피드백 기반 개선사항 적용
+            if self.realtime_feedback_system:
+                improvements = self.realtime_feedback_system.get_next_response_improvements()
+                answer = self._apply_feedback_improvements(answer, improvements)
+            
+            # 5. 자연스러움 평가 및 최종 검증
+            if self.naturalness_evaluator:
+                context = {
+                    "user_preference": phase2_info.get("user_profile", {}).get("style_preferences", {}).get("formality_level", "medium"),
+                    "user_emotion": phase2_info.get("emotion_analysis", {}).get("primary_emotion", "neutral"),
+                    "user_type": phase2_info.get("user_profile", {}).get("user_type", "general"),
+                    "expertise_level": phase2_info.get("user_profile", {}).get("expertise_level", "beginner"),
+                    "question_type": phase1_info.get("question_classification", {}).get("question_type", "general"),
+                    "previous_topic": phase1_info.get("session_context", {}).get("current_topic", "")
+                }
+                
+                metrics = self.naturalness_evaluator.evaluate_naturalness(answer, context)
+                
+                # 자연스러움이 매우 낮으면 추가 개선
+                if metrics.overall_naturalness < 0.3:
+                    recommendations = self.naturalness_evaluator.get_improvement_recommendations(metrics)
+                    answer = self._apply_naturalness_recommendations(answer, recommendations)
+            
+            return answer
+            
+        except Exception as e:
+            self.logger.error(f"Error applying naturalness improvements: {e}")
+            return answer
+    
+    async def _add_conversation_connectors(self, answer: str, phase1_info: Dict[str, Any], 
+                                        phase2_info: Dict[str, Any]) -> str:
+        """대화 연결어 추가"""
+        try:
+            if not self.conversation_connector:
+                return answer
+            
+            context = {
+                "previous_topic": phase1_info.get("session_context", {}).get("current_topic", ""),
+                "conversation_flow": phase1_info.get("session_context", {}).get("flow_type", "new"),
+                "user_emotion": phase2_info.get("emotion_analysis", {}).get("primary_emotion", "neutral"),
+                "question_type": phase1_info.get("question_classification", {}).get("question_type", "general")
+            }
+            
+            return self.conversation_connector.add_natural_connectors(answer, context)
+            
+        except Exception as e:
+            self.logger.error(f"Error adding conversation connectors: {e}")
+            return answer
+    
+    async def _adjust_emotional_tone(self, answer: str, phase2_info: Dict[str, Any]) -> str:
+        """감정 톤 조절"""
+        try:
+            if not self.emotional_tone_adjuster:
+                return answer
+            
+            emotion_analysis = phase2_info.get("emotion_analysis", {})
+            user_emotion = emotion_analysis.get("primary_emotion", "neutral")
+            emotion_intensity = emotion_analysis.get("intensity", 0.5)
+            
+            return self.emotional_tone_adjuster.adjust_tone(answer, user_emotion, emotion_intensity)
+            
+        except Exception as e:
+            self.logger.error(f"Error adjusting emotional tone: {e}")
+            return answer
+    
+    def _apply_feedback_improvements(self, answer: str, improvements: List[str]) -> str:
+        """피드백 기반 개선사항 적용"""
+        try:
+            for improvement in improvements:
+                if "간결하게" in improvement:
+                    answer = self._make_concise(answer)
+                elif "자세히" in improvement:
+                    answer = self._add_details(answer)
+                elif "친근한" in improvement:
+                    answer = self._make_friendly(answer)
+                elif "단계별" in improvement:
+                    answer = self._structure_step_by_step(answer)
+            
+            return answer
+            
+        except Exception as e:
+            self.logger.error(f"Error applying feedback improvements: {e}")
+            return answer
+    
+    def _apply_naturalness_recommendations(self, answer: str, recommendations: List[str]) -> str:
+        """자연스러움 권장사항 적용"""
+        try:
+            for recommendation in recommendations:
+                if "자연스러운 말투" in recommendation:
+                    answer = self._make_casual(answer)
+                elif "대화 연결어" in recommendation:
+                    answer = self._add_connectors(answer)
+                elif "공감적 표현" in recommendation:
+                    answer = self._add_empathy(answer)
+                elif "개인화된 표현" in recommendation:
+                    answer = self._add_personalization(answer)
+                elif "읽기 쉽게" in recommendation:
+                    answer = self._improve_readability(answer)
+            
+            return answer
+            
+        except Exception as e:
+            self.logger.error(f"Error applying naturalness recommendations: {e}")
+            return answer
+    
+    def _make_concise(self, answer: str) -> str:
+        """답변을 간결하게 만들기"""
+        try:
+            sentences = answer.split(".")
+            if len(sentences) > 3:
+                return ". ".join(sentences[:3]) + "."
+            return answer
+        except Exception:
+            return answer
+    
+    def _add_details(self, answer: str) -> str:
+        """세부사항 추가"""
+        try:
+            if "예를 들어" not in answer:
+                answer += " 예를 들어, 실제 사례를 통해 설명드리면 더 명확할 것 같아요."
+            return answer
+        except Exception:
+            return answer
+    
+    def _make_friendly(self, answer: str) -> str:
+        """친근하게 만들기"""
+        try:
+            replacements = {
+                "~입니다": "~예요",
+                "~합니다": "~해요",
+                "~하시기 바랍니다": "~하시면 돼요"
+            }
+            
+            for formal, casual in replacements.items():
+                answer = answer.replace(formal, casual)
+            
+            return answer
+        except Exception:
+            return answer
+    
+    def _structure_step_by_step(self, answer: str) -> str:
+        """단계별로 구조화"""
+        try:
+            if "단계" not in answer and "절차" not in answer:
+                answer = f"단계별로 설명드리면, {answer}"
+            return answer
+        except Exception:
+            return answer
+    
+    def _make_casual(self, answer: str) -> str:
+        """캐주얼하게 만들기"""
+        try:
+            replacements = {
+                "~입니다": "~예요",
+                "~합니다": "~해요",
+                "~됩니다": "~돼요",
+                "귀하": "질문하신",
+                "~하시기 바랍니다": "~하시면 돼요"
+            }
+            
+            for formal, casual in replacements.items():
+                answer = answer.replace(formal, casual)
+            
+            return answer
+        except Exception:
+            return answer
+    
+    def _add_connectors(self, answer: str) -> str:
+        """연결어 추가"""
+        try:
+            connectors = ["그리고", "또한", "추가로"]
+            if not any(connector in answer for connector in connectors):
+                answer = f"그리고 {answer}"
+            return answer
+        except Exception:
+            return answer
+    
+    def _add_empathy(self, answer: str) -> str:
+        """공감 표현 추가"""
+        try:
+            empathy_expressions = ["이해하시는 마음이에요", "답답하시겠어요", "괜찮을 거예요"]
+            if not any(expression in answer for expression in empathy_expressions):
+                answer = f"이해하시는 마음이에요, {answer}"
+            return answer
+        except Exception:
+            return answer
+    
+    def _add_personalization(self, answer: str) -> str:
+        """개인화 표현 추가"""
+        try:
+            personal_expressions = ["질문하신", "말씀하신", "문의하신"]
+            if not any(expression in answer for expression in personal_expressions):
+                answer = f"질문하신 내용에 대해 {answer}"
+            return answer
+        except Exception:
+            return answer
+    
+    def _improve_readability(self, answer: str) -> str:
+        """가독성 개선"""
+        try:
+            # 문장을 더 짧게 만들기
+            sentences = answer.split(".")
+            improved_sentences = []
+            
+            for sentence in sentences:
+                if len(sentence.split()) > 20:  # 너무 긴 문장
+                    # 간단히 나누기
+                    words = sentence.split()
+                    mid_point = len(words) // 2
+                    improved_sentences.append(" ".join(words[:mid_point]))
+                    improved_sentences.append(" ".join(words[mid_point:]))
+                else:
+                    improved_sentences.append(sentence)
+            
+            return ". ".join(filter(None, improved_sentences)) + "."
+        except Exception:
+            return answer
+    
+    def collect_user_feedback(self, session_id: str, feedback_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        사용자 피드백 수집
+        
+        Args:
+            session_id: 세션 ID
+            feedback_data: 피드백 데이터
+            
+        Returns:
+            Dict[str, Any]: 피드백 처리 결과
+        """
+        try:
+            if not self.realtime_feedback_system:
+                return {"feedback_received": False, "error": "Feedback system not available"}
+            
+            return self.realtime_feedback_system.collect_feedback(session_id, feedback_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error collecting user feedback: {e}")
+            return {"feedback_received": False, "error": str(e)}
+    
+    def get_naturalness_evaluation(self, answer: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        답변의 자연스러움 평가
+        
+        Args:
+            answer: 평가할 답변
+            context: 평가 맥락
+            
+        Returns:
+            Dict[str, Any]: 자연스러움 평가 결과
+        """
+        try:
+            if not self.naturalness_evaluator:
+                return {"error": "Naturalness evaluator not available"}
+            
+            metrics = self.naturalness_evaluator.evaluate_naturalness(answer, context)
+            
+            return {
+                "overall_score": metrics.overall_naturalness,
+                "category_scores": {
+                    "formality": metrics.formality_score,
+                    "conversation_flow": metrics.conversation_flow_score,
+                    "emotional_appropriateness": metrics.emotional_appropriateness,
+                    "personalization": metrics.personalization_score,
+                    "readability": metrics.readability_score
+                },
+                "naturalness_level": metrics.detailed_analysis["naturalness_level"],
+                "strengths": metrics.detailed_analysis["strengths"],
+                "weaknesses": metrics.detailed_analysis["weaknesses"],
+                "suggestions": metrics.detailed_analysis["suggestions"],
+                "evaluation_timestamp": metrics.evaluation_timestamp
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error evaluating naturalness: {e}")
+            return {"error": str(e)}
     
     def get_service_status(self) -> Dict[str, Any]:
         """서비스 상태 조회"""
