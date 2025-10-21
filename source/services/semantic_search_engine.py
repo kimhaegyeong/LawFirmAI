@@ -49,42 +49,62 @@ class SemanticSearchEngine:
     def _load_components(self):
         """벡터 인덱스와 모델 로드"""
         try:
-            # FAISS 인덱스 로드
-            if self.index_path.exists():
-                self.index = faiss.read_index(str(self.index_path))
-                self.logger.info(f"FAISS index loaded: {self.index.ntotal} vectors")
-            else:
-                self.logger.warning(f"FAISS index not found: {self.index_path}")
-                return
+            # 여러 인덱스 경로 시도
+            index_paths = [
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents.faiss",
+                "data/embeddings/optimized_ko_sroberta_precedents.faiss",
+                "data/embeddings/quantized_ko_sroberta_precedents.faiss",
+                str(self.index_path)
+            ]
             
-            # 메타데이터 로드
-            if self.metadata_path.exists():
-                with open(self.metadata_path, 'r', encoding='utf-8') as f:
-                    metadata_content = json.load(f)
-                
-                # 메타데이터가 딕셔너리인 경우 (설정 정보)
-                if isinstance(metadata_content, dict):
-                    if 'documents' in metadata_content:
-                        self.metadata = metadata_content['documents']
+            metadata_paths = [
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents.json",
+                "data/embeddings/optimized_ko_sroberta_precedents.json", 
+                "data/embeddings/quantized_ko_sroberta_precedents.json",
+                str(self.metadata_path)
+            ]
+            
+            # 인덱스 로드 시도
+            for i, (idx_path, meta_path) in enumerate(zip(index_paths, metadata_paths)):
+                try:
+                    if Path(idx_path).exists() and Path(meta_path).exists():
+                        self.logger.info(f"Loading index from: {idx_path}")
+                        self.index = faiss.read_index(idx_path)
+                        
+                        with open(meta_path, 'r', encoding='utf-8') as f:
+                            metadata_content = json.load(f)
+                        
+                        # 메타데이터가 딕셔너리인 경우 (설정 정보)
+                        if isinstance(metadata_content, dict):
+                            if 'document_metadata' in metadata_content:
+                                self.metadata = metadata_content['document_metadata']
+                            elif 'documents' in metadata_content:
+                                self.metadata = metadata_content['documents']
+                            else:
+                                # 설정 정보만 있는 경우, 빈 리스트로 초기화
+                                self.metadata = []
+                                self.logger.warning("Metadata contains only configuration, no document data")
+                        else:
+                            self.metadata = metadata_content
+                        
+                        self.logger.info(f"Successfully loaded index with {len(self.metadata)} documents")
+                        break
                     else:
-                        # 설정 정보만 있는 경우, 빈 리스트로 초기화
-                        self.metadata = []
-                        self.logger.warning("Metadata contains only configuration, no document data")
-                else:
-                    self.metadata = metadata_content
-                
-                self.logger.info(f"Metadata loaded: {len(self.metadata)} items")
-            else:
-                self.logger.warning(f"Metadata not found: {self.metadata_path}")
-                return
+                        self.logger.warning(f"Index files not found: {idx_path}, {meta_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to load index from {idx_path}: {e}")
+                    continue
             
             # 모델 로드
             try:
                 self.model = SentenceTransformer(self.model_name)
                 self.logger.info(f"Model loaded: {self.model_name}")
             except Exception as e:
-                self.logger.warning(f"Failed to load model {self.model_name}: {e}")
+                self.logger.error(f"Failed to load model {self.model_name}: {e}")
                 self.model = None
+            
+            if self.index is None or self.model is None:
+                self.logger.warning("Vector index or model not available, will use keyword search fallback")
                 
         except Exception as e:
             self.logger.error(f"Error loading components: {e}")
@@ -106,7 +126,7 @@ class SemanticSearchEngine:
         """
         try:
             if self.index is None or self.model is None or not self.metadata:
-                self.logger.warning("Vector index or model not available, falling back to keyword search")
+                self.logger.debug("Vector index or model not available, falling back to keyword search")
                 return self._fallback_keyword_search(query, k)
             
             # 쿼리 벡터화

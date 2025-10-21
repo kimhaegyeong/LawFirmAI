@@ -62,7 +62,7 @@ class LegalVectorStore:
                  dimension: int = 768, index_type: str = "flat",
                  enable_quantization: bool = True,
                  enable_lazy_loading: bool = True,
-                 memory_threshold_mb: int = 500):
+                 memory_threshold_mb: int = 3000):
         """
         벡터 스토어 초기화
         
@@ -96,7 +96,7 @@ class LegalVectorStore:
         # 메모리 관리
         self._memory_cache = weakref.WeakValueDictionary()
         self._last_memory_check = time.time()
-        self._memory_check_interval = 30  # 30초마다 메모리 체크
+        self._memory_check_interval = 60  # 60초마다 메모리 체크
         
         # 모델 타입 감지
         self.is_bge_model = "bge-m3" in model_name.lower()
