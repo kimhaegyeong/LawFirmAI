@@ -441,6 +441,95 @@ class ContextCompressor:
             self.logger.error(f"Error converting context to text: {e}")
             return ""
 
+    def _estimate_tokens(self, context: ConversationContext) -> int:
+        """
+        컨텍스트의 토큰 수 추정
+        
+        Args:
+            context: 대화 컨텍스트
+            
+        Returns:
+            int: 추정된 토큰 수
+        """
+        try:
+            total_words = 0
+            
+            # 모든 턴의 텍스트 길이 합산
+            for turn in context.turns:
+                if hasattr(turn, 'user_query'):
+                    total_words += len(turn.user_query.split())
+                if hasattr(turn, 'bot_response'):
+                    total_words += len(turn.bot_response.split())
+                if hasattr(turn, 'query'):
+                    total_words += len(turn.query.split())
+                if hasattr(turn, 'response'):
+                    total_words += len(turn.response.split())
+            
+            # 한국어 기준 단어당 평균 토큰 수 적용
+            estimated_tokens = int(total_words * self.tokens_per_word)
+            return estimated_tokens
+            
+        except Exception as e:
+            self.logger.error(f"토큰 수 추정 중 오류 발생: {e}")
+            return 0
+
+    def compress_context_if_needed(self, context: ConversationContext) -> ConversationContext:
+        """
+        컨텍스트가 필요시 압축
+        
+        Args:
+            context: 대화 컨텍스트
+            
+        Returns:
+            ConversationContext: 압축된 컨텍스트
+        """
+        try:
+            # 현재 토큰 수 계산
+            current_tokens = self._estimate_tokens(context)
+            
+            # 압축이 필요한지 확인
+            if current_tokens <= self.max_tokens:
+                self.logger.info(f"컨텍스트 압축 불필요: {current_tokens} 토큰")
+                return context
+            
+            # 압축 실행
+            self.logger.info(f"컨텍스트 압축 시작: {current_tokens} 토큰 -> {self.max_tokens} 토큰")
+            compression_result = self.compress_context(context)
+            
+            # 압축된 컨텍스트로 새 컨텍스트 생성
+            compressed_context = ConversationContext(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                turns=[],  # 압축된 내용으로 대체
+                metadata=context.metadata.copy(),
+                created_at=context.created_at,
+                updated_at=datetime.now()
+            )
+            
+            # 압축된 내용을 턴으로 추가
+            compressed_turn = ConversationTurn(
+                turn_id=f"compressed_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                query="[압축된 대화 내용]",
+                response=compression_result.compressed_text,
+                timestamp=datetime.now(),
+                metadata={
+                    "compression_ratio": compression_result.compression_ratio,
+                    "original_tokens": compression_result.original_tokens,
+                    "compressed_tokens": compression_result.compressed_tokens,
+                    "preserved_entities": compression_result.preserved_entities,
+                    "preserved_topics": compression_result.preserved_topics,
+                    "summary": compression_result.summary
+                }
+            )
+            compressed_context.turns.append(compressed_turn)
+            
+            self.logger.info(f"컨텍스트 압축 완료: {compression_result.compression_ratio:.2f} 비율")
+            return compressed_context
+            
+        except Exception as e:
+            self.logger.error(f"컨텍스트 압축 중 오류 발생: {e}")
+            return context  # 오류 시 원본 컨텍스트 반환
+
 
 # 테스트 함수
 def test_context_compressor():
@@ -511,6 +600,64 @@ def test_context_compressor():
     print(f"엔티티: {key_info['entities']}")
     print(f"질문 유형: {key_info['question_types']}")
     print(f"중요 질문: {[q['query'] for q in key_info['important_queries']]}")
+
+
+    def compress_context_if_needed(self, context: ConversationContext) -> ConversationContext:
+        """
+        컨텍스트가 필요시 압축
+        
+        Args:
+            context: 대화 컨텍스트
+            
+        Returns:
+            ConversationContext: 압축된 컨텍스트
+        """
+        try:
+            # 현재 토큰 수 계산
+            current_tokens = self._estimate_tokens(context)
+            
+            # 압축이 필요한지 확인
+            if current_tokens <= self.max_tokens:
+                self.logger.info(f"컨텍스트 압축 불필요: {current_tokens} 토큰")
+                return context
+            
+            # 압축 실행
+            self.logger.info(f"컨텍스트 압축 시작: {current_tokens} 토큰 -> {self.max_tokens} 토큰")
+            compression_result = self.compress_context(context)
+            
+            # 압축된 컨텍스트로 새 컨텍스트 생성
+            compressed_context = ConversationContext(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                turns=[],  # 압축된 내용으로 대체
+                metadata=context.metadata.copy(),
+                created_at=context.created_at,
+                updated_at=datetime.now()
+            )
+            
+            # 압축된 내용을 턴으로 추가
+            compressed_turn = ConversationTurn(
+                turn_id=f"compressed_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                query="[압축된 대화 내용]",
+                response=compression_result.compressed_text,
+                timestamp=datetime.now(),
+                metadata={
+                    "compression_ratio": compression_result.compression_ratio,
+                    "original_tokens": compression_result.original_tokens,
+                    "compressed_tokens": compression_result.compressed_tokens,
+                    "preserved_entities": compression_result.preserved_entities,
+                    "preserved_topics": compression_result.preserved_topics,
+                    "summary": compression_result.summary
+                }
+            )
+            compressed_context.turns.append(compressed_turn)
+            
+            self.logger.info(f"컨텍스트 압축 완료: {compression_result.compression_ratio:.2f} 비율")
+            return compressed_context
+            
+        except Exception as e:
+            self.logger.error(f"컨텍스트 압축 중 오류 발생: {e}")
+            return context  # 오류 시 원본 컨텍스트 반환
 
 
 if __name__ == "__main__":
