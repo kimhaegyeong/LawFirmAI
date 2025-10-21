@@ -6,6 +6,7 @@ Chat Service
 
 import os
 import time
+import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from ..utils.config import Config
@@ -40,10 +41,18 @@ from .realtime_feedback_system import RealtimeFeedbackSystem
 from .naturalness_evaluator import NaturalnessEvaluator
 
 # 성능 최적화 모듈
-from ..utils.performance_optimizer import (
-    PerformanceMonitor, MemoryOptimizer, CacheManager,
-    performance_monitor, memory_optimized
-)
+from .cache_manager import get_cache_manager, cached
+from .optimized_search_engine import OptimizedSearchEngine
+
+# 법률 제한 시스템 모듈 (개선됨)
+from .improved_legal_restriction_system import ImprovedLegalRestrictionSystem, ImprovedRestrictionResult
+from .intent_based_processor import IntentBasedProcessor, ProcessingResult
+from .content_filter_engine import ContentFilterEngine, FilterResult
+from .response_validation_system import ResponseValidationSystem, ValidationResult, ValidationStatus, ValidationLevel
+from .safe_response_generator import SafeResponseGenerator, SafeResponse
+from .legal_compliance_monitor import LegalComplianceMonitor, ComplianceStatus
+from .user_education_system import UserEducationSystem, WarningMessage
+from .multi_stage_validation_system import MultiStageValidationSystem, MultiStageValidationResult
 
 logger = get_logger(__name__)
 
@@ -76,27 +85,75 @@ class ChatService:
         
         # 실제 RAG 컴포넌트 초기화
         try:
-            # 필요한 컴포넌트들 초기화
-            model_manager = LegalModelManager()
-            vector_store = LegalVectorStore()
-            database_manager = DatabaseManager()
+            self.logger.info("Starting RAG components initialization...")
             
+            # 필요한 컴포넌트들 초기화
+            self.logger.info("Initializing LegalModelManager...")
+            model_manager = LegalModelManager()
+            self.logger.info("LegalModelManager initialized successfully")
+            
+            self.logger.info("Initializing LegalVectorStore...")
+            vector_store = LegalVectorStore()
+            self.logger.info("LegalVectorStore initialized successfully")
+            
+            self.logger.info("Initializing DatabaseManager...")
+            database_manager = DatabaseManager()
+            self.logger.info("DatabaseManager initialized successfully")
+            
+            self.logger.info("Initializing MLEnhancedRAGService...")
             self.rag_service = MLEnhancedRAGService(
                 config=config,
                 model_manager=model_manager,
                 vector_store=vector_store,
                 database=database_manager
             )
+            self.logger.info("MLEnhancedRAGService initialized successfully")
+            
+            self.logger.info("Initializing HybridSearchEngine...")
             self.hybrid_search_engine = HybridSearchEngine()
+            self.logger.info("HybridSearchEngine initialized successfully")
+            
+            self.logger.info("Initializing QuestionClassifier...")
             self.question_classifier = QuestionClassifier()
+            self.logger.info("QuestionClassifier initialized successfully")
+            
+            self.logger.info("Initializing ImprovedAnswerGenerator...")
             self.improved_answer_generator = ImprovedAnswerGenerator()
-            self.logger.info("RAG components initialized successfully")
+            self.logger.info("ImprovedAnswerGenerator initialized successfully")
+            
+            # 최적화된 검색 엔진 초기화
+            self.logger.info("Initializing OptimizedSearchEngine...")
+            from .exact_search_engine import ExactSearchEngine
+            from .semantic_search_engine import SemanticSearchEngine
+            
+            exact_search_engine = ExactSearchEngine()
+            semantic_search_engine = SemanticSearchEngine()
+            
+            self.optimized_search_engine = OptimizedSearchEngine(
+                vector_store=vector_store,
+                exact_search_engine=exact_search_engine,
+                semantic_search_engine=semantic_search_engine,
+                max_workers=4,
+                enable_parallel_search=True,
+                enable_caching=True
+            )
+            self.logger.info("OptimizedSearchEngine initialized successfully")
+            
+            # 캐시 매니저 초기화
+            self.cache_manager = get_cache_manager()
+            self.logger.info("CacheManager initialized successfully")
+            
+            self.logger.info("All RAG components initialized successfully")
         except Exception as e:
             self.logger.error(f"Failed to initialize RAG components: {e}")
+            import traceback
+            self.logger.error(f"RAG initialization traceback: {traceback.format_exc()}")
             self.rag_service = None
             self.hybrid_search_engine = None
             self.question_classifier = None
             self.improved_answer_generator = None
+            self.optimized_search_engine = None
+            self.cache_manager = None
         
         # Phase 1: 대화 맥락 강화 컴포넌트 초기화
         try:
@@ -167,10 +224,30 @@ class ChatService:
             self.memory_optimizer = None
             self.cache_manager = None
         
+        # 법률 제한 시스템 초기화 (개선됨)
+        try:
+            self.improved_legal_restriction_system = ImprovedLegalRestrictionSystem()
+            self.intent_based_processor = IntentBasedProcessor()
+            self.content_filter_engine = ContentFilterEngine()
+            self.response_validation_system = ResponseValidationSystem()
+            self.safe_response_generator = SafeResponseGenerator()
+            self.legal_compliance_monitor = LegalComplianceMonitor()
+            self.user_education_system = UserEducationSystem()
+            self.multi_stage_validation_system = MultiStageValidationSystem()
+            self.logger.info("Improved legal restriction system with multi-stage validation initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize improved legal restriction system: {e}")
+            self.improved_legal_restriction_system = None
+            self.intent_based_processor = None
+            self.content_filter_engine = None
+            self.response_validation_system = None
+            self.safe_response_generator = None
+            self.legal_compliance_monitor = None
+            self.user_education_system = None
+            self.multi_stage_validation_system = None
+        
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
     
-    @performance_monitor
-    @memory_optimized
     async def process_message(self, message: str, context: Optional[str] = None, 
                              session_id: Optional[str] = None, 
                              user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -221,6 +298,256 @@ class ChatService:
                     }
                 }
             
+            # 다단계 검증 시스템 사전 검사
+            multi_stage_validation_result = None
+            improved_restriction_result = None
+            processing_result = None
+            filter_result = None
+            validation_result = None
+            safe_response = None
+            warning_message = None
+            
+            if self.multi_stage_validation_system:
+                try:
+                    # 1. 다단계 검증 수행
+                    multi_stage_validation_result = self.multi_stage_validation_system.validate(message)
+                    
+                    # 2. 기존 개선된 법률 제한 시스템도 함께 사용 (백업)
+                    if self.improved_legal_restriction_system:
+                        improved_restriction_result = self.improved_legal_restriction_system.check_restrictions(message)
+                    
+                    # 3. 의도별 처리
+                    if self.intent_based_processor:
+                        processing_result = self.intent_based_processor.process_by_intent(message, improved_restriction_result)
+                    
+                    # 4. 콘텐츠 필터링 (추가 검증)
+                    if self.content_filter_engine:
+                        filter_result = self.content_filter_engine.filter_content(message)
+                    
+                    # 5. 사전 차단 여부 확인 (다단계 검증 우선)
+                    # 디버깅: 각 검증 결과 확인
+                    self.logger.info(f"Multi-stage validation result: {multi_stage_validation_result.final_decision.value}")
+                    self.logger.info(f"Improved restriction result: {improved_restriction_result.is_restricted if improved_restriction_result else 'None'}")
+                    self.logger.info(f"Processing result allowed: {processing_result.allowed if processing_result else 'None'}")
+                    self.logger.info(f"Filter result blocked: {filter_result.is_blocked if filter_result else 'None'}")
+                    
+                    should_block = (
+                        multi_stage_validation_result.final_decision.value == "restricted" or
+                        (improved_restriction_result and improved_restriction_result.is_restricted) or 
+                        (processing_result and not processing_result.allowed) or
+                        (filter_result and filter_result.is_blocked)
+                    )
+                    
+                    self.logger.info(f"Should block: {should_block}")
+                    
+                    if should_block:
+                        # 안전한 답변 생성
+                        if self.safe_response_generator:
+                            safe_response = self.safe_response_generator.generate_safe_response(
+                                message, improved_restriction_result, filter_result
+                            )
+                        
+                        # 사용자 교육 및 경고
+                        if self.user_education_system:
+                            warning_message = self.user_education_system.generate_warning(
+                                improved_restriction_result, filter_result, 
+                                ValidationResult(
+                                    status=ValidationStatus.REJECTED,
+                                    validation_level=ValidationLevel.AUTOMATIC,
+                                    confidence=0.0,
+                                    issues=["다단계 검증으로 차단"],
+                                    recommendations=["안전한 질문으로 수정하세요"],
+                                    modified_response=None,
+                                    validation_details={},
+                                    timestamp=datetime.now()
+                                ),
+                                user_id
+                            )
+                        
+                        # 준수 모니터링
+                        if self.legal_compliance_monitor:
+                            compliance_status = self.legal_compliance_monitor.monitor_request(
+                                message, "", improved_restriction_result, filter_result,
+                                ValidationResult(
+                                    status=ValidationStatus.REJECTED,
+                                    validation_level=ValidationLevel.AUTOMATIC,
+                                    confidence=0.0,
+                                    issues=["다단계 검증으로 차단"],
+                                    recommendations=["안전한 질문으로 수정하세요"],
+                                    modified_response=None,
+                                    validation_details={},
+                                    timestamp=datetime.now()
+                                ),
+                                user_id, session_id, time.time() - start_time
+                            )
+                        
+                        # 안전한 응답 반환
+                        response_content = safe_response.content if safe_response else "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
+                        
+                        return {
+                            "response": response_content,
+                            "confidence": safe_response.confidence if safe_response else 0.9,
+                            "sources": [],
+                            "processing_time": time.time() - start_time,
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "restriction_info": {
+                                "is_restricted": True,
+                                "restriction_level": "high",
+                                "multi_stage_validation": {
+                                    "final_decision": multi_stage_validation_result.final_decision.value,
+                                    "confidence": multi_stage_validation_result.confidence,
+                                    "total_score": multi_stage_validation_result.total_score,
+                                    "stage_summary": [
+                                        {
+                                            "stage": stage.stage.value,
+                                            "result": stage.result.value,
+                                            "score": stage.score,
+                                            "reasoning": stage.reasoning
+                                        } for stage in multi_stage_validation_result.stages
+                                    ]
+                                },
+                                "context_analysis": {
+                                    "context_type": improved_restriction_result.context_analysis.context_type.value if improved_restriction_result else "unknown",
+                                    "personal_score": improved_restriction_result.context_analysis.personal_score if improved_restriction_result else 0.0,
+                                    "general_score": improved_restriction_result.context_analysis.general_score if improved_restriction_result else 0.0,
+                                    "hypothetical_score": improved_restriction_result.context_analysis.hypothetical_score if improved_restriction_result else 0.0,
+                                    "confidence": improved_restriction_result.context_analysis.confidence if improved_restriction_result else 0.0,
+                                    "indicators": improved_restriction_result.context_analysis.indicators if improved_restriction_result else []
+                                },
+                                "intent_analysis": {
+                                    "intent_type": processing_result.response_type.value if processing_result else "unknown",
+                                    "reasoning": processing_result.reasoning if processing_result else "unknown"
+                                },
+                                "warning_message": warning_message.message if warning_message else None,
+                                "safe_alternatives": safe_response.additional_info if safe_response else [],
+                                "disclaimer": safe_response.disclaimer if safe_response else None
+                            },
+                            "phase_info": {
+                                "phase1": {"enabled": False, "reason": "Multi-stage validation blocked"},
+                                "phase2": {"enabled": False},
+                                "phase3": {"enabled": False}
+                            }
+                        }
+                        
+                except Exception as e:
+                    self.logger.error(f"Error in multi-stage validation system: {e}")
+                    # 다단계 검증 오류 시 기존 시스템으로 폴백
+                    if self.improved_legal_restriction_system and self.intent_based_processor:
+                        try:
+                            # 기존 개선된 법률 제한 시스템 사용
+                            improved_restriction_result = self.improved_legal_restriction_system.check_restrictions(message)
+                            processing_result = self.intent_based_processor.process_by_intent(message, improved_restriction_result)
+                            
+                            if self.content_filter_engine:
+                                filter_result = self.content_filter_engine.filter_content(message)
+                            
+                            should_block = (
+                                improved_restriction_result.is_restricted or 
+                                (processing_result and not processing_result.allowed) or
+                                (filter_result and filter_result.is_blocked)
+                            )
+                            
+                            if should_block:
+                                # 안전한 답변 생성
+                                if self.safe_response_generator:
+                                    safe_response = self.safe_response_generator.generate_safe_response(
+                                        message, improved_restriction_result, filter_result
+                                    )
+                                
+                                # 사용자 교육 및 경고
+                                if self.user_education_system:
+                                    warning_message = self.user_education_system.generate_warning(
+                                        improved_restriction_result, filter_result, 
+                                        ValidationResult(
+                                            status=ValidationStatus.REJECTED,
+                                            validation_level=ValidationLevel.AUTOMATIC,
+                                            confidence=0.0,
+                                            issues=["폴백 시스템으로 차단"],
+                                            recommendations=["안전한 질문으로 수정하세요"],
+                                            modified_response=None,
+                                            validation_details={},
+                                            timestamp=datetime.now()
+                                        ),
+                                        user_id
+                                    )
+                                
+                                # 준수 모니터링
+                                if self.legal_compliance_monitor:
+                                    compliance_status = self.legal_compliance_monitor.monitor_request(
+                                        message, "", improved_restriction_result, filter_result,
+                                        ValidationResult(
+                                            status=ValidationStatus.REJECTED,
+                                            validation_level=ValidationLevel.AUTOMATIC,
+                                            confidence=0.0,
+                                            issues=["폴백 시스템으로 차단"],
+                                            recommendations=["안전한 질문으로 수정하세요"],
+                                            modified_response=None,
+                                            validation_details={},
+                                            timestamp=datetime.now()
+                                        ),
+                                        user_id, session_id, time.time() - start_time
+                                    )
+                                
+                                # 안전한 응답 반환
+                                response_content = safe_response.content if safe_response else "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
+                                
+                                return {
+                                    "response": response_content,
+                                    "confidence": safe_response.confidence if safe_response else 0.9,
+                                    "sources": [],
+                                    "processing_time": time.time() - start_time,
+                                    "session_id": session_id,
+                                    "user_id": user_id,
+                                    "restriction_info": {
+                                        "is_restricted": True,
+                                        "restriction_level": "high",
+                                        "fallback_system": True,
+                                        "context_analysis": {
+                                            "context_type": improved_restriction_result.context_analysis.context_type.value if improved_restriction_result else "unknown",
+                                            "personal_score": improved_restriction_result.context_analysis.personal_score if improved_restriction_result else 0.0,
+                                            "general_score": improved_restriction_result.context_analysis.general_score if improved_restriction_result else 0.0,
+                                            "hypothetical_score": improved_restriction_result.context_analysis.hypothetical_score if improved_restriction_result else 0.0,
+                                            "confidence": improved_restriction_result.context_analysis.confidence if improved_restriction_result else 0.0,
+                                            "indicators": improved_restriction_result.context_analysis.indicators if improved_restriction_result else []
+                                        },
+                                        "intent_analysis": {
+                                            "intent_type": processing_result.response_type.value if processing_result else "unknown",
+                                            "reasoning": processing_result.reasoning if processing_result else "unknown"
+                                        },
+                                        "warning_message": warning_message.message if warning_message else None,
+                                        "safe_alternatives": safe_response.additional_info if safe_response else [],
+                                        "disclaimer": safe_response.disclaimer if safe_response else None
+                                    },
+                                    "phase_info": {
+                                        "phase1": {"enabled": False, "reason": "Fallback system blocked"},
+                                        "phase2": {"enabled": False},
+                                        "phase3": {"enabled": False}
+                                    }
+                                }
+                        except Exception as fallback_error:
+                            self.logger.error(f"Error in fallback system: {fallback_error}")
+                            # 모든 시스템 실패 시 기본 차단
+                            return {
+                                "response": "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다.",
+                                "confidence": 0.9,
+                                "sources": [],
+                                "processing_time": time.time() - start_time,
+                                "session_id": session_id,
+                                "user_id": user_id,
+                                "restriction_info": {
+                                    "is_restricted": True,
+                                    "restriction_level": "critical",
+                                    "system_error": True,
+                                    "error_message": str(e)
+                                },
+                                "phase_info": {
+                                    "phase1": {"enabled": False, "reason": "System error"},
+                                    "phase2": {"enabled": False},
+                                    "phase3": {"enabled": False}
+                                }
+                            }
+            
             # Phase 1: 대화 맥락 강화 처리
             phase1_info = await self._process_phase1_context(message, session_id, user_id)
             
@@ -238,6 +565,86 @@ class ChatService:
                 response_result["response"] = await self._apply_naturalness_improvements(
                     response_result["response"], phase1_info, phase2_info, user_id
                 )
+            
+            # 답변 생성 후 다단계 검증 시스템 검증
+            if self.response_validation_system and response_result.get("response"):
+                try:
+                    # 답변 검증
+                    validation_result = self.response_validation_system.validate_response(
+                        message, response_result["response"]
+                    )
+                    
+                    # 다단계 검증 시스템으로 추가 검증
+                    if self.multi_stage_validation_system:
+                        response_validation = self.multi_stage_validation_system.validate(response_result["response"])
+                        
+                        # 다단계 검증에서도 제한된 경우 추가 처리
+                        if response_validation.final_decision.value == "restricted":
+                            if self.safe_response_generator:
+                                safe_response = self.safe_response_generator.generate_safe_response(
+                                    message, improved_restriction_result, filter_result
+                                )
+                                response_result["response"] = safe_response.content
+                            
+                            # 다단계 검증 정보 추가
+                            response_result["multi_stage_validation"] = {
+                                "final_decision": response_validation.final_decision.value,
+                                "confidence": response_validation.confidence,
+                                "total_score": response_validation.total_score,
+                                "stage_summary": [
+                                    {
+                                        "stage": stage.stage.value,
+                                        "result": stage.result.value,
+                                        "score": stage.score,
+                                        "reasoning": stage.reasoning
+                                    } for stage in response_validation.stages
+                                ]
+                            }
+                    
+                    # 검증 실패 시 안전한 답변으로 교체
+                    if validation_result.status in [ValidationStatus.REJECTED, ValidationStatus.MODIFIED]:
+                        if validation_result.modified_response:
+                            response_result["response"] = validation_result.modified_response
+                        elif self.safe_response_generator:
+                            safe_response = self.safe_response_generator.generate_safe_response(
+                                message, improved_restriction_result, filter_result
+                            )
+                            response_result["response"] = safe_response.content
+                        
+                        # 사용자 교육 및 경고
+                        if self.user_education_system:
+                            warning_message = self.user_education_system.generate_warning(
+                                improved_restriction_result, filter_result, validation_result, user_id
+                            )
+                        
+                        # 준수 모니터링
+                        if self.legal_compliance_monitor:
+                            compliance_status = self.legal_compliance_monitor.monitor_request(
+                                message, response_result["response"], improved_restriction_result, 
+                                filter_result, validation_result, user_id, session_id, 
+                                time.time() - start_time
+                            )
+                        
+                        # 검증 정보 추가 (다단계 검증 정보 포함)
+                        response_result["validation_info"] = {
+                            "status": validation_result.status.value,
+                            "issues": validation_result.issues,
+                            "recommendations": validation_result.recommendations,
+                            "warning_message": warning_message.message if warning_message else None,
+                            "multi_stage_validation": response_result.get("multi_stage_validation", {}),
+                            "context_analysis": {
+                                "context_type": improved_restriction_result.context_analysis.context_type.value if improved_restriction_result else "unknown",
+                                "reasoning": improved_restriction_result.reasoning if improved_restriction_result else "unknown"
+                            },
+                            "intent_analysis": {
+                                "intent_type": processing_result.response_type.value if processing_result else "unknown",
+                                "reasoning": processing_result.reasoning if processing_result else "unknown"
+                            }
+                        }
+                    
+                except Exception as e:
+                    self.logger.error(f"Error in response validation: {e}")
+                    # 검증 오류 시에도 계속 진행
             
             # 최종 결과 통합
             processing_time = time.time() - start_time
@@ -361,7 +768,7 @@ class ChatService:
             
             # 컨텍스트 압축 (필요시)
             if self.context_compressor and context:
-                compression_info = self.context_compressor.compress_context_if_needed(context, message)
+                compression_info = self.context_compressor.compress_context_if_needed(context)
                 phase1_info["compression_info"] = compression_info
             
             return phase1_info
@@ -690,9 +1097,16 @@ class ChatService:
     def get_service_status(self) -> Dict[str, Any]:
         """서비스 상태 조회"""
         try:
+            # 디버깅: 컴포넌트 상태 확인
+            self.logger.info(f"RAG service: {self.rag_service is not None}")
+            self.logger.info(f"Hybrid search engine: {self.hybrid_search_engine is not None}")
+            self.logger.info(f"Question classifier: {self.question_classifier is not None}")
+            self.logger.info(f"Improved answer generator: {self.improved_answer_generator is not None}")
+            
             status = {
                 "service_name": "ChatService",
                 "langgraph_enabled": self.use_langgraph,
+                "langgraph_service_available": self.langgraph_service is not None,
                 "rag_components": {
                     "rag_service": self.rag_service is not None,
                     "hybrid_search_engine": self.hybrid_search_engine is not None,
@@ -717,10 +1131,20 @@ class ChatService:
                 "last_updated": datetime.now().isoformat()
             }
             
+            # LangGraph 상태 추가
+            if self.use_langgraph and self.langgraph_service:
+                try:
+                    langgraph_status = self.langgraph_service.get_service_status()
+                    status["langgraph_status"] = langgraph_status
+                except Exception as e:
+                    status["langgraph_error"] = str(e)
+            
             return status
             
         except Exception as e:
             self.logger.error(f"Error getting service status: {e}")
+            import traceback
+            self.logger.error(f"Service status traceback: {traceback.format_exc()}")
             return {
                 "service_name": "ChatService",
                 "overall_status": "error",
@@ -1256,24 +1680,288 @@ class ChatService:
             self.logger.error(f"Error evaluating naturalness: {e}")
             return {"error": str(e)}
     
-    def get_service_status(self) -> Dict[str, Any]:
-        """서비스 상태 조회"""
-        status = {
-            "service_name": "ChatService",
-            "langgraph_enabled": self.use_langgraph,
-            "langgraph_service_available": self.langgraph_service is not None,
-            "timestamp": time.time()
-        }
+    async def process_message_stream(self, message: str, context: Optional[str] = None, 
+                                   session_id: Optional[str] = None, 
+                                   user_id: Optional[str] = None):
+        """
+        스트림 형태로 사용자 메시지 처리
         
-        if self.use_langgraph and self.langgraph_service:
-            try:
-                langgraph_status = self.langgraph_service.get_service_status()
-                status["langgraph_status"] = langgraph_status
-            except Exception as e:
-                status["langgraph_error"] = str(e)
-        
-        return status
+        Args:
+            message: 사용자 메시지
+            context: 추가 컨텍스트 (선택사항)
+            session_id: 세션 ID (선택사항)
+            user_id: 사용자 ID (선택사항)
+            
+        Yields:
+            Dict[str, Any]: 스트림 청크 데이터
+        """
+        try:
+            start_time = time.time()
+            
+            # 기본값 설정
+            if not user_id:
+                user_id = "anonymous_user"
+            if not session_id:
+                session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # 입력 검증
+            if not self.validate_input(message):
+                yield {
+                    "type": "error",
+                    "content": "올바른 질문을 입력해주세요.",
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+                return
+            
+            # Phase 1: 대화 맥락 강화 처리
+            yield {
+                "type": "status",
+                "content": "대화 맥락을 분석하고 있습니다...",
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            phase1_info = await self._process_phase1_context(message, session_id, user_id)
+            
+            # Phase 2: 개인화 및 지능형 분석 처리
+            yield {
+                "type": "status",
+                "content": "개인화된 분석을 수행하고 있습니다...",
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            phase2_info = await self._process_phase2_personalization(message, session_id, user_id, phase1_info)
+            
+            # Phase 3: 장기 기억 및 품질 모니터링 처리
+            yield {
+                "type": "status",
+                "content": "관련 정보를 검색하고 있습니다...",
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            phase3_info = await self._process_phase3_memory_quality(message, session_id, user_id, phase1_info, phase2_info)
+            
+            # 실제 답변 생성 (스트림 형태)
+            yield {
+                "type": "status",
+                "content": "답변을 생성하고 있습니다...",
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            async for chunk in self._generate_response_stream(message, phase1_info, phase2_info, phase3_info):
+                chunk.update({
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "timestamp": datetime.now().isoformat()
+                })
+                yield chunk
+            
+            # 최종 메타데이터 전송
+            processing_time = time.time() - start_time
+            yield {
+                "type": "metadata",
+                "content": {
+                    "processing_time": processing_time,
+                    "confidence": 0.8,  # 실제로는 계산된 값 사용
+                    "question_type": "general_question",
+                    "phase_info": {
+                        "phase1": phase1_info,
+                        "phase2": phase2_info,
+                        "phase3": phase3_info
+                    }
+                },
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error processing message stream: {e}")
+            yield {
+                "type": "error",
+                "content": f"오류가 발생했습니다: {str(e)}",
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
     
+    async def _generate_response_stream(self, message: str, phase1_info: Dict[str, Any], 
+                                      phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]):
+        """
+        스트림 형태로 답변 생성
+        
+        Args:
+            message: 사용자 메시지
+            phase1_info: Phase 1 정보
+            phase2_info: Phase 2 정보
+            phase3_info: Phase 3 정보
+            
+        Yields:
+            Dict[str, Any]: 답변 청크
+        """
+        try:
+            # 다중 턴 처리된 쿼리 사용
+            resolved_query = message
+            if phase1_info.get("multi_turn_result", {}).get("is_multi_turn"):
+                resolved_query = phase1_info["multi_turn_result"]["resolved_query"]
+            
+            # LangGraph 사용 여부에 따른 처리
+            if self.use_langgraph and self.langgraph_service:
+                async for chunk in self._process_with_langgraph_stream(resolved_query, phase1_info.get("session_id")):
+                    yield chunk
+            else:
+                async for chunk in self._process_legacy_stream(resolved_query, None):
+                    yield chunk
+            
+        except Exception as e:
+            self.logger.error(f"Error generating response stream: {e}")
+            yield {
+                "type": "error",
+                "content": "답변 생성 중 오류가 발생했습니다."
+            }
+    
+    async def _process_with_langgraph_stream(self, message: str, session_id: Optional[str] = None):
+        """LangGraph를 사용한 스트림 처리"""
+        try:
+            # LangGraph 스트림 처리 (placeholder)
+            # 실제 구현은 LangGraph의 스트림 기능을 사용
+            yield {
+                "type": "content",
+                "content": f"LangGraph를 사용하여 '{message}'에 대한 답변을 생성하고 있습니다.",
+                "is_final": False
+            }
+            
+            # 시뮬레이션된 스트림 응답
+            response_parts = [
+                "안녕하세요! 질문해주신 내용에 대해 답변드리겠습니다.",
+                " 먼저 관련 법령을 확인해보겠습니다.",
+                " 해당 사안에 대한 판례도 검토해보겠습니다.",
+                " 종합적으로 분석한 결과를 말씀드리겠습니다."
+            ]
+            
+            for i, part in enumerate(response_parts):
+                await asyncio.sleep(0.5)  # 실제 처리 시간 시뮬레이션
+                yield {
+                    "type": "content",
+                    "content": part,
+                    "is_final": i == len(response_parts) - 1
+                }
+            
+        except Exception as e:
+            self.logger.error(f"LangGraph stream processing error: {e}")
+            yield {
+                "type": "error",
+                "content": "LangGraph 처리 중 오류가 발생했습니다."
+            }
+    
+    async def _process_legacy_stream(self, message: str, context: Optional[str] = None):
+        """기존 방식으로 스트림 처리"""
+        try:
+            # 질문 분류
+            if self.question_classifier:
+                question_classification = self.question_classifier.classify_question(message)
+            else:
+                question_classification = type('QuestionClassification', (), {
+                    'question_type': type('QuestionType', (), {'value': 'general'})()
+                })()
+            
+            yield {
+                "type": "status",
+                "content": f"질문 유형을 분석했습니다: {question_classification.question_type.value}",
+                "is_final": False
+            }
+            
+            # 검색 실행
+            if self.hybrid_search_engine:
+                yield {
+                    "type": "status",
+                    "content": "관련 법령과 판례를 검색하고 있습니다...",
+                    "is_final": False
+                }
+                
+                search_results = self.hybrid_search_engine.search_with_question_type(
+                    query=message,
+                    question_type=question_classification,
+                    max_results=10
+                )
+                
+                yield {
+                    "type": "status",
+                    "content": f"{len(search_results)}개의 관련 자료를 찾았습니다.",
+                    "is_final": False
+                }
+            else:
+                search_results = []
+            
+            # 답변 생성 (스트림 형태)
+            if self.improved_answer_generator:
+                yield {
+                    "type": "status",
+                    "content": "답변을 생성하고 있습니다...",
+                    "is_final": False
+                }
+                
+                # 실제 답변 생성
+                answer_result = self.improved_answer_generator.generate_answer(
+                    query=message,
+                    question_type=question_classification,
+                    context=context or "",
+                    sources=search_results,
+                    conversation_history=None
+                )
+                
+                # 답변을 청크로 나누어 스트림 전송
+                answer_text = answer_result.answer
+                words = answer_text.split()
+                chunk_size = 5  # 한 번에 5개 단어씩 전송
+                
+                for i in range(0, len(words), chunk_size):
+                    chunk_words = words[i:i + chunk_size]
+                    chunk_text = " ".join(chunk_words)
+                    
+                    await asyncio.sleep(0.1)  # 스트림 효과를 위한 지연
+                    
+                    yield {
+                        "type": "content",
+                        "content": chunk_text + (" " if i + chunk_size < len(words) else ""),
+                        "is_final": i + chunk_size >= len(words)
+                    }
+            else:
+                # 폴백: 기본 응답
+                response_text = f"안녕하세요! '{message}'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다."
+                
+                # 기본 응답도 스트림으로 전송
+                words = response_text.split()
+                chunk_size = 3
+                
+                for i in range(0, len(words), chunk_size):
+                    chunk_words = words[i:i + chunk_size]
+                    chunk_text = " ".join(chunk_words)
+                    
+                    await asyncio.sleep(0.2)
+                    
+                    yield {
+                        "type": "content",
+                        "content": chunk_text + (" " if i + chunk_size < len(words) else ""),
+                        "is_final": i + chunk_size >= len(words)
+                    }
+            
+        except Exception as e:
+            self.logger.error(f"Legacy stream processing error: {e}")
+            yield {
+                "type": "error",
+                "content": "기존 처리 방식에서 오류가 발생했습니다."
+            }
+
     async def test_service(self, test_message: str = "테스트 질문입니다") -> Dict[str, Any]:
         """서비스 테스트"""
         try:
