@@ -205,21 +205,21 @@ class SemanticSearchEngine:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # 법률 검색
+                # 법률 검색 (assembly_laws 테이블에는 article_number 컬럼이 없음)
                 cursor.execute("""
-                    SELECT law_name, article_number, content, 'law' as type
+                    SELECT law_name, law_id, full_text, 'law' as type
                     FROM assembly_laws 
-                    WHERE content LIKE ? OR law_name LIKE ?
+                    WHERE full_text LIKE ? OR law_name LIKE ?
                     LIMIT ?
                 """, (f"%{query}%", f"%{query}%", k))
                 
                 for row in cursor.fetchall():
                     result = {
-                        'text': f"{row['law_name']} {row['article_number']}: {row['content'][:200]}...",
+                        'text': f"{row['law_name']} {row['law_id']}: {row['full_text'][:200]}...",
                         'similarity': 0.8,  # 데이터베이스 검색은 높은 신뢰도
                         'score': 0.8,
                         'type': 'law',
-                        'source': f"{row['law_name']} {row['article_number']}",
+                        'source': f"{row['law_name']} {row['law_id']}",
                         'metadata': dict(row),
                         'search_type': 'database_fallback'
                     }

@@ -93,15 +93,18 @@ class ExactSearchEngine:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # 실제 테이블 구조에 맞는 쿼리
+                # 실제 테이블 구조에 맞는 쿼리 (assembly_laws 테이블 구조에 맞춤)
                 sql_query = """
                 SELECT 
                     id,
+                    law_id,
                     law_name,
-                    article_number,
-                    content,
                     law_type,
-                    effective_date
+                    category,
+                    promulgation_date,
+                    enforcement_date,
+                    full_text,
+                    summary
                 FROM assembly_laws
                 WHERE 1=1
                 """
@@ -109,19 +112,20 @@ class ExactSearchEngine:
                 
                 # 검색 조건 추가
                 if query:
-                    sql_query += " AND (law_name LIKE ? OR content LIKE ?)"
+                    sql_query += " AND (law_name LIKE ? OR full_text LIKE ? OR summary LIKE ?)"
                     search_term = f"%{query}%"
-                    params.extend([search_term, search_term])
+                    params.extend([search_term, search_term, search_term])
                 
                 if law_name:
                     sql_query += " AND law_name LIKE ?"
                     params.append(f"%{law_name}%")
                 
-                if article_number:
-                    sql_query += " AND article_number LIKE ?"
-                    params.append(f"%{article_number}%")
+                # article_number는 assembly_laws 테이블에 없으므로 제거
+                # if article_number:
+                #     sql_query += " AND law_id LIKE ?"
+                #     params.append(f"%{article_number}%")
                 
-                sql_query += " ORDER BY law_name, article_number LIMIT ?"
+                sql_query += " ORDER BY law_name, law_id LIMIT ?"
                 params.append(top_k)
                 
                 cursor.execute(sql_query, params)
@@ -130,12 +134,14 @@ class ExactSearchEngine:
                 results = []
                 for row in rows:
                     result = {
-                        'law_id': row['id'],
+                        'law_id': row['law_id'],
                         'law_name': row['law_name'],
-                        'article_number': row['article_number'],
-                        'content': row['content'],
                         'law_type': row['law_type'],
-                        'effective_date': row['effective_date'],
+                        'category': row['category'],
+                        'promulgation_date': row['promulgation_date'],
+                        'enforcement_date': row['enforcement_date'],
+                        'full_text': row['full_text'],
+                        'summary': row['summary'],
                         'search_type': 'exact_law'
                     }
                     results.append(result)
@@ -252,9 +258,7 @@ class ExactSearchEngine:
                     sql_query += " AND law_name LIKE ?"
                     params.append(f"%{law_name}%")
                 
-                if article_number:
-                    sql_query += " AND law_id LIKE ?"
-                    params.append(f"%{article_number}%")
+                # article_number는 assembly_laws 테이블에 없으므로 제거
                 
                 sql_query += " ORDER BY promulgation_date DESC LIMIT ?"
                 params.append(top_k)
