@@ -1,283 +1,387 @@
 # -*- coding: utf-8 -*-
 """
-최적화된 검색 엔진
+Optimized Search Engine
+최적화된 검색 엔진 모듈
 """
 
 import logging
 import time
-import json
-from typing import List, Dict, Any, Optional
-from functools import lru_cache
-from pathlib import Path
-import hashlib
+import asyncio
+import concurrent.futures
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+import threading
+from queue import Queue, Empty
+import multiprocessing as mp
 
-from ..data.vector_store import LegalVectorStore
-from ..services.hybrid_search_engine import HybridSearchEngine
-from ..services.exact_search_engine import ExactSearchEngine
-from ..services.semantic_search_engine import SemanticSearchEngine
+from source.services.cache_manager import QueryCache, get_cache_manager
+from source.data.vector_store import LegalVectorStore
+from source.services.exact_search_engine import ExactSearchEngine
+from source.services.semantic_search_engine import SemanticSearchEngine
 
 logger = logging.getLogger(__name__)
 
-class SearchCache:
-    """검색 결과 캐시"""
-    
-    def __init__(self, cache_size: int = 1000, ttl: int = 3600):
-        self.cache = {}
-        self.cache_size = cache_size
-        self.ttl = ttl
-        self.access_times = {}
-    
-    def _generate_key(self, query: str, search_type: str, top_k: int) -> str:
-        """캐시 키 생성"""
-        key_string = f"{query}:{search_type}:{top_k}"
-        return hashlib.md5(key_string.encode()).hexdigest()
-    
-    def get(self, query: str, search_type: str, top_k: int) -> Optional[List[Dict[str, Any]]]:
-        """캐시에서 결과 조회"""
-        key = self._generate_key(query, search_type, top_k)
-        
-        if key in self.cache:
-            # TTL 확인
-            if time.time() - self.access_times[key] < self.ttl:
-                self.access_times[key] = time.time()
-                logger.debug(f"Cache hit for query: {query}")
-                return self.cache[key]
-            else:
-                # TTL 만료
-                del self.cache[key]
-                del self.access_times[key]
-        
-        return None
-    
-    def set(self, query: str, search_type: str, top_k: int, results: List[Dict[str, Any]]):
-        """캐시에 결과 저장"""
-        key = self._generate_key(query, search_type, top_k)
-        
-        # 캐시 크기 제한
-        if len(self.cache) >= self.cache_size:
-            # 가장 오래된 항목 제거
-            oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
-            del self.cache[oldest_key]
-            del self.access_times[oldest_key]
-        
-        self.cache[key] = results
-        self.access_times[key] = time.time()
-        logger.debug(f"Cached results for query: {query}")
-    
-    def clear(self):
-        """캐시 초기화"""
-        self.cache.clear()
-        self.access_times.clear()
-        logger.info("Search cache cleared")
+
+@dataclass
+class SearchResult:
+    """검색 결과 데이터 클래스"""
+    query: str
+    results: List[Dict[str, Any]]
+    search_time: float
+    cache_hit: bool
+    search_type: str
+    total_results: int
+    confidence: float
+
 
 class OptimizedSearchEngine:
-    """최적화된 검색 엔진"""
+    """최적화된 검색 엔진 클래스"""
     
     def __init__(self, 
                  vector_store: LegalVectorStore,
-                 hybrid_engine: HybridSearchEngine,
-                 cache_size: int = 1000,
-                 cache_ttl: int = 3600):
+                 exact_search_engine: ExactSearchEngine,
+                 semantic_search_engine: SemanticSearchEngine,
+                 max_workers: int = None,
+                 enable_parallel_search: bool = True,
+                 enable_caching: bool = True):
+        """
+        최적화된 검색 엔진 초기화
+        
+        Args:
+            vector_store: 벡터 스토어
+            exact_search_engine: 정확 검색 엔진
+            semantic_search_engine: 의미 검색 엔진
+            max_workers: 최대 워커 수
+            enable_parallel_search: 병렬 검색 활성화
+            enable_caching: 캐싱 활성화
+        """
         self.vector_store = vector_store
-        self.hybrid_engine = hybrid_engine
-        self.cache = SearchCache(cache_size, cache_ttl)
-        self.logger = logging.getLogger(__name__)
+        self.exact_search_engine = exact_search_engine
+        self.semantic_search_engine = semantic_search_engine
+        
+        self.max_workers = max_workers or min(4, mp.cpu_count())
+        self.enable_parallel_search = enable_parallel_search
+        self.enable_caching = enable_caching
+        
+        # 캐시 매니저
+        self.cache_manager = get_cache_manager() if enable_caching else None
+        self.query_cache = QueryCache(self.cache_manager) if enable_caching else None
+        
+        # 스레드 풀
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
         
         # 성능 통계
-        self.stats = {
+        self._stats = {
             'total_searches': 0,
             'cache_hits': 0,
             'cache_misses': 0,
-            'avg_search_time': 0.0,
-            'total_search_time': 0.0
+            'parallel_searches': 0,
+            'total_search_time': 0.0,
+            'avg_search_time': 0.0
         }
+        
+        logger.info(f"OptimizedSearchEngine initialized: workers={self.max_workers}, "
+                   f"parallel={enable_parallel_search}, caching={enable_caching}")
     
-    def search(self, 
-               query: str, 
-               search_type: str = "hybrid",
-               top_k: int = 10,
-               use_cache: bool = True) -> Dict[str, Any]:
-        """최적화된 검색 실행"""
+    async def search(self, 
+                    query: str, 
+                    top_k: int = 10,
+                    search_types: List[str] = None,
+                    filters: Dict = None,
+                    use_cache: bool = True) -> SearchResult:
+        """
+        최적화된 검색 수행
+        
+        Args:
+            query: 검색 쿼리
+            top_k: 상위 k개 결과
+            search_types: 검색 타입 리스트
+            filters: 필터 조건
+            use_cache: 캐시 사용 여부
+            
+        Returns:
+            SearchResult: 검색 결과
+        """
         start_time = time.time()
-        self.stats['total_searches'] += 1
+        
+        # 기본 검색 타입 설정
+        if search_types is None:
+            search_types = ['vector', 'exact', 'semantic']
         
         # 캐시 확인
-        if use_cache:
-            cached_results = self.cache.get(query, search_type, top_k)
-            if cached_results is not None:
-                self.stats['cache_hits'] += 1
+        if use_cache and self.query_cache:
+            cached_result = self.query_cache.get_search_result(query, filters, top_k)
+            if cached_result is not None:
                 search_time = time.time() - start_time
-                self._update_stats(search_time)
+                self._update_stats(search_time, cache_hit=True)
                 
-                return {
-                    'results': cached_results,
-                    'search_time': search_time,
-                    'cache_hit': True,
-                    'total_results': len(cached_results)
-                }
+                return SearchResult(
+                    query=query,
+                    results=cached_result,
+                    search_time=search_time,
+                    cache_hit=True,
+                    search_type='cached',
+                    total_results=len(cached_result),
+                    confidence=0.9
+                )
         
-        # 캐시 미스
-        self.stats['cache_misses'] += 1
-        
-        # 실제 검색 실행
-        if search_type == "vector":
-            results = self._vector_search(query, top_k)
-        elif search_type == "hybrid":
-            results = self._hybrid_search(query, top_k)
+        # 병렬 검색 수행
+        if self.enable_parallel_search and len(search_types) > 1:
+            results = await self._parallel_search(query, top_k, search_types, filters)
         else:
-            results = self._vector_search(query, top_k)
+            results = await self._sequential_search(query, top_k, search_types, filters)
         
-        # 결과 후처리
-        processed_results = self._post_process_results(results, query)
-        
-        # 캐시에 저장
-        if use_cache:
-            self.cache.set(query, search_type, top_k, processed_results)
+        # 결과 통합 및 정렬
+        integrated_results = self._integrate_results(results, top_k)
         
         search_time = time.time() - start_time
-        self._update_stats(search_time)
+        self._update_stats(search_time, cache_hit=False)
         
-        return {
-            'results': processed_results,
-            'search_time': search_time,
-            'cache_hit': False,
-            'total_results': len(processed_results)
-        }
+        # 캐시 저장
+        if use_cache and self.query_cache:
+            self.query_cache.set_search_result(query, integrated_results, filters, top_k)
+        
+        return SearchResult(
+            query=query,
+            results=integrated_results,
+            search_time=search_time,
+            cache_hit=False,
+            search_type='integrated',
+            total_results=len(integrated_results),
+            confidence=self._calculate_confidence(integrated_results)
+        )
     
-    def _vector_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """벡터 검색 실행"""
+    async def _parallel_search(self, 
+                              query: str, 
+                              top_k: int, 
+                              search_types: List[str],
+                              filters: Dict) -> Dict[str, List[Dict[str, Any]]]:
+        """병렬 검색 수행"""
+        self._stats['parallel_searches'] += 1
+        
+        # 검색 태스크 생성
+        tasks = []
+        
+        if 'vector' in search_types:
+            task = asyncio.create_task(
+                self._run_in_executor(self._vector_search, query, top_k, filters)
+            )
+            tasks.append(('vector', task))
+        
+        if 'exact' in search_types:
+            task = asyncio.create_task(
+                self._run_in_executor(self._exact_search, query, top_k, filters)
+            )
+            tasks.append(('exact', task))
+        
+        if 'semantic' in search_types:
+            task = asyncio.create_task(
+                self._run_in_executor(self._semantic_search, query, top_k, filters)
+            )
+            tasks.append(('semantic', task))
+        
+        # 모든 태스크 완료 대기
+        results = {}
+        for search_type, task in tasks:
+            try:
+                result = await task
+                results[search_type] = result
+            except Exception as e:
+                logger.error(f"Parallel search failed for {search_type}: {e}")
+                results[search_type] = []
+        
+        return results
+    
+    async def _sequential_search(self, 
+                               query: str, 
+                               top_k: int, 
+                               search_types: List[str],
+                               filters: Dict) -> Dict[str, List[Dict[str, Any]]]:
+        """순차 검색 수행"""
+        results = {}
+        
+        for search_type in search_types:
+            try:
+                if search_type == 'vector':
+                    result = await self._run_in_executor(self._vector_search, query, top_k, filters)
+                elif search_type == 'exact':
+                    result = await self._run_in_executor(self._exact_search, query, top_k, filters)
+                elif search_type == 'semantic':
+                    result = await self._run_in_executor(self._semantic_search, query, top_k, filters)
+                else:
+                    result = []
+                
+                results[search_type] = result
+                
+            except Exception as e:
+                logger.error(f"Sequential search failed for {search_type}: {e}")
+                results[search_type] = []
+        
+        return results
+    
+    async def _run_in_executor(self, func, *args, **kwargs):
+        """스레드 풀에서 함수 실행"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, func, *args, **kwargs)
+    
+    def _vector_search(self, query: str, top_k: int, filters: Dict) -> List[Dict[str, Any]]:
+        """벡터 검색 수행"""
         try:
-            results = self.vector_store.search(query, top_k=top_k)
+            if self.query_cache:
+                cached_embedding = self.query_cache.get_embedding(query)
+                if cached_embedding is not None:
+                    # 캐시된 임베딩 사용
+                    pass  # 벡터 스토어에서 직접 검색
+            
+            results = self.vector_store.search(query, top_k, filters, enhanced=True)
+            
+            # 임베딩 캐싱
+            if self.query_cache and results:
+                # 임베딩은 벡터 스토어 내부에서 생성되므로 여기서는 결과만 캐싱
+                pass
+            
             return results
+            
         except Exception as e:
-            self.logger.error(f"Vector search failed: {e}")
+            logger.error(f"Vector search failed: {e}")
             return []
     
-    def _hybrid_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """하이브리드 검색 실행"""
+    def _exact_search(self, query: str, top_k: int, filters: Dict) -> List[Dict[str, Any]]:
+        """정확 검색 수행"""
         try:
-            # 하이브리드 검색 결과를 리스트로 변환
-            hybrid_results = self.hybrid_engine.search(query, max_results=top_k)
+            results = self.exact_search_engine.search(query, top_k)
             
             # 결과 형식 통일
-            if isinstance(hybrid_results, dict):
-                # 딕셔너리인 경우 results 키에서 추출
-                results = hybrid_results.get('results', [])
-                if isinstance(results, list):
-                    return results
-                else:
-                    return []
-            elif isinstance(hybrid_results, list):
-                return hybrid_results
-            else:
-                return []
-                
-        except Exception as e:
-            self.logger.error(f"Hybrid search failed: {e}")
-            return []
-    
-    def _post_process_results(self, results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-        """검색 결과 후처리"""
-        if not results:
-            return []
-        
-        # 점수 정규화 및 정렬
-        processed_results = []
-        
-        for result in results:
-            if isinstance(result, dict):
-                # 점수 정규화 (0-1 범위로)
-                score = result.get('score', 0.0)
-                if score > 1.0:
-                    score = score / 100.0  # 0-100 범위를 0-1로 변환
-                
-                # 관련성 점수 계산
-                relevance_score = self._calculate_relevance_score(result, query)
-                
-                processed_result = {
-                    'case_id': result.get('case_id', ''),
-                    'case_name': result.get('case_name', ''),
-                    'case_number': result.get('case_number', ''),
-                    'decision_date': result.get('decision_date', ''),
-                    'court': result.get('court', ''),
-                    'category': result.get('category', ''),
-                    'field': result.get('field', ''),
-                    'content': result.get('content', ''),
-                    'score': score,
-                    'relevance_score': relevance_score,
-                    'metadata': result.get('metadata', {})
+            formatted_results = []
+            for result in results:
+                formatted_result = {
+                    'score': result.get('score', 0.8),
+                    'text': result.get('text', ''),
+                    'metadata': result.get('metadata', {}),
+                    'search_type': 'exact'
                 }
-                
-                processed_results.append(processed_result)
-        
-        # 관련성 점수로 정렬
-        processed_results.sort(key=lambda x: x['relevance_score'], reverse=True)
-        
-        return processed_results
+                formatted_results.append(formatted_result)
+            
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Exact search failed: {e}")
+            return []
     
-    def _calculate_relevance_score(self, result: Dict[str, Any], query: str) -> float:
-        """관련성 점수 계산"""
-        base_score = result.get('score', 0.0)
-        
-        # 쿼리 키워드와의 매칭 점수
-        query_lower = query.lower()
-        case_name = result.get('case_name', '').lower()
-        content = result.get('content', '').lower()
-        
-        # 정확한 매칭
-        exact_matches = 0
-        for word in query_lower.split():
-            if word in case_name:
-                exact_matches += 1
-            if word in content:
-                exact_matches += 1
-        
-        # 부분 매칭
-        partial_matches = 0
-        for word in query_lower.split():
-            if any(word in case_name for word in query_lower.split()):
-                partial_matches += 0.5
-            if any(word in content for word in query_lower.split()):
-                partial_matches += 0.3
-        
-        # 최종 관련성 점수
-        relevance_score = base_score + (exact_matches * 0.1) + (partial_matches * 0.05)
-        
-        return min(relevance_score, 1.0)  # 1.0으로 제한
+    def _semantic_search(self, query: str, top_k: int, filters: Dict) -> List[Dict[str, Any]]:
+        """의미 검색 수행"""
+        try:
+            results = self.semantic_search_engine.search(query, top_k)
+            
+            # 결과 형식 통일
+            formatted_results = []
+            for result in results:
+                formatted_result = {
+                    'score': result.get('score', 0.7),
+                    'text': result.get('text', ''),
+                    'metadata': result.get('metadata', {}),
+                    'search_type': 'semantic'
+                }
+                formatted_results.append(formatted_result)
+            
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
     
-    def _update_stats(self, search_time: float):
+    def _integrate_results(self, 
+                          results: Dict[str, List[Dict[str, Any]]], 
+                          top_k: int) -> List[Dict[str, Any]]:
+        """검색 결과 통합 및 정렬"""
+        try:
+            # 모든 결과 수집
+            all_results = []
+            
+            for search_type, search_results in results.items():
+                for result in search_results:
+                    result['search_type'] = search_type
+                    all_results.append(result)
+            
+            # 중복 제거 (텍스트 기준)
+            unique_results = {}
+            for result in all_results:
+                text_key = result.get('text', '')[:100]  # 처음 100자로 중복 판단
+                if text_key not in unique_results:
+                    unique_results[text_key] = result
+                else:
+                    # 더 높은 점수로 업데이트
+                    if result.get('score', 0) > unique_results[text_key].get('score', 0):
+                        unique_results[text_key] = result
+            
+            # 점수 기준 정렬
+            sorted_results = sorted(
+                unique_results.values(),
+                key=lambda x: x.get('score', 0),
+                reverse=True
+            )
+            
+            return sorted_results[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Result integration failed: {e}")
+            return []
+    
+    def _calculate_confidence(self, results: List[Dict[str, Any]]) -> float:
+        """검색 결과 신뢰도 계산"""
+        if not results:
+            return 0.0
+        
+        try:
+            # 상위 결과들의 평균 점수
+            top_scores = [result.get('score', 0) for result in results[:3]]
+            avg_score = sum(top_scores) / len(top_scores)
+            
+            # 결과 수에 따른 보정
+            count_factor = min(len(results) / 5, 1.0)
+            
+            confidence = avg_score * count_factor
+            return min(confidence, 1.0)
+            
+        except Exception as e:
+            logger.error(f"Confidence calculation failed: {e}")
+            return 0.5
+    
+    def _update_stats(self, search_time: float, cache_hit: bool):
         """통계 업데이트"""
-        self.stats['total_search_time'] += search_time
-        self.stats['avg_search_time'] = self.stats['total_search_time'] / self.stats['total_searches']
+        self._stats['total_searches'] += 1
+        self._stats['total_search_time'] += search_time
+        self._stats['avg_search_time'] = (
+            self._stats['total_search_time'] / self._stats['total_searches']
+        )
+        
+        if cache_hit:
+            self._stats['cache_hits'] += 1
+        else:
+            self._stats['cache_misses'] += 1
     
     def get_stats(self) -> Dict[str, Any]:
-        """검색 통계 반환"""
-        cache_hit_rate = 0.0
-        if self.stats['total_searches'] > 0:
-            cache_hit_rate = self.stats['cache_hits'] / self.stats['total_searches']
+        """성능 통계 반환"""
+        stats = self._stats.copy()
         
-        return {
-            'total_searches': self.stats['total_searches'],
-            'cache_hits': self.stats['cache_hits'],
-            'cache_misses': self.stats['cache_misses'],
-            'cache_hit_rate': cache_hit_rate,
-            'avg_search_time': self.stats['avg_search_time'],
-            'total_search_time': self.stats['total_search_time']
-        }
+        # 캐시 통계 추가
+        if self.cache_manager:
+            cache_stats = self.cache_manager.get_stats()
+            stats['cache_stats'] = cache_stats
+        
+        return stats
     
     def clear_cache(self):
-        """캐시 초기화"""
-        self.cache.clear()
-        self.logger.info("Search cache cleared")
+        """캐시 정리"""
+        if self.cache_manager:
+            self.cache_manager.clear()
     
-    def warm_up_cache(self, common_queries: List[str]):
-        """캐시 워밍업"""
-        self.logger.info(f"Warming up cache with {len(common_queries)} queries")
-        
-        for query in common_queries:
-            try:
-                self.search(query, use_cache=True)
-            except Exception as e:
-                self.logger.warning(f"Failed to warm up cache for query '{query}': {e}")
-        
-        self.logger.info("Cache warm-up completed")
+    def cleanup_expired_cache(self):
+        """만료된 캐시 정리"""
+        if self.cache_manager:
+            self.cache_manager.cleanup_expired()
+    
+    def shutdown(self):
+        """리소스 정리"""
+        self.executor.shutdown(wait=True)
+        logger.info("OptimizedSearchEngine shutdown completed")
