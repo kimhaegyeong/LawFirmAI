@@ -712,6 +712,44 @@ def create_gradio_interface():
         color: #f44336;
         font-weight: bold;
     }
+    
+    /* 스트림 모드용 CSS */
+    .stream-toggle {
+        background: linear-gradient(45deg, #667eea, #764ba2) !important;
+        color: white !important;
+        border-radius: 8px !important;
+        padding: 8px 16px !important;
+        font-weight: 500 !important;
+    }
+    
+    .stream-toggle:hover {
+        background: linear-gradient(45deg, #5a6fd8, #6a4190) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3) !important;
+    }
+    
+    /* 스트림 애니메이션 */
+    @keyframes stream-pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.7; }
+        100% { opacity: 1; }
+    }
+    
+    .streaming {
+        animation: stream-pulse 1.5s infinite !important;
+    }
+    
+    /* 타이핑 효과 */
+    @keyframes typing {
+        from { width: 0; }
+        to { width: 100%; }
+    }
+    
+    .typing-effect {
+        overflow: hidden;
+        white-space: nowrap;
+        animation: typing 2s steps(40, end);
+    }
     """
     
     # HTML 헤드에 매니페스트 및 메타 태그 추가
@@ -758,6 +796,10 @@ def create_gradio_interface():
                                 scale=4
                             )
                             submit_btn = gr.Button("전송", scale=1, variant="primary")
+                        
+                        # 스트림 모드 토글
+                        with gr.Row():
+                            stream_mode = gr.Checkbox(label="🔄 스트림 모드 (실시간 답변)", value=True, elem_classes=["stream-toggle"])
                         
                         # 예시 질문
                         gr.Examples(
@@ -918,6 +960,59 @@ def create_gradio_interface():
                 "세션 ID": result.get('session_id', 'Unknown'),
                 "사용자 ID": result.get('user_id', 'Unknown')
             }
+        
+        def respond_stream(message, history):
+            """스트림 응답 생성"""
+            if not message.strip():
+                return history, "", {}
+            
+            # 사용자 메시지 추가
+            history.append({"role": "user", "content": message})
+            
+            # 스트림 응답 시뮬레이션
+            import time
+            
+            # 초기 상태 메시지
+            history.append({"role": "assistant", "content": "🔄 질문을 분석하고 있습니다..."})
+            yield history, "", {}
+            time.sleep(0.5)
+            
+            # 검색 상태 메시지
+            history[-1] = {"role": "assistant", "content": "🔍 관련 법령과 판례를 검색하고 있습니다..."}
+            yield history, "", {}
+            time.sleep(0.5)
+            
+            # 답변 생성 상태 메시지
+            history[-1] = {"role": "assistant", "content": "📝 답변을 생성하고 있습니다..."}
+            yield history, "", {}
+            time.sleep(0.5)
+            
+            # 실제 답변 생성
+            result = app_instance.process_query(message)
+            answer = result.get("answer", "죄송합니다. 답변을 생성할 수 없습니다.")
+            
+            # 답변을 단어별로 스트림
+            words = answer.split()
+            current_response = ""
+            
+            for i, word in enumerate(words):
+                current_response += word + " "
+                history[-1] = {"role": "assistant", "content": current_response.strip()}
+                
+                # 신뢰도 정보 업데이트
+                confidence_info = {
+                    "신뢰도": f"{result['confidence']['confidence']:.1%}",
+                    "수준": result['confidence']['reliability_level'],
+                    "처리 시간": f"{result.get('processing_time', 0):.2f}초",
+                    "질문 유형": result.get('question_type', 'Unknown'),
+                    "세션 ID": result.get('session_id', 'Unknown'),
+                    "사용자 ID": result.get('user_id', 'Unknown'),
+                    "스트림 모드": "활성화",
+                    "진행률": f"{((i + 1) / len(words) * 100):.0f}%"
+                }
+                
+                yield history, "", confidence_info
+                time.sleep(0.1)  # 스트림 효과를 위한 지연
             
             # 다중 턴 질문 정보 추가
             if result.get('multi_turn_info', {}).get('is_multi_turn'):
@@ -1190,15 +1285,22 @@ def create_gradio_interface():
                 return {"error": str(e)}
         
         # 이벤트 연결
+        def handle_submit(message, history, use_stream):
+            """제출 처리 (스트림/일반 모드 선택)"""
+            if use_stream:
+                return respond_stream(message, history)
+            else:
+                return respond(message, history)
+        
         submit_btn.click(
-            respond,
-            inputs=[msg, chatbot],
+            handle_submit,
+            inputs=[msg, chatbot, stream_mode],
             outputs=[chatbot, msg, confidence_output]
         )
         
         msg.submit(
-            respond,
-            inputs=[msg, chatbot],
+            handle_submit,
+            inputs=[msg, chatbot, stream_mode],
             outputs=[chatbot, msg, confidence_output]
         )
         
