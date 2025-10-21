@@ -120,3 +120,4 @@ chroma_db/
 data/
 reports/
 results/
+# test_results/
