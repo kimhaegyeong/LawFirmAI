@@ -2,7 +2,7 @@
 
 ## 개요
 
-이 가이드는 LawFirmAI를 다양한 환경에 배포하는 방법을 설명합니다. Phase 1-3이 완료된 지능형 대화 시스템의 실제 배포 방법을 다룹니다.
+이 가이드는 LawFirmAI를 다양한 환경에 배포하는 방법을 설명합니다. Phase 1-6이 완료된 지능형 대화 시스템과 성능 최적화된 의미적 검색 시스템의 실제 배포 방법을 다룹니다.
 
 ## 목차
 
@@ -27,6 +27,23 @@
 - **CPU**: 4코어 이상 (권장 8코어+)
 - **GPU**: 선택사항 (CUDA 지원 시 성능 향상)
 - **네트워크**: 안정적인 인터넷 연결
+
+### Phase별 요구사항
+
+#### Phase 1-3: 지능형 대화 시스템
+- **메모리**: 최소 4GB RAM
+- **저장공간**: 5GB (데이터베이스 + 로그)
+- **네트워크**: 안정적인 연결 (세션 동기화)
+
+#### Phase 5: 성능 최적화 시스템
+- **메모리**: 최소 6GB RAM (캐싱 시스템)
+- **CPU**: 4코어 이상 (병렬 처리)
+- **저장공간**: 8GB (벡터 인덱스 + 캐시)
+
+#### Phase 6: 의미적 검색 시스템
+- **메모리**: 최소 8GB RAM (FAISS 인덱스)
+- **저장공간**: 15GB (벡터 임베딩 + 메타데이터)
+- **CPU**: 6코어 이상 (벡터 검색)
 
 ## 로컬 개발 환경 설정
 
@@ -84,10 +101,15 @@ GOOGLE_API_KEY=your_google_api_key_here
 LOG_LEVEL=INFO
 LOG_FILE=./logs/lawfirm.log
 
-# 성능 설정
+# 성능 설정 (Phase 5)
 MAX_CACHE_SIZE=1000
 CACHE_TTL=3600
 MEMORY_LIMIT_MB=2048
+
+# 의미적 검색 설정 (Phase 6)
+SEMANTIC_SEARCH_ENABLED=true
+FAISS_INDEX_PATH=./data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss
+EMBEDDING_MODEL=ko-sroberta-multitask
 
 # HuggingFace 설정 (선택사항)
 HUGGINGFACE_TOKEN=your_hf_token_here

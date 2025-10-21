@@ -2,7 +2,7 @@
 
 ## 📋 문서 개요
 
-본 문서는 LawFirmAI 프로젝트의 개발 규칙, 코딩 스타일, 운영 가이드라인을 정의합니다.
+본 문서는 LawFirmAI 프로젝트의 개발 규칙, 코딩 스타일, 운영 가이드라인을 정의합니다. Phase 1-6이 완료된 지능형 대화 시스템과 성능 최적화된 의미적 검색 시스템의 개발 가이드라인을 포함합니다.
 
 ## 🚀 프로세스 관리 규칙
 
@@ -13,6 +13,9 @@
 # Gradio 서버 시작 (LangChain 기반)
 cd gradio
 python simple_langchain_app.py
+
+# 또는 최신 앱 실행 (7개 탭 구성)
+python app.py
 ```
 
 #### 서버 종료 (PID 기준)
@@ -97,9 +100,189 @@ taskkill /PID 12345 /F
 python gradio/stop_server.py
 ```
 
-## 🔧 개발 환경 규칙
+## 🚀 Phase별 개발 가이드라인
 
-### 디렉토리 구조 준수
+### Phase 1-3: 지능형 대화 시스템 개발
+
+#### Phase 1: 대화 맥락 강화
+```python
+# 통합 세션 관리 구현 예시
+from source.services.integrated_session_manager import IntegratedSessionManager
+
+class ChatService:
+    def __init__(self):
+        self.session_manager = IntegratedSessionManager()
+    
+    def process_message(self, message: str, session_id: str):
+        # 세션 컨텍스트 로드
+        context = self.session_manager.get_session_context(session_id)
+        
+        # 다중 턴 질문 처리
+        processed_message = self.session_manager.process_multi_turn(message, context)
+        
+        # 컨텍스트 압축
+        compressed_context = self.session_manager.compress_context(context)
+        
+        return processed_message, compressed_context
+```
+
+#### Phase 2: 개인화 및 지능형 분석
+```python
+# 사용자 프로필 기반 개인화 구현 예시
+from source.services.user_profile_manager import UserProfileManager
+from source.services.emotion_intent_analyzer import EmotionIntentAnalyzer
+
+class PersonalizedChatService:
+    def __init__(self):
+        self.profile_manager = UserProfileManager()
+        self.emotion_analyzer = EmotionIntentAnalyzer()
+    
+    def get_personalized_response(self, message: str, user_id: str):
+        # 사용자 프로필 로드
+        profile = self.profile_manager.get_profile(user_id)
+        
+        # 감정 및 의도 분석
+        emotion_result = self.emotion_analyzer.analyze(message)
+        
+        # 개인화된 응답 생성
+        response = self.generate_response(message, profile, emotion_result)
+        
+        return response
+```
+
+#### Phase 3: 장기 기억 및 품질 모니터링
+```python
+# 맥락적 메모리 관리 구현 예시
+from source.services.contextual_memory_manager import ContextualMemoryManager
+from source.services.conversation_quality_monitor import ConversationQualityMonitor
+
+class AdvancedChatService:
+    def __init__(self):
+        self.memory_manager = ContextualMemoryManager()
+        self.quality_monitor = ConversationQualityMonitor()
+    
+    def process_with_memory(self, message: str, user_id: str):
+        # 관련 메모리 검색
+        relevant_memories = self.memory_manager.search_memories(message, user_id)
+        
+        # 품질 모니터링
+        quality_score = self.quality_monitor.assess_quality(message, relevant_memories)
+        
+        # 메모리 업데이트
+        self.memory_manager.update_memory(message, user_id, quality_score)
+        
+        return relevant_memories, quality_score
+```
+
+### Phase 5: 성능 최적화 개발
+
+#### 통합 캐싱 시스템
+```python
+# 다층 캐싱 시스템 구현 예시
+from source.services.integrated_cache_system import IntegratedCacheSystem
+
+class OptimizedChatService:
+    def __init__(self):
+        self.cache_system = IntegratedCacheSystem()
+    
+    def get_cached_response(self, message: str, session_id: str):
+        # 캐시 키 생성
+        cache_key = self.cache_system.generate_key(message, session_id)
+        
+        # 다층 캐시 검색
+        cached_result = self.cache_system.get(cache_key)
+        
+        if cached_result:
+            return cached_result
+        
+        # 캐시 미스 시 새로 생성
+        result = self.generate_response(message)
+        
+        # 캐시 저장
+        self.cache_system.set(cache_key, result)
+        
+        return result
+```
+
+#### 병렬 검색 엔진
+```python
+# 병렬 검색 구현 예시
+import asyncio
+from source.services.optimized_hybrid_search_engine import OptimizedHybridSearchEngine
+
+class ParallelSearchService:
+    def __init__(self):
+        self.search_engine = OptimizedHybridSearchEngine()
+    
+    async def parallel_search(self, query: str):
+        # 정확 검색과 의미 검색을 동시 실행
+        exact_task = asyncio.create_task(self.search_engine.exact_search(query))
+        semantic_task = asyncio.create_task(self.search_engine.semantic_search(query))
+        
+        # 결과 병합
+        exact_results, semantic_results = await asyncio.gather(exact_task, semantic_task)
+        
+        return self.search_engine.merge_results(exact_results, semantic_results)
+```
+
+### Phase 6: 의미적 검색 시스템 개발
+
+#### FAISS 기반 벡터 검색
+```python
+# 의미적 검색 엔진 구현 예시
+from source.services.semantic_search_engine import SemanticSearchEngine
+
+class VectorSearchService:
+    def __init__(self):
+        self.semantic_engine = SemanticSearchEngine()
+    
+    def semantic_search(self, query: str, limit: int = 10):
+        # 쿼리 벡터화
+        query_vector = self.semantic_engine.encode_query(query)
+        
+        # FAISS 인덱스에서 검색
+        scores, indices = self.semantic_engine.search(query_vector, limit)
+        
+        # 메타데이터와 함께 결과 반환
+        results = []
+        for score, idx in zip(scores, indices):
+            metadata = self.semantic_engine.get_metadata(idx)
+            results.append({
+                'text': metadata['text'],
+                'score': float(score),
+                'metadata': metadata
+            })
+        
+        return results
+```
+
+#### 다중 모델 지원
+```python
+# 다중 모델 관리자 구현 예시
+from source.services.multi_model_manager import MultiModelManager
+
+class MultiModelService:
+    def __init__(self):
+        self.model_manager = MultiModelManager()
+    
+    def search_with_multiple_models(self, query: str):
+        results = {}
+        
+        # ko-sroberta-multitask 모델로 검색
+        kobart_results = self.model_manager.search_with_model(
+            query, model_name="ko-sroberta-multitask"
+        )
+        results['kobart'] = kobart_results
+        
+        # BGE-M3-Korean 모델로 검색
+        bge_results = self.model_manager.search_with_model(
+            query, model_name="BGE-M3-Korean"
+        )
+        results['bge'] = bge_results
+        
+        # 결과 통합
+        return self.model_manager.merge_model_results(results)
+```
 ```
 LawFirmAI/
 ├── gradio/                          # Gradio 웹 애플리케이션
