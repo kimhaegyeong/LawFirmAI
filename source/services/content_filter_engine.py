@@ -11,6 +11,7 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 import json
+from .improved_legal_restriction_system import ContextAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class FilterResult:
     intent_analysis: IntentAnalysis
     safe_alternatives: List[str]
     warning_level: str
+    risk_level: str
     timestamp: datetime
 
 
@@ -358,7 +360,28 @@ class ContentFilterEngine:
             intent_analysis = self.analyze_intent(query)
             
             # 차단 여부 결정
-            is_blocked = self._should_block(intent_analysis, query, response)
+            is_blocked = intent_analysis.risk_level in ["critical", "high"]
+            
+            # 절차 관련 질문에 대한 특별 처리 (더욱 관대한 처리)
+            if any(keyword in query.lower() for keyword in ["절차", "방법", "과정", "규정", "제도"]):
+                # 절차 관련 질문은 더욱 관대하게 처리
+                if intent_analysis.risk_level == "critical":
+                    is_blocked = True
+                    block_reason = "절차 관련 질문이지만 위험도가 높음"
+                else:
+                    # critical이 아니면 허용
+                    is_blocked = False
+                    block_reason = None
+                
+                return FilterResult(
+                    is_blocked=is_blocked,
+                    block_reason=block_reason,
+                    intent_analysis=intent_analysis,
+                    safe_alternatives=self._generate_safe_alternatives(intent_analysis, query),
+                    warning_level="low" if not is_blocked else "medium",
+                    risk_level=intent_analysis.risk_level,
+                    timestamp=datetime.now()
+                )
             
             # 차단 사유
             block_reason = None
@@ -377,6 +400,7 @@ class ContentFilterEngine:
                 intent_analysis=intent_analysis,
                 safe_alternatives=safe_alternatives,
                 warning_level=warning_level,
+                risk_level=intent_analysis.risk_level,
                 timestamp=datetime.now()
             )
             
@@ -396,6 +420,7 @@ class ContentFilterEngine:
                 ),
                 safe_alternatives=[],
                 warning_level="low",
+                risk_level="low",
                 timestamp=datetime.now()
             )
     

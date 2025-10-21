@@ -10,7 +10,7 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
 
-from .improved_legal_restriction_system import ImprovedRestrictionResult, ContextType, RestrictionLevel
+from .improved_legal_restriction_system import ImprovedRestrictionResult, ContextType, RestrictionLevel, ContextAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +433,25 @@ class IntentBasedProcessor:
         try:
             # 의도 분석
             intent_analysis = self.analyze_intent(query)
+            
+            # 절차 관련 질문에 대한 특별 처리 (더욱 관대한 처리)
+            if any(keyword in query.lower() for keyword in ["절차", "방법", "과정", "규정", "제도"]):
+                # 절차 관련 질문은 더욱 관대하게 처리
+                if restriction_result.is_restricted:
+                    # 제한되어 있어도 절차 관련이면 허용
+                    return ProcessingResult(
+                        allowed=True,
+                        response_type=ResponseType.GENERAL_INFO,
+                        confidence=0.8,
+                        message="절차 관련 질문에 대해 일반적인 정보를 제공할 수 있습니다.",
+                        safe_alternatives=["관련 법령이나 판례를 참고하실 수 있습니다."],
+                        disclaimer="구체적인 사안은 전문가와 상담하시기 바랍니다.",
+                        expert_referral="변호사와 상담하시는 것을 권합니다.",
+                        reasoning="절차 관련 질문 특별 처리 (관대한 처리)"
+                    )
+                else:
+                    # 제한되지 않았으면 그대로 허용
+                    return self._process_allowed_query(intent_analysis, restriction_result)
             
             # 제한 결과와 의도 분석을 종합하여 처리
             if restriction_result.is_restricted:

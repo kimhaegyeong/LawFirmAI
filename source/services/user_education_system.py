@@ -309,12 +309,12 @@ class UserEducationSystem:
     def generate_warning(self, restriction_result: RestrictionResult,
                         filter_result: FilterResult,
                         validation_result: ValidationResult,
-                        user_id: str) -> Optional[WarningMessage]:
+                        user_id: str, query: str = "") -> Optional[WarningMessage]:
         """경고 메시지 생성"""
         try:
             # 위반 유형 결정
             warning_type = self._determine_warning_type(
-                restriction_result, filter_result, validation_result
+                restriction_result, filter_result, validation_result, query
             )
             
             if not warning_type:
@@ -357,26 +357,36 @@ class UserEducationSystem:
     
     def _determine_warning_type(self, restriction_result: RestrictionResult,
                                filter_result: FilterResult,
-                               validation_result: ValidationResult) -> Optional[WarningType]:
-        """경고 유형 결정"""
-        # 심각한 제한 사항
-        if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
-            return WarningType.SUSPICIOUS_REQUEST
+                               validation_result: ValidationResult,
+                               query: str = "") -> Optional[WarningType]:
+        """경고 유형 결정 (더 엄격한 조건)"""
+        # 절차 관련 질문에 대한 특별 처리 (더욱 관대한 처리)
+        if any(keyword in query.lower() for keyword in ["절차", "방법", "과정", "규정", "제도"]):
+            # 절차 관련 질문은 더욱 관대하게 처리
+            if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
+                return WarningType.SUSPICIOUS_REQUEST
+            else:
+                # critical이 아니면 경고하지 않음
+                return None
         
-        # 법률 자문 요청
-        if filter_result.intent_analysis.intent_type == IntentType.LEGAL_ADVICE_REQUEST:
+        # 명확한 개인 법률 자문 요청만 경고 (일반 정보 요청 제외)
+        if (filter_result.intent_analysis.intent_type == IntentType.LEGAL_ADVICE_REQUEST and
+            filter_result.intent_analysis.confidence > 0.8):  # 높은 신뢰도만
             return WarningType.LEGAL_ADVICE_REQUEST
         
-        # 구체적 사건 질문
-        if filter_result.intent_analysis.intent_type == IntentType.CASE_SPECIFIC_QUESTION:
+        # 구체적 사건 질문 (높은 신뢰도만)
+        if (filter_result.intent_analysis.intent_type == IntentType.CASE_SPECIFIC_QUESTION and
+            filter_result.intent_analysis.confidence > 0.8):
             return WarningType.SPECIFIC_CASE_QUESTION
         
-        # 의심스러운 요청
-        if filter_result.intent_analysis.intent_type == IntentType.SUSPICIOUS_REQUEST:
+        # 의심스러운 요청 (높은 신뢰도만)
+        if (filter_result.intent_analysis.intent_type == IntentType.SUSPICIOUS_REQUEST and
+            filter_result.intent_analysis.confidence > 0.8):
             return WarningType.SUSPICIOUS_REQUEST
         
-        # 검증 실패
-        if validation_result.status == ValidationStatus.REJECTED:
+        # 검증 실패 (심각한 경우만)
+        if (validation_result.status == ValidationStatus.REJECTED and
+            validation_result.confidence > 0.9):
             return WarningType.SYSTEM_LIMITATION
         
         return None

@@ -337,7 +337,7 @@ class ImprovedLegalRestrictionSystem:
         return compiled
     
     def analyze_context(self, query: str) -> ContextAnalysis:
-        """맥락 분석"""
+        """맥락 분석 (카테고리별 맞춤 정책 포함)"""
         query_lower = query.lower()
         
         # 개인적 표현 지표
@@ -358,14 +358,38 @@ class ImprovedLegalRestrictionSystem:
             "상상해보면", "가정해보면", "예시로", "만약에"
         ]
         
+        # 카테고리별 특별 지표 (더 관대한 처리)
+        administrative_indicators = [
+            "행정", "행정심판", "행정소송", "행정처분", "행정절차",
+            "신청", "제출", "처리", "절차", "방법", "규정"
+        ]
+        
+        corporate_indicators = [
+            "법인", "주식회사", "법인세", "설립", "등기", "해산",
+            "신고", "납부", "계산", "절차", "방법", "규정"
+        ]
+        
+        real_estate_indicators = [
+            "부동산", "매매", "임대차", "등기", "소유권", "이전",
+            "절차", "방법", "규정", "신청", "제출", "처리"
+        ]
+        
         # 점수 계산
         personal_score = sum(1 for indicator in personal_indicators if indicator in query_lower)
         general_score = sum(1 for indicator in general_indicators if indicator in query_lower)
         hypothetical_score = sum(1 for indicator in hypothetical_indicators if indicator in query_lower)
         
-        # 맥락 유형 결정
+        # 카테고리별 점수 계산
+        admin_score = sum(1 for indicator in administrative_indicators if indicator in query_lower)
+        corporate_score = sum(1 for indicator in corporate_indicators if indicator in query_lower)
+        real_estate_score = sum(1 for indicator in real_estate_indicators if indicator in query_lower)
+        
+        # 맥락 유형 결정 (카테고리별 우선순위 적용)
         if personal_score > 0:
             context_type = ContextType.PERSONAL_CASE
+        elif admin_score > 0 or corporate_score > 0 or real_estate_score > 0:
+            # 카테고리별 특별 지표가 있으면 일반적 호기심으로 분류 (더 관대한 처리)
+            context_type = ContextType.GENERAL_CURIOSITY
         elif general_score > 0:
             context_type = ContextType.GENERAL_CURIOSITY
         elif hypothetical_score > 0:
@@ -373,13 +397,14 @@ class ImprovedLegalRestrictionSystem:
         else:
             context_type = ContextType.GENERAL_CURIOSITY
         
-        # 신뢰도 계산
-        total_indicators = personal_score + general_score + hypothetical_score
+        # 신뢰도 계산 (카테고리별 지표 고려)
+        total_indicators = personal_score + general_score + hypothetical_score + admin_score + corporate_score + real_estate_score
         confidence = min(total_indicators / 3.0, 1.0) if total_indicators > 0 else 0.5
         
         # 매칭된 지표들
         matched_indicators = []
-        for indicator in personal_indicators + general_indicators + hypothetical_indicators:
+        all_indicators = personal_indicators + general_indicators + hypothetical_indicators + administrative_indicators + corporate_indicators + real_estate_indicators
+        for indicator in all_indicators:
             if indicator in query_lower:
                 matched_indicators.append(indicator)
         
@@ -550,10 +575,16 @@ class ImprovedLegalRestrictionSystem:
         )
     
     def _check_general_curiosity(self, query: str, context_analysis: ContextAnalysis) -> ImprovedRestrictionResult:
-        """일반적 호기심 검사 (관대)"""
+        """일반적 호기심 검사 (더욱 관대)"""
         matched_rules = []
         matched_patterns = []
         max_confidence = 0.0
+        
+        # 카테고리별 특별 지표가 있는 경우 더욱 관대한 처리
+        has_category_indicators = any(indicator in query.lower() for indicator in [
+            "행정", "법인", "부동산", "주식회사", "법인세", "매매", "임대차", 
+            "등기", "신청", "제출", "처리", "절차", "방법", "규정"
+        ])
         
         for rule in self.restriction_rules:
             rule_matches = self._check_rule_patterns(query, rule)
@@ -562,8 +593,45 @@ class ImprovedLegalRestrictionSystem:
                 matched_patterns.extend(rule_matches['patterns'])
                 max_confidence = max(max_confidence, rule_matches['confidence'])
         
-        # 일반적 호기심의 경우 더 낮은 임계값으로 제한 (0.7 → 0.5)
-        is_restricted = max_confidence > 0.5
+        # 절차 관련 질문에 대한 특별 처리 (더욱 관대한 처리)
+        if any(keyword in query.lower() for keyword in ["절차", "방법", "과정", "규정", "제도"]):
+            # 절차 관련 질문은 더욱 관대하게 처리
+            threshold = 0.3  # 매우 관대한 임계값
+            if max_confidence > threshold * 2:  # 2배 더 관대
+                restriction_level = self._determine_restriction_level(matched_rules)
+                safe_response = self._generate_safe_response(matched_rules, query)
+                warning_message = self._generate_warning_message(matched_rules)
+            elif max_confidence < threshold * 2:  # 2배 더 관대
+                restriction_level = RestrictionLevel.ALLOWED
+                safe_response = None
+                warning_message = None
+            else:
+                # 불확실한 경우도 허용
+                restriction_level = RestrictionLevel.ALLOWED
+                safe_response = None
+                warning_message = None
+            
+            return ImprovedRestrictionResult(
+                is_restricted=restriction_level != RestrictionLevel.ALLOWED,
+                restriction_level=restriction_level,
+                context_analysis=context_analysis,
+                matched_rules=matched_rules,
+                matched_patterns=matched_patterns,
+                confidence=max_confidence,
+                safe_response=safe_response,
+                warning_message=warning_message,
+                reasoning=f"절차 관련 질문 특별 처리 (관대한 임계값 적용): {context_analysis.indicators}",
+                timestamp=datetime.now()
+            )
+        
+        # 일반적 호기심의 경우 더 낮은 임계값으로 제한
+        # 카테고리별 지표가 있으면 더욱 관대하게 처리
+        if has_category_indicators:
+            threshold = 0.3  # 매우 관대
+        else:
+            threshold = 0.5  # 관대
+        
+        is_restricted = max_confidence > threshold
         
         if is_restricted:
             restriction_level = self._determine_restriction_level(matched_rules)
@@ -583,7 +651,7 @@ class ImprovedLegalRestrictionSystem:
             confidence=max_confidence,
             safe_response=safe_response,
             warning_message=warning_message,
-            reasoning=f"일반적 호기심 맥락 분석: {context_analysis.indicators}",
+            reasoning=f"일반적 호기심 맥락 분석 (카테고리 지표: {has_category_indicators}): {context_analysis.indicators}",
             timestamp=datetime.now()
         )
     

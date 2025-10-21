@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import StandardScaler
 import joblib
+from ..utils.json_safe_saver import safe_save_json, safe_load_json
 
 logger = logging.getLogger(__name__)
 
@@ -583,15 +584,12 @@ class PerformanceMonitor:
         os.makedirs(os.path.dirname(self.metrics_file), exist_ok=True)
     
     def record_metrics(self, metrics: Dict[str, Any]):
-        """메트릭 기록"""
+        """메트릭 기록 (개선된 안전성)"""
         try:
             metrics['timestamp'] = datetime.now().isoformat()
             
-            # 기존 메트릭 로드
-            existing_metrics = []
-            if os.path.exists(self.metrics_file):
-                with open(self.metrics_file, 'r', encoding='utf-8') as f:
-                    existing_metrics = json.load(f)
+            # 기존 메트릭 로드 (안전한 로드 사용)
+            existing_metrics = safe_load_json(self.metrics_file, [])
             
             # 새 메트릭 추가
             existing_metrics.append(metrics)
@@ -600,11 +598,11 @@ class PerformanceMonitor:
             if len(existing_metrics) > 100:
                 existing_metrics = existing_metrics[-100:]
             
-            # 저장
-            with open(self.metrics_file, 'w', encoding='utf-8') as f:
-                json.dump(existing_metrics, f, ensure_ascii=False, indent=2)
-            
-            self.logger.info("메트릭 기록 완료")
+            # 저장 (안전한 저장 사용)
+            if safe_save_json(self.metrics_file, existing_metrics):
+                self.logger.info("메트릭 기록 완료")
+            else:
+                self.logger.error(f"Failed to save metrics to {self.metrics_file}")
             
         except Exception as e:
             self.logger.error(f"메트릭 기록 오류: {e}")
@@ -612,11 +610,8 @@ class PerformanceMonitor:
     def get_performance_trend(self, days: int = 7) -> Dict[str, List[float]]:
         """성능 트렌드 분석"""
         try:
-            if not os.path.exists(self.metrics_file):
-                return {}
-            
-            with open(self.metrics_file, 'r', encoding='utf-8') as f:
-                metrics_history = json.load(f)
+            # 안전한 로드 사용
+            metrics_history = safe_load_json(self.metrics_file, [])
             
             cutoff_date = datetime.now() - timedelta(days=days)
             

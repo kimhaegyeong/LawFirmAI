@@ -7,6 +7,7 @@ Chat Service
 import os
 import time
 import asyncio
+import hashlib
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from ..utils.config import Config
@@ -62,6 +63,28 @@ class ChatService:
     
     def __init__(self, config: Config):
         """채팅 서비스 초기화"""
+        # Google Cloud 관련 경고 방지 (더 포괄적)
+        import os
+        os.environ['GRPC_DNS_RESOLVER'] = 'native'
+        os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '0'
+        os.environ['GOOGLE_CLOUD_PROJECT'] = ''
+        os.environ['GCLOUD_PROJECT'] = ''
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = ''
+        os.environ['GOOGLE_CLOUD_DISABLE_GRPC'] = 'true'
+        os.environ['GRPC_VERBOSITY'] = 'ERROR'
+        os.environ['GRPC_TRACE'] = ''
+        
+        # gRPC 로깅 레벨 조정 (더 포괄적)
+        import logging
+        logging.getLogger('grpc').setLevel(logging.ERROR)
+        logging.getLogger('google').setLevel(logging.ERROR)
+        logging.getLogger('google.auth').setLevel(logging.ERROR)
+        logging.getLogger('google.auth.transport').setLevel(logging.ERROR)
+        logging.getLogger('google.auth.transport.grpc').setLevel(logging.ERROR)
+        logging.getLogger('google.auth.transport.requests').setLevel(logging.ERROR)
+        logging.getLogger('google.cloud').setLevel(logging.ERROR)
+        logging.getLogger('google.api_core').setLevel(logging.ERROR)
+        
         self.config = config
         self.logger = get_logger(__name__)
         
@@ -93,7 +116,38 @@ class ChatService:
             self.logger.info("LegalModelManager initialized successfully")
             
             self.logger.info("Initializing LegalVectorStore...")
-            vector_store = LegalVectorStore()
+            vector_store = LegalVectorStore(
+                model_name="jhgan/ko-sroberta-multitask",
+                dimension=768,
+                index_type="flat",
+                enable_quantization=True,
+                enable_lazy_loading=True,
+                memory_threshold_mb=3000
+            )
+            
+            # 기존 인덱스 로드 시도
+            index_paths = [
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents",
+                "data/embeddings/optimized_ko_sroberta_precedents", 
+                "data/embeddings/quantized_ko_sroberta_precedents"
+            ]
+            
+            index_loaded = False
+            for index_path in index_paths:
+                try:
+                    if vector_store.load_index(index_path):
+                        self.logger.info(f"Successfully loaded index from: {index_path}")
+                        index_loaded = True
+                        break
+                    else:
+                        self.logger.warning(f"Failed to load index from: {index_path}")
+                except Exception as e:
+                    self.logger.warning(f"Error loading index from {index_path}: {e}")
+                    continue
+            
+            if not index_loaded:
+                self.logger.warning("No vector index loaded, will use keyword search fallback")
+            
             self.logger.info("LegalVectorStore initialized successfully")
             
             self.logger.info("Initializing DatabaseManager...")
@@ -127,7 +181,11 @@ class ChatService:
             from .semantic_search_engine import SemanticSearchEngine
             
             exact_search_engine = ExactSearchEngine()
-            semantic_search_engine = SemanticSearchEngine()
+            semantic_search_engine = SemanticSearchEngine(
+                model_name="jhgan/ko-sroberta-multitask",
+                index_path="data/embeddings/ml_enhanced_ko_sroberta_precedents.faiss",
+                metadata_path="data/embeddings/ml_enhanced_ko_sroberta_precedents.json"
+            )
             
             self.optimized_search_engine = OptimizedSearchEngine(
                 vector_store=vector_store,
@@ -214,9 +272,10 @@ class ChatService:
         
         # 성능 최적화 컴포넌트 초기화
         try:
-            self.performance_monitor = PerformanceMonitor()
-            self.memory_optimizer = MemoryOptimizer()
-            self.cache_manager = CacheManager(max_size=1000, ttl=3600)
+            # PerformanceMonitor와 MemoryOptimizer는 아직 구현되지 않았으므로 None으로 설정
+            self.performance_monitor = None
+            self.memory_optimizer = None
+            self.cache_manager = get_cache_manager()
             self.logger.info("Performance optimization components initialized successfully")
         except Exception as e:
             self.logger.error(f"Failed to initialize performance optimization components: {e}")
@@ -266,10 +325,10 @@ class ChatService:
         try:
             start_time = time.time()
             
-            # 캐시에서 응답 확인
-            cache_key = f"response:{hash(message)}:{session_id}:{user_id}"
+            # 캐시에서 응답 확인 (더 효율적인 키 생성)
+            message_hash = hashlib.md5(message.encode('utf-8')).hexdigest()[:16]
+            cache_key = f"resp_{message_hash}_{user_id}"
             cached_response = self.cache_manager.get(cache_key) if self.cache_manager else None
-            
             if cached_response:
                 self.logger.info(f"Cache hit for message: {message[:50]}...")
                 cached_response["from_cache"] = True
@@ -361,7 +420,7 @@ class ChatService:
                                     validation_details={},
                                     timestamp=datetime.now()
                                 ),
-                                user_id
+                                user_id, message
                             )
                         
                         # 준수 모니터링
@@ -433,6 +492,10 @@ class ChatService:
                 except Exception as e:
                     self.logger.error(f"Error in multi-stage validation system: {e}")
                     # 다단계 검증 오류 시 기존 시스템으로 폴백
+                    improved_restriction_result = None
+                    processing_result = None
+                    filter_result = None
+                    
                     if self.improved_legal_restriction_system and self.intent_based_processor:
                         try:
                             # 기존 개선된 법률 제한 시스템 사용
@@ -469,7 +532,7 @@ class ChatService:
                                             validation_details={},
                                             timestamp=datetime.now()
                                         ),
-                                        user_id
+                                        user_id, message
                                     )
                                 
                                 # 준수 모니터링
@@ -614,7 +677,7 @@ class ChatService:
                         # 사용자 교육 및 경고
                         if self.user_education_system:
                             warning_message = self.user_education_system.generate_warning(
-                                improved_restriction_result, filter_result, validation_result, user_id
+                                improved_restriction_result, filter_result, validation_result, user_id, message
                             )
                         
                         # 준수 모니터링
@@ -680,9 +743,9 @@ class ChatService:
                 }
             }
             
-            # 캐시에 결과 저장
+            # 캐시에 결과 저장 (더 긴 TTL)
             if self.cache_manager and not result.get("errors"):
-                self.cache_manager.set(cache_key, result)
+                self.cache_manager.set(cache_key, result, ttl_seconds=1800)
             
             # Phase 3: 품질 평가 및 메모리 저장
             if self.quality_monitor and phase1_info.get("context"):

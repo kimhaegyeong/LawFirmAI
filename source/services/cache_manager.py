@@ -48,12 +48,12 @@ class CacheManager:
     """캐시 관리자 클래스"""
     
     def __init__(self, 
-                 max_size_mb: int = 100,
-                 default_ttl_seconds: int = 3600,
+                 max_size_mb: int = 300,  # 메모리 사용량 증가
+                 default_ttl_seconds: int = 10800,  # TTL 증가 (3시간)
                  enable_persistence: bool = True,
                  cache_dir: str = "data/cache"):
         """
-        캐시 관리자 초기화
+        캐시 관리자 초기화 (성능 최적화)
         
         Args:
             max_size_mb: 최대 캐시 크기 (MB)
@@ -66,23 +66,30 @@ class CacheManager:
         self.enable_persistence = enable_persistence
         self.cache_dir = Path(cache_dir)
         
-        # 메모리 캐시
+        # 메모리 캐시 (성능 최적화)
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._lock = threading.RLock()
         
-        # 통계
+        # 통계 (성능 모니터링)
         self._stats = {
             'hits': 0,
             'misses': 0,
             'evictions': 0,
-            'total_size_bytes': 0
+            'total_size_bytes': 0,
+            'hit_rate': 0.0,
+            'avg_response_time': 0.0
         }
+        
+        # 성능 최적화 설정
+        self._batch_size = 100  # 배치 처리 크기
+        self._cleanup_interval = 300  # 5분마다 정리
+        self._last_cleanup = time.time()
         
         # 캐시 디렉토리 생성
         if self.enable_persistence:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"CacheManager initialized: max_size={max_size_mb}MB, ttl={default_ttl_seconds}s")
+        logger.info(f"CacheManager initialized (optimized): max_size={max_size_mb}MB, ttl={default_ttl_seconds}s")
     
     def _generate_key(self, prefix: str, *args, **kwargs) -> str:
         """캐시 키 생성"""
@@ -132,10 +139,13 @@ class CacheManager:
             self._evict_lru()
     
     def get(self, key: str) -> Optional[Any]:
-        """캐시에서 값 가져오기"""
+        """캐시에서 값 가져오기 (성능 최적화)"""
+        start_time = time.time()
+        
         with self._lock:
             if key not in self._cache:
                 self._stats['misses'] += 1
+                self._update_stats(start_time)
                 return None
             
             entry = self._cache[key]
@@ -145,14 +155,74 @@ class CacheManager:
                 del self._cache[key]
                 self._stats['total_size_bytes'] -= entry.size_bytes
                 self._stats['misses'] += 1
+                self._update_stats(start_time)
                 return None
             
-            # LRU 업데이트
+            # LRU 업데이트 (성능 최적화)
             entry.touch()
             self._cache.move_to_end(key)
             
             self._stats['hits'] += 1
+            self._update_stats(start_time)
+            
+            # 주기적 정리 (성능 최적화)
+            self._periodic_cleanup()
+            
             return entry.value
+    
+    def _update_stats(self, start_time: float):
+        """통계 업데이트 (성능 모니터링)"""
+        response_time = time.time() - start_time
+        
+        # 히트율 계산
+        total_requests = self._stats['hits'] + self._stats['misses']
+        if total_requests > 0:
+            self._stats['hit_rate'] = self._stats['hits'] / total_requests
+        
+        # 평균 응답 시간 계산 (지수 이동 평균)
+        alpha = 0.1  # 평활화 계수
+        if self._stats['avg_response_time'] == 0:
+            self._stats['avg_response_time'] = response_time
+        else:
+            self._stats['avg_response_time'] = (alpha * response_time + 
+                                              (1 - alpha) * self._stats['avg_response_time'])
+    
+    def _periodic_cleanup(self):
+        """주기적 정리 (성능 최적화)"""
+        current_time = time.time()
+        if current_time - self._last_cleanup > self._cleanup_interval:
+            self._last_cleanup = current_time
+            self._cleanup_expired_entries()
+    
+    def _cleanup_expired_entries(self):
+        """만료된 엔트리 정리 (성능 최적화)"""
+        expired_keys = []
+        for key, entry in self._cache.items():
+            if entry.is_expired():
+                expired_keys.append(key)
+        
+        # 만료된 엔트리 제거
+        for key in expired_keys:
+            entry = self._cache.pop(key)
+            self._stats['total_size_bytes'] -= entry.size_bytes
+        
+        if expired_keys:
+            logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """캐시 통계 반환 (성능 모니터링)"""
+        with self._lock:
+            return {
+                'hits': self._stats['hits'],
+                'misses': self._stats['misses'],
+                'hit_rate': self._stats['hit_rate'],
+                'evictions': self._stats['evictions'],
+                'total_size_bytes': self._stats['total_size_bytes'],
+                'total_size_mb': self._stats['total_size_bytes'] / (1024 * 1024),
+                'max_size_mb': self.max_size_bytes / (1024 * 1024),
+                'avg_response_time': self._stats['avg_response_time'],
+                'cache_entries': len(self._cache)
+            }
     
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
         """캐시에 값 저장"""
@@ -233,9 +303,13 @@ class CacheManager:
                 'size_bytes': entry.size_bytes
             }
             
+            # 인코딩 문제 방지를 위해 안전한 직렬화
             with open(cache_file, 'wb') as f:
-                pickle.dump(persist_data, f)
+                pickle.dump(persist_data, f, protocol=pickle.HIGHEST_PROTOCOL)
                 
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Encoding error persisting cache entry {key}: {e}")
+            # 인코딩 오류 시 해당 엔트리 건너뛰기
         except Exception as e:
             logger.warning(f"Failed to persist cache entry {key}: {e}")
     
@@ -257,6 +331,14 @@ class CacheManager:
             
             return CacheEntry(**persist_data)
             
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Encoding error loading cache entry {key}: {e}")
+            # 인코딩 오류 시 파일 삭제
+            try:
+                cache_file.unlink()
+            except:
+                pass
+            return None
         except Exception as e:
             logger.warning(f"Failed to load persisted cache entry {key}: {e}")
             return None

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType, QuestionType
+from ..utils.json_safe_saver import safe_save_json, safe_load_json
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +150,13 @@ class PromptOptimizer:
             
             # 기존 데이터 로드
             if performance_file.exists():
-                with open(performance_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                try:
+                    with open(performance_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except json.JSONDecodeError:
+                    # JSON 파일이 손상된 경우 새로 생성
+                    logger.warning(f"Corrupted JSON file detected, creating new one: {performance_file}")
+                    data = {"metrics": []}
             else:
                 data = {"metrics": []}
             
@@ -170,12 +176,35 @@ class PromptOptimizer:
             
             data["metrics"].append(metrics_dict)
             
-            # 파일 저장
-            with open(performance_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            # 파일 저장 (안전한 방법)
+            self._safe_save_performance_data(data, performance_file)
             
         except Exception as e:
             logger.error(f"Error saving performance data: {e}")
+    
+    def _safe_save_performance_data(self, data: dict, performance_file) -> None:
+        """성능 데이터를 안전하게 저장"""
+        try:
+            # 임시 파일에 먼저 저장
+            temp_file = str(performance_file) + ".tmp"
+            
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # 임시 파일이 성공적으로 저장되었으면 원본 파일로 이동
+            import shutil
+            shutil.move(temp_file, str(performance_file))
+            
+        except Exception as e:
+            logger.error(f"Error in safe save: {e}")
+            # 임시 파일이 있으면 삭제
+            try:
+                import os
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except:
+                pass
+            raise
     
     def _check_and_optimize(self, metrics: PromptPerformanceMetrics) -> None:
         """성능 확인 및 최적화"""
@@ -421,12 +450,8 @@ class PromptOptimizer:
             # 최적화 결과 파일에 저장
             optimization_file = self.performance_data_dir / "optimization_results.json"
             
-            # 기존 결과 로드
-            if optimization_file.exists():
-                with open(optimization_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            else:
-                data = {"results": []}
+            # 기존 결과 로드 (안전한 로드 사용)
+            data = safe_load_json(str(optimization_file), {"results": []})
             
             # 새 결과 추가
             for optimization in optimizations:
@@ -441,11 +466,11 @@ class PromptOptimizer:
                 }
                 data["results"].append(result_dict)
             
-            # 파일 저장
-            with open(optimization_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"Recorded {len(optimizations)} optimization results")
+            # 파일 저장 (안전한 저장 사용)
+            if safe_save_json(str(optimization_file), data):
+                logger.info(f"Recorded {len(optimizations)} optimization results")
+            else:
+                logger.error(f"Failed to save optimization results to {optimization_file}")
             
         except Exception as e:
             logger.error(f"Error recording optimization results: {e}")
