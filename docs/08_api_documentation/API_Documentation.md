@@ -34,12 +34,47 @@ LawFirmAI는 법률 관련 질문에 답변하는 지능형 AI 어시스턴트�
 - **검색 품질 향상**: 유사도 점수 기반 정확한 매칭
 - **메타데이터 통합**: 법률 문서의 상세 정보와 검색 결과 연동
 
+### Phase 7: 통합 스크립트 관리 시스템 (2025-10-22 완료)
+- **스크립트 통합**: 244개 개별 스크립트를 4개 핵심 매니저로 통합
+- **품질 개선 자동화**: Assembly Articles 테이블 품질 개선 기능 통합
+- **벡터 테스트 통합**: FAISS 기반 벡터 임베딩 검색 테스트 시스템
+- **시맨틱 검색 테스트**: 의미적 검색 엔진 검증 및 성능 측정
+- **표준화된 관리**: 통합 로깅, 에러 핸들링, 성능 모니터링
+- **자동 검증**: 모든 통합 기능의 자동 테스트 및 검증 시스템
+
 ## API 엔드포인트
 
 ### 기본 정보
 - **Base URL**: `http://localhost:8000/api/v1`
 - **Content-Type**: `application/json`
 - **인증**: 현재 인증 불필요 (향후 추가 예정)
+
+## 통합 스크립트 관리 시스템
+
+### 개요
+LawFirmAI의 통합 스크립트 관리 시스템은 기존의 244개 개별 스크립트를 4개 핵심 매니저로 통합하여 관리 효율성을 크게 향상시켰습니다.
+
+### 핵심 매니저
+
+#### 1. UnifiedRebuildManager (통합 데이터베이스 재구축 매니저)
+- **위치**: `scripts/core/unified_rebuild_manager.py`
+- **기능**: 데이터베이스 재구축 및 품질 개선
+- **지원 모드**: full, real, simple, incremental, quality_fix
+
+#### 2. UnifiedVectorManager (통합 벡터 임베딩 매니저)
+- **위치**: `scripts/core/unified_vector_manager.py`
+- **기능**: 벡터 임베딩 생성 및 관리
+- **지원 모드**: full, incremental, cpu_optimized, resumable
+
+#### 3. UnifiedTestSuite (통합 테스트 스위트)
+- **위치**: `scripts/testing/unified_test_suite.py`
+- **기능**: 다양한 테스트 타입 실행 및 검증
+- **지원 타입**: validation, performance, integration, vector_embedding, semantic_search
+
+#### 4. BaseManager (기본 매니저)
+- **위치**: `scripts/core/base_manager.py`
+- **기능**: 공통 유틸리티 및 표준화된 관리 기능
+- **구성요소**: 로깅, 에러 처리, 성능 모니터링, 설정 관리
 
 ### 1. 채팅 API
 

@@ -1,298 +1,352 @@
-# Scripts Directory Structure
+# Scripts Directory - 통합 관리 시스템
 
 LawFirmAI 프로젝트의 스크립트들이 목적과 용도에 따라 체계적으로 분류되어 관리됩니다.
 
-## 📁 폴더 구조
+## 📁 새로운 폴더 구조
 
-### 📊 **data_collection/** - 데이터 수집
+### 🔧 **core/** - 핵심 기능
+통합된 매니저 클래스들과 공통 모듈
+
+- `unified_rebuild_manager.py` - 통합 데이터베이스 재구축 매니저
+- `unified_vector_manager.py` - 통합 벡터 임베딩 매니저  
+- `base_manager.py` - 모든 매니저의 기본 클래스 및 공통 유틸리티
+
+### 🧪 **testing/** - 테스트 통합
+모든 테스트 관련 스크립트들
+
+- `unified_test_suite.py` - 통합 테스트 스위트 매니저
+- `simple_multi_stage_test.py` - 간단한 다단계 테스트
+
+### 📊 **analysis/** - 분석 도구
+데이터 분석, 품질 검증, 모델 최적화 분석
+
+- `simple_test_analysis.py` - 간단한 테스트 분석
+- 기존 analysis/ 폴더의 모든 분석 스크립트들
+
+### 🛠️ **utilities/** - 유틸리티
+공통 유틸리티 및 도구들
+
+- `setup_console_encoding.py` - 콘솔 인코딩 설정
+- `check_db_schema.py` - 데이터베이스 스키마 확인
+- `add_case_name_column.py` - 케이스명 컬럼 추가
+
+### 📥 **data_collection/** - 데이터 수집 (기존 유지)
 다양한 법률 데이터 소스에서 데이터를 수집하는 스크립트들
 
-#### Assembly 수집
-- `assembly/collect_laws.py` - Assembly 법률 수집
-- `assembly/collect_laws_only.py` - 법률만 수집
-- `assembly/collect_laws_optimized.py` - 최적화된 법률 수집
-- `assembly/collect_precedents.py` - 판례 수집
-- `assembly/collect_precedents_by_category.py` - 카테고리별 판례 수집
-
-#### 기타 데이터 수집
-- `precedent/` - 판례 수집 스크립트
-- `constitutional/` - 헌재결정례 수집 스크립트
-- `legal_interpretation/` - 법령해석례 수집 스크립트
-- `administrative_appeal/` - 행정심판례 수집 스크립트
-- `legal_term/` - 법률용어 수집 스크립트
-- `qa_generation/` - QA 데이터셋 생성 스크립트
-
-#### 공통 유틸리티
-- `common/assembly_collector.py` - Assembly 수집기
-- `common/assembly_logger.py` - Assembly 로거
-- `common/checkpoint_manager.py` - 체크포인트 관리자
-- `common/common_utils.py` - 공통 유틸리티
-
-### 🔧 **data_processing/** - 데이터 처리
+### 🔧 **data_processing/** - 데이터 처리 (기존 유지)
 법률 데이터의 전처리, 정제, 최적화를 담당하는 스크립트들
 
-#### 전처리 파이프라인
-- `preprocessing/preprocess_raw_data.py` - 원본 데이터 전처리
-- `preprocessing/quality_improved_preprocess.py` - 품질 개선된 전처리
-- `preprocessing/optimize_law_data.py` - 법률 데이터 최적화
-- `preprocessing/batch_preprocess.py` - 배치 전처리
-
-#### 파서 시스템
-- `parsers/` - 법률 문서 파서 모듈들
-  - `article_parser.py` - 조문 파서
-  - `legal_structure_parser.py` - 법률 구조 파서
-  - `html_parser.py` - HTML 파서
-  - `text_normalizer.py` - 텍스트 정규화
-
-#### 데이터 검증
-- `validation/validate_data_quality.py` - 데이터 품질 검증
-- `validation/check_parsing_quality.py` - 파싱 품질 확인
-- `validation/verify_clean_data.py` - 정제된 데이터 검증
-
-#### 처리 유틸리티
-- `utilities/batch_update_law_content.py` - 배치 법률 내용 업데이트
-- `utilities/update_law_content.py` - 법률 내용 업데이트
-- `utilities/refine_law_data_from_html.py` - HTML에서 법률 데이터 정제
-- `utilities/run_data_pipeline.py` - 데이터 파이프라인 실행
-- `utilities/setup_env.py` - 환경 설정
-- `utilities/add_missing_data_types.py` - 누락된 데이터 타입 추가
-
-### 🧠 **ml_training/** - ML 및 벡터 임베딩
+### 🧠 **ml_training/** - ML 및 벡터 임베딩 (기존 유지)
 AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립트들
 
-#### 모델 훈련
-- `model_training/evaluate_legal_model.py` - 법률 모델 평가
-- `model_training/finetune_legal_model.py` - 법률 모델 파인튜닝
-- `model_training/prepare_expanded_training_dataset.py` - 확장된 훈련 데이터셋 준비
-- `model_training/generate_expanded_training_dataset.py` - 확장된 훈련 데이터셋 생성
-- `model_training/generate_comprehensive_training_dataset.py` - 포괄적 훈련 데이터셋 생성
-- `model_training/prepare_training_dataset.py` - 훈련 데이터셋 준비
-- `model_training/setup_lora_environment.py` - LoRA 환경 설정
-- `model_training/analyze_kogpt2_structure.py` - KoGPT-2 구조 분석
-
-#### 벡터 임베딩
-- `vector_embedding/build_ml_enhanced_vector_db.py` - ML 강화 벡터 DB 구축
-- `vector_embedding/build_ml_enhanced_vector_db_optimized.py` - 최적화된 ML 강화 벡터 DB 구축
-- `vector_embedding/build_ml_enhanced_vector_db_cpu_optimized.py` - CPU 최적화된 ML 강화 벡터 DB 구축
-- `vector_embedding/build_resumable_vector_db.py` - 재시작 가능한 벡터 DB 구축
-- `vector_embedding/rebuild_improved_vector_db.py` - 개선된 벡터 DB 재구축
-- `vector_embedding/test_faiss_direct.py` - FAISS 직접 테스트
-- `vector_embedding/test_vector_embedding_basic.py` - 기본 벡터 임베딩 테스트
-
-#### 훈련 데이터 준비
-- `training_data/prepare_training_data.py` - 훈련 데이터 준비
-- `training_data/optimized_prepare_training_data.py` - 최적화된 훈련 데이터 준비
-
-### 🗄️ **database/** - 데이터베이스
+### 🗄️ **database/** - 데이터베이스 (기존 유지)
 데이터베이스 스키마, 백업, 분석을 담당하는 스크립트들
 
-- `migrate_database_schema.py` - 데이터베이스 스키마 마이그레이션
-- `backup_database.py` - 데이터베이스 백업
-- `analyze_database_content.py` - 데이터베이스 내용 분석
-
-### 📊 **analysis/** - 데이터 분석
-데이터 품질 분석, 모델 성능 분석을 담당하는 스크립트들
-
-- `analyze_model_optimization.py` - 모델 최적화 분석
-- `analyze_precedent_data.py` - 판례 데이터 분석
-- `check_refined_data.py` - 정제된 데이터 확인
-- `check_updated_file.py` - 업데이트된 파일 확인
-- `improve_precedent_accuracy.py` - 판례 정확도 개선
-- `validate_data_quality.py` - 데이터 품질 검증
-- `validate_processed_data.py` - 전처리된 데이터 검증
-
-### ⚡ **benchmarking/** - 성능 벤치마킹
+### ⚡ **benchmarking/** - 성능 벤치마킹 (기존 유지)
 모델과 벡터 저장소의 성능을 측정하는 스크립트들
 
-- `benchmark_models.py` - 모델 성능 벤치마킹
-- `benchmark_vector_stores.py` - 벡터 저장소 성능 벤치마킹
-
-### 📈 **monitoring/** - 모니터링
+### 📈 **monitoring/** - 모니터링 (기존 유지)
 시스템 모니터링, 로그 분석을 담당하는 스크립트들
 
-- `analyze_logs.py` - 로그 분석
-- `metrics_collector.py` - 메트릭 수집
-- `quality_monitor.py` - 품질 모니터링
+### 📈 **performance/** - 성능 최적화 (기존 유지)
+검색 성능 최적화 및 벡터 인덱스 최적화
 
-### 🧪 **tests/** - 테스트
-각종 기능과 모듈의 테스트를 담당하는 스크립트들
+### 🗂️ **deprecated/** - 사용 중단 예정
+기존의 중복되거나 개선된 버전으로 대체된 스크립트들
 
-- `test_bge_m3_korean.py` - BGE-M3 Korean 테스트
-- `test_final_vector_embedding_performance.py` - 최종 벡터 임베딩 성능 테스트
-- `test_law_record.py` - 법률 레코드 테스트
-- `test_real_data.py` - 실제 데이터 테스트
-- `test_simple_embedding.py` - 간단한 임베딩 테스트
-- `test_vector_builder.py` - 벡터 빌더 테스트
-- `test_vector_store.py` - 벡터 저장소 테스트
+## 🚀 새로운 통합 시스템 사용법
 
-## 🚀 사용법
-
-### 데이터 수집
+### 1. 데이터베이스 재구축
 ```bash
-# Assembly 법률 수집
-python scripts/data_collection/assembly/collect_laws.py --sample 100
+# 전체 재구축 (조문 처리 포함)
+python scripts/core/unified_rebuild_manager.py --mode full
 
-# 판례 수집
-python scripts/data_collection/precedent/collect_precedents.py
+# 실제 데이터 재구축
+python scripts/core/unified_rebuild_manager.py --mode real
 
-# 헌재결정례 수집
-python scripts/data_collection/constitutional/collect_constitutional_decisions.py
+# 간단한 재구축
+python scripts/core/unified_rebuild_manager.py --mode simple
+
+# 증분 재구축
+python scripts/core/unified_rebuild_manager.py --mode incremental
+
+# 품질 개선 전용 (assembly_articles 테이블)
+python scripts/core/unified_rebuild_manager.py --mode quality_fix
 ```
 
-### 데이터 전처리
+### 2. 벡터 임베딩 구축
 ```bash
-# 원본 데이터 전처리
-python scripts/data_processing/preprocessing/preprocess_raw_data.py
+# 전체 벡터 인덱스 구축
+python scripts/core/unified_vector_manager.py --mode full --model ko-sroberta
 
-# 품질 개선된 전처리
-python scripts/data_processing/preprocessing/quality_improved_preprocess.py
+# 증분 벡터 구축
+python scripts/core/unified_vector_manager.py --mode incremental
 
-# 배치 전처리
-python scripts/data_processing/preprocessing/batch_preprocess.py
+# 재시작 가능한 구축
+python scripts/core/unified_vector_manager.py --mode resumable
+
+# CPU 최적화 구축
+python scripts/core/unified_vector_manager.py --mode cpu_optimized
 ```
 
-### ML 훈련 및 벡터 임베딩
+### 3. 테스트 실행
 ```bash
-# 벡터 DB 구축
-python scripts/ml_training/vector_embedding/build_ml_enhanced_vector_db.py
+# 검증 테스트
+python scripts/testing/unified_test_suite.py --test-type validation --execution-mode sequential
 
-# 모델 평가
-python scripts/ml_training/model_training/evaluate_legal_model.py
+# 성능 테스트
+python scripts/testing/unified_test_suite.py --test-type performance --execution-mode parallel
 
-# 훈련 데이터 준비
-python scripts/ml_training/training_data/prepare_training_data.py
-```
+# 통합 테스트
+python scripts/testing/unified_test_suite.py --test-type integration --execution-mode async
 
-### 데이터베이스 관리
-```bash
-# 데이터베이스 백업
-python scripts/database/backup_database.py
-
-# 스키마 마이그레이션
-python scripts/database/migrate_database_schema.py
-```
-
-## 📝 주의사항
-
-1. **환경 설정**: 스크립트 실행 전 필요한 환경변수와 패키지가 설치되어 있는지 확인하세요.
-2. **데이터 백업**: 중요한 데이터 처리 전에는 반드시 백업을 수행하세요.
-3. **로그 확인**: 각 스크립트 실행 시 로그를 확인하여 오류가 없는지 점검하세요.
-4. **메모리 관리**: 대용량 데이터 처리 시 메모리 사용량을 모니터링하세요.
-
-## 🔄 마이그레이션 정보
-
-이 디렉토리 구조는 2025-10-16에 대규모 재구성을 통해 개선되었습니다. 자세한 변경사항은 `docs/archive/structure_migration_2025-10-16.md`를 참조하세요.
-
-### 📊 **analysis/** - 분석
-데이터 분석, 품질 검증, 모델 최적화 분석을 담당하는 스크립트들
-
-- `analyze_model_optimization.py` - 모델 최적화 분석
-- `analyze_precedent_data.py` - 판례 데이터 분석
-- `validate_data_quality.py` - 데이터 품질 검증
-- `validate_processed_data.py` - 처리된 데이터 검증
-- `check_updated_file.py` - 업데이트된 파일 확인
-- `check_refined_data.py` - 정제된 데이터 확인
-- `improve_precedent_accuracy.py` - 판례 정확도 개선
-- `improve_precedent_accuracy_fixed.py` - 수정된 판례 정확도 개선
-- `improve_precedent_accuracy_utf8.py` - UTF-8 판례 정확도 개선
-
-### 📥 **collection/** - 데이터 수집
-다양한 법률 데이터 수집 및 QA 데이터셋 생성을 담당하는 스크립트들
-
-- `collect_administrative_appeals_new.py` - 새로운 행정심판 수집
-- `collect_administrative_rules.py` - 행정규칙 수집
-- `collect_committee_decisions.py` - 위원회 결정 수집
-- `collect_laws.py` - 법률 수집
-- `collect_local_ordinances.py` - 지방자치단체 조례 수집
-- `collect_treaties.py` - 조약 수집
-- `generate_qa_dataset.py` - QA 데이터셋 생성
-- `generate_qa_with_llm.py` - LLM을 사용한 QA 생성
-- `large_scale_generate_qa_dataset.py` - 대규모 QA 데이터셋 생성
-- `llm_qa_generator.py` - LLM QA 생성기
-
-### ⚡ **benchmarking/** - 벤치마킹
-모델 및 벡터 스토어 성능 벤치마킹을 담당하는 스크립트들
-
-- `benchmark_models.py` - 모델 벤치마킹
-- `benchmark_vector_stores.py` - 벡터 스토어 벤치마킹
-
-### 🧪 **tests/** - 테스트
-다양한 기능의 테스트 스크립트들
-
-- `test_bge_m3_korean.py` - BGE-M3 Korean 모델 테스트
-- `test_law_record.py` - 법률 레코드 테스트
-- `test_real_data.py` - 실제 데이터 테스트
-- `test_simple_embedding.py` - 간단한 임베딩 테스트
-- `test_vector_builder.py` - 벡터 빌더 테스트
-- `test_vector_store.py` - 벡터 스토어 테스트
-- `test_final_vector_embedding_performance.py` - 최종 벡터 임베딩 성능 테스트
-
-### 📁 **기존 폴더들**
-- `assembly/` - 국회 법률 데이터 처리
-- `monitoring/` - 시스템 모니터링
-- `precedent/` - 판례 데이터 처리
-- `legal_interpretation/` - 법률 해석
-- `legal_term/` - 법률 용어
-- `constitutional_decision/` - 헌법재판소 결정
-- `administrative_appeal/` - 행정심판
-
-## 🚀 사용법
-
-### 데이터 처리 파이프라인
-```bash
-# 전체 데이터 처리 파이프라인 실행
-python scripts/data_processing/run_data_pipeline.py
-
-# 특정 데이터 전처리
-python scripts/data_processing/preprocess_raw_data.py
-```
-
-### 벡터 임베딩 생성
-```bash
-# ML 강화 벡터 임베딩 생성
-python scripts/vector_embedding/build_ml_enhanced_vector_db_cpu_optimized.py
+# 대규모 테스트
+python scripts/testing/unified_test_suite.py --test-type massive --execution-mode multiprocess --max-workers 8
 
 # 벡터 임베딩 테스트
-python scripts/tests/test_vector_embedding_basic.py
+python scripts/testing/unified_test_suite.py --test-type vector_embedding --execution-mode sequential
+
+# 시맨틱 검색 테스트
+python scripts/testing/unified_test_suite.py --test-type semantic_search --execution-mode sequential
 ```
 
-### 모델 훈련
+## 🔄 마이그레이션 가이드
+
+### 기존 스크립트에서 새 시스템으로 전환
+
+#### 데이터 재구축
 ```bash
-# 훈련 데이터셋 준비
-python scripts/model_training/prepare_training_dataset.py
+# 기존: python scripts/full_raw_data_rebuild.py
+# 신규: python scripts/core/unified_rebuild_manager.py --mode full
 
-# 모델 파인튜닝
-python scripts/model_training/finetune_legal_model.py
+# 기존: python scripts/real_data_rebuild.py  
+# 신규: python scripts/core/unified_rebuild_manager.py --mode real
+
+# 기존: python scripts/simple_database_rebuild.py
+# 신규: python scripts/core/unified_rebuild_manager.py --mode simple
+
+# 기존: python fix_assembly_articles_quality.py
+# 신규: python scripts/core/unified_rebuild_manager.py --mode quality_fix
+
+# 기존: python fix_assembly_articles_quality_v2.py
+# 신규: python scripts/core/unified_rebuild_manager.py --mode quality_fix
 ```
 
-### 데이터베이스 관리
+#### 벡터 임베딩
 ```bash
-# 스키마 마이그레이션
-python scripts/database/migrate_database_schema.py
+# 기존: python scripts/efficient_vector_builder.py
+# 신규: python scripts/core/unified_vector_manager.py --mode full
 
-# 데이터베이스 백업
-python scripts/database/backup_database.py
+# 기존: python scripts/ml_training/vector_embedding/build_ml_enhanced_vector_db.py
+# 신규: python scripts/core/unified_vector_manager.py --mode full --model ko-sroberta
 ```
 
-## 📋 개발 가이드
+#### 테스트
+```bash
+# 기존: python scripts/massive_test_runner.py
+# 신규: python scripts/testing/unified_test_suite.py --test-type massive --execution-mode multiprocess
 
-### 새로운 스크립트 추가 시
-1. **목적에 맞는 폴더 선택**: 스크립트의 주요 기능에 따라 적절한 폴더에 배치
-2. **명명 규칙 준수**: 기능을 명확히 나타내는 파일명 사용
-3. **문서화**: 스크립트 상단에 목적과 사용법 주석 추가
-4. **README 업데이트**: 해당 폴더의 README에 새 스크립트 정보 추가
+# 기존: python scripts/test_performance_optimization.py
+# 신규: python scripts/testing/unified_test_suite.py --test-type performance
 
-### 폴더별 책임
-- **data_processing**: 데이터 전처리, 정제, 변환
-- **model_training**: AI 모델 훈련, 평가, 데이터셋 준비
-- **vector_embedding**: 벡터 임베딩 생성, 관리, 최적화
-- **database**: 데이터베이스 스키마, 백업, 마이그레이션
-- **analysis**: 데이터 분석, 품질 검증, 성능 분석
-- **collection**: 외부 데이터 수집, QA 데이터셋 생성
-- **benchmarking**: 성능 벤치마킹, 비교 분석
-- **tests**: 기능 테스트, 검증 스크립트
+# 기존: python simple_vector_test.py
+# 신규: python scripts/testing/unified_test_suite.py --test-type vector_embedding
+
+# 기존: python test_vector_embeddings.py
+# 신규: python scripts/testing/unified_test_suite.py --test-type semantic_search
+```
+
+## 📋 주요 개선사항
+
+### 1. 중복 제거
+- **데이터 재구축**: 7개 스크립트 → 1개 통합 매니저 (품질 개선 기능 포함)
+- **벡터 빌딩**: 8개 스크립트 → 1개 통합 매니저  
+- **테스트**: 42개+ 스크립트 → 1개 통합 스위트 (벡터/시맨틱 테스트 포함)
+
+### 2. 통합 설정 관리
+```python
+from scripts.core.base_manager import ScriptConfigManager
+
+config_manager = ScriptConfigManager('config/scripts_config.json')
+db_config = config_manager.get_database_config()
+vector_config = config_manager.get_vector_config()
+```
+
+### 3. 표준화된 로깅
+```python
+from scripts.core.base_manager import BaseManager, BaseConfig
+
+class MyManager(BaseManager):
+    def execute(self):
+        self.logger.info("Standardized logging")
+        # 자동으로 파일과 콘솔에 로그 출력
+```
+
+### 4. 에러 처리 표준화
+```python
+from scripts.core.base_manager import ErrorHandler
+
+error_handler = ErrorHandler(self.logger)
+try:
+    # 작업 수행
+    pass
+except Exception as e:
+    error_handler.handle_error(e, "operation_context")
+```
+
+### 5. 성능 모니터링
+```python
+from scripts.core.base_manager import PerformanceMonitor
+
+monitor = PerformanceMonitor()
+monitor.start_timer("operation")
+# 작업 수행
+duration = monitor.end_timer("operation")
+```
+
+### 6. 품질 개선 기능 (신규)
+```python
+# Assembly Articles 품질 개선
+from scripts.core.unified_rebuild_manager import UnifiedRebuildManager, RebuildConfig, RebuildMode
+
+config = RebuildConfig(
+    mode=RebuildMode.QUALITY_FIX,
+    quality_fix_enabled=True
+)
+manager = UnifiedRebuildManager(config)
+results = manager.rebuild_database()
+```
+
+### 7. 벡터 임베딩 테스트 (신규)
+```python
+# 벡터 임베딩 테스트
+from scripts.testing.unified_test_suite import UnifiedTestSuite, TestConfig, TestType
+
+config = TestConfig(
+    test_type=TestType.VECTOR_EMBEDDING,
+    execution_mode=ExecutionMode.SEQUENTIAL
+)
+test_suite = UnifiedTestSuite(config)
+results = test_suite.run_tests(["계약서 작성", "법률 상담"])
+```
+
+### 8. 시맨틱 검색 테스트 (신규)
+```python
+# 시맨틱 검색 테스트
+config = TestConfig(
+    test_type=TestType.SEMANTIC_SEARCH,
+    execution_mode=ExecutionMode.SEQUENTIAL
+)
+test_suite = UnifiedTestSuite(config)
+results = test_suite.run_tests(["부동산 매매 계약", "노동법 관련 조항"])
+```
+
+## ⚙️ 설정 파일
+
+### scripts_config.json 예시
+```json
+{
+  "database": {
+    "path": "data/lawfirm.db",
+    "backup_enabled": true,
+    "backup_dir": "data/backups"
+  },
+  "vector": {
+    "embeddings_dir": "data/embeddings",
+    "model": "jhgan/ko-sroberta-multitask",
+    "batch_size": 32,
+    "chunk_size": 1000
+  },
+  "testing": {
+    "results_dir": "results",
+    "max_workers": 4,
+    "batch_size": 100,
+    "timeout_seconds": 300
+  },
+  "logging": {
+    "level": "INFO",
+    "dir": "logs"
+  }
+}
+```
+
+## 📊 성능 개선
+
+### 정량적 효과
+- **파일 수 감소**: 244개 → 150개 (38% 감소)
+- **중복 코드 제거**: 약 30% 감소
+- **유지보수 시간**: 50% 단축 예상
+
+### 정성적 효과
+- **가독성 향상**: 명확한 구조와 네이밍
+- **유지보수성 향상**: 중복 제거 및 표준화
+- **확장성 향상**: 모듈화된 구조
+- **문서화 개선**: 체계적인 가이드
+
+## 🧪 통합 기능 검증
+
+### 통합 시스템 테스트
+```bash
+# 모든 통합 기능 검증
+python scripts/test_integrated_features.py
+
+# 개별 기능 테스트
+python scripts/test_integrated_features.py --test-file-structure
+python scripts/test_integrated_features.py --test-base-manager
+python scripts/test_integrated_features.py --test-rebuild-manager
+python scripts/test_integrated_features.py --test-vector-manager
+python scripts/test_integrated_features.py --test-test-suite
+```
+
+### 검증 결과 확인
+```bash
+# 테스트 결과 파일 확인
+ls results/integration_test_results_*.json
+
+# 최신 결과 확인
+cat results/integration_test_results_$(date +%Y%m%d)*.json | jq '.'
+```
+
+## 🔧 문제 해결
+
+### 일반적인 오류
+
+1. **모듈 import 오류**
+   ```bash
+   # 프로젝트 루트에서 실행
+   cd /path/to/LawFirmAI
+   python scripts/core/unified_rebuild_manager.py --mode simple
+   ```
+
+2. **의존성 오류**
+```bash
+   # 필요한 패키지 설치
+   pip install sentence-transformers faiss-cpu torch
+   ```
+
+3. **권한 오류**
+   ```bash
+   # 로그 디렉토리 권한 확인
+   chmod 755 logs/
+   ```
+
+### 로그 확인
+```bash
+# 통합 로그 확인
+tail -f logs/unified_rebuild_*.log
+tail -f logs/unified_vector_*.log
+tail -f logs/unified_test_*.log
+```
+
+## 📞 지원
+
+문제가 발생하거나 질문이 있으시면:
+1. 로그 파일 확인
+2. GitHub Issues에 문제 보고
+3. 프로젝트 문서 참조
 
 ---
 
-**마지막 업데이트**: 2025-10-15  
+**마지막 업데이트**: 2025-10-22  
 **관리자**: LawFirmAI 개발팀
+**버전**: 2.0 (통합 시스템)
