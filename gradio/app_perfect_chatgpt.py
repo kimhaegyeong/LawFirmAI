@@ -102,9 +102,8 @@ class PerfectChatGPTStyleLawFirmAI:
         start_time = time.time()
         
         try:
-            # ChatService를 사용한 처리
-            import asyncio
-            result = asyncio.run(self.chat_service.process_message(query, session_id=self.current_session_id))
+            # ChatService를 사용한 처리 (동기 래퍼 사용)
+            result = self._process_message_sync(query)
             
             response_time = time.time() - start_time
             
@@ -181,6 +180,63 @@ class PerfectChatGPTStyleLawFirmAI:
                 self.current_conversation_id = self.conversations[0]["id"]
             else:
                 self._create_new_conversation()
+    
+    def _process_message_sync(self, message: str) -> Dict[str, Any]:
+        """동기적으로 메시지 처리 (비동기 함수를 동기로 래핑)"""
+        try:
+            import asyncio
+            import threading
+            
+            # 새 이벤트 루프에서 실행
+            def run_in_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(
+                        self.chat_service.process_message(message, session_id=self.current_session_id)
+                    )
+                finally:
+                    loop.close()
+            
+            # 별도 스레드에서 실행
+            result = None
+            exception = None
+            
+            def target():
+                nonlocal result, exception
+                try:
+                    result = run_in_thread()
+                except Exception as e:
+                    exception = e
+            
+            thread = threading.Thread(target=target)
+            thread.start()
+            thread.join(timeout=30)  # 30초 타임아웃
+            
+            if thread.is_alive():
+                # 타임아웃 발생
+                return {
+                    "response": "처리 시간이 초과되었습니다. 다시 시도해주세요.",
+                    "confidence": 0.0,
+                    "error": "Timeout"
+                }
+            
+            if exception:
+                raise exception
+            
+            return result or {
+                "response": "처리 중 오류가 발생했습니다.",
+                "confidence": 0.0,
+                "error": "No result"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error in sync message processing: {e}")
+            return {
+                "response": "죄송합니다. 처리 중 오류가 발생했습니다.",
+                "confidence": 0.0,
+                "error": str(e)
+            }
 
 def create_perfect_chatgpt_interface():
     """완전히 안정적인 ChatGPT 스타일 Gradio 인터페이스 생성"""
