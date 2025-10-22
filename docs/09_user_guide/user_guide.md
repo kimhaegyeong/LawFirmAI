@@ -14,6 +14,60 @@ LawFirmAI는 지능형 법률 AI 어시스턴트로, Phase 2 완료로 질문 �
 - **컨텍스트 최적화**: 토큰 제한 내에서 가장 관련성 높은 정보만 선별
 - **법률 용어 확장**: 동의어 및 관련 용어를 통한 검색 정확도 향상
 
+### Phase 7 통합 시스템 (2025-10-22 완료)
+- **통합 스크립트 관리**: 244개 개별 스크립트를 4개 핵심 매니저로 통합
+- **품질 개선 자동화**: Assembly Articles 테이블 품질 개선 기능 통합
+- **벡터 테스트 통합**: FAISS 기반 벡터 임베딩 검색 테스트 시스템
+- **시맨틱 검색 테스트**: 의미적 검색 엔진 검증 및 성능 측정
+- **표준화된 관리**: 통합 로깅, 에러 핸들링, 성능 모니터링
+- **자동 검증**: 모든 통합 기능의 자동 테스트 및 검증 시스템
+
+## 🔧 통합 시스템 사용법
+
+### 개발자용 통합 스크립트 관리
+
+#### 1. 데이터베이스 재구축
+```bash
+# 전체 재구축 (조문 처리 포함)
+python scripts/core/unified_rebuild_manager.py --mode full
+
+# 실제 데이터 재구축
+python scripts/core/unified_rebuild_manager.py --mode real
+
+# 간단한 재구축
+python scripts/core/unified_rebuild_manager.py --mode simple
+
+# 품질 개선 전용 (assembly_articles 테이블)
+python scripts/core/unified_rebuild_manager.py --mode quality_fix
+```
+
+#### 2. 벡터 임베딩 구축
+```bash
+# 전체 벡터 인덱스 구축
+python scripts/core/unified_vector_manager.py --mode full --model ko-sroberta
+
+# CPU 최적화 구축
+python scripts/core/unified_vector_manager.py --mode cpu_optimized
+```
+
+#### 3. 테스트 실행
+```bash
+# 벡터 임베딩 테스트
+python scripts/testing/unified_test_suite.py --test-type vector_embedding
+
+# 시맨틱 검색 테스트
+python scripts/testing/unified_test_suite.py --test-type semantic_search
+
+# 성능 테스트
+python scripts/testing/unified_test_suite.py --test-type performance
+```
+
+#### 4. 통합 기능 검증
+```bash
+# 모든 통합 기능 검증
+python scripts/test_integrated_features.py
+```
+
 ## 💬 질문 유형별 사용법
 
 ### 1. 판례 검색 질문
