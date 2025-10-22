@@ -45,7 +45,8 @@ from .naturalness_evaluator import NaturalnessEvaluator
 from .cache_manager import get_cache_manager, cached
 from .optimized_search_engine import OptimizedSearchEngine
 
-# 법률 제한 시스템 모듈 (개선됨)
+# 법률 제한 시스템 모듈 (ML 통합 최신 버전)
+from .ml_integrated_validation_system import MLIntegratedValidationSystem
 from .improved_legal_restriction_system import ImprovedLegalRestrictionSystem, ImprovedRestrictionResult
 from .intent_based_processor import IntentBasedProcessor, ProcessingResult
 from .content_filter_engine import ContentFilterEngine, FilterResult
@@ -283,8 +284,12 @@ class ChatService:
             self.memory_optimizer = None
             self.cache_manager = None
         
-        # 법률 제한 시스템 초기화 (개선됨)
+        # 법률 제한 시스템 초기화 (ML 통합 최신 버전)
         try:
+            # ML 통합 검증 시스템 (최신 버전)
+            self.ml_integrated_validation_system = MLIntegratedValidationSystem()
+            
+            # 기존 시스템들 (백업 및 호환성)
             self.improved_legal_restriction_system = ImprovedLegalRestrictionSystem()
             self.intent_based_processor = IntentBasedProcessor()
             self.content_filter_engine = ContentFilterEngine()
@@ -293,17 +298,27 @@ class ChatService:
             self.legal_compliance_monitor = LegalComplianceMonitor()
             self.user_education_system = UserEducationSystem()
             self.multi_stage_validation_system = MultiStageValidationSystem()
-            self.logger.info("Improved legal restriction system with multi-stage validation initialized successfully")
+            
+            self.logger.info("ML 통합 검증 시스템 초기화 완료")
         except Exception as e:
-            self.logger.error(f"Failed to initialize improved legal restriction system: {e}")
-            self.improved_legal_restriction_system = None
+            self.logger.error(f"Failed to initialize ML integrated validation system: {e}")
+            # 백업 시스템들만 초기화
+            try:
+                self.improved_legal_restriction_system = ImprovedLegalRestrictionSystem()
+                self.multi_stage_validation_system = MultiStageValidationSystem()
+                self.logger.info("백업 법률 제한 시스템 초기화 완료")
+            except Exception as e2:
+                self.logger.error(f"백업 시스템 초기화도 실패: {e2}")
+                self.improved_legal_restriction_system = None
+                self.multi_stage_validation_system = None
+            
+            self.ml_integrated_validation_system = None
             self.intent_based_processor = None
             self.content_filter_engine = None
             self.response_validation_system = None
             self.safe_response_generator = None
             self.legal_compliance_monitor = None
             self.user_education_system = None
-            self.multi_stage_validation_system = None
         
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
     
@@ -357,7 +372,8 @@ class ChatService:
                     }
                 }
             
-            # 다단계 검증 시스템 사전 검사
+            # ML 통합 검증 시스템 사전 검사 (최신 버전 우선 사용)
+            ml_validation_result = None
             multi_stage_validation_result = None
             improved_restriction_result = None
             processing_result = None
@@ -366,7 +382,80 @@ class ChatService:
             safe_response = None
             warning_message = None
             
-            if self.multi_stage_validation_system:
+            # ML 통합 시스템 사용 (최신 버전)
+            if self.ml_integrated_validation_system:
+                try:
+                    # ML 통합 검증 수행 (가장 정확한 시스템)
+                    ml_validation_result = self.ml_integrated_validation_system.validate(
+                        query=message,
+                        user_id=user_id,
+                        session_id=session_id,
+                        collect_feedback=True
+                    )
+                    
+                    # 디버깅: ML 검증 결과 확인
+                    self.logger.info(f"ML integrated validation result: {ml_validation_result.get('final_decision', 'unknown')}")
+                    self.logger.info(f"ML confidence: {ml_validation_result.get('confidence', 0.0):.2f}")
+                    self.logger.info(f"Edge case detected: {ml_validation_result.get('edge_case_info', {}).get('is_edge_case', False)}")
+                    
+                    # ML 시스템이 제한을 권하는 경우 차단
+                    should_block = ml_validation_result.get('final_decision') == 'restricted'
+                    
+                    # ML 시스템이 차단한 경우 안전한 응답 반환
+                    if should_block:
+                        # ML 시스템의 안전한 응답 생성
+                        ml_reasoning = ml_validation_result.get('reasoning', [])
+                        edge_case_info = ml_validation_result.get('edge_case_info', {})
+                        
+                        # Edge Case인 경우 더 관대한 응답
+                        if edge_case_info.get('is_edge_case', False):
+                            response_content = "일반적인 법률 정보는 제공할 수 있지만, 구체적인 개인 사안에 대한 조언은 변호사와 상담하시는 것이 좋습니다."
+                        else:
+                            response_content = "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
+                        
+                        # 준수 모니터링
+                        if self.legal_compliance_monitor:
+                            compliance_status = self.legal_compliance_monitor.monitor_request(
+                                message, "", None, None,
+                                ValidationResult(
+                                    status=ValidationStatus.REJECTED,
+                                    validation_level=ValidationLevel.AUTOMATIC,
+                                    confidence=ml_validation_result.get('confidence', 0.0),
+                                    issues=["ML 통합 검증으로 차단"],
+                                    recommendations=["안전한 질문으로 수정하세요"],
+                                    modified_response=None,
+                                    validation_details=ml_validation_result,
+                                    timestamp=datetime.now()
+                                ),
+                                user_id, session_id, time.time() - start_time
+                            )
+                        
+                        return {
+                            "response": response_content,
+                            "confidence": ml_validation_result.get('confidence', 0.9),
+                            "sources": [],
+                            "processing_time": time.time() - start_time,
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "validation_info": {
+                                "ml_validation": ml_validation_result,
+                                "blocked_by": "ML_Integrated_System",
+                                "reasoning": ml_reasoning,
+                                "edge_case": edge_case_info
+                            },
+                            "phase_info": {
+                                "phase1": {"enabled": False, "reason": "ML validation blocked"},
+                                "phase2": {"enabled": False},
+                                "phase3": {"enabled": False}
+                            }
+                        }
+                    
+                except Exception as e:
+                    self.logger.error(f"ML 통합 검증 오류: {e}")
+                    ml_validation_result = None
+            
+            # ML 시스템이 없거나 오류가 발생한 경우 백업 시스템 사용
+            if not ml_validation_result and self.multi_stage_validation_system:
                 try:
                     # 1. 다단계 검증 수행
                     multi_stage_validation_result = self.multi_stage_validation_system.validate(message)

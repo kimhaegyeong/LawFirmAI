@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 
-from .legal_restriction_system import RestrictionResult, RestrictionLevel, LegalArea
+from .improved_legal_restriction_system import ImprovedRestrictionResult, RestrictionLevel, LegalArea
 from .content_filter_engine import FilterResult, IntentType, ContextType
 from .response_validation_system import ValidationResult, ValidationStatus, ValidationLevel
 
@@ -219,7 +219,7 @@ class LegalComplianceMonitor:
             return ""
     
     def monitor_request(self, query: str, response: str, 
-                       restriction_result: RestrictionResult,
+                       restriction_result: ImprovedRestrictionResult,
                        filter_result: FilterResult,
                        validation_result: ValidationResult,
                        user_id: Optional[str] = None,
@@ -254,7 +254,7 @@ class LegalComplianceMonitor:
             self.logger.error(f"Error monitoring request: {e}")
             return ComplianceStatus.UNKNOWN
     
-    def _determine_compliance_status(self, restriction_result: RestrictionResult,
+    def _determine_compliance_status(self, restriction_result: ImprovedRestrictionResult,
                                    filter_result: FilterResult,
                                    validation_result: ValidationResult) -> ComplianceStatus:
         """준수 상태 결정"""
@@ -312,7 +312,7 @@ class LegalComplianceMonitor:
             self.logger.error(f"Error logging user activity: {e}")
     
     def _create_compliance_event(self, compliance_status: ComplianceStatus,
-                               restriction_result: RestrictionResult,
+                               restriction_result: ImprovedRestrictionResult,
                                filter_result: FilterResult,
                                validation_result: ValidationResult,
                                user_id: Optional[str],

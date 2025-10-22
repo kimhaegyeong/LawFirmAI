@@ -14,7 +14,7 @@ from datetime import datetime
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
-from source.services.improved_multi_stage_validation_system import ImprovedMultiStageValidationSystem
+from source.services.multi_stage_validation_system import MultiStageValidationSystem
 from source.services.ml_pattern_learning_system import MLPatternLearningSystem
 try:
     from source.services.simple_text_classifier import SimpleTextClassifier
@@ -41,11 +41,15 @@ class MLIntegratedValidationSystem:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # 기존 개선된 시스템
-        self.improved_system = ImprovedMultiStageValidationSystem()
+        # 기존 개선된 시스템 (백업용)
+        self.improved_system = MultiStageValidationSystem()
         
-        # ML 패턴 학습 시스템
-        self.ml_system = MLPatternLearningSystem()
+        # ML 패턴 학습 시스템 (옵션)
+        try:
+            self.ml_system = MLPatternLearningSystem()
+        except Exception as e:
+            self.logger.warning(f"ML 패턴 학습 시스템 초기화 실패: {e}")
+            self.ml_system = None
         
         # ML 예측 가중치 (기존 시스템과 ML 예측의 조합 비율)
         self.ml_weight = 0.3  # ML 예측이 30% 가중치
@@ -91,16 +95,27 @@ class MLIntegratedValidationSystem:
             self.logger.info(f"ML 통합 검증 시작: {query[:50]}...")
             
             # 1. 기존 개선된 시스템으로 검증
-            traditional_result = self.improved_system.validate(query, category=category)
+            traditional_result = self.improved_system.validate(query)
+            
+            # MultiStageValidationResult를 딕셔너리로 변환
+            traditional_dict = {
+                "final_decision": traditional_result.final_decision.value,
+                "confidence": traditional_result.confidence,
+                "reasoning": traditional_result.reasoning,
+                "edge_case_info": {
+                    "is_edge_case": False,  # 기본값
+                    "edge_case_type": None
+                }
+            }
             
             # 2. ML 시스템으로 예측 (활성화된 경우)
             ml_prediction = None
-            if self.ml_enabled:
+            if self.ml_enabled and self.ml_system:
                 try:
                     ml_prediction = self.ml_system.get_ml_prediction(
                         query=query,
-                        confidence=traditional_result["confidence"],
-                        edge_case_type=traditional_result["edge_case_info"]["edge_case_type"]
+                        confidence=traditional_dict.get("confidence", 0.0),
+                        edge_case_type=traditional_dict.get("edge_case_info", {}).get("edge_case_type", None)
                     )
                 except Exception as e:
                     self.logger.warning(f"ML 예측 오류: {e}")
@@ -123,7 +138,7 @@ class MLIntegratedValidationSystem:
                     self.logger.warning(f"BERT 분류기 예측 오류: {e}")
             
             # 3. 결과 통합
-            final_result = self._integrate_results(traditional_result, ml_prediction, simple_pred, bert_pred)
+            final_result = self._integrate_results(traditional_dict, ml_prediction, simple_pred, bert_pred)
             
             # 4. 피드백 수집 준비 (사용자 피드백 대기)
             if collect_feedback:
@@ -148,8 +163,17 @@ class MLIntegratedValidationSystem:
             
         except Exception as e:
             self.logger.error(f"ML 통합 검증 오류: {e}")
-            # 오류 시 기존 시스템 결과 반환
-            return self.improved_system.validate(query, category=category)
+            # 오류 시 기존 시스템 결과 반환 (딕셔너리 형태로)
+            traditional_result = self.improved_system.validate(query)
+            return {
+                "final_decision": traditional_result.final_decision.value,
+                "confidence": traditional_result.confidence,
+                "reasoning": traditional_result.reasoning,
+                "edge_case_info": {
+                    "is_edge_case": False,
+                    "edge_case_type": None
+                }
+            }
     
     def _integrate_results(self, traditional_result: Dict[str, Any], 
                           ml_prediction: Optional[Dict[str, float]],

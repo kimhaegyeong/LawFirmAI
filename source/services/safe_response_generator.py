@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import random
 
-from .legal_restriction_system import RestrictionResult, RestrictionLevel, LegalArea
+from .improved_legal_restriction_system import ImprovedRestrictionResult, RestrictionLevel, LegalArea
 from .content_filter_engine import FilterResult, IntentType, ContextType
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ class SafeResponseGenerator:
             "labor_legal": "노동부나 노동 전문 변호사와 상담하시기 바랍니다."
         }
     
-    def generate_safe_response(self, query: str, restriction_result: RestrictionResult, 
+    def generate_safe_response(self, query: str, restriction_result: ImprovedRestrictionResult,  
                              filter_result: FilterResult) -> SafeResponse:
         """안전한 답변 생성"""
         try:
@@ -250,7 +250,7 @@ class SafeResponseGenerator:
             self.logger.error(f"Error generating safe response: {e}")
             return self._get_fallback_response()
     
-    def _analyze_situation(self, restriction_result: RestrictionResult, 
+    def _analyze_situation(self, restriction_result: ImprovedRestrictionResult, 
                           filter_result: FilterResult) -> Dict[str, Any]:
         """상황 분석"""
         situation = {

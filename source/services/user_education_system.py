@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
 
-from .legal_restriction_system import RestrictionResult, RestrictionLevel, LegalArea
+from .improved_legal_restriction_system import ImprovedRestrictionResult, RestrictionLevel, LegalArea
 from .content_filter_engine import FilterResult, IntentType, ContextType
 from .response_validation_system import ValidationResult, ValidationStatus
 
@@ -306,7 +306,7 @@ class UserEducationSystem:
             self.logger.error(f"Error getting onboarding content: {e}")
             return []
     
-    def generate_warning(self, restriction_result: RestrictionResult,
+    def generate_warning(self, restriction_result: ImprovedRestrictionResult,
                         filter_result: FilterResult,
                         validation_result: ValidationResult,
                         user_id: str, query: str = "") -> Optional[WarningMessage]:
@@ -355,7 +355,7 @@ class UserEducationSystem:
         else:
             return UserLevel.ADVANCED
     
-    def _determine_warning_type(self, restriction_result: RestrictionResult,
+    def _determine_warning_type(self, restriction_result: ImprovedRestrictionResult,
                                filter_result: FilterResult,
                                validation_result: ValidationResult,
                                query: str = "") -> Optional[WarningType]:

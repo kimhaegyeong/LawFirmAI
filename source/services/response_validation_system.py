@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 
-from .legal_restriction_system import LegalRestrictionSystem, RestrictionResult, RestrictionLevel
+from .improved_legal_restriction_system import ImprovedLegalRestrictionSystem, ImprovedRestrictionResult, RestrictionLevel
 from .content_filter_engine import ContentFilterEngine, FilterResult, IntentType
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class ResponseValidationSystem:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.legal_restriction_system = LegalRestrictionSystem()
+        self.legal_restriction_system = ImprovedLegalRestrictionSystem()
         self.content_filter_engine = ContentFilterEngine()
         self.validation_rules = self._initialize_validation_rules()
         self.validation_history = []
