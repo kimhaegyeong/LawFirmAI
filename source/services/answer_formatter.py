@@ -24,45 +24,14 @@ class FormattedAnswer:
 
 
 class AnswerFormatter:
-    """답변 구조화기"""
+    """답변 구조화기 - 템플릿 완전 제거"""
     
     def __init__(self):
         """답변 구조화기 초기화"""
         self.logger = logging.getLogger(__name__)
         
-        # 질문 유형별 템플릿
-        self.templates = {
-            QuestionType.PRECEDENT_SEARCH: {
-                "title": "## 관련 판례 분석",
-                "sections": ["analysis", "precedents", "laws", "confidence"],
-                "disclaimer": True
-            },
-            QuestionType.LAW_INQUIRY: {
-                "title": "## 법률 해설",
-                "sections": ["explanation", "laws", "examples", "confidence"],
-                "disclaimer": True
-            },
-            QuestionType.LEGAL_ADVICE: {
-                "title": "## 법적 조언",
-                "sections": ["advice", "laws", "precedents", "steps", "warnings", "recommendations", "confidence"],
-                "disclaimer": True
-            },
-            QuestionType.PROCEDURE_GUIDE: {
-                "title": "## 절차 안내",
-                "sections": ["overview", "steps", "documents", "timeline", "warnings", "recommendations", "confidence"],
-                "disclaimer": True
-            },
-            QuestionType.TERM_EXPLANATION: {
-                "title": "## 용어 해설",
-                "sections": ["definition", "laws", "examples", "related", "confidence"],
-                "disclaimer": True
-            },
-            QuestionType.GENERAL_QUESTION: {
-                "title": "## 답변",
-                "sections": ["answer", "sources", "confidence"],
-                "disclaimer": True
-            }
-        }
+        # 모든 템플릿 제거 - 자연스러운 답변만 생성
+        self.templates = {}
         
         # 이모지 매핑 (강화된 시각적 요소)
         self.emoji_map = {
@@ -750,7 +719,7 @@ class AnswerFormatter:
         """면책 조항 반환"""
         return """---
 💼 **면책 조항**
-# 면책 조항 제거됨
+됨
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
     
     def _extract_steps_from_answer(self, answer: str) -> str:
@@ -1090,7 +1059,7 @@ class AnswerFormatter:
 - 수준: {confidence.reliability_level}
 
 ---
-💼 # 면책 조항 제거됨
+💼 됨
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.""",
                 sections={"answer": raw_answer},
                 metadata={"question_type": "general", "confidence_level": confidence.reliability_level}
@@ -1124,34 +1093,46 @@ class AnswerFormatter:
         return True
     
     def _clean_answer(self, answer: str) -> str:
-        """답변을 깔끔하게 정리"""
+        """답변을 깔끔하게 정리 - 템플릿 패턴 완전 제거"""
         import re
         
-        # 불필요한 섹션 제목 제거
-        patterns_to_remove = [
-            r'###\s*관련\s*법령\s*\n+\s*관련\s*법령\s*:\s*\n*',
-            r'###\s*법령\s*해설\s*\n+\s*법령\s*해설\s*:\s*\n*',
-            r'###\s*적용\s*사례\s*\n+\s*실제\s*적용\s*사례\s*:\s*\n*',
-            r'###\s*주의사항\s*\n+\s*주의사항\s*:\s*\n*',
+        # 모든 템플릿 패턴 제거
+        template_patterns = [
+            r'##\s*법률\s*문의\s*답변\s*',
+            r'###\s*관련\s*법령\s*',
+            r'###\s*법령\s*해설\s*',
+            r'###\s*적용\s*사례\s*',
+            r'###\s*주의사항\s*',
+            r'###\s*권장사항\s*',
+            r'###\s*답변\s*',
+            r'###\s*분석\s*',
+            r'###\s*해설\s*',
+            r'###\s*안내\s*',
         ]
         
-        for pattern in patterns_to_remove:
+        for pattern in template_patterns:
             answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
         
-        # 빈 섹션과 플레이스홀더 제거
+        # 모든 플레이스홀더 제거
         placeholder_patterns = [
-            r'###\s*법령\s*해설\s*\n+\s*\*쉬운\s*말로\s*풀어서\s*설명\*\s*\n*',
-            r'###\s*적용\s*사례\s*\n+\s*\*구체적\s*예시와\s*설명\*\s*\n*',
-            r'###\s*주의사항\s*\n+\s*\*법적\s*리스크와\s*제한사항\*\s*\n*',
+            r'\*정확한\s*조문\s*번호와\s*내용\*',
+            r'\*쉬운\s*말로\s*풀어서\s*설명\*',
+            r'\*구체적\s*예시와\s*설명\*',
+            r'\*법적\s*리스크와\s*제한사항\*',
+            r'\*추가\s*권장사항\*',
+            r'\*실무적\s*조언\*',
         ]
         
         for pattern in placeholder_patterns:
             answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
         
-        # 면책 조항 제거
+        
         disclaimer_patterns = [
             r'---\s*\n\s*💼\s*\*\*면책\s*조항\*\*\s*\n\s*#\s*면책\s*조항\s*제거\s*\n\s*#\s*본\s*답변은.*?바랍니다\.\s*\n*',
             r'💼\s*\*\*면책\s*조항\*\*\s*\n\s*#\s*면책\s*조항\s*제거\s*\n\s*#\s*본\s*답변은.*?바랍니다\.\s*\n*',
+            r'면책\s*조항.*?바랍니다\.',
+            r'변호사.*?상담.*?권장',
+            r'법률\s*자문.*?필요',
         ]
         
         for pattern in disclaimer_patterns:

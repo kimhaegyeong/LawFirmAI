@@ -77,7 +77,8 @@ class GeminiClient:
                  context: Optional[str] = None,
                  system_prompt: Optional[str] = None,
                  temperature: Optional[float] = None,
-                 max_tokens: Optional[int] = None) -> GeminiResponse:
+                 max_tokens: Optional[int] = None,
+                 question_type: str = "일반") -> GeminiResponse:
         """
         텍스트 생성
         
@@ -87,6 +88,7 @@ class GeminiClient:
             system_prompt: 시스템 프롬프트
             temperature: 생성 온도 (0.0-1.0)
             max_tokens: 최대 토큰 수
+            question_type: 질문 유형 (오류 처리용)
             
         Returns:
             GeminiResponse: 생성된 응답
@@ -150,8 +152,91 @@ class GeminiClient:
                 raise Exception("No response generated from Gemini")
                 
         except Exception as e:
-            self.logger.error(f"Error generating response: {e}")
-            raise Exception(f"Gemini API error: {str(e)}")
+            error_msg = str(e)
+            self.logger.error(f"Error generating response: {error_msg}")
+            
+            # 특정 오류 타입별 처리
+            if "response.text quick accessor" in error_msg:
+                self.logger.warning(f"Gemini API response accessor error: {error_msg}")
+                # 대체 응답 생성
+                return self._generate_fallback_response(prompt, question_type, e)
+            elif "finish_reason" in error_msg and "2" in error_msg:
+                self.logger.warning(f"Gemini API finish_reason error: {error_msg}")
+                # 대체 응답 생성
+                return self._generate_fallback_response(prompt, question_type, e)
+            elif "timeout" in error_msg.lower():
+                self.logger.warning(f"Gemini API timeout error: {error_msg}")
+                # 대체 응답 생성
+                return self._generate_fallback_response(prompt, question_type, e)
+            else:
+                # 기타 오류는 기존 방식대로 처리
+                raise Exception(f"Gemini API error: {error_msg}")
+    
+    def _generate_fallback_response(self, prompt: str, question_type: str, error: Exception) -> GeminiResponse:
+        """
+        Gemini API 오류 시 대체 응답 생성
+        
+        Args:
+            prompt: 원본 프롬프트
+            question_type: 질문 유형
+            error: 발생한 오류
+            
+        Returns:
+            GeminiResponse: 대체 응답
+        """
+        try:
+            self.logger.info(f"Generating fallback response for question_type: {question_type}")
+            
+            # 질문 유형별 대체 응답 템플릿
+            fallback_responses = {
+                "법률조문": "죄송합니다. 현재 해당 법률 조문에 대한 상세한 정보를 제공할 수 없습니다. 정확한 법률 조문 내용은 국가법령정보센터(www.law.go.kr)에서 확인하시거나, 법률 전문가와 상담하시기 바랍니다.",
+                
+                "계약서": "죄송합니다. 현재 계약서 작성에 대한 상세한 안내를 제공할 수 없습니다. 계약서 작성은 법적 효력이 있으므로, 구체적인 내용은 법률 전문가와 상담하시거나 공인중개사, 법무사 등 전문가의 도움을 받으시기 바랍니다.",
+                
+                "부동산": "죄송합니다. 현재 부동산 관련 절차에 대한 상세한 안내를 제공할 수 없습니다. 부동산 거래는 복잡한 법적 절차가 필요하므로, 공인중개사나 법무사 등 전문가와 상담하시기 바랍니다.",
+                
+                "가족법": "죄송합니다. 현재 가족법 관련 절차에 대한 상세한 안내를 제공할 수 없습니다. 가족법 관련 문제는 민감하고 복잡하므로, 가정법원이나 가족상담소, 법률 전문가와 상담하시기 바랍니다.",
+                
+                "민사법": "죄송합니다. 현재 민사법 관련 절차에 대한 상세한 안내를 제공할 수 없습니다. 민사법 관련 문제는 구체적인 상황에 따라 다르므로, 법률 전문가와 상담하시기 바랍니다.",
+                
+                "일반": "죄송합니다. 현재 질문에 대한 상세한 답변을 제공할 수 없습니다. 법률 관련 질문은 구체적인 상황에 따라 답변이 달라질 수 있으므로, 법률 전문가와 상담하시기 바랍니다."
+            }
+            
+            # 질문 유형에 따른 대체 응답 선택
+            fallback_response = fallback_responses.get(question_type, fallback_responses["일반"])
+            
+            # 오류 정보를 포함한 응답 생성
+            full_response = f"{fallback_response}\n\n※ 시스템 오류로 인해 상세한 답변을 제공할 수 없습니다. 잠시 후 다시 시도해주세요."
+            
+            return GeminiResponse(
+                response=full_response,
+                model=f"{self.model_name}_fallback",
+                created_at=datetime.now().isoformat(),
+                done=True,
+                total_duration=None,
+                prompt_eval_count=None,
+                prompt_eval_duration=None,
+                eval_count=None,
+                eval_duration=None
+            )
+            
+        except Exception as fallback_error:
+            self.logger.error(f"Fallback response generation failed: {fallback_error}")
+            
+            # 최종 대체 응답
+            final_response = "죄송합니다. 현재 시스템 오류로 인해 답변을 제공할 수 없습니다. 잠시 후 다시 시도해주시거나, 법률 전문가와 상담하시기 바랍니다."
+            
+            return GeminiResponse(
+                response=final_response,
+                model=f"{self.model_name}_final_fallback",
+                created_at=datetime.now().isoformat(),
+                done=True,
+                total_duration=None,
+                prompt_eval_count=None,
+                prompt_eval_duration=None,
+                eval_count=None,
+                eval_duration=None
+            )
     
     def _build_prompt(self, 
                      prompt: str, 

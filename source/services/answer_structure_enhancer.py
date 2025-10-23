@@ -364,123 +364,23 @@ class AnswerStructureEnhancer:
             return self._get_fallback_templates()
     
     def _get_fallback_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
-        """폴백 템플릿 생성"""
+        """폴백 템플릿 생성 - 템플릿 완전 제거"""
         return {
             QuestionType.GENERAL_QUESTION: {
-                "title": "법률 질문 답변",
-                "sections": [
-                    {
-                        "name": "질문 분석",
-                        "priority": "high",
-                        "template": "",
-                        "content_guide": "질문의 핵심 파악"
-                    },
-                    {
-                        "name": "관련 법령",
-                        "priority": "high",
-                        "template": "",
-                        "content_guide": "적용 가능한 법령"
-                    },
-                    {
-                        "name": "법적 해설",
-                        "priority": "medium",
-                        "template": "법적 해설:",
-                        "content_guide": "쉬운 말로 설명"
-                    },
-                    {
-                        "name": "실무 조언",
-                        "priority": "medium",
-                        "template": "실무적 조언:",
-                        "content_guide": "구체적 행동 방안"
-                    }
-                ]
+                "title": "",
+                "sections": []
             },
             QuestionType.DIVORCE_PROCEDURE: {
-                "title": "이혼 절차 안내",
-                "sections": [
-                    {
-                        "name": "이혼 절차 개요",
-                        "priority": "high",
-                        "template": "이혼 절차 개요:",
-                        "content_guide": "이혼의 종류와 기본 절차"
-                    },
-                    {
-                        "name": "협의이혼",
-                        "priority": "high",
-                        "template": "협의이혼 절차:",
-                        "content_guide": "협의이혼의 구체적 절차와 필요 서류"
-                    },
-                    {
-                        "name": "재판이혼",
-                        "priority": "high",
-                        "template": "재판이혼 절차:",
-                        "content_guide": "재판이혼의 절차와 소송 방법"
-                    },
-                    {
-                        "name": "주의사항",
-                        "priority": "medium",
-                        "template": "주의사항:",
-                        "content_guide": "이혼 시 고려해야 할 사항들"
-                    }
-                ]
+                "title": "",
+                "sections": []
             },
             QuestionType.CONTRACT_REVIEW: {
-                "title": "계약서 검토 가이드",
-                "sections": [
-                    {
-                        "name": "계약서 기본 검토 포인트",
-                        "priority": "high",
-                        "template": "기본 검토 포인트:",
-                        "content_guide": "계약서에서 확인해야 할 기본 사항들"
-                    },
-                    {
-                        "name": "주의 조항",
-                        "priority": "high",
-                        "template": "주의해야 할 조항:",
-                        "content_guide": "불리한 조항이나 위험 요소"
-                    },
-                    {
-                        "name": "권리와 의무",
-                        "priority": "medium",
-                        "template": "당사자의 권리와 의무:",
-                        "content_guide": "계약상의 권리와 의무 관계"
-                    },
-                    {
-                        "name": "실무 조언",
-                        "priority": "medium",
-                        "template": "실무적 조언:",
-                        "content_guide": "계약서 작성 및 검토 시 유의사항"
-                    }
-                ]
+                "title": "",
+                "sections": []
             },
             QuestionType.PROCEDURE_GUIDE: {
-                "title": "법적 절차 안내",
-                "sections": [
-                    {
-                        "name": "절차 개요",
-                        "priority": "high",
-                        "template": "절차 개요:",
-                        "content_guide": "해당 절차의 기본 내용"
-                    },
-                    {
-                        "name": "신청 방법",
-                        "priority": "high",
-                        "template": "신청 방법:",
-                        "content_guide": "구체적인 신청 절차와 방법"
-                    },
-                    {
-                        "name": "필요 서류",
-                        "priority": "medium",
-                        "template": "필요 서류:",
-                        "content_guide": "신청 시 필요한 서류들"
-                    },
-                    {
-                        "name": "처리 기간",
-                        "priority": "medium",
-                        "template": "처리 기간:",
-                        "content_guide": "절차 처리에 소요되는 시간"
-                    }
-                ]
+                "title": "",
+                "sections": []
             }
         }
     
@@ -1285,7 +1185,7 @@ class AnswerStructureEnhancer:
                 legal_basis_section += "\n"
             
             # 면책 조항
-            # 면책 조항 제거
+            
             # legal_basis_section += "> **면책 조항:** 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.\n"
             
             return structured_answer + legal_basis_section
@@ -1382,21 +1282,81 @@ class AnswerStructureEnhancer:
             }
     
     def create_structured_answer(self, answer: str, question_type: QuestionType) -> str:
-        """간결하고 자연스러운 답변 생성"""
+        """자연스러운 답변 생성 - 템플릿 완전 제거"""
         try:
-            # 이미 잘 구성된 답변인지 확인
-            if self._is_well_structured(answer):
-                return answer
+            # 템플릿 패턴이 있는지 확인
+            template_patterns = [
+                "## 법률 문의 답변",
+                "### 관련 법령",
+                "### 법령 해설",
+                "### 적용 사례",
+                "### 주의사항",
+                "*정확한 조문 번호와 내용*",
+                "*쉬운 말로 풀어서 설명*",
+                "*구체적 예시와 설명*"
+            ]
             
-            # 간단한 제목만 추가 (필요한 경우)
-            if not re.search(r'^#+\s+', answer, re.MULTILINE):
-                return f"## 답변\n\n{answer}"
+            for pattern in template_patterns:
+                if pattern in answer:
+                    # 템플릿이 감지되면 자연스러운 답변으로 변환
+                    return self._convert_to_natural_answer(answer, question_type)
             
+            # 이미 자연스러운 답변이면 그대로 반환
             return answer
             
         except Exception as e:
             print(f"Error creating structured answer: {e}")
             return answer
+    
+    def _convert_to_natural_answer(self, template_answer: str, question_type: QuestionType) -> str:
+        """템플릿 답변을 자연스러운 답변으로 변환 - Gemini API 사용"""
+        try:
+            # Gemini API를 사용하여 강력한 변환
+            from .gemini_client import GeminiClient
+            gemini_client = GeminiClient()
+            
+            prompt = f"""다음 템플릿 기반 답변을 자연스러운 대화체로 변환해주세요:
+
+원본: {template_answer}
+
+변환 규칙:
+1. 모든 섹션 제목(##, ###)을 제거하세요
+2. 모든 플레이스홀더(*정확한 조문 번호와 내용* 등)를 제거하세요
+3. 하나의 연속된 자연스러운 답변으로 작성하세요
+4. 친근하고 대화체로 변환하세요
+5. 불필요한 면책 조항은 제거하세요
+6. 마치 친한 변호사와 대화하는 것처럼 자연스럽게 작성하세요
+
+변환된 답변:"""
+            
+            response = gemini_client.generate(prompt)
+            return response.response
+            
+        except Exception as e:
+            print(f"Error converting to natural answer with Gemini: {e}")
+            # 폴백: 간단한 정리
+            import re
+            
+            # 템플릿 패턴 제거
+            cleaned = template_answer
+            cleaned = re.sub(r'##\s*법률\s*문의\s*답변\s*', '', cleaned)
+            cleaned = re.sub(r'###\s*관련\s*법령\s*', '', cleaned)
+            cleaned = re.sub(r'###\s*법령\s*해설\s*', '', cleaned)
+            cleaned = re.sub(r'###\s*적용\s*사례\s*', '', cleaned)
+            cleaned = re.sub(r'###\s*주의사항\s*', '', cleaned)
+            cleaned = re.sub(r'\*정확한\s*조문\s*번호와\s*내용\*', '', cleaned)
+            cleaned = re.sub(r'\*쉬운\s*말로\s*풀어서\s*설명\*', '', cleaned)
+            cleaned = re.sub(r'\*구체적\s*예시와\s*설명\*', '', cleaned)
+            
+            # 빈 줄 정리
+            cleaned = re.sub(r'\n\s*\n+', '\n\n', cleaned)
+            cleaned = cleaned.strip()
+            
+            # 의미있는 내용이 있으면 반환, 없으면 기본 답변
+            if len(cleaned) > 50:
+                return cleaned
+            else:
+                return f"질문에 대한 답변을 준비 중입니다. 더 구체적인 정보가 필요하시면 추가 질문을 해주세요."
     
     def _is_well_structured(self, answer: str) -> bool:
         """답변이 잘 구조화되어 있는지 확인"""

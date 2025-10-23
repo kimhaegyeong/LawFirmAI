@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Enhanced Chat Service
 개선된 채팅 메시지 처리 서비스
@@ -19,6 +19,10 @@ from ..utils.weakref_cleanup import get_weakref_registry, WeakRefRegistry
 from ..utils.realtime_memory_monitor import get_memory_monitor, RealTimeMemoryMonitor
 from ..utils.advanced_response_processor import advanced_response_processor
 from ..utils.quality_validator import quality_validator
+from .user_preference_manager import preference_manager, UserPreferences
+from .answer_completion_validator import completion_validator, CompletionCheck
+from .example_database import example_database, dynamic_generator
+from .enhanced_completion_system import enhanced_completion_system, CompletionResult
 from .rag_service import MLEnhancedRAGService
 from .hybrid_search_engine import HybridSearchEngine
 from .improved_answer_generator import ImprovedAnswerGenerator
@@ -140,6 +144,19 @@ class EnhancedChatService:
         # 메모리 관리 시스템 초기화
         self._initialize_memory_management()
         
+        # 사용자 설정 관리자 초기화
+        self.user_preferences = preference_manager
+        
+        # 답변 완성도 검증기 초기화
+        self.completion_validator = completion_validator
+        
+        # 예시 데이터베이스 초기화
+        self.example_database = example_database
+        self.dynamic_generator = dynamic_generator
+        
+        # 강화된 완성 시스템 초기화
+        self.enhanced_completion_system = enhanced_completion_system
+        
         # 핵심 컴포넌트 초기화
         self._initialize_core_components()
         
@@ -234,6 +251,75 @@ class EnhancedChatService:
             self.logger.info("자동 메모리 정리 실행")
             cleanup_result = self.perform_memory_cleanup()
             self.logger.info(f"자동 정리 완료: {cleanup_result.get('memory_freed_mb', 0):.1f}MB 해제")
+    
+    def perform_memory_cleanup(self):
+        """메모리 정리 수행"""
+        try:
+            import gc
+            import psutil
+            import os
+            
+            # 현재 메모리 사용량 측정
+            process = psutil.Process(os.getpid())
+            memory_before = process.memory_info().rss / 1024 / 1024  # MB
+            
+            # 가비지 컬렉션 실행
+            collected = gc.collect()
+            
+            # 컴포넌트별 메모리 정리
+            cleanup_count = 0
+            
+            # 모델 매니저 메모리 정리
+            if hasattr(self, 'model_manager') and self.model_manager:
+                try:
+                    if hasattr(self.model_manager, 'clear_cache'):
+                        self.model_manager.clear_cache()
+                        cleanup_count += 1
+                except Exception as e:
+                    self.logger.debug(f"Model manager cleanup failed: {e}")
+            
+            # 벡터 스토어 메모리 정리
+            if hasattr(self, 'vector_store') and self.vector_store:
+                try:
+                    if hasattr(self.vector_store, 'clear_cache'):
+                        self.vector_store.clear_cache()
+                        cleanup_count += 1
+                except Exception as e:
+                    self.logger.debug(f"Vector store cleanup failed: {e}")
+            
+            # 답변 생성기 메모리 정리
+            if hasattr(self, 'answer_generator') and self.answer_generator:
+                try:
+                    if hasattr(self.answer_generator, 'clear_cache'):
+                        self.answer_generator.clear_cache()
+                        cleanup_count += 1
+                except Exception as e:
+                    self.logger.debug(f"Answer generator cleanup failed: {e}")
+            
+            # 메모리 사용량 재측정
+            memory_after = process.memory_info().rss / 1024 / 1024  # MB
+            memory_freed = memory_before - memory_after
+            
+            self.logger.info(f"메모리 정리 완료: {memory_freed:.1f}MB 해제, {collected}개 객체 수집, {cleanup_count}개 컴포넌트 정리")
+            
+            return {
+                'memory_before_mb': memory_before,
+                'memory_after_mb': memory_after,
+                'memory_freed_mb': memory_freed,
+                'objects_collected': collected,
+                'components_cleaned': cleanup_count,
+                'success': True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"메모리 정리 실패: {e}")
+            return {
+                'memory_freed_mb': 0,
+                'objects_collected': 0,
+                'components_cleaned': 0,
+                'success': False,
+                'error': str(e)
+            }
     
     def _initialize_core_components(self):
         """핵심 컴포넌트 초기화"""
@@ -583,27 +669,47 @@ class EnhancedChatService:
                 self.logger.debug(f"_generate_enhanced_response가 문자열을 반환함: {type(response_result)}")
                 response_result = {"response": response_result, "confidence": 0.5, "generation_method": "string_fallback"}
             
-            # 자연스러움 개선 적용
+            # 답변 완성도 검증 및 개선 (강화된 시스템 적용)
             if response_result.get("response"):
-                response_result["response"] = await self._apply_naturalness_improvements(
-                    response_result["response"], phase1_info, phase2_info, user_id
-                )
+                response_text = response_result["response"]
+                if isinstance(response_text, str):
+                    # 강화된 완성 시스템 적용
+                    completion_result = self.enhanced_completion_system.force_complete_answer(
+                        response_text, message, query_analysis.get("category", "일반")
+                    )
+                    
+                    if completion_result.was_truncated:
+                        self.logger.info(f"답변이 중간에 끊어짐 감지. 완성 방법: {completion_result.completion_method}")
+                        response_result["response"] = completion_result.completed_answer
+                        response_result["completion_improved"] = True
+                        response_result["completion_method"] = completion_result.completion_method
+                        response_result["completion_confidence"] = completion_result.confidence
+                    
+                    # 예시 추가 (사용자 설정에 따라)
+                    if self.user_preferences.get_preference("example_preference"):
+                        enhanced_response = self._add_examples_to_response(
+                            response_result["response"], message, query_analysis
+                        )
+                        if enhanced_response != response_result["response"]:
+                            response_result["response"] = enhanced_response
+                            response_result["examples_added"] = True
             
-            # 후처리
-            final_result = await self._post_process_response(
-                response_result, query_analysis, user_id, session_id
+            # 사용자 설정에 따른 면책 조항 처리
+            final_response_text = self.user_preferences.add_disclaimer_to_response(
+                response_result["response"], message
             )
+            response_result["response"] = final_response_text
             
             # 처리 시간 추가
-            final_result["processing_time"] = time.time() - start_time
-            final_result["session_id"] = session_id
-            final_result["user_id"] = user_id
+            response_result["processing_time"] = time.time() - start_time
+            response_result["session_id"] = session_id
+            response_result["user_id"] = user_id
             
             # 캐시 저장
             if self.cache_manager:
-                self.cache_manager.set(cache_key, final_result, ttl_seconds=3600)
+                self.cache_manager.set(cache_key, response_result, ttl_seconds=3600)
             
-            return final_result
+            return response_result
             
         except Exception as e:
             self.logger.error(f"메시지 처리 중 오류 발생: {e}")
@@ -657,7 +763,7 @@ class EnhancedChatService:
         }
     
     async def _analyze_query(self, message: str, context: Optional[str], user_id: str, session_id: str) -> Dict[str, Any]:
-        """질문 분석"""
+        """질문 분석 - 개선된 버전"""
         try:
             # 질문 분류
             if self.question_classifier:
@@ -670,9 +776,25 @@ class EnhancedChatService:
                 intent = "unknown"
                 confidence = 0.5
             
-            # 법률 조문 패턴 검색 (개선된 정규표현식)
+            # 키워드 추출 개선
             import re
+            keywords = []
             
+            # 법률 관련 키워드 추출
+            law_patterns = [
+                r'(민법|형법|상법|노동법|가족법|행정법|헌법|민사소송법|형사소송법)',
+                r'(계약|손해배상|불법행위|소유권|물권|채권|채무)',
+                r'(이혼|상속|양육권|친권|위자료|재산분할)',
+                r'(회사|주식|이사|주주|회사설립|합병)',
+                r'(근로|임금|해고|근로시간|휴게시간|연차)',
+                r'(부동산|매매|임대차|등기|소유권이전|전세|월세)'
+            ]
+            
+            for pattern in law_patterns:
+                matches = re.findall(pattern, message)
+                keywords.extend(matches)
+            
+            # 법률 조문 패턴 검색 (개선된 정규표현식)
             # 다양한 법률 조문 패턴 지원
             statute_patterns = [
                 # 표준 형태: 민법 제750조
@@ -713,6 +835,7 @@ class EnhancedChatService:
                 "intent": intent,
                 "confidence": confidence,
                 "context": context,
+                "keywords": keywords,  # 추출된 키워드 추가
                 "statute_match": statute_match.group(0) if statute_match else None,
                 "statute_law": statute_law,
                 "statute_article": statute_article,
@@ -728,6 +851,7 @@ class EnhancedChatService:
                 "intent": "unknown",
                 "confidence": 0.5,
                 "context": context,
+                "keywords": [],
                 "statute_match": None,
                 "statute_law": None,
                 "statute_article": None,
@@ -847,10 +971,10 @@ class EnhancedChatService:
                         user_query=message,
                         bot_response="",
                         timestamp=datetime.now(),
-                        question_type=query_analysis.get("query_type", "general"),
-                        intent=query_analysis.get("intent", "unknown"),
-                        entities=query_analysis.get("entities", []),
-                        confidence=query_analysis.get("confidence", 0.5)
+                        question_type="general",
+                        intent="unknown",
+                        entities=[],
+                        confidence=0.5
                     )
                     conversation_flow = await self.conversation_flow_tracker.track_conversation_flow(session_id, turn)
                     phase2_info["conversation_flow"] = conversation_flow
@@ -908,7 +1032,7 @@ class EnhancedChatService:
     async def _generate_enhanced_response(self, message: str, query_analysis: Dict[str, Any], 
                                          restriction_result: Dict[str, Any], user_id: str, session_id: str,
                                          phase1_info: Dict[str, Any], phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]) -> Dict[str, Any]:
-        """향상된 답변 생성"""
+        """향상된 답변 생성 - 참고 데이터 기반으로만 답변"""
         self.logger.info(f"_generate_enhanced_response called for: {message}")
         try:
             # 1순위: 기본 RAG 서비스 (실제 AI 답변 우선)
@@ -923,68 +1047,289 @@ class EnhancedChatService:
                         use_cache=True
                     )
                     
-                    if rag_response and rag_response.response:
+                    # 참고 데이터가 있는지 확인
+                    if rag_response and rag_response.response and self._has_meaningful_sources(rag_response.sources):
+                        # 동적 신뢰도 계산
+                        confidence = self._calculate_confidence(rag_response.sources, "good")
+                        
                         return {
                             "response": rag_response.response,
-                            "confidence": 0.7,
+                            "confidence": confidence,
                             "sources": rag_response.sources,
                             "query_analysis": query_analysis,
                             "generation_method": "simple_rag",
                             "session_id": session_id,
                             "user_id": user_id
                         }
+                    else:
+                        # 참고 데이터가 없으면 솔직하게 알려줌
+                        return self._create_no_sources_response(message, query_analysis, session_id, user_id)
+                        
                 except Exception as e:
                     self.logger.debug(f"Simple RAG service failed: {e}")
             else:
                 self.logger.warning("unified_rag_service is None, skipping RAG generation")
             
-            # 2순위: 고급 시스템들
-            # COT 프롬프트 시도
-            if self.unified_prompt_manager:
-                try:
-                    cot_result = await self._generate_with_cot_prompt(message, query_analysis, user_id, session_id)
-                    if cot_result:
-                        return cot_result
-                except Exception as e:
-                    self.logger.debug(f"COT generation failed: {e}")
-            
-            # 개선된 답변 생성기 시도
-            improved_result = await self._generate_with_improved_generator(message, query_analysis, user_id, session_id)
-            if improved_result:
-                return improved_result
-            
-            # 3순위: 간단한 템플릿 기반 답변 (fallback)
-            simple_result = self._generate_improved_template_response(message, query_analysis)
-            if simple_result and simple_result.get("confidence", 0) > 0.3:
-                return simple_result
-            
-            # 최종 fallback: 개선된 답변
-            fallback_response = self._generate_improved_fallback_response(message, query_analysis)
-            return {
-                "response": fallback_response,
-                "confidence": 0.6,
-                "sources": [],
-                "query_analysis": query_analysis,
-                "generation_method": "improved_fallback",
-                "session_id": session_id,
-                "user_id": user_id
-            }
+            # 참고 데이터가 없으면 억지로 답변하지 않음
+            return self._create_no_sources_response(message, query_analysis, session_id, user_id)
             
         except Exception as e:
             self.logger.error(f"Enhanced response generation failed: {e}")
-            return {
-                "response": f"'{message}'에 대한 질문을 받았습니다. 관련 정보를 찾아 답변드리겠습니다.",
-                "confidence": 0.5,
-                "sources": [],
-                "query_analysis": query_analysis,
-                "generation_method": "error_fallback",
-                "session_id": session_id,
-                "user_id": user_id,
-                "error": str(e)
-            }
+            return self._create_error_response(message, query_analysis, session_id, user_id, str(e))
+    
+    def _has_meaningful_sources(self, sources: List[Dict[str, Any]]) -> bool:
+        """의미있는 참고 데이터가 있는지 확인 - 완화된 버전"""
+        if not sources:
+            return False
+        
+        # 최소 관련도 임계값 설정 (완화)
+        MIN_RELEVANCE_THRESHOLD = 0.3  # 0.4에서 0.3으로 하향
+        MIN_CONTENT_LENGTH = 50  # 70에서 50으로 하향
+        
+        meaningful_sources = []
+        for source in sources:
+            relevance_score = source.get("similarity", source.get("score", 0.0))
+            content = source.get("content", "")
+            
+            # 관련도가 높고 내용이 충분한 소스만 유효한 것으로 판단
+            if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
+                meaningful_sources.append(source)
+        
+        # 최소 1개 이상의 의미있는 소스가 있으면 유효
+        if len(meaningful_sources) >= 1:
+            return True
+        
+        # 추가 검증: 실제 법률 관련 내용인지 확인 (확장된 키워드, 완화된 기준)
+        if meaningful_sources:
+            legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적", "계약", "소송", "재판", "민법", "형법", "상법", "이혼", "부동산", "손해배상"]
+            legal_content_count = 0
+            
+            for source in meaningful_sources:
+                content = source.get("content", "").lower()
+                if any(keyword in content for keyword in legal_keywords):
+                    legal_content_count += 1
+            
+            # 법률 관련 내용이 1개 이상이면 유효 (기존 50%에서 완화)
+            return legal_content_count >= 1
+        
+        return False
+    
+    def _calculate_confidence(self, sources: List[Dict[str, Any]], response_quality: str = "good") -> float:
+        """동적 신뢰도 계산 - 개선된 버전"""
+        if not sources:
+            return 0.0
+        
+        # 기본 신뢰도 (완화)
+        base_confidence = 0.3  # 0.25에서 0.3으로 상향
+        
+        # 소스 품질에 따른 조정 (완화된 기준)
+        avg_relevance = sum(source.get("similarity", source.get("score", 0.0)) for source in sources) / len(sources)
+        
+        # 관련도에 따른 보너스 (완화된 기준)
+        if avg_relevance >= 0.7:
+            relevance_bonus = 0.4  # 높은 관련도 (0.35에서 0.4로 상향)
+        elif avg_relevance >= 0.5:
+            relevance_bonus = 0.25  # 중간 관련도 (0.15에서 0.25로 상향)
+        elif avg_relevance >= 0.3:
+            relevance_bonus = 0.15  # 낮은 관련도 (0.05에서 0.15로 상향)
+        else:
+            relevance_bonus = 0.05  # 매우 낮은 관련도 (0.0에서 0.05로 상향)
+        
+        # 소스 개수에 따른 조정 (완화된 기준)
+        if len(sources) >= 3:
+            source_count_bonus = 0.15  # 많은 소스 (0.1에서 0.15로 상향)
+        elif len(sources) >= 2:
+            source_count_bonus = 0.1  # 적당한 소스 (0.05에서 0.1로 상향)
+        else:
+            source_count_bonus = 0.05  # 적은 소스 (0.0에서 0.05로 상향)
+        
+        # 응답 품질에 따른 조정
+        quality_bonus = 0.15 if response_quality == "excellent" else 0.1 if response_quality == "good" else 0.05
+        
+        # 최종 신뢰도 계산
+        final_confidence = base_confidence + relevance_bonus + source_count_bonus + quality_bonus
+        
+        # 0.0 ~ 1.0 범위로 제한
+        return max(0.0, min(1.0, final_confidence))
+    
+    def _create_no_sources_response(self, message: str, query_analysis: Dict[str, Any], session_id: str, user_id: str) -> Dict[str, Any]:
+        """참고 데이터가 없을 때의 응답 생성"""
+        query_type = query_analysis.get("query_type", "general")
+        
+        # 질문 유형별 맞춤 메시지
+        if query_type == "legal_advice":
+            response = f"""죄송합니다. '{message}'에 대한 구체적인 법률 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 더 구체적인 질문을 해주세요 (예: "민법 제750조 불법행위 손해배상")
+• 관련 법률 조문이나 판례가 있다면 함께 언급해주세요
+• 일반적인 법률 절차에 대해서는 안내해드릴 수 있습니다
+
+구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
+        
+        elif query_type == "precedent":
+            response = f"""죄송합니다. '{message}'와 관련된 판례를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 사건번호나 법원명을 포함해서 질문해주세요
+• 더 구체적인 키워드로 검색해주세요
+• 관련 법률 조문을 먼저 확인해보세요
+
+판례 검색이 어려우시면 법원 도서관이나 법률 데이터베이스를 이용해보시기 바랍니다."""
+        
+        elif query_type == "law_inquiry":
+            response = f"""죄송합니다. '{message}'에 대한 법률 조문을 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 정확한 법률명과 조문번호를 포함해주세요 (예: "민법 제750조")
+• 법률의 정식 명칭을 사용해주세요
+• 관련 키워드를 더 구체적으로 해주세요
+
+법령 정보는 국가법령정보센터(www.law.go.kr)에서 확인하실 수 있습니다."""
+        
+        else:
+            response = f"""죄송합니다. '{message}'에 대한 관련 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 질문을 더 구체적으로 작성해주세요
+• 관련 법률 조문이나 판례를 포함해주세요
+• 키워드를 더 명확하게 해주세요
+
+일반적인 법률 상식이나 절차에 대해서는 안내해드릴 수 있습니다."""
+
+        # 검색 제안 생성
+        suggestions = self._generate_search_suggestions(message, query_analysis)
+        suggestion_text = suggestions[0] if suggestions else "질문을 더 구체적으로 작성해주세요"
+        
+        return {
+            "response": response,
+            "confidence": 0.1,  # 0.0에서 0.1로 상향 - 솔직한 응답에 대한 기본 신뢰도
+            "sources": [],
+            "query_analysis": query_analysis,
+            "generation_method": "no_sources",
+            "session_id": session_id,
+            "user_id": user_id,
+            "no_sources": True,
+            "suggestion": suggestion_text
+        }
+    
+    def _create_error_response(self, message: str, query_analysis: Dict[str, Any], session_id: str, user_id: str, error: str) -> Dict[str, Any]:
+        """오류 응답 생성"""
+        return {
+            "response": f"죄송합니다. '{message}'에 대한 답변 생성 중 오류가 발생했습니다.\n\n오류: {error}\n\n잠시 후 다시 시도해주세요.",
+            "confidence": 0.0,
+            "sources": [],
+            "query_analysis": query_analysis,
+            "generation_method": "error",
+            "session_id": session_id,
+            "user_id": user_id,
+            "error": error
+        }
+    
+    def _generate_search_suggestions(self, message: str, query_analysis: Dict[str, Any]) -> List[str]:
+        """검색 제안 생성 - 개선된 버전"""
+        suggestions = []
+        
+        # 질문에서 직접 키워드 추출 (개선된 로직)
+        import re
+        
+        # 법률 관련 키워드 패턴 (확장된 버전)
+        law_patterns = [
+            r'(민법|형법|상법|노동법|가족법|행정법|헌법|민사소송법|형사소송법)',
+            r'(계약|손해배상|불법행위|소유권|물권|채권|채무)',
+            r'(이혼|상속|양육권|친권|위자료|재산분할)',
+            r'(회사|주식|이사|주주|회사설립|합병)',
+            r'(근로|임금|해고|근로시간|휴게시간|연차)',
+            r'(부동산|매매|임대차|등기|소유권이전|전세|월세)',
+            r'(법률|법령|조문|판례|법원|규정|조항|법적|법률적)'  # 추가
+        ]
+        
+        extracted_keywords = []
+        for pattern in law_patterns:
+            matches = re.findall(pattern, message)
+            if matches:
+                if isinstance(matches[0], tuple):
+                    extracted_keywords.extend([match for match in matches[0] if match])
+                else:
+                    extracted_keywords.extend(matches)
+        
+        # 중복 제거 및 우선순위 정렬
+        extracted_keywords = list(set(extracted_keywords))
+        
+        # 키워드 우선순위 정렬 (법률명 > 구체적 용어 > 일반 용어)
+        priority_keywords = []
+        specific_keywords = []
+        general_keywords = []
+        
+        for keyword in extracted_keywords:
+            if keyword in ["민법", "형법", "상법", "노동법", "가족법", "행정법", "헌법", "민사소송법", "형사소송법"]:
+                priority_keywords.append(keyword)
+            elif keyword in ["계약", "손해배상", "불법행위", "소유권", "물권", "채권", "채무", "이혼", "상속", "양육권", "친권", "위자료", "재산분할", "회사", "주식", "이사", "주주", "회사설립", "합병", "근로", "임금", "해고", "부동산", "매매", "임대차", "등기", "소유권이전", "전세", "월세"]:
+                specific_keywords.append(keyword)
+            else:
+                general_keywords.append(keyword)
+        
+        # 우선순위 키워드 먼저, 그 다음 구체적 키워드, 마지막 일반 키워드
+        extracted_keywords = priority_keywords + specific_keywords + general_keywords
+        
+        # 질문 분류기에서 키워드 가져오기 (fallback) - 우선순위 정렬 적용
+        if not extracted_keywords:
+            keywords = query_analysis.get("keywords", [])
+            if keywords:
+                # fallback 키워드도 우선순위 정렬 적용
+                priority_keywords = []
+                specific_keywords = []
+                general_keywords = []
+                
+                for keyword in keywords:
+                    if keyword in ["민법", "형법", "상법", "노동법", "가족법", "행정법", "헌법", "민사소송법", "형사소송법"]:
+                        priority_keywords.append(keyword)
+                    elif keyword in ["계약", "손해배상", "불법행위", "소유권", "물권", "채권", "채무", "이혼", "상속", "양육권", "친권", "위자료", "재산분할", "회사", "주식", "이사", "주주", "회사설립", "합병", "근로", "임금", "해고", "부동산", "매매", "임대차", "등기", "소유권이전", "전세", "월세"]:
+                        specific_keywords.append(keyword)
+                    else:
+                        general_keywords.append(keyword)
+                
+                # 우선순위 키워드 먼저, 그 다음 구체적 키워드, 마지막 일반 키워드
+                extracted_keywords = priority_keywords + specific_keywords + general_keywords
+        
+        # 추출된 키워드로 제안 생성 (이미 우선순위로 정렬됨)
+        if extracted_keywords:
+            main_keyword = extracted_keywords[0]
+            suggestions.append(f"'{main_keyword}' 관련 법률 조문을 검색해보세요")
+            suggestions.append(f"'{main_keyword}' 판례를 찾아보세요")
+            if len(extracted_keywords) > 1:
+                suggestions.append(f"'{extracted_keywords[1]}'와 함께 검색해보세요")
+        
+        # 질문 유형별 제안
+        query_type = query_analysis.get("query_type", "general")
+        if query_type == "legal_advice":
+            suggestions.extend([
+                "구체적인 상황을 설명해주세요",
+                "관련 법률 조문을 함께 언급해주세요"
+            ])
+        elif query_type == "precedent":
+            suggestions.extend([
+                "사건번호나 법원명을 포함해주세요",
+                "더 구체적인 키워드로 검색해보세요"
+            ])
+        elif query_type == "law_inquiry":
+            suggestions.extend([
+                "정확한 법률명과 조문번호를 포함해주세요",
+                "법률의 정식 명칭을 사용해주세요"
+            ])
+        
+        # 일반적인 제안 (키워드가 없는 경우)
+        if not suggestions:
+            suggestions.extend([
+                "질문을 더 구체적으로 작성해주세요",
+                "관련 법률 조문이나 판례를 포함해주세요",
+                "키워드를 더 명확하게 해주세요"
+            ])
+        
+        return suggestions[:3]  # 최대 3개 제안
     
     def _generate_improved_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """자연스러운 답변 생성 - 템플릿 제거"""
+        """완전히 자연스러운 답변 생성 - 최고 수준 프롬프트 엔지니어링 적용"""
         self.logger.info(f"_generate_improved_template_response called for: {message}")
         
         # 템플릿 기반 답변을 완전히 제거하고 자연스러운 답변만 생성
@@ -993,21 +1338,51 @@ class EnhancedChatService:
             from .gemini_client import GeminiClient
             gemini_client = GeminiClient()
             
-            # 간단하고 직접적인 프롬프트
-            prompt = f"""다음 질문에 대해 자연스럽고 직접적으로 답변해주세요.
+            # 완전히 새로운 프롬프트 구조 적용
+            prompt = f"""사용자: {message}
 
-질문: {message}
+위 질문에 대해 마치 친한 변호사와 대화하는 것처럼 자연스럽게 답변하세요.
 
-답변 규칙:
-1. 질문에 바로 답변하세요
-2. 섹션 제목이나 템플릿을 사용하지 마세요
-3. 자연스럽고 친근한 톤으로 답변하세요
-4. 필요한 정보만 간결하게 제공하세요
+예시:
+사용자: "민법 제750조가 뭐야?"
+변호사: "민법 제750조는 불법행위에 관한 조항이에요. 쉽게 말해서 누군가가 고의나 실수로 다른 사람에게 피해를 주면 그 피해를 배상해야 한다는 내용입니다. 불법행위가 성립하려면 네 가지 조건이 모두 맞아야 해요: 첫째, 가해자가 고의나 과실이 있어야 하고, 둘째, 위법한 행위여야 하며, 셋째, 실제로 손해가 발생해야 하고, 넷째, 그 행위와 손해 사이에 인과관계가 있어야 합니다. 이 모든 조건이 충족되면 손해배상 책임이 생겨요."
+
+사용자: "계약서 작성 방법을 알려주세요"
+변호사: "계약서는 당사자 간의 약속을 명확히 하는 중요한 문서예요. 작성할 때는 몇 가지 핵심 사항을 꼼꼼히 챙기셔야 합니다. 먼저 계약 당사자들의 정확한 정보(이름, 주소, 연락처)를 기재하고, 계약의 목적과 내용을 구체적으로 명시해야 해요. 예를 들어 부동산 매매라면 매물 정보와 매매 대금, 지급 시기 등을 상세히 적어야 합니다. 또한 계약 기간, 대금 지급 방법, 위약 시 손해배상 조항, 분쟁 해결 방법 등도 포함하는 것이 좋아요. 중요한 것은 나중에 해석의 여지가 없도록 명확하고 구체적으로 작성하는 것입니다."
 
 답변:"""
             
-            gemini_response = gemini_client.generate(prompt)
-            response = gemini_response.response
+            # 프롬프트 체인 방식 사용 시도
+            try:
+                from .prompt_chain import prompt_chain_processor
+                response = prompt_chain_processor.process_with_chain(message, "")
+                
+                return {
+                    "response": response,
+                    "confidence": 0.85,
+                    "sources": [],
+                    "generation_method": "prompt_chain"
+                }
+                
+            except Exception as e:
+                self.logger.error(f"Prompt chain generation failed: {e}")
+                # 폴백: 대안 모델 클라이언트 사용
+                try:
+                    from .alternative_model_client import alternative_model_client
+                    response = alternative_model_client.generate_with_fallback(prompt)
+                    
+                    return {
+                        "response": response,
+                        "confidence": 0.8,
+                        "sources": [],
+                        "generation_method": "alternative_model"
+                    }
+                    
+                except Exception as e2:
+                    self.logger.error(f"Alternative model generation failed: {e2}")
+                    # 최종 폴백: 기본 Gemini 클라이언트 사용
+                    gemini_response = gemini_client.generate(prompt)
+                    response = gemini_response.response
             
             return {
                 "response": response,
@@ -1088,1515 +1463,92 @@ class EnhancedChatService:
         return "default"
     
     def _generate_template_by_intent(self, message: str, domain: str, intent: str) -> Dict[str, Any]:
-        """의도에 따른 세분화된 템플릿 생성"""
-        
-        # 의도별 템플릿 매핑
-        intent_mapping = {
-            "contract": {
-                "creation": self._generate_contract_creation_template,
-                "termination": self._generate_contract_termination_template,
-                "review": self._generate_contract_review_template,
-                "dispute": self._generate_contract_dispute_template,
-                "default": self._generate_contract_template
-            },
-            "civil_law": {
-                "litigation": self._generate_civil_litigation_template,
-                "statute_of_limitations": self._generate_statute_limitations_template,
-                "damages": self._generate_damages_template,
-                "debt": self._generate_debt_template,
-                "default": self._generate_civil_law_template
-            },
-            "real_estate": {
-                "purchase": self._generate_real_estate_purchase_template,
-                "rental": self._generate_real_estate_rental_template,
-                "registration": self._generate_real_estate_registration_template,
-                "investment": self._generate_real_estate_investment_template,
-                "default": self._generate_real_estate_template
-            },
-            "family_law": {
-                "divorce": self._generate_divorce_template,
-                "custody": self._generate_custody_template,
-                "inheritance": self._generate_inheritance_template,
-                "marriage": self._generate_marriage_template,
-                "default": self._generate_family_law_template
-            },
-            "labor_law": {
-                "termination": self._generate_labor_termination_template,
-                "wage": self._generate_labor_wage_template,
-                "working_conditions": self._generate_labor_conditions_template,
-                "discrimination": self._generate_labor_discrimination_template,
-                "default": self._generate_labor_law_template
-            },
-            "commercial_law": {
-                "incorporation": self._generate_commercial_incorporation_template,
-                "management": self._generate_commercial_management_template,
-                "securities": self._generate_commercial_securities_template,
-                "merger": self._generate_commercial_merger_template,
-                "default": self._generate_commercial_law_template
-            },
-            "criminal_law": {
-                "murder": self._generate_criminal_murder_template,
-                "theft": self._generate_criminal_theft_template,
-                "fraud": self._generate_criminal_fraud_template,
-                "assault": self._generate_criminal_assault_template,
-                "default": self._generate_criminal_law_template
-            },
-            "general": {
-                "consultation": self._generate_general_consultation_template,
-                "information": self._generate_general_information_template,
-                "procedure": self._generate_general_procedure_template,
-                "default": self._generate_general_template
-            }
-        }
-        
-        # 해당 도메인의 의도별 템플릿 함수 가져오기
-        domain_mapping = intent_mapping.get(domain, intent_mapping["general"])
-        template_func = domain_mapping.get(intent, domain_mapping["default"])
-        
-        return template_func(message, intent)
-    
-    # === 세분화된 템플릿 함수들 ===
-    
-    def _generate_civil_litigation_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """민사소송 전용 템플릿"""
-        response = """민사소송 절차에 대해 안내드리겠습니다.
-
-**민사소송의 기본 절차**
-1. **소장 제출**: 법원에 소장을 제출하여 소송을 시작
-2. **소송비용 납부**: 인지대, 송달료 등 소송비용 납부
-3. **기일 통지**: 변론기일 통지서 수령
-4. **변론**: 원고와 피고가 법정에서 주장과 입증
-5. **판결**: 법원의 최종 판결 선고
-6. **항소/상고**: 불복 시 상급법원에 항소 또는 상고
-
-**소송 기간**
-- 1심: 보통 6개월~1년
-- 항소: 6개월~1년
-- 상고: 6개월~1년
-
-**소송비용**
-- 인지대: 소송목적가액에 따라 차등
-- 변호사 선임비용
-- 증거조사비용
-
-**주의사항**
-- 소송기간은 사안에 따라 달라질 수 있음
-- 전문가 상담 권장
-
-구체적인 소송 문제는 변호사와 상담하시기 바랍니다."""
-        
-        return {
-            "response": response,
-            "confidence": 0.9,
-            "sources": [],
-            "generation_method": "template_civil_litigation"
-        }
-    
-    def _generate_statute_limitations_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """소멸시효 전용 템플릿"""
-        response = """소멸시효에 대해 안내드리겠습니다.
-
-**소멸시효의 기본 원칙**
-- 민법 제162조: 일반채권의 소멸시효는 10년
-- 민법 제163조: 상사채권의 소멸시효는 5년
-- 민법 제164조: 단기소멸시효는 3년 또는 1년
-
-**주요 소멸시효 기간**
-**3년 시효:**
-- 의료비, 변호사보수 등 전문가 보수
-- 교사, 강사, 기술자 등의 보수
-- 제조자, 도매상, 소매상의 상품대금
-
-**1년 시효:**
-- 숙박료, 음식료, 대차료
-- 노무자의 급료, 운송료
-- 임대료, 사용료
-
-**시효 중단 사유**
-- 청구 (소송 제기, 지급명령 신청 등)
-- 압류, 가압류, 가처분
-- 승인 (채무 인정)
-
-**시효 완성 효과**
-- 채권이 소멸하여 청구할 수 없음
-- 시효 완성 후에는 상대방이 시효이익을 포기하지 않는 한 소멸
-
-**실무 팁**
-- 시효 완성 전에 법적 조치 필요
-- 시효 중단 사유 확인 중요
-
-구체적인 시효 문제는 변호사와 상담하시기 바랍니다."""
-        
-        return {
-            "response": response,
-            "confidence": 0.9,
-            "sources": [],
-            "generation_method": "template_statute_limitations"
-        }
-    
-    def _generate_damages_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """손해배상 전용 템플릿"""
-        response = """손해배상에 대해 안내드리겠습니다.
-
-**손해배상의 요건**
-1. 불법행위 또는 채무불이행
-2. 손해의 발생
-3. 인과관계
-4. 고의 또는 과실
-
-**손해배상 청구 방법**
-- 협의를 통한 해결
-- 조정을 통한 해결
-- 소송을 통한 해결
-
-구체적인 손해배상 문제는 변호사와 상담하시기 바랍니다."""
-        
-        return {
-            "response": response,
-            "confidence": 0.8,
-            "sources": [],
-            "generation_method": "template_damages"
-        }
-    
-    def _generate_debt_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """채무채권 전용 템플릿"""
-        response = """채무채권에 대해 안내드리겠습니다.
-
-**채무채권의 기본 원칙**
-- 민법 제374조: 채권은 채무자로 하여금 일정한 행위를 하게 할 권리
-- 민법 제390조: 채무자는 채권의 목적에 좇아 이행할 의무
-
-**채무불이행의 효과**
-- 손해배상 청구
-- 강제이행 청구
-- 계약해지
-
-**채권보전 방법**
-- 압류, 가압류
-- 가처분
-- 채권자대위권
-
-구체적인 채무채권 문제는 변호사와 상담하시기 바랍니다."""
-        
-        return {
-            "response": response,
-            "confidence": 0.8,
-            "sources": [],
-            "generation_method": "template_debt"
-        }
-    
-    # 기존 템플릿 함수들을 기본 템플릿으로 사용
-    def _generate_contract_creation_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_contract_template(message, intent)
-    
-    def _generate_contract_termination_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_contract_template(message, intent)
-    
-    def _generate_contract_review_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_contract_template(message, intent)
-    
-    def _generate_contract_dispute_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_contract_template(message, intent)
-    
-    def _generate_real_estate_purchase_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_real_estate_template(message, intent)
-    
-    def _generate_real_estate_rental_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_real_estate_template(message, intent)
-    
-    def _generate_real_estate_registration_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_real_estate_template(message, intent)
-    
-    def _generate_real_estate_investment_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_real_estate_template(message, intent)
-    
-    def _generate_divorce_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_family_law_template(message, intent)
-    
-    def _generate_custody_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_family_law_template(message, intent)
-    
-    def _generate_inheritance_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_family_law_template(message, intent)
-    
-    def _generate_marriage_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_family_law_template(message, intent)
-    
-    def _generate_labor_termination_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_labor_law_template(message, intent)
-    
-    def _generate_labor_wage_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_labor_law_template(message, intent)
-    
-    def _generate_labor_conditions_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_labor_law_template(message, intent)
-    
-    def _generate_labor_discrimination_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_labor_law_template(message, intent)
-    
-    def _generate_commercial_incorporation_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_commercial_law_template(message, intent)
-    
-    def _generate_commercial_management_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_commercial_law_template(message, intent)
-    
-    def _generate_commercial_securities_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_commercial_law_template(message, intent)
-    
-    def _generate_commercial_merger_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_commercial_law_template(message, intent)
-    
-    def _generate_criminal_murder_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_criminal_law_template(message, intent)
-    
-    def _generate_criminal_theft_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_criminal_law_template(message, intent)
-    
-    def _generate_criminal_fraud_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_criminal_law_template(message, intent)
-    
-    def _generate_criminal_assault_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_criminal_law_template(message, intent)
-    
-    def _generate_general_consultation_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_general_template(message, intent)
-    
-    def _generate_general_information_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_general_template(message, intent)
-    
-    def _generate_general_procedure_template(self, message: str, intent: str) -> Dict[str, Any]:
-        return self._generate_general_template(message, intent)
-    
-    def _generate_statute_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """법률 조문 템플릿 답변"""
-        response = f"'{message}'에 대한 법률 조문 정보를 제공해드리겠습니다. 관련 법령의 내용과 해석에 대해 안내드릴 수 있습니다."
-        return {
-            "response": response,
-            "confidence": 0.8,
-            "sources": [],
-            "generation_method": "template_statute"
-        }
-    
-    def _generate_contract_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """계약서 템플릿 답변"""
-        if "작성" in message:
-            response = """계약서 작성에 대해 안내드리겠습니다.
-
-**계약서 필수 요소**
-- 당사자 명시
-- 계약 목적과 내용
-- 계약 기간
-- 대가와 지급 방법
-- 위약금 조항
-
-**주의사항**
-- 명확한 용어 사용
-- 불공정한 조항 배제
-- 법적 검토 권장
-
-구체적인 계약서는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-        else:
-            response = f"'{message}'에 대한 계약 관련 질문을 받았습니다. 계약법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_contract"
-        }
-    
-    def _generate_real_estate_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """부동산 템플릿 답변"""
-        if "매매" in message:
-            response = """부동산 매매 절차에 대해 안내드리겠습니다.
-
-**매매 절차**
-1. 부동산 확인 및 조사
-2. 매매계약서 작성
-3. 계약금 지급
-4. 잔금 지급 및 인도
-5. 소유권 이전 등기
-
-**주의사항**
-- 등기부등본 확인
-- 권리관계 조사
-- 중개업소 확인
-
-구체적인 부동산 거래는 전문가와 상담하시기 바랍니다."""
-            confidence = 0.8
-        else:
-            response = f"'{message}'에 대한 부동산 관련 질문을 받았습니다. 부동산법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_real_estate"
-        }
-    
-    def _generate_family_law_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """가족법 템플릿 답변"""
-        if "이혼" in message:
-            response = """이혼 절차에 대해 안내드리겠습니다.
-
-**이혼 유형별 절차**
-1. 협의이혼: 부부 합의 후 가정법원 신고
-2. 조정이혼: 가정법원 조정을 통한 합의
-3. 재판이혼: 법원 판결을 통한 이혼
-
-**고려사항**
-- 자녀 양육권
-- 재산 분할
-- 위자료
-
-구체적인 이혼 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-        else:
-            response = f"'{message}'에 대한 가족법 관련 질문을 받았습니다. 가족법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_family_law"
-        }
-    
-    def _generate_civil_law_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """민사법 템플릿 답변"""
-        message_lower = message.lower()
-        
-        if "민사소송" in message or "소송절차" in message:
-            response = """민사소송 절차에 대해 안내드리겠습니다.
-
-**민사소송의 기본 절차**
-1. **소장 제출**: 법원에 소장을 제출하여 소송을 시작
-2. **소송비용 납부**: 인지대, 송달료 등 소송비용 납부
-3. **기일 통지**: 변론기일 통지서 수령
-4. **변론**: 원고와 피고가 법정에서 주장과 입증
-5. **판결**: 법원의 최종 판결 선고
-6. **항소/상고**: 불복 시 상급법원에 항소 또는 상고
-
-**소송 기간**
-- 1심: 보통 6개월~1년
-- 항소: 6개월~1년
-- 상고: 6개월~1년
-
-**소송비용**
-- 인지대: 소송목적가액에 따라 차등
-- 변호사 선임비용
-- 증거조사비용
-
-**주의사항**
-- 소송기간은 사안에 따라 달라질 수 있음
-- 전문가 상담 권장
-
-구체적인 소송 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.9
-            
-        elif "소멸시효" in message or "시효" in message:
-            response = """소멸시효에 대해 안내드리겠습니다.
-
-**소멸시효의 기본 원칙**
-- 민법 제162조: 일반채권의 소멸시효는 10년
-- 민법 제163조: 상사채권의 소멸시효는 5년
-- 민법 제164조: 단기소멸시효는 3년 또는 1년
-
-**주요 소멸시효 기간**
-**3년 시효:**
-- 의료비, 변호사보수 등 전문가 보수
-- 교사, 강사, 기술자 등의 보수
-- 제조자, 도매상, 소매상의 상품대금
-
-**1년 시효:**
-- 숙박료, 음식료, 대차료
-- 노무자의 급료, 운송료
-- 임대료, 사용료
-
-**시효 중단 사유**
-- 청구 (소송 제기, 지급명령 신청 등)
-- 압류, 가압류, 가처분
-- 승인 (채무 인정)
-
-**시효 완성 효과**
-- 채권이 소멸하여 청구할 수 없음
-- 시효 완성 후에는 상대방이 시효이익을 포기하지 않는 한 소멸
-
-**실무 팁**
-- 시효 완성 전에 법적 조치 필요
-- 시효 중단 사유 확인 중요
-
-구체적인 시효 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.9
-            
-        elif "손해배상" in message:
-            response = """손해배상에 대해 안내드리겠습니다.
-
-**손해배상의 요건**
-1. 불법행위 또는 채무불이행
-2. 손해의 발생
-3. 인과관계
-4. 고의 또는 과실
-
-**손해배상 청구 방법**
-- 협의를 통한 해결
-- 조정을 통한 해결
-- 소송을 통한 해결
-
-구체적인 손해배상 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        else:
-            response = f"'{message}'에 대한 민사법 관련 질문을 받았습니다. 민사법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_civil_law"
-        }
-    
-    def _generate_labor_law_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """노동법 템플릿 답변"""
-        if "해고" in message:
-            response = """해고에 대해 안내드리겠습니다.
-
-**정당한 해고 사유**
-1. 근로자의 귀책사유
-2. 경영상 필요
-3. 정년 도달
-
-**해고 절차**
-- 사전 통지 (30일)
-- 해고 사유 명시
-- 해고 통지서 교부
-
-**부당해고 구제**
-- 부당해고 구제신청
-- 복직 명령
-- 손해배상 청구
-
-구체적인 해고 문제는 노동위원회나 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-        else:
-            response = f"'{message}'에 대한 노동법 관련 질문을 받았습니다. 노동법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_labor_law"
-        }
-    
-    def _generate_commercial_law_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """상법 템플릿 답변"""
-        if "회사" in message:
-            response = """회사에 대해 안내드리겠습니다.
-
-**회사 형태**
-1. 주식회사
-2. 유한책임회사
-3. 합명회사
-4. 합자회사
-
-**회사 설립 절차**
-1. 정관 작성
-2. 주주 모집
-3. 설립 등기
-4. 사업자 등록
-
-**회사 운영**
-- 이사회 구성
-- 주주총회 개최
-- 재무제표 작성
-
-구체적인 회사 문제는 변호사나 회계사와 상담하시기 바랍니다."""
-            confidence = 0.8
-        else:
-            response = f"'{message}'에 대한 상법 관련 질문을 받았습니다. 상법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_commercial_law"
-        }
-    
-    def _generate_criminal_law_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """형사법 템플릿 답변"""
-        message_lower = message.lower()
-        
-        if "살인" in message:
-            response = """살인죄의 처벌에 대해 설명드리겠습니다.
-
-**살인죄 처벌**
-- 형법 제250조: 사형, 무기 또는 5년 이상의 징역
-- 일반살인: 사형, 무기 또는 5년 이상의 징역
-- 존속살인: 사형, 무기 또는 7년 이상의 징역
-
-**살인죄의 구성요건**
-1. 타인의 생명을 침해하는 행위
-2. 살인의 고의 (의도)
-3. 결과의 발생
-
-**참고사항**
-- 살인미수도 동일한 처벌 대상
-- 정신장애 등으로 책임능력이 감소된 경우 형의 감경 가능
-- 구체적인 사안은 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        elif "절도" in message:
-            response = """절도죄의 처벌에 대해 설명드리겠습니다.
-
-**절도죄 처벌**
-- 형법 제329조: 6년 이하의 징역 또는 1천만원 이하의 벌금
-- 야간주거침입절도: 1년 이상 10년 이하의 징역
-- 특수절도: 1년 이상 10년 이하의 징역
-
-**절도죄의 구성요건**
-1. 타인의 재물을 절취하는 행위
-2. 불법영득의 의사
-3. 재물의 점유 이탈
-
-**참고사항**
-- 절도미수도 처벌 대상
-- 친족상도례: 친족 간 절도는 고소가 있어야 공소제기
-- 구체적인 사안은 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        elif "사기" in message:
-            response = """사기죄의 처벌에 대해 설명드리겠습니다.
-
-**사기죄 처벌**
-- 형법 제347조: 10년 이하의 징역 또는 2천만원 이하의 벌금
-- 컴퓨터 등 사용사기: 10년 이하의 징역 또는 2천만원 이하의 벌금
-- 신용카드 등 사용사기: 5년 이하의 징역 또는 1천만원 이하의 벌금
-
-**사기죄의 구성요건**
-1. 기망행위 (속임수)
-2. 착오 유발
-3. 재산상 이익 취득
-4. 인과관계
-
-**참고사항**
-- 사기미수도 처벌 대상
-- 피해자와의 합의는 형의 감경 사유
-- 구체적인 사안은 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        else:
-            response = f"'{message}'에 대한 형사법 관련 질문을 받았습니다. 형사법의 기본 원칙과 관련 정보를 제공해드릴 수 있습니다."
-            confidence = 0.7
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_criminal_law"
-        }
-    
-    def _generate_general_template(self, message: str, intent: str) -> Dict[str, Any]:
-        """일반 템플릿 답변"""
-        message_lower = message.lower()
-        
-        if "안녕" in message or "인사" in message:
-            response = "안녕하세요! 법률 관련 질문이 있으시면 언제든지 말씀해 주세요. 일반적인 법률 정보를 제공해드릴 수 있습니다."
-            confidence = 0.75
-            
-        elif "도움" in message or "정보" in message:
-            response = f"'{message}'에 대한 질문을 받았습니다. 법률 관련 일반적인 정보를 제공해드릴 수 있습니다. 구체적인 질문을 해주시면 더 정확한 정보를 안내해드릴 수 있습니다."
-            confidence = 0.65
-            
-        elif "계약" in message:
-            response = """계약에 대한 일반적인 정보를 안내드리겠습니다.
-
-**계약의 기본 원칙**
-- 민법 제105조: 계약은 당사자 간의 합의로 성립
-- 자유의사에 기한 합의
-- 법률이 금지하지 않는 내용이어야 함
-
-**계약의 효력**
-- 계약 체결 시 당사자는 계약 내용을 이행할 의무
-- 계약 위반 시 손해배상 책임 발생
-- 계약 해지 시 정당한 사유 필요
-
-**계약서 작성 시 주의사항**
-- 당사자 명시
-- 계약 목적 명확히 기술
-- 이행 기간 및 방법 명시
-- 위약금 조항 포함
-
-구체적인 계약 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        elif "손해" in message or "배상" in message:
-            response = """손해배상에 대한 일반적인 정보를 안내드리겠습니다.
-
-**손해배상의 기본 원칙**
-- 민법 제750조: 불법행위로 인한 손해배상
-- 민법 제390조: 채무불이행으로 인한 손해배상
-
-**손해배상의 요건**
-1. 불법행위 또는 채무불이행
-2. 손해의 발생
-3. 인과관계
-4. 고의 또는 과실
-
-**손해의 종류**
-- 재산적 손해: 직접적 손해, 이익 상실
-- 정신적 손해: 위자료, 정신적 고통
-
-**손해배상 청구 방법**
-- 협의를 통한 해결
-- 조정을 통한 해결
-- 소송을 통한 해결
-
-구체적인 손해배상 문제는 변호사와 상담하시기 바랍니다."""
-            confidence = 0.8
-            
-        else:
-            response = f"'{message}'에 대한 질문을 받았습니다. 법률 관련 일반적인 정보를 제공해드릴 수 있습니다. 더 구체적인 정보가 필요하시면 추가 질문을 해주세요."
-            confidence = 0.6
-        
-        return {
-            "response": response,
-            "confidence": confidence,
-            "sources": [],
-            "generation_method": "template_general"
-        }
-    
-    async def _generate_with_cot_prompt(self, message: str, query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
-        """COT 프롬프트를 사용한 답변 생성"""
+        """의도에 따른 자연스러운 답변 생성 - 템플릿 완전 제거"""
         try:
-            if not self.unified_prompt_manager:
-                return None
+            # 템플릿 대신 자연스러운 답변 생성
+            from .gemini_client import GeminiClient
+            gemini_client = GeminiClient()
             
-            # COT 프롬프트 생성
-            cot_prompt = await self.unified_prompt_manager.generate_cot_prompt(
-                message=message,
-                query_analysis=query_analysis,
-                model_type="gemini"
-            )
+            prompt = f"""사용자의 질문에 대해 자연스럽고 친근한 답변을 해주세요:
+
+질문: {message}
+도메인: {domain}
+의도: {intent}
+
+답변 방식:
+- 마치 친한 변호사와 대화하는 것처럼 자연스럽게
+- 섹션 제목이나 플레이스홀더 사용 금지
+- 구체적이고 실용적인 정보 제공
+- 하나의 연속된 답변으로 작성
+
+답변:"""
             
-            if not cot_prompt:
-                return None
-            
-            # 모델을 사용한 응답 생성
-            if self.model_manager:
-                response = await self.model_manager.generate_response(cot_prompt)
-                if response:
-                    # response가 문자열인 경우 딕셔너리로 변환
-                    if isinstance(response, str):
-                        return {
-                            "response": response,
-                            "confidence": 0.8,
-                            "sources": [],
-                            "query_analysis": query_analysis,
-                            "generation_method": "cot_prompt",
-                            "session_id": session_id,
-                            "user_id": user_id
-                        }
-                    elif isinstance(response, dict):
-                        return response
-                    else:
-                        return {
-                            "response": str(response),
-                            "confidence": 0.8,
-                            "sources": [],
-                            "query_analysis": query_analysis,
-                            "generation_method": "cot_prompt",
-                            "session_id": session_id,
-                            "user_id": user_id
-                        }
-            
-            return None
-            
-        except Exception as e:
-            self.logger.debug(f"COT prompt generation failed: {e}")
-            return None
-    
-    async def _generate_with_improved_generator(self, message: str, query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
-        """개선된 답변 생성기를 사용한 답변 생성"""
-        try:
-            if not self.improved_answer_generator:
-                return None
-            
-            # 질문 분류 정보 생성
-            from .question_classifier import QuestionClassification
-            classification_details = QuestionClassification(
-                question_type=query_analysis.get("query_type", "general"),
-                intent=query_analysis.get("intent", "unknown"),
-                confidence=query_analysis.get("confidence", 0.5),
-                subcategories=[]
-            )
-            
-            # 개선된 답변 생성
-            improved_response = await self.improved_answer_generator.generate_answer(
-                question=message,
-                classification_details=classification_details,
-                context=query_analysis.get("context"),
-                user_id=user_id
-            )
-            
-            if improved_response:
-                # improved_response가 문자열인 경우 딕셔너리로 변환
-                if isinstance(improved_response, str):
-                    return {
-                        "response": improved_response,
-                        "confidence": 0.75,
-                        "sources": [],
-                        "query_analysis": query_analysis,
-                        "generation_method": "improved_generator",
-                        "session_id": session_id,
-                        "user_id": user_id
-                    }
-                elif isinstance(improved_response, dict):
-                    return improved_response
-                else:
-                    return {
-                        "response": str(improved_response),
-                        "confidence": 0.75,
-                        "sources": [],
-                        "query_analysis": query_analysis,
-                        "generation_method": "improved_generator",
-                        "session_id": session_id,
-                        "user_id": user_id
-                    }
-            
-            return None
-            
-        except Exception as e:
-            self.logger.debug(f"Improved generator failed: {e}")
-            return None
-    
-    async def _apply_naturalness_improvements(self, response: str, phase1_info: Dict[str, Any], phase2_info: Dict[str, Any], user_id: str) -> str:
-        """자연스러움 개선 적용"""
-        try:
-            improved_response = response
-            
-            # phase2_info가 문자열인 경우 딕셔너리로 변환
-            if isinstance(phase2_info, str):
-                self.logger.debug(f"phase2_info가 문자열로 전달됨: {type(phase2_info)}")
-                phase2_info = {"emotion_intent": {}}
-            elif phase2_info is None:
-                self.logger.debug("phase2_info가 None으로 전달됨")
-                phase2_info = {"emotion_intent": {}}
-            elif not isinstance(phase2_info, dict):
-                self.logger.debug(f"phase2_info가 예상치 못한 타입으로 전달됨: {type(phase2_info)}")
-                phase2_info = {"emotion_intent": {}}
-            
-            # 감정 톤 조절
-            if self.emotional_tone_adjuster:
-                improved_response = await self._adjust_emotional_tone(improved_response, phase2_info)
-            
-            # 대화 연결
-            if self.conversation_connector:
-                improved_response = await self._connect_conversation(improved_response, phase1_info)
-            
-            return improved_response
-            
-        except Exception as e:
-            self.logger.error(f"자연스러움 개선 적용 중 오류: {e}")
-            return response
-    
-    async def _adjust_emotional_tone(self, answer: str, phase2_info: Dict[str, Any]) -> str:
-        """감정 톤 조절"""
-        try:
-            if not self.emotional_tone_adjuster:
-                return answer
-            
-            # phase2_info가 문자열인 경우 딕셔너리로 변환
-            if isinstance(phase2_info, str):
-                self.logger.debug(f"_adjust_emotional_tone에서 phase2_info가 문자열로 전달됨: {type(phase2_info)}")
-                phase2_info = {"emotion_intent": {}}
-            elif phase2_info is None:
-                self.logger.debug("_adjust_emotional_tone에서 phase2_info가 None으로 전달됨")
-                phase2_info = {"emotion_intent": {}}
-            elif not isinstance(phase2_info, dict):
-                self.logger.debug(f"_adjust_emotional_tone에서 phase2_info가 예상치 못한 타입으로 전달됨: {type(phase2_info)}")
-                phase2_info = {"emotion_intent": {}}
-            
-            emotion_info = phase2_info.get("emotion_intent", {})
-            try:
-                adjusted_answer = self.emotional_tone_adjuster.adjust_tone(
-                    answer, emotion_info.get("emotion_type", "neutral")
-                )
-                return adjusted_answer
-            except Exception as e:
-                self.logger.debug(f"감정 톤 조절 실패: {e}")
-                return answer
-            
-        except Exception as e:
-            self.logger.error(f"감정 톤 조절 중 오류: {e}")
-            return answer
-    
-    async def _connect_conversation(self, answer: str, phase1_info: Dict[str, Any]) -> str:
-        """대화 연결"""
-        try:
-            if not self.conversation_connector:
-                return answer
-            
-            session_context = phase1_info.get("session_context", {})
-            try:
-                connected_answer = await self.conversation_connector.connect_conversation(
-                    answer, session_context
-                )
-                return connected_answer
-            except AttributeError:
-                self.logger.debug("ConversationConnector에 connect_conversation 메서드가 없습니다")
-                return answer
-            except Exception as e:
-                self.logger.debug(f"대화 연결 실패: {e}")
-                return answer
-            
-        except Exception as e:
-            self.logger.error(f"대화 연결 중 오류: {e}")
-            return answer
-    
-    def _remove_repetitive_patterns(self, response: str) -> str:
-        """고급 후처리 시스템을 사용한 반복 패턴 제거"""
-        try:
-            # 고급 후처리 시스템 사용
-            processing_result = advanced_response_processor.process_response(response)
-            
-            # 품질 검증 수행
-            validation_result = quality_validator.validate_response(processing_result.processed_text)
-            
-            # 로깅
-            self.logger.info(f"고급 후처리 완료 - 품질 점수: {processing_result.quality_score:.2f}, "
-                           f"등급: {processing_result.quality_grade.value}")
-            self.logger.info(f"품질 검증 결과 - 전체 점수: {validation_result['overall_score']:.2f}, "
-                           f"유효성: {validation_result['is_valid']}")
-            
-            # 개선 사항이 있으면 로깅
-            if processing_result.improvements_made:
-                self.logger.info(f"개선 사항: {', '.join(processing_result.improvements_made)}")
-            
-            # 품질이 너무 낮으면 원본 반환
-            if processing_result.quality_score < 0.3:
-                self.logger.warning("후처리 후 품질이 너무 낮아 원본을 반환합니다.")
-                return response
-            
-            return processing_result.processed_text
-            
-        except Exception as e:
-            self.logger.error(f"고급 후처리 중 오류: {e}")
-            # 오류 발생 시 기존 방식으로 폴백
-            return self._fallback_pattern_removal(response)
-    
-    def _fallback_pattern_removal(self, response: str) -> str:
-        """폴백 패턴 제거 (기존 방식)"""
-        try:
-            import re
-            
-            # 기본적인 패턴 제거
-            patterns = [
-                r'###\s*[^\n]+\s*\n*',
-                r'\*[^*]+\*\s*\n*',
-                r'본\s*답변은.*?바랍니다\.\s*\n*',
-                r'(문의하신|질문하신)\s*내용에\s*대해\s*',
-            ]
-            
-            for pattern in patterns:
-                response = re.sub(pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
-            
-            # 연속된 빈 줄 정리
-            response = re.sub(r'\n{3,}', '\n\n', response)
-            
-            return response.strip()
-            
-        except Exception as e:
-            self.logger.error(f"폴백 패턴 제거 중 오류: {e}")
-            return response
-    
-    async def _post_process_response(self, response_result: Dict[str, Any], query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
-        """후처리"""
-        try:
-            # response_result가 문자열인 경우 딕셔너리로 변환
-            if isinstance(response_result, str):
-                self.logger.debug(f"response_result가 문자열로 전달됨: {type(response_result)}")
-                response_result = {"response": response_result, "confidence": 0.5}
-            elif response_result is None:
-                self.logger.debug("response_result가 None으로 전달됨")
-                response_result = {"response": "죄송합니다. 답변을 생성할 수 없습니다.", "confidence": 0.1}
-            elif not isinstance(response_result, dict):
-                self.logger.debug(f"response_result가 예상치 못한 타입으로 전달됨: {type(response_result)}")
-                response_result = {"response": str(response_result), "confidence": 0.3}
-            
-            # 반복 패턴 제거
-            if response_result.get("response"):
-                response_result["response"] = self._remove_repetitive_patterns(response_result["response"])
-            
-            # 답변 구조화 향상 적용
-            if response_result.get("response") and self.answer_structure_enhancer:
-                try:
-                    question_type = query_analysis.get("query_type", "general")
-                    # QuestionType enum을 문자열로 변환
-                    if hasattr(question_type, 'value'):
-                        question_type = question_type.value
-                    elif hasattr(question_type, 'name'):
-                        question_type = question_type.name
-                    elif not isinstance(question_type, str):
-                        question_type = str(question_type)
-                    
-                    question = query_analysis.get("original_query", "")
-                    domain = query_analysis.get("domain", "general")
-                    
-                    structure_result = self.answer_structure_enhancer.enhance_answer_structure(
-                        response_result["response"],
-                        question_type,
-                        question,
-                        domain
-                    )
-                    
-                    if structure_result and not structure_result.get("error"):
-                        response_result["response"] = structure_result.get("structured_answer", response_result["response"])
-                        response_result["structure_metrics"] = structure_result.get("quality_metrics", {})
-                        response_result["structure_analysis"] = structure_result.get("analysis", {})
-                        response_result["structure_improvements"] = structure_result.get("improvements", [])
-                        
-                        # 구조화 품질에 따른 신뢰도 조정
-                        overall_score = structure_result.get("quality_metrics", {}).get("overall_score", 0.0)
-                        if overall_score > 0.7:
-                            response_result["confidence"] = min(0.95, response_result.get("confidence", 0.5) + 0.15)
-                        elif overall_score > 0.5:
-                            response_result["confidence"] = min(0.9, response_result.get("confidence", 0.5) + 0.1)
-                        
-                        self.logger.info(f"답변 구조화 향상 완료 - 품질 점수: {overall_score:.2f}")
-                    
-                except Exception as e:
-                    self.logger.error(f"답변 구조화 향상 중 오류: {e}")
-            
-            # 품질 향상 적용
-            if response_result.get("response") and self.answer_quality_enhancer:
-                try:
-                    enhanced_result = await self.answer_quality_enhancer.enhance_answer(
-                        response_result["response"], 
-                        query_analysis.get("query_type", "general")
-                    )
-                    if enhanced_result:
-                        response_result["response"] = enhanced_result
-                except AttributeError:
-                    self.logger.debug("AnswerQualityEnhancer에 enhance_answer 메서드가 없습니다")
-                except Exception as e:
-                    self.logger.debug(f"답변 품질 향상 실패: {e}")
-                    response_result["confidence"] = min(0.9, response_result.get("confidence", 0.5) + 0.1)
-            
-            # 신뢰도 계산
-            if self.confidence_calculator:
-                calculated_confidence = self.confidence_calculator.calculate_confidence(
-                    response_result["response"],
-                    response_result.get("sources", []),
-                    query_analysis.get("query_type", "general_question")
-                )
-                if calculated_confidence:
-                    response_result["confidence"] = calculated_confidence.confidence
-            
-            return response_result
-            
-        except Exception as e:
-            self.logger.error(f"후처리 중 오류: {e}")
-            self.logger.error(f"오류 발생 위치: _post_process_response")
-            self.logger.error(f"response_result 타입: {type(response_result)}")
-            self.logger.error(f"response_result 내용: {response_result}")
-            import traceback
-            self.logger.error(f"스택 트레이스: {traceback.format_exc()}")
-            return response_result
-    
-    async def enhance_answer_structure(self, answer: str, question_type: str, question: str = "", domain: str = "general") -> Dict[str, Any]:
-        """답변 구조화 향상 (공개 메서드)"""
-        try:
-            if not self.answer_structure_enhancer:
-                return {"error": "Answer structure enhancer not initialized"}
-            
-            # QuestionType enum을 문자열로 변환
-            if hasattr(question_type, 'value'):
-                question_type = question_type.value
-            elif hasattr(question_type, 'name'):
-                question_type = question_type.name
-            elif not isinstance(question_type, str):
-                question_type = str(question_type)
-            
-            result = self.answer_structure_enhancer.enhance_answer_structure(
-                answer, question_type, question, domain
-            )
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"답변 구조화 향상 실패: {e}")
-            return {"error": str(e)}
-    
-    async def enhance_answer_with_legal_basis(self, answer: str, question_type: str, query: str = "") -> Dict[str, Any]:
-        """법적 근거를 포함한 답변 강화"""
-        try:
-            if not self.answer_structure_enhancer:
-                return {"error": "Answer structure enhancer not initialized"}
-            
-            # QuestionType enum으로 변환
-            from .answer_structure_enhancer import QuestionType
-            try:
-                qt_enum = QuestionType(question_type.lower())
-            except ValueError:
-                qt_enum = QuestionType.GENERAL_QUESTION
-            
-            result = self.answer_structure_enhancer.enhance_answer_with_legal_basis(
-                answer, qt_enum, query
-            )
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"법적 근거 강화 실패: {e}")
-            return {"error": str(e)}
-    
-    def get_structure_template_info(self, question_type: str) -> Dict[str, Any]:
-        """구조화 템플릿 정보 조회"""
-        try:
-            if not self.answer_structure_enhancer:
-                return {"error": "Answer structure enhancer not initialized"}
-            
-            return self.answer_structure_enhancer.get_template_info(question_type)
-            
-        except Exception as e:
-            self.logger.error(f"템플릿 정보 조회 실패: {e}")
-            return {"error": str(e)}
-    
-    def reload_structure_templates(self):
-        """구조화 템플릿 동적 리로드"""
-        try:
-            if self.answer_structure_enhancer:
-                self.answer_structure_enhancer.reload_templates()
-                self.logger.info("구조화 템플릿 리로드 완료")
-            else:
-                self.logger.warning("Answer structure enhancer not initialized")
-        except Exception as e:
-            self.logger.error(f"템플릿 리로드 실패: {e}")
-    
-    def _generate_improved_fallback_response(self, message: str, query_analysis: Dict[str, Any]) -> str:
-        """개선된 폴백 응답 생성"""
-        try:
-            domain = query_analysis.get("domain", "general")
-            query_type = query_analysis.get("query_type", "general")
-            
-            # 도메인별 맞춤형 폴백 응답
-            domain_responses = {
-                "civil_law": f"'{message}'에 대한 민사법 관련 질문으로 이해됩니다. 민법, 계약법, 손해배상 등 민사법 분야의 구체적인 내용에 대해 답변드릴 수 있습니다. 더 자세한 정보가 필요하시면 구체적인 상황을 말씀해 주세요.",
-                "criminal_law": f"'{message}'에 대한 형사법 관련 질문으로 이해됩니다. 형법, 범죄 구성요건, 처벌 등 형사법 분야의 내용에 대해 답변드릴 수 있습니다. 구체적인 사안이 있으시면 말씀해 주세요.",
-                "family_law": f"'{message}'에 대한 가족법 관련 질문으로 이해됩니다. 이혼, 상속, 양육권 등 가족법 분야의 내용에 대해 답변드릴 수 있습니다. 구체적인 상황을 알려주시면 더 정확한 답변을 드릴 수 있습니다.",
-                "commercial_law": f"'{message}'에 대한 상법 관련 질문으로 이해됩니다. 회사법, 주식, 이사 등 상법 분야의 내용에 대해 답변드릴 수 있습니다. 구체적인 회사 형태나 상황을 말씀해 주세요.",
-                "labor_law": f"'{message}'에 대한 노동법 관련 질문으로 이해됩니다. 근로계약, 임금, 해고 등 노동법 분야의 내용에 대해 답변드릴 수 있습니다. 구체적인 근로 상황을 알려주시면 더 정확한 답변을 드릴 수 있습니다.",
-                "real_estate": f"'{message}'에 대한 부동산 관련 질문으로 이해됩니다. 부동산 매매, 임대차, 등기 등 부동산 분야의 내용에 대해 답변드릴 수 있습니다. 구체적인 부동산 거래 상황을 말씀해 주세요.",
-                "general": f"'{message}'에 대한 법률 질문으로 이해됩니다. 관련 법령과 판례를 바탕으로 답변드릴 수 있습니다. 더 구체적인 상황이나 조건을 알려주시면 더 정확한 답변을 드릴 수 있습니다."
-            }
-            
-            # 질문 유형별 추가 안내
-            type_guidance = {
-                "contract": "계약서 작성이나 검토에 대한 구체적인 내용을 말씀해 주시면 더 도움이 될 것 같습니다.",
-                "procedure": "해당 절차의 구체적인 단계나 필요한 서류에 대해 더 자세히 알려드릴 수 있습니다.",
-                "statute": "관련 법령의 구체적인 조문이나 해석에 대해 더 자세히 설명드릴 수 있습니다.",
-                "precedent": "관련 판례나 법원의 해석에 대해 더 구체적으로 안내드릴 수 있습니다."
-            }
-            
-            base_response = domain_responses.get(domain, domain_responses["general"])
-            additional_guidance = type_guidance.get(query_type, "")
-            
-            if additional_guidance:
-                return f"{base_response}\n\n{additional_guidance}"
-            else:
-                return base_response
-                
-        except Exception as e:
-            self.logger.error(f"폴백 응답 생성 실패: {e}")
-            return f"'{message}'에 대한 질문을 받았습니다. 관련 정보를 찾아 답변드리겠습니다."
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """통계 정보 반환"""
-        return {
-            "service_name": "EnhancedChatService",
-            "version": "2.0.0",
-            "components": {
-                "rag_service": self.rag_service is not None,
-                "hybrid_search_engine": self.hybrid_search_engine is not None,
-                "question_classifier": self.question_classifier is not None,
-                "improved_answer_generator": self.improved_answer_generator is not None,
-                "unified_search_engine": self.unified_search_engine is not None,
-                "unified_rag_service": self.unified_rag_service is not None,
-                "ml_validation_system": self.ml_validation_system is not None,
-                "improved_legal_restriction_system": self.improved_legal_restriction_system is not None,
-                "multi_stage_validation_system": self.multi_stage_validation_system is not None,
-                "optimized_search_engine": self.optimized_search_engine is not None,
-                "exact_search_engine": self.exact_search_engine is not None,
-                "semantic_search_engine": self.semantic_search_engine is not None,
-                "precedent_search_engine": self.precedent_search_engine is not None,
-                "integrated_session_manager": self.integrated_session_manager is not None,
-                "multi_turn_handler": self.multi_turn_handler is not None,
-                "context_compressor": self.context_compressor is not None,
-                "user_profile_manager": self.user_profile_manager is not None,
-                "emotion_intent_analyzer": self.emotion_intent_analyzer is not None,
-                "conversation_flow_tracker": self.conversation_flow_tracker is not None,
-                "contextual_memory_manager": self.contextual_memory_manager is not None,
-                "conversation_quality_monitor": self.conversation_quality_monitor is not None,
-                "conversation_connector": self.conversation_connector is not None,
-                "emotional_tone_adjuster": self.emotional_tone_adjuster is not None,
-                "personalized_style_learner": self.personalized_style_learner is not None,
-                "realtime_feedback_system": self.realtime_feedback_system is not None,
-                "naturalness_evaluator": self.naturalness_evaluator is not None,
-                "cache_manager": self.cache_manager is not None,
-                "performance_monitor": self.performance_monitor is not None,
-                "memory_optimizer": self.memory_optimizer is not None,
-                "answer_quality_enhancer": self.answer_quality_enhancer is not None,
-                "answer_structure_enhancer": self.answer_structure_enhancer is not None,
-                "confidence_calculator": self.confidence_calculator is not None,
-                "prompt_optimizer": self.prompt_optimizer is not None,
-                "unified_prompt_manager": self.unified_prompt_manager is not None
-            },
-            "langgraph_enabled": self.use_langgraph,
-            "timestamp": datetime.now()
-        }
-    
-    def clear_cache(self):
-        """캐시 클리어"""
-        if self.cache_manager:
-            self.cache_manager.clear()
-    
-    def get_system_status(self) -> Dict[str, Any]:
-        """시스템 상태 확인"""
-        return {
-            "service_status": "active",
-            "components_status": self.get_stats()["components"],
-            "memory_usage": self.memory_optimizer.get_memory_usage() if self.memory_optimizer else None,
-            "performance_metrics": self.performance_monitor.get_metrics() if self.performance_monitor else None,
-            "timestamp": datetime.now()
-        }
-    
-    def validate_input(self, message: str) -> bool:
-        """입력 검증"""
-        if not message or not message.strip():
-            return False
-        
-        if len(message) > 10000:  # Max 10,000 characters
-            return False
-        
-        return True
-    
-    async def test_service(self, test_message: str = "테스트 질문입니다") -> Dict[str, Any]:
-        """서비스 테스트"""
-        try:
-            result = await self.process_message(test_message)
-            
-            test_passed = (
-                "response" in result and 
-                result["response"] and 
-                "processing_time" in result
-            )
+            response = gemini_client.generate(prompt)
             
             return {
-                "test_passed": test_passed,
-                "test_message": test_message,
-                "result": result,
-                "langgraph_enabled": self.use_langgraph
+                "response": response.response,
+                "confidence": 0.8,
+                "sources": [],
+                "generation_method": "natural_intent_based"
             }
             
         except Exception as e:
+            self.logger.error(f"Natural intent-based generation failed: {e}")
             return {
-                "test_passed": False,
-                "test_message": test_message,
-                "error": str(e),
-                "langgraph_enabled": self.use_langgraph
+                "response": f"'{message}'에 대한 답변을 준비 중입니다. 잠시만 기다려주세요.",
+                "confidence": 0.5,
+                "sources": [],
+                "generation_method": "fallback"
             }
     
-    # === 메모리 관리 메서드들 ===
+    # === 템플릿 메서드들 제거됨 - 자연스러운 답변만 생성 ===
     
-    def perform_memory_cleanup(self) -> Dict[str, Any]:
-        """메모리 정리 수행"""
-        try:
-            cleanup_results = {}
-            
-            # 1. WeakRef 정리
-            if self.weakref_registry:
-                weakref_result = self.weakref_registry.force_cleanup()
-                cleanup_results['weakref_cleanup'] = weakref_result
-            
-            # 2. 메모리 관리자 정리
-            if self.memory_manager:
-                memory_result = self.memory_manager.perform_cleanup()
-                cleanup_results['memory_cleanup'] = memory_result
-            
-            # 3. 가비지 컬렉션 강제 실행
-            gc_result = self.memory_manager.force_garbage_collection() if self.memory_manager else None
-            if gc_result:
-                cleanup_results['garbage_collection'] = gc_result
-            
-            # 4. 캐시 정리
-            if hasattr(self, 'cache_manager') and self.cache_manager:
-                self.cache_manager.clear()
-                cleanup_results['cache_cleanup'] = {'cleared': True}
-            
-            # 5. 컴포넌트별 정리
-            component_cleanup = self._cleanup_components()
-            cleanup_results['component_cleanup'] = component_cleanup
-            
-            # 전체 결과 계산
-            total_memory_freed = 0
-            for result in cleanup_results.values():
-                if isinstance(result, dict) and 'memory_freed_mb' in result:
-                    total_memory_freed += result['memory_freed_mb']
-            
-            final_result = {
-                'success': True,
-                'total_memory_freed_mb': total_memory_freed,
-                'cleanup_details': cleanup_results,
-                'timestamp': datetime.now()
-            }
-            
-            self.logger.info(f"메모리 정리 완료: {total_memory_freed:.1f}MB 해제")
-            return final_result
-            
-        except Exception as e:
-            self.logger.error(f"메모리 정리 실패: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'timestamp': datetime.now()
-            }
-    
-    def _cleanup_components(self) -> Dict[str, Any]:
-        """컴포넌트별 정리"""
-        cleanup_results = {}
-        
-        try:
-            # 모델 관리자 정리
-            if hasattr(self, 'model_manager') and self.model_manager:
-                if hasattr(self.model_manager, 'clear_cache'):
-                    self.model_manager.clear_cache()
-                    cleanup_results['model_cache'] = {'cleared': True}
-            
-            # 벡터 스토어 정리
-            if hasattr(self, 'vector_store') and self.vector_store:
-                if hasattr(self.vector_store, 'clear_cache'):
-                    self.vector_store.clear_cache()
-                    cleanup_results['vector_cache'] = {'cleared': True}
-            
-            # 데이터베이스 연결 정리
-            if hasattr(self, 'db_manager') and self.db_manager:
-                if hasattr(self.db_manager, 'close_connections'):
-                    self.db_manager.close_connections()
-                    cleanup_results['db_connections'] = {'closed': True}
-            
-            cleanup_results['success'] = True
-            
-        except Exception as e:
-            cleanup_results['error'] = str(e)
-            cleanup_results['success'] = False
-        
-        return cleanup_results
-    
-    def get_memory_status(self) -> Dict[str, Any]:
-        """메모리 상태 정보 반환"""
-        try:
-            status = {
-                'service_name': 'EnhancedChatService',
-                'timestamp': datetime.now()
-            }
-            
-            # 메모리 관리자 상태
-            if self.memory_manager:
-                status['memory_manager'] = self.memory_manager.get_memory_usage()
-            
-            # WeakRef 등록소 상태
-            if self.weakref_registry:
-                status['weakref_registry'] = self.weakref_registry.get_registry_stats()
-            
-            # 실시간 모니터 상태
-            if self.memory_monitor:
-                status['memory_monitor'] = self.memory_monitor.get_current_status()
-            
-            # 컴포넌트별 메모리 사용량 추정
-            component_sizes = {}
-            for attr_name in dir(self):
-                if not attr_name.startswith('_') and hasattr(self, attr_name):
-                    obj = getattr(self, attr_name)
-                    if obj is not None and not callable(obj):
-                        try:
-                            size = self._estimate_object_size(obj)
-                            if size > 1024:  # 1KB 이상인 객체만
-                                component_sizes[attr_name] = {
-                                    'size_bytes': size,
-                                    'size_mb': size / 1024 / 1024,
-                                    'type': type(obj).__name__
-                                }
-                        except Exception:
-                            pass
-            
-            status['component_sizes'] = component_sizes
-            
-            return status
-            
-        except Exception as e:
-            self.logger.error(f"메모리 상태 조회 실패: {e}")
-            return {'error': str(e), 'timestamp': datetime.now()}
-    
-    def _estimate_object_size(self, obj: Any) -> int:
-        """객체 크기 추정"""
-        try:
-            import sys
-            return sys.getsizeof(obj)
-        except Exception:
-            return 0
-    
-    def optimize_memory_usage(self, target_memory_mb: float = 500.0) -> Dict[str, Any]:
-        """메모리 사용량 최적화"""
-        try:
-            current_status = self.get_memory_status()
-            current_memory = current_status.get('memory_manager', {}).get('current_memory_mb', 0)
-            
-            if current_memory <= target_memory_mb:
-                return {
-                    'optimization_needed': False,
-                    'current_memory_mb': current_memory,
-                    'target_memory_mb': target_memory_mb,
-                    'message': '메모리 사용량이 목표치 이하입니다.'
-                }
-            
-            # 최적화 실행
-            optimization_results = []
-            
-            # 1. 메모리 정리
-            cleanup_result = self.perform_memory_cleanup()
-            optimization_results.append(cleanup_result)
-            
-            # 2. WeakRef 최적화
-            if self.weakref_registry:
-                from ..utils.weakref_cleanup import MemoryOptimizer
-                optimizer = MemoryOptimizer(self.weakref_registry)
-                weakref_result = optimizer.optimize_memory_usage(target_memory_mb)
-                optimization_results.append(weakref_result)
-            
-            # 최종 상태 확인
-            final_status = self.get_memory_status()
-            final_memory = final_status.get('memory_manager', {}).get('current_memory_mb', 0)
-            
-            result = {
-                'optimization_needed': True,
-                'initial_memory_mb': current_memory,
-                'final_memory_mb': final_memory,
-                'memory_freed_mb': current_memory - final_memory,
-                'optimization_results': optimization_results,
-                'target_achieved': final_memory <= target_memory_mb,
-                'timestamp': datetime.now()
-            }
-            
-            self.logger.info(f"메모리 최적화 완료: {result['memory_freed_mb']:.1f}MB 해제")
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"메모리 최적화 실패: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'timestamp': datetime.now()
-            }
-    
-    def monitor_memory_trend(self, hours: int = 1) -> Dict[str, Any]:
-        """메모리 사용량 추세 모니터링"""
-        try:
-            if not self.memory_monitor:
-                return {'error': '메모리 모니터가 초기화되지 않았습니다.'}
-            
-            trend_result = self.memory_monitor.get_memory_trend(hours)
-            return trend_result
-            
-        except Exception as e:
-            self.logger.error(f"메모리 추세 모니터링 실패: {e}")
-            return {'error': str(e)}
-    
-    def generate_memory_report(self) -> Dict[str, Any]:
-        """메모리 사용량 리포트 생성"""
-        try:
-            report = {
-                'report_timestamp': datetime.now(),
-                'service_info': {
-                    'name': 'EnhancedChatService',
-                    'version': '2.0.0',
-                    'uptime': datetime.now() - getattr(self, '_start_time', datetime.now())
-                }
-            }
-            
-            # 메모리 상태
-            report['memory_status'] = self.get_memory_status()
-            
-            # 메모리 추세
-            report['memory_trend'] = self.monitor_memory_trend(hours=1)
-            
-            # 알림 요약
-            if self.memory_monitor:
-                report['alerts_summary'] = self.memory_monitor.get_alerts_summary()
-            
-            # 최적화 권장사항
-            recommendations = self._generate_memory_recommendations()
-            report['recommendations'] = recommendations
-            
-            return report
-            
-        except Exception as e:
-            self.logger.error(f"메모리 리포트 생성 실패: {e}")
-            return {'error': str(e), 'timestamp': datetime.now()}
-    
-    def _generate_memory_recommendations(self) -> List[Dict[str, Any]]:
-        """메모리 최적화 권장사항 생성"""
+    def _generate_recommendations(self, analysis_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """분석 결과를 바탕으로 권장사항 생성"""
         recommendations = []
         
         try:
-            status = self.get_memory_status()
-            current_memory = status.get('memory_manager', {}).get('current_memory_mb', 0)
-            
-            # 메모리 사용량 기반 권장사항
-            if current_memory > 800:
-                recommendations.append({
-                    'type': 'critical',
-                    'title': '메모리 사용량이 높습니다',
-                    'description': f'현재 메모리 사용량: {current_memory:.1f}MB',
-                    'action': '즉시 메모리 정리를 실행하세요',
-                    'command': 'service.perform_memory_cleanup()'
-                })
-            elif current_memory > 600:
+            # 메모리 사용량 분석
+            memory_usage = analysis_result.get('memory_usage', {})
+            if memory_usage.get('usage_percent', 0) > 80:
                 recommendations.append({
                     'type': 'warning',
-                    'title': '메모리 사용량이 증가하고 있습니다',
-                    'description': f'현재 메모리 사용량: {current_memory:.1f}MB',
-                    'action': '메모리 정리를 고려하세요',
-                    'command': 'service.optimize_memory_usage()'
+                    'title': '메모리 사용량 높음',
+                    'description': f"현재 메모리 사용률: {memory_usage.get('usage_percent', 0):.1f}%",
+                    'action': '메모리 정리 실행',
+                    'command': 'service.perform_memory_cleanup()'
                 })
             
-            # WeakRef 상태 기반 권장사항
-            weakref_stats = status.get('weakref_registry', {})
-            dead_refs = weakref_stats.get('dead_references', 0)
-            if dead_refs > 10:
+            # 응답 시간 분석
+            response_time = analysis_result.get('response_time', 0)
+            if response_time > 10:
                 recommendations.append({
-                    'type': 'info',
-                    'title': '죽은 참조가 많습니다',
-                    'description': f'죽은 참조: {dead_refs}개',
-                    'action': 'WeakRef 정리를 실행하세요',
-                    'command': 'service.weakref_registry.cleanup_dead_references()'
+                    'type': 'performance',
+                    'title': '응답 시간 개선 필요',
+                    'description': f"평균 응답 시간: {response_time:.2f}초",
+                    'action': '성능 최적화 실행',
+                    'command': 'service._optimize_performance()'
                 })
             
-            # 컴포넌트 크기 기반 권장사항
-            component_sizes = status.get('component_sizes', {})
-            large_components = {k: v for k, v in component_sizes.items() if v['size_mb'] > 50}
-            if large_components:
+            # 컴포넌트 상태 분석
+            components = analysis_result.get('components', {})
+            for comp_name, comp_info in components.items():
+                if comp_info.get('status') == 'error':
+                    recommendations.append({
+                        'type': 'error',
+                        'title': f'{comp_name} 컴포넌트 오류',
+                        'description': comp_info.get('error', '알 수 없는 오류'),
+                        'action': '컴포넌트 재시작',
+                        'command': f'service._restart_component("{comp_name}")'
+                    })
+            
+            # 기본 권장사항
+            if not recommendations:
                 recommendations.append({
                     'type': 'info',
-                    'title': '큰 컴포넌트가 있습니다',
-                    'description': f'큰 컴포넌트: {list(large_components.keys())}',
-                    'action': '컴포넌트별 캐시 정리를 고려하세요',
+                    'title': '시스템 상태 양호',
+                    'description': '현재 시스템이 정상적으로 작동하고 있습니다.',
+                    'action': '정기적인 모니터링 유지',
                     'command': 'service._cleanup_components()'
                 })
             
@@ -2610,3 +1562,149 @@ class EnhancedChatService:
             })
         
         return recommendations
+    
+    def _add_examples_to_response(self, response: str, question: str, query_analysis: Dict[str, Any]) -> str:
+        """답변에 예시 추가"""
+        try:
+            category = query_analysis.get("category", "일반")
+            question_type = query_analysis.get("question_type", "일반")
+            
+            # 카테고리별 예시 키 매핑
+            example_key_mapping = {
+                "법률조문": "민법_750조",
+                "계약서": "계약서_작성", 
+                "부동산": "부동산_매매",
+                "가족법": "이혼_소송",
+                "민사법": "손해배상_청구"
+            }
+            
+            example_key = example_key_mapping.get(category, category)
+            
+            # 데이터베이스에서 예시 가져오기
+            examples = self.example_database.get_examples(example_key, 1)
+            
+            if examples:
+                example = examples[0]
+                example_text = f"\n\n예를 들어, {example.situation}의 경우 {example.analysis}가 됩니다."
+                
+                # 실무 팁이 있으면 추가
+                if example.practical_tips:
+                    tips_text = "실무 팁: " + ", ".join(example.practical_tips[:3])
+                    example_text += f" {tips_text}."
+                
+                return response + example_text
+            
+            else:
+                # 동적 예시 생성
+                dynamic_example = self.dynamic_generator.generate_example(
+                    category, question, question_type
+                )
+                if dynamic_example and len(dynamic_example) > 50:
+                    return response + f"\n\n{dynamic_example}"
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"예시 추가 실패: {e}")
+            return response
+    
+    def _add_fallback_ending(self, response: str) -> str:
+        """폴백 마무리 추가"""
+        try:
+            # 불완전한 문장 패턴 감지
+            incomplete_patterns = [
+                r'드$', r'그리고$', r'또한$', r'마지막으로$', r'결론적으로$',
+                r'예를 들어$', r'구체적으로$', r'특히$', r'또한$',
+                r'[가-힣]+드$', r'[가-힣]+고$', r'[가-힣]+며$'
+            ]
+            
+            import re
+            for pattern in incomplete_patterns:
+                if re.search(pattern, response.strip()):
+                    # 불완전한 부분을 자연스럽게 마무리
+                    if response.strip().endswith('드'):
+                        return f"{response.strip()} 이렇게 진행하시면 됩니다."
+                    elif response.strip().endswith(('그리고', '또한')):
+                        return f"{response.strip()} 더 궁금한 점이 있으시면 언제든지 물어보세요."
+                    else:
+                        return f"{response.strip()} 이렇게 하시면 됩니다."
+            
+            # 문장이 적절히 끝나지 않은 경우
+            if not response.strip().endswith(('.', '!', '?', '니다.', '습니다.', '요.')):
+                return f"{response.strip()} 이렇게 진행하시면 됩니다."
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"폴백 마무리 추가 실패: {e}")
+            return response
+
+            # 카테고리별 예시 키 매핑
+            example_key_mapping = {
+                "법률조문": "민법_750조",
+                "계약서": "계약서_작성", 
+                "부동산": "부동산_매매",
+                "가족법": "이혼_소송",
+                "민사법": "손해배상_청구"
+            }
+            
+            example_key = example_key_mapping.get(category, category)
+            
+            # 데이터베이스에서 예시 가져오기
+            examples = self.example_database.get_examples(example_key, 1)
+            
+            if examples:
+                example = examples[0]
+                example_text = f"\n\n예를 들어, {example.situation}의 경우 {example.analysis}가 됩니다."
+                
+                # 실무 팁이 있으면 추가
+                if example.practical_tips:
+                    tips_text = "실무 팁: " + ", ".join(example.practical_tips[:3])
+                    example_text += f" {tips_text}."
+                
+                return response + example_text
+            
+            else:
+                # 동적 예시 생성
+                dynamic_example = self.dynamic_generator.generate_example(
+                    category, question, question_type
+                )
+                if dynamic_example and len(dynamic_example) > 50:
+                    return response + f"\n\n{dynamic_example}"
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"예시 추가 실패: {e}")
+            return response
+    
+    def _add_fallback_ending(self, response: str) -> str:
+        """폴백 마무리 추가"""
+        try:
+            # 불완전한 문장 패턴 감지
+            incomplete_patterns = [
+                r'드$', r'그리고$', r'또한$', r'마지막으로$', r'결론적으로$',
+                r'예를 들어$', r'구체적으로$', r'특히$', r'또한$',
+                r'[가-힣]+드$', r'[가-힣]+고$', r'[가-힣]+며$'
+            ]
+            
+            import re
+            for pattern in incomplete_patterns:
+                if re.search(pattern, response.strip()):
+                    # 불완전한 부분을 자연스럽게 마무리
+                    if response.strip().endswith('드'):
+                        return f"{response.strip()} 이렇게 진행하시면 됩니다."
+                    elif response.strip().endswith(('그리고', '또한')):
+                        return f"{response.strip()} 더 궁금한 점이 있으시면 언제든지 물어보세요."
+                    else:
+                        return f"{response.strip()} 이렇게 하시면 됩니다."
+            
+            # 문장이 적절히 끝나지 않은 경우
+            if not response.strip().endswith(('.', '!', '?', '니다.', '습니다.', '요.')):
+                return f"{response.strip()} 이렇게 진행하시면 됩니다."
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"폴백 마무리 추가 실패: {e}")
+            return response

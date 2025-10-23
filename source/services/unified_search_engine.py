@@ -178,7 +178,7 @@ class UnifiedSearchEngine:
         )
     
     def _search_vector(self, query: str, top_k: int, category: str) -> List[Dict[str, Any]]:
-        """벡터 검색"""
+        """벡터 검색 - 개선된 버전"""
         try:
             # 벡터 스토어가 비어있는 경우 인덱스 로드 시도
             if not hasattr(self.vector_store, 'index') or self.vector_store.index is None:
@@ -190,13 +190,27 @@ class UnifiedSearchEngine:
                     logger.debug(f"Failed to load vector index: {load_error}")
                     return []
             
-            results = self.vector_store.search(query, top_k=top_k)
+            # 더 많은 결과를 검색하고 나중에 필터링
+            expanded_k = min(top_k * 3, 50)  # 최대 50개까지 확장 검색
+            results = self.vector_store.search(query, top_k=expanded_k)
+            
             if not results:
                 logger.debug("No vector search results found")
                 return []
             
-            logger.debug(f"Vector search found {len(results)} results")
-            return [self._format_vector_result(result) for result in results]
+            # 결과 필터링 및 포맷팅
+            formatted_results = []
+            for result in results:
+                formatted_result = self._format_vector_result(result)
+                # 임계값을 낮춰서 더 많은 결과 포함
+                if formatted_result.get('score', 0.0) >= 0.3:  # 기존 0.5에서 0.3으로 낮춤
+                    formatted_results.append(formatted_result)
+            
+            # 상위 k개만 반환
+            formatted_results = formatted_results[:top_k]
+            
+            logger.debug(f"Vector search found {len(formatted_results)} results (from {len(results)} total)")
+            return formatted_results
         except Exception as e:
             logger.debug(f"Vector search error: {e}")
             return []

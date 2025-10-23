@@ -227,10 +227,20 @@ class UnifiedRAGService:
                              query_analysis: Dict[str, Any], 
                              search_result: UnifiedSearchResult,
                              max_length: int) -> Dict[str, Any]:
-        """답변 생성"""
+        """답변 생성 - 참고 데이터 기반으로만 답변"""
         try:
             logger.info(f"Generating answer for query: {query}")
             logger.info(f"Search results count: {len(search_result.results)}")
+            
+            # 참고 데이터가 있는지 먼저 확인
+            if not self._has_meaningful_search_results(search_result):
+                logger.info("No meaningful search results found, returning no-sources response")
+                return {
+                    'answer': self._create_no_sources_message(query, query_analysis),
+                    'confidence': 0.1,  # 0.0에서 0.1로 상향 - 솔직한 응답에 대한 기본 신뢰도
+                    'method': 'no_sources'
+                }
+            
             # 1순위: 개선된 답변 생성기
             if self.answer_generator:
                 try:
@@ -263,27 +273,21 @@ class UnifiedRAGService:
                     # 실제 검색 결과를 사용한 답변 생성
                     logger.info(f"Context text length: {len(context_text)} characters")
                     if context_text.strip():
-                        # Gemini API를 사용하여 실제 답변 생성 - 근본적 개선
-                        prompt = f"""다음은 법률 관련 질문에 대한 검색 결과입니다.
+                        # Gemini API를 사용하여 실제 답변 생성 - 완전히 새로운 프롬프트 구조
+                        prompt = f"""사용자: {query}
 
-질문: {query}
+검색 정보: {context_text}
 
-검색 결과:
-{context_text}
+위 정보를 바탕으로 질문에 직접 답변하세요. 마치 친한 변호사와 대화하는 것처럼 자연스럽게 말하세요.
 
-위 검색 결과를 바탕으로 질문에 직접적으로 답변해주세요.
+예시:
+사용자: "민법 제750조가 뭐야?"
+변호사: "민법 제750조는 불법행위에 관한 조항이에요. 쉽게 말해서 누군가가 고의나 실수로 다른 사람에게 피해를 주면 그 피해를 배상해야 한다는 내용입니다. 불법행위가 성립하려면 네 가지 조건이 모두 맞아야 해요: 첫째, 가해자가 고의나 과실이 있어야 하고, 둘째, 위법한 행위여야 하며, 셋째, 실제로 손해가 발생해야 하고, 넷째, 그 행위와 손해 사이에 인과관계가 있어야 합니다. 이 모든 조건이 충족되면 손해배상 책임이 생겨요."
 
-**중요한 답변 규칙:**
-1. 질문에 바로 답변하세요. "질문하신", "문의하신" 같은 불필요한 서론은 사용하지 마세요
-2. "### 관련 법령", "### 법령 해설" 같은 섹션 제목을 사용하지 마세요
-3. 자연스럽고 직접적인 답변을 작성하세요
-4. 검색된 내용을 참고하여 정확한 정보를 제공하세요
-5. 법률 조문이나 판례가 있다면 자연스럽게 인용하세요
-6. 같은 내용을 여러 번 반복하지 마세요
-7. 빈 섹션이나 플레이스홀더 텍스트를 사용하지 마세요
-8. 면책 조항이나 불필요한 주의사항을 추가하지 마세요
+사용자: "계약서 작성 방법을 알려주세요"
+변호사: "계약서는 당사자 간의 약속을 명확히 하는 중요한 문서예요. 작성할 때는 몇 가지 핵심 사항을 꼼꼼히 챙기셔야 합니다. 먼저 계약 당사자들의 정확한 정보(이름, 주소, 연락처)를 기재하고, 계약의 목적과 내용을 구체적으로 명시해야 해요. 예를 들어 부동산 매매라면 매물 정보와 매매 대금, 지급 시기 등을 상세히 적어야 합니다. 또한 계약 기간, 대금 지급 방법, 위약 시 손해배상 조항, 분쟁 해결 방법 등도 포함하는 것이 좋아요. 중요한 것은 나중에 해석의 여지가 없도록 명확하고 구체적으로 작성하는 것입니다."
 
-답변을 시작하세요:"""
+답변:"""
 
                         try:
                             # Gemini 클라이언트 직접 사용
@@ -308,8 +312,12 @@ class UnifiedRAGService:
             else:
                 logger.warning("model_manager is None, skipping model manager generation")
             
-            # 3순위: 템플릿 기반 답변
-            return self._generate_template_answer(query, query_analysis, search_result)
+            # 참고 데이터가 없으면 억지로 답변하지 않음
+            return {
+                'answer': self._create_no_sources_message(query, query_analysis),
+                'confidence': 0.0,
+                'method': 'no_sources'
+            }
             
         except Exception as e:
             logger.error(f"Answer generation failed: {e}")
@@ -379,3 +387,74 @@ class UnifiedRAGService:
         if self.cache_manager:
             self.cache_manager.clear()
         logger.info("RAG cache cleared")
+    
+    def _has_meaningful_search_results(self, search_result: UnifiedSearchResult) -> bool:
+        """의미있는 검색 결과가 있는지 확인 - 완화된 버전"""
+        if not search_result.results:
+            return False
+        
+        # 최소 관련도 임계값 설정 (완화)
+        MIN_RELEVANCE_THRESHOLD = 0.3  # 0.4에서 0.3으로 하향
+        MIN_CONTENT_LENGTH = 50  # 100에서 50으로 하향
+        
+        meaningful_results = []
+        for result in search_result.results:
+            relevance_score = result.get("similarity", result.get("score", 0.0))
+            content = result.get("content", "")
+            
+            # 관련도가 높고 내용이 충분한 결과만 유효한 것으로 판단
+            if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
+                meaningful_results.append(result)
+        
+        # 최소 1개 이상의 의미있는 결과가 있으면 유효
+        if len(meaningful_results) >= 1:
+            return True
+        
+        # 추가 검증: 실제 법률 관련 내용인지 확인 (완화된 기준)
+        if meaningful_results:
+            legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적", "계약", "소송", "재판", "민법", "형법", "상법"]
+            legal_content_count = 0
+            
+            for result in meaningful_results:
+                content = result.get("content", "").lower()
+                if any(keyword in content for keyword in legal_keywords):
+                    legal_content_count += 1
+            
+            # 법률 관련 내용이 1개 이상이면 유효 (기존 50%에서 완화)
+            return legal_content_count >= 1
+        
+        return False
+    
+    def _create_no_sources_message(self, query: str, query_analysis: Dict[str, Any]) -> str:
+        """참고 데이터가 없을 때의 메시지 생성"""
+        query_type = query_analysis.get('query_type', 'general')
+        
+        if query_type == 'legal_advice':
+            return f"""죄송합니다. '{query}'에 대한 구체적인 법률 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 더 구체적인 질문을 해주세요
+• 관련 법률 조문이나 판례가 있다면 함께 언급해주세요
+• 일반적인 법률 절차에 대해서는 안내해드릴 수 있습니다
+
+구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
+        
+        elif query_type == 'precedent':
+            return f"""죄송합니다. '{query}'와 관련된 판례를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 사건번호나 법원명을 포함해서 질문해주세요
+• 더 구체적인 키워드로 검색해주세요
+• 관련 법률 조문을 먼저 확인해보세요
+
+판례 검색이 어려우시면 법원 도서관이나 법률 데이터베이스를 이용해보시기 바랍니다."""
+        
+        else:
+            return f"""죄송합니다. '{query}'에 대한 관련 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 질문을 더 구체적으로 작성해주세요
+• 관련 법률 조문이나 판례를 포함해주세요
+• 키워드를 더 명확하게 해주세요
+
+일반적인 법률 상식이나 절차에 대해서는 안내해드릴 수 있습니다."""

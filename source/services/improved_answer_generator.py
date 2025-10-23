@@ -102,21 +102,16 @@ class ImprovedAnswerGenerator:
                        sources: Dict[str, List[Dict[str, Any]]],
                        conversation_history: Optional[List[Dict[str, Any]]] = None) -> AnswerResult:
         """
-        답변 생성
-        
-        Args:
-            query: 사용자 질문
-            question_type: 질문 분류 결과
-            context: 컨텍스트 정보
-            sources: 검색된 소스들
-            conversation_history: 대화 이력
-            
-        Returns:
-            AnswerResult: 생성된 답변 결과
+        답변 생성 - 참고 데이터 기반으로만 답변
         """
         try:
             start_time = time.time()
             self.logger.info(f"Generating answer for query: {query[:100]}...")
+            
+            # 참고 데이터가 있는지 먼저 확인
+            if not self._has_meaningful_sources(sources):
+                self.logger.info("No meaningful sources found, returning no-sources response")
+                return self._create_no_sources_answer(query, question_type)
             
             # 질문 유형별 설정 적용
             config = self.question_type_configs.get(
@@ -442,8 +437,8 @@ class ImprovedAnswerGenerator:
 
 ---
 💼 **면책 조항**
-# 면책 조항 제거
-# 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
+
+본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
         
         return answer + disclaimer
@@ -503,6 +498,106 @@ class ImprovedAnswerGenerator:
                 tokens_used=0,
                 model_info={"model": "error"}
             )
+    
+    def _has_meaningful_sources(self, sources: Dict[str, List[Dict[str, Any]]]) -> bool:
+        """의미있는 참고 데이터가 있는지 확인 - 강화된 버전"""
+        if not sources:
+            return False
+        
+        # 소스 리스트 변환
+        sources_list = []
+        if isinstance(sources, dict):
+            sources_list.extend(sources.get("results", []))
+            sources_list.extend(sources.get("law_results", []))
+            sources_list.extend(sources.get("precedent_results", []))
+        elif isinstance(sources, list):
+            sources_list = sources
+        
+        if not sources_list:
+            return False
+        
+        # 최소 관련도 임계값 설정 (더 엄격하게)
+        MIN_RELEVANCE_THRESHOLD = 0.4  # 0.3에서 0.4로 상향
+        MIN_CONTENT_LENGTH = 100  # 50에서 100으로 상향
+        
+        meaningful_sources = []
+        for source in sources_list:
+            relevance_score = source.get("similarity", source.get("score", 0.0))
+            content = source.get("content", "")
+            
+            # 관련도가 높고 내용이 충분한 소스만 유효한 것으로 판단
+            if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
+                meaningful_sources.append(source)
+        
+        # 추가 검증: 실제 법률 관련 내용인지 확인
+        if meaningful_sources:
+            legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적"]
+            legal_content_count = 0
+            
+            for source in meaningful_sources:
+                content = source.get("content", "").lower()
+                if any(keyword in content for keyword in legal_keywords):
+                    legal_content_count += 1
+            
+            # 법률 관련 내용이 절반 이상이어야 유효
+            return legal_content_count >= len(meaningful_sources) * 0.5
+        
+        return False
+    
+    def _create_no_sources_answer(self, query: str, question_type: QuestionClassification) -> AnswerResult:
+        """참고 데이터가 없을 때의 답변 생성"""
+        try:
+            query_type_value = question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
+            
+            if query_type_value == "legal_advice":
+                no_sources_answer = f"""죄송합니다. '{query}'에 대한 구체적인 법률 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 더 구체적인 질문을 해주세요
+• 관련 법률 조문이나 판례가 있다면 함께 언급해주세요
+• 일반적인 법률 절차에 대해서는 안내해드릴 수 있습니다
+
+구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
+            
+            elif query_type_value == "precedent":
+                no_sources_answer = f"""죄송합니다. '{query}'와 관련된 판례를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 사건번호나 법원명을 포함해서 질문해주세요
+• 더 구체적인 키워드로 검색해주세요
+• 관련 법률 조문을 먼저 확인해보세요
+
+판례 검색이 어려우시면 법원 도서관이나 법률 데이터베이스를 이용해보시기 바랍니다."""
+            
+            else:
+                no_sources_answer = f"""죄송합니다. '{query}'에 대한 관련 정보를 찾을 수 없습니다.
+
+다음과 같이 도움을 드릴 수 있습니다:
+• 질문을 더 구체적으로 작성해주세요
+• 관련 법률 조문이나 판례를 포함해주세요
+• 키워드를 더 명확하게 해주세요
+
+일반적인 법률 상식이나 절차에 대해서는 안내해드릴 수 있습니다."""
+            
+            return AnswerResult(
+                answer=no_sources_answer,
+                formatted_answer=None,
+                raw_answer=no_sources_answer,
+                confidence=ConfidenceInfo(
+                    confidence=0.0,
+                    level=ConfidenceLevel.VERY_LOW,
+                    factors={"no_sources": 1.0},
+                    explanation="참고 데이터 없음"
+                ),
+                question_type=question_type.question_type,
+                processing_time=0.0,
+                tokens_used=self._estimate_tokens(no_sources_answer),
+                model_info={"model": "no_sources"}
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error creating no-sources answer: {e}")
+            return self._create_fallback_answer(query, question_type, e)
 
 
 # 테스트 함수

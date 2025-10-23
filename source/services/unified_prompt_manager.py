@@ -65,111 +65,111 @@ class UnifiedPromptManager:
         }
     
     def _load_domain_templates(self) -> Dict[LegalDomain, Dict[str, Any]]:
-        """도메인별 템플릿 로드"""
+        """도메인별 템플릿 로드 - 템플릿 완전 제거"""
         return {
             LegalDomain.CIVIL_LAW: {
                 "focus": "계약, 불법행위, 소유권, 상속",
                 "key_laws": ["민법", "민사소송법", "부동산등기법"],
                 "recent_changes": "2024년 민법 개정사항 반영",
-                "template": self._get_civil_law_template()
+                "template": ""
             },
             LegalDomain.CRIMINAL_LAW: {
                 "focus": "범죄 구성요건, 형량, 절차",
                 "key_laws": ["형법", "형사소송법", "특별법"],
                 "recent_changes": "디지털 성범죄 처벌법 등 신설법",
-                "template": self._get_criminal_law_template()
+                "template": ""
             },
             LegalDomain.FAMILY_LAW: {
                 "focus": "혼인, 이혼, 친자관계, 상속",
                 "key_laws": ["민법 가족편", "가족관계의 등록 등에 관한 법률"],
                 "recent_changes": "2024년 가족법 개정사항",
-                "template": self._get_family_law_template()
+                "template": ""
             },
             LegalDomain.COMMERCIAL_LAW: {
                 "focus": "회사법, 상행위, 어음수표",
                 "key_laws": ["상법", "주식회사법", "어음법"],
                 "recent_changes": "2024년 상법 개정사항",
-                "template": self._get_commercial_law_template()
+                "template": ""
             },
             LegalDomain.ADMINISTRATIVE_LAW: {
                 "focus": "행정행위, 행정절차, 행정소송",
                 "key_laws": ["행정절차법", "행정소송법", "행정법"],
                 "recent_changes": "2024년 행정법 개정사항",
-                "template": self._get_administrative_law_template()
+                "template": ""
             },
             LegalDomain.LABOR_LAW: {
                 "focus": "근로계약, 임금, 근로시간, 휴가",
                 "key_laws": ["근로기준법", "노동조합법", "고용보험법"],
                 "recent_changes": "2024년 노동법 개정사항",
-                "template": self._get_labor_law_template()
+                "template": ""
             },
             LegalDomain.PROPERTY_LAW: {
                 "focus": "부동산 계약, 등기, 권리보호",
                 "key_laws": ["부동산등기법", "부동산 실권리자명의 등기에 관한 법률"],
                 "recent_changes": "2024년 부동산법 개정사항",
-                "template": self._get_property_law_template()
+                "template": ""
             },
             LegalDomain.INTELLECTUAL_PROPERTY: {
                 "focus": "특허, 상표, 저작권, 디자인",
                 "key_laws": ["특허법", "상표법", "저작권법", "디자인보호법"],
                 "recent_changes": "2024년 지적재산권법 개정사항",
-                "template": self._get_intellectual_property_template()
+                "template": ""
             },
             LegalDomain.TAX_LAW: {
                 "focus": "소득세, 법인세, 부가가치세",
                 "key_laws": ["소득세법", "법인세법", "부가가치세법"],
                 "recent_changes": "2024년 세법 개정사항",
-                "template": self._get_tax_law_template()
+                "template": ""
             },
             LegalDomain.CIVIL_PROCEDURE: {
                 "focus": "민사소송 절차, 증거, 집행",
                 "key_laws": ["민사소송법", "민사집행법", "가사소송법"],
                 "recent_changes": "2024년 민사소송법 개정사항",
-                "template": self._get_civil_procedure_template()
+                "template": ""
             },
             LegalDomain.CRIMINAL_PROCEDURE: {
                 "focus": "형사소송 절차, 수사, 재판",
                 "key_laws": ["형사소송법", "수사절차법"],
                 "recent_changes": "2024년 형사소송법 개정사항",
-                "template": self._get_criminal_procedure_template()
+                "template": ""
             }
         }
     
     def _load_question_type_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
-        """질문 유형별 템플릿 로드"""
+        """질문 유형별 템플릿 로드 - 템플릿 완전 제거"""
         return {
             QuestionType.PRECEDENT_SEARCH: {
-                "template": self._get_precedent_search_template(),
+                "template": "",
                 "context_keys": ["precedent_list"],
                 "max_context_length": 3000,
                 "priority": "high"
             },
             QuestionType.LAW_INQUIRY: {
-                "template": self._get_law_inquiry_template(),
+                "template": "",
                 "context_keys": ["law_articles"],
                 "max_context_length": 2000,
                 "priority": "high"
             },
             QuestionType.LEGAL_ADVICE: {
-                "template": self._get_legal_advice_template(),
+                "template": "",
                 "context_keys": ["context"],
                 "max_context_length": 4000,
                 "priority": "high"
             },
             QuestionType.PROCEDURE_GUIDE: {
-                "template": self._get_procedure_guide_template(),
+                "template": "",
                 "context_keys": ["procedure_info"],
                 "max_context_length": 2500,
                 "priority": "medium"
             },
             QuestionType.TERM_EXPLANATION: {
-                "template": self._get_term_explanation_template(),
+                "template": "",
                 "context_keys": ["term_info"],
                 "max_context_length": 1500,
                 "priority": "medium"
             },
             QuestionType.GENERAL_QUESTION: {
-                "template": self._get_general_question_template(),
+                "template": "",
                 "context_keys": ["general_context"],
                 "max_context_length": 2000,
                 "priority": "low"
@@ -321,8 +321,8 @@ class UnifiedPromptManager:
         return base_prompt + optimization
     
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
-        """최종 프롬프트 구성 - 간결하고 자연스러운 답변 방식"""
-        final_prompt = f"""{base_prompt}
+        """최종 프롬프트 구성 - 강력한 프롬프트 엔지니어링 적용"""
+        final_prompt = f"""당신은 전문적인 법률 상담사입니다. 사용자의 질문에 대해 자연스럽고 직접적으로 답변해주세요.
 
 ## 사용자 질문
 {query}
@@ -343,12 +343,13 @@ class UnifiedPromptManager:
 - 질문의 범위에 맞는 적절한 양의 정보만 제공하세요
 - 전문성을 유지하되 접근하기 쉬운 말투로 답변하세요
 
-### 금지 사항
-- "### 관련 법령", "### 법령 해설" 같은 섹션 제목 사용 금지
-- "질문하신", "문의하신" 같은 불필요한 서론 사용 금지
-- 같은 내용을 여러 번 반복하지 마세요
-- 빈 섹션이나 플레이스홀더 텍스트 사용 금지
-- 면책 조항이나 불필요한 주의사항 추가 금지
+### 답변 예시
+
+질문: "민법 제750조에 대해서 설명해줘"
+답변: 민법 제750조는 불법행위에 관한 기본 조항입니다. 이 조항에 따르면 고의 또는 과실로 타인에게 손해를 가한 자는 그 손해를 배상할 책임이 있습니다. 불법행위가 성립하려면 다음 네 가지 요건이 모두 충족되어야 합니다: 첫째, 가해자의 고의 또는 과실이 있어야 하고, 둘째, 위법한 행위가 있어야 하며, 셋째, 손해가 발생해야 하고, 넷째, 행위와 손해 사이에 인과관계가 있어야 합니다. 이러한 요건이 모두 충족되면 손해배상 책임이 발생합니다.
+
+질문: "계약서 작성 방법을 알려주세요"
+답변: 계약서는 당사자 간의 합의 내용을 명확히 하여 분쟁을 예방하는 중요한 문서입니다. 계약서 작성 시에는 다음과 같은 내용을 포함하는 것이 좋습니다: 당사자의 성명과 주소, 계약의 목적과 내용, 계약 기간, 대금 및 지급 방법, 계약 위반 시 손해배상 조항, 분쟁 해결 방법 등입니다. 또한 계약서는 명확하고 구체적으로 작성하여 나중에 해석의 여지가 없도록 해야 합니다.
 
 ## 답변 작성
 위 지침에 따라 질문에 직접적으로 답변하세요:
