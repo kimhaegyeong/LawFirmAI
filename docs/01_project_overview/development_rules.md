@@ -4,6 +4,107 @@
 
 본 문서는 LawFirmAI 프로젝트의 개발 규칙, 코딩 스타일, 운영 가이드라인을 정의합니다. Phase 1-6이 완료된 지능형 대화 시스템과 성능 최적화된 의미적 검색 시스템의 개발 가이드라인을 포함합니다.
 
+## 📝 Git 커밋 메시지 규칙
+
+### 커밋 메시지 형식
+모든 커밋 메시지는 **영어**로 작성해야 합니다.
+
+#### 기본 형식
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+#### Type (필수)
+- `feat`: 새로운 기능 추가
+- `fix`: 버그 수정
+- `docs`: 문서 변경
+- `style`: 코드 포맷팅, 세미콜론 누락 등 (기능 변경 없음)
+- `refactor`: 코드 리팩토링
+- `test`: 테스트 코드 추가/수정
+- `chore`: 빌드 프로세스, 보조 도구 변경
+
+#### Scope (선택)
+- `data-collection`: 데이터 수집 관련
+- `search-engine`: 검색 엔진 관련
+- `database`: 데이터베이스 관련
+- `chat-service`: 채팅 서비스 관련
+- `api`: API 관련
+- `ui`: 사용자 인터페이스 관련
+- `config`: 설정 관련
+
+#### Subject (필수)
+- 50자 이내
+- 명령형 (imperative mood)
+- 첫 글자는 소문자
+- 마침표 없음
+
+#### Body (선택)
+- 72자 이내로 줄바꿈
+- 무엇을 왜 변경했는지 설명
+- 어떻게 변경했는지 설명
+
+#### Footer (선택)
+- Breaking changes
+- Issues 참조
+
+#### 예시
+```
+feat(search-engine): implement current law search engine
+
+- Add CurrentLawSearchEngine class
+- Implement hybrid search (vector + FTS + exact matching)
+- Add law name normalization and mapping
+- Integrate with unified search engine
+
+Closes #123
+```
+
+```
+fix(chat-service): resolve law article pattern matching issue
+
+- Fix regex pattern for law article detection
+- Improve confidence calculation for specific articles
+- Add priority processing for article search
+
+Fixes #456
+```
+
+```
+docs: update project completion report
+
+- Add Phase 5 current law search system
+- Update performance metrics
+- Add technical documentation
+
+No breaking changes
+```
+
+### 커밋 메시지 작성 가이드라인
+
+#### 1. 명확성
+- 변경사항을 명확하게 설명
+- 왜 변경했는지 이유 포함
+- 어떤 문제를 해결했는지 명시
+
+#### 2. 일관성
+- 동일한 용어 사용
+- 일관된 형식 유지
+- 표준화된 타입 사용
+
+#### 3. 간결성
+- 불필요한 단어 제거
+- 핵심 내용만 포함
+- 명확하고 간결한 표현
+
+#### 4. 검색 가능성
+- 관련 이슈 번호 포함
+- 키워드 사용
+- 태그 활용
+
 ## 🚀 프로세스 관리 규칙
 
 ### Gradio 서버 관리
