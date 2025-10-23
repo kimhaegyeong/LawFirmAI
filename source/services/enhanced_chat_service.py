@@ -160,14 +160,17 @@ class EnhancedChatService:
         # 핵심 컴포넌트 초기화
         self._initialize_core_components()
         
-        # 통합 서비스 초기화
-        self._initialize_unified_services()
-        
         # 법률 제한 시스템 초기화
         self._initialize_legal_restriction_systems()
         
         # 고급 검색 엔진 초기화
         self._initialize_advanced_search_engines()
+        
+        # 현행법령 전용 검색 엔진 초기화
+        self._initialize_current_law_search_engine()
+        
+        # 통합 서비스 초기화 (현행법령 검색 엔진 초기화 후)
+        self._initialize_unified_services()
         
         # Phase 시스템 초기화
         self._initialize_phase_systems()
@@ -387,7 +390,8 @@ class EnhancedChatService:
             # 통합 검색 엔진
             from .unified_search_engine import UnifiedSearchEngine
             self.unified_search_engine = UnifiedSearchEngine(
-                vector_store=self.vector_store
+                vector_store=self.vector_store,
+                current_law_search_engine=self.current_law_search_engine
             )
             
             # 통합 RAG 서비스
@@ -481,6 +485,22 @@ class EnhancedChatService:
             self.exact_search_engine = None
             self.semantic_search_engine = None
             self.precedent_search_engine = None
+    
+    def _initialize_current_law_search_engine(self):
+        """현행법령 전용 검색 엔진 초기화"""
+        try:
+            from .current_law_search_engine import CurrentLawSearchEngine
+            
+            self.current_law_search_engine = CurrentLawSearchEngine(
+                db_path="data/lawfirm.db",
+                vector_store=self.vector_store
+            )
+            
+            self.logger.info("현행법령 전용 검색 엔진 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"현행법령 전용 검색 엔진 초기화 실패: {e}")
+            self.current_law_search_engine = None
     
     def _initialize_phase_systems(self):
         """Phase 시스템 초기화"""
@@ -1035,6 +1055,55 @@ class EnhancedChatService:
         """향상된 답변 생성 - 참고 데이터 기반으로만 답변"""
         self.logger.info(f"_generate_enhanced_response called for: {message}")
         try:
+            # 0순위: 특정 법령 조문 검색 (새로 추가)
+            statute_law = query_analysis.get("statute_law")
+            statute_article = query_analysis.get("statute_article")
+            
+            if statute_law and statute_article and self.current_law_search_engine:
+                try:
+                    self.logger.info(f"Searching specific law article: {statute_law} 제{statute_article}조")
+                    specific_result = self.current_law_search_engine.search_by_law_article(
+                        statute_law, statute_article
+                    )
+                    
+                    if specific_result and specific_result.article_content:
+                        return {
+                            "response": specific_result.article_content,
+                            "confidence": 0.95,  # 특정 조문 검색은 높은 신뢰도
+                            "sources": [{
+                                "content": specific_result.article_content,
+                                "law_name": specific_result.law_name_korean,
+                                "article_number": statute_article,
+                                "similarity": 1.0,
+                                "source": "specific_article",
+                                "type": "current_law"
+                            }],
+                            "query_analysis": query_analysis,
+                            "generation_method": "specific_article",
+                            "session_id": session_id,
+                            "user_id": user_id
+                        }
+                    elif specific_result:
+                        # 조문 내용은 없지만 법령은 찾은 경우
+                        return {
+                            "response": f"'{statute_law} 제{statute_article}조'에 대한 정보를 찾았지만, 해당 조문의 구체적인 내용을 찾을 수 없습니다.\n\n찾은 법령 정보:\n- 법령명: {specific_result.law_name_korean}\n- 소관부처: {specific_result.ministry_name}\n- 시행일: {specific_result.effective_date}\n\n더 구체적인 조문 내용이 필요하시면 국가법령정보센터(www.law.go.kr)에서 확인하시기 바랍니다.",
+                            "confidence": 0.7,
+                            "sources": [{
+                                "content": f"법령명: {specific_result.law_name_korean}, 소관부처: {specific_result.ministry_name}",
+                                "law_name": specific_result.law_name_korean,
+                                "article_number": statute_article,
+                                "similarity": 0.8,
+                                "source": "law_info_only",
+                                "type": "current_law"
+                            }],
+                            "query_analysis": query_analysis,
+                            "generation_method": "law_info_only",
+                            "session_id": session_id,
+                            "user_id": user_id
+                        }
+                except Exception as e:
+                    self.logger.debug(f"Specific law article search failed: {e}")
+            
             # 1순위: 기본 RAG 서비스 (실제 AI 답변 우선)
             if self.unified_rag_service:
                 try:
@@ -1436,6 +1505,56 @@ class EnhancedChatService:
         
         return "general"
     
+    def _extract_law_article_from_query(self, message: str) -> Dict[str, Any]:
+        """질문에서 법령 조문 정보 추출"""
+        try:
+            import re
+            
+            # 확장된 법률 조문 패턴
+            statute_patterns = {
+                'standard': r'([\w가-힣]+법)\s*제\s*(\d+)\s*조',  # 민법 제750조
+                'compact': r'([\w가-힣]+법)제(\d+)조',           # 민법제750조
+                'with_clause': r'([\w가-힣]+법)\s*제\s*(\d+)\s*조\s*제\s*(\d+)\s*항',  # 민법 제750조 제1항
+                'simple': r'제\s*(\d+)\s*조',                      # 제750조
+                'number_only': r'(\d+)\s*조'                       # 750조
+            }
+            
+            for pattern_name, pattern in statute_patterns.items():
+                match = re.search(pattern, message)
+                if match:
+                    groups = match.groups()
+                    
+                    if pattern_name == 'with_clause' and len(groups) == 3:
+                        return {
+                            'law_name': groups[0],
+                            'article_number': groups[1],
+                            'clause_number': groups[2],
+                            'pattern_type': pattern_name,
+                            'full_match': match.group(0)
+                        }
+                    elif len(groups) == 2:
+                        return {
+                            'law_name': groups[0],
+                            'article_number': groups[1],
+                            'clause_number': None,
+                            'pattern_type': pattern_name,
+                            'full_match': match.group(0)
+                        }
+                    elif len(groups) == 1:
+                        return {
+                            'law_name': None,
+                            'article_number': groups[0],
+                            'clause_number': None,
+                            'pattern_type': pattern_name,
+                            'full_match': match.group(0)
+                        }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting law article: {e}")
+            return None
+
     def _extract_intent_from_message(self, message: str, domain: str) -> str:
         """메시지에서 의도 추출"""
         message_lower = message.lower()
