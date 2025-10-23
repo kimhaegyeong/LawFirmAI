@@ -22,7 +22,7 @@ import gradio as gr
 import torch
 
 # 프로젝트 모듈
-from source.services.chat_service import ChatService
+from source.services.enhanced_chat_service import EnhancedChatService
 from source.utils.config import Config
 
 # 로깅 설정
@@ -58,7 +58,7 @@ class PerfectChatGPTStyleLawFirmAI:
             self.logger.info("Initializing perfect ChatGPT-style components...")
             
             config = Config()
-            self.chat_service = ChatService(config)
+            self.chat_service = EnhancedChatService(config)
             
             self.is_initialized = True
             self.logger.info("Perfect ChatGPT-style components initialized successfully")
@@ -115,8 +115,10 @@ class PerfectChatGPTStyleLawFirmAI:
                 "answer": result.get("response", ""),
                 "confidence": result.get("confidence", 0.0),
                 "processing_time": response_time,
-                "question_type": result.get("question_type", "general"),
-                "session_id": self.current_session_id
+                "question_type": result.get("query_analysis", {}).get("query_type", "general"),
+                "session_id": self.current_session_id,
+                "generation_method": result.get("generation_method", "unknown"),
+                "is_restricted": result.get("restricted", False)
             }
             
         except Exception as e:
@@ -193,7 +195,11 @@ class PerfectChatGPTStyleLawFirmAI:
                 asyncio.set_event_loop(loop)
                 try:
                     return loop.run_until_complete(
-                        self.chat_service.process_message(message, session_id=self.current_session_id)
+                        self.chat_service.process_message(
+                            message=message, 
+                            session_id=self.current_session_id,
+                            user_id=f"gradio_user_{self.current_session_id}"
+                        )
                     )
                 finally:
                     loop.close()
@@ -891,7 +897,7 @@ def main():
     # 완전히 안정적인 실행 설정 (404 오류 방지)
     interface.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7865,
         share=False,
         show_error=True,
         quiet=False,
