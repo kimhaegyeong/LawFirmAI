@@ -312,6 +312,40 @@ class ImprovedLegalRestrictionSystem:
             legal_basis="국세기본법 제81조 (납세의무)"
         ))
         
+        # 5. 일반 정보 질문 허용 (새로 추가)
+        rules.append(ImprovedRestrictionRule(
+            id="general_info_001",
+            area=LegalArea.GENERAL_INFO,
+            level=RestrictionLevel.ALLOWED,
+            patterns=[
+                # 법률 규정 질문
+                r"(.+법|.+규정|.+조항)\s*(은|는|이|가)\s*(무엇|어떤|어떠한)",
+                r"(.+법|.+규정|.+조항)\s*(에\s*대해|에\s*관해|에\s*대한)",
+                r"(.+법|.+규정|.+조항)\s*(규정|내용|조항)",
+                
+                # 일반적인 절차 질문
+                r"(.+절차|.+방법|.+신청|.+제출)\s*(은|는|이|가)\s*(어떻게|무엇|어떠한)",
+                r"(.+절차|.+방법|.+신청|.+제출)\s*(에\s*대해|에\s*관해|에\s*대한)",
+                
+                # 법률 용어 설명 요청
+                r"(.+이|.+가|.+은|.+는)\s*(무엇|어떤|어떠한|의미)",
+                r"(.+에\s*대해|.+에\s*관해|.+에\s*대한)\s*(설명|해석|의미)",
+                
+                # 일반적인 정보 요청
+                r"(.+에\s*대해|.+에\s*관해|.+에\s*대한)\s*(알고\s*싶|궁금|질문)",
+                r"(.+에\s*대해|.+에\s*관해|.+에\s*대한)\s*(정보|자료|내용)"
+            ],
+            exceptions=[],  # 일반 정보는 예외 없음
+            prohibited_phrases=[],  # 금지 구문 없음
+            safe_alternatives=[
+                "해당 법률의 일반적인 내용을 안내드릴 수 있습니다",
+                "관련 절차에 대해 설명드릴 수 있습니다",
+                "법률 용어의 의미를 설명드릴 수 있습니다"
+            ],
+            description="일반적인 법률 정보 및 절차 안내 허용",
+            legal_basis="정보공개법 제1조 (목적)"
+        ))
+        
         return rules
     
     def _compile_patterns(self) -> Dict[str, re.Pattern]:
@@ -426,7 +460,23 @@ class ImprovedLegalRestrictionSystem:
             # 2. 복합 질문에서 개인적 조언 부분 감지
             has_personal_advice = self._detect_personal_advice_in_complex_query(query)
             
-            # 3. 예외 패턴 검사 (예외가 있으면 허용)
+            # 3. 일반 정보 질문 검사 (우선순위 높음)
+            general_info_matched = self._check_general_info_patterns(query)
+            if general_info_matched:
+                return ImprovedRestrictionResult(
+                    is_restricted=False,
+                    restriction_level=RestrictionLevel.ALLOWED,
+                    context_analysis=context_analysis,
+                    matched_rules=[general_info_matched],
+                    matched_patterns=[],
+                    confidence=0.95,
+                    safe_response=None,
+                    warning_message=None,
+                    reasoning=f"일반 정보 질문으로 허용: {general_info_matched.description}",
+                    timestamp=datetime.now()
+                )
+            
+            # 4. 예외 패턴 검사 (예외가 있으면 허용)
             exception_matched = self._check_exceptions(query)
             if exception_matched and not has_personal_advice:
                 return ImprovedRestrictionResult(
@@ -526,6 +576,35 @@ class ImprovedLegalRestrictionSystem:
         # 키워드 1개 이상 또는 패턴 1개 이상 매칭
         return keyword_matches > 0 or pattern_matches > 0
     
+    def _check_general_info_patterns(self, query: str) -> Optional[ImprovedRestrictionRule]:
+        """일반 정보 질문 패턴 검사"""
+        try:
+            # 일반 정보 규칙 찾기
+            general_info_rule = None
+            for rule in self.restriction_rules:
+                if rule.area == LegalArea.GENERAL_INFO:
+                    general_info_rule = rule
+                    break
+            
+            if not general_info_rule:
+                return None
+            
+            # 패턴 매칭 검사
+            query_lower = query.lower()
+            for pattern in general_info_rule.patterns:
+                try:
+                    compiled_pattern = re.compile(pattern, re.IGNORECASE)
+                    if compiled_pattern.search(query):
+                        return general_info_rule
+                except re.error:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error checking general info patterns: {e}")
+            return None
+    
     def _check_exceptions(self, query: str) -> Optional[str]:
         """예외 패턴 검사"""
         for rule in self.restriction_rules:
@@ -549,8 +628,8 @@ class ImprovedLegalRestrictionSystem:
                 matched_patterns.extend(rule_matches['patterns'])
                 max_confidence = max(max_confidence, rule_matches['confidence'])
         
-        # 개인 사건의 경우 더 낮은 임계값으로 제한 (0.3 → 0.1)
-        is_restricted = max_confidence > 0.1
+        # 개인 사건의 경우 더 낮은 임계값으로 제한 (0.1 → 0.2로 조정)
+        is_restricted = max_confidence > 0.2
         
         if is_restricted:
             restriction_level = self._determine_restriction_level(matched_rules)
@@ -624,12 +703,11 @@ class ImprovedLegalRestrictionSystem:
                 timestamp=datetime.now()
             )
         
-        # 일반적 호기심의 경우 더 낮은 임계값으로 제한
-        # 카테고리별 지표가 있으면 더욱 관대하게 처리
+        # 일반적 호기심의 경우 더 낮은 임계값으로 제한 (카테고리별 지표가 있으면 더욱 관대하게 처리)
         if has_category_indicators:
-            threshold = 0.3  # 매우 관대
+            threshold = 0.4  # 관대 (0.3 → 0.4로 조정)
         else:
-            threshold = 0.5  # 관대
+            threshold = 0.5  # 기본 (유지)
         
         is_restricted = max_confidence > threshold
         

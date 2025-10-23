@@ -97,8 +97,21 @@ class GeminiClient:
             
             self.logger.info(f"Generating response with model {self.model_name}")
             
+            # 기본 시스템 프롬프트 설정 (구체적 답변 요구)
+            default_system_prompt = """당신은 한국 법률 전문가입니다. 사용자의 질문에 대해 구체적이고 완전한 답변을 제공해야 합니다.
+
+중요한 지침:
+1. 질문에 대한 직접적이고 구체적인 답변을 제공하세요
+2. 추가 질문을 요청하지 말고, 가능한 한 완전한 답변을 작성하세요
+3. 답변이 불완전한 경우에만 추가 정보 요청을 하세요
+4. 법률적 정확성을 유지하면서 이해하기 쉽게 설명하세요
+5. 관련 법령과 판례를 적절히 인용하세요"""
+            
+            # 시스템 프롬프트 구성
+            final_system_prompt = system_prompt or default_system_prompt
+            
             # 프롬프트 구성
-            full_prompt = self._build_prompt(prompt, context, system_prompt)
+            full_prompt = self._build_prompt(prompt, context, final_system_prompt)
             
             # 생성 설정
             generation_config = genai.types.GenerationConfig(

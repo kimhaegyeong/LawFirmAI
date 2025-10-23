@@ -126,11 +126,11 @@ class ChatService:
                 memory_threshold_mb=3000
             )
             
-            # 기존 인덱스 로드 시도
+            # 기존 인덱스 로드 시도 (실제 파일 경로로 수정)
             index_paths = [
-                "data/embeddings/ml_enhanced_ko_sroberta_precedents",
-                "data/embeddings/optimized_ko_sroberta_precedents", 
-                "data/embeddings/quantized_ko_sroberta_precedents"
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index",
+                "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index",
+                "data/embeddings/legal_vector_index"
             ]
             
             index_loaded = False
@@ -184,8 +184,8 @@ class ChatService:
             exact_search_engine = ExactSearchEngine()
             semantic_search_engine = SemanticSearchEngine(
                 model_name="jhgan/ko-sroberta-multitask",
-                index_path="data/embeddings/ml_enhanced_ko_sroberta_precedents.faiss",
-                metadata_path="data/embeddings/ml_enhanced_ko_sroberta_precedents.json"
+                index_path="data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
+                metadata_path="data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"
             )
             
             self.optimized_search_engine = OptimizedSearchEngine(
@@ -322,11 +322,401 @@ class ChatService:
         
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
     
+    def _validate_and_preprocess_input(self, message: str) -> Dict[str, Any]:
+        """입력 검증 및 전처리"""
+        if not message or not message.strip():
+            return {"is_valid": False, "error_message": "메시지가 비어있습니다."}
+        
+        if len(message.strip()) < 2:
+            return {"is_valid": False, "error_message": "메시지가 너무 짧습니다."}
+        
+        if len(message) > 5000:
+            return {"is_valid": False, "error_message": "메시지가 너무 깁니다. (최대 5000자)"}
+        
+        # 기본 전처리
+        processed_message = message.strip()
+        
+        return {
+            "is_valid": True, 
+            "processed_message": processed_message,
+            "original_length": len(message),
+            "processed_length": len(processed_message)
+        }
+    
+    def _generate_cache_key(self, message: str, user_id: str, context: Optional[str] = None) -> str:
+        """개선된 캐시 키 생성"""
+        # 메시지 해시 (더 안정적)
+        message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()[:16]
+        context_hash = hashlib.sha256(context.encode('utf-8')).hexdigest()[:8] if context else "noctx"
+        return f"chat_{message_hash}_{user_id}_{context_hash}"
+    
+    def _create_error_response(self, error_message: str, session_id: str, user_id: str, start_time: float) -> Dict[str, Any]:
+        """에러 응답 생성"""
+        return {
+            "response": error_message,
+            "confidence": 0.0,
+            "sources": [],
+            "processing_time": time.time() - start_time,
+            "session_id": session_id,
+            "user_id": user_id,
+            "error": True,
+            "query_analysis": None,
+            "restriction_result": None
+        }
+    
+    def _create_restricted_response(self, restriction_result: Dict[str, Any], session_id: str, user_id: str, start_time: float) -> Dict[str, Any]:
+        """제한된 응답 생성"""
+        return {
+            "response": restriction_result.get("safe_response", "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."),
+            "confidence": restriction_result.get("confidence", 0.9),
+            "sources": [],
+            "processing_time": time.time() - start_time,
+            "session_id": session_id,
+            "user_id": user_id,
+            "restricted": True,
+            "restriction_reason": restriction_result.get("reason", "법률 제한"),
+            "query_analysis": restriction_result.get("query_analysis"),
+            "restriction_result": restriction_result
+        }
+    
+    async def _analyze_query(self, message: str, context: Optional[str], user_id: str, session_id: str) -> Dict[str, Any]:
+        """질의 분석 및 분류 (개선된 버전)"""
+        try:
+            analysis_result = {
+                "original_query": message,
+                "processed_query": message.strip(),
+                "query_type": "general",
+                "intent": "unknown",
+                "confidence": 0.5,
+                "entities": [],
+                "context": context,
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp": datetime.now()
+            }
+            
+            # 질문 분류기 사용
+            if self.question_classifier:
+                try:
+                    classification = self.question_classifier.classify_question(message)
+                    analysis_result.update({
+                        "query_type": getattr(classification.question_type, 'value', 'general'),
+                        "confidence": getattr(classification, 'confidence', 0.5),
+                        "classification_details": classification
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Question classification failed: {e}")
+            
+            # 의도 분석
+            if self.emotion_intent_analyzer:
+                try:
+                    intent_result = self.emotion_intent_analyzer.analyze_intent(message)
+                    analysis_result.update({
+                        "intent": intent_result.get("intent", "unknown"),
+                        "emotion": intent_result.get("emotion", "neutral"),
+                        "urgency": intent_result.get("urgency", "normal")
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Intent analysis failed: {e}")
+            
+            return analysis_result
+            
+        except Exception as e:
+            self.logger.error(f"Query analysis failed: {e}")
+            return {
+                "original_query": message,
+                "processed_query": message.strip(),
+                "query_type": "general",
+                "intent": "unknown",
+                "confidence": 0.3,
+                "entities": [],
+                "context": context,
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp": datetime.now(),
+                "error": str(e)
+            }
+    
+    async def _validate_legal_restrictions(self, message: str, query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
+        """법률 제한 검증 (최적화된 버전)"""
+        try:
+            # ML 통합 검증 시스템 우선 사용
+            if self.ml_integrated_validation_system:
+                try:
+                    ml_result = self.ml_integrated_validation_system.validate(
+                        query=message,
+                        user_id=user_id,
+                        session_id=session_id,
+                        collect_feedback=True
+                    )
+                    
+                    if ml_result.get("final_decision") == "restricted":
+                        return {
+                            "is_restricted": True,
+                            "reason": ml_result.get("reason", "ML 검증 시스템에 의해 제한됨"),
+                            "confidence": ml_result.get("confidence", 0.9),
+                            "safe_response": ml_result.get("safe_response", "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."),
+                            "query_analysis": query_analysis,
+                            "validation_details": ml_result
+                        }
+                except Exception as e:
+                    self.logger.warning(f"ML validation failed, using fallback: {e}")
+            
+            # 백업 검증 시스템들
+            if self.improved_legal_restriction_system:
+                try:
+                    restriction_result = self.improved_legal_restriction_system.check_restriction(message)
+                    if restriction_result.is_restricted:
+                        return {
+                            "is_restricted": True,
+                            "reason": restriction_result.reason,
+                            "confidence": restriction_result.confidence,
+                            "safe_response": restriction_result.safe_response,
+                            "query_analysis": query_analysis,
+                            "validation_details": restriction_result
+                        }
+                except Exception as e:
+                    self.logger.warning(f"Improved restriction system failed: {e}")
+            
+            # 제한되지 않음
+            return {
+                "is_restricted": False,
+                "confidence": 0.8,
+                "query_analysis": query_analysis
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Legal restriction validation failed: {e}")
+            # 안전을 위해 제한
+            return {
+                "is_restricted": True,
+                "reason": f"검증 시스템 오류: {str(e)}",
+                "confidence": 0.7,
+                "safe_response": "죄송합니다. 시스템 오류로 인해 응답을 생성할 수 없습니다.",
+                "query_analysis": query_analysis
+            }
+    
+    async def _generate_enhanced_response(self, message: str, query_analysis: Dict[str, Any], 
+                                         restriction_result: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
+        """향상된 답변 생성"""
+        try:
+            # 검색 실행 (최적화된 버전)
+            search_results = await self._perform_enhanced_search(message, query_analysis)
+            
+            # 답변 생성 (우선순위 기반)
+            response_result = await self._generate_answer_with_priority(
+                message, query_analysis, search_results, user_id, session_id
+            )
+            
+            return {
+                "response": response_result.get("answer", ""),
+                "confidence": response_result.get("confidence", 0.5),
+                "sources": search_results,
+                "query_analysis": query_analysis,
+                "search_results": search_results,
+                "generation_method": response_result.get("method", "default"),
+                "session_id": session_id,
+                "user_id": user_id
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Enhanced response generation failed: {e}")
+            # 폴백 응답
+            return {
+                "response": f"안녕하세요! '{message}'에 대한 질문을 받았습니다. 현재 시스템을 개선 중입니다.",
+                "confidence": 0.3,
+                "sources": [],
+                "query_analysis": query_analysis,
+                "search_results": [],
+                "generation_method": "fallback",
+                "session_id": session_id,
+                "user_id": user_id,
+                "error": str(e)
+            }
+    
+    async def _perform_enhanced_search(self, message: str, query_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """향상된 검색 수행"""
+        try:
+            search_results = []
+            
+            # 최적화된 검색 엔진 사용
+            if self.optimized_search_engine:
+                try:
+                    search_result = await self.optimized_search_engine.search(
+                        query=message,
+                        top_k=10,
+                        search_types=['vector', 'exact', 'semantic'],
+                        use_cache=True
+                    )
+                    search_results.extend(search_result.results)
+                except Exception as e:
+                    self.logger.warning(f"Optimized search failed: {e}")
+            
+            # 하이브리드 검색 엔진 백업
+            if not search_results and self.hybrid_search_engine:
+                try:
+                    search_results = self.hybrid_search_engine.search_with_question_type(
+                        query=message,
+                        question_type=query_analysis.get("classification_details"),
+                        max_results=10
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Hybrid search failed: {e}")
+            
+            # RAG 서비스 백업
+            if not search_results and self.rag_service:
+                try:
+                    rag_results = await self.rag_service.search_documents(message, top_k=10)
+                    search_results.extend(rag_results)
+                except Exception as e:
+                    self.logger.warning(f"RAG search failed: {e}")
+            
+            return search_results[:10]  # 최대 10개 결과
+            
+        except Exception as e:
+            self.logger.error(f"Enhanced search failed: {e}")
+            return []
+    
+    async def _generate_answer_with_priority(self, message: str, query_analysis: Dict[str, Any], 
+                                          search_results: List[Dict[str, Any]], user_id: str, session_id: str) -> Dict[str, Any]:
+        """우선순위 기반 답변 생성"""
+        try:
+            # 1순위: 개선된 답변 생성기
+            if self.improved_answer_generator:
+                try:
+                    answer_result = self.improved_answer_generator.generate_answer(
+                        query=message,
+                        question_type=query_analysis.get("classification_details"),
+                        context="",
+                        sources=search_results,
+                        conversation_history=None
+                    )
+                    return {
+                        "answer": answer_result.answer,
+                        "confidence": 0.8,
+                        "method": "improved_generator"
+                    }
+                except Exception as e:
+                    self.logger.warning(f"Improved answer generator failed: {e}")
+            
+            # 2순위: RAG 서비스
+            if self.rag_service:
+                try:
+                    rag_response = await self.rag_service.generate_response(
+                        query=message,
+                        context_documents=search_results,
+                        max_length=500
+                    )
+                    return {
+                        "answer": rag_response.get("response", ""),
+                        "confidence": rag_response.get("confidence", 0.7),
+                        "method": "rag_service"
+                    }
+                except Exception as e:
+                    self.logger.warning(f"RAG service failed: {e}")
+            
+            # 3순위: 기본 템플릿 기반 답변
+            return self._generate_template_response(message, query_analysis, search_results)
+            
+        except Exception as e:
+            self.logger.error(f"Answer generation failed: {e}")
+            return {
+                "answer": "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다.",
+                "confidence": 0.1,
+                "method": "error_fallback"
+            }
+    
+    def _generate_template_response(self, message: str, query_analysis: Dict[str, Any], search_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """템플릿 기반 답변 생성"""
+        query_type = query_analysis.get("query_type", "general")
+        
+        if query_type == "legal_advice":
+            return {
+                "answer": f"'{message}'에 대한 법률적 조언을 요청하셨습니다. 구체적인 법률 자문은 변호사와 상담하시는 것을 권장합니다.",
+                "confidence": 0.6,
+                "method": "template_legal"
+            }
+        elif query_type == "precedent":
+            if search_results:
+                return {
+                    "answer": f"'{message}'와 관련된 판례를 찾았습니다. 관련 판례: {len(search_results)}건",
+                    "confidence": 0.7,
+                    "method": "template_precedent"
+                }
+            else:
+                return {
+                    "answer": f"'{message}'와 관련된 판례를 찾을 수 없습니다.",
+                    "confidence": 0.5,
+                    "method": "template_no_precedent"
+                }
+        else:
+            return {
+                "answer": f"'{message}'에 대한 질문을 받았습니다. 더 구체적인 정보가 필요하시면 추가 질문을 해주세요.",
+                "confidence": 0.4,
+                "method": "template_general"
+            }
+    
+    async def _post_process_response(self, response_result: Dict[str, Any], query_analysis: Dict[str, Any], 
+                                   user_id: str, session_id: str) -> Dict[str, Any]:
+        """응답 후처리 및 품질 검증"""
+        try:
+            # 기본 응답 구조
+            final_response = {
+                "response": response_result.get("response", ""),
+                "confidence": response_result.get("confidence", 0.5),
+                "sources": response_result.get("sources", []),
+                "session_id": session_id,
+                "user_id": user_id,
+                "query_analysis": query_analysis,
+                "generation_method": response_result.get("generation_method", "unknown"),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # 자연스러운 답변 개선
+            if self.conversation_connector and response_result.get("response"):
+                try:
+                    improved_response = self.conversation_connector.connect_response(
+                        response_result["response"], 
+                        query_analysis.get("original_query", "")
+                    )
+                    final_response["response"] = improved_response
+                    final_response["naturalness_improved"] = True
+                except Exception as e:
+                    self.logger.warning(f"Conversation connector failed: {e}")
+            
+            # 감정 톤 조정
+            if self.emotional_tone_adjuster and response_result.get("response"):
+                try:
+                    emotion = query_analysis.get("emotion", "neutral")
+                    adjusted_response = self.emotional_tone_adjuster.adjust_tone(
+                        response_result["response"], emotion
+                    )
+                    final_response["response"] = adjusted_response
+                    final_response["tone_adjusted"] = True
+                except Exception as e:
+                    self.logger.warning(f"Emotional tone adjustment failed: {e}")
+            
+            # 품질 평가
+            if self.naturalness_evaluator and response_result.get("response"):
+                try:
+                    quality_score = self.naturalness_evaluator.evaluate_naturalness(
+                        response_result["response"]
+                    )
+                    final_response["quality_score"] = quality_score
+                except Exception as e:
+                    self.logger.warning(f"Quality evaluation failed: {e}")
+            
+            return final_response
+            
+        except Exception as e:
+            self.logger.error(f"Post-processing failed: {e}")
+            return response_result
+    
     async def process_message(self, message: str, context: Optional[str] = None, 
                              session_id: Optional[str] = None, 
                              user_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        사용자 메시지 처리 (모든 Phase 기능 통합)
+        사용자 메시지 처리 (최적화된 질의 답변 시스템)
         
         Args:
             message: 사용자 메시지
@@ -340,9 +730,22 @@ class ChatService:
         try:
             start_time = time.time()
             
-            # 캐시에서 응답 확인 (더 효율적인 키 생성)
-            message_hash = hashlib.md5(message.encode('utf-8')).hexdigest()[:16]
-            cache_key = f"resp_{message_hash}_{user_id}"
+            # 기본값 설정
+            if not user_id:
+                user_id = "anonymous_user"
+            if not session_id:
+                session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # 입력 검증 및 전처리
+            validation_result = self._validate_and_preprocess_input(message)
+            if not validation_result["is_valid"]:
+                return self._create_error_response(
+                    validation_result["error_message"], 
+                    session_id, user_id, start_time
+                )
+            
+            # 캐시 확인 (개선된 키 생성)
+            cache_key = self._generate_cache_key(message, user_id, context)
             cached_response = self.cache_manager.get(cache_key) if self.cache_manager else None
             if cached_response:
                 self.logger.info(f"Cache hit for message: {message[:50]}...")
@@ -350,27 +753,53 @@ class ChatService:
                 cached_response["processing_time"] = time.time() - start_time
                 return cached_response
             
-            # 기본값 설정
-            if not user_id:
-                user_id = "anonymous_user"
-            if not session_id:
-                session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # 질의 분석 및 분류 (개선된 버전)
+            query_analysis = await self._analyze_query(message, context, user_id, session_id)
             
-            # 입력 검증
-            if not self.validate_input(message):
-                return {
-                    "response": "올바른 질문을 입력해주세요.",
-                    "confidence": 0.0,
-                    "sources": [],
-                    "processing_time": 0.0,
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "phase_info": {
-                        "phase1": {"enabled": False, "error": "Invalid input"},
-                        "phase2": {"enabled": False},
-                        "phase3": {"enabled": False}
-                    }
-                }
+            # 법률 제한 검증 (최적화된 버전)
+            restriction_result = await self._validate_legal_restrictions(
+                message, query_analysis, user_id, session_id
+            )
+            
+            if restriction_result["is_restricted"]:
+                return self._create_restricted_response(
+                    restriction_result, session_id, user_id, start_time
+                )
+            
+            # 답변 생성 (개선된 버전)
+            response_result = await self._generate_enhanced_response(
+                message, query_analysis, restriction_result, user_id, session_id
+            )
+            
+            # 응답 후처리 및 품질 검증
+            final_response = await self._post_process_response(
+                response_result, query_analysis, user_id, session_id
+            )
+            
+            # 캐시 저장
+            if self.cache_manager:
+                self.cache_manager.set(cache_key, final_response, ttl_seconds=3600)  # 1시간 TTL
+            
+            # 처리 시간 추가
+            final_response["processing_time"] = time.time() - start_time
+            
+            return final_response
+            
+        except Exception as e:
+            self.logger.error(f"Error processing message: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            return {
+                "response": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
+                "confidence": 0.0,
+                "sources": [],
+                "processing_time": time.time() - start_time,
+                "session_id": session_id,
+                "user_id": user_id,
+                "error": True,
+                "error_details": str(e)
+            }
             
             # ML 통합 검증 시스템 사전 검사 (최신 버전 우선 사용)
             ml_validation_result = None
@@ -416,8 +845,11 @@ class ChatService:
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                message, "", None, None,
-                                ValidationResult(
+                                query=message, 
+                                response="", 
+                                restriction_result=None, 
+                                filter_result=None,
+                                validation_result=ValidationResult(
                                     status=ValidationStatus.REJECTED,
                                     validation_level=ValidationLevel.AUTOMATIC,
                                     confidence=ml_validation_result.get('confidence', 0.0),
@@ -427,7 +859,9 @@ class ChatService:
                                     validation_details=ml_validation_result,
                                     timestamp=datetime.now()
                                 ),
-                                user_id, session_id, time.time() - start_time
+                                user_id=user_id, 
+                                session_id=session_id, 
+                                processing_time=time.time() - start_time
                             )
                         
                         return {
@@ -515,8 +949,11 @@ class ChatService:
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                message, "", improved_restriction_result, filter_result,
-                                ValidationResult(
+                                query=message, 
+                                response="", 
+                                restriction_result=improved_restriction_result, 
+                                filter_result=filter_result,
+                                validation_result=ValidationResult(
                                     status=ValidationStatus.REJECTED,
                                     validation_level=ValidationLevel.AUTOMATIC,
                                     confidence=0.0,
@@ -526,7 +963,9 @@ class ChatService:
                                     validation_details={},
                                     timestamp=datetime.now()
                                 ),
-                                user_id, session_id, time.time() - start_time
+                                user_id=user_id, 
+                                session_id=session_id, 
+                                processing_time=time.time() - start_time
                             )
                         
                         # 안전한 응답 반환
@@ -627,8 +1066,11 @@ class ChatService:
                                 # 준수 모니터링
                                 if self.legal_compliance_monitor:
                                     compliance_status = self.legal_compliance_monitor.monitor_request(
-                                        message, "", improved_restriction_result, filter_result,
-                                        ValidationResult(
+                                        query=message, 
+                                        response="", 
+                                        restriction_result=improved_restriction_result, 
+                                        filter_result=filter_result,
+                                        validation_result=ValidationResult(
                                             status=ValidationStatus.REJECTED,
                                             validation_level=ValidationLevel.AUTOMATIC,
                                             confidence=0.0,
@@ -638,7 +1080,9 @@ class ChatService:
                                             validation_details={},
                                             timestamp=datetime.now()
                                         ),
-                                        user_id, session_id, time.time() - start_time
+                                        user_id=user_id, 
+                                        session_id=session_id, 
+                                        processing_time=time.time() - start_time
                                     )
                                 
                                 # 안전한 응답 반환
@@ -772,9 +1216,14 @@ class ChatService:
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                message, response_result["response"], improved_restriction_result, 
-                                filter_result, validation_result, user_id, session_id, 
-                                time.time() - start_time
+                                query=message, 
+                                response=response_result["response"], 
+                                restriction_result=improved_restriction_result, 
+                                filter_result=filter_result, 
+                                validation_result=validation_result, 
+                                user_id=user_id, 
+                                session_id=session_id, 
+                                processing_time=time.time() - start_time
                             )
                         
                         # 검증 정보 추가 (다단계 검증 정보 포함)
