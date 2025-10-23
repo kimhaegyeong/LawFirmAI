@@ -360,6 +360,37 @@ class UserEducationSystem:
                                validation_result: ValidationResult,
                                query: str = "") -> Optional[WarningType]:
         """경고 유형 결정 (더 엄격한 조건)"""
+        # None 체크 및 기본값 설정
+        if restriction_result is None:
+            self.logger.warning("restriction_result is None in _determine_warning_type")
+            # restriction_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if validation_result and validation_result.status == ValidationStatus.REJECTED:
+                return WarningType.LEGAL_RISK_WARNING
+            elif filter_result and filter_result.is_blocked:
+                return WarningType.CONTENT_FILTER_WARNING
+            else:
+                return None  # 경고 없음
+        
+        if filter_result is None:
+            self.logger.warning("filter_result is None in _determine_warning_type")
+            # filter_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
+                return WarningType.LEGAL_RISK_WARNING
+            elif validation_result and validation_result.status == ValidationStatus.REJECTED:
+                return WarningType.LEGAL_RISK_WARNING
+            else:
+                return None  # 경고 없음
+            
+        if validation_result is None:
+            self.logger.warning("validation_result is None in _determine_warning_type")
+            # validation_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
+                return WarningType.LEGAL_RISK_WARNING
+            elif filter_result.is_blocked:
+                return WarningType.CONTENT_FILTER_WARNING
+            else:
+                return None  # 경고 없음
+        
         # 절차 관련 질문에 대한 특별 처리 (더욱 관대한 처리)
         if any(keyword in query.lower() for keyword in ["절차", "방법", "과정", "규정", "제도"]):
             # 절차 관련 질문은 더욱 관대하게 처리
@@ -368,6 +399,11 @@ class UserEducationSystem:
             else:
                 # critical이 아니면 경고하지 않음
                 return None
+        
+        # intent_analysis가 None인지 확인
+        if not hasattr(filter_result, 'intent_analysis') or filter_result.intent_analysis is None:
+            self.logger.warning("filter_result.intent_analysis is None")
+            return None
         
         # 명확한 개인 법률 자문 요청만 경고 (일반 정보 요청 제외)
         if (filter_result.intent_analysis.intent_type == IntentType.LEGAL_ADVICE_REQUEST and

@@ -39,8 +39,8 @@ class PrecedentSearchEngine:
     
     def __init__(self, 
                  db_path: str = "data/lawfirm.db",
-                 vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
-                 vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
+                 vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index",
+                 vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"):
         """판례 검색 엔진 초기화"""
         self.logger = logging.getLogger(__name__)
         

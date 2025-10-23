@@ -249,15 +249,16 @@ class OptimizedSearchEngine:
     def _exact_search(self, query: str, top_k: int, filters: Dict) -> List[Dict[str, Any]]:
         """정확 검색 수행"""
         try:
-            results = self.exact_search_engine.search(query, top_k)
+            # ExactSearchEngine은 documents 매개변수가 필요하므로 빈 리스트 전달
+            results = self.exact_search_engine.search(query, documents=[], top_k=top_k)
             
             # 결과 형식 통일
             formatted_results = []
             for result in results:
                 formatted_result = {
-                    'score': result.get('score', 0.8),
-                    'text': result.get('text', ''),
-                    'metadata': result.get('metadata', {}),
+                    'score': getattr(result, 'score', 0.8),
+                    'text': getattr(result, 'text', ''),
+                    'metadata': getattr(result, 'metadata', {}),
                     'search_type': 'exact'
                 }
                 formatted_results.append(formatted_result)
@@ -271,7 +272,8 @@ class OptimizedSearchEngine:
     def _semantic_search(self, query: str, top_k: int, filters: Dict) -> List[Dict[str, Any]]:
         """의미 검색 수행"""
         try:
-            results = self.semantic_search_engine.search(query, top_k)
+            # SemanticSearchEngine은 k 매개변수 사용
+            results = self.semantic_search_engine.search(query, k=top_k)
             
             # 결과 형식 통일
             formatted_results = []

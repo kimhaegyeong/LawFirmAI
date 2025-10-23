@@ -49,18 +49,18 @@ class SemanticSearchEngine:
     def _load_components(self):
         """벡터 인덱스와 모델 로드"""
         try:
-            # 여러 인덱스 경로 시도
+            # 여러 인덱스 경로 시도 (실제 파일 경로로 수정)
             index_paths = [
-                "data/embeddings/ml_enhanced_ko_sroberta_precedents.faiss",
-                "data/embeddings/optimized_ko_sroberta_precedents.faiss",
-                "data/embeddings/quantized_ko_sroberta_precedents.faiss",
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
+                "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
+                "data/embeddings/legal_vector_index.faiss",
                 str(self.index_path)
             ]
             
             metadata_paths = [
-                "data/embeddings/ml_enhanced_ko_sroberta_precedents.json",
-                "data/embeddings/optimized_ko_sroberta_precedents.json", 
-                "data/embeddings/quantized_ko_sroberta_precedents.json",
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json",
+                "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json",
+                "data/embeddings/legal_vector_index.json",
                 str(self.metadata_path)
             ]
             

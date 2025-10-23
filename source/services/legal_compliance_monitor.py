@@ -258,6 +258,37 @@ class LegalComplianceMonitor:
                                    filter_result: FilterResult,
                                    validation_result: ValidationResult) -> ComplianceStatus:
         """준수 상태 결정"""
+        # None 체크 및 기본값 설정
+        if restriction_result is None:
+            self.logger.warning("restriction_result is None, using default compliance status")
+            # restriction_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if validation_result and validation_result.status == ValidationStatus.REJECTED:
+                return ComplianceStatus.NON_COMPLIANT
+            elif filter_result and filter_result.is_blocked:
+                return ComplianceStatus.NON_COMPLIANT
+            else:
+                return ComplianceStatus.COMPLIANT  # 기본적으로 준수로 간주
+        
+        if filter_result is None:
+            self.logger.warning("filter_result is None, using default compliance status")
+            # filter_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
+                return ComplianceStatus.NON_COMPLIANT
+            elif validation_result and validation_result.status == ValidationStatus.REJECTED:
+                return ComplianceStatus.NON_COMPLIANT
+            else:
+                return ComplianceStatus.COMPLIANT  # 기본적으로 준수로 간주
+            
+        if validation_result is None:
+            self.logger.warning("validation_result is None, using default compliance status")
+            # validation_result가 None인 경우 다른 검증 결과를 기반으로 판단
+            if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
+                return ComplianceStatus.NON_COMPLIANT
+            elif filter_result.is_blocked:
+                return ComplianceStatus.NON_COMPLIANT
+            else:
+                return ComplianceStatus.COMPLIANT  # 기본적으로 준수로 간주
+        
         # 심각한 제한 사항이 있으면 비준수
         if restriction_result.restriction_level == RestrictionLevel.CRITICAL:
             return ComplianceStatus.NON_COMPLIANT
@@ -329,17 +360,17 @@ class LegalComplianceMonitor:
                 severity = AlertLevel.WARNING
                 description = "법적 위험이 감지되었습니다."
             
-            # 상세 정보
+            # 상세 정보 (None 체크 추가)
             details = {
                 "compliance_status": compliance_status.value,
-                "restriction_level": restriction_result.restriction_level.value,
-                "restricted_areas": [rule.area.value for rule in restriction_result.matched_rules],
-                "intent_type": filter_result.intent_analysis.intent_type.value,
-                "risk_level": filter_result.intent_analysis.risk_level,
-                "validation_status": validation_result.status.value,
-                "validation_level": validation_result.validation_level.value,
-                "issues": validation_result.issues,
-                "recommendations": validation_result.recommendations
+                "restriction_level": restriction_result.restriction_level.value if restriction_result else "unknown",
+                "restricted_areas": [rule.area.value for rule in restriction_result.matched_rules] if restriction_result and restriction_result.matched_rules else [],
+                "intent_type": filter_result.intent_analysis.intent_type.value if filter_result and filter_result.intent_analysis else "unknown",
+                "risk_level": filter_result.intent_analysis.risk_level if filter_result and filter_result.intent_analysis else "unknown",
+                "validation_status": validation_result.status.value if validation_result else "unknown",
+                "validation_level": validation_result.validation_level.value if validation_result else "unknown",
+                "issues": validation_result.issues if validation_result else [],
+                "recommendations": validation_result.recommendations if validation_result else []
             }
             
             # 이벤트 로깅

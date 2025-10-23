@@ -157,9 +157,40 @@ class ContextBuilder:
         try:
             items = []
             
+            # search_results가 UnifiedSearchResult 객체인 경우 처리
+            if hasattr(search_results, '__dict__') and not isinstance(search_results, dict):
+                # UnifiedSearchResult 객체를 딕셔너리로 변환
+                search_results_dict = {
+                    "results": [{
+                        "content": getattr(search_results, 'content', ''),
+                        "title": getattr(search_results, 'title', ''),
+                        "source": getattr(search_results, 'source', ''),
+                        "score": getattr(search_results, 'score', 0.0),
+                        "similarity": getattr(search_results, 'score', 0.0),
+                        "type": "general",
+                        "metadata": getattr(search_results, 'metadata', {})
+                    }],
+                    "law_results": [],
+                    "precedent_results": []
+                }
+                search_results = search_results_dict
+            elif not isinstance(search_results, dict):
+                # 예상치 못한 타입인 경우 빈 딕셔너리로 처리
+                search_results = {"results": [], "law_results": [], "precedent_results": []}
+            
             # 법률 검색 결과 처리
             law_results = search_results.get("law_results", [])
             for law in law_results:
+                if hasattr(law, '__dict__'):
+                    # UnifiedSearchResult 객체인 경우 딕셔너리로 변환
+                    law = {
+                        "law_name": getattr(law, 'title', ''),
+                        "content": getattr(law, 'content', ''),
+                        "similarity": getattr(law, 'score', 0.0),
+                        "law_id": getattr(law, 'source', ''),
+                        "article_number": getattr(law, 'metadata', {}).get('article_number', '')
+                    }
+                
                 content = self._format_law_content(law)
                 priority = self._calculate_law_priority(law, question_classification)
                 relevance_score = law.get("similarity", 0.0)
@@ -177,6 +208,16 @@ class ContextBuilder:
             # 판례 검색 결과 처리
             precedent_results = search_results.get("precedent_results", [])
             for precedent in precedent_results:
+                if hasattr(precedent, '__dict__'):
+                    # UnifiedSearchResult 객체인 경우 딕셔너리로 변환
+                    precedent = {
+                        "case_name": getattr(precedent, 'title', ''),
+                        "content": getattr(precedent, 'content', ''),
+                        "similarity": getattr(precedent, 'score', 0.0),
+                        "case_id": getattr(precedent, 'source', ''),
+                        "case_number": getattr(precedent, 'metadata', {}).get('case_number', '')
+                    }
+                
                 content = self._format_precedent_content(precedent)
                 priority = self._calculate_precedent_priority(precedent, question_classification)
                 relevance_score = precedent.get("similarity", 0.0)
@@ -194,6 +235,18 @@ class ContextBuilder:
             # 일반 검색 결과 처리
             general_results = search_results.get("results", [])
             for result in general_results:
+                if hasattr(result, '__dict__'):
+                    # UnifiedSearchResult 객체인 경우 딕셔너리로 변환
+                    result = {
+                        "content": getattr(result, 'content', ''),
+                        "title": getattr(result, 'title', ''),
+                        "source": getattr(result, 'source', ''),
+                        "score": getattr(result, 'score', 0.0),
+                        "similarity": getattr(result, 'score', 0.0),
+                        "type": "general",
+                        "metadata": getattr(result, 'metadata', {})
+                    }
+                
                 if result.get("type") not in ["law", "precedent"]:
                     content = self._format_general_content(result)
                     priority = self._calculate_general_priority(result, question_classification)
