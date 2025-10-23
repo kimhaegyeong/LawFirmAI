@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,43 @@ class DatabaseManager:
                     local_government TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # 현행법령 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS current_laws (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    law_id TEXT UNIQUE NOT NULL,
+                    law_name_korean TEXT NOT NULL,
+                    law_name_abbreviation TEXT,
+                    promulgation_date INTEGER,
+                    promulgation_number INTEGER,
+                    amendment_type TEXT,
+                    ministry_code TEXT,
+                    ministry_name TEXT,
+                    law_type TEXT,
+                    joint_ministry_type TEXT,
+                    joint_promulgation_number TEXT,
+                    effective_date INTEGER,
+                    self_other_law TEXT,
+                    law_detail_link TEXT,
+                    detailed_info TEXT,
+                    document_type TEXT DEFAULT 'current_law',
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 현행법령 FTS 테이블 (전문 검색용)
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS current_laws_fts USING fts5(
+                    law_name_korean,
+                    law_name_abbreviation,
+                    ministry_name,
+                    detailed_info,
+                    content='current_laws',
+                    content_rowid='id'
                 )
             """)
             
@@ -1414,3 +1452,347 @@ class DatabaseManager:
         stats['by_type'] = self.execute_query(type_query)
         
         return stats
+    
+    # 현행법령 관련 메서드들
+    
+    def insert_current_laws_batch(self, laws: List[Dict[str, Any]]) -> int:
+        """
+        현행법령 배치 삽입
+        
+        Args:
+            laws: 현행법령 목록
+            
+        Returns:
+            int: 삽입된 개수
+        """
+        import json
+        
+        query = """
+            INSERT OR REPLACE INTO current_laws (
+                law_id, law_name_korean, law_name_abbreviation,
+                promulgation_date, promulgation_number, amendment_type,
+                ministry_code, ministry_name, law_type, joint_ministry_type,
+                joint_promulgation_number, effective_date, self_other_law,
+                law_detail_link, detailed_info, document_type, collected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                params_list = []
+                
+                for law in laws:
+                    # 기본 정보 추출
+                    law_id = law.get('법령ID', '')
+                    law_name_korean = law.get('법령명한글', '')
+                    law_name_abbreviation = law.get('법령약칭명', '')
+                    promulgation_date = law.get('공포일자', 0)
+                    promulgation_number = law.get('공포번호', 0)
+                    amendment_type = law.get('제개정구분명', '')
+                    ministry_code = law.get('소관부처코드', '')
+                    ministry_name = law.get('소관부처명', '')
+                    law_type = law.get('법령구분명', '')
+                    joint_ministry_type = law.get('공동부령구분', '')
+                    joint_promulgation_number = law.get('공포번호', '')
+                    effective_date = law.get('시행일자', 0)
+                    self_other_law = law.get('자법타법여부', '')
+                    law_detail_link = law.get('법령상세링크', '')
+                    
+                    # 상세 정보 JSON 변환
+                    detailed_info = json.dumps(law.get('detailed_info', {}), ensure_ascii=False)
+                    
+                    # 메타데이터
+                    document_type = law.get('document_type', 'current_law')
+                    collected_at = law.get('collected_at', datetime.now().isoformat())
+                    
+                    params = (
+                        law_id, law_name_korean, law_name_abbreviation,
+                        promulgation_date, promulgation_number, amendment_type,
+                        ministry_code, ministry_name, law_type, joint_ministry_type,
+                        joint_promulgation_number, effective_date, self_other_law,
+                        law_detail_link, detailed_info, document_type, collected_at
+                    )
+                    params_list.append(params)
+                
+                cursor.executemany(query, params_list)
+                conn.commit()
+                
+                logger.info(f"현행법령 배치 삽입 성공: {len(laws)}개")
+                return len(laws)
+                
+        except Exception as e:
+            logger.error(f"현행법령 배치 삽입 실패: {e}")
+            return 0
+    
+    def get_current_law_by_id(self, law_id: str) -> Optional[Dict[str, Any]]:
+        """
+        현행법령 ID로 조회
+        
+        Args:
+            law_id: 법령 ID
+            
+        Returns:
+            Dict: 현행법령 데이터 또는 None
+        """
+        query = """
+            SELECT * FROM current_laws 
+            WHERE law_id = ?
+        """
+        result = self.execute_query(query, (law_id,))
+        return result[0] if result else None
+    
+    def search_current_laws_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        현행법령 FTS 검색
+        
+        Args:
+            query: 검색 쿼리
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        fts_query = """
+            SELECT cl.* FROM current_laws cl
+            JOIN current_laws_fts fts ON cl.id = fts.rowid
+            WHERE current_laws_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """
+        return self.execute_query(fts_query, (query, limit))
+    
+    def search_current_laws_by_keyword(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        현행법령 키워드 검색
+        
+        Args:
+            keyword: 검색 키워드
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        query = """
+            SELECT * FROM current_laws 
+            WHERE law_name_korean LIKE ? OR law_name_abbreviation LIKE ? OR ministry_name LIKE ?
+            ORDER BY effective_date DESC
+            LIMIT ?
+        """
+        keyword_pattern = f"%{keyword}%"
+        return self.execute_query(query, (keyword_pattern, keyword_pattern, keyword_pattern, limit))
+    
+    def search_current_laws_by_date_range(self, start_date: int, end_date: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        시행일 범위로 현행법령 검색
+        
+        Args:
+            start_date: 시작 시행일 (YYYYMMDD 형식의 정수)
+            end_date: 종료 시행일 (YYYYMMDD 형식의 정수)
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        query = """
+            SELECT * FROM current_laws
+            WHERE effective_date BETWEEN ? AND ?
+            ORDER BY effective_date DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (start_date, end_date, limit))
+    
+    def get_latest_current_laws(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        최신 시행 법령 조회
+        
+        Args:
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 최신 법령 목록
+        """
+        query = """
+            SELECT * FROM current_laws
+            ORDER BY effective_date DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (limit,))
+    
+    def search_current_laws_by_ministry(self, ministry_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        소관부처별 현행법령 검색
+        
+        Args:
+            ministry_name: 소관부처명
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        query = """
+            SELECT * FROM current_laws
+            WHERE ministry_name LIKE ?
+            ORDER BY effective_date DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (f"%{ministry_name}%", limit))
+    
+    def get_current_laws_count(self) -> int:
+        """
+        현행법령 총 개수 조회
+        
+        Returns:
+            int: 총 개수
+        """
+        query = "SELECT COUNT(*) as count FROM current_laws"
+        result = self.execute_query(query)
+        return result[0]['count'] if result else 0
+    
+    def get_current_laws_stats(self) -> Dict[str, Any]:
+        """
+        현행법령 통계 조회
+        
+        Returns:
+            Dict: 통계 정보
+        """
+        stats = {}
+        
+        # 총 개수
+        stats['total_count'] = self.get_current_laws_count()
+        
+        # 소관부처별 통계
+        ministry_query = """
+            SELECT ministry_name, COUNT(*) as count
+            FROM current_laws 
+            WHERE ministry_name IS NOT NULL AND ministry_name != ''
+            GROUP BY ministry_name
+            ORDER BY count DESC
+        """
+        stats['by_ministry'] = self.execute_query(ministry_query)
+        
+        # 법령종류별 통계
+        type_query = """
+            SELECT law_type, COUNT(*) as count
+            FROM current_laws 
+            WHERE law_type IS NOT NULL AND law_type != ''
+            GROUP BY law_type
+            ORDER BY count DESC
+        """
+        stats['by_type'] = self.execute_query(type_query)
+        
+        # 시행일자별 통계 (연도별)
+        year_query = """
+            SELECT SUBSTR(effective_date, 1, 4) as year, COUNT(*) as count
+            FROM current_laws 
+            WHERE effective_date IS NOT NULL AND effective_date > 0
+            GROUP BY SUBSTR(effective_date, 1, 4)
+            ORDER BY year DESC
+        """
+        stats['by_year'] = self.execute_query(year_query)
+        
+        return stats
+    
+    def get_current_laws_by_ministry(self, ministry_name: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        소관부처별 현행법령 조회
+        
+        Args:
+            ministry_name: 소관부처명
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 현행법령 목록
+        """
+        query = """
+            SELECT * FROM current_laws 
+            WHERE ministry_name = ?
+            ORDER BY effective_date DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (ministry_name, limit))
+    
+    def get_recent_current_laws(self, days: int = 30, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        최근 수집된 현행법령 조회
+        
+        Args:
+            days: 최근 일수
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 현행법령 목록
+        """
+        query = """
+            SELECT * FROM current_laws 
+            WHERE collected_at >= datetime('now', '-{} days')
+            ORDER BY collected_at DESC
+            LIMIT ?
+        """.format(days)
+        return self.execute_query(query, (limit,))
+    
+    def delete_current_law(self, law_id: str) -> bool:
+        """
+        현행법령 삭제
+        
+        Args:
+            law_id: 법령 ID
+            
+        Returns:
+            bool: 삭제 성공 여부
+        """
+        query = "DELETE FROM current_laws WHERE law_id = ?"
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (law_id,))
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"현행법령 삭제 성공: {law_id}")
+                    return True
+                else:
+                    logger.warning(f"현행법령 삭제 실패 (존재하지 않음): {law_id}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"현행법령 삭제 실패: {e}")
+            return False
+    
+    def update_current_law_detailed_info(self, law_id: str, detailed_info: Dict[str, Any]) -> bool:
+        """
+        현행법령 상세 정보 업데이트
+        
+        Args:
+            law_id: 법령 ID
+            detailed_info: 상세 정보
+            
+        Returns:
+            bool: 업데이트 성공 여부
+        """
+        import json
+        
+        query = """
+            UPDATE current_laws 
+            SET detailed_info = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE law_id = ?
+        """
+        
+        try:
+            detailed_info_json = json.dumps(detailed_info, ensure_ascii=False)
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (detailed_info_json, law_id))
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"현행법령 상세 정보 업데이트 성공: {law_id}")
+                    return True
+                else:
+                    logger.warning(f"현행법령 상세 정보 업데이트 실패 (존재하지 않음): {law_id}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"현행법령 상세 정보 업데이트 실패: {e}")
+            return False

@@ -307,16 +307,19 @@ class LegalVectorStore:
             # 정규화 (cosine similarity를 위해)
             faiss.normalize_L2(embeddings)
             
+            # 인덱스 가져오기 (지연 로딩 지원)
+            index = self.get_index()
+            
             # 인덱스에 추가
-            if self.index.is_trained:
-                self.index.add(embeddings)
+            if index.is_trained:
+                index.add(embeddings)
             else:
                 # IVF 인덱스의 경우 훈련 필요
                 if self.index_type == "ivf":
-                    self.index.train(embeddings)
-                    self.index.add(embeddings)
+                    index.train(embeddings)
+                    index.add(embeddings)
                 else:
-                    self.index.add(embeddings)
+                    index.add(embeddings)
             
             # 메타데이터 저장
             self.document_metadata.extend(metadatas)
@@ -1196,3 +1199,283 @@ class LegalVectorStore:
         except Exception as e:
             self.logger.error(f"Failed to get constitutional decisions stats: {e}")
             return {}
+    
+    # 현행법령 관련 메서드들
+    
+    def add_current_laws(self, laws: List[Dict[str, Any]]) -> bool:
+        """
+        현행법령을 벡터 저장소에 추가
+        
+        Args:
+            laws: 현행법령 목록
+            
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            documents = []
+            metadatas = []
+            
+            for law in laws:
+                # 문서 내용 구성
+                law_name = law.get('법령명한글', '')
+                law_id = law.get('법령ID', '')
+                
+                # 상세 정보에서 조문 내용 추출
+                detailed_info = law.get('detailed_info', {})
+                content_parts = []
+                
+                # 조문 내용 추가
+                if isinstance(detailed_info, dict):
+                    # 조문 내용 추출
+                    if '조문내용' in detailed_info:
+                        content_parts.append(f"조문: {detailed_info['조문내용']}")
+                    
+                    # 별표 내용 추가
+                    if '별표내용' in detailed_info:
+                        content_parts.append(f"별표: {detailed_info['별표내용']}")
+                    
+                    # 부칙 내용 추가
+                    if '부칙내용' in detailed_info:
+                        content_parts.append(f"부칙: {detailed_info['부칙내용']}")
+                
+                # 문서 내용 구성
+                content = f"법령명: {law_name}\n"
+                if content_parts:
+                    content += "\n".join(content_parts)
+                else:
+                    content += f"법령ID: {law_id}"
+                
+                documents.append(content)
+                
+                # 메타데이터 구성
+                metadata = {
+                    'document_type': 'current_law',
+                    'law_id': law_id,
+                    'law_name': law_name,
+                    'ministry_name': law.get('소관부처명', ''),
+                    'effective_date': law.get('시행일자', 0),
+                    'promulgation_date': law.get('공포일자', 0),
+                    'law_type': law.get('법령구분명', ''),
+                    'amendment_type': law.get('제개정구분명', ''),
+                    'collected_at': law.get('collected_at', datetime.now().isoformat())
+                }
+                metadatas.append(metadata)
+            
+                # 벡터 저장소에 추가
+                if documents:
+                    self.add_documents(
+                        texts=documents,
+                        metadatas=metadatas
+                    )
+                
+                self.logger.info(f"현행법령 {len(documents)}개를 벡터 저장소에 추가")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"현행법령 벡터 저장소 추가 실패: {e}")
+            return False
+    
+    def search_current_laws(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        현행법령 검색
+        
+        Args:
+            query: 검색 쿼리
+            top_k: 반환할 결과 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        try:
+            # 임베딩 생성
+            query_embeddings = self.generate_embeddings([query])
+            if query_embeddings is None or len(query_embeddings) == 0:
+                return []
+            
+            query_embedding = query_embeddings[0].reshape(1, -1)
+            
+            # 인덱스 가져오기
+            index = self.get_index()
+            
+            # 검색 실행
+            scores, indices = index.search(query_embedding.astype('float32'), top_k)
+            
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.document_metadata):
+                    metadata = self.document_metadata[idx].copy()
+                    
+                    # 문서 타입 필터링
+                    if metadata.get('document_type') == 'current_law':
+                        metadata['similarity_score'] = float(score)
+                        results.append(metadata)
+            
+            self.logger.info(f"Found {len(results)} current law results for query: {query}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to search current laws: {e}")
+            return []
+    
+    def get_current_laws_by_similarity(self, 
+                                     law_id: str, 
+                                     top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        특정 현행법령과 유사한 법령 검색
+        
+        Args:
+            law_id: 기준 법령 ID
+            top_k: 반환할 결과 수
+            
+        Returns:
+            List[Dict]: 유사한 법령 목록
+        """
+        try:
+            # 기준 법령 찾기
+            target_idx = None
+            for i, metadata in enumerate(self.document_metadata):
+                if (metadata.get('document_type') == 'current_law' and 
+                    metadata.get('law_id') == law_id):
+                    target_idx = i
+                    break
+            
+            if target_idx is None:
+                self.logger.warning(f"Current law not found: {law_id}")
+                return []
+            
+            # 해당 법령의 임베딩을 쿼리로 사용
+            target_embedding = self.index.reconstruct(target_idx).reshape(1, -1)
+            
+            # 검색 실행 (자기 자신 제외)
+            scores, indices = self.index.search(target_embedding.astype('float32'), top_k + 1)
+            
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.document_metadata):
+                    metadata = self.document_metadata[idx].copy()
+                    
+                    # 문서 타입 필터링 및 자기 자신 제외
+                    if (metadata.get('document_type') == 'current_law' and 
+                        metadata.get('law_id') != law_id):
+                        metadata['similarity_score'] = float(score)
+                        results.append(metadata)
+                        
+                        if len(results) >= top_k:
+                            break
+            
+            self.logger.info(f"Found {len(results)} similar current laws for ID: {law_id}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get similar current laws: {e}")
+            return []
+    
+    def get_current_laws_by_ministry(self, ministry_name: str, top_k: int = 20) -> List[Dict[str, Any]]:
+        """
+        소관부처별 현행법령 검색
+        
+        Args:
+            ministry_name: 소관부처명
+            top_k: 반환할 결과 수
+            
+        Returns:
+            List[Dict]: 현행법령 목록
+        """
+        try:
+            results = []
+            for metadata in self.document_metadata:
+                if (metadata.get('document_type') == 'current_law' and 
+                    metadata.get('ministry_name') == ministry_name):
+                    results.append(metadata.copy())
+                    
+                    if len(results) >= top_k:
+                        break
+            
+            self.logger.info(f"Found {len(results)} current laws for ministry: {ministry_name}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get current laws by ministry: {e}")
+            return []
+    
+    def get_current_laws_stats(self) -> Dict[str, Any]:
+        """
+        현행법령 벡터 스토어 통계
+        
+        Returns:
+            Dict: 통계 정보
+        """
+        try:
+            current_law_count = 0
+            by_ministry = {}
+            by_type = {}
+            by_year = {}
+            
+            for metadata in self.document_metadata:
+                if metadata.get('document_type') == 'current_law':
+                    current_law_count += 1
+                    
+                    # 소관부처별 통계
+                    ministry = metadata.get('ministry_name', '')
+                    if ministry:
+                        by_ministry[ministry] = by_ministry.get(ministry, 0) + 1
+                    
+                    # 법령종류별 통계
+                    law_type = metadata.get('law_type', '')
+                    if law_type:
+                        by_type[law_type] = by_type.get(law_type, 0) + 1
+                    
+                    # 연도별 통계
+                    effective_date = metadata.get('effective_date', 0)
+                    if effective_date and effective_date > 0:
+                        year = str(effective_date)[:4]
+                        by_year[year] = by_year.get(year, 0) + 1
+            
+            return {
+                'total_current_laws': current_law_count,
+                'by_ministry': by_ministry,
+                'by_type': by_type,
+                'by_year': by_year,
+                'total_documents': len(self.document_metadata),
+                'current_law_ratio': current_law_count / len(self.document_metadata) if self.document_metadata else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get current laws stats: {e}")
+            return {}
+    
+    def remove_current_law(self, law_id: str) -> bool:
+        """
+        현행법령 제거
+        
+        Args:
+            law_id: 법령 ID
+            
+        Returns:
+            bool: 제거 성공 여부
+        """
+        try:
+            # 해당 법령의 인덱스 찾기
+            target_idx = None
+            for i, metadata in enumerate(self.document_metadata):
+                if (metadata.get('document_type') == 'current_law' and 
+                    metadata.get('law_id') == law_id):
+                    target_idx = i
+                    break
+            
+            if target_idx is None:
+                self.logger.warning(f"Current law not found for removal: {law_id}")
+                return False
+            
+            # 인덱스에서 제거
+            self._remove_from_index(target_idx)
+            
+            self.logger.info(f"현행법령 제거 성공: {law_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to remove current law: {e}")
+            return False
