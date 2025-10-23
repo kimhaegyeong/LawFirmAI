@@ -45,6 +45,7 @@ class UnifiedSearchEngine:
                  exact_search_engine: Optional[ExactSearchEngine] = None,
                  semantic_search_engine: Optional[SemanticSearchEngine] = None,
                  precedent_search_engine: Optional[PrecedentSearchEngine] = None,
+                 current_law_search_engine: Optional[Any] = None,
                  enable_caching: bool = True):
         """
         통합 검색 엔진 초기화
@@ -60,6 +61,7 @@ class UnifiedSearchEngine:
         self.exact_search_engine = exact_search_engine
         self.semantic_search_engine = semantic_search_engine
         self.precedent_search_engine = precedent_search_engine
+        self.current_law_search_engine = current_law_search_engine
         
         # 캐시 매니저
         self.cache_manager = get_cache_manager() if enable_caching else None
@@ -140,6 +142,17 @@ class UnifiedSearchEngine:
             except Exception as e:
                 logger.debug(f"Exact search failed: {e}")
         
+        # 현행법령 검색
+        if 'current_law' in search_types and hasattr(self, 'current_law_search_engine') and self.current_law_search_engine:
+            try:
+                current_law_results = self.current_law_search_engine.search_current_laws(
+                    query, top_k=top_k
+                )
+                all_results.extend(self._format_current_law_results(current_law_results))
+                used_types.append('current_law')
+            except Exception as e:
+                logger.debug(f"Current law search failed: {e}")
+        
         # 의미 검색
         if 'semantic' in search_types and self.semantic_search_engine:
             try:
@@ -214,6 +227,33 @@ class UnifiedSearchEngine:
         except Exception as e:
             logger.debug(f"Vector search error: {e}")
             return []
+    
+    def _format_current_law_results(self, results) -> List[Dict[str, Any]]:
+        """현행법령 검색 결과 포맷팅"""
+        formatted_results = []
+        for result in results:
+            formatted_result = {
+                'content': result.matched_content,
+                'metadata': {
+                    'law_id': result.law_id,
+                    'law_name_korean': result.law_name_korean,
+                    'law_name_abbreviation': result.law_name_abbreviation,
+                    'promulgation_date': result.promulgation_date,
+                    'promulgation_number': result.promulgation_number,
+                    'amendment_type': result.amendment_type,
+                    'ministry_name': result.ministry_name,
+                    'law_type': result.law_type,
+                    'effective_date': result.effective_date,
+                    'law_detail_link': result.law_detail_link,
+                    'document_type': 'current_law',
+                    'search_type': result.search_type,
+                    'article_content': result.article_content
+                },
+                'score': result.similarity_score,
+                'similarity': result.similarity_score
+            }
+            formatted_results.append(formatted_result)
+        return formatted_results
     
     def _search_exact(self, query: str, top_k: int, category: str) -> List[Dict[str, Any]]:
         """정확 검색 - FTS 직접 사용"""

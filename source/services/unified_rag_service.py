@@ -114,7 +114,7 @@ class UnifiedRAGService:
             search_result = await self.search_engine.search(
                 query=query,
                 top_k=top_k,
-                search_types=['vector', 'exact', 'semantic', 'precedent'],
+                search_types=['vector', 'exact', 'semantic', 'precedent', 'current_law'],
                 use_cache=use_cache
             )
             
