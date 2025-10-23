@@ -136,8 +136,8 @@ class AnswerFormatter:
                 "confidence_level": confidence.reliability_level,
                 "confidence_score": confidence.confidence,
                 "source_count": {
-                    "laws": len(sources.get("law_results", [])),
-                    "precedents": len(sources.get("precedent_results", []))
+                    "laws": len(self._extract_sources(sources, "law_results")),
+                    "precedents": len(self._extract_sources(sources, "precedent_results"))
                 },
                 "sections_count": len(sections)
             }
@@ -167,14 +167,14 @@ class AnswerFormatter:
             sections["analysis"] = self._clean_and_structure_text(answer)
             
             # 판례 섹션
-            precedents = sources.get("precedent_results", [])
+            precedents = self._extract_sources(sources, "precedent_results")
             if precedents:
                 sections["precedents"] = self._format_precedent_sources(precedents)
             else:
                 sections["precedents"] = "관련 판례를 찾을 수 없습니다."
             
             # 법률 섹션
-            laws = sources.get("law_results", [])
+            laws = self._extract_sources(sources, "law_results")
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
             else:
@@ -201,7 +201,7 @@ class AnswerFormatter:
             sections["explanation"] = self._clean_and_structure_text(answer)
             
             # 법률 섹션
-            laws = sources.get("law_results", [])
+            laws = self._extract_sources(sources, "law_results")
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
             else:
@@ -231,14 +231,14 @@ class AnswerFormatter:
             sections["advice"] = self._clean_and_structure_text(answer)
             
             # 법률 섹션
-            laws = sources.get("law_results", [])
+            laws = self._extract_sources(sources, "law_results")
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
             else:
                 sections["laws"] = "관련 법률을 찾을 수 없습니다."
             
             # 판례 섹션
-            precedents = sources.get("precedent_results", [])
+            precedents = self._extract_sources(sources, "precedent_results")
             if precedents:
                 sections["precedents"] = self._format_precedent_sources(precedents)
             else:
@@ -540,10 +540,21 @@ class AnswerFormatter:
             # 답변 섹션
             sections["answer"] = self._clean_and_structure_text(answer)
             
-            # 소스 섹션
+            # 소스 섹션 (UnifiedSearchResult 객체 처리)
             all_sources = []
-            all_sources.extend(sources.get("law_results", []))
-            all_sources.extend(sources.get("precedent_results", []))
+            if hasattr(sources, '__dict__') and not isinstance(sources, dict):
+                # UnifiedSearchResult 객체인 경우 딕셔너리로 변환
+                all_sources = [{
+                    'content': getattr(sources, 'content', ''),
+                    'title': getattr(sources, 'title', ''),
+                    'source': getattr(sources, 'source', ''),
+                    'score': getattr(sources, 'score', 0.0)
+                }]
+            elif isinstance(sources, dict):
+                all_sources.extend(sources.get("law_results", []))
+                all_sources.extend(sources.get("precedent_results", []))
+            elif isinstance(sources, list):
+                all_sources = sources
             
             if all_sources:
                 sections["sources"] = self._format_general_sources(all_sources)
@@ -558,6 +569,30 @@ class AnswerFormatter:
         except Exception as e:
             self.logger.error(f"Error formatting general answer: {e}")
             return {"answer": answer}
+    
+    def _extract_sources(self, sources: Any, source_type: str) -> List[Dict[str, Any]]:
+        """소스에서 특정 타입의 소스들을 안전하게 추출"""
+        try:
+            if hasattr(sources, '__dict__') and not isinstance(sources, dict):
+                # UnifiedSearchResult 객체인 경우
+                if source_type == "law_results" or source_type == "precedent_results":
+                    return [{
+                        'content': getattr(sources, 'content', ''),
+                        'title': getattr(sources, 'title', ''),
+                        'source': getattr(sources, 'source', ''),
+                        'score': getattr(sources, 'score', 0.0)
+                    }]
+                else:
+                    return []
+            elif isinstance(sources, dict):
+                return sources.get(source_type, [])
+            elif isinstance(sources, list):
+                return sources
+            else:
+                return []
+        except Exception as e:
+            self.logger.debug(f"Error extracting sources: {e}")
+            return []
     
     def _clean_and_structure_text(self, text: str) -> str:
         """텍스트 정리 및 구조화"""
@@ -727,7 +762,7 @@ class AnswerFormatter:
         """면책 조항 반환"""
         return """---
 💼 **면책 조항**
-본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
+# 면책 조항 제거됨
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
     
     def _extract_steps_from_answer(self, answer: str) -> str:
@@ -1067,7 +1102,7 @@ class AnswerFormatter:
 - 수준: {confidence.reliability_level}
 
 ---
-💼 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
+💼 # 면책 조항 제거됨
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.""",
                 sections={"answer": raw_answer},
                 metadata={"question_type": "general", "confidence_level": confidence.reliability_level}

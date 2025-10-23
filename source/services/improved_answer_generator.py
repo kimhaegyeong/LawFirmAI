@@ -156,9 +156,23 @@ class ImprovedAnswerGenerator:
             raw_answer = self._generate_with_retry(prompt, config)
             
             # 신뢰도 계산
+            sources_list = []
+            if hasattr(sources, '__dict__'):
+                # UnifiedSearchResult 객체인 경우 딕셔너리로 변환
+                sources_list = [{
+                    'content': getattr(sources, 'content', ''),
+                    'title': getattr(sources, 'title', ''),
+                    'source': getattr(sources, 'source', ''),
+                    'score': getattr(sources, 'score', 0.0)
+                }]
+            elif isinstance(sources, dict):
+                sources_list = sources.get("results", [])
+            elif isinstance(sources, list):
+                sources_list = sources
+            
             confidence = self.confidence_calculator.calculate_confidence(
                 answer=raw_answer,
-                sources=sources.get("results", []),
+                sources=sources_list,
                 question_type=question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
             )
             
@@ -289,31 +303,36 @@ class ImprovedAnswerGenerator:
 특별 지시사항:
 - 판례의 핵심 판결요지를 명확히 제시하세요
 - 사건번호와 법원 정보를 정확히 인용하세요
-- 해당 판례의 실무적 시사점을 설명하세요""",
+- 해당 판례의 실무적 시사점을 설명하세요
+- 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
             
             QuestionType.LAW_INQUIRY: """
 특별 지시사항:
 - 법률 조문을 정확히 인용하세요
 - 법률의 목적과 취지를 설명하세요
-- 실제 적용 사례를 포함하세요""",
+- 실제 적용 사례를 포함하세요
+- 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
             
             QuestionType.LEGAL_ADVICE: """
 특별 지시사항:
 - 단계별 해결 방법을 제시하세요
 - 필요한 증거 자료를 명시하세요
-- 전문가 상담의 필요성을 언급하세요""",
+- 전문가 상담의 필요성을 언급하세요
+- 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
             
             QuestionType.PROCEDURE_GUIDE: """
 특별 지시사항:
 - 절차를 순서대로 설명하세요
 - 필요한 서류와 비용을 명시하세요
-- 처리 기간을 포함하세요""",
+- 처리 기간을 포함하세요
+- 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
             
             QuestionType.TERM_EXPLANATION: """
 특별 지시사항:
 - 용어의 정확한 정의를 제시하세요
 - 관련 법률 조문을 인용하세요
-- 실제 적용 예시를 포함하세요"""
+- 실제 적용 예시를 포함하세요
+- 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)"""
         }
         
         return instructions.get(question_type, "")
@@ -423,7 +442,8 @@ class ImprovedAnswerGenerator:
 
 ---
 💼 **면책 조항**
-본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
+# 면책 조항 제거
+# 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
         
         return answer + disclaimer

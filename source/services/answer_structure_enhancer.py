@@ -33,17 +33,38 @@ class AnswerStructureEnhancer:
     
     def __init__(self):
         """초기화"""
-        # 데이터베이스 기반 템플릿 매니저 초기화
-        from .template_database_manager import template_db_manager
-        self.template_db_manager = template_db_manager
-        
-        # 동적 템플릿 로드
-        self.structure_templates = self._load_structure_templates_from_db()
-        self.quality_indicators = self._load_quality_indicators_from_db()
-        
-        # 법적 근거 강화 시스템 초기화
-        self.citation_enhancer = LegalCitationEnhancer()
-        self.basis_validator = LegalBasisValidator()
+        try:
+            # 데이터베이스 기반 템플릿 매니저 초기화 (안전한 방식)
+            try:
+                from .template_database_manager import template_db_manager
+                self.template_db_manager = template_db_manager
+            except ImportError:
+                print("Template database manager not available, using fallback")
+                self.template_db_manager = None
+            
+            # 동적 템플릿 로드
+            self.structure_templates = self._load_structure_templates_from_db()
+            self.quality_indicators = self._load_quality_indicators_from_db()
+            
+            # 법적 근거 강화 시스템 초기화 (안전한 방식)
+            try:
+                self.citation_enhancer = LegalCitationEnhancer()
+                self.basis_validator = LegalBasisValidator()
+            except Exception as e:
+                print(f"Legal citation systems not available: {e}")
+                self.citation_enhancer = None
+                self.basis_validator = None
+            
+            print("AnswerStructureEnhancer initialized successfully")
+            
+        except Exception as e:
+            print(f"AnswerStructureEnhancer initialization failed: {e}")
+            # 폴백 초기화
+            self.template_db_manager = None
+            self.structure_templates = self._get_fallback_templates()
+            self.quality_indicators = self._get_fallback_quality_indicators()
+            self.citation_enhancer = None
+            self.basis_validator = None
     
     def classify_question_type(self, question: str) -> QuestionType:
         """질문 유형 분류 (개선된 키워드 우선순위)"""
@@ -314,8 +335,11 @@ class AnswerStructureEnhancer:
             return QuestionType.GENERAL_QUESTION
     
     def _load_structure_templates_from_db(self) -> Dict[QuestionType, Dict[str, Any]]:
-        """데이터베이스에서 구조 템플릿 로드"""
+        """데이터베이스에서 구조 템플릿 로드 (안전한 방식)"""
         try:
+            if not self.template_db_manager:
+                return self._get_fallback_templates()
+            
             templates = {}
             
             # 데이터베이스에서 모든 템플릿 조회
@@ -348,13 +372,13 @@ class AnswerStructureEnhancer:
                     {
                         "name": "질문 분석",
                         "priority": "high",
-                        "template": "질문 내용 분석:",
+                        "template": "",
                         "content_guide": "질문의 핵심 파악"
                     },
                     {
                         "name": "관련 법령",
                         "priority": "high",
-                        "template": "관련 법령:",
+                        "template": "",
                         "content_guide": "적용 가능한 법령"
                     },
                     {
@@ -370,12 +394,102 @@ class AnswerStructureEnhancer:
                         "content_guide": "구체적 행동 방안"
                     }
                 ]
+            },
+            QuestionType.DIVORCE_PROCEDURE: {
+                "title": "이혼 절차 안내",
+                "sections": [
+                    {
+                        "name": "이혼 절차 개요",
+                        "priority": "high",
+                        "template": "이혼 절차 개요:",
+                        "content_guide": "이혼의 종류와 기본 절차"
+                    },
+                    {
+                        "name": "협의이혼",
+                        "priority": "high",
+                        "template": "협의이혼 절차:",
+                        "content_guide": "협의이혼의 구체적 절차와 필요 서류"
+                    },
+                    {
+                        "name": "재판이혼",
+                        "priority": "high",
+                        "template": "재판이혼 절차:",
+                        "content_guide": "재판이혼의 절차와 소송 방법"
+                    },
+                    {
+                        "name": "주의사항",
+                        "priority": "medium",
+                        "template": "주의사항:",
+                        "content_guide": "이혼 시 고려해야 할 사항들"
+                    }
+                ]
+            },
+            QuestionType.CONTRACT_REVIEW: {
+                "title": "계약서 검토 가이드",
+                "sections": [
+                    {
+                        "name": "계약서 기본 검토 포인트",
+                        "priority": "high",
+                        "template": "기본 검토 포인트:",
+                        "content_guide": "계약서에서 확인해야 할 기본 사항들"
+                    },
+                    {
+                        "name": "주의 조항",
+                        "priority": "high",
+                        "template": "주의해야 할 조항:",
+                        "content_guide": "불리한 조항이나 위험 요소"
+                    },
+                    {
+                        "name": "권리와 의무",
+                        "priority": "medium",
+                        "template": "당사자의 권리와 의무:",
+                        "content_guide": "계약상의 권리와 의무 관계"
+                    },
+                    {
+                        "name": "실무 조언",
+                        "priority": "medium",
+                        "template": "실무적 조언:",
+                        "content_guide": "계약서 작성 및 검토 시 유의사항"
+                    }
+                ]
+            },
+            QuestionType.PROCEDURE_GUIDE: {
+                "title": "법적 절차 안내",
+                "sections": [
+                    {
+                        "name": "절차 개요",
+                        "priority": "high",
+                        "template": "절차 개요:",
+                        "content_guide": "해당 절차의 기본 내용"
+                    },
+                    {
+                        "name": "신청 방법",
+                        "priority": "high",
+                        "template": "신청 방법:",
+                        "content_guide": "구체적인 신청 절차와 방법"
+                    },
+                    {
+                        "name": "필요 서류",
+                        "priority": "medium",
+                        "template": "필요 서류:",
+                        "content_guide": "신청 시 필요한 서류들"
+                    },
+                    {
+                        "name": "처리 기간",
+                        "priority": "medium",
+                        "template": "처리 기간:",
+                        "content_guide": "절차 처리에 소요되는 시간"
+                    }
+                ]
             }
         }
     
     def _load_quality_indicators_from_db(self) -> Dict[str, List[str]]:
-        """데이터베이스에서 품질 지표 로드"""
+        """데이터베이스에서 품질 지표 로드 (안전한 방식)"""
         try:
+            if not self.template_db_manager:
+                return self._get_fallback_quality_indicators()
+            
             return self.template_db_manager.get_quality_indicators()
         except Exception as e:
             print(f"Failed to load quality indicators from database: {e}")
@@ -1120,7 +1234,7 @@ class AnswerStructureEnhancer:
                                 validation_result: Any) -> str:
         """법적 근거 섹션 추가"""
         try:
-            legal_basis_section = "\n\n### 📚 법적 근거\n\n"
+            legal_basis_section = "\n\n"
             
             # 인용 통계
             citation_count = citation_result.get("citation_count", 0)
@@ -1171,7 +1285,8 @@ class AnswerStructureEnhancer:
                 legal_basis_section += "\n"
             
             # 면책 조항
-            legal_basis_section += "> **면책 조항:** 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.\n"
+            # 면책 조항 제거
+            # legal_basis_section += "> **면책 조항:** 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.\n"
             
             return structured_answer + legal_basis_section
             
