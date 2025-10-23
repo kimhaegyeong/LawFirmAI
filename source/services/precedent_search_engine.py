@@ -59,12 +59,17 @@ class PrecedentSearchEngine:
             )
             
             # 기존 벡터 인덱스 로드
-            if Path(vector_index_path).exists() and Path(vector_metadata_path).exists():
+            faiss_file = Path(vector_index_path)
+            if not faiss_file.exists():
+                faiss_file = Path(vector_index_path + ".faiss")
+            
+            if faiss_file.exists() and Path(vector_metadata_path).exists():
                 # 벡터 스토어에 인덱스 로드
-                self.vector_store.load_index(vector_index_path)
-                self.logger.info(f"Loaded precedent vector index from {vector_index_path}")
+                self.vector_store.load_index(str(faiss_file))
+                self.logger.info(f"Loaded precedent vector index from {faiss_file}")
             else:
                 self.logger.warning(f"Precedent vector index not found at {vector_index_path}")
+                self.logger.warning("Falling back to keyword search only")
                 
         except Exception as e:
             self.logger.error(f"Failed to initialize vector store: {e}")

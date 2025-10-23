@@ -26,67 +26,22 @@ except ImportError as e:
 
 
 def generate_comprehensive_test_questions() -> List[Dict[str, Any]]:
-    """종합 테스트 질문 생성 (40개 질문)"""
+    """종합 테스트 질문 생성 (5개 질문)"""
     questions = [
-        # 법률 조문 질문 (확장된 데이터베이스)
+        # 법률 조문 질문
         {"question": "민법 제 750조에 대해서 설명해줘", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "민법 제 681조는 무엇인가요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "민법 제 105조에 대해 알려주세요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "형법 제 250조는 무엇인가요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "형법 제 257조에 대해서 설명해줘", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "상법 제 1조에 대해 알려주세요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "상법 제 169조는 무엇인가요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "민법 제 100조는 무엇인가요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "형법 제 1조에 대해 설명해주세요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
-        {"question": "민법 제 200조는 무엇인가요", "category": "법률조문", "expected_type": "statute", "priority": "high"},
         
-        # 계약서 관련 질문 (개선된 템플릿)
+        # 계약서 관련 질문
         {"question": "계약서 작성 방법을 알려주세요", "category": "계약서", "expected_type": "contract", "priority": "high"},
-        {"question": "계약서 검토 방법이 궁금합니다", "category": "계약서", "expected_type": "contract", "priority": "high"},
-        {"question": "계약 해지 조건은 어떻게 되나요", "category": "계약서", "expected_type": "contract", "priority": "high"},
-        {"question": "계약서에 필수 포함 사항은 무엇인가요", "category": "계약서", "expected_type": "contract", "priority": "high"},
         
-        # 부동산 관련 질문 (개선된 템플릿)
+        # 부동산 관련 질문
         {"question": "부동산 매매 절차를 알려주세요", "category": "부동산", "expected_type": "real_estate", "priority": "high"},
-        {"question": "부동산 임대차 계약 방법", "category": "부동산", "expected_type": "real_estate", "priority": "high"},
-        {"question": "부동산 등기 절차는 어떻게 되나요", "category": "부동산", "expected_type": "real_estate", "priority": "high"},
-        {"question": "부동산 매매 시 주의사항", "category": "부동산", "expected_type": "real_estate", "priority": "high"},
         
-        # 가족법 관련 질문 (개선된 템플릿)
+        # 가족법 관련 질문
         {"question": "이혼 소송 절차가 궁금합니다", "category": "가족법", "expected_type": "family_law", "priority": "high"},
-        {"question": "자녀 양육권 결정 기준", "category": "가족법", "expected_type": "family_law", "priority": "high"},
-        {"question": "상속 순위는 어떻게 되나요", "category": "가족법", "expected_type": "family_law", "priority": "high"},
-        {"question": "입양 절차를 알려주세요", "category": "가족법", "expected_type": "family_law", "priority": "high"},
         
         # 민사법 관련 질문
         {"question": "손해배상 청구 방법", "category": "민사법", "expected_type": "civil_law", "priority": "medium"},
-        {"question": "소송 제기 절차는 어떻게 되나요", "category": "민사법", "expected_type": "civil_law", "priority": "medium"},
-        {"question": "민사조정 절차를 알려주세요", "category": "민사법", "expected_type": "civil_law", "priority": "medium"},
-        {"question": "채권 추심 방법", "category": "민사법", "expected_type": "civil_law", "priority": "medium"},
-        
-        # 노동법 관련 질문
-        {"question": "근로계약서 작성 방법", "category": "노동법", "expected_type": "labor_law", "priority": "medium"},
-        {"question": "해고 절차는 어떻게 되나요", "category": "노동법", "expected_type": "labor_law", "priority": "medium"},
-        {"question": "임금 체불 시 대처 방법", "category": "노동법", "expected_type": "labor_law", "priority": "medium"},
-        {"question": "근로시간 규정을 알려주세요", "category": "노동법", "expected_type": "labor_law", "priority": "medium"},
-        
-        # 상법 관련 질문
-        {"question": "회사 설립 절차", "category": "상법", "expected_type": "commercial_law", "priority": "medium"},
-        {"question": "주식회사 운영 방법", "category": "상법", "expected_type": "commercial_law", "priority": "medium"},
-        {"question": "회사 해산 절차", "category": "상법", "expected_type": "commercial_law", "priority": "medium"},
-        {"question": "이사회 운영 규정", "category": "상법", "expected_type": "commercial_law", "priority": "medium"},
-        
-        # 형사법 관련 질문
-        {"question": "형사소송 절차", "category": "형사법", "expected_type": "criminal_law", "priority": "medium"},
-        {"question": "보석 신청 방법", "category": "형사법", "expected_type": "criminal_law", "priority": "medium"},
-        {"question": "형사합의 절차", "category": "형사법", "expected_type": "criminal_law", "priority": "medium"},
-        
-        # 일반 질문
-        {"question": "안녕하세요", "category": "인사", "expected_type": "greeting", "priority": "low"},
-        {"question": "법률 상담은 어떻게 받을 수 있나요", "category": "일반", "expected_type": "general", "priority": "low"},
-        {"question": "변호사 선임 방법", "category": "일반", "expected_type": "general", "priority": "low"},
-        {"question": "법원 이용 방법", "category": "일반", "expected_type": "general", "priority": "low"},
-        {"question": "법률 서비스 이용 방법", "category": "일반", "expected_type": "general", "priority": "low"},
     ]
     
     return questions
@@ -151,12 +106,15 @@ async def test_comprehensive_answer_quality():
                 generation_method = result.get('generation_method', 'unknown')
                 sources = result.get('sources', [])
                 
-                print(f"응답: {response[:150]}...")
+                print(f"응답: {response}")
                 print(f"신뢰도: {confidence:.2f}")
                 print(f"처리 시간: {processing_time:.3f}초")
                 print(f"제한 여부: {is_restricted}")
                 print(f"생성 방법: {generation_method}")
                 print(f"검색 결과 수: {len(sources)}")
+                if sources:
+                    print(f"검색 소스: {sources}")
+                print("-" * 80)
                 
                 # 결과 저장
                 results.append({

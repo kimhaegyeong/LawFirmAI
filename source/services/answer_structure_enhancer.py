@@ -1382,31 +1382,39 @@ class AnswerStructureEnhancer:
             }
     
     def create_structured_answer(self, answer: str, question_type: QuestionType) -> str:
-        """구조화된 답변 생성"""
+        """간결하고 자연스러운 답변 생성"""
         try:
-            # 질문 유형에 따른 템플릿 가져오기
-            template = self.structure_templates.get(question_type, {})
-            
-            if not template:
+            # 이미 잘 구성된 답변인지 확인
+            if self._is_well_structured(answer):
                 return answer
             
-            # 구조화된 답변 생성
-            structured_answer = f"## {template.get('title', '답변')}\n\n"
+            # 간단한 제목만 추가 (필요한 경우)
+            if not re.search(r'^#+\s+', answer, re.MULTILINE):
+                return f"## 답변\n\n{answer}"
             
-            # 각 섹션별로 내용 구성
-            sections = template.get('sections', [])
-            for section in sections:
-                if section.get('priority') == 'high':
-                    structured_answer += f"### {section['name']}\n"
-                    structured_answer += f"{section['template']}\n\n"
-                    structured_answer += f"{answer}\n\n"
-                    break  # 첫 번째 high priority 섹션만 사용
-            
-            return structured_answer
+            return answer
             
         except Exception as e:
             print(f"Error creating structured answer: {e}")
             return answer
+    
+    def _is_well_structured(self, answer: str) -> bool:
+        """답변이 잘 구조화되어 있는지 확인"""
+        # 불필요한 섹션 제목이 있는지 확인
+        unwanted_patterns = [
+            r'###\s*관련\s*법령\s*\n+\s*관련\s*법령\s*:',
+            r'###\s*법령\s*해설\s*\n+\s*법령\s*해설\s*:',
+            r'###\s*적용\s*사례\s*\n+\s*실제\s*적용\s*사례\s*:',
+            r'\*쉬운\s*말로\s*풀어서\s*설명\*',
+            r'\*구체적\s*예시와\s*설명\*',
+            r'\*법적\s*리스크와\s*제한사항\*'
+        ]
+        
+        for pattern in unwanted_patterns:
+            if re.search(pattern, answer, re.IGNORECASE):
+                return False
+        
+        return True
 
 
 # 전역 인스턴스

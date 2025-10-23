@@ -95,7 +95,7 @@ class AnswerFormatter:
                      sources: Dict[str, List[Dict[str, Any]]],
                      confidence: ConfidenceInfo) -> FormattedAnswer:
         """
-        답변 구조화
+        간결하고 자연스러운 답변 포맷팅
         
         Args:
             raw_answer: 원본 답변
@@ -109,26 +109,14 @@ class AnswerFormatter:
         try:
             self.logger.info(f"Formatting answer for question type: {question_type.value}")
             
-            template = self.templates.get(question_type, self.templates[QuestionType.GENERAL_QUESTION])
-            
-            # 섹션별 내용 생성
-            sections = {}
-            
-            if question_type == QuestionType.PRECEDENT_SEARCH:
-                sections = self._format_precedent_answer(raw_answer, sources, confidence)
-            elif question_type == QuestionType.LAW_INQUIRY:
-                sections = self._format_law_explanation(raw_answer, sources, confidence)
-            elif question_type == QuestionType.LEGAL_ADVICE:
-                sections = self._format_legal_advice(raw_answer, sources, confidence)
-            elif question_type == QuestionType.PROCEDURE_GUIDE:
-                sections = self._format_procedure_guide(raw_answer, sources, confidence)
-            elif question_type == QuestionType.TERM_EXPLANATION:
-                sections = self._format_term_explanation(raw_answer, sources, confidence)
+            # 원본 답변이 이미 잘 구성되어 있으면 그대로 사용
+            if self._is_clean_answer(raw_answer):
+                formatted_content = raw_answer
+                sections = {"answer": raw_answer}
             else:
-                sections = self._format_general_answer(raw_answer, sources, confidence)
-            
-            # 최종 구조화된 답변 생성
-            formatted_content = self._build_formatted_content(template, sections, confidence)
+                # 간단한 정리만 수행
+                formatted_content = self._clean_answer(raw_answer)
+                sections = {"answer": formatted_content}
             
             # 메타데이터 생성
             metadata = {
@@ -1115,6 +1103,64 @@ class AnswerFormatter:
                 sections={"answer": raw_answer},
                 metadata={"question_type": "error"}
             )
+    
+    def _is_clean_answer(self, answer: str) -> bool:
+        """답변이 깔끔하게 구성되어 있는지 확인"""
+        # 불필요한 패턴이 있는지 확인
+        unwanted_patterns = [
+            r'###\s*관련\s*법령\s*\n+\s*관련\s*법령\s*:',
+            r'###\s*법령\s*해설\s*\n+\s*법령\s*해설\s*:',
+            r'###\s*적용\s*사례\s*\n+\s*실제\s*적용\s*사례\s*:',
+            r'\*쉬운\s*말로\s*풀어서\s*설명\*',
+            r'\*구체적\s*예시와\s*설명\*',
+            r'\*법적\s*리스크와\s*제한사항\*',
+            r'---\s*\n\s*💼\s*\*\*면책\s*조항\*\*'
+        ]
+        
+        for pattern in unwanted_patterns:
+            if re.search(pattern, answer, re.IGNORECASE):
+                return False
+        
+        return True
+    
+    def _clean_answer(self, answer: str) -> str:
+        """답변을 깔끔하게 정리"""
+        import re
+        
+        # 불필요한 섹션 제목 제거
+        patterns_to_remove = [
+            r'###\s*관련\s*법령\s*\n+\s*관련\s*법령\s*:\s*\n*',
+            r'###\s*법령\s*해설\s*\n+\s*법령\s*해설\s*:\s*\n*',
+            r'###\s*적용\s*사례\s*\n+\s*실제\s*적용\s*사례\s*:\s*\n*',
+            r'###\s*주의사항\s*\n+\s*주의사항\s*:\s*\n*',
+        ]
+        
+        for pattern in patterns_to_remove:
+            answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
+        
+        # 빈 섹션과 플레이스홀더 제거
+        placeholder_patterns = [
+            r'###\s*법령\s*해설\s*\n+\s*\*쉬운\s*말로\s*풀어서\s*설명\*\s*\n*',
+            r'###\s*적용\s*사례\s*\n+\s*\*구체적\s*예시와\s*설명\*\s*\n*',
+            r'###\s*주의사항\s*\n+\s*\*법적\s*리스크와\s*제한사항\*\s*\n*',
+        ]
+        
+        for pattern in placeholder_patterns:
+            answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
+        
+        # 면책 조항 제거
+        disclaimer_patterns = [
+            r'---\s*\n\s*💼\s*\*\*면책\s*조항\*\*\s*\n\s*#\s*면책\s*조항\s*제거\s*\n\s*#\s*본\s*답변은.*?바랍니다\.\s*\n*',
+            r'💼\s*\*\*면책\s*조항\*\*\s*\n\s*#\s*면책\s*조항\s*제거\s*\n\s*#\s*본\s*답변은.*?바랍니다\.\s*\n*',
+        ]
+        
+        for pattern in disclaimer_patterns:
+            answer = re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE)
+        
+        # 연속된 빈 줄 정리
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        
+        return answer.strip()
 
 
 # 테스트 함수

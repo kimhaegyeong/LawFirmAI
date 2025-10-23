@@ -163,14 +163,13 @@ cp env.example .env
 # GOOGLE_API_KEY=your_google_api_key (선택사항)
 ```
 
-### 4. Gradio 웹 인터페이스 실행
+### 4. Streamlit 웹 인터페이스 실행
 
 ```bash
-cd gradio
-python app.py
+streamlit run streamlit_app.py
 ```
 
-웹 브라우저에서 `http://localhost:7861`에 접속하여 LawFirmAI를 사용할 수 있습니다.
+웹 브라우저에서 `http://localhost:8501`에 접속하여 LawFirmAI를 사용할 수 있습니다.
 
 ## 📊 현재 성과
 
@@ -193,16 +192,8 @@ python app.py
 
 ```
 LawFirmAI/
-├── gradio/                          # Gradio 웹 애플리케이션
-│   ├── app.py                       # 메인 HuggingFace Spaces 앱 (7개 탭)
-│   ├── simple_langchain_app.py      # LangChain 기반 앱
-│   ├── components/                  # UI 컴포넌트
-│   ├── static/                      # 정적 파일 (CSS, 매니페스트)
-│   ├── requirements.txt             # Gradio 의존성
-│   ├── requirements_spaces.txt      # HuggingFace Spaces 의존성
-│   ├── Dockerfile.spaces            # Spaces 전용 Dockerfile
-│   └── docker-compose.yml           # 로컬 개발 환경
-├── source/                          # 핵심 모듈 (106개 파일)
+├── streamlit_app.py                    # Streamlit 메인 애플리케이션
+├── source/                             # 핵심 모듈 (106개 파일)
 │   ├── services/                    # 비즈니스 로직 (50+ 서비스)
 │   │   ├── chat_service.py          # 메인 채팅 서비스
 │   │   ├── rag_service.py           # ML 강화 RAG 서비스
@@ -382,7 +373,7 @@ LawFirmAI/
 ### 핵심 기술
 - **백엔드**: FastAPI, SQLite, FAISS, LangChain, LangGraph
 - **AI/ML**: KoGPT-2, Sentence-BERT, BGE-M3-Korean, ko-sroberta-multitask
-- **프론트엔드**: Gradio 4.0.0 (7개 탭 구성)
+- **프론트엔드**: Streamlit (현대적 웹 인터페이스)
 - **검색**: 하이브리드 검색 (의미적 + 정확 매칭)
 - **모니터링**: Prometheus + Grafana
 - **배포**: Docker, HuggingFace Spaces 준비 완료
@@ -454,30 +445,25 @@ LawFirmAI/
 # HuggingFace Spaces에 배포
 # 1. HuggingFace 계정 생성
 # 2. 새로운 Space 생성 (Docker 설정)
-# 3. gradio/app.py 사용 (7개 탭 구성)
-# 4. 포트: 7861
+# 3. streamlit_app.py 사용
+# 4. 포트: 8501
 ```
 
 ### Docker 배포
 
 ```bash
-# HuggingFace Spaces 전용 Docker 이미지 빌드
-cd gradio
-docker build -f Dockerfile.spaces -t lawfirm-ai-spaces .
+# Streamlit Docker 이미지 빌드
+docker build -t lawfirm-ai-streamlit .
 
 # 컨테이너 실행
-docker run -p 7861:7861 lawfirm-ai-spaces
+docker run -p 8501:8501 lawfirm-ai-streamlit
 ```
 
 ### 로컬 개발 환경
 
 ```bash
-# 로컬 개발용 Gradio 앱 실행
-cd gradio
-python app.py
-
-# 또는 LangChain 기반 앱 실행
-python simple_langchain_app.py
+# 로컬 개발용 Streamlit 앱 실행
+streamlit run streamlit_app.py
 ```
 
 
@@ -488,7 +474,7 @@ python simple_langchain_app.py
 ## 🙏 감사의 말
 
 - [LangChain](https://github.com/langchain-ai/langchain) - RAG 파이프라인 구축
-- [Gradio](https://github.com/gradio-app/gradio) - 웹 인터페이스
+- [Streamlit](https://github.com/streamlit/streamlit) - 웹 인터페이스
 - [HuggingFace](https://huggingface.co/) - 모델 및 데이터셋
 - [국가법령정보센터](https://www.law.go.kr/) - 법률 데이터 제공
 - [법률전문대학원협의회](https://www.akls.or.kr/) - AKLS 표준판례 데이터 제공

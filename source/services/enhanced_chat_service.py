@@ -8,10 +8,17 @@ import os
 import time
 import asyncio
 import hashlib
+import gc
+import weakref
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from ..utils.config import Config
 from ..utils.logger import get_logger
+from ..utils.memory_manager import get_memory_manager, MemoryManager
+from ..utils.weakref_cleanup import get_weakref_registry, WeakRefRegistry
+from ..utils.realtime_memory_monitor import get_memory_monitor, RealTimeMemoryMonitor
+from ..utils.advanced_response_processor import advanced_response_processor
+from ..utils.quality_validator import quality_validator
 from .rag_service import MLEnhancedRAGService
 from .hybrid_search_engine import HybridSearchEngine
 from .improved_answer_generator import ImprovedAnswerGenerator
@@ -130,6 +137,9 @@ class EnhancedChatService:
         # LangGraph 사용 여부 확인 (비활성화)
         self.use_langgraph = False
         
+        # 메모리 관리 시스템 초기화
+        self._initialize_memory_management()
+        
         # 핵심 컴포넌트 초기화
         self._initialize_core_components()
         
@@ -178,14 +188,63 @@ class EnhancedChatService:
         logging.getLogger('google.cloud').setLevel(logging.ERROR)
         logging.getLogger('google.api_core').setLevel(logging.ERROR)
     
+    def _initialize_memory_management(self):
+        """메모리 관리 시스템 초기화"""
+        try:
+            # 메모리 관리자 초기화
+            self.memory_manager = get_memory_manager(max_memory_mb=1024)
+            
+            # WeakRef 등록소 초기화
+            self.weakref_registry = get_weakref_registry()
+            
+            # 실시간 메모리 모니터 초기화
+            self.memory_monitor = get_memory_monitor()
+            
+            # 메모리 알림 콜백 등록
+            self.memory_manager.add_alert_callback(self._on_memory_alert)
+            
+            # 컴포넌트 추적을 위한 WeakRef 등록 함수
+            self._track_component = self._create_component_tracker()
+            
+            self.logger.info("메모리 관리 시스템 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"메모리 관리 시스템 초기화 실패: {e}")
+            # 기본값으로 설정
+            self.memory_manager = None
+            self.weakref_registry = None
+            self.memory_monitor = None
+            self._track_component = lambda obj, name: None
+    
+    def _create_component_tracker(self):
+        """컴포넌트 추적 함수 생성"""
+        def track_component(obj: Any, name: str) -> str:
+            """컴포넌트를 WeakRef로 추적"""
+            if self.weakref_registry:
+                return self.weakref_registry.register_object(obj, name)
+            return name
+        return track_component
+    
+    def _on_memory_alert(self, alert):
+        """메모리 알림 처리"""
+        self.logger.warning(f"메모리 알림 [{alert.severity}]: {alert.message}")
+        
+        # 심각한 메모리 부족 시 자동 정리
+        if alert.severity in ['high', 'critical']:
+            self.logger.info("자동 메모리 정리 실행")
+            cleanup_result = self.perform_memory_cleanup()
+            self.logger.info(f"자동 정리 완료: {cleanup_result.get('memory_freed_mb', 0):.1f}MB 해제")
+    
     def _initialize_core_components(self):
         """핵심 컴포넌트 초기화"""
         try:
             # 데이터베이스 관리자
             self.db_manager = DatabaseManager("data/lawfirm.db")
+            self._track_component(self.db_manager, "db_manager")
             
             # 벡터 스토어
             self.vector_store = LegalVectorStore()
+            self._track_component(self.vector_store, "vector_store")
             # 벡터 인덱스 로드
             try:
                 self.vector_store.load_index()
@@ -196,18 +255,22 @@ class EnhancedChatService:
             # 모델 관리자
             from .optimized_model_manager import OptimizedModelManager
             self.model_manager = OptimizedModelManager()
+            self._track_component(self.model_manager, "model_manager")
             
             # RAG 서비스 (MLEnhancedRAGService는 제거하고 UnifiedRAGService만 사용)
             # self.rag_service = MLEnhancedRAGService(...)
             
             # 하이브리드 검색 엔진
             self.hybrid_search_engine = HybridSearchEngine()
+            self._track_component(self.hybrid_search_engine, "hybrid_search_engine")
             
             # 질문 분류기
             self.question_classifier = QuestionClassifier()
+            self._track_component(self.question_classifier, "question_classifier")
             
             # 개선된 답변 생성기
             self.improved_answer_generator = ImprovedAnswerGenerator()
+            self._track_component(self.improved_answer_generator, "improved_answer_generator")
             
             self.logger.info("핵심 컴포넌트 초기화 완료")
             
@@ -337,18 +400,18 @@ class EnhancedChatService:
         """Phase 시스템 초기화"""
         try:
             # Phase 1: 대화 맥락 강화
-            self.integrated_session_manager = IntegratedSessionManager(self.config)
+            self.integrated_session_manager = IntegratedSessionManager("data/conversations.db")
             self.multi_turn_handler = MultiTurnQuestionHandler()
             self.context_compressor = ContextCompressor(self.config)
             
             # Phase 2: 개인화 및 지능형 분석
-            self.user_profile_manager = UserProfileManager(self.config)
+            self.user_profile_manager = UserProfileManager()
             self.emotion_intent_analyzer = EmotionIntentAnalyzer()
             self.conversation_flow_tracker = ConversationFlowTracker(self.config)
             
             # Phase 3: 장기 기억 및 품질 모니터링
-            self.contextual_memory_manager = ContextualMemoryManager(self.config)
-            self.conversation_quality_monitor = ConversationQualityMonitor(self.config)
+            self.contextual_memory_manager = ContextualMemoryManager()
+            self.conversation_quality_monitor = ConversationQualityMonitor()
             
             self.logger.info("Phase 시스템 초기화 완료")
             
@@ -921,24 +984,47 @@ class EnhancedChatService:
             }
     
     def _generate_improved_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """개선된 템플릿 기반 답변 생성"""
+        """자연스러운 답변 생성 - 템플릿 제거"""
         self.logger.info(f"_generate_improved_template_response called for: {message}")
         
-        # 법률 조문이 있는 경우
-        if query_analysis.get("statute_match") or query_analysis.get("statute_law") or query_analysis.get("statute_article"):
-            return self._generate_statute_template(message, query_analysis.get("intent", "unknown"))
-        
-        # 1. ML 기반 분류 우선 시도
-        if query_analysis.get("confidence", 0) > 0.7:
-            domain = query_analysis.get("query_type", "general")
-            intent = query_analysis.get("intent", "unknown")
-        else:
-            # 2. 가중치 기반 키워드 분류
-            domain = self._classify_domain_by_weight(message)
-            intent = self._extract_intent_from_message(message, domain)
-        
-        # 3. 의도 기반 세분화된 템플릿 생성
-        return self._generate_template_by_intent(message, domain, intent)
+        # 템플릿 기반 답변을 완전히 제거하고 자연스러운 답변만 생성
+        try:
+            # Gemini 클라이언트를 사용하여 직접 답변 생성
+            from .gemini_client import GeminiClient
+            gemini_client = GeminiClient()
+            
+            # 간단하고 직접적인 프롬프트
+            prompt = f"""다음 질문에 대해 자연스럽고 직접적으로 답변해주세요.
+
+질문: {message}
+
+답변 규칙:
+1. 질문에 바로 답변하세요
+2. 섹션 제목이나 템플릿을 사용하지 마세요
+3. 자연스럽고 친근한 톤으로 답변하세요
+4. 필요한 정보만 간결하게 제공하세요
+
+답변:"""
+            
+            gemini_response = gemini_client.generate(prompt)
+            response = gemini_response.response
+            
+            return {
+                "response": response,
+                "confidence": 0.8,
+                "sources": [],
+                "generation_method": "natural_response"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Natural response generation failed: {e}")
+            # 폴백: 간단한 답변
+            return {
+                "response": f"'{message}'에 대한 답변을 준비 중입니다. 잠시만 기다려주세요.",
+                "confidence": 0.5,
+                "sources": [],
+                "generation_method": "fallback"
+            }
     
     def _classify_domain_by_weight(self, message: str) -> str:
         """가중치 기반 도메인 분류"""
@@ -1874,31 +1960,59 @@ class EnhancedChatService:
             return answer
     
     def _remove_repetitive_patterns(self, response: str) -> str:
-        """반복적인 패턴 제거"""
+        """고급 후처리 시스템을 사용한 반복 패턴 제거"""
+        try:
+            # 고급 후처리 시스템 사용
+            processing_result = advanced_response_processor.process_response(response)
+            
+            # 품질 검증 수행
+            validation_result = quality_validator.validate_response(processing_result.processed_text)
+            
+            # 로깅
+            self.logger.info(f"고급 후처리 완료 - 품질 점수: {processing_result.quality_score:.2f}, "
+                           f"등급: {processing_result.quality_grade.value}")
+            self.logger.info(f"품질 검증 결과 - 전체 점수: {validation_result['overall_score']:.2f}, "
+                           f"유효성: {validation_result['is_valid']}")
+            
+            # 개선 사항이 있으면 로깅
+            if processing_result.improvements_made:
+                self.logger.info(f"개선 사항: {', '.join(processing_result.improvements_made)}")
+            
+            # 품질이 너무 낮으면 원본 반환
+            if processing_result.quality_score < 0.3:
+                self.logger.warning("후처리 후 품질이 너무 낮아 원본을 반환합니다.")
+                return response
+            
+            return processing_result.processed_text
+            
+        except Exception as e:
+            self.logger.error(f"고급 후처리 중 오류: {e}")
+            # 오류 발생 시 기존 방식으로 폴백
+            return self._fallback_pattern_removal(response)
+    
+    def _fallback_pattern_removal(self, response: str) -> str:
+        """폴백 패턴 제거 (기존 방식)"""
         try:
             import re
             
-            # "### 관련 법령\n관련 법령:" 같은 반복 패턴 제거 (더 강력한 패턴)
-            response = re.sub(r'###\s*관련\s*법령\s*\n+\s*관련\s*법령\s*:\s*\n+', '', response)
-            response = re.sub(r'###\s*법령\s*해설\s*\n+\s*법령\s*해설\s*:\s*\n+', '', response)
-            response = re.sub(r'###\s*적용\s*사례\s*\n+\s*실제\s*적용\s*사례\s*:\s*\n+', '', response)
+            # 기본적인 패턴 제거
+            patterns = [
+                r'###\s*[^\n]+\s*\n*',
+                r'\*[^*]+\*\s*\n*',
+                r'본\s*답변은.*?바랍니다\.\s*\n*',
+                r'(문의하신|질문하신)\s*내용에\s*대해\s*',
+            ]
             
-            # "문의하신 내용에 대해", "질문하신 내용에 대해", "관련해서 말씀드리면" 같은 불필요한 서론 제거
-            response = re.sub(r'(문의하신|질문하신)\s*내용에\s*대해\s*', '', response)
-            response = re.sub(r'관련해서\s*말씀드리면\s*', '', response)
+            for pattern in patterns:
+                response = re.sub(pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
             
-            # 중복된 제목 제거 (예: "## 제목\n제목:")
-            response = re.sub(r'(###+\s*[^\n]+)\s*\n+\s*\1\s*:', r'\1\n\n', response, flags=re.IGNORECASE)
-            
-            # 연속된 빈 줄 제거 (3개 이상의 연속 줄바꿈을 2개로)
+            # 연속된 빈 줄 정리
             response = re.sub(r'\n{3,}', '\n\n', response)
             
-            # 응답 시작 부분의 불필요한 섹션 제목 제거
-            response = re.sub(r'^###\s*관련\s*법령\s*\n+', '', response)
-            
             return response.strip()
+            
         except Exception as e:
-            self.logger.debug(f"패턴 제거 중 오류: {e}")
+            self.logger.error(f"폴백 패턴 제거 중 오류: {e}")
             return response
     
     async def _post_process_response(self, response_result: Dict[str, Any], query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
@@ -2197,3 +2311,302 @@ class EnhancedChatService:
                 "error": str(e),
                 "langgraph_enabled": self.use_langgraph
             }
+    
+    # === 메모리 관리 메서드들 ===
+    
+    def perform_memory_cleanup(self) -> Dict[str, Any]:
+        """메모리 정리 수행"""
+        try:
+            cleanup_results = {}
+            
+            # 1. WeakRef 정리
+            if self.weakref_registry:
+                weakref_result = self.weakref_registry.force_cleanup()
+                cleanup_results['weakref_cleanup'] = weakref_result
+            
+            # 2. 메모리 관리자 정리
+            if self.memory_manager:
+                memory_result = self.memory_manager.perform_cleanup()
+                cleanup_results['memory_cleanup'] = memory_result
+            
+            # 3. 가비지 컬렉션 강제 실행
+            gc_result = self.memory_manager.force_garbage_collection() if self.memory_manager else None
+            if gc_result:
+                cleanup_results['garbage_collection'] = gc_result
+            
+            # 4. 캐시 정리
+            if hasattr(self, 'cache_manager') and self.cache_manager:
+                self.cache_manager.clear()
+                cleanup_results['cache_cleanup'] = {'cleared': True}
+            
+            # 5. 컴포넌트별 정리
+            component_cleanup = self._cleanup_components()
+            cleanup_results['component_cleanup'] = component_cleanup
+            
+            # 전체 결과 계산
+            total_memory_freed = 0
+            for result in cleanup_results.values():
+                if isinstance(result, dict) and 'memory_freed_mb' in result:
+                    total_memory_freed += result['memory_freed_mb']
+            
+            final_result = {
+                'success': True,
+                'total_memory_freed_mb': total_memory_freed,
+                'cleanup_details': cleanup_results,
+                'timestamp': datetime.now()
+            }
+            
+            self.logger.info(f"메모리 정리 완료: {total_memory_freed:.1f}MB 해제")
+            return final_result
+            
+        except Exception as e:
+            self.logger.error(f"메모리 정리 실패: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
+    
+    def _cleanup_components(self) -> Dict[str, Any]:
+        """컴포넌트별 정리"""
+        cleanup_results = {}
+        
+        try:
+            # 모델 관리자 정리
+            if hasattr(self, 'model_manager') and self.model_manager:
+                if hasattr(self.model_manager, 'clear_cache'):
+                    self.model_manager.clear_cache()
+                    cleanup_results['model_cache'] = {'cleared': True}
+            
+            # 벡터 스토어 정리
+            if hasattr(self, 'vector_store') and self.vector_store:
+                if hasattr(self.vector_store, 'clear_cache'):
+                    self.vector_store.clear_cache()
+                    cleanup_results['vector_cache'] = {'cleared': True}
+            
+            # 데이터베이스 연결 정리
+            if hasattr(self, 'db_manager') and self.db_manager:
+                if hasattr(self.db_manager, 'close_connections'):
+                    self.db_manager.close_connections()
+                    cleanup_results['db_connections'] = {'closed': True}
+            
+            cleanup_results['success'] = True
+            
+        except Exception as e:
+            cleanup_results['error'] = str(e)
+            cleanup_results['success'] = False
+        
+        return cleanup_results
+    
+    def get_memory_status(self) -> Dict[str, Any]:
+        """메모리 상태 정보 반환"""
+        try:
+            status = {
+                'service_name': 'EnhancedChatService',
+                'timestamp': datetime.now()
+            }
+            
+            # 메모리 관리자 상태
+            if self.memory_manager:
+                status['memory_manager'] = self.memory_manager.get_memory_usage()
+            
+            # WeakRef 등록소 상태
+            if self.weakref_registry:
+                status['weakref_registry'] = self.weakref_registry.get_registry_stats()
+            
+            # 실시간 모니터 상태
+            if self.memory_monitor:
+                status['memory_monitor'] = self.memory_monitor.get_current_status()
+            
+            # 컴포넌트별 메모리 사용량 추정
+            component_sizes = {}
+            for attr_name in dir(self):
+                if not attr_name.startswith('_') and hasattr(self, attr_name):
+                    obj = getattr(self, attr_name)
+                    if obj is not None and not callable(obj):
+                        try:
+                            size = self._estimate_object_size(obj)
+                            if size > 1024:  # 1KB 이상인 객체만
+                                component_sizes[attr_name] = {
+                                    'size_bytes': size,
+                                    'size_mb': size / 1024 / 1024,
+                                    'type': type(obj).__name__
+                                }
+                        except Exception:
+                            pass
+            
+            status['component_sizes'] = component_sizes
+            
+            return status
+            
+        except Exception as e:
+            self.logger.error(f"메모리 상태 조회 실패: {e}")
+            return {'error': str(e), 'timestamp': datetime.now()}
+    
+    def _estimate_object_size(self, obj: Any) -> int:
+        """객체 크기 추정"""
+        try:
+            import sys
+            return sys.getsizeof(obj)
+        except Exception:
+            return 0
+    
+    def optimize_memory_usage(self, target_memory_mb: float = 500.0) -> Dict[str, Any]:
+        """메모리 사용량 최적화"""
+        try:
+            current_status = self.get_memory_status()
+            current_memory = current_status.get('memory_manager', {}).get('current_memory_mb', 0)
+            
+            if current_memory <= target_memory_mb:
+                return {
+                    'optimization_needed': False,
+                    'current_memory_mb': current_memory,
+                    'target_memory_mb': target_memory_mb,
+                    'message': '메모리 사용량이 목표치 이하입니다.'
+                }
+            
+            # 최적화 실행
+            optimization_results = []
+            
+            # 1. 메모리 정리
+            cleanup_result = self.perform_memory_cleanup()
+            optimization_results.append(cleanup_result)
+            
+            # 2. WeakRef 최적화
+            if self.weakref_registry:
+                from ..utils.weakref_cleanup import MemoryOptimizer
+                optimizer = MemoryOptimizer(self.weakref_registry)
+                weakref_result = optimizer.optimize_memory_usage(target_memory_mb)
+                optimization_results.append(weakref_result)
+            
+            # 최종 상태 확인
+            final_status = self.get_memory_status()
+            final_memory = final_status.get('memory_manager', {}).get('current_memory_mb', 0)
+            
+            result = {
+                'optimization_needed': True,
+                'initial_memory_mb': current_memory,
+                'final_memory_mb': final_memory,
+                'memory_freed_mb': current_memory - final_memory,
+                'optimization_results': optimization_results,
+                'target_achieved': final_memory <= target_memory_mb,
+                'timestamp': datetime.now()
+            }
+            
+            self.logger.info(f"메모리 최적화 완료: {result['memory_freed_mb']:.1f}MB 해제")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"메모리 최적화 실패: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
+    
+    def monitor_memory_trend(self, hours: int = 1) -> Dict[str, Any]:
+        """메모리 사용량 추세 모니터링"""
+        try:
+            if not self.memory_monitor:
+                return {'error': '메모리 모니터가 초기화되지 않았습니다.'}
+            
+            trend_result = self.memory_monitor.get_memory_trend(hours)
+            return trend_result
+            
+        except Exception as e:
+            self.logger.error(f"메모리 추세 모니터링 실패: {e}")
+            return {'error': str(e)}
+    
+    def generate_memory_report(self) -> Dict[str, Any]:
+        """메모리 사용량 리포트 생성"""
+        try:
+            report = {
+                'report_timestamp': datetime.now(),
+                'service_info': {
+                    'name': 'EnhancedChatService',
+                    'version': '2.0.0',
+                    'uptime': datetime.now() - getattr(self, '_start_time', datetime.now())
+                }
+            }
+            
+            # 메모리 상태
+            report['memory_status'] = self.get_memory_status()
+            
+            # 메모리 추세
+            report['memory_trend'] = self.monitor_memory_trend(hours=1)
+            
+            # 알림 요약
+            if self.memory_monitor:
+                report['alerts_summary'] = self.memory_monitor.get_alerts_summary()
+            
+            # 최적화 권장사항
+            recommendations = self._generate_memory_recommendations()
+            report['recommendations'] = recommendations
+            
+            return report
+            
+        except Exception as e:
+            self.logger.error(f"메모리 리포트 생성 실패: {e}")
+            return {'error': str(e), 'timestamp': datetime.now()}
+    
+    def _generate_memory_recommendations(self) -> List[Dict[str, Any]]:
+        """메모리 최적화 권장사항 생성"""
+        recommendations = []
+        
+        try:
+            status = self.get_memory_status()
+            current_memory = status.get('memory_manager', {}).get('current_memory_mb', 0)
+            
+            # 메모리 사용량 기반 권장사항
+            if current_memory > 800:
+                recommendations.append({
+                    'type': 'critical',
+                    'title': '메모리 사용량이 높습니다',
+                    'description': f'현재 메모리 사용량: {current_memory:.1f}MB',
+                    'action': '즉시 메모리 정리를 실행하세요',
+                    'command': 'service.perform_memory_cleanup()'
+                })
+            elif current_memory > 600:
+                recommendations.append({
+                    'type': 'warning',
+                    'title': '메모리 사용량이 증가하고 있습니다',
+                    'description': f'현재 메모리 사용량: {current_memory:.1f}MB',
+                    'action': '메모리 정리를 고려하세요',
+                    'command': 'service.optimize_memory_usage()'
+                })
+            
+            # WeakRef 상태 기반 권장사항
+            weakref_stats = status.get('weakref_registry', {})
+            dead_refs = weakref_stats.get('dead_references', 0)
+            if dead_refs > 10:
+                recommendations.append({
+                    'type': 'info',
+                    'title': '죽은 참조가 많습니다',
+                    'description': f'죽은 참조: {dead_refs}개',
+                    'action': 'WeakRef 정리를 실행하세요',
+                    'command': 'service.weakref_registry.cleanup_dead_references()'
+                })
+            
+            # 컴포넌트 크기 기반 권장사항
+            component_sizes = status.get('component_sizes', {})
+            large_components = {k: v for k, v in component_sizes.items() if v['size_mb'] > 50}
+            if large_components:
+                recommendations.append({
+                    'type': 'info',
+                    'title': '큰 컴포넌트가 있습니다',
+                    'description': f'큰 컴포넌트: {list(large_components.keys())}',
+                    'action': '컴포넌트별 캐시 정리를 고려하세요',
+                    'command': 'service._cleanup_components()'
+                })
+            
+        except Exception as e:
+            recommendations.append({
+                'type': 'error',
+                'title': '권장사항 생성 실패',
+                'description': str(e),
+                'action': '시스템 로그를 확인하세요',
+                'command': None
+            })
+        
+        return recommendations

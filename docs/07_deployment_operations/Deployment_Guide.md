@@ -70,12 +70,9 @@ source venv/bin/activate
 ### 3. 의존성 설치
 
 ```bash
-# Gradio 앱 의존성 설치
-cd gradio
+# Streamlit 앱 의존성 설치
+pip install streamlit
 pip install -r requirements.txt
-
-# 또는 HuggingFace Spaces 의존성 설치
-pip install -r requirements_spaces.txt
 ```
 
 ### 4. 환경 변수 설정
@@ -128,15 +125,11 @@ python -c "from source.data.database import DatabaseManager; db = DatabaseManage
 ### 6. 애플리케이션 실행
 
 ```bash
-# Gradio 앱 실행 (7개 탭 구성)
-cd gradio
-python app.py
-
-# 또는 LangChain 기반 앱 실행
-python simple_langchain_app.py
+# Streamlit 앱 실행
+streamlit run streamlit_app.py
 ```
 
-웹 브라우저에서 `http://localhost:7861`에 접속하여 LawFirmAI를 사용할 수 있습니다.
+웹 브라우저에서 `http://localhost:8501`에 접속하여 LawFirmAI를 사용할 수 있습니다.
 
 ## HuggingFace Spaces 배포 (권장)
 
@@ -151,7 +144,7 @@ python simple_langchain_app.py
 
 ### 2. Docker 설정
 
-`gradio/Dockerfile.spaces` 파일이 이미 준비되어 있습니다:
+`Dockerfile` 파일을 생성하세요:
 
 ```dockerfile
 FROM python:3.9-slim
@@ -164,25 +157,25 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 의존성 설치
-COPY gradio/requirements_spaces.txt .
-RUN pip install --no-cache-dir -r requirements_spaces.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install streamlit
 
 # 애플리케이션 코드 복사
-COPY gradio/ ./gradio/
+COPY streamlit_app.py .
 COPY source/ ./source/
 
 # 필요한 디렉토리 생성
 RUN mkdir -p data logs runtime
 
 # 환경 변수 설정
-ENV USE_LANGGRAPH=true
 ENV PYTHONPATH=/app
 
 # 포트 설정
-EXPOSE 7861
+EXPOSE 8501
 
 # 애플리케이션 실행
-CMD ["python", "gradio/app.py"]
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
 
 ### 3. Space 설정
@@ -198,19 +191,20 @@ colorTo: purple
 sdk: docker
 pinned: false
 license: mit
-app_port: 7861
+app_port: 8501
 ---
 
 # LawFirmAI - 법률 AI 어시스턴트
 
-Phase 1-3이 완료된 지능형 법률 AI 어시스턴트입니다.
+지능형 법률 AI 어시스턴트입니다.
 
 ## 주요 기능
 
-- **Phase 1**: 대화 맥락 강화, 다중 턴 질문 처리
-- **Phase 2**: 개인화 및 지능형 분석, 감정/의도 분석
-- **Phase 3**: 장기 기억 및 품질 모니터링
-- **7개 탭 UI**: 채팅, 프로필, 분석, 이력, 기억, 품질, 설정
+- 법령 조문 해석
+- 판례 검색 및 분석
+- 계약서 검토
+- 법률 절차 안내
+- 개인화된 답변
 ```
 
 ### 4. 배포 및 테스트
@@ -224,30 +218,26 @@ Phase 1-3이 완료된 지능형 법률 AI 어시스턴트입니다.
 ### 1. 로컬 Docker 배포
 
 ```bash
-# HuggingFace Spaces 전용 Docker 이미지 빌드
-cd gradio
-docker build -f Dockerfile.spaces -t lawfirm-ai-spaces .
+# Streamlit Docker 이미지 빌드
+docker build -t lawfirm-ai-streamlit .
 
 # 컨테이너 실행
-docker run -p 7861:7861 lawfirm-ai-spaces
+docker run -p 8501:8501 lawfirm-ai-streamlit
 ```
 
 ### 2. Docker Compose 배포
 
-`gradio/docker-compose.yml` 파일을 사용:
+`docker-compose.yml` 파일을 생성하세요:
 
 ```yaml
 version: '3.8'
 
 services:
   lawfirm-ai:
-    build:
-      context: .
-      dockerfile: Dockerfile.spaces
+    build: .
     ports:
-      - "7861:7861"
+      - "8501:8501"
     environment:
-      - USE_LANGGRAPH=true
       - LOG_LEVEL=INFO
     volumes:
       - ./data:/app/data
@@ -257,7 +247,6 @@ services:
 
 실행:
 ```bash
-cd gradio
 docker-compose up -d
 ```
 
@@ -265,13 +254,12 @@ docker-compose up -d
 
 ```bash
 # 프로덕션용 이미지 빌드
-docker build -f Dockerfile.spaces -t lawfirm-ai:latest .
+docker build -t lawfirm-ai:latest .
 
 # 프로덕션 컨테이너 실행
 docker run -d \
   --name lawfirm-ai \
-  -p 7861:7861 \
-  -e USE_LANGGRAPH=true \
+  -p 8501:8501 \
   -e LOG_LEVEL=INFO \
   -v /path/to/data:/app/data \
   -v /path/to/logs:/app/logs \
