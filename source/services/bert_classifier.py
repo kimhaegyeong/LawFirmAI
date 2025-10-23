@@ -210,17 +210,17 @@ def predict_proba(query: str, category: str = "unknown", subcategory: str = "unk
     allowed_p = float(probabilities[0][0])  # 0: allowed
     restricted_p = float(probabilities[0][1])  # 1: restricted
     
-    # 카테고리별 차별화 적용
+    # 카테고리별 차별화 적용 (균형잡힌 기준)
     sensitive_categories = ["personal_legal_advice", "medical_legal_advice", "criminal_case_advice", "illegal_activity_assistance"]
     if category in sensitive_categories:
         if category == "medical_legal_advice":
-            restricted_p = max(restricted_p, 0.4)  # 의료법은 더 관대
+            restricted_p = max(restricted_p, 0.35)  # 의료법은 0.35로 조정 (0.25 → 0.35)
         elif category == "criminal_case_advice":
-            restricted_p = max(restricted_p, 0.6)  # 형사법은 적당한 엄격함
+            restricted_p = max(restricted_p, 0.5)   # 형사법은 0.5로 조정 (0.4 → 0.5)
         elif category == "illegal_activity_assistance":
-            restricted_p = max(restricted_p, 0.7)  # 불법행위는 엄격함
+            restricted_p = max(restricted_p, 0.6)   # 불법행위는 0.6으로 조정 (0.5 → 0.6)
         else:
-            restricted_p = max(restricted_p, 0.55)  # 개인 자문은 기본
+            restricted_p = max(restricted_p, 0.45)  # 개인 자문은 0.45로 조정 (0.35 → 0.45)
         allowed_p = 1.0 - restricted_p
     
     return {"allowed": allowed_p, "restricted": restricted_p}

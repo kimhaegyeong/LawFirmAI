@@ -123,21 +123,21 @@ def predict_proba(query: str, category: str = "unknown", subcategory: str = "unk
     allowed_p = float(proba[class_to_idx.get(0, 0)])
     restricted_p = float(proba[class_to_idx.get(1, 1)])
     
-    # 민감군 강제 제한 기준 상향 (카테고리별 차별화)
+    # 민감군 강제 제한 기준 상향 (카테고리별 차별화 - 균형잡힌 기준)
     sensitive_categories = ["personal_legal_advice", "medical_legal_advice", "criminal_case_advice", "illegal_activity_assistance"]
     if category in sensitive_categories:
         # 의료법 카테고리는 더 관대한 기준 적용
         if category == "medical_legal_advice":
-            restricted_p = max(restricted_p, 0.5)  # 의료법은 0.5로 완화
-        # 형사법 카테고리는 적당한 엄격함 적용 (완화)
+            restricted_p = max(restricted_p, 0.4)  # 의료법은 0.4로 조정 (0.3 → 0.4)
+        # 형사법 카테고리는 적당한 엄격함 적용
         elif category == "criminal_case_advice":
-            restricted_p = max(restricted_p, 0.65)  # 형사법은 0.65로 완화 (0.8 → 0.65)
+            restricted_p = max(restricted_p, 0.6)  # 형사법은 0.6으로 조정 (0.5 → 0.6)
         # 불법행위 카테고리도 더 엄격한 기준 적용
         elif category == "illegal_activity_assistance":
-            restricted_p = max(restricted_p, 0.75)  # 불법행위는 0.75로 강화
+            restricted_p = max(restricted_p, 0.7)  # 불법행위는 0.7로 조정 (0.6 → 0.7)
         # 개인 법률 자문은 기본 기준 적용
         else:
-            restricted_p = max(restricted_p, 0.6)  # 기본 0.6 유지
+            restricted_p = max(restricted_p, 0.5)  # 기본 0.5로 조정 (0.4 → 0.5)
         allowed_p = 1.0 - restricted_p
     
     return {"allowed": allowed_p, "restricted": restricted_p}

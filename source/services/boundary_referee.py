@@ -47,17 +47,30 @@ class BoundaryReferee:
         is_general = any(tok in query for tok in self.general_markers)
         is_harmful = any(tok in query for tok in self.harmful_markers)
 
+        # 중립 정책으로 변경: REFEREE_STRICT=0일 때는 더 관대하게 처리
+        if not self.strict:
+            # 중립 모드에서는 일반 정보성이 있으면 허용 유지
+            if is_general and not is_harmful:
+                result["final_decision"] = "allowed"
+                result.setdefault("reasoning", []).append("경계 심판기: 중립 모드 - 일반 정보성으로 허용")
+                return result
+            # 중립 모드에서는 유해 마커가 없으면 허용 고려
+            elif not is_harmful:
+                result["final_decision"] = "allowed"
+                result.setdefault("reasoning", []).append("경계 심판기: 중립 모드 - 유해 마커 없음으로 허용")
+                return result
+
         # 의료법 카테고리는 더 관대한 기준 적용
         if category == "medical_legal_advice":
             # 의료법에서는 일반 정보성이 있으면 허용 유지
             if is_general and not is_harmful:
                 result["final_decision"] = "allowed"
-                result["reasoning"].append("경계 심판기: 의료법 일반 정보성으로 허용 유지")
+                result.setdefault("reasoning", []).append("경계 심판기: 의료법 일반 정보성으로 허용 유지")
                 return result
             # 의료법에서는 제한 편향을 완화
             if self.strict and final == "allowed":
                 result["final_decision"] = "restricted"
-                result["reasoning"].append("경계 심판기: 의료법 보수적 제한 (완화)")
+                result.setdefault("reasoning", []).append("경계 심판기: 의료법 보수적 제한 (완화)")
             return result
 
         # 형사법과 불법행위 카테고리는 더 엄격한 기준 적용
@@ -67,25 +80,25 @@ class BoundaryReferee:
                 # 형사법에서는 일반 정보성이 있으면 허용 고려
                 if is_general and not is_harmful:
                     result["final_decision"] = "allowed"
-                    result["reasoning"].append("경계 심판기: 형사법 일반 정보성으로 허용")
+                    result.setdefault("reasoning", []).append("경계 심판기: 형사법 일반 정보성으로 허용")
                     return result
                 # 형사법에서는 제한 편향을 적당히 적용
                 if self.strict and final == "allowed":
                     result["final_decision"] = "restricted"
-                    result["reasoning"].append("경계 심판기: 형사법 보수적 제한 (적당함)")
+                    result.setdefault("reasoning", []).append("경계 심판기: 형사법 보수적 제한 (적당함)")
             # 불법행위는 여전히 엄격한 기준 적용
             elif category == "illegal_activity_assistance":
                 # 불법행위에서는 제한 편향을 강화
                 if self.strict and final == "allowed":
                     result["final_decision"] = "restricted"
-                    result["reasoning"].append(f"경계 심판기: {category} 엄격한 제한 보정")
+                    result.setdefault("reasoning", []).append(f"경계 심판기: {category} 엄격한 제한 보정")
                 # 일반 정보성이 있어도 유해 마커가 있으면 제한
                 elif is_harmful:
                     result["final_decision"] = "restricted"
-                    result["reasoning"].append(f"경계 심판기: {category} 유해 마커로 제한")
+                    result.setdefault("reasoning", []).append(f"경계 심판기: {category} 유해 마커로 제한")
             return result
 
-        # 보수 정책: 경계에서는 제한 편향
+        # 보수 정책: 경계에서는 제한 편향 (strict 모드에서만)
         if self.strict and not is_general and is_harmful:
             if final == "allowed":
                 result["final_decision"] = "restricted"
@@ -94,7 +107,7 @@ class BoundaryReferee:
 
         # 중립 또는 일반정보성 강한 경우 허용 유지
         if final == "restricted" and is_general and not is_harmful:
-            result["reasoning"].append("경계구간: 일반정보 마커로 허용 유지")
+            result.setdefault("reasoning", []).append("경계구간: 일반정보 마커로 허용 유지")
         return result
 
     def re_evaluate(self, result: Dict[str, Any], category: str = "") -> Dict[str, Any]:
