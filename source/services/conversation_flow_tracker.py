@@ -169,8 +169,16 @@ class ConversationFlowTracker:
             turn: 대화 턴
         """
         try:
+            # user_query가 문자열이 아닌 경우 처리
+            user_query = turn.user_query
+            if not isinstance(user_query, str):
+                if hasattr(turn, 'user_query') and turn.user_query:
+                    user_query = str(turn.user_query)
+                else:
+                    user_query = ""
+            
             # 의도 분석
-            intent_result = self.emotion_intent_analyzer.analyze_intent(turn.user_query)
+            intent_result = self.emotion_intent_analyzer.analyze_intent(user_query)
             intent_type = intent_result.primary_intent.value
             
             # 질문 유형 추출
@@ -180,7 +188,7 @@ class ConversationFlowTracker:
             self._update_flow_pattern(session_id, intent_type, question_type)
             
             # 분기점 감지
-            branch = self.detect_conversation_branch(turn.user_query)
+            branch = self.detect_conversation_branch(user_query)
             if branch:
                 self._update_conversation_branch(branch)
             
@@ -206,7 +214,10 @@ class ConversationFlowTracker:
             # 최근 턴들의 의도 분석
             recent_intents = []
             for turn in context.turns[-3:]:  # 최근 3턴
-                intent_result = self.emotion_intent_analyzer.analyze_intent(turn.user_query)
+                user_query = turn.user_query
+                if not isinstance(user_query, str):
+                    user_query = str(user_query) if user_query else ""
+                intent_result = self.emotion_intent_analyzer.analyze_intent(user_query)
                 recent_intents.append(intent_result.primary_intent.value)
             
             # 패턴 기반 예측
@@ -258,7 +269,10 @@ class ConversationFlowTracker:
             
             # 분기점 기반 제안
             last_turn = context.turns[-1]
-            branch = self.detect_conversation_branch(last_turn.user_query)
+            user_query = last_turn.user_query
+            if not isinstance(user_query, str):
+                user_query = str(user_query) if user_query else ""
+            branch = self.detect_conversation_branch(user_query)
             if branch:
                 suggestions.extend(branch.follow_up_suggestions)
             
@@ -344,7 +358,10 @@ class ConversationFlowTracker:
                 # 의도 시퀀스 추출
                 intent_sequence = []
                 for turn in session.turns:
-                    intent_result = self.emotion_intent_analyzer.analyze_intent(turn.user_query)
+                    user_query = turn.user_query
+                    if not isinstance(user_query, str):
+                        user_query = str(user_query) if user_query else ""
+                    intent_result = self.emotion_intent_analyzer.analyze_intent(user_query)
                     intent_sequence.append(intent_result.primary_intent.value)
                 
                 # 패턴 카운트
@@ -397,7 +414,10 @@ class ConversationFlowTracker:
             # 최근 턴들의 의도 분석
             recent_intents = []
             for turn in context.turns[-3:]:
-                intent_result = self.emotion_intent_analyzer.analyze_intent(turn.user_query)
+                user_query = turn.user_query
+                if not isinstance(user_query, str):
+                    user_query = str(user_query) if user_query else ""
+                intent_result = self.emotion_intent_analyzer.analyze_intent(user_query)
                 recent_intents.append(intent_result.primary_intent.value)
             
             # 상태 결정 로직

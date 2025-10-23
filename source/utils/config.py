@@ -11,6 +11,22 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from pathlib import Path
 
+# .env 파일 로딩
+try:
+    from dotenv import load_dotenv
+    # 프로젝트 루트 디렉토리에서 .env 파일 로드
+    project_root = Path(__file__).parent.parent.parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✅ .env 파일 로드됨: {env_path}")
+    else:
+        print(f"⚠️ .env 파일을 찾을 수 없음: {env_path}")
+except ImportError:
+    print("⚠️ python-dotenv가 설치되지 않음. pip install python-dotenv")
+except Exception as e:
+    print(f"⚠️ .env 파일 로드 실패: {e}")
+
 # 한글 출력을 위한 인코딩 설정
 if sys.platform == "win32":
     # Windows에서 한글 출력을 위한 설정
@@ -46,12 +62,15 @@ class Config(BaseSettings):
     debug: bool = Field(default=False, env="DEBUG")
     
     # Database Configuration
-    database_url: str = Field(default="sqlite:///./data/lawfirm.db", env="DATABASE_URL")
+    database_url: str = Field(default="sqlite:///data/lawfirm.db", env="DATABASE_URL")
     database_path: str = Field(default="./data/lawfirm.db", env="DATABASE_PATH")
     
     # Model Configuration
     model_path: str = Field(default="./models", env="MODEL_PATH")
     device: str = Field(default="cpu", env="DEVICE")
+    
+    # Google API Configuration
+    google_api_key: str = Field(default="", env="GOOGLE_API_KEY")
     model_cache_dir: str = Field(default="./model_cache", env="MODEL_CACHE_DIR")
     
     # Vector Store Configuration

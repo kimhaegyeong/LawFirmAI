@@ -853,9 +853,11 @@ class LegalVectorStore:
             self.logger.error(f"Failed to save index: {e}")
             return False
     
-    def load_index(self, filepath: str) -> bool:
+    def load_index(self, filepath: str = None) -> bool:
         """인덱스와 메타데이터 로딩"""
         try:
+            if filepath is None:
+                filepath = "data/embeddings/legal_vector_index"
             filepath = Path(filepath)
             
             # FAISS 인덱스 로딩 - 확장자가 없으면 직접 로드, 있으면 기존 방식 사용
@@ -865,8 +867,8 @@ class LegalVectorStore:
                 if not Path(faiss_file).exists():
                     faiss_file = str(filepath)
                 self.index = faiss.read_index(faiss_file)
-                # 메타데이터 파일명 처리 (simple_vector_index -> simple_vector_metadata.json)
-                metadata_file = filepath.parent / f"{filepath.name.replace('_index', '_metadata')}.json"
+                # 메타데이터 파일명 처리 (ml_enhanced_faiss_index -> ml_enhanced_faiss_index.json)
+                metadata_file = str(filepath) + '.json'
             else:
                 # 확장자가 있는 경우 기존 방식 사용
                 faiss_file = str(filepath.with_suffix('.faiss'))

@@ -151,6 +151,24 @@ class ConfidenceCalculator:
     
     def _calculate_type_confidence(self, question_type: str) -> float:
         """질문 유형 기반 신뢰도 (상향 조정된 버전)"""
+        # question_type이 리스트인 경우 첫 번째 요소 사용
+        if isinstance(question_type, list):
+            question_type = question_type[0] if question_type else "general_question"
+        elif isinstance(question_type, dict):
+            # 딕셔너리인 경우 'query_type' 키의 값을 사용하거나 첫 번째 값을 사용
+            question_type = question_type.get('query_type', question_type.get('type', 'general_question'))
+            # 여전히 딕셔너리인 경우 문자열로 변환
+            if isinstance(question_type, dict):
+                question_type = str(question_type)
+        elif not isinstance(question_type, str):
+            # QuestionType enum이나 다른 객체인 경우 문자열로 변환
+            if hasattr(question_type, 'value'):
+                question_type = question_type.value
+            elif hasattr(question_type, 'name'):
+                question_type = question_type.name
+            else:
+                question_type = str(question_type)
+        
         type_confidence_map = {
             "precedent_search": 0.95,    # 판례 검색 - 높은 신뢰도
             "law_inquiry": 0.90,         # 법률 문의 - 높은 신뢰도
@@ -250,6 +268,12 @@ class ConfidenceCalculator:
         quality_scores = []
         for source in sources:
             score = 0.0
+            
+            # source가 문자열인 경우 딕셔너리로 변환
+            if isinstance(source, str):
+                source = {'content': source, 'search_type': 'unknown'}
+            elif not isinstance(source, dict):
+                source = {'content': str(source), 'search_type': 'unknown'}
             
             # 소스 타입별 가중치
             source_type = source.get('search_type', 'unknown')
