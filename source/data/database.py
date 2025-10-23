@@ -125,6 +125,41 @@ class DatabaseManager:
                 )
             """)
             
+            # 헌재결정례 상세 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS constitutional_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    decision_id INTEGER UNIQUE NOT NULL,
+                    decision_name TEXT NOT NULL,
+                    case_number TEXT,
+                    case_type TEXT,
+                    case_type_code INTEGER,
+                    court_division_code INTEGER,
+                    decision_date TEXT,
+                    final_date TEXT,
+                    summary TEXT,
+                    decision_gist TEXT,
+                    full_text TEXT,
+                    reference_articles TEXT,
+                    reference_precedents TEXT,
+                    target_articles TEXT,
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 헌재결정례 FTS 테이블 (전문 검색용)
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS constitutional_decisions_fts USING fts5(
+                    decision_name,
+                    summary,
+                    decision_gist,
+                    full_text,
+                    content='constitutional_decisions',
+                    content_rowid='id'
+                )
+            """)
+            
             # 법령해석례 메타데이터 테이블
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS interpretation_metadata (
@@ -1152,3 +1187,230 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error updating file processing status: {e}")
             return False
+    
+    # 헌재결정례 관련 메서드들
+    
+    def insert_constitutional_decision(self, decision_data: Dict[str, Any]) -> bool:
+        """
+        헌재결정례 데이터 삽입
+        
+        Args:
+            decision_data: 헌재결정례 데이터
+            
+        Returns:
+            bool: 삽입 성공 여부
+        """
+        query = """
+            INSERT OR REPLACE INTO constitutional_decisions (
+                decision_id, decision_name, case_number, case_type, case_type_code,
+                court_division_code, decision_date, final_date, summary, decision_gist,
+                full_text, reference_articles, reference_precedents, target_articles
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        
+        try:
+            params = (
+                decision_data.get('헌재결정례일련번호'),
+                decision_data.get('사건명'),
+                decision_data.get('사건번호'),
+                decision_data.get('사건종류명'),
+                decision_data.get('사건종류코드'),
+                decision_data.get('재판부구분코드'),
+                decision_data.get('종국일자'),
+                decision_data.get('종국일자'),
+                decision_data.get('판시사항'),
+                decision_data.get('결정요지'),
+                decision_data.get('전문'),
+                decision_data.get('참조조문'),
+                decision_data.get('참조판례'),
+                decision_data.get('심판대상조문')
+            )
+            
+            self.execute_update(query, params)
+            logger.info(f"헌재결정례 삽입 성공: {decision_data.get('사건명', 'Unknown')}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"헌재결정례 삽입 실패: {e}")
+            return False
+    
+    def insert_constitutional_decisions_batch(self, decisions: List[Dict[str, Any]]) -> int:
+        """
+        헌재결정례 배치 삽입
+        
+        Args:
+            decisions: 헌재결정례 데이터 리스트
+            
+        Returns:
+            int: 삽입된 행 수
+        """
+        query = """
+            INSERT OR REPLACE INTO constitutional_decisions (
+                decision_id, decision_name, case_number, case_type, case_type_code,
+                court_division_code, decision_date, final_date, summary, decision_gist,
+                full_text, reference_articles, reference_precedents, target_articles
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                params_list = []
+                for decision_data in decisions:
+                    params = (
+                        decision_data.get('헌재결정례일련번호'),
+                        decision_data.get('사건명'),
+                        decision_data.get('사건번호'),
+                        decision_data.get('사건종류명'),
+                        decision_data.get('사건종류코드'),
+                        decision_data.get('재판부구분코드'),
+                        decision_data.get('종국일자'),
+                        decision_data.get('종국일자'),
+                        decision_data.get('판시사항'),
+                        decision_data.get('결정요지'),
+                        decision_data.get('전문'),
+                        decision_data.get('참조조문'),
+                        decision_data.get('참조판례'),
+                        decision_data.get('심판대상조문')
+                    )
+                    params_list.append(params)
+                
+                cursor.executemany(query, params_list)
+                conn.commit()
+                
+                logger.info(f"헌재결정례 배치 삽입 성공: {len(decisions)}개")
+                return len(decisions)
+                
+        except Exception as e:
+            logger.error(f"헌재결정례 배치 삽입 실패: {e}")
+            return 0
+    
+    def get_constitutional_decision_by_id(self, decision_id: int) -> Optional[Dict[str, Any]]:
+        """
+        헌재결정례 ID로 조회
+        
+        Args:
+            decision_id: 헌재결정례 ID
+            
+        Returns:
+            Dict: 헌재결정례 데이터 또는 None
+        """
+        query = """
+            SELECT * FROM constitutional_decisions 
+            WHERE decision_id = ?
+        """
+        result = self.execute_query(query, (decision_id,))
+        return result[0] if result else None
+    
+    def search_constitutional_decisions_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        헌재결정례 FTS 검색
+        
+        Args:
+            query: 검색 쿼리
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        fts_query = """
+            SELECT cd.*, 
+                   rank as fts_rank
+            FROM constitutional_decisions_fts fts
+            JOIN constitutional_decisions cd ON fts.rowid = cd.id
+            WHERE constitutional_decisions_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """
+        return self.execute_query(fts_query, (query, limit))
+    
+    def get_constitutional_decisions_by_date_range(self, 
+                                                  start_date: str, 
+                                                  end_date: str,
+                                                  limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        날짜 범위로 헌재결정례 조회
+        
+        Args:
+            start_date: 시작 날짜 (YYYY-MM-DD)
+            end_date: 종료 날짜 (YYYY-MM-DD)
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 헌재결정례 목록
+        """
+        query = """
+            SELECT * FROM constitutional_decisions 
+            WHERE decision_date BETWEEN ? AND ?
+            ORDER BY decision_date ASC
+            LIMIT ?
+        """
+        return self.execute_query(query, (start_date, end_date, limit))
+    
+    def get_constitutional_decisions_by_keyword(self, 
+                                              keyword: str, 
+                                              limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        키워드로 헌재결정례 조회
+        
+        Args:
+            keyword: 검색 키워드
+            limit: 결과 제한 수
+            
+        Returns:
+            List[Dict]: 헌재결정례 목록
+        """
+        query = """
+            SELECT * FROM constitutional_decisions 
+            WHERE decision_name LIKE ? OR summary LIKE ? OR decision_gist LIKE ?
+            ORDER BY decision_date DESC
+            LIMIT ?
+        """
+        keyword_pattern = f"%{keyword}%"
+        return self.execute_query(query, (keyword_pattern, keyword_pattern, keyword_pattern, limit))
+    
+    def get_constitutional_decisions_count(self) -> int:
+        """
+        헌재결정례 총 개수 조회
+        
+        Returns:
+            int: 총 개수
+        """
+        query = "SELECT COUNT(*) as count FROM constitutional_decisions"
+        result = self.execute_query(query)
+        return result[0]['count'] if result else 0
+    
+    def get_constitutional_decisions_stats(self) -> Dict[str, Any]:
+        """
+        헌재결정례 통계 조회
+        
+        Returns:
+            Dict: 통계 정보
+        """
+        stats = {}
+        
+        # 총 개수
+        stats['total_count'] = self.get_constitutional_decisions_count()
+        
+        # 연도별 통계
+        year_query = """
+            SELECT SUBSTR(decision_date, 1, 4) as year, COUNT(*) as count
+            FROM constitutional_decisions 
+            WHERE decision_date IS NOT NULL
+            GROUP BY SUBSTR(decision_date, 1, 4)
+            ORDER BY year DESC
+        """
+        stats['by_year'] = self.execute_query(year_query)
+        
+        # 사건종류별 통계
+        type_query = """
+            SELECT case_type, COUNT(*) as count
+            FROM constitutional_decisions 
+            WHERE case_type IS NOT NULL
+            GROUP BY case_type
+            ORDER BY count DESC
+        """
+        stats['by_type'] = self.execute_query(type_query)
+        
+        return stats

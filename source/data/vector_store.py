@@ -970,3 +970,229 @@ class LegalVectorStore:
         gc.collect()
         
         self.logger.info("Resource cleanup completed")
+    
+    # 헌재결정례 관련 메서드들
+    
+    def add_constitutional_decisions(self, decisions: List[Dict[str, Any]]) -> bool:
+        """
+        헌재결정례 벡터 임베딩 추가
+        
+        Args:
+            decisions: 헌재결정례 데이터 리스트
+            
+        Returns:
+            bool: 추가 성공 여부
+        """
+        try:
+            texts = []
+            metadata = []
+            
+            for decision in decisions:
+                # 텍스트 조합 (사건명 + 판시사항 + 결정요지 + 전문)
+                text_parts = [
+                    decision.get('사건명', ''),
+                    decision.get('판시사항', ''),
+                    decision.get('결정요지', ''),
+                    decision.get('전문', '')
+                ]
+                
+                combined_text = ' '.join(filter(None, text_parts))
+                if combined_text.strip():
+                    texts.append(combined_text)
+                    
+                    metadata.append({
+                        'document_type': 'constitutional_decision',
+                        'decision_id': decision.get('헌재결정례일련번호'),
+                        'case_name': decision.get('사건명'),
+                        'case_number': decision.get('사건번호'),
+                        'decision_date': decision.get('종국일자'),
+                        'case_type': decision.get('사건종류명'),
+                        'court_division_code': decision.get('재판부구분코드'),
+                        'summary': decision.get('판시사항'),
+                        'decision_gist': decision.get('결정요지'),
+                        'reference_articles': decision.get('참조조문'),
+                        'reference_precedents': decision.get('참조판례'),
+                        'target_articles': decision.get('심판대상조문'),
+                        'collected_at': decision.get('collected_at', datetime.now().isoformat())
+                    })
+            
+            if not texts:
+                self.logger.warning("No valid texts found in constitutional decisions")
+                return False
+            
+            # 임베딩 생성
+            embeddings = self.generate_embeddings(texts)
+            
+            # 정규화 (cosine similarity를 위해)
+            faiss.normalize_L2(embeddings)
+            
+            # 인덱스에 추가
+            if self.index.is_trained:
+                self.index.add(embeddings)
+            else:
+                # IVF 인덱스의 경우 훈련 필요
+                if self.index_type == "ivf":
+                    self.index.train(embeddings)
+                    self.index.add(embeddings)
+                else:
+                    self.index.add(embeddings)
+            
+            # 메타데이터 저장
+            self.document_metadata.extend(metadata)
+            self.document_texts.extend(texts)
+            
+            self.logger.info(f"Added {len(texts)} constitutional decisions to vector store")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to add constitutional decisions: {e}")
+            return False
+    
+    def search_constitutional_decisions(self, 
+                                      query: str, 
+                                      top_k: int = 10,
+                                      filter_by_date: Optional[str] = None,
+                                      filter_by_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        헌재결정례 벡터 검색
+        
+        Args:
+            query: 검색 쿼리
+            top_k: 반환할 결과 수
+            filter_by_date: 날짜 필터 (YYYY-MM-DD 형식)
+            filter_by_type: 사건종류 필터
+            
+        Returns:
+            List[Dict]: 검색 결과
+        """
+        try:
+            # 쿼리 임베딩 생성
+            query_embedding = self.generate_embeddings([query])
+            faiss.normalize_L2(query_embedding)
+            
+            # 검색 실행
+            scores, indices = self.index.search(query_embedding.astype('float32'), top_k * 2)  # 필터링을 위해 더 많이 검색
+            
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.document_metadata):
+                    metadata = self.document_metadata[idx].copy()
+                    
+                    # 문서 타입 필터링
+                    if metadata.get('document_type') != 'constitutional_decision':
+                        continue
+                    
+                    # 날짜 필터링
+                    if filter_by_date and metadata.get('decision_date'):
+                        if not metadata['decision_date'].startswith(filter_by_date):
+                            continue
+                    
+                    # 사건종류 필터링
+                    if filter_by_type and metadata.get('case_type'):
+                        if filter_by_type not in metadata['case_type']:
+                            continue
+                    
+                    metadata['similarity_score'] = float(score)
+                    results.append(metadata)
+                    
+                    if len(results) >= top_k:
+                        break
+            
+            self.logger.info(f"Found {len(results)} constitutional decision results for query: {query}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to search constitutional decisions: {e}")
+            return []
+    
+    def get_constitutional_decisions_by_similarity(self, 
+                                                 decision_id: int, 
+                                                 top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        특정 헌재결정례와 유사한 결정례 검색
+        
+        Args:
+            decision_id: 기준 헌재결정례 ID
+            top_k: 반환할 결과 수
+            
+        Returns:
+            List[Dict]: 유사한 결정례 목록
+        """
+        try:
+            # 기준 결정례 찾기
+            target_idx = None
+            for i, metadata in enumerate(self.document_metadata):
+                if (metadata.get('document_type') == 'constitutional_decision' and 
+                    metadata.get('decision_id') == decision_id):
+                    target_idx = i
+                    break
+            
+            if target_idx is None:
+                self.logger.warning(f"Constitutional decision not found: {decision_id}")
+                return []
+            
+            # 해당 결정례의 임베딩을 쿼리로 사용
+            target_embedding = self.index.reconstruct(target_idx).reshape(1, -1)
+            
+            # 검색 실행 (자기 자신 제외)
+            scores, indices = self.index.search(target_embedding.astype('float32'), top_k + 1)
+            
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.document_metadata):
+                    metadata = self.document_metadata[idx].copy()
+                    
+                    # 문서 타입 필터링 및 자기 자신 제외
+                    if (metadata.get('document_type') == 'constitutional_decision' and 
+                        metadata.get('decision_id') != decision_id):
+                        metadata['similarity_score'] = float(score)
+                        results.append(metadata)
+                        
+                        if len(results) >= top_k:
+                            break
+            
+            self.logger.info(f"Found {len(results)} similar constitutional decisions for ID: {decision_id}")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get similar constitutional decisions: {e}")
+            return []
+    
+    def get_constitutional_decisions_stats(self) -> Dict[str, Any]:
+        """
+        헌재결정례 벡터 스토어 통계
+        
+        Returns:
+            Dict: 통계 정보
+        """
+        try:
+            constitutional_count = 0
+            by_year = {}
+            by_type = {}
+            
+            for metadata in self.document_metadata:
+                if metadata.get('document_type') == 'constitutional_decision':
+                    constitutional_count += 1
+                    
+                    # 연도별 통계
+                    decision_date = metadata.get('decision_date', '')
+                    if decision_date and len(decision_date) >= 4:
+                        year = decision_date[:4]
+                        by_year[year] = by_year.get(year, 0) + 1
+                    
+                    # 사건종류별 통계
+                    case_type = metadata.get('case_type', '')
+                    if case_type:
+                        by_type[case_type] = by_type.get(case_type, 0) + 1
+            
+            return {
+                'total_constitutional_decisions': constitutional_count,
+                'by_year': by_year,
+                'by_type': by_type,
+                'total_documents': len(self.document_metadata),
+                'constitutional_ratio': constitutional_count / len(self.document_metadata) if self.document_metadata else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get constitutional decisions stats: {e}")
+            return {}

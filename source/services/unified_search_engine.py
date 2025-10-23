@@ -216,13 +216,92 @@ class UnifiedSearchEngine:
             return []
     
     def _search_exact(self, query: str, top_k: int, category: str) -> List[Dict[str, Any]]:
-        """정확 검색"""
+        """정확 검색 - FTS 직접 사용"""
         try:
-            # ExactSearchEngine은 documents 매개변수가 필요하므로 빈 리스트 전달
-            results = self.exact_search_engine.search(query, documents=[], top_k=top_k)
-            return [self._format_exact_result(result) for result in results]
+            # FTS 직접 검색으로 개선
+            results = self._search_fts_direct(query, top_k)
+            return results
         except Exception as e:
             logger.error(f"Exact search error: {e}")
+            return []
+    
+    def _search_fts_direct(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """FTS 직접 검색"""
+        try:
+            import sqlite3
+            
+            # 데이터베이스 연결
+            conn = sqlite3.connect('data/lawfirm.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            results = []
+            
+            # 1. assembly_articles에서 FTS 검색
+            try:
+                cursor.execute("""
+                    SELECT id, article_title, article_content,
+                           snippet(fts_assembly_articles, 2, '<b>', '</b>', '...', 32) as snippet
+                    FROM fts_assembly_articles 
+                    WHERE fts_assembly_articles MATCH ?
+                    LIMIT ?
+                """, (query, top_k))
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    result = {
+                        'content': row['article_content'],
+                        'score': 0.9,  # FTS 검색은 높은 신뢰도
+                        'source': 'fts_assembly_articles',
+                        'type': 'exact',
+                        'metadata': {
+                            'id': row['id'],
+                            'title': row['article_title'],
+                            'snippet': row['snippet']
+                        }
+                    }
+                    results.append(result)
+                    
+            except Exception as e:
+                logger.debug(f"FTS assembly_articles search error: {e}")
+            
+            # 2. assembly_laws에서 FTS 검색
+            try:
+                cursor.execute("""
+                    SELECT id, law_name, full_text,
+                           snippet(fts_assembly_laws, 2, '<b>', '</b>', '...', 32) as snippet
+                    FROM fts_assembly_laws 
+                    WHERE fts_assembly_laws MATCH ?
+                    LIMIT ?
+                """, (query, top_k))
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    result = {
+                        'content': row['full_text'],
+                        'score': 0.8,  # 법률명 검색은 중간 신뢰도
+                        'source': 'fts_assembly_laws',
+                        'type': 'exact',
+                        'metadata': {
+                            'id': row['id'],
+                            'law_name': row['law_name'],
+                            'snippet': row['snippet']
+                        }
+                    }
+                    results.append(result)
+                    
+            except Exception as e:
+                logger.debug(f"FTS assembly_laws search error: {e}")
+            
+            conn.close()
+            
+            # 상위 k개만 반환
+            results = results[:top_k]
+            logger.debug(f"FTS direct search found {len(results)} results")
+            return results
+            
+        except Exception as e:
+            logger.error(f"FTS direct search error: {e}")
             return []
     
     def _search_semantic(self, query: str, top_k: int, category: str) -> List[Dict[str, Any]]:

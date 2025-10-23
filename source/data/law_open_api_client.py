@@ -513,6 +513,300 @@ class LawOpenAPIClient:
         
         return all_terms
     
+    def search_constitutional_decisions(self, 
+                                      query: str = "",
+                                      search: int = 1,
+                                      display: int = 20,
+                                      page: int = 1,
+                                      sort: str = "dasc",
+                                      date: Optional[str] = None,
+                                      edYd: Optional[str] = None,
+                                      nb: Optional[int] = None) -> Dict[str, Any]:
+        """
+        헌재결정례 목록 조회
+        
+        Args:
+            query: 검색 쿼리
+            search: 검색범위 (1: 헌재결정례명, 2: 본문검색)
+            display: 검색된 결과 개수 (기본: 20, 최대: 100)
+            page: 검색 결과 페이지 (기본: 1)
+            sort: 정렬옵션 (dasc: 선고일자 오름차순, ddes: 선고일자 내림차순, 
+                           lasc: 사건명 오름차순, ldes: 사건명 내림차순,
+                           nasc: 사건번호 오름차순, ndes: 사건번호 내림차순,
+                           efasc: 종국일자 오름차순, efdes: 종국일자 내림차순)
+            date: 종국일자 (YYYYMMDD 형식)
+            edYd: 종국일자 기간 검색
+            nb: 사건번호
+            
+        Returns:
+            헌재결정례 목록 데이터
+        """
+        params = {
+            'OC': self.oc_parameter,
+            'target': 'detc',
+            'type': 'JSON',
+            'query': query,
+            'search': search,
+            'display': display,
+            'page': page,
+            'sort': sort
+        }
+        
+        if date:
+            params['date'] = date
+        if edYd:
+            params['edYd'] = edYd
+        if nb:
+            params['nb'] = nb
+            
+        logger.info(f"헌재결정례 목록 조회 - 쿼리: '{query}', 페이지: {page}, 크기: {display}, 정렬: {sort}")
+        
+        return self._make_request(params)
+    
+    def get_constitutional_decision_detail(self, 
+                                        decision_id: str,
+                                        decision_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        헌재결정례 상세 조회
+        
+        Args:
+            decision_id: 헌재결정례 일련번호
+            decision_name: 헌재결정례명 (선택사항)
+            
+        Returns:
+            헌재결정례 상세 데이터
+        """
+        # 상세 조회는 별도 URL 사용
+        detail_url = "http://www.law.go.kr/DRF/lawService.do"
+        
+        params = {
+            'OC': self.oc_parameter,
+            'target': 'detc',
+            'type': 'JSON',
+            'ID': decision_id
+        }
+        
+        if decision_name:
+            params['LM'] = decision_name
+            
+        logger.debug(f"헌재결정례 상세 조회 - ID: {decision_id}, 이름: {decision_name}")
+        
+        # 상세 조회는 별도 URL이므로 직접 요청
+        self._wait_for_request_interval()
+        
+        try:
+            response = self.session.get(detail_url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            # 응답 내용 확인
+            response_text = response.text.strip()
+            if not response_text:
+                logger.warning(f"헌재결정례 상세 조회 응답이 비어있음: {decision_id}")
+                return {"error": "empty_response", "decision_id": decision_id}
+            
+            # JSON 파싱 시도
+            try:
+                data = response.json()
+                logger.debug(f"헌재결정례 상세 조회 성공: {decision_id}")
+                return data
+            except ValueError as e:
+                logger.warning(f"JSON 파싱 실패, 응답 내용: {response_text[:200]}...")
+                return {
+                    "error": "json_parse_error", 
+                    "decision_id": decision_id,
+                    "response_text": response_text[:500]  # 처음 500자만 저장
+                }
+            
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP 에러 발생: {e}, 응답: {response.text if 'response' in locals() else 'N/A'}")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"요청 에러 발생: {e}")
+            raise
+    
+    def get_all_constitutional_decisions(self, 
+                                       query: str = "", 
+                                       max_pages: int = None,
+                                       sort: str = "dasc",
+                                       include_details: bool = True,
+                                       batch_size: int = 100,
+                                       save_batches: bool = True) -> List[Dict[str, Any]]:
+        """
+        모든 헌재결정례 조회 (선고일자 오름차순, 배치 저장 지원)
+        
+        Args:
+            query: 검색 쿼리
+            max_pages: 최대 페이지 수 (None이면 모든 페이지)
+            sort: 정렬옵션 (기본값: dasc - 선고일자 오름차순)
+            include_details: 상세 정보 포함 여부
+            batch_size: 배치 크기 (기본값: 100개)
+            save_batches: 배치별 저장 여부 (기본값: True)
+            
+        Returns:
+            헌재결정례 목록 (상세 정보 포함)
+        """
+        all_decisions = []
+        page = 1
+        total_pages = 0
+        batch_count = 0
+        current_batch = []
+        
+        # 배치 저장 디렉토리 설정
+        if save_batches:
+            batch_dir = Path("data/raw/constitutional_decisions/batches")
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        logger.info(f"전체 헌재결정례 조회 시작 - 쿼리: '{query}', 최대페이지: {max_pages or '무제한'}, 정렬: {sort}, 배치크기: {batch_size}")
+        
+        # 첫 페이지로 전체 개수 확인
+        if page == 1:
+            first_response = self.search_constitutional_decisions(query, 1, 100, 1, sort)
+            if first_response and 'DetcSearch' in first_response:
+                total_count = int(first_response['DetcSearch'].get('totalCnt', 0))
+                total_pages = (total_count + 99) // 100  # 페이지당 100개
+                print(f"  전체 헌재결정례 수: {total_count:,}개 (총 {total_pages}페이지)")
+        
+        while True:
+            if max_pages and page > max_pages:
+                break
+            
+            try:
+                if page == 1:
+                    response = first_response
+                else:
+                    response = self.search_constitutional_decisions(query, 1, 100, page, sort)
+                
+                # 응답 데이터 확인
+                if not response or 'DetcSearch' not in response:
+                    logger.warning(f"페이지 {page}에서 데이터 없음")
+                    break
+                
+                search_result = response['DetcSearch']
+                if 'detc' not in search_result:
+                    logger.info(f"페이지 {page}에서 빈 결과 - 수집 완료")
+                    break
+                
+                # detc가 단일 객체인 경우 리스트로 변환
+                decisions = search_result['detc']
+                if isinstance(decisions, dict):
+                    decisions = [decisions]
+                
+                # 상세 정보 포함 여부에 따라 처리
+                if include_details:
+                    detailed_decisions = []
+                    for decision in decisions:
+                        decision_id = decision.get('헌재결정례일련번호')
+                        if decision_id:
+                            try:
+                                # 상세 정보 조회
+                                detail = self.get_constitutional_decision_detail(decision_id)
+                                
+                                # 목록 정보와 상세 정보 결합
+                                combined_decision = {
+                                    **decision,  # 목록 정보
+                                    'detailed_info': detail  # 상세 정보
+                                }
+                                detailed_decisions.append(combined_decision)
+                                
+                                # 서버 과부하 방지
+                                time.sleep(1.0)
+                                
+                            except Exception as e:
+                                logger.error(f"헌재결정례 상세 조회 실패: {decision_id} - {e}")
+                                detailed_decisions.append(decision)
+                        else:
+                            detailed_decisions.append(decision)
+                    
+                    all_decisions.extend(detailed_decisions)
+                    current_batch.extend(detailed_decisions)
+                else:
+                    all_decisions.extend(decisions)
+                    current_batch.extend(decisions)
+                
+                # 배치 크기에 도달하면 파일로 저장
+                if save_batches and len(current_batch) >= batch_size:
+                    batch_count += 1
+                    batch_file = batch_dir / f"constitutional_batch_{timestamp}_{batch_count:03d}.json"
+                    
+                    batch_data = {
+                        "batch_number": batch_count,
+                        "batch_size": len(current_batch),
+                        "start_page": page - len(current_batch) // 100 + 1,
+                        "end_page": page,
+                        "timestamp": datetime.now().isoformat(),
+                        "decisions": current_batch
+                    }
+                    
+                    with open(batch_file, 'w', encoding='utf-8') as f:
+                        json.dump(batch_data, f, ensure_ascii=False, indent=2)
+                    
+                    print(f"  💾 헌재결정례 배치 {batch_count} 저장: {len(current_batch):,}개 항목 -> {batch_file.name}")
+                    logger.info(f"헌재결정례 배치 {batch_count} 저장 완료: {len(current_batch)}개 항목")
+                    
+                    current_batch = []  # 배치 초기화
+                
+                # 진행률 표시
+                if page % 10 == 0 or (total_pages > 0 and page >= total_pages):
+                    progress = (page / total_pages * 100) if total_pages > 0 else 0
+                    print(f"  페이지 {page} 수집 완료 - 누적: {len(all_decisions):,}개 ({progress:.1f}%)")
+                
+                logger.info(f"페이지 {page} 수집 완료 - {len(decisions)}개 결정례, 누적: {len(all_decisions)}개")
+                
+                page += 1
+                
+                # 서버 과부하 방지를 위한 대기 (1초)
+                time.sleep(1.0)
+                
+            except Exception as e:
+                logger.error(f"페이지 {page} 수집 실패: {e}")
+                break
+        
+        logger.info(f"전체 헌재결정례 조회 완료 - 총 {len(all_decisions)}개 결정례")
+        
+        # 마지막 배치 저장 (남은 데이터가 있는 경우)
+        if save_batches and current_batch:
+            batch_count += 1
+            batch_file = batch_dir / f"constitutional_batch_{timestamp}_{batch_count:03d}.json"
+            
+            batch_data = {
+                "batch_number": batch_count,
+                "batch_size": len(current_batch),
+                "start_page": page - len(current_batch) // 100,
+                "end_page": page - 1,
+                "timestamp": datetime.now().isoformat(),
+                "decisions": current_batch
+            }
+            
+            with open(batch_file, 'w', encoding='utf-8') as f:
+                json.dump(batch_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"  💾 마지막 헌재결정례 배치 {batch_count} 저장: {len(current_batch):,}개 항목 -> {batch_file.name}")
+            logger.info(f"마지막 헌재결정례 배치 {batch_count} 저장 완료: {len(current_batch)}개 항목")
+        
+        # 배치 요약 정보 저장
+        if save_batches and batch_count > 0:
+            summary_file = batch_dir / f"constitutional_batch_summary_{timestamp}.json"
+            summary_data = {
+                "total_batches": batch_count,
+                "total_decisions": len(all_decisions),
+                "batch_size": batch_size,
+                "timestamp": timestamp,
+                "start_time": datetime.now().isoformat(),
+                "end_time": datetime.now().isoformat(),
+                "query": query,
+                "sort": sort,
+                "max_pages": max_pages,
+                "include_details": include_details
+            }
+            
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(summary_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"  📊 헌재결정례 배치 요약 저장: {batch_count}개 배치, {len(all_decisions):,}개 항목 -> {summary_file.name}")
+        
+        return all_decisions
+
     def test_connection(self) -> bool:
         """
         API 연결 테스트
