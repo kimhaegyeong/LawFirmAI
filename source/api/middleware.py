@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from source.utils.config import Config
-from utils.logger import get_logger
+from source.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

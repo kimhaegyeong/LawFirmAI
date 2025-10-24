@@ -9,8 +9,11 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 import time
 from datetime import datetime
-from source.utils.config import Config
+from source.utils.input_validator import get_input_validator, ValidationResult
+from source.utils.security_logger import get_security_logger, SecurityEventType, SecurityLevel
+from source.utils.privacy_compliance import get_privacy_compliance_manager, ProcessingPurpose
 from source.utils.logger import get_logger
+from source.utils.config import Config
 from source.services.chat_service import ChatService
 from source.services.rag_service import MLEnhancedRAGService
 from source.services.search_service import MLEnhancedSearchService
@@ -29,6 +32,9 @@ from source.models.model_manager import LegalModelManager
 
 logger = get_logger(__name__)
 
+# Create API router at module level
+api_router = APIRouter(prefix="/api/v1")
+
 # Pydantic models
 class ChatRequest(BaseModel):
     message: str
@@ -41,7 +47,7 @@ class MLEnhancedChatRequest(BaseModel):
     session_id: Optional[str] = None
     use_ml_enhanced: bool = True
     quality_threshold: Optional[float] = Field(default=0.7, ge=0.0, le=1.0)
-    search_type: str = Field(default="hybrid", regex="^(semantic|keyword|hybrid|supplementary|high_quality)$")
+    search_type: str = Field(default="hybrid", pattern="^(semantic|keyword|hybrid|supplementary|high_quality)$")
 
 class ChatResponse(BaseModel):
     response: str
@@ -60,7 +66,7 @@ class MLEnhancedChatResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    search_type: str = Field(default="hybrid", regex="^(semantic|keyword|hybrid|supplementary|high_quality)$")
+    search_type: str = Field(default="hybrid", pattern="^(semantic|keyword|hybrid|supplementary|high_quality)$")
     limit: int = Field(default=10, ge=1, le=50)
     filters: Optional[Dict[str, Any]] = None
 
@@ -159,7 +165,7 @@ class IntelligentChatV2Request(BaseModel):
     answer_formatting: bool = True
 
 class FeedbackRequest(BaseModel):
-    feedback_type: str = Field(..., regex="^(rating|text|bug_report|feature_request|general)$")
+    feedback_type: str = Field(..., pattern="^(rating|text|bug_report|feature_request|general)$")
     rating: Optional[int] = Field(None, ge=1, le=5)
     text_content: Optional[str] = None
     question: Optional[str] = None
@@ -237,22 +243,89 @@ def setup_routes(app, config: Config):
     # Start performance monitoring
     start_monitoring()
     
-    # Create API router
-    api_router = APIRouter(prefix="/api/v1")
+    # API router is already created at module level
     
     @api_router.post("/chat", response_model=ChatResponse)
     async def chat_endpoint(request: ChatRequest):
         """기본 채팅 엔드포인트 (레거시 호환성)"""
         try:
+            # 입력 검증
+            input_validator = get_input_validator()
+            security_logger = get_security_logger()
+            privacy_manager = get_privacy_compliance_manager()
+            
+            validation_report = input_validator.validate_input(
+                input_data=request.message,
+                user_id=getattr(request, 'user_id', None),
+                session_id=request.session_id
+            )
+            
+            # 검증 실패 시 에러 반환
+            if validation_report.result == ValidationResult.BLOCKED:
+                security_logger.log_security_violation(
+                    violation_type="input_blocked",
+                    description=f"Blocked input: {validation_report.violations}",
+                    session_id=request.session_id,
+                    details={
+                        'input_preview': request.message[:100],
+                        'violations': validation_report.violations,
+                        'risk_score': validation_report.risk_score
+                    }
+                )
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"입력이 차단되었습니다: {validation_report.message}"
+                )
+            
+            # 의심스러운 입력에 대한 경고 로그
+            if validation_report.result == ValidationResult.SUSPICIOUS:
+                security_logger.log_security_violation(
+                    violation_type="suspicious_input",
+                    description=f"Suspicious input detected: {validation_report.violations}",
+                    session_id=request.session_id,
+                    details={
+                        'input_preview': request.message[:100],
+                        'violations': validation_report.violations,
+                        'risk_score': validation_report.risk_score
+                    }
+                )
+            
+            # 개인정보보호법 준수 처리
+            privacy_result = privacy_manager.process_text(
+                text=validation_report.sanitized_input,
+                processing_purpose=ProcessingPurpose.LEGAL_CONSULTATION,
+                user_id=getattr(request, 'user_id', None),
+                session_id=request.session_id
+            )
+            
+            # 개인정보가 발견된 경우 처리된 텍스트 사용
+            if privacy_result['has_personal_data']:
+                security_logger.log_event(
+                    SecurityEventType.DATA_ACCESS,
+                    SecurityLevel.MEDIUM,
+                    f"Personal data processed: {privacy_result['detected_count']} items",
+                    {
+                        'data_types': privacy_result['data_types'],
+                        'retention_period': privacy_result['retention_period']
+                    },
+                    user_id=getattr(request, 'user_id', None),
+                    session_id=request.session_id
+                )
+            
             logger.info(f"Chat request received: {request.message[:100]}...")
             
+            # 개인정보가 마스킹된 텍스트로 처리
+            processed_message = privacy_result['masked_text']
+            
             result = chat_service.process_message(
-                message=request.message,
+                message=processed_message,
                 context=request.context
             )
             
             return ChatResponse(**result)
             
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Chat endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -979,7 +1052,81 @@ def setup_routes(app, config: Config):
             logger.error(f"Existing answer enhancement error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
+    @api_router.get("/privacy/compliance-report")
+    async def get_privacy_compliance_report():
+        """개인정보보호법 준수 보고서 조회"""
+        try:
+            privacy_manager = get_privacy_compliance_manager()
+            report = privacy_manager.generate_compliance_report()
+            
+            return {
+                "success": True,
+                "report": {
+                    "total_processed": report.total_processed,
+                    "personal_data_found": report.personal_data_found,
+                    "consent_required": report.consent_required,
+                    "consent_given": report.consent_given,
+                    "data_retention_compliant": report.data_retention_compliant,
+                    "violations": report.violations,
+                    "recommendations": report.recommendations,
+                    "compliance_score": report.compliance_score
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Privacy compliance report error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @api_router.get("/privacy/notice")
+    async def get_privacy_notice():
+        """개인정보 처리방침 안내"""
+        try:
+            privacy_manager = get_privacy_compliance_manager()
+            notice = privacy_manager.get_privacy_notice()
+            
+            return {
+                "success": True,
+                "notice": notice,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Privacy notice error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @api_router.post("/privacy/cleanup")
+    async def cleanup_expired_data():
+        """만료된 개인정보 삭제"""
+        try:
+            privacy_manager = get_privacy_compliance_manager()
+            cleaned_count = privacy_manager.cleanup_expired_data()
+            
+            return {
+                "success": True,
+                "cleaned_count": cleaned_count,
+                "message": f"만료된 개인정보 {cleaned_count}건이 삭제되었습니다.",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Privacy cleanup error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
     # Include router in app
     app.include_router(api_router)
     
     logger.info("ML-enhanced API routes configured successfully")
+
+# Initialize routes at module level
+def initialize_routes():
+    """모듈 레벨에서 라우트 초기화"""
+    try:
+        # 기본 설정으로 Config 생성
+        config = Config()
+        setup_routes(None, config)  # app은 None으로 전달 (이미 api_router에 등록됨)
+    except Exception as e:
+        logger.error(f"Failed to initialize routes: {e}")
+
+# 모듈 로드 시 자동으로 라우트 초기화
+initialize_routes()

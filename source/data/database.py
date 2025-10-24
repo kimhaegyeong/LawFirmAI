@@ -96,6 +96,41 @@ class DatabaseManager:
                 )
             """)
             
+            # 법률 용어 목록 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_term_list (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    법령용어ID TEXT UNIQUE NOT NULL,
+                    법령용어명 TEXT NOT NULL,
+                    법령용어상세검색 TEXT,
+                    사전구분코드 TEXT,
+                    법령용어상세링크 TEXT,
+                    법령종류코드 INTEGER,
+                    lstrm_id INTEGER,
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed BOOLEAN DEFAULT FALSE,
+                    vectorized BOOLEAN DEFAULT FALSE
+                )
+            """)
+            
+            # 법률 용어 상세 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS legal_term_details (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    법령용어ID TEXT NOT NULL,
+                    법령용어명_한글 TEXT,
+                    법령용어명_한자 TEXT,
+                    법령용어코드 INTEGER,
+                    법령용어코드명 TEXT,
+                    출처 TEXT,
+                    법령용어정의 TEXT,
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP,
+                    vectorized_at TIMESTAMP,
+                    FOREIGN KEY (법령용어ID) REFERENCES legal_term_list(법령용어ID)
+                )
+            """)
+            
             # 판례 메타데이터 테이블
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS precedent_metadata (
@@ -824,6 +859,50 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error searching assembly documents: {e}")
             return []
+    
+    def search_assembly_articles_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Assembly 조문 FTS 검색"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # FTS5 검색 실행
+                sql = """
+                    SELECT aa.*, al.law_name, al.law_id
+                    FROM assembly_articles aa
+                    JOIN assembly_laws al ON aa.law_id = al.law_id
+                    JOIN fts_assembly_articles fts ON aa.rowid = fts.rowid
+                    WHERE fts_assembly_articles MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                
+                cursor.execute(sql, (query, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    result = {
+                        "law_id": row["law_id"],
+                        "law_name": row["law_name"],
+                        "article_number": row["article_number"],
+                        "article_title": row["article_title"],
+                        "article_content": row["article_content"],
+                        "article_type": row["article_type"],
+                        "is_supplementary": bool(row["is_supplementary"]),
+                        "ml_confidence_score": row["ml_confidence_score"],
+                        "parsing_method": row["parsing_method"],
+                        "parsing_quality_score": row["parsing_quality_score"],
+                        "word_count": row["word_count"],
+                        "char_count": row["char_count"]
+                    }
+                    results.append(result)
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Error in FTS search: {e}")
+            # FTS가 실패하면 일반 검색으로 폴백
+            return self.search_assembly_documents(query, limit)
     
     # 파일 처리 이력 추적 메서드들
     def mark_file_as_processed(self, file_path: str, file_hash: str, 
@@ -1796,3 +1875,91 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"현행법령 상세 정보 업데이트 실패: {e}")
             return False
+    
+    # 현행법령 조문 관련 메서드들
+    
+    def search_current_laws_articles(self, law_name: str, article_number: int) -> List[Dict[str, Any]]:
+        """현행법령 조문 검색"""
+        query = """
+            SELECT ca.*, cl.ministry_name, cl.effective_date
+            FROM current_laws_articles ca
+            JOIN current_laws cl ON ca.law_id = cl.law_id
+            WHERE ca.law_name_korean = ? AND ca.article_number = ?
+            ORDER BY ca.quality_score DESC, ca.paragraph_number ASC, ca.sub_paragraph_number ASC
+        """
+        return self.execute_query(query, (law_name, article_number))
+    
+    def search_current_laws_articles_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """현행법령 조문 FTS 검색"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                sql = """
+                    SELECT ca.*, cl.ministry_name, cl.effective_date
+                    FROM current_laws_articles ca
+                    JOIN current_laws cl ON ca.law_id = cl.law_id
+                    JOIN current_laws_articles_fts fts ON ca.rowid = fts.rowid
+                    WHERE current_laws_articles_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                
+                cursor.execute(sql, (query, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    result = {
+                        "article_id": row["article_id"],
+                        "law_id": row["law_id"],
+                        "law_name_korean": row["law_name_korean"],
+                        "article_number": row["article_number"],
+                        "article_title": row["article_title"],
+                        "article_content": row["article_content"],
+                        "paragraph_number": row["paragraph_number"],
+                        "paragraph_content": row["paragraph_content"],
+                        "sub_paragraph_number": row["sub_paragraph_number"],
+                        "sub_paragraph_content": row["sub_paragraph_content"],
+                        "is_supplementary": bool(row["is_supplementary"]),
+                        "quality_score": row["quality_score"],
+                        "parsing_method": row["parsing_method"],
+                        "ministry_name": row["ministry_name"],
+                        "effective_date": row["effective_date"]
+                    }
+                    results.append(result)
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"현행법령 조문 FTS 검색 실패: {e}")
+            return []
+    
+    def get_current_laws_articles_stats(self) -> Dict[str, Any]:
+        """현행법령 조문 통계 조회"""
+        stats = {}
+        
+        # 총 조문 수
+        stats['total_articles'] = self.execute_query("SELECT COUNT(*) as count FROM current_laws_articles")[0]['count']
+        
+        # 법령별 조문 수
+        stats['by_law'] = self.execute_query("""
+            SELECT law_name_korean, COUNT(*) as count
+            FROM current_laws_articles
+            GROUP BY law_name_korean
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        
+        # 조문별 항 수
+        stats['by_paragraph'] = self.execute_query("""
+            SELECT 
+                CASE 
+                    WHEN paragraph_number IS NOT NULL THEN '항 있음'
+                    ELSE '항 없음'
+                END as type,
+                COUNT(*) as count
+            FROM current_laws_articles
+            GROUP BY type
+        """)
+        
+        return stats

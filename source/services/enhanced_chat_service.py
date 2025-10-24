@@ -184,6 +184,9 @@ class EnhancedChatService:
         # 품질 개선 시스템 초기화
         self._initialize_quality_enhancement_systems()
         
+        # 향상된 조문 검색 시스템 초기화
+        self._initialize_enhanced_law_search()
+        
         self.logger.info("EnhancedChatService 초기화 완료")
     
     def _setup_google_cloud_warnings(self):
@@ -634,6 +637,11 @@ class EnhancedChatService:
             user_id = f"user_{int(time.time())}"
         
         try:
+            # 법률 조문 질문 감지 및 처리
+            if self._is_law_article_query(message):
+                self.logger.info(f"법률 조문 질문 감지: {message}")
+                return await self._handle_law_article_query(message, user_id, session_id)
+            
             # 입력 검증 및 전처리
             validation_result = self._validate_and_preprocess_input(message)
             if not validation_result["valid"]:
@@ -1711,7 +1719,7 @@ class EnhancedChatService:
                     tips_text = "실무 팁: " + ", ".join(example.practical_tips[:3])
                     example_text += f" {tips_text}."
                 
-                return response + example_text
+                return "" + example_text
             
             else:
                 # 동적 예시 생성
@@ -1719,13 +1727,13 @@ class EnhancedChatService:
                     category, question, question_type
                 )
                 if dynamic_example and len(dynamic_example) > 50:
-                    return response + f"\n\n{dynamic_example}"
+                    return "" + f"\n\n{dynamic_example}"
             
-            return response
+            return ""
             
         except Exception as e:
             self.logger.error(f"예시 추가 실패: {e}")
-            return response
+            return ""
     
     def _add_fallback_ending(self, response: str) -> str:
         """폴백 마무리 추가"""
@@ -1752,11 +1760,215 @@ class EnhancedChatService:
             if not response.strip().endswith(('.', '!', '?', '니다.', '습니다.', '요.')):
                 return f"{response.strip()} 이렇게 진행하시면 됩니다."
             
-            return response
+            return ""
             
         except Exception as e:
             self.logger.error(f"폴백 마무리 추가 실패: {e}")
-            return response
+            return ""
+    
+    # 새로운 조문 검색 및 답변 최적화 기능들
+    
+    def _initialize_enhanced_law_search(self):
+        """향상된 조문 검색 시스템 초기화"""
+        try:
+            from .enhanced_law_search_engine import EnhancedLawSearchEngine
+            from .law_context_search_engine import LawContextSearchEngine
+            from .integrated_law_search_service import IntegratedLawSearchService
+            from .adaptive_response_manager import AdaptiveResponseManager
+            from .progressive_response_system import ProgressiveResponseSystem
+            
+            # 통합 조문 검색 서비스 초기화
+            self.integrated_law_search = IntegratedLawSearchService(self.config)
+            
+            # 적응형 답변 관리자 초기화
+            self.adaptive_response_manager = AdaptiveResponseManager()
+            
+            # 단계별 답변 시스템 초기화
+            self.progressive_response_system = ProgressiveResponseSystem()
+            
+            # 법률 조문 질문 패턴
+            self.law_query_patterns = [
+                r'(\w+법)\s*제\s*(\d+)조',
+                r'제\s*(\d+)조',
+                r'(\w+법)\s*(\d+)조',
+                r'(\w+법)\s*제\s*(\d+)조\s*제\s*(\d+)항'
+            ]
+            
+            self.logger.info("향상된 조문 검색 시스템 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"향상된 조문 검색 시스템 초기화 실패: {e}")
+            self.integrated_law_search = None
+            self.adaptive_response_manager = None
+            self.progressive_response_system = None
+    
+    def _is_law_article_query(self, query: str) -> bool:
+        """법률 조문 질문인지 확인"""
+        try:
+            import re
+            for pattern in self.law_query_patterns:
+                if re.search(pattern, query):
+                    return True
+            return False
+        except Exception as e:
+            self.logger.error(f"법률 조문 질문 확인 실패: {e}")
+            return False
+    
+    async def _handle_law_article_query(self, message: str, user_id: str, session_id: str) -> Dict[str, Any]:
+        """법률 조문 질문 처리"""
+        start_time = time.time()
+        
+        try:
+            if not self.integrated_law_search:
+                return await self._fallback_response(message)
+            
+            # 통합 조문 검색 실행
+            search_result = await self.integrated_law_search.search_law_article(message)
+            
+            # 사용자 컨텍스트 분석
+            user_context = await self._analyze_user_context(user_id, session_id)
+            
+            # 적응형 답변 길이 조정
+            if self.adaptive_response_manager:
+                optimized_response = self.adaptive_response_manager.adapt_response_length(
+                    search_result.response, user_context
+                )
+            else:
+                optimized_response = search_result.response
+            
+            # 단계별 답변 생성
+            if self.progressive_response_system:
+                progressive_response = self.progressive_response_system.generate_progressive_response(
+                    optimized_response, user_context.get('response_level', 'standard')
+                )
+                final_response = progressive_response.response
+                additional_options = progressive_response.additional_options
+            else:
+                final_response = optimized_response
+                additional_options = []
+            
+            return {
+                'response': final_response,
+                'confidence': search_result.confidence,
+                'sources': search_result.sources,
+                'processing_time': time.time() - start_time,
+                'generation_method': 'integrated_law_search',
+                'restricted': False,
+                'context_info': search_result.context_info,
+                'additional_options': additional_options,
+                'has_more_detail': len(search_result.response) > len(final_response)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"법률 조문 질문 처리 실패: {e}")
+            return await self._fallback_response(message)
+    
+    async def _analyze_user_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        """사용자 컨텍스트 분석"""
+        try:
+            context = {
+                'user_id': user_id,
+                'session_id': session_id,
+                'expertise_level': 'beginner',
+                'response_level': 'standard',
+                'device_info': {'type': 'desktop'},
+                'preferred_length': 1000
+            }
+            
+            # 사용자 프로필 정보 가져오기
+            if hasattr(self, 'user_preferences') and self.user_preferences:
+                try:
+                    user_profile = self.user_preferences.get_user_profile(user_id)
+                    if user_profile:
+                        context.update({
+                            'expertise_level': user_profile.get('expertise_level', 'beginner'),
+                            'response_level': user_profile.get('preferred_detail_level', 'standard'),
+                            'device_info': user_profile.get('device_info', {'type': 'desktop'}),
+                            'preferred_length': self._get_preferred_length(user_profile)
+                        })
+                except Exception as e:
+                    self.logger.debug(f"사용자 프로필 조회 실패: {e}")
+            
+            return context
+            
+        except Exception as e:
+            self.logger.error(f"사용자 컨텍스트 분석 실패: {e}")
+            return {
+                'user_id': user_id,
+                'session_id': session_id,
+                'expertise_level': 'beginner',
+                'response_level': 'standard',
+                'device_info': {'type': 'desktop'},
+                'preferred_length': 1000
+            }
+    
+    def _get_preferred_length(self, user_profile: Dict[str, Any]) -> int:
+        """사용자 프로필에서 선호 길이 계산"""
+        try:
+            expertise_level = user_profile.get('expertise_level', 'beginner')
+            detail_level = user_profile.get('preferred_detail_level', 'medium')
+            device_type = user_profile.get('device_info', {}).get('type', 'desktop')
+            
+            # 기본 길이 설정
+            base_lengths = {
+                'mobile': 600,
+                'desktop': 1200,
+                'tablet': 900
+            }
+            
+            base_length = base_lengths.get(device_type, 1200)
+            
+            # 전문성 수준에 따른 조정
+            expertise_multipliers = {
+                'beginner': 0.8,
+                'intermediate': 1.0,
+                'expert': 1.2,
+                'professional': 1.3
+            }
+            
+            multiplier = expertise_multipliers.get(expertise_level, 1.0)
+            
+            # 상세 수준에 따른 조정
+            detail_multipliers = {
+                'low': 0.7,
+                'medium': 1.0,
+                'high': 1.3
+            }
+            
+            detail_multiplier = detail_multipliers.get(detail_level, 1.0)
+            
+            return int(base_length * multiplier * detail_multiplier)
+            
+        except Exception as e:
+            self.logger.error(f"선호 길이 계산 실패: {e}")
+            return 1000
+    
+    async def get_expanded_response(self, base_response: str, option_type: str, user_id: str = None) -> str:
+        """확장된 답변 제공"""
+        try:
+            if not self.progressive_response_system:
+                return base_response
+            
+            # 사용자 컨텍스트 분석
+            user_context = await self._analyze_user_context(user_id, None)
+            
+            # 확장된 답변 생성
+            expanded_response = self.progressive_response_system.generate_expanded_response(
+                base_response, option_type, base_response
+            )
+            
+            # 적응형 길이 조정
+            if self.adaptive_response_manager:
+                optimized_response = self.adaptive_response_manager.adapt_response_length(
+                    expanded_response, user_context
+                )
+                return optimized_response
+            
+            return expanded_response
+            
+        except Exception as e:
+            self.logger.error(f"확장된 답변 생성 실패: {e}")
+            return base_response
 
             # 카테고리별 예시 키 매핑
             example_key_mapping = {
@@ -1781,7 +1993,7 @@ class EnhancedChatService:
                     tips_text = "실무 팁: " + ", ".join(example.practical_tips[:3])
                     example_text += f" {tips_text}."
                 
-                return response + example_text
+                return "" + example_text
             
             else:
                 # 동적 예시 생성
@@ -1789,13 +2001,13 @@ class EnhancedChatService:
                     category, question, question_type
                 )
                 if dynamic_example and len(dynamic_example) > 50:
-                    return response + f"\n\n{dynamic_example}"
+                    return "" + f"\n\n{dynamic_example}"
             
-            return response
+            return ""
             
         except Exception as e:
             self.logger.error(f"예시 추가 실패: {e}")
-            return response
+            return ""
     
     def _add_fallback_ending(self, response: str) -> str:
         """폴백 마무리 추가"""
@@ -1822,8 +2034,212 @@ class EnhancedChatService:
             if not response.strip().endswith(('.', '!', '?', '니다.', '습니다.', '요.')):
                 return f"{response.strip()} 이렇게 진행하시면 됩니다."
             
-            return response
+            return ""
             
         except Exception as e:
             self.logger.error(f"폴백 마무리 추가 실패: {e}")
-            return response
+            return ""
+    
+    # 새로운 조문 검색 및 답변 최적화 기능들
+    
+    def _initialize_enhanced_law_search(self):
+        """향상된 조문 검색 시스템 초기화"""
+        try:
+            from .enhanced_law_search_engine import EnhancedLawSearchEngine
+            from .law_context_search_engine import LawContextSearchEngine
+            from .integrated_law_search_service import IntegratedLawSearchService
+            from .adaptive_response_manager import AdaptiveResponseManager
+            from .progressive_response_system import ProgressiveResponseSystem
+            
+            # 통합 조문 검색 서비스 초기화
+            self.integrated_law_search = IntegratedLawSearchService(self.config)
+            
+            # 적응형 답변 관리자 초기화
+            self.adaptive_response_manager = AdaptiveResponseManager()
+            
+            # 단계별 답변 시스템 초기화
+            self.progressive_response_system = ProgressiveResponseSystem()
+            
+            # 법률 조문 질문 패턴
+            self.law_query_patterns = [
+                r'(\w+법)\s*제\s*(\d+)조',
+                r'제\s*(\d+)조',
+                r'(\w+법)\s*(\d+)조',
+                r'(\w+법)\s*제\s*(\d+)조\s*제\s*(\d+)항'
+            ]
+            
+            self.logger.info("향상된 조문 검색 시스템 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"향상된 조문 검색 시스템 초기화 실패: {e}")
+            self.integrated_law_search = None
+            self.adaptive_response_manager = None
+            self.progressive_response_system = None
+    
+    def _is_law_article_query(self, query: str) -> bool:
+        """법률 조문 질문인지 확인"""
+        try:
+            import re
+            for pattern in self.law_query_patterns:
+                if re.search(pattern, query):
+                    return True
+            return False
+        except Exception as e:
+            self.logger.error(f"법률 조문 질문 확인 실패: {e}")
+            return False
+    
+    async def _handle_law_article_query(self, message: str, user_id: str, session_id: str) -> Dict[str, Any]:
+        """법률 조문 질문 처리"""
+        start_time = time.time()
+        
+        try:
+            if not self.integrated_law_search:
+                return await self._fallback_response(message)
+            
+            # 통합 조문 검색 실행
+            search_result = await self.integrated_law_search.search_law_article(message)
+            
+            # 사용자 컨텍스트 분석
+            user_context = await self._analyze_user_context(user_id, session_id)
+            
+            # 적응형 답변 길이 조정
+            if self.adaptive_response_manager:
+                optimized_response = self.adaptive_response_manager.adapt_response_length(
+                    search_result.response, user_context
+                )
+            else:
+                optimized_response = search_result.response
+            
+            # 단계별 답변 생성
+            if self.progressive_response_system:
+                progressive_response = self.progressive_response_system.generate_progressive_response(
+                    optimized_response, user_context.get('response_level', 'standard')
+                )
+                final_response = progressive_response.response
+                additional_options = progressive_response.additional_options
+            else:
+                final_response = optimized_response
+                additional_options = []
+            
+            return {
+                'response': final_response,
+                'confidence': search_result.confidence,
+                'sources': search_result.sources,
+                'processing_time': time.time() - start_time,
+                'generation_method': 'integrated_law_search',
+                'restricted': False,
+                'context_info': search_result.context_info,
+                'additional_options': additional_options,
+                'has_more_detail': len(search_result.response) > len(final_response)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"법률 조문 질문 처리 실패: {e}")
+            return await self._fallback_response(message)
+    
+    async def _analyze_user_context(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        """사용자 컨텍스트 분석"""
+        try:
+            context = {
+                'user_id': user_id,
+                'session_id': session_id,
+                'expertise_level': 'beginner',
+                'response_level': 'standard',
+                'device_info': {'type': 'desktop'},
+                'preferred_length': 1000
+            }
+            
+            # 사용자 프로필 정보 가져오기
+            if hasattr(self, 'user_preferences') and self.user_preferences:
+                try:
+                    user_profile = self.user_preferences.get_user_profile(user_id)
+                    if user_profile:
+                        context.update({
+                            'expertise_level': user_profile.get('expertise_level', 'beginner'),
+                            'response_level': user_profile.get('preferred_detail_level', 'standard'),
+                            'device_info': user_profile.get('device_info', {'type': 'desktop'}),
+                            'preferred_length': self._get_preferred_length(user_profile)
+                        })
+                except Exception as e:
+                    self.logger.debug(f"사용자 프로필 조회 실패: {e}")
+            
+            return context
+            
+        except Exception as e:
+            self.logger.error(f"사용자 컨텍스트 분석 실패: {e}")
+            return {
+                'user_id': user_id,
+                'session_id': session_id,
+                'expertise_level': 'beginner',
+                'response_level': 'standard',
+                'device_info': {'type': 'desktop'},
+                'preferred_length': 1000
+            }
+    
+    def _get_preferred_length(self, user_profile: Dict[str, Any]) -> int:
+        """사용자 프로필에서 선호 길이 계산"""
+        try:
+            expertise_level = user_profile.get('expertise_level', 'beginner')
+            detail_level = user_profile.get('preferred_detail_level', 'medium')
+            device_type = user_profile.get('device_info', {}).get('type', 'desktop')
+            
+            # 기본 길이 설정
+            base_lengths = {
+                'mobile': 600,
+                'desktop': 1200,
+                'tablet': 900
+            }
+            
+            base_length = base_lengths.get(device_type, 1200)
+            
+            # 전문성 수준에 따른 조정
+            expertise_multipliers = {
+                'beginner': 0.8,
+                'intermediate': 1.0,
+                'expert': 1.2,
+                'professional': 1.3
+            }
+            
+            multiplier = expertise_multipliers.get(expertise_level, 1.0)
+            
+            # 상세 수준에 따른 조정
+            detail_multipliers = {
+                'low': 0.7,
+                'medium': 1.0,
+                'high': 1.3
+            }
+            
+            detail_multiplier = detail_multipliers.get(detail_level, 1.0)
+            
+            return int(base_length * multiplier * detail_multiplier)
+            
+        except Exception as e:
+            self.logger.error(f"선호 길이 계산 실패: {e}")
+            return 1000
+    
+    async def get_expanded_response(self, base_response: str, option_type: str, user_id: str = None) -> str:
+        """확장된 답변 제공"""
+        try:
+            if not self.progressive_response_system:
+                return base_response
+            
+            # 사용자 컨텍스트 분석
+            user_context = await self._analyze_user_context(user_id, None)
+            
+            # 확장된 답변 생성
+            expanded_response = self.progressive_response_system.generate_expanded_response(
+                base_response, option_type, base_response
+            )
+            
+            # 적응형 길이 조정
+            if self.adaptive_response_manager:
+                optimized_response = self.adaptive_response_manager.adapt_response_length(
+                    expanded_response, user_context
+                )
+                return optimized_response
+            
+            return expanded_response
+            
+        except Exception as e:
+            self.logger.error(f"확장된 답변 생성 실패: {e}")
+            return base_response

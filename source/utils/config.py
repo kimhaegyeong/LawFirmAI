@@ -53,8 +53,8 @@ class Config(BaseSettings):
     """설정 관리 클래스"""
     
     # LAW OPEN API Configuration
-    law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
-    law_firm_ai_api_key: str = Field(default="your-api-key-here", env="LAW_FIRM_AI_API_KEY")
+    law_open_api_oc: str = Field(default="", env="LAW_OPEN_API_OC")
+    law_firm_ai_api_key: str = Field(default="", env="LAW_FIRM_AI_API_KEY")
     
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
@@ -96,7 +96,7 @@ class Config(BaseSettings):
     cache_ttl: int = Field(default=3600, env="CACHE_TTL")
     
     # Security Configuration
-    secret_key: str = Field(default="your-secret-key-here", env="SECRET_KEY")
+    secret_key: str = Field(default="", env="SECRET_KEY")
     cors_origins: list = Field(default=["http://localhost:3000", "http://localhost:7860"], env="CORS_ORIGINS")
     
     # Monitoring Configuration
@@ -135,6 +135,27 @@ class Config(BaseSettings):
     def get(self, key: str, default: Any = None) -> Any:
         """설정 값 조회"""
         return getattr(self, key, default)
+    
+    def validate_security_settings(self) -> bool:
+        """보안 설정 검증"""
+        required_secrets = [
+            ("SECRET_KEY", self.secret_key),
+            ("LAW_OPEN_API_OC", self.law_open_api_oc),
+        ]
+        
+        missing_secrets = []
+        for name, value in required_secrets:
+            if not value or value.strip() == "":
+                missing_secrets.append(name)
+        
+        if missing_secrets:
+            print(f"❌ 보안 오류: 다음 환경변수가 설정되지 않았습니다: {', '.join(missing_secrets)}")
+            print("다음과 같이 설정하세요:")
+            for secret in missing_secrets:
+                print(f"  export {secret}=your_{secret.lower()}_here")
+            return False
+        
+        return True
     
     def is_development(self) -> bool:
         """개발 환경 여부"""
