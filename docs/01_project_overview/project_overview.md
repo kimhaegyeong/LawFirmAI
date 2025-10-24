@@ -61,9 +61,10 @@
 
 ```
 LawFirmAI/
-├── streamlit_app.py                 # Streamlit 메인 애플리케이션
+├── streamlit/                          # Streamlit 애플리케이션
+│   └── streamlit_app.py               # Streamlit 메인 애플리케이션
 ├── source/                          # 핵심 모듈
-│   ├── services/                    # 비즈니스 로직 (80+ 서비스)
+│   ├── services/                    # 비즈니스 로직 (130+ 서비스)
 │   │   ├── chat_service.py          # 통합 채팅 서비스
 │   │   ├── rag_service.py           # RAG 서비스
 │   │   ├── enhanced_rag_service.py  # AKLS 통합 RAG 서비스

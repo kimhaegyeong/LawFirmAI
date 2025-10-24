@@ -215,7 +215,7 @@ cp env.example .env
 ### 4. Streamlit 웹 인터페이스 실행
 
 ```bash
-streamlit run streamlit_app.py
+streamlit run streamlit/streamlit_app.py
 ```
 
 웹 브라우저에서 `http://localhost:8501`에 접속하여 LawFirmAI를 사용할 수 있습니다.
@@ -241,9 +241,10 @@ streamlit run streamlit_app.py
 
 ```
 LawFirmAI/
-├── streamlit_app.py                    # Streamlit 메인 애플리케이션
-├── source/                             # 핵심 모듈 (106개 파일)
-│   ├── services/                    # 비즈니스 로직 (50+ 서비스)
+├── streamlit/                          # Streamlit 애플리케이션
+│   └── streamlit_app.py               # Streamlit 메인 애플리케이션
+├── source/                             # 핵심 모듈 (130+ 개 파일)
+│   ├── services/                    # 비즈니스 로직 (130+ 서비스)
 │   │   ├── chat_service.py          # 메인 채팅 서비스
 │   │   ├── rag_service.py           # ML 강화 RAG 서비스
 │   │   ├── hybrid_search_engine.py  # 하이브리드 검색 엔진
@@ -262,7 +263,7 @@ LawFirmAI/
 │   │   ├── optimized_chat_service.py       # 최적화된 채팅 서비스
 │   │   ├── optimized_model_manager.py      # 최적화된 모델 관리
 │   │   ├── optimized_hybrid_search_engine.py # 최적화된 하이브리드 검색
-│   │   ├── # 기타 30+ 서비스들...
+│   │   ├── # 기타 100+ 서비스들...
 │   │   ├── domain_specific_extractor.py   # 도메인별 용어 추출기
 │   │   ├── hybrid_keyword_manager.py      # 하이브리드 키워드 관리
 │   │   ├── keyword_database_loader.py     # 키워드 데이터베이스 로더
@@ -333,7 +334,7 @@ LawFirmAI/
 ├── models/                          # 훈련된 모델
 │   └── article_classifier.pkl       # 조문 분류 모델
 ├── runtime/                         # 런타임 파일
-│   └── gradio_server.pid            # 서버 PID
+│   └── streamlit_server.pid         # 서버 PID
 ├── reports/                         # 리포트 파일
 │   ├── quality_report.json          # 품질 리포트
 │   └── law_parsing_quality_report.txt # 파싱 품질 리포트
@@ -423,7 +424,7 @@ LawFirmAI/
 
 ### 핵심 기술
 - **백엔드**: FastAPI, SQLite, FAISS, LangChain, LangGraph
-- **AI/ML**: KoGPT-2, Sentence-BERT, BGE-M3-Korean, ko-sroberta-multitask
+- **AI/ML**: Google Gemini 2.5 Flash Lite, KoGPT-2, BGE-M3-Korean, ko-sroberta-multitask
 - **프론트엔드**: Streamlit (현대적 웹 인터페이스)
 - **검색**: 하이브리드 검색 (의미적 + FTS + 정확 매칭)
 - **현행법령 검색**: 국가법령정보센터 OpenAPI 연동
