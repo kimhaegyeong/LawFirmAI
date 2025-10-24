@@ -562,16 +562,17 @@ CMD ["python", "api/main.py"]
 version: '3.8'
 
 services:
-  gradio-app:
-    build: ./gradio
+  streamlit-app:
+    build: .
     ports:
-      - "7860:7860"
+      - "8501:8501"
     environment:
       - DATABASE_URL=sqlite:///./data/lawfirm.db
       - LOG_LEVEL=INFO
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    command: streamlit run streamlit/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
     restart: unless-stopped
 
   api-server:
@@ -595,7 +596,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf
       - ./ssl:/etc/nginx/ssl
     depends_on:
-      - gradio-app
+      - streamlit-app
       - api-server
     restart: unless-stopped
 ```
@@ -625,7 +626,7 @@ docker-compose down
 3. 다음 정보 입력:
    - **Space name**: lawfirmai
    - **License**: MIT
-   - **SDK**: Gradio
+   - **SDK**: Streamlit
    - **Hardware**: CPU Basic (또는 GPU)
 
 ### 2. 파일 업로드
@@ -634,18 +635,18 @@ docker-compose down
 
 ```
 lawfirmai/
-├── app.py                 # Gradio 앱 메인 파일
-├── requirements.txt       # Python 의존성
-├── README.md             # Space 설명
-├── source/               # 소스 코드
-├── data/                 # 데이터 파일
-└── .env                  # 환경 변수 (선택사항)
+├── streamlit_app.py            # Streamlit 앱 메인 파일
+├── requirements.txt             # Python 의존성
+├── README.md                   # Space 설명
+├── source/                     # 소스 코드
+├── data/                       # 데이터 파일
+└── .env                        # 환경 변수 (선택사항)
 ```
 
 ### 3. requirements.txt
 
 ```txt
-gradio>=4.0.0
+streamlit>=1.28.0
 fastapi>=0.100.0
 uvicorn>=0.20.0
 sqlite3
