@@ -1,0 +1,65 @@
+# 법률 용어 수집 시스템 설정 파일
+
+# API 설정
+api:
+  base_url: "http://www.law.go.kr/DRF"
+  oc_id: "test"  # 사용자 이메일 ID (환경변수 LEGAL_API_OC_ID로 오버라이드 가능)
+  display_count: 100  # 한 번에 가져올 결과 수 (1-100)
+  max_retries: 3  # 최대 재시도 횟수
+  retry_delays: [180, 300, 600]  # 재시도 대기 시간 (초) - 3분, 5분, 10분
+  request_timeout: 30  # 요청 타임아웃 (초)
+  rate_limit_delay: 1  # 요청 간 대기 시간 (초)
+
+# 수집 설정
+collection:
+  start_page: 1  # 시작 페이지
+  end_page: null  # 종료 페이지 (null이면 무제한)
+  query: ""  # 검색 쿼리
+  gana: ""  # 가나다 검색 (예: 가, 나, 다)
+  list_batch_size: 10  # 목록 수집 배치 크기
+  detail_batch_size: 50  # 상세 수집 배치 크기
+  vector_batch_size: 100  # 벡터화 배치 크기
+  auto_resume: true  # 자동 재개 여부
+  save_raw_data: true  # 원본 데이터 저장 여부
+  save_batch_files: true  # 배치 파일 저장 여부
+
+# 데이터베이스 설정
+database:
+  db_path: "data/legal_terms.db"  # 데이터베이스 파일 경로
+  backup_enabled: true  # 백업 활성화
+  backup_interval: 1000  # 백업 간격 (수집된 항목 수)
+  connection_timeout: 30  # 연결 타임아웃 (초)
+
+# 벡터스토어 설정
+vector_store:
+  model_name: "jhgan/ko-sroberta-multitask"  # 문장 임베딩 모델
+  vector_dimension: 768  # 벡터 차원
+  index_type: "flat"  # 인덱스 타입 (flat, ivf, hnsw)
+  similarity_metric: "l2"  # 유사도 메트릭 (l2, cosine, ip)
+  embeddings_dir: "data/embeddings/legal_terms"  # 임베딩 저장 디렉토리
+  index_file: "legal_term_index.faiss"  # FAISS 인덱스 파일명
+  metadata_file: "legal_term_metadata.json"  # 메타데이터 파일명
+
+# 로깅 설정
+logging:
+  level: "INFO"  # 로그 레벨 (DEBUG, INFO, WARNING, ERROR)
+  log_file: "logs/legal_term_collection.log"  # 로그 파일 경로
+  max_file_size: "10MB"  # 최대 로그 파일 크기
+  backup_count: 5  # 로그 파일 백업 개수
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # 로그 포맷
+
+# 모니터링 설정
+monitoring:
+  enabled: true  # 모니터링 활성화
+  progress_update_interval: 10  # 진행 상황 업데이트 간격 (초)
+  status_file: "data/collection_status.json"  # 상태 파일 경로
+  progress_file: "data/legal_term_collection_progress.json"  # 진행 상황 파일 경로
+  metrics_file: "data/collection_metrics.json"  # 메트릭 파일 경로
+
+# 성능 설정
+performance:
+  max_concurrent_requests: 5  # 최대 동시 요청 수
+  memory_limit_mb: 2048  # 메모리 제한 (MB)
+  cache_size: 1000  # 캐시 크기
+  enable_compression: true  # 압축 활성화
+  chunk_size: 1024  # 청크 크기
