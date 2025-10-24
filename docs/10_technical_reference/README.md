@@ -6,6 +6,7 @@
 
 - **[데이터베이스 스키마](database_schema.md)**: SQLite 데이터베이스 스키마 상세 정보
 - **[FTS 성능 최적화 가이드](fts_performance_optimization_guide.md)**: Full-Text Search 성능 최적화 방법
+- **[법률 용어 수집 시스템](legal_term_collection_system.md)**: 법률 용어 수집 시스템 기술 문서 (NEW - 2025.10.24)
 - **[문제 해결 가이드](Troubleshooting_Guide.md)**: 일반적인 문제 및 해결 방법
 - **[통합 시스템 가이드](../09_user_guide/Integrated_System_Guide.md)**: 통합 스크립트 관리 시스템 상세 가이드
 - **[통합 시스템 기술 문서](Integrated_System_Technical_Doc.md)**: 통합 시스템의 기술적 구현 상세

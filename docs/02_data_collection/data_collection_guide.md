@@ -46,6 +46,114 @@ mkdir -p data/checkpoints
 mkdir -p logs
 ```
 
+## 법률 용어 수집 시스템 (2025.10.24)
+
+국가법령정보센터의 법령용어사전 API를 활용한 전문적인 법률 용어 수집 시스템이 추가되었습니다.
+
+### 법률 용어 수집 시스템 특징
+
+- **API 기반 수집**: 국가법령정보센터 법령용어사전 API 활용
+- **번갈아가면서 수집**: 목록 수집과 상세 정보 수집을 번갈아가면서 진행
+- **JSON 응답 처리**: XML 대신 JSON 형태로 응답을 받아 효율적인 파싱
+- **품질 필터링**: "일치하는 법령용어가 없습니다" 응답 자동 필터링
+- **중복 방지**: 동일한 목록 파일 중복 저장 방지
+- **진행 상황 추적**: 실시간 수집 진행률 및 통계 제공
+
+### 법률 용어 수집 시스템 사용법
+
+#### 기본 사용법
+```bash
+# 1페이지만 샘플 수집
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --end-page 1 --detail-delay 1.0 --verbose
+
+# 여러 페이지 수집 (1-5페이지)
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --end-page 5 --detail-delay 1.0 --verbose
+
+# 전체 수집 (모든 페이지)
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --detail-delay 1.0 --verbose
+```
+
+#### 고급 옵션
+```bash
+# 상세 정보만 수집 (목록은 건너뛰기)
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-all-details --detail-delay 1.0 --verbose
+
+# 배치 크기 조정
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --end-page 3 --batch-size 20 --detail-delay 1.0
+
+# 재시도 횟수 설정
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --end-page 2 --max-retries 5 --detail-delay 1.0
+```
+
+#### 주요 개선사항 (2025.10.24)
+
+- ✅ **JSON 응답 처리**: XML 대신 JSON 형태로 응답을 받아 파싱 효율성 향상
+- ✅ **품질 필터링**: "일치하는 법령용어가 없습니다" 응답 자동 필터링으로 데이터 품질 향상
+- ✅ **중복 저장 방지**: 목록 파일 중복 저장 방지로 저장 공간 절약
+- ✅ **JSON 직렬화 해결**: `LegalTermDetail` 객체의 JSON 직렬화 문제 해결
+- ✅ **변수 스코프 오류 해결**: `asdict` 변수 스코프 문제 해결
+- ✅ **빈 배열 저장 방지**: 유효하지 않은 데이터나 빈 배열 저장 방지
+
+#### 수집된 데이터 구조
+
+**목록 데이터 (legal_term_list_batch_*.json)**
+```json
+[
+  {
+    "법령용어ID": "3945293",
+    "법령용어명": "(Instrument Meterological Condition; IMC)",
+    "법령용어상세검색": "/LSW/lsTrmInfoR.do?trmSeqs=3945293&mobile=",
+    "사전구분코드": "011402",
+    "법령용어상세링크": "/DRF/lawService.do?OC=test&target=lstrm&trmSeqs=3945293&mobile=&type=XML",
+    "법령종류코드": 10102,
+    "lstrm_id": 1
+  }
+]
+```
+
+**상세 데이터 (legal_term_detail_batch_*.json)**
+```json
+[
+  {
+    "법령용어일련번호": 4350393,
+    "법령용어명_한글": "080착신과금사업자",
+    "법령용어명_한자": "080착신과금사업자",
+    "법령용어코드": 11402,
+    "법령용어코드명": "법령정의사전",
+    "출처": "시내전화서비스 등 번호이동성 시행에 관한 기준[과학기술정보통신부고시 제2023-40호, 2023.11.9., 일부개정]",
+    "법령용어정의": "착신과금서비스를 제공하는 기간통신사업자를 말한다."
+  }
+]
+```
+
+#### 수집 통계 확인
+```bash
+# 수집된 파일 수 확인
+python -c "import os; files = [f for f in os.listdir('data/raw/law_open_api/legal_terms') if f.endswith('.json')]; print(f'총 파일 수: {len(files)}'); list_files = [f for f in files if 'list' in f]; detail_files = [f for f in files if 'detail' in f]; print(f'목록 파일: {len(list_files)}개'); print(f'상세 파일: {len(detail_files)}개')"
+
+# 수집 진행률 확인
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --stats
+```
+
+#### 문제 해결
+
+**자주 발생하는 문제:**
+
+1. **API 응답 실패**
+   ```
+   일치하는 법령용어가 없음: (용어명)
+   ```
+   - 해결: 해당 용어는 법령용어사전에 존재하지 않으므로 정상적인 필터링 결과
+
+2. **JSON 직렬화 오류**
+   ```
+   Object of type LegalTermDetail is not JSON serializable
+   ```
+   - 해결: `asdict()` 함수로 객체를 딕셔너리로 변환하여 해결됨
+
+3. **중복 파일 생성**
+   - 해결: 목록 수집과 상세 수집을 분리하여 중복 저장 방지
+
 ## Assembly 데이터 수집 시스템 (NEW)
 
 국가법령정보센터 API 서비스 중단으로 인해 국회 법률정보시스템을 대안으로 사용하는 새로운 데이터 수집 시스템이 추가되었습니다.

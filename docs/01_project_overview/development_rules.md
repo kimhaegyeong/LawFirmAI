@@ -29,6 +29,7 @@
 
 #### Scope (선택)
 - `data-collection`: 데이터 수집 관련
+- `legal-terms`: 법률 용어 수집 시스템 관련 (NEW - 2025.10.24)
 - `search-engine`: 검색 엔진 관련
 - `database`: 데이터베이스 관련
 - `chat-service`: 채팅 서비스 관련
@@ -81,6 +82,28 @@ docs: update project completion report
 - Add technical documentation
 
 No breaking changes
+```
+
+```
+feat(legal-terms): implement legal term collection system
+
+- Add LegalTermCollector class with alternating collection
+- Implement JSON response parsing and quality filtering
+- Add duplicate prevention and error handling
+- Support batch processing and progress tracking
+
+Closes #789
+```
+
+```
+fix(legal-terms): resolve JSON serialization issue
+
+- Fix LegalTermDetail object serialization using asdict()
+- Resolve variable scope error for asdict import
+- Prevent empty array file saving
+- Improve data validation logic
+
+Fixes #790
 ```
 
 ### 커밋 메시지 작성 가이드라인
