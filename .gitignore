@@ -117,6 +117,7 @@ chroma_db/
 # Docker
 .dockerignore
 
+# 파일 관리
 data/
 reports/
 results/
