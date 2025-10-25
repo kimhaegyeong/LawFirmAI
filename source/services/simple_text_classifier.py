@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 간단한 TF-IDF + LogisticRegression 분류기
  - 입력: 질의 텍스트

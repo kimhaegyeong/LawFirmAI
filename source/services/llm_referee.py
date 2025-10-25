@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 2-stage LLM 심판기 (옵션)
  - 환경변수 USE_LLM_REFEREE=1 이면 활성화

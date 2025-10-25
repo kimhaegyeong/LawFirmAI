@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 BERT 기반 텍스트 분류기
 - 입력: 질의 텍스트, 카테고리, 서브카테고리
