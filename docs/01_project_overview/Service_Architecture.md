@@ -2,7 +2,7 @@
 
 ## 개요
 
-LawFirmAI의 서비스 아키텍처는 130+ 개의 모듈화된 서비스로 구성되어 있으며, Phase 1-3의 지능형 대화 시스템을 지원합니다.
+LawFirmAI의 서비스 아키텍처는 140+ 개의 모듈화된 서비스로 구성되어 있으며, Enhanced Chat Service와 통합 검색 엔진 시스템을 통해 완전한 법률 AI 어시스턴트를 제공합니다.
 
 ## 아키텍처 개요
 
@@ -12,12 +12,17 @@ LawFirmAI의 서비스 아키텍처는 130+ 개의 모듈화된 서비스로 구
 ┌─────────────────────────────────────────────────────────────┐
 │                    Streamlit UI (웹 인터페이스)                  │
 ├─────────────────────────────────────────────────────────────┤
-│                    ChatService (통합)                        │
+│                Enhanced Chat Service (통합)                   │
+│                    (2,574라인)                              │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 1: 대화 맥락 강화    │  Phase 2: 개인화 분석    │  Phase 3: 장기 기억    │
 │  ├── IntegratedSessionManager │  ├── UserProfileManager    │  ├── ContextualMemoryManager │
 │  ├── MultiTurnHandler         │  ├── EmotionIntentAnalyzer │  ├── ConversationQualityMonitor │
 │  └── ContextCompressor        │  └── ConversationFlowTracker│  └── PerformanceOptimizer    │
+├─────────────────────────────────────────────────────────────┤
+│                    통합 검색 엔진 레이어                      │
+│  ├── UnifiedSearchEngine      │  ├── IntegratedLawSearchService │  ├── EnhancedLawSearchEngine │
+│  ├── PerformanceMonitor       │  ├── CurrentLawSearchEngine │  └── VectorSearchOptimizer    │
 ├─────────────────────────────────────────────────────────────┤
 │                    핵심 서비스 레이어                        │
 │  ├── RAGService              │  ├── SearchService         │  ├── ModelManager            │
@@ -32,38 +37,69 @@ LawFirmAI의 서비스 아키텍처는 130+ 개의 모듈화된 서비스로 구
 
 | 분류 | 서비스 수 | 주요 역할 |
 |------|-----------|-----------|
+| **Enhanced Chat Service** | 1개 | 통합 채팅 서비스 (2,574라인) |
+| **통합 검색 엔진** | 4개 | UnifiedSearchEngine, IntegratedLawSearchService 등 |
 | **핵심 서비스** | 15개 | 기본 RAG, 검색, 답변 생성 |
 | **Phase 서비스** | 9개 | Phase 1-3 기능 구현 |
-| **최적화 서비스** | 12개 | 성능 최적화, 캐싱 |
+| **최적화 서비스** | 12개 | 성능 최적화, 캐싱, 모니터링 |
 | **데이터 서비스** | 8개 | 데이터 관리, 벡터 스토어 |
 | **API 서비스** | 6개 | REST API, 엔드포인트 |
-| **기타 서비스** | 80개 | 유틸리티, 모니터링, LangGraph |
+| **기타 서비스** | 85개 | 유틸리티, 모니터링, LangGraph |
 
 ## 핵심 서비스
 
-### 1. ChatService (통합 서비스)
+### 1. Enhanced Chat Service (통합 서비스)
 
-**파일**: `source/services/chat_service.py`
+**파일**: `source/services/enhanced_chat_service.py` (2,574라인)
 
-**역할**: 모든 Phase를 통합하여 지능형 채팅 제공
+**역할**: 모든 Phase를 통합하여 완전한 지능형 채팅 제공
+
+**주요 특징**:
+- Phase 1-3 시스템 완전 통합
+- 법률 제한 시스템 및 보안 강화
+- 성능 최적화 및 메모리 관리
+- 자연스러운 대화 개선 시스템
 
 **주요 메서드**:
 ```python
-class ChatService:
+class EnhancedChatService:
     def process_message(self, message: str, user_id: str = None, session_id: str = None) -> Dict[str, Any]:
         """메시지 처리 (모든 Phase 통합)"""
         
-    def _process_phase1(self, message: str, context: Dict) -> Dict:
-        """Phase 1: 대화 맥락 강화"""
+    def _initialize_legal_restriction_systems(self):
+        """법률 제한 시스템 초기화"""
         
-    def _process_phase2(self, message: str, user_id: str, context: Dict) -> Dict:
-        """Phase 2: 개인화 및 지능형 분석"""
-        
-    def _process_phase3(self, message: str, user_id: str, context: Dict) -> Dict:
-        """Phase 3: 장기 기억 및 품질 모니터링"""
+    def _initialize_performance_monitoring(self):
+        """성능 모니터링 시스템 초기화"""
 ```
 
-### 2. RAGService (검색 증강 생성)
+### 2. 통합 검색 엔진 시스템
+
+#### 2.1 Unified Search Engine
+
+**파일**: `source/services/unified_search_engine.py` (460라인)
+
+**역할**: 모든 검색 기능을 통합한 단일 검색 엔진
+
+#### 2.2 Integrated Law Search Service
+
+**파일**: `source/services/integrated_law_search_service.py` (578라인)
+
+**역할**: 통합 조문 검색 서비스
+
+#### 2.3 Enhanced Law Search Engine
+
+**파일**: `source/services/enhanced_law_search_engine.py` (1,299라인)
+
+**역할**: 향상된 법령 검색 엔진
+
+### 3. ChatService (기본 서비스)
+
+**파일**: `source/services/chat_service.py`
+
+**역할**: 기본 채팅 서비스 (Enhanced Chat Service의 기본 버전)
+
+### 4. RAGService (검색 증강 생성)
 
 **파일**: `source/services/rag_service.py`
 
@@ -75,7 +111,7 @@ class ChatService:
 - 답변 생성
 - 신뢰도 계산
 
-### 3. HybridSearchEngine (하이브리드 검색)
+### 5. HybridSearchEngine (하이브리드 검색)
 
 **파일**: `source/services/hybrid_search_engine.py`
 
@@ -86,7 +122,7 @@ class ChatService:
 - 정확 매칭 (데이터베이스)
 - 하이브리드 병합
 
-### 4. QuestionClassifier (질문 분류)
+### 6. QuestionClassifier (질문 분류)
 
 **파일**: `source/services/question_classifier.py`
 

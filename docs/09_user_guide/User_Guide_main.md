@@ -7,12 +7,13 @@ LawFirmAI에 오신 것을 환영합니다! 이 가이드는 LawFirmAI의 모든
 ## 목차
 
 1. [시작하기](#시작하기)
-2. [Streamlit UI 개요](#streamlit-ui-개요)
-3. [7개 탭 사용법](#7개-탭-사용법)
-4. [Phase 1-3 기능 활용](#phase-1-3-기능-활용)
-5. [고급 기능](#고급-기능)
-6. [문제 해결](#문제-해결)
-7. [팁과 요령](#팁과-요령)
+2. [법률 용어 수집 시스템 사용법](#법률-용어-수집-시스템-사용법)
+3. [Streamlit UI 개요](#streamlit-ui-개요)
+4. [7개 탭 사용법](#7개-탭-사용법)
+5. [Phase 1-3 기능 활용](#phase-1-3-기능-활용)
+6. [고급 기능](#고급-기능)
+7. [문제 해결](#문제-해결)
+8. [팁과 요령](#팁과-요령)
 
 ## 시작하기
 
@@ -31,6 +32,295 @@ LawFirmAI는 간단한 질문부터 시작할 수 있습니다:
 1. **👤 사용자 프로필** 탭으로 이동
 2. **사용자 ID** 필드에 고유한 ID 입력
 3. **프로필 저장** 버튼 클릭
+
+## 법률 용어 수집 시스템 사용법
+
+### trmSeqs 기반 수집 시스템
+
+LawFirmAI는 법령용어일련번호(`trmSeqs`)를 사용한 더 정확하고 안정적인 수집 시스템을 제공합니다.
+
+#### 주요 개선사항
+
+1. **정확도 향상**: 용어명 검색 대신 고유 식별자 사용
+2. **안정성 증대**: 특수문자나 공백으로 인한 검색 실패 방지
+3. **효율성 개선**: 불필요한 재시도 감소
+
+#### 사용법
+
+```bash
+# 기본 수집 (trmSeqs 자동 사용)
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-all-details
+
+# 번갈아가면서 수집 (목록 → 상세)
+python scripts/data_collection/law_open_api/legal_terms/legal_term_collector.py --collect-alternating --start-page 1 --end-page 10
+```
+
+#### 데이터 구조
+
+목록 파일에서 각 용어는 다음과 같은 구조를 가집니다:
+
+```json
+{
+  "법령용어ID": "851801",
+  "법령용어명": "가수(아이돌)",
+  "법령용어상세링크": "/DRF/lawService.do?OC=test&target=lstrm&trmSeqs=851801&type=XML",
+  "trmSeqs": "851801"
+}
+```
+
+상세 파일에서는 다음과 같은 정보를 제공합니다:
+
+```json
+{
+  "LsTrmService": {
+    "법령용어일련번호": "851801",
+    "법령용어명_한글": "가수(아이돌)",
+    "법령용어코드": "011405",
+    "법령용어코드명": "생활용어사전",
+    "법령용어정의": "가수(아이돌)</a> (으)로 이동"
+  }
+}
+```
+
+#### 폴더 구조
+
+```
+data/raw/law_open_api/legal_terms/
+├── processing/     # 처리 중인 파일들
+├── complete/       # 완료된 파일들 (날짜별 정리)
+│   └── 2025-10-24/ # 날짜별 완료 파일들
+├── failed/         # 실패한 파일들
+└── archive/        # 아카이브된 파일들 (30일 이상)
+```
+
+#### 파일 상태 확인
+
+```bash
+# 현재 처리 상태 확인
+python scripts/data_processing/legal_term_auto_processor.py --monitor
+
+# 출력 예시:
+# === 법률용어 파일 처리 현황 (2025-10-24 23:28:48) ===
+# 처리 중: 0개
+# 오늘 완료: 233개
+# 총 완료: 233개
+# 실패: 0개
+# 아카이브: 0개
+# 성공률: 100.0%
+```
+
+### 재처리 시스템
+
+실패한 파일들을 자동으로 다시 처리할 수 있습니다.
+
+#### 실패한 파일 재처리
+
+```bash
+# 실패한 파일들 재처리
+python scripts/data_processing/legal_term_auto_processor.py --reprocess-failed --verbose
+
+# 출력 예시:
+# 재처리 완료: 성공 233개, 여전히 실패 0개
+```
+
+#### 실패한 파일 삭제
+
+```bash
+# 실패한 파일들 삭제 (주의: 데이터 손실 가능)
+python scripts/data_processing/legal_term_auto_processor.py --clear-failed
+```
+
+### 자동 처리 시스템
+
+#### 지속적인 자동 처리
+
+```bash
+# 5분마다 파일 체크 및 처리
+python scripts/data_processing/legal_term_auto_processor.py --mode continuous --check-interval 300
+```
+
+#### 단일 처리
+
+```bash
+# 한 번만 파일 처리 실행
+python scripts/data_processing/legal_term_auto_processor.py --mode single
+```
+
+#### 상세 로깅
+
+```bash
+# 상세한 로그와 함께 실행
+python scripts/data_processing/legal_term_auto_processor.py --reprocess-failed --verbose
+```
+
+### 데이터베이스 관리
+
+#### 데이터베이스 상태 확인
+
+```python
+# Python 스크립트로 확인
+from source.services.legal_term_database_loader import LegalTermDatabaseLoaderWithFileManagement
+
+loader = LegalTermDatabaseLoaderWithFileManagement('data/legal_terms.db', 'data/raw/law_open_api/legal_terms')
+stats = loader.get_database_stats()
+
+print(f"총 용어 수: {stats['total_terms']}")
+print(f"오늘 처리된 용어: {stats['today_terms']}")
+print(f"성공률: {stats['success_rate']:.1f}%")
+```
+
+#### 파일 처리 이력 조회
+
+```python
+# 파일 처리 이력 확인
+from source.services.legal_term_file_manager import LegalTermFileManager
+
+file_manager = LegalTermFileManager('data/raw/law_open_api/legal_terms')
+stats = file_manager.get_processing_stats()
+
+print(f"처리 중인 파일: {stats['processing_files']}")
+print(f"완료된 파일: {stats['completed_files']}")
+print(f"실패한 파일: {stats['failed_files']}")
+```
+
+### 문제 해결
+
+#### 일반적인 문제들
+
+1. **파일 이동 오류**
+   ```bash
+   # 권한 확인 및 설정
+   chmod 755 data/raw/law_open_api/legal_terms/
+   chmod 755 data/raw/law_open_api/legal_terms/processing/
+   chmod 755 data/raw/law_open_api/legal_terms/complete/
+   chmod 755 data/raw/law_open_api/legal_terms/failed/
+   chmod 755 data/raw/law_open_api/legal_terms/archive/
+   ```
+
+2. **데이터베이스 연결 오류**
+   ```python
+   # 데이터베이스 연결 테스트
+   import sqlite3
+   
+   def test_database_connection(db_path):
+       try:
+           conn = sqlite3.connect(db_path)
+           cursor = conn.cursor()
+           cursor.execute("SELECT COUNT(*) FROM legal_term_details")
+           count = cursor.fetchone()[0]
+           print(f"데이터베이스 연결 성공: {count}개 용어")
+           conn.close()
+           return True
+       except Exception as e:
+           print(f"데이터베이스 연결 실패: {e}")
+           return False
+   ```
+
+3. **처리 중단**
+   ```bash
+   # 실행 중인 프로세스 확인
+   ps aux | grep legal_term_auto_processor
+   
+   # 프로세스 종료
+   kill -TERM <PID>
+   ```
+
+#### 로그 분석
+
+```bash
+# 오류 로그 확인
+grep "ERROR" logs/legal_term_collection.log
+
+# 파일 처리 로그 확인
+grep "파일 재처리" logs/legal_term_collection.log
+
+# 데이터베이스 적재 로그 확인
+grep "데이터베이스 적재" logs/legal_term_collection.log
+```
+
+### 성능 최적화
+
+#### 시스템 모니터링
+
+```python
+# 시스템 상태 체크
+from source.services.legal_term_monitor import LegalTermMonitor
+
+monitor = LegalTermMonitor('data/legal_terms.db', 'data/raw/law_open_api/legal_terms')
+health = monitor.check_system_health()
+
+print(f"시스템 상태: {health['status']}")
+if health['issues']:
+    print("문제점:")
+    for issue in health['issues']:
+        print(f"  - {issue}")
+```
+
+#### 일일 리포트
+
+```python
+# 일일 처리 리포트 출력
+file_manager.print_daily_report()
+
+# 출력 예시:
+# === 법률용어 파일 처리 일일 리포트 (2025-10-24) ===
+# 처리 중: 0개
+# 오늘 완료: 233개
+# 총 완료: 233개
+# 실패: 0개
+# 아카이브: 0개
+# 성공률: 100.0%
+```
+
+### 고급 사용법
+
+#### 커스텀 처리 모드
+
+```python
+# 커스텀 자동 처리기 생성
+from scripts.data_processing.legal_term_auto_processor import LegalTermAutoProcessor
+
+class CustomAutoProcessor(LegalTermAutoProcessor):
+    def run_custom_processing(self):
+        """커스텀 처리 모드"""
+        logger.info("커스텀 처리 모드 실행")
+        
+        # 커스텀 로직 구현
+        self._process_custom_files()
+        
+        # 통계 업데이트
+        self._update_stats()
+        
+        # 처리 현황 출력
+        self._print_status()
+
+# 사용
+processor = CustomAutoProcessor('data/legal_terms.db', 'data/raw/law_open_api/legal_terms')
+processor.run_custom_processing()
+```
+
+#### 파일 관리 확장
+
+```python
+# 확장된 파일 관리자 생성
+from source.services.legal_term_file_manager import LegalTermFileManager
+
+class ExtendedFileManager(LegalTermFileManager):
+    def move_to_review(self, file_path: Path) -> Path:
+        """파일을 검토 상태로 이동"""
+        review_dir = self.base_dir / "review"
+        review_dir.mkdir(exist_ok=True)
+        
+        new_path = review_dir / file_path.name
+        file_path.rename(new_path)
+        
+        logger.info(f"파일을 검토 상태로 이동: {file_path.name}")
+        return new_path
+
+# 사용
+file_manager = ExtendedFileManager('data/raw/law_open_api/legal_terms')
+review_path = file_manager.move_to_review(file_path)
+```
 
 ## Streamlit UI 개요
 
