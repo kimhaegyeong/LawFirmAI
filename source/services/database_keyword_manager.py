@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 데이터베이스 기반 키워드 관리 시스템
 SQLite를 사용하여 질문 유형별 키워드를 효율적으로 관리

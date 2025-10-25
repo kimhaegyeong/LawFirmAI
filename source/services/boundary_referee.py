@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 경계 샘플 심판기 (두 번째 판단자)
  - 입력: 1차 판정(traditional/improved) 결과와 질의

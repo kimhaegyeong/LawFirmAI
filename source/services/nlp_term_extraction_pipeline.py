@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
