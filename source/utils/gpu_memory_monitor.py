@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 GPU 메모리 모니터링 도구
 LawFirmAI 프로젝트 - TASK 3.1 훈련 환경 구성
