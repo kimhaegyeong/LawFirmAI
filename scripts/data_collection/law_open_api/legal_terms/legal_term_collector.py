@@ -26,7 +26,18 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from scripts.data_collection.law_open_api.legal_terms.legal_term_collection_config import LegalTermCollectionConfig as Config
 from source.utils.logger import setup_logging, get_logger
 
+# 로거 초기화 (import 전에)
 logger = get_logger(__name__)
+
+# 파일 관리 시스템 import
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'source', 'services'))
+    from legal_term_file_manager import LegalTermFileManager
+    from legal_term_database_loader import LegalTermDatabaseLoaderWithFileManagement
+    FILE_MANAGEMENT_AVAILABLE = True
+except ImportError:
+    FILE_MANAGEMENT_AVAILABLE = False
+    logger.warning("파일 관리 시스템을 사용할 수 없습니다. 기본 저장 방식으로 진행합니다.")
 
 @dataclass
 class LegalTermListItem:
@@ -38,6 +49,7 @@ class LegalTermListItem:
     법령용어상세링크: str
     법령종류코드: int
     lstrm_id: int
+    trmSeqs: str = ""  # 법령용어일련번호 추가
 
 @dataclass
 class LegalTermDetail:
@@ -95,6 +107,20 @@ class LegalTermCollector:
         
         # 데이터베이스 초기화
         self._init_database()
+        
+        # 파일 관리 시스템 초기화
+        file_management_enabled = config.get("file_management", {}).get("enabled", True)
+        if FILE_MANAGEMENT_AVAILABLE and file_management_enabled:
+            self.file_manager = LegalTermFileManager(str(self.raw_data_dir))
+            self.db_loader = LegalTermDatabaseLoaderWithFileManagement(self.db_path, str(self.raw_data_dir))
+            logger.info("파일 관리 시스템 활성화")
+        else:
+            self.file_manager = None
+            self.db_loader = None
+            if not FILE_MANAGEMENT_AVAILABLE:
+                logger.warning("파일 관리 시스템을 사용할 수 없습니다. 기본 저장 방식으로 진행합니다.")
+            else:
+                logger.info("파일 관리 시스템 비활성화됨")
         
     def _init_database(self):
         """데이터베이스 초기화"""
@@ -289,20 +315,27 @@ class LegalTermCollector:
         logger.info(f"API 요청 파라미터: {params}")
         return await self._make_request_with_retry(self.list_url, params)
     
-    async def get_term_detail(self, term_name: str, detail_link: str = None) -> Optional[Any]:
-        """법률 용어 상세 조회 - API 가이드 준수"""
+    async def get_term_detail(self, term_name: str, detail_link: str = None, trm_seqs: str = None) -> Optional[Any]:
+        """법률 용어 상세 조회 - trmSeqs 파라미터 사용"""
         import urllib.parse
         
-        # API 가이드에 따른 파라미터 설정 - 실제 용어명 사용
-        params = {
-            "OC": "schema9",  # 가이드에 명시된 OC 값 사용
-            "target": "lstrm",
-            "type": "JSON",  # JSON 형태로 요청
-            "query": urllib.parse.quote(term_name, encoding='utf-8')  # 실제 용어명 사용
-        }
-        
-        logger.debug(f"상세 조회 요청 (실제 용어명): {term_name}")
-        logger.debug(f"URL 인코딩된 query: {params['query']}")
+        # trmSeqs가 있으면 우선 사용, 없으면 용어명으로 검색
+        if trm_seqs:
+            params = {
+                "OC": "schema9",
+                "target": "lstrm",
+                "type": "JSON",
+                "trmSeqs": trm_seqs
+            }
+            logger.debug(f"상세 조회 요청 (trmSeqs): {trm_seqs}")
+        else:
+            params = {
+                "OC": "schema9",
+                "target": "lstrm", 
+                "type": "JSON",
+                "query": urllib.parse.quote(term_name, encoding='utf-8')
+            }
+            logger.debug(f"상세 조회 요청 (용어명): {term_name}")
         
         response = await self._make_request_with_retry(self.detail_url, params)
         
@@ -312,7 +345,7 @@ class LegalTermCollector:
         return None
     
     def _parse_term_detail_response(self, response: Any, term_name: str) -> Optional[LegalTermDetail]:
-        """법률 용어 상세 응답 파싱 - API 가이드 준수"""
+        """법률 용어 상세 응답 파싱 - LsTrmService 구조 처리"""
         try:
             # JSON 응답 처리 (우선)
             if isinstance(response, dict):
@@ -321,7 +354,34 @@ class LegalTermCollector:
                     logger.warning(f"일치하는 법령용어가 없음: {term_name}")
                     return None
                 
-                # API 가이드에 따른 직접 필드 접근
+                # LsTrmService 구조 처리 (웹 검색 결과 기준)
+                if "LsTrmService" in response:
+                    service_data = response["LsTrmService"]
+                    
+                    # 안전한 변환 함수들
+                    def safe_int(value, default=0):
+                        try:
+                            return int(value) if value else default
+                        except (ValueError, TypeError):
+                            return default
+                    
+                    def safe_str(value, default=""):
+                        return str(value) if value else default
+                    
+                    detail_item = LegalTermDetail(
+                        법령용어일련번호=safe_int(service_data.get("법령용어일련번호", 0)),
+                        법령용어명_한글=safe_str(service_data.get("법령용어명_한글", "")),
+                        법령용어명_한자=safe_str(service_data.get("법령용어명_한자", "")),
+                        법령용어코드=safe_int(service_data.get("법령용어코드", 0)),
+                        법령용어코드명=safe_str(service_data.get("법령용어코드명", "")),
+                        출처=safe_str(service_data.get("출처", "")),
+                        법령용어정의=safe_str(service_data.get("법령용어정의", ""))
+                    )
+                    
+                    logger.debug(f"LsTrmService 파싱 성공: {term_name}")
+                    return detail_item
+                
+                # API 가이드에 따른 직접 필드 접근 (fallback)
                 if any(key in response for key in ["법령용어일련번호", "법령용어명_한글"]):
                     detail_item = LegalTermDetail(
                         법령용어일련번호=int(response.get("법령용어일련번호", 0)),
@@ -332,7 +392,7 @@ class LegalTermCollector:
                         출처=response.get("출처", ""),
                         법령용어정의=response.get("법령용어정의", "")
                     )
-                    logger.debug(f"가이드 방식 파싱 성공: {term_name}")
+                    logger.debug(f"직접 필드 접근 파싱 성공: {term_name}")
                     return detail_item
                 
                 # 중첩된 구조에서 데이터 찾기 (fallback)
@@ -520,26 +580,54 @@ class LegalTermCollector:
                             if isinstance(law_type_code, str) and "," in law_type_code:
                                 law_type_code = law_type_code.split(",")[0]
                             
+                            # trmSeqs 추출 (상세링크에서 추출하거나 직접 필드에서 가져오기)
+                            trm_seqs = ""
+                            detail_link = item.get("법령용어상세링크", item.get("link", ""))
+                            if detail_link and "trmSeqs=" in detail_link:
+                                try:
+                                    trm_seqs = detail_link.split("trmSeqs=")[1].split("&")[0]
+                                except:
+                                    pass
+                            
+                            # 직접 필드에서도 확인
+                            if not trm_seqs:
+                                trm_seqs = item.get("trmSeqs", item.get("법령용어일련번호", ""))
+                            
                             term_item = LegalTermListItem(
                                 법령용어ID=item.get("법령용어ID", item.get("id", "")),
                                 법령용어명=item.get("법령용어명", item.get("name", "")),
                                 법령용어상세검색=item.get("법령용어상세검색", item.get("detail", "")),
                                 사전구분코드=item.get("사전구분코드", item.get("code", "")),
-                                법령용어상세링크=item.get("법령용어상세링크", item.get("link", "")),
+                                법령용어상세링크=detail_link,
                                 법령종류코드=int(law_type_code),
-                                lstrm_id=int(item.get("id", item.get("lstrm_id", 0)))
+                                lstrm_id=int(item.get("id", item.get("lstrm_id", 0))),
+                                trmSeqs=str(trm_seqs)
                             )
                             items.append(term_item)
                 elif isinstance(term_data, dict):
                     # 단일 아이템인 경우
+                    # trmSeqs 추출
+                    trm_seqs = ""
+                    detail_link = term_data.get("법령용어상세링크", term_data.get("link", ""))
+                    if detail_link and "trmSeqs=" in detail_link:
+                        try:
+                            trm_seqs = detail_link.split("trmSeqs=")[1].split("&")[0]
+                        except:
+                            pass
+                    
+                    # 직접 필드에서도 확인
+                    if not trm_seqs:
+                        trm_seqs = term_data.get("trmSeqs", term_data.get("법령용어일련번호", ""))
+                    
                     term_item = LegalTermListItem(
                         법령용어ID=term_data.get("법령용어ID", term_data.get("id", "")),
                         법령용어명=term_data.get("법령용어명", term_data.get("name", "")),
                         법령용어상세검색=term_data.get("법령용어상세검색", term_data.get("detail", "")),
                         사전구분코드=term_data.get("사전구분코드", term_data.get("code", "")),
-                        법령용어상세링크=term_data.get("법령용어상세링크", term_data.get("link", "")),
+                        법령용어상세링크=detail_link,
                         법령종류코드=int(term_data.get("법령종류코드", term_data.get("type", 0))),
-                        lstrm_id=int(term_data.get("lstrm id", term_data.get("lstrm_id", 0)))
+                        lstrm_id=int(term_data.get("lstrm id", term_data.get("lstrm_id", 0))),
+                        trmSeqs=str(trm_seqs)
                     )
                     items.append(term_item)
             
@@ -602,6 +690,30 @@ class LegalTermCollector:
             
             logger.info(f"데이터 파일 저장 완료: {file_path}")
             logger.info(f"파일 크기: {file_path.stat().st_size} bytes")
+            
+            # 파일 관리 시스템이 활성화된 경우 자동으로 데이터베이스에 적재하고 파일 이동
+            if self.file_manager and self.db_loader and filename.startswith("legal_term_detail"):
+                try:
+                    logger.info(f"파일 관리 시스템을 통한 자동 처리 시작: {file_path.name}")
+                    
+                    # 파일을 processing으로 이동
+                    processing_path = self.file_manager.move_to_processing(file_path)
+                    
+                    # 데이터베이스에 적재
+                    success = self.db_loader._load_file_to_database(processing_path)
+                    
+                    if success:
+                        # 성공 시 complete로 이동
+                        self.file_manager.move_to_complete(processing_path)
+                        logger.info(f"파일 자동 처리 완료: {file_path.name}")
+                    else:
+                        # 실패 시 failed로 이동
+                        self.file_manager.move_to_failed(processing_path, "데이터베이스 적재 실패")
+                        logger.warning(f"파일 자동 처리 실패: {file_path.name}")
+                        
+                except Exception as e:
+                    logger.error(f"파일 관리 시스템 처리 중 오류: {e}")
+                    # 오류 발생 시 원본 파일 유지
             
         except Exception as e:
             logger.error(f"데이터 파일 저장 실패: {e}")
@@ -802,11 +914,22 @@ class LegalTermCollector:
             with open(latest_file, 'r', encoding='utf-8') as f:
                 list_data = json.load(f)
             
-            # 용어명과 상세링크 추출
+            # 용어명, 상세링크, trmSeqs 추출
             terms = []
             for item in list_data:
-                if isinstance(item, dict) and '법령용어명' in item and '법령용어상세링크' in item:
-                    terms.append((item['법령용어명'], item['법령용어상세링크']))
+                if isinstance(item, dict) and '법령용어명' in item:
+                    term_name = item['법령용어명']
+                    detail_link = item.get('법령용어상세링크', '')
+                    trm_seqs = item.get('trmSeqs', '')
+                    
+                    # trmSeqs가 없으면 상세링크에서 추출
+                    if not trm_seqs and detail_link and "trmSeqs=" in detail_link:
+                        try:
+                            trm_seqs = detail_link.split("trmSeqs=")[1].split("&")[0]
+                        except:
+                            pass
+                    
+                    terms.append((term_name, detail_link, trm_seqs))
             
                 total_terms = len(terms)
                 logger.info(f"수집할 용어 수: {total_terms}개")
@@ -815,12 +938,12 @@ class LegalTermCollector:
                 batch_number = 1
                 collected_count = 0
                 
-            for i, (term_name, detail_link) in enumerate(terms):
+            for i, (term_name, detail_link, trm_seqs) in enumerate(terms):
                 if (i + 1) % 50 == 0:  # 50개마다 진행 상황 로그
                     logger.info(f"진행 상황: {i+1}/{total_terms} ({((i+1)/total_terms)*100:.1f}%)")
                     
-                # API 요청 (상세링크 사용)
-                response = await self.get_term_detail(term_name, detail_link)
+                # API 요청 (trmSeqs 우선 사용)
+                response = await self.get_term_detail(term_name, detail_link, trm_seqs)
                 
                 if response is None:
                     continue
@@ -883,11 +1006,22 @@ class LegalTermCollector:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         list_data = json.load(f)
                     
-                    # 용어명과 상세링크 추출
+                    # 용어명, 상세링크, trmSeqs 추출
                     file_terms = []
                     for item in list_data:
-                        if isinstance(item, dict) and '법령용어명' in item and '법령용어상세링크' in item:
-                            file_terms.append((item['법령용어명'], item['법령용어상세링크']))
+                        if isinstance(item, dict) and '법령용어명' in item:
+                            term_name = item['법령용어명']
+                            detail_link = item.get('법령용어상세링크', '')
+                            trm_seqs = item.get('trmSeqs', '')
+                            
+                            # trmSeqs가 없으면 상세링크에서 추출
+                            if not trm_seqs and detail_link and "trmSeqs=" in detail_link:
+                                try:
+                                    trm_seqs = detail_link.split("trmSeqs=")[1].split("&")[0]
+                                except:
+                                    pass
+                            
+                            file_terms.append((term_name, detail_link, trm_seqs))
                     
                     all_terms.extend(file_terms)
                     processed_files += 1
@@ -912,13 +1046,13 @@ class LegalTermCollector:
             collected_count = 0
             failed_count = 0
             
-            for i, (term_name, detail_link) in enumerate(unique_terms):
+            for i, (term_name, detail_link, trm_seqs) in enumerate(unique_terms):
                 if (i + 1) % 100 == 0:  # 100개마다 진행 상황 로그
                     logger.info(f"진행 상황: {i+1}/{unique_count} ({((i+1)/unique_count)*100:.1f}%) - 수집: {collected_count}, 실패: {failed_count}")
                 
                 try:
-                    # API 요청 (상세링크 사용)
-                    response = await self.get_term_detail(term_name, detail_link)
+                    # API 요청 (trmSeqs 우선 사용)
+                    response = await self.get_term_detail(term_name, detail_link, trm_seqs)
                     
                     if response is None:
                         failed_count += 1
@@ -1009,8 +1143,19 @@ class LegalTermCollector:
                 for i, item in enumerate(items, 1):
                     if isinstance(item, dict) and '법령용어명' in item:
                         term_name = item['법령용어명']
+                        detail_link = item.get('법령용어상세링크', '')
+                        trm_seqs = item.get('trmSeqs', '')
+                        
+                        # trmSeqs가 없으면 상세링크에서 추출
+                        if not trm_seqs and detail_link and "trmSeqs=" in detail_link:
+                            try:
+                                trm_seqs = detail_link.split("trmSeqs=")[1].split("&")[0]
+                            except:
+                                pass
                     elif hasattr(item, '법령용어명'):
                         term_name = item.법령용어명
+                        detail_link = getattr(item, '법령용어상세링크', '')
+                        trm_seqs = getattr(item, 'trmSeqs', '')
                     else:
                         continue
                     
@@ -1018,7 +1163,7 @@ class LegalTermCollector:
                         try:
                             logger.info(f"상세 수집: {i}/{len(items)} - {term_name}")
                             
-                            detail = await self.get_term_detail(term_name)
+                            detail = await self.get_term_detail(term_name, detail_link, trm_seqs)
                             
                             if detail:
                                 # LegalTermDetail 객체인지 확인하고 유효한 데이터인지 검증
@@ -1154,6 +1299,10 @@ def parse_arguments():
                        help='설정 파일 경로 (기본값: 기본 설정 사용)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='상세 로그 출력')
+    parser.add_argument('--enable-file-management', action='store_true',
+                       help='파일 관리 시스템 활성화 (자동 데이터베이스 적재 및 파일 이동)')
+    parser.add_argument('--disable-file-management', action='store_true',
+                       help='파일 관리 시스템 비활성화 (기본 저장 방식)')
     
     return parser.parse_args()
 
@@ -1183,6 +1332,14 @@ async def main():
     # 로그 레벨 설정
     if args.verbose:
         config_dict['logging']['level'] = 'DEBUG'
+    
+    # 파일 관리 시스템 설정
+    if args.enable_file_management:
+        config_dict['file_management']['enabled'] = True
+        logger.info("파일 관리 시스템 활성화")
+    elif args.disable_file_management:
+        config_dict['file_management']['enabled'] = False
+        logger.info("파일 관리 시스템 비활성화")
     
     # 설정 업데이트
     config.update_config(config_dict)

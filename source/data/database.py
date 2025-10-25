@@ -31,6 +31,9 @@ class DatabaseManager:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         
+        # UTF-8 인코딩 설정
+        conn.execute("PRAGMA encoding = 'UTF-8'")
+        
         # FTS5 확장 활성화 (Windows 호환)
         try:
             # Windows에서는 FTS5가 기본적으로 포함되어 있음
@@ -477,6 +480,21 @@ class DatabaseManager:
                 )
             """)
             
+            # base_legal_term_lists 테이블 (법령정보지식베이스 법령용어)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS base_legal_term_lists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    법령용어ID TEXT UNIQUE,
+                    법령용어명 TEXT,
+                    동음이의어존재여부 TEXT,
+                    비고 TEXT,
+                    용어간관계링크 TEXT,
+                    조문간관계링크 TEXT,
+                    수집일시 TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # FTS5 전체 텍스트 검색 테이블
             cursor.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS fts_precedent_cases USING fts5(
@@ -568,6 +586,12 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_history_version ON migration_history(migration_version)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_history_success ON migration_history(success)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_schema_version_updated_at ON schema_version(updated_at)")
+            
+            # base_legal_term_lists 테이블 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_legal_term_lists_법령용어ID ON base_legal_term_lists(법령용어ID)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_legal_term_lists_법령용어명 ON base_legal_term_lists(법령용어명)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_legal_term_lists_동음이의어존재여부 ON base_legal_term_lists(동음이의어존재여부)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_legal_term_lists_created_at ON base_legal_term_lists(created_at)")
             
             conn.commit()
             logger.info("Database tables and indices created successfully")
@@ -813,66 +837,72 @@ class DatabaseManager:
             logger.error(f"Error getting document by ID: {e}")
             return None
     
-    def search_assembly_documents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Assembly 데이터베이스에서 문서 검색"""
+    def search_current_laws_documents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Current Laws 데이터베이스에서 문서 검색"""
         try:
+            logger.info(f"Searching current laws documents for query: '{query}' with limit: {limit}")
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Assembly 테이블에서 검색
+                # Current Laws 테이블에서 검색
                 sql = """
-                    SELECT al.law_id, al.law_name, aa.article_number, aa.article_title, 
-                           aa.article_content, aa.article_type, aa.is_supplementary,
-                           aa.ml_confidence_score, aa.parsing_method, aa.parsing_quality_score,
-                           aa.word_count, aa.char_count
-                    FROM assembly_laws al
-                    JOIN assembly_articles aa ON al.law_id = aa.law_id
-                    WHERE (al.law_name LIKE ? OR aa.article_content LIKE ? OR aa.article_title LIKE ?)
-                    ORDER BY aa.parsing_quality_score DESC, aa.word_count DESC
+                    SELECT law_id, law_name_korean, article_number, article_title, 
+                           article_content, paragraph_content, is_supplementary,
+                           quality_score, parsing_method, effective_date,
+                           paragraph_number, sub_paragraph_content
+                    FROM current_laws_articles
+                    WHERE (law_name_korean LIKE ? OR article_content LIKE ? OR article_title LIKE ?)
+                    ORDER BY quality_score DESC, law_name_korean
                     LIMIT ?
                 """
                 
                 search_term = f"%{query}%"
+                logger.info(f"Executing SQL with search_term: '{search_term}' (bytes: {search_term.encode('utf-8')})")
                 cursor.execute(sql, (search_term, search_term, search_term, limit))
                 
+                rows = cursor.fetchall()
+                logger.info(f"SQL returned {len(rows)} rows")
+                
                 results = []
-                for row in cursor.fetchall():
+                for row in rows:
                     result = {
                         "law_id": row["law_id"],
-                        "law_name": row["law_name"],
+                        "law_name": row["law_name_korean"],
                         "article_number": row["article_number"],
                         "article_title": row["article_title"],
                         "content": row["article_content"],
-                        "article_type": row["article_type"],
+                        "paragraph_content": row["paragraph_content"],
                         "is_supplementary": bool(row["is_supplementary"]),
-                        "ml_confidence_score": row["ml_confidence_score"],
+                        "quality_score": row["quality_score"],
                         "parsing_method": row["parsing_method"],
-                        "quality_score": row["parsing_quality_score"],
-                        "word_count": row["word_count"],
-                        "char_count": row["char_count"],
+                        "effective_date": row["effective_date"],
+                        "paragraph_number": row["paragraph_number"],
+                        "sub_paragraph_content": row["sub_paragraph_content"],
                         "relevance_score": 1.0  # 정확한 매칭이므로 높은 점수
                     }
                     results.append(result)
                 
+                logger.info(f"Returning {len(results)} results")
                 return results
                 
         except Exception as e:
-            logger.error(f"Error searching assembly documents: {e}")
+            logger.error(f"Error searching current laws documents: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
-    def search_assembly_articles_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Assembly 조문 FTS 검색"""
+    def search_current_laws_articles_fts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Current Laws 조문 FTS 검색"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
                 # FTS5 검색 실행
                 sql = """
-                    SELECT aa.*, al.law_name, al.law_id
-                    FROM assembly_articles aa
-                    JOIN assembly_laws al ON aa.law_id = al.law_id
-                    JOIN fts_assembly_articles fts ON aa.rowid = fts.rowid
-                    WHERE fts_assembly_articles MATCH ?
+                    SELECT cla.*
+                    FROM current_laws_articles cla
+                    JOIN fts_current_laws_articles fts ON cla.rowid = fts.rowid
+                    WHERE fts MATCH ?
                     ORDER BY rank
                     LIMIT ?
                 """
@@ -883,17 +913,15 @@ class DatabaseManager:
                 for row in cursor.fetchall():
                     result = {
                         "law_id": row["law_id"],
-                        "law_name": row["law_name"],
+                        "law_name_korean": row["law_name_korean"],
                         "article_number": row["article_number"],
                         "article_title": row["article_title"],
                         "article_content": row["article_content"],
-                        "article_type": row["article_type"],
+                        "paragraph_content": row["paragraph_content"],
                         "is_supplementary": bool(row["is_supplementary"]),
-                        "ml_confidence_score": row["ml_confidence_score"],
+                        "quality_score": row["quality_score"],
                         "parsing_method": row["parsing_method"],
-                        "parsing_quality_score": row["parsing_quality_score"],
-                        "word_count": row["word_count"],
-                        "char_count": row["char_count"]
+                        "effective_date": row["effective_date"]
                     }
                     results.append(result)
                 
@@ -902,7 +930,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error in FTS search: {e}")
             # FTS가 실패하면 일반 검색으로 폴백
-            return self.search_assembly_documents(query, limit)
+            return self.search_current_laws_documents(query, limit)
     
     # 파일 처리 이력 추적 메서드들
     def mark_file_as_processed(self, file_path: str, file_hash: str, 
@@ -1531,6 +1559,116 @@ class DatabaseManager:
         stats['by_type'] = self.execute_query(type_query)
         
         return stats
+    
+    # base_legal_term_lists 관련 메서드들
+    
+    def search_base_legal_terms(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """base_legal_term_lists에서 법령용어 검색"""
+        search_query = """
+            SELECT 법령용어ID, 법령용어명, 동음이의어존재여부, 비고, 
+                   용어간관계링크, 조문간관계링크, 수집일시, created_at
+            FROM base_legal_term_lists 
+            WHERE 법령용어명 LIKE ? OR 비고 LIKE ?
+            ORDER BY 법령용어명
+            LIMIT ?
+        """
+        return self.execute_query(search_query, (f"%{query}%", f"%{query}%", limit))
+    
+    def get_legal_term_suggestions(self, partial_term: str, limit: int = 5) -> List[str]:
+        """법령용어 자동완성 제안"""
+        query = """
+            SELECT 법령용어명 
+            FROM base_legal_term_lists 
+            WHERE 법령용어명 LIKE ?
+            ORDER BY 법령용어명
+            LIMIT ?
+        """
+        results = self.execute_query(query, (f"{partial_term}%", limit))
+        return [result['법령용어명'] for result in results]
+    
+    def get_legal_term_definition(self, term_name: str) -> Optional[Dict[str, Any]]:
+        """특정 법령용어의 정의 조회"""
+        query = """
+            SELECT * FROM base_legal_term_lists 
+            WHERE 법령용어명 = ?
+        """
+        results = self.execute_query(query, (term_name,))
+        return results[0] if results else None
+    
+    def get_related_legal_terms(self, term_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """관련 법령용어 추천"""
+        query = """
+            SELECT 법령용어ID, 법령용어명, 비고
+            FROM base_legal_term_lists 
+            WHERE 법령용어명 != ? 
+            AND (비고 LIKE ? OR 법령용어명 LIKE ?)
+            ORDER BY 법령용어명
+            LIMIT ?
+        """
+        return self.execute_query(query, (term_name, f"%{term_name}%", f"%{term_name}%", limit))
+    
+    def get_base_legal_terms_count(self) -> int:
+        """base_legal_term_lists 총 개수 조회"""
+        query = "SELECT COUNT(*) as count FROM base_legal_term_lists"
+        result = self.execute_query(query)
+        return result[0]['count'] if result else 0
+    
+    def insert_base_legal_term(self, term_data: Dict[str, Any]) -> bool:
+        """base_legal_term_lists에 법령용어 삽입"""
+        query = """
+            INSERT OR REPLACE INTO base_legal_term_lists 
+            (법령용어ID, 법령용어명, 동음이의어존재여부, 비고, 용어간관계링크, 조문간관계링크, 수집일시)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """
+        try:
+            params = (
+                term_data.get('법령용어ID', ''),
+                term_data.get('법령용어명', ''),
+                term_data.get('동음이의어존재여부', ''),
+                term_data.get('비고', ''),
+                term_data.get('용어간관계링크', ''),
+                term_data.get('조문간관계링크', ''),
+                term_data.get('수집일시', '')
+            )
+            self.execute_update(query, params)
+            return True
+        except Exception as e:
+            logger.error(f"법령용어 삽입 실패: {e}")
+            return False
+    
+    def insert_base_legal_terms_batch(self, terms: List[Dict[str, Any]]) -> int:
+        """base_legal_term_lists에 법령용어 배치 삽입"""
+        query = """
+            INSERT OR REPLACE INTO base_legal_term_lists 
+            (법령용어ID, 법령용어명, 동음이의어존재여부, 비고, 용어간관계링크, 조문간관계링크, 수집일시)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                params_list = []
+                for term in terms:
+                    params = (
+                        term.get('법령용어ID', ''),
+                        term.get('법령용어명', ''),
+                        term.get('동음이의어존재여부', ''),
+                        term.get('비고', ''),
+                        term.get('용어간관계링크', ''),
+                        term.get('조문간관계링크', ''),
+                        term.get('수집일시', '')
+                    )
+                    params_list.append(params)
+                
+                cursor.executemany(query, params_list)
+                conn.commit()
+                
+                logger.info(f"법령용어 배치 삽입 성공: {len(terms)}개")
+                return len(terms)
+                
+        except Exception as e:
+            logger.error(f"법령용어 배치 삽입 실패: {e}")
+            return 0
     
     # 현행법령 관련 메서드들
     

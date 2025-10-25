@@ -137,12 +137,12 @@ class MLEnhancedSearchService:
                 where_clause += " AND " + " AND ".join(ml_filters)
             
             sql = f"""
-                SELECT law_id, law_name, article_number, article_title, article_content,
-                       article_type, is_supplementary, ml_confidence_score, parsing_method,
-                       parsing_quality_score, word_count, char_count
-                FROM assembly_articles
+                SELECT law_id, law_name_korean, article_number, article_title, article_content,
+                       paragraph_content, is_supplementary, quality_score, parsing_method,
+                       effective_date, paragraph_number, sub_paragraph_content
+                FROM current_laws_articles
                 WHERE {where_clause}
-                ORDER BY parsing_quality_score DESC, word_count DESC
+                ORDER BY quality_score DESC
                 LIMIT ?
             """
             params.append(limit)
@@ -154,22 +154,22 @@ class MLEnhancedSearchService:
             results = []
             for row in rows:
                 matched_keywords = self._find_matched_keywords(
-                    f"{row['law_name']} {row['article_content']}", keywords
+                    f"{row['law_name_korean']} {row['article_content']}", keywords
                 )
                 
                 result = {
                     "document_id": f"{row['law_id']}_article_{row['article_number']}",
-                    "title": row["law_name"],
+                    "title": row["law_name_korean"],
                     "content": row["article_content"],
                     "article_number": row["article_number"],
                     "article_title": row["article_title"],
-                    "article_type": row["article_type"],
+                    "paragraph_content": row.get("paragraph_content"),
                     "is_supplementary": bool(row["is_supplementary"]),
-                    "ml_confidence_score": row["ml_confidence_score"],
+                    "quality_score": row["quality_score"],
                     "parsing_method": row["parsing_method"],
-                    "quality_score": row["parsing_quality_score"],
-                    "word_count": row["word_count"],
-                    "char_count": row["char_count"],
+                    "effective_date": row.get("effective_date"),
+                    "paragraph_number": row.get("paragraph_number"),
+                    "sub_paragraph_content": row.get("sub_paragraph_content"),
                     "search_type": "keyword",
                     "matched_keywords": matched_keywords
                 }

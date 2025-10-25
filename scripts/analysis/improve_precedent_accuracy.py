@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-판례 검색 정확도 향상 스크립트
+판례 검색 정확도 향상 스크립트 (한국어 인코딩 수정)
 """
 
 import json
 import sys
 import re
+import os
 from pathlib import Path
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(str(Path(__file__).parent.parent))
+
+# 한국어 출력을 위한 환경 설정
+os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 def improve_precedent_titles():
     """판례 제목 개선"""

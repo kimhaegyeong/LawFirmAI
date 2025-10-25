@@ -62,7 +62,8 @@ class LegalVectorStore:
                  dimension: int = 768, index_type: str = "flat",
                  enable_quantization: bool = True,
                  enable_lazy_loading: bool = True,
-                 memory_threshold_mb: int = 3000):
+                 memory_threshold_mb: int = 512,  # 메모리 임계값을 512MB로 긴급 낮춤
+                 use_gpu: bool = True, device: str = "auto"):
         """
         벡터 스토어 초기화
         
@@ -73,6 +74,8 @@ class LegalVectorStore:
             enable_quantization: Float16 양자화 활성화
             enable_lazy_loading: 지연 로딩 활성화
             memory_threshold_mb: 메모리 임계값 (MB)
+            use_gpu: GPU 사용 여부
+            device: 사용할 디바이스 ("auto", "cpu", "cuda")
         """
         self.model_name = model_name
         self.dimension = dimension
@@ -80,6 +83,22 @@ class LegalVectorStore:
         self.enable_quantization = enable_quantization
         self.enable_lazy_loading = enable_lazy_loading
         self.memory_threshold_mb = memory_threshold_mb
+        self.use_gpu = use_gpu
+        
+        # 디바이스 설정
+        if device == "auto":
+            if use_gpu and TORCH_AVAILABLE and torch.cuda.is_available():
+                self.device = "cuda"
+                self.logger = logging.getLogger(__name__)
+                self.logger.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
+                self.logger.info(f"CUDA version: {torch.version.cuda}")
+            else:
+                self.device = "cpu"
+                if use_gpu:
+                    self.logger = logging.getLogger(__name__)
+                    self.logger.warning("GPU requested but not available, using CPU")
+        else:
+            self.device = device
         
         # 모델 관련
         self.model = None
@@ -93,16 +112,22 @@ class LegalVectorStore:
         self._index_loaded = False
         self._index_lock = threading.Lock()
         
-        # 메모리 관리
+        # 메모리 관리 (긴급 최적화 - 더 적극적인 설정)
         self._memory_cache = weakref.WeakValueDictionary()
         self._last_memory_check = time.time()
-        self._memory_check_interval = 60  # 60초마다 메모리 체크
+        self._memory_check_interval = 15  # 15초마다 메모리 체크 (더 자주)
+        self._memory_threshold_mb = 512   # 512MB 임계값 (더 낮게 설정)
+        self._aggressive_cleanup_threshold = 768  # 768MB에서 적극적 정리
         
         # 모델 타입 감지
         self.is_bge_model = "bge-m3" in model_name.lower()
         
-        self.logger = logging.getLogger(__name__)
+        # 로거 초기화 (디바이스 설정 후)
+        if not hasattr(self, 'logger'):
+            self.logger = logging.getLogger(__name__)
+        
         self.logger.info(f"LegalVectorStore initialized with model: {model_name}")
+        self.logger.info(f"Device: {self.device}")
         self.logger.info(f"Model type: {'BGE-M3' if self.is_bge_model else 'Sentence-BERT'}")
         self.logger.info(f"Quantization: {'Enabled' if enable_quantization else 'Disabled'}")
         self.logger.info(f"Lazy Loading: {'Enabled' if enable_lazy_loading else 'Disabled'}")
@@ -113,7 +138,7 @@ class LegalVectorStore:
             self._initialize_index()
     
     def _check_memory_usage(self):
-        """메모리 사용량 체크 및 정리"""
+        """메모리 사용량 체크 및 정리 (개선된 버전)"""
         current_time = time.time()
         if current_time - self._last_memory_check < self._memory_check_interval:
             return
@@ -124,12 +149,54 @@ class LegalVectorStore:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / (1024**2)
             
-            if memory_mb > self.memory_threshold_mb:
-                self.logger.warning(f"Memory usage exceeded threshold: {memory_mb:.2f} MB > {self.memory_threshold_mb} MB")
+            # 적극적 정리 임계값 초과 시
+            if memory_mb > self._aggressive_cleanup_threshold:
+                self.logger.warning(f"Memory usage critical: {memory_mb:.2f} MB > {self._aggressive_cleanup_threshold} MB")
+                self._aggressive_memory_cleanup()
+            # 일반 임계값 초과 시
+            elif memory_mb > self._memory_threshold_mb:
+                self.logger.warning(f"Memory usage exceeded threshold: {memory_mb:.2f} MB > {self._memory_threshold_mb} MB")
                 self._cleanup_memory()
                 
         except Exception as e:
             self.logger.error(f"Memory check failed: {e}")
+    
+    def _aggressive_memory_cleanup(self):
+        """적극적 메모리 정리"""
+        self.logger.warning("Starting aggressive memory cleanup...")
+        
+        # 1. 가비지 컬렉션 강제 실행 (여러 번)
+        for i in range(3):
+            collected = gc.collect()
+            self.logger.info(f"Garbage collection cycle {i+1}: collected {collected} objects")
+        
+        # 2. 캐시 완전 정리
+        if hasattr(self, '_memory_cache'):
+            cache_size = len(self._memory_cache)
+            self._memory_cache.clear()
+            self.logger.info(f"Cleared {cache_size} cached items")
+        
+        # 3. 모델 언로드 (필요시)
+        if hasattr(self, 'model') and self.model is not None:
+            if hasattr(self.model, 'cpu'):
+                self.model.cpu()
+            del self.model
+            self.model = None
+            self._model_loaded = False
+            self.logger.info("Model unloaded to free memory")
+        
+        # 4. PyTorch 캐시 정리
+        if TORCH_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            self.logger.info("PyTorch CUDA cache cleared")
+        
+        # 5. 메모리 사용량 재확인
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / (1024**2)
+            self.logger.info(f"Memory after aggressive cleanup: {memory_mb:.2f} MB")
+        except Exception as e:
+            self.logger.error(f"Failed to check memory after aggressive cleanup: {e}")
     
     def _cleanup_memory(self):
         """메모리 정리"""
@@ -175,22 +242,35 @@ class LegalVectorStore:
                     if not SENTENCE_TRANSFORMERS_AVAILABLE:
                         raise ImportError("SentenceTransformers is required but not installed")
                     
-                    self.model = SentenceTransformer(self.model_name)
+                    # 디바이스 설정에 따라 모델 로딩
+                    if self.device == "cuda":
+                        self.model = SentenceTransformer(self.model_name, device=self.device)
+                        self.logger.info(f"Sentence-BERT model loaded on GPU: {self.model_name}")
+                    else:
+                        self.model = SentenceTransformer(self.model_name)
+                        self.logger.info(f"Sentence-BERT model loaded on CPU: {self.model_name}")
                     
-                    # Float16 양자화 적용
+                    # Float16 양자화 적용 (GPU에서 더 효과적)
                     if self.enable_quantization and TORCH_AVAILABLE:
                         try:
-                            # 모델의 모든 파라미터를 Float16으로 변환
-                            if hasattr(self.model, 'model') and hasattr(self.model.model, 'half'):
-                                self.model.model = self.model.model.half()
-                                self.logger.info("Model quantized to Float16")
-                            elif hasattr(self.model, 'half'):
-                                self.model = self.model.half()
-                                self.logger.info("Model quantized to Float16")
+                            if self.device == "cuda":
+                                # GPU에서 양자화 적용
+                                if hasattr(self.model, 'model') and hasattr(self.model.model, 'half'):
+                                    self.model.model = self.model.model.half()
+                                    self.logger.info("Model quantized to Float16 on GPU")
+                                elif hasattr(self.model, 'half'):
+                                    self.model = self.model.half()
+                                    self.logger.info("Model quantized to Float16 on GPU")
+                            else:
+                                # CPU에서 양자화 적용
+                                if hasattr(self.model, 'model') and hasattr(self.model.model, 'half'):
+                                    self.model.model = self.model.model.half()
+                                    self.logger.info("Model quantized to Float16 on CPU")
+                                elif hasattr(self.model, 'half'):
+                                    self.model = self.model.half()
+                                    self.logger.info("Model quantized to Float16 on CPU")
                         except Exception as e:
                             self.logger.warning(f"Quantization failed: {e}")
-                    
-                    self.logger.info(f"Sentence-BERT model loaded: {self.model_name}")
                 
                 self._model_loaded = True
                 
@@ -405,6 +485,9 @@ class LegalVectorStore:
     
     def search(self, query: str, top_k: int = 10, filters: Dict = None, enhanced: bool = True) -> List[Dict[str, Any]]:
         """벡터 검색 수행 (하이브리드 검색용)"""
+        # 메모리 사용량 체크
+        self._check_memory_usage()
+        
         try:
             model = self.get_model()
             index = self.get_index()

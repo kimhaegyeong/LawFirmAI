@@ -50,12 +50,11 @@ class LawContextSearchEngine:
         try:
             # 해당 법령의 조문 범위 검색
             query = """
-                SELECT aa.*, al.law_name, al.law_id
-                FROM assembly_articles aa
-                JOIN assembly_laws al ON aa.law_id = al.law_id
-                WHERE al.law_name = ? 
-                AND aa.article_number BETWEEN ? AND ?
-                ORDER BY aa.article_number
+                SELECT cla.*
+                FROM current_laws_articles cla
+                WHERE cla.law_name_korean = ? 
+                AND cla.article_number BETWEEN ? AND ?
+                ORDER BY cla.article_number
             """
             
             start_article = max(1, article_number - context_range)
@@ -214,12 +213,11 @@ class LawContextSearchEngine:
         """날짜 범위로 조문 검색"""
         try:
             query = """
-                SELECT aa.*, al.law_name, al.law_id, al.promulgation_date, al.enforcement_date
-                FROM assembly_articles aa
-                JOIN assembly_laws al ON aa.law_id = al.law_id
-                WHERE al.law_name = ? 
-                AND al.promulgation_date BETWEEN ? AND ?
-                ORDER BY aa.article_number
+                SELECT cla.*
+                FROM current_laws_articles cla
+                WHERE cla.law_name_korean = ? 
+                AND cla.effective_date BETWEEN ? AND ?
+                ORDER BY cla.article_number
             """
             
             results = self.db_manager.execute_query(query, (law_name, start_date, end_date))
@@ -249,35 +247,29 @@ class LawContextSearchEngine:
                 # 특정 법령의 통계
                 query = """
                     SELECT 
-                        COUNT(aa.article_id) as total_articles,
-                        COUNT(CASE WHEN aa.is_supplementary = 0 THEN 1 END) as main_articles,
-                        COUNT(CASE WHEN aa.is_supplementary = 1 THEN 1 END) as supplementary_articles,
-                        AVG(aa.parsing_quality_score) as avg_quality_score,
-                        AVG(aa.word_count) as avg_word_count,
-                        AVG(aa.char_count) as avg_char_count,
-                        al.law_type,
-                        al.ministry,
-                        al.promulgation_date,
-                        al.enforcement_date
-                    FROM assembly_articles aa
-                    JOIN assembly_laws al ON aa.law_id = al.law_id
-                    WHERE al.law_name = ?
-                    GROUP BY al.law_id
+                        COUNT(cla.article_id) as total_articles,
+                        COUNT(CASE WHEN cla.is_supplementary = 0 THEN 1 END) as main_articles,
+                        COUNT(CASE WHEN cla.is_supplementary = 1 THEN 1 END) as supplementary_articles,
+                        AVG(cla.quality_score) as avg_quality_score,
+                        COUNT(CASE WHEN cla.paragraph_content IS NOT NULL THEN 1 END) as articles_with_paragraphs,
+                        cla.law_name_korean,
+                        cla.effective_date
+                    FROM current_laws_articles cla
+                    WHERE cla.law_name_korean = ?
+                    GROUP BY cla.law_name_korean
                 """
                 results = self.db_manager.execute_query(query, (law_name,))
             else:
                 # 전체 법령 통계
                 query = """
                     SELECT 
-                        COUNT(DISTINCT al.law_id) as total_laws,
-                        COUNT(aa.article_id) as total_articles,
-                        COUNT(CASE WHEN aa.is_supplementary = 0 THEN 1 END) as main_articles,
-                        COUNT(CASE WHEN aa.is_supplementary = 1 THEN 1 END) as supplementary_articles,
-                        AVG(aa.parsing_quality_score) as avg_quality_score,
-                        AVG(aa.word_count) as avg_word_count,
-                        AVG(aa.char_count) as avg_char_count
-                    FROM assembly_articles aa
-                    JOIN assembly_laws al ON aa.law_id = al.law_id
+                        COUNT(DISTINCT cla.law_name_korean) as total_laws,
+                        COUNT(cla.article_id) as total_articles,
+                        COUNT(CASE WHEN cla.is_supplementary = 0 THEN 1 END) as main_articles,
+                        COUNT(CASE WHEN cla.is_supplementary = 1 THEN 1 END) as supplementary_articles,
+                        AVG(cla.quality_score) as avg_quality_score,
+                        COUNT(CASE WHEN cla.paragraph_content IS NOT NULL THEN 1 END) as articles_with_paragraphs
+                    FROM current_laws_articles cla
                 """
                 results = self.db_manager.execute_query(query)
             
@@ -294,11 +286,10 @@ class LawContextSearchEngine:
         """소관부처별 조문 검색"""
         try:
             query = """
-                SELECT aa.*, al.law_name, al.law_id, al.ministry
-                FROM assembly_articles aa
-                JOIN assembly_laws al ON aa.law_id = al.law_id
-                WHERE al.ministry LIKE ?
-                ORDER BY aa.parsing_quality_score DESC, aa.word_count DESC
+                SELECT cla.*
+                FROM current_laws_articles cla
+                WHERE cla.law_name_korean LIKE ?
+                ORDER BY cla.quality_score DESC
                 LIMIT ?
             """
             

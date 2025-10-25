@@ -102,6 +102,10 @@ from .conversation_flow_tracker import ConversationFlowTracker
 from .contextual_memory_manager import ContextualMemoryManager
 from .conversation_quality_monitor import ConversationQualityMonitor
 
+# 대화형 계약서 작성 모듈
+from .interactive_contract_assistant import InteractiveContractAssistant
+from .contract_query_handler import ContractQueryHandler
+
 # 자연스러운 답변 개선 모듈
 from .conversation_connector import ConversationConnector
 from .emotional_tone_adjuster import EmotionalToneAdjuster
@@ -175,8 +179,14 @@ class EnhancedChatService:
         # Phase 시스템 초기화
         self._initialize_phase_systems()
         
+        # 대화형 계약서 어시스턴트 초기화
+        self._initialize_interactive_contract_assistant()
+        
         # 자연스러운 대화 개선 시스템 초기화
         self._initialize_natural_conversation_systems()
+        
+        # 성능 모니터링 시스템 초기화
+        self._initialize_performance_monitoring()
         
         # 성능 최적화 시스템 초기화
         self._initialize_performance_systems()
@@ -259,7 +269,7 @@ class EnhancedChatService:
             self.logger.info(f"자동 정리 완료: {cleanup_result.get('memory_freed_mb', 0):.1f}MB 해제")
     
     def perform_memory_cleanup(self):
-        """메모리 정리 수행"""
+        """메모리 정리 수행 (긴급 최적화 버전)"""
         try:
             import gc
             import psutil
@@ -269,8 +279,11 @@ class EnhancedChatService:
             process = psutil.Process(os.getpid())
             memory_before = process.memory_info().rss / 1024 / 1024  # MB
             
-            # 가비지 컬렉션 실행
+            # 강화된 가비지 컬렉션 실행
             collected = gc.collect()
+            # 추가 가비지 컬렉션 (더 적극적)
+            for _ in range(3):
+                collected += gc.collect()
             
             # 컴포넌트별 메모리 정리
             cleanup_count = 0
@@ -281,6 +294,9 @@ class EnhancedChatService:
                     if hasattr(self.model_manager, 'clear_cache'):
                         self.model_manager.clear_cache()
                         cleanup_count += 1
+                    # 추가: 모델 언로드 시도
+                    if hasattr(self.model_manager, 'unload_unused_models'):
+                        self.model_manager.unload_unused_models()
                 except Exception as e:
                     self.logger.debug(f"Model manager cleanup failed: {e}")
             
@@ -290,6 +306,9 @@ class EnhancedChatService:
                     if hasattr(self.vector_store, 'clear_cache'):
                         self.vector_store.clear_cache()
                         cleanup_count += 1
+                    # 추가: 벡터 인덱스 정리
+                    if hasattr(self.vector_store, 'clear_index_cache'):
+                        self.vector_store.clear_index_cache()
                 except Exception as e:
                     self.logger.debug(f"Vector store cleanup failed: {e}")
             
@@ -302,11 +321,20 @@ class EnhancedChatService:
                 except Exception as e:
                     self.logger.debug(f"Answer generator cleanup failed: {e}")
             
+            # RAG 서비스 메모리 정리
+            if hasattr(self, 'unified_rag_service') and self.unified_rag_service:
+                try:
+                    if hasattr(self.unified_rag_service, 'clear_cache'):
+                        self.unified_rag_service.clear_cache()
+                        cleanup_count += 1
+                except Exception as e:
+                    self.logger.debug(f"RAG service cleanup failed: {e}")
+            
             # 메모리 사용량 재측정
             memory_after = process.memory_info().rss / 1024 / 1024  # MB
             memory_freed = memory_before - memory_after
             
-            self.logger.info(f"메모리 정리 완료: {memory_freed:.1f}MB 해제, {collected}개 객체 수집, {cleanup_count}개 컴포넌트 정리")
+            self.logger.info(f"긴급 메모리 정리 완료: {memory_freed:.1f}MB 해제, {collected}개 객체 수집, {cleanup_count}개 컴포넌트 정리")
             
             return {
                 'memory_before_mb': memory_before,
@@ -565,6 +593,43 @@ class EnhancedChatService:
             self.realtime_feedback_system = None
             self.naturalness_evaluator = None
     
+    def _initialize_performance_monitoring(self):
+        """성능 모니터링 시스템 초기화"""
+        try:
+            from ..utils.performance_monitor import PerformanceMonitor
+            
+            # 성능 모니터 초기화
+            self.performance_monitor = PerformanceMonitor(self.config)
+            
+            # 메서드 존재 여부 확인
+            if hasattr(self.performance_monitor, 'log_response_metrics'):
+                self.logger.info("성능 모니터링 시스템 초기화 완료")
+            else:
+                self.logger.warning("PerformanceMonitor 초기화되었지만 log_response_metrics 메서드가 없습니다")
+                self.performance_monitor = None
+            
+        except Exception as e:
+            self.logger.error(f"성능 모니터링 시스템 초기화 실패: {e}")
+            self.performance_monitor = None
+    
+    def _initialize_interactive_contract_assistant(self):
+        """대화형 계약서 어시스턴트 초기화"""
+        try:
+            self.interactive_contract_assistant = InteractiveContractAssistant()
+            self.logger.info("대화형 계약서 어시스턴트 초기화 완료")
+            
+            # 계약서 질문 처리기 초기화
+            self.contract_query_handler = ContractQueryHandler(
+                self.interactive_contract_assistant,
+                self.integrated_session_manager
+            )
+            self.logger.info("계약서 질문 처리기 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"대화형 계약서 어시스턴트 초기화 실패: {e}")
+            self.interactive_contract_assistant = None
+            self.contract_query_handler = None
+    
     def _initialize_performance_systems(self):
         """성능 최적화 시스템 초기화"""
         try:
@@ -641,6 +706,11 @@ class EnhancedChatService:
             if self._is_law_article_query(message):
                 self.logger.info(f"법률 조문 질문 감지: {message}")
                 return await self._handle_law_article_query(message, user_id, session_id)
+            
+            # 계약서 관련 질문 감지 및 처리
+            if self.contract_query_handler and self.contract_query_handler.is_contract_related_query(message):
+                self.logger.info(f"계약서 관련 질문 감지: {message}")
+                return await self.contract_query_handler.handle_interactive_contract_query(message, session_id, user_id)
             
             # 입력 검증 및 전처리
             validation_result = self._validate_and_preprocess_input(message)
@@ -733,9 +803,31 @@ class EnhancedChatService:
             response_result["session_id"] = session_id
             response_result["user_id"] = user_id
             
-            # 캐시 저장
+            # 캐시 저장 (긴급 최적화 - 캐시 시간 연장)
             if self.cache_manager:
-                self.cache_manager.set(cache_key, response_result, ttl_seconds=3600)
+                self.cache_manager.set(cache_key, response_result, ttl_seconds=7200)  # 1시간에서 2시간으로 연장
+            
+            # 성능 메트릭 로깅
+            if self.performance_monitor and hasattr(self.performance_monitor, 'log_response_metrics'):
+                try:
+                    query_type = response_result.get('generation_method', 'unknown')
+                    processing_time = response_result.get('processing_time', 0)
+                    confidence = response_result.get('confidence', 0)
+                    response_length = len(response_result.get('response', ''))
+                    
+                    self.performance_monitor.log_response_metrics(
+                        query_type=query_type,
+                        processing_time=processing_time,
+                        confidence=confidence,
+                        response_length=response_length,
+                        success=True
+                    )
+                except Exception as e:
+                    self.logger.error(f"성능 메트릭 로깅 실패: {e}")
+            elif self.performance_monitor:
+                self.logger.warning("PerformanceMonitor가 초기화되었지만 log_response_metrics 메서드가 없습니다")
+            else:
+                self.logger.debug("PerformanceMonitor가 초기화되지 않았습니다")
             
             return response_result
             
@@ -743,6 +835,26 @@ class EnhancedChatService:
             self.logger.error(f"메시지 처리 중 오류 발생: {e}")
             import traceback
             self.logger.error(f"상세 오류: {traceback.format_exc()}")
+            
+            # 오류 발생 시에도 성능 메트릭 로깅
+            if self.performance_monitor and hasattr(self.performance_monitor, 'log_response_metrics'):
+                try:
+                    processing_time = time.time() - start_time
+                    self.performance_monitor.log_response_metrics(
+                        query_type='error',
+                        processing_time=processing_time,
+                        confidence=0.0,
+                        response_length=0,
+                        success=False,
+                        error_message=str(e)
+                    )
+                except Exception as metric_error:
+                    self.logger.error(f"오류 메트릭 로깅 실패: {metric_error}")
+            elif self.performance_monitor:
+                self.logger.warning("PerformanceMonitor가 초기화되었지만 log_response_metrics 메서드가 없습니다")
+            else:
+                self.logger.debug("PerformanceMonitor가 초기화되지 않았습니다")
+            
             return self._create_error_response(
                 f"메시지 처리 중 오류가 발생했습니다: {str(e)}", 
                 session_id, user_id, start_time
@@ -804,25 +916,38 @@ class EnhancedChatService:
                 intent = "unknown"
                 confidence = 0.5
             
-            # 키워드 추출 개선
-            import re
-            keywords = []
+            # 도메인별 키워드 매칭 강화 (관련성 개선)
+            domain_scores = {}
+            message_lower = message.lower()
             
-            # 법률 관련 키워드 추출
-            law_patterns = [
-                r'(민법|형법|상법|노동법|가족법|행정법|헌법|민사소송법|형사소송법)',
-                r'(계약|손해배상|불법행위|소유권|물권|채권|채무)',
-                r'(이혼|상속|양육권|친권|위자료|재산분할)',
-                r'(회사|주식|이사|주주|회사설립|합병)',
-                r'(근로|임금|해고|근로시간|휴게시간|연차)',
-                r'(부동산|매매|임대차|등기|소유권이전|전세|월세)'
-            ]
+            for domain, keywords in LEGAL_DOMAIN_KEYWORDS.items():
+                score = 0.0
+                
+                # 주요 키워드 매칭 (높은 가중치)
+                for keyword in keywords.get("primary", []):
+                    if keyword in message_lower:
+                        score += 3.0
+                
+                # 보조 키워드 매칭 (중간 가중치)
+                for keyword in keywords.get("secondary", []):
+                    if keyword in message_lower:
+                        score += 1.0
+                
+                # 제외 키워드 매칭 (음수 가중치)
+                for keyword in keywords.get("exclude", []):
+                    if keyword in message_lower:
+                        score -= 2.0
+                
+                # 도메인 우선순위 적용
+                priority = DOMAIN_PRIORITY.get(domain, 1.0)
+                domain_scores[domain] = score * priority
             
-            for pattern in law_patterns:
-                matches = re.findall(pattern, message)
-                keywords.extend(matches)
+            # 가장 높은 점수의 도메인 선택
+            best_domain = max(domain_scores.items(), key=lambda x: x[1])[0] if domain_scores else "general"
+            domain_confidence = domain_scores.get(best_domain, 0.0)
             
             # 법률 조문 패턴 검색 (개선된 정규표현식)
+            import re
             # 다양한 법률 조문 패턴 지원
             statute_patterns = [
                 # 표준 형태: 민법 제750조
@@ -858,6 +983,17 @@ class EnhancedChatService:
                         statute_law = None
                     break
             
+            # 키워드 추출 (도메인별 키워드 활용)
+            keywords = []
+            for domain, domain_keywords in LEGAL_DOMAIN_KEYWORDS.items():
+                for keyword_type, keyword_list in domain_keywords.items():
+                    for keyword in keyword_list:
+                        if keyword in message_lower:
+                            keywords.append(keyword)
+            
+            # 중복 제거
+            keywords = list(set(keywords))
+            
             return {
                 "query_type": query_type,
                 "intent": intent,
@@ -867,6 +1003,9 @@ class EnhancedChatService:
                 "statute_match": statute_match.group(0) if statute_match else None,
                 "statute_law": statute_law,
                 "statute_article": statute_article,
+                "domain": best_domain,  # 도메인 정보 추가
+                "domain_confidence": domain_confidence,  # 도메인 신뢰도 추가
+                "domain_scores": domain_scores,  # 모든 도메인 점수 추가
                 "timestamp": datetime.now(),
                 "session_id": session_id,
                 "user_id": user_id
@@ -1063,7 +1202,21 @@ class EnhancedChatService:
         """향상된 답변 생성 - 참고 데이터 기반으로만 답변"""
         self.logger.info(f"_generate_enhanced_response called for: {message}")
         try:
-            # 0순위: 특정 법령 조문 검색 (새로 추가)
+            # 0순위: 템플릿 기반 답변 (빠르고 정확한 답변 우선)
+            template_response = self._generate_improved_template_response(message, query_analysis)
+            if template_response and template_response.get("response"):
+                self.logger.info("Using template-based response")
+                return {
+                    "response": template_response["response"],
+                    "confidence": template_response.get("confidence", 0.8),
+                    "sources": template_response.get("sources", []),
+                    "query_analysis": query_analysis,
+                    "generation_method": template_response.get("generation_method", "template"),
+                    "session_id": session_id,
+                    "user_id": user_id
+                }
+            
+            # 1순위: 특정 법령 조문 검색 (새로 추가)
             statute_law = query_analysis.get("statute_law")
             statute_article = query_analysis.get("statute_article")
             
@@ -1119,8 +1272,8 @@ class EnhancedChatService:
                     rag_response = await self.unified_rag_service.generate_response(
                         query=message,
                         context=query_analysis.get("context"),
-                        max_length=300,
-                        top_k=3,
+                        max_length=800,  # 토큰 제한을 300에서 800으로 증가
+                        top_k=2,  # 검색 결과 수를 3에서 2로 감소 (처리시간 단축)
                         use_cache=True
                     )
                     
@@ -1155,15 +1308,17 @@ class EnhancedChatService:
             return self._create_error_response(message, query_analysis, session_id, user_id, str(e))
     
     def _has_meaningful_sources(self, sources: List[Dict[str, Any]]) -> bool:
-        """의미있는 참고 데이터가 있는지 확인 - 완화된 버전"""
+        """의미있는 참고 데이터가 있는지 확인 - 관련성 강화 버전"""
         if not sources:
             return False
         
-        # 최소 관련도 임계값 설정 (완화)
-        MIN_RELEVANCE_THRESHOLD = 0.3  # 0.4에서 0.3으로 하향
-        MIN_CONTENT_LENGTH = 50  # 70에서 50으로 하향
+        # 더 엄격한 관련도 임계값 설정
+        MIN_RELEVANCE_THRESHOLD = 0.4  # 0.3에서 0.4로 상향
+        MIN_CONTENT_LENGTH = 60  # 50에서 60으로 상향
         
         meaningful_sources = []
+        high_relevance_sources = []
+        
         for source in sources:
             relevance_score = source.get("similarity", source.get("score", 0.0))
             content = source.get("content", "")
@@ -1171,14 +1326,17 @@ class EnhancedChatService:
             # 관련도가 높고 내용이 충분한 소스만 유효한 것으로 판단
             if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
                 meaningful_sources.append(source)
+                
+                # 높은 관련도 소스 별도 카운트
+                if relevance_score >= 0.6:
+                    high_relevance_sources.append(source)
         
         # 최소 1개 이상의 의미있는 소스가 있으면 유효
         if len(meaningful_sources) >= 1:
-            return True
-        
-        # 추가 검증: 실제 법률 관련 내용인지 확인 (확장된 키워드, 완화된 기준)
-        if meaningful_sources:
-            legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적", "계약", "소송", "재판", "민법", "형법", "상법", "이혼", "부동산", "손해배상"]
+            # 추가 검증: 실제 법률 관련 내용인지 확인 (강화된 키워드)
+            legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적", 
+                           "계약", "소송", "재판", "민법", "형법", "상법", "이혼", "부동산", "손해배상",
+                           "불법행위", "채권", "채무", "소유권", "물권", "상속", "양육권", "친권", "위자료"]
             legal_content_count = 0
             
             for source in meaningful_sources:
@@ -1186,8 +1344,8 @@ class EnhancedChatService:
                 if any(keyword in content for keyword in legal_keywords):
                     legal_content_count += 1
             
-            # 법률 관련 내용이 1개 이상이면 유효 (기존 50%에서 완화)
-            return legal_content_count >= 1
+            # 법률 관련 내용이 1개 이상이고 높은 관련도 소스가 있으면 유효
+            return legal_content_count >= 1 and len(high_relevance_sources) >= 1
         
         return False
     
@@ -1406,77 +1564,221 @@ class EnhancedChatService:
         return suggestions[:3]  # 최대 3개 제안
     
     def _generate_improved_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """완전히 자연스러운 답변 생성 - 최고 수준 프롬프트 엔지니어링 적용"""
+        """개선된 템플릿 기반 답변 생성 - 빠르고 정확한 답변 제공"""
         self.logger.info(f"_generate_improved_template_response called for: {message}")
         
-        # 템플릿 기반 답변을 완전히 제거하고 자연스러운 답변만 생성
-        try:
-            # Gemini 클라이언트를 사용하여 직접 답변 생성
-            from .gemini_client import GeminiClient
-            gemini_client = GeminiClient()
-            
-            # 완전히 새로운 프롬프트 구조 적용
-            prompt = f"""사용자: {message}
+        # 도메인별 특화 템플릿 답변 생성
+        domain = query_analysis.get("domain", "general")
+        message_lower = message.lower()
+        
+        # 계약서 관련 질문 처리
+        if any(keyword in message_lower for keyword in ["계약서", "계약", "작성", "만들"]):
+            return self._generate_contract_template_response(message, query_analysis)
+        
+        # 부동산 관련 질문 처리
+        elif any(keyword in message_lower for keyword in ["부동산", "매매", "임대차", "등기"]):
+            return self._generate_real_estate_template_response(message, query_analysis)
+        
+        # 이혼 관련 질문 처리
+        elif any(keyword in message_lower for keyword in ["이혼", "상속", "양육권", "재산분할"]):
+            return self._generate_family_law_template_response(message, query_analysis)
+        
+        # 법률 조문 관련 질문 처리
+        elif query_analysis.get("statute_match"):
+            return self._generate_statute_template_response(message, query_analysis)
+        
+        # 기본 템플릿 답변
+        return self._generate_general_template_response(message, query_analysis)
+    
+    def _generate_contract_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """계약서 관련 템플릿 답변 생성"""
+        response = """📋 **계약서 작성을 도와드리겠습니다!**
 
-위 질문에 대해 마치 친한 변호사와 대화하는 것처럼 자연스럽게 답변하세요.
+어떤 종류의 계약서를 작성하시나요?
 
-예시:
-사용자: "민법 제750조가 뭐야?"
-변호사: "민법 제750조는 불법행위에 관한 조항이에요. 쉽게 말해서 누군가가 고의나 실수로 다른 사람에게 피해를 주면 그 피해를 배상해야 한다는 내용입니다. 불법행위가 성립하려면 네 가지 조건이 모두 맞아야 해요: 첫째, 가해자가 고의나 과실이 있어야 하고, 둘째, 위법한 행위여야 하며, 셋째, 실제로 손해가 발생해야 하고, 넷째, 그 행위와 손해 사이에 인과관계가 있어야 합니다. 이 모든 조건이 충족되면 손해배상 책임이 생겨요."
+○ **용역계약** (디자인, 개발, 컨설팅 등)
+○ **근로계약** (직원 채용)
+○ **부동산계약** (매매, 임대차)
+○ **지적재산권계약** (저작권, 특허 등)
+○ **제휴계약** (업무 협력)
+○ **기타**
 
-사용자: "계약서 작성 방법을 알려주세요"
-변호사: "계약서는 당사자 간의 약속을 명확히 하는 중요한 문서예요. 작성할 때는 몇 가지 핵심 사항을 꼼꼼히 챙기셔야 합니다. 먼저 계약 당사자들의 정확한 정보(이름, 주소, 연락처)를 기재하고, 계약의 목적과 내용을 구체적으로 명시해야 해요. 예를 들어 부동산 매매라면 매물 정보와 매매 대금, 지급 시기 등을 상세히 적어야 합니다. 또한 계약 기간, 대금 지급 방법, 위약 시 손해배상 조항, 분쟁 해결 방법 등도 포함하는 것이 좋아요. 중요한 것은 나중에 해석의 여지가 없도록 명확하고 구체적으로 작성하는 것입니다."
+## 📝 계약서 작성 기본 원칙
 
-답변:"""
-            
-            # 프롬프트 체인 방식 사용 시도
-            try:
-                from .prompt_chain import prompt_chain_processor
-                response = prompt_chain_processor.process_with_chain(message, "")
-                
-                return {
-                    "response": response,
-                    "confidence": 0.85,
-                    "sources": [],
-                    "generation_method": "prompt_chain"
-                }
-                
-            except Exception as e:
-                self.logger.error(f"Prompt chain generation failed: {e}")
-                # 폴백: 대안 모델 클라이언트 사용
-                try:
-                    from .alternative_model_client import alternative_model_client
-                    response = alternative_model_client.generate_with_fallback(prompt)
-                    
-                    return {
-                        "response": response,
-                        "confidence": 0.8,
-                        "sources": [],
-                        "generation_method": "alternative_model"
-                    }
-                    
-                except Exception as e2:
-                    self.logger.error(f"Alternative model generation failed: {e2}")
-                    # 최종 폴백: 기본 Gemini 클라이언트 사용
-                    gemini_response = gemini_client.generate(prompt)
-                    response = gemini_response.response
-            
-            return {
-                "response": response,
-                "confidence": 0.8,
-                "sources": [],
-                "generation_method": "natural_response"
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Natural response generation failed: {e}")
-            # 폴백: 간단한 답변
-            return {
-                "response": f"'{message}'에 대한 답변을 준비 중입니다. 잠시만 기다려주세요.",
-                "confidence": 0.5,
-                "sources": [],
-                "generation_method": "fallback"
-            }
+1. **당사자 정보**: 정확한 이름, 주소, 연락처
+2. **계약 목적**: 구체적이고 명확한 내용
+3. **대금 및 지급**: 금액, 지급 시기, 방법
+4. **계약 기간**: 시작일, 종료일, 연장 조건
+5. **위약 조항**: 계약 위반 시 손해배상
+6. **분쟁 해결**: 조정, 중재, 관할 법원
+
+## ⚠️ 중요 안내
+- 계약서는 나중에 해석의 여지가 없도록 명확하게 작성하세요
+- 중요한 계약은 변호사 검토를 권장합니다
+- 계약 금액이 큰 경우 전문가 상담이 필요합니다
+
+구체적인 계약 유형을 알려주시면 더 자세한 가이드를 제공해드리겠습니다!"""
+        
+        return {
+            "response": response,
+            "confidence": 0.90,
+            "generation_method": "contract_template",
+            "sources": [],
+            "query_analysis": query_analysis
+        }
+    
+    def _generate_real_estate_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """부동산 관련 템플릿 답변 생성"""
+        response = """🏠 **부동산 관련 도움을 드리겠습니다!**
+
+어떤 부동산 관련 질문이 있으신가요?
+
+○ **매매 절차** (부동산 구매/판매)
+○ **임대차 계약** (전세, 월세)
+○ **등기 절차** (소유권 이전)
+○ **부동산 세금** (취득세, 양도세)
+○ **부동산 분쟁** (계약 분쟁, 권리 분쟁)
+○ **기타**
+
+## 📋 부동산 거래 기본 절차
+
+### 매매 거래
+1. **물건 확인** → 등기부등본, 건축물대장 확인
+2. **계약 체결** → 매매계약서 작성, 계약금 지급
+3. **중도금 지급** → 중도금 지급, 근저당 해지
+4. **잔금 지급** → 잔금 지급, 소유권 이전 등기
+5. **세금 납부** → 취득세, 등록면허세 납부
+
+### 임대차 계약
+1. **물건 확인** → 임차물 상태, 권리관계 확인
+2. **계약 체결** → 임대차계약서 작성, 보증금 지급
+3. **등기 신청** → 전입신고, 주민등록 등록
+4. **계약 갱신** → 갱신 요청, 갱신 보증금 지급
+
+구체적인 상황을 알려주시면 더 자세한 안내를 제공해드리겠습니다!"""
+        
+        return {
+            "response": response,
+            "confidence": 0.90,
+            "generation_method": "real_estate_template",
+            "sources": [],
+            "query_analysis": query_analysis
+        }
+    
+    def _generate_family_law_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """가족법 관련 템플릿 답변 생성"""
+        response = """👨‍👩‍👧‍👦 **가족법 관련 도움을 드리겠습니다!**
+
+어떤 가족법 관련 질문이 있으신가요?
+
+○ **이혼 절차** (협의이혼, 재판이혼)
+○ **상속 문제** (상속인, 상속분, 유언)
+○ **양육권** (양육권자 지정, 양육비)
+○ **재산분할** (재산 분할 비율, 절차)
+○ **위자료** (위자료 청구, 액수 산정)
+○ **기타**
+
+## 📋 주요 가족법 절차
+
+### 이혼 절차
+1. **협의이혼**: 당사자 합의 → 법원 확인 → 이혼 신고
+2. **재판이혼**: 소장 제출 → 변론 → 판결 → 이혼 신고
+
+### 상속 절차
+1. **상속인 확인**: 법정상속인, 유언상속인 확인
+2. **상속재산 파악**: 재산 목록 작성, 평가
+3. **상속분 배분**: 법정상속분, 유언상속분 배분
+4. **상속등기**: 부동산 상속등기 신청
+
+### 양육권 절차
+1. **양육권자 지정**: 자녀 복리 최우선 고려
+2. **양육비 산정**: 소득, 자녀 연령, 지역 고려
+3. **면접교섭권**: 비양육권자와의 교섭권 확보
+
+구체적인 상황을 알려주시면 더 자세한 안내를 제공해드리겠습니다!"""
+        
+        return {
+            "response": response,
+            "confidence": 0.90,
+            "generation_method": "family_law_template",
+            "sources": [],
+            "query_analysis": query_analysis
+        }
+    
+    def _generate_statute_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """법률 조문 관련 템플릿 답변 생성"""
+        statute_law = query_analysis.get("statute_law")
+        statute_article = query_analysis.get("statute_article")
+        
+        response = f"""📖 **법률 조문에 대해 설명드리겠습니다!**
+
+{'**' + statute_law + ' 제' + statute_article + '조**' if statute_law and statute_article else '**해당 법률 조문**'}에 대한 질문이시군요.
+
+## 📋 법률 조문 해석 가이드
+
+### 조문 구성 요소
+1. **조문 번호**: 법률의 순서
+2. **조문 제목**: 조문의 주제
+3. **조문 내용**: 구체적인 법적 규정
+4. **관련 조문**: 연관된 다른 조문들
+
+### 해석 방법
+1. **문리해석**: 조문의 문자적 의미 파악
+2. **목적해석**: 법률의 입법 목적 고려
+3. **체계해석**: 다른 조문과의 관계 고려
+4. **판례해석**: 관련 판례의 해석 참고
+
+## ⚖️ 관련 판례 및 해석
+- 해당 조문의 주요 판례
+- 법원의 해석 입장
+- 실무 적용 사례
+
+구체적인 조문 내용이나 적용 사례에 대해 더 자세히 알고 싶으시면 말씀해 주세요!"""
+        
+        return {
+            "response": response,
+            "confidence": 0.85,
+            "generation_method": "statute_template",
+            "sources": [],
+            "query_analysis": query_analysis
+        }
+    
+    def _generate_general_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """일반 템플릿 답변 생성"""
+        response = """⚖️ **법률 관련 도움을 드리겠습니다!**
+
+어떤 법률 문제로 도움이 필요하신가요?
+
+○ **민사법** (계약, 손해배상, 소유권)
+○ **형사법** (범죄, 처벌, 형량)
+○ **가족법** (이혼, 상속, 양육권)
+○ **상법** (회사, 주식, 이사)
+○ **노동법** (근로, 임금, 해고)
+○ **부동산법** (매매, 임대차, 등기)
+○ **기타**
+
+## 📋 법률 상담 가이드
+
+### 효과적인 상담을 위한 팁
+1. **구체적인 상황 설명**: 시간, 장소, 인물 포함
+2. **관련 서류 준비**: 계약서, 증명서, 통화내역 등
+3. **명확한 질문**: 원하는 답변의 범위 지정
+4. **단계별 접근**: 복잡한 문제는 단계별로 분해
+
+### 법률 정보 활용 방법
+- **법령**: 정확한 법조문 확인
+- **판례**: 법원의 해석 입장 파악
+- **실무**: 실제 적용 사례 참고
+
+구체적인 상황을 알려주시면 더 정확한 도움을 드릴 수 있습니다!"""
+        
+        return {
+            "response": response,
+            "confidence": 0.80,
+            "generation_method": "general_template",
+            "sources": [],
+            "query_analysis": query_analysis
+        }
     
     def _classify_domain_by_weight(self, message: str) -> str:
         """가중치 기반 도메인 분류"""
@@ -1776,6 +2078,17 @@ class EnhancedChatService:
             from .integrated_law_search_service import IntegratedLawSearchService
             from .adaptive_response_manager import AdaptiveResponseManager
             from .progressive_response_system import ProgressiveResponseSystem
+            from .dynamic_precedent_search_service import DynamicPrecedentSearchService
+            
+            # 동적 판례 검색 서비스 초기화
+            self.precedent_service = DynamicPrecedentSearchService(self.db_manager)
+            
+            # 향상된 조문 검색 엔진 초기화 (판례 서비스 포함)
+            self.enhanced_law_search_engine = EnhancedLawSearchEngine(
+                db_manager=self.db_manager,
+                vector_store=self.vector_store,
+                precedent_service=self.precedent_service
+            )
             
             # 통합 조문 검색 서비스 초기화
             self.integrated_law_search = IntegratedLawSearchService(self.config)
@@ -1794,13 +2107,15 @@ class EnhancedChatService:
                 r'(\w+법)\s*제\s*(\d+)조\s*제\s*(\d+)항'
             ]
             
-            self.logger.info("향상된 조문 검색 시스템 초기화 완료")
+            self.logger.info("향상된 조문 검색 시스템 초기화 완료 (판례 서비스 포함)")
             
         except Exception as e:
             self.logger.error(f"향상된 조문 검색 시스템 초기화 실패: {e}")
             self.integrated_law_search = None
             self.adaptive_response_manager = None
             self.progressive_response_system = None
+            self.precedent_service = None
+            self.enhanced_law_search_engine = None
     
     def _is_law_article_query(self, query: str) -> bool:
         """법률 조문 질문인지 확인"""
@@ -1828,16 +2143,16 @@ class EnhancedChatService:
             # 사용자 컨텍스트 분석
             user_context = await self._analyze_user_context(user_id, session_id)
             
-            # 적응형 답변 길이 조정
-            if self.adaptive_response_manager:
+            # 적응형 답변 길이 조정 (동적 해석 보존)
+            if self.adaptive_response_manager and "📖 조문 해석:" not in search_result.response:
                 optimized_response = self.adaptive_response_manager.adapt_response_length(
                     search_result.response, user_context
                 )
             else:
                 optimized_response = search_result.response
             
-            # 단계별 답변 생성
-            if self.progressive_response_system:
+            # 단계별 답변 생성 (동적 해석 보존)
+            if self.progressive_response_system and "📖 조문 해석:" not in optimized_response:
                 progressive_response = self.progressive_response_system.generate_progressive_response(
                     optimized_response, user_context.get('response_level', 'standard')
                 )
@@ -1909,14 +2224,14 @@ class EnhancedChatService:
             detail_level = user_profile.get('preferred_detail_level', 'medium')
             device_type = user_profile.get('device_info', {}).get('type', 'desktop')
             
-            # 기본 길이 설정
+            # 기본 길이 설정 (긴급 최적화 - 더 긴 답변 허용)
             base_lengths = {
-                'mobile': 600,
-                'desktop': 1200,
-                'tablet': 900
+                'mobile': 800,   # 모바일도 더 긴 답변 허용
+                'desktop': 2000, # 데스크톱은 더 긴 답변 허용
+                'tablet': 1200   # 태블릿도 더 긴 답변 허용
             }
             
-            base_length = base_lengths.get(device_type, 1200)
+            base_length = base_lengths.get(device_type, 2000)
             
             # 전문성 수준에 따른 조정
             expertise_multipliers = {
@@ -1941,7 +2256,7 @@ class EnhancedChatService:
             
         except Exception as e:
             self.logger.error(f"선호 길이 계산 실패: {e}")
-            return 1000
+            return 1500  # 기본 길이를 1000에서 1500으로 증가
     
     async def get_expanded_response(self, base_response: str, option_type: str, user_id: str = None) -> str:
         """확장된 답변 제공"""
@@ -2050,6 +2365,17 @@ class EnhancedChatService:
             from .integrated_law_search_service import IntegratedLawSearchService
             from .adaptive_response_manager import AdaptiveResponseManager
             from .progressive_response_system import ProgressiveResponseSystem
+            from .dynamic_precedent_search_service import DynamicPrecedentSearchService
+            
+            # 동적 판례 검색 서비스 초기화
+            self.precedent_service = DynamicPrecedentSearchService(self.db_manager)
+            
+            # 향상된 조문 검색 엔진 초기화 (판례 서비스 포함)
+            self.enhanced_law_search_engine = EnhancedLawSearchEngine(
+                db_manager=self.db_manager,
+                vector_store=self.vector_store,
+                precedent_service=self.precedent_service
+            )
             
             # 통합 조문 검색 서비스 초기화
             self.integrated_law_search = IntegratedLawSearchService(self.config)
@@ -2068,13 +2394,15 @@ class EnhancedChatService:
                 r'(\w+법)\s*제\s*(\d+)조\s*제\s*(\d+)항'
             ]
             
-            self.logger.info("향상된 조문 검색 시스템 초기화 완료")
+            self.logger.info("향상된 조문 검색 시스템 초기화 완료 (판례 서비스 포함)")
             
         except Exception as e:
             self.logger.error(f"향상된 조문 검색 시스템 초기화 실패: {e}")
             self.integrated_law_search = None
             self.adaptive_response_manager = None
             self.progressive_response_system = None
+            self.precedent_service = None
+            self.enhanced_law_search_engine = None
     
     def _is_law_article_query(self, query: str) -> bool:
         """법률 조문 질문인지 확인"""
@@ -2102,16 +2430,16 @@ class EnhancedChatService:
             # 사용자 컨텍스트 분석
             user_context = await self._analyze_user_context(user_id, session_id)
             
-            # 적응형 답변 길이 조정
-            if self.adaptive_response_manager:
+            # 적응형 답변 길이 조정 (동적 해석 보존)
+            if self.adaptive_response_manager and "📖 조문 해석:" not in search_result.response:
                 optimized_response = self.adaptive_response_manager.adapt_response_length(
                     search_result.response, user_context
                 )
             else:
                 optimized_response = search_result.response
             
-            # 단계별 답변 생성
-            if self.progressive_response_system:
+            # 단계별 답변 생성 (동적 해석 보존)
+            if self.progressive_response_system and "📖 조문 해석:" not in optimized_response:
                 progressive_response = self.progressive_response_system.generate_progressive_response(
                     optimized_response, user_context.get('response_level', 'standard')
                 )
@@ -2183,14 +2511,14 @@ class EnhancedChatService:
             detail_level = user_profile.get('preferred_detail_level', 'medium')
             device_type = user_profile.get('device_info', {}).get('type', 'desktop')
             
-            # 기본 길이 설정
+            # 기본 길이 설정 (긴급 최적화 - 더 긴 답변 허용)
             base_lengths = {
-                'mobile': 600,
-                'desktop': 1200,
-                'tablet': 900
+                'mobile': 800,   # 모바일도 더 긴 답변 허용
+                'desktop': 2000, # 데스크톱은 더 긴 답변 허용
+                'tablet': 1200   # 태블릿도 더 긴 답변 허용
             }
             
-            base_length = base_lengths.get(device_type, 1200)
+            base_length = base_lengths.get(device_type, 2000)
             
             # 전문성 수준에 따른 조정
             expertise_multipliers = {
@@ -2215,7 +2543,7 @@ class EnhancedChatService:
             
         except Exception as e:
             self.logger.error(f"선호 길이 계산 실패: {e}")
-            return 1000
+            return 1500  # 기본 길이를 1000에서 1500으로 증가
     
     async def get_expanded_response(self, base_response: str, option_type: str, user_id: str = None) -> str:
         """확장된 답변 제공"""

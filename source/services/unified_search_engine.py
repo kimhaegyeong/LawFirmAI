@@ -203,8 +203,8 @@ class UnifiedSearchEngine:
                     logger.debug(f"Failed to load vector index: {load_error}")
                     return []
             
-            # 더 많은 결과를 검색하고 나중에 필터링
-            expanded_k = min(top_k * 3, 50)  # 최대 50개까지 확장 검색
+            # 성능 최적화: 확장 검색 범위 축소
+            expanded_k = min(top_k * 2, 20)  # 최대 20개까지 확장 검색 (기존 50개에서 축소)
             results = self.vector_store.search(query, top_k=expanded_k)
             
             if not results:
@@ -247,7 +247,7 @@ class UnifiedSearchEngine:
                     'law_detail_link': result.law_detail_link,
                     'document_type': 'current_law',
                     'search_type': result.search_type,
-                    'article_content': result.article_content
+                    'article_content': getattr(result, 'article_content', None)
                 },
                 'score': result.similarity_score,
                 'similarity': result.similarity_score
@@ -277,13 +277,13 @@ class UnifiedSearchEngine:
             
             results = []
             
-            # 1. assembly_articles에서 FTS 검색
+            # 1. current_laws_articles에서 FTS 검색
             try:
                 cursor.execute("""
-                    SELECT id, article_title, article_content,
-                           snippet(fts_assembly_articles, 2, '<b>', '</b>', '...', 32) as snippet
-                    FROM fts_assembly_articles 
-                    WHERE fts_assembly_articles MATCH ?
+                    SELECT article_id, article_title, article_content,
+                           snippet(fts_current_laws_articles, 2, '<b>', '</b>', '...', 32) as snippet
+                    FROM fts_current_laws_articles 
+                    WHERE fts_current_laws_articles MATCH ?
                     LIMIT ?
                 """, (query, top_k))
                 
@@ -292,10 +292,10 @@ class UnifiedSearchEngine:
                     result = {
                         'content': row['article_content'],
                         'score': 0.9,  # FTS 검색은 높은 신뢰도
-                        'source': 'fts_assembly_articles',
+                        'source': 'fts_current_laws_articles',
                         'type': 'exact',
                         'metadata': {
-                            'id': row['id'],
+                            'id': row['article_id'],
                             'title': row['article_title'],
                             'snippet': row['snippet']
                         }
@@ -303,7 +303,7 @@ class UnifiedSearchEngine:
                     results.append(result)
                     
             except Exception as e:
-                logger.debug(f"FTS assembly_articles search error: {e}")
+                logger.debug(f"FTS current_laws_articles search error: {e}")
             
             # 2. assembly_laws에서 FTS 검색
             try:
