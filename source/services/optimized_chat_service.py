@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 최적화된 ChatService
 성능 최적화된 모델 관리, 검색 엔진, 캐싱 시스템 통합
