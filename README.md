@@ -396,12 +396,30 @@ LawFirmAI/
 │   │   └── ml_enhanced_ko_sroberta_precedents/ # 판례 벡터 임베딩 (신규)
 │   ├── qa_dataset/        # Q&A 데이터셋
 │   └── legal_term_dictionary.json # 법률 용어 사전 (신규)
-├── tests/                 # 테스트 코드
-│   ├── natural_conversation/  # 자연스러운 대화 개선 시스템 테스트
-│   │   ├── __init__.py
-│   │   └── test_natural_conversation_improvements.py
-│   ├── test_conversation_memory.py  # 대화 메모리 및 연속 질의 처리 테스트
-│   └── run_master_tests.py  # 통합 테스트 실행
+├── tests/                 # 테스트 코드 (체계적으로 분류됨)
+│   ├── conftest.py        # pytest 설정 및 공통 fixtures
+│   ├── run_tests.py       # 테스트 실행 스크립트
+│   ├── fixtures/          # 테스트 데이터 및 공통 fixtures
+│   ├── unit/              # 단위 테스트
+│   │   ├── services/      # 서비스 단위 테스트
+│   │   ├── models/        # 모델 단위 테스트
+│   │   ├── data/          # 데이터 처리 단위 테스트
+│   │   └── utils/         # 유틸리티 단위 테스트
+│   ├── integration/       # 통합 테스트
+│   ├── performance/       # 성능 테스트
+│   ├── quality/           # 품질 테스트
+│   ├── memory/            # 메모리 관련 테스트
+│   ├── classification/    # 분류 시스템 테스트
+│   ├── legal_systems/     # 법률 시스템 테스트
+│   ├── contracts/         # 계약 관련 테스트
+│   ├── external_integrations/ # 외부 시스템 통합 테스트
+│   │   ├── akls/          # AKLS 관련 테스트
+│   │   ├── langfuse/      # Langfuse 통합 테스트
+│   │   └── gradio/        # Gradio 인터페이스 테스트
+│   ├── conversational/    # 대화 관련 테스트
+│   ├── database/          # 데이터베이스 테스트
+│   ├── demos/             # 데모 및 예제 테스트
+│   └── regression/        # 회귀 테스트
 ├── docs/                  # 문서
 ├── scripts/               # 유틸리티 스크립트
 │   ├── collect_data_only.py    # 데이터 수집 전용 (JSON 저장)
@@ -956,16 +974,93 @@ pytest tests/
 
 ### 테스트 실행
 
-#### 자연스러운 대화 개선 시스템 테스트
+LawFirmAI는 체계적으로 구성된 테스트 시스템을 제공합니다. 기능별로 분류된 테스트를 실행할 수 있습니다.
+
+#### 전체 테스트 실행
 ```bash
-# 자연스러운 대화 개선 시스템 테스트 실행
-python tests/natural_conversation/test_natural_conversation_improvements.py
+# 기본 실행
+python tests/run_tests.py
+
+# 상세 출력과 함께
+python tests/run_tests.py -v
+
+# 커버리지 측정과 함께
+python tests/run_tests.py --coverage
 ```
 
-#### 대화 메모리 및 연속 질의 처리 테스트
+#### 카테고리별 테스트 실행
 ```bash
-# 대화 메모리 및 연속 질의 처리 테스트 실행
-python tests/test_conversation_memory.py
+# 단위 테스트 (개별 컴포넌트 테스트)
+python tests/run_tests.py unit
+
+# 통합 테스트 (시스템 간 통합 테스트)
+python tests/run_tests.py integration
+
+# 성능 테스트 (응답 시간, 메모리 사용량 측정)
+python tests/run_tests.py performance
+
+# 품질 테스트 (답변 품질 및 대화 품질 검증)
+python tests/run_tests.py quality
+
+# 메모리 테스트 (대화 메모리 및 컨텍스트 관리)
+python tests/run_tests.py memory
+
+# 분류 시스템 테스트 (질의 분류 및 질문 유형 분류)
+python tests/run_tests.py classification
+
+# 법률 시스템 테스트 (법적 근거, 법률 검색 등)
+python tests/run_tests.py legal_systems
+
+# 계약 관련 테스트 (계약서 분석 및 검토)
+python tests/run_tests.py contracts
+
+# 외부 시스템 통합 테스트 (AKLS, Langfuse, Gradio)
+python tests/run_tests.py external_integrations
+
+# 대화 관련 테스트 (자연어 대화 및 컨텍스트 관리)
+python tests/run_tests.py conversational
+
+# 데이터베이스 테스트 (데이터베이스 연산 및 템플릿 시스템)
+python tests/run_tests.py database
+
+# 데모 및 예제 테스트 (시연용 테스트)
+python tests/run_tests.py demos
+
+# 회귀 테스트 (시스템 안정성 및 회귀 테스트)
+python tests/run_tests.py regression
+```
+
+#### 특정 테스트 파일 실행
+```bash
+# 특정 테스트 파일 실행
+python tests/run_tests.py test_chat_service.py
+
+# 특정 경로의 테스트 실행
+python tests/run_tests.py unit/services/test_chat_service.py
+```
+
+#### 마커를 사용한 필터링
+```bash
+# 느린 테스트 제외
+python tests/run_tests.py -m "not slow"
+
+# 특정 마커만 실행
+python tests/run_tests.py -m "unit"
+
+# 여러 마커 조합
+python tests/run_tests.py -m "unit and not slow"
+```
+
+#### 병렬 실행
+```bash
+# 병렬 실행 (pytest-xdist 필요)
+python tests/run_tests.py --parallel
+```
+
+#### 사용 가능한 카테고리 목록 확인
+```bash
+# 테스트 카테고리 목록 출력
+python tests/run_tests.py --list
 ```
 
 #### 보안 시스템 테스트
@@ -980,11 +1075,28 @@ python test_masked_query_responses.py
 python quick_test.py
 ```
 
-#### 통합 테스트 실행
-```bash
-# 모든 테스트 통합 실행
-python tests/run_master_tests.py
+#### 테스트 구조
 ```
+tests/
+├── conftest.py                    # pytest 설정 및 공통 fixtures
+├── run_tests.py                   # 테스트 실행 스크립트
+├── fixtures/                      # 테스트 데이터 및 공통 fixtures
+├── unit/                          # 단위 테스트
+├── integration/                   # 통합 테스트
+├── performance/                   # 성능 테스트
+├── quality/                       # 품질 테스트
+├── memory/                        # 메모리 관련 테스트
+├── classification/                # 분류 시스템 테스트
+├── legal_systems/                # 법률 시스템 테스트
+├── contracts/                    # 계약 관련 테스트
+├── external_integrations/        # 외부 시스템 통합 테스트
+├── conversational/               # 대화 관련 테스트
+├── database/                     # 데이터베이스 테스트
+├── demos/                        # 데모 및 예제 테스트
+└── regression/                   # 회귀 테스트
+```
+
+자세한 테스트 가이드는 [tests/README.md](tests/README.md)를 참조하세요.
 
 ### 코드 스타일
 
