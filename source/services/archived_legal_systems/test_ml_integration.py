@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ML 통합 검증 시스템 테스트
 민법 제750조 설명 요청 문제 해결 테스트

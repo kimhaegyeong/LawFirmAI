@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import re
 import logging
 from typing import List, Dict, Any, Optional
