@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 동의어 데이터베이스 관리 시스템
 SQLite를 사용한 동의어 저장, 관리, 최적화 시스템

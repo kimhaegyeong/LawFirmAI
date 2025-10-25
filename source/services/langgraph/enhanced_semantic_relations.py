@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 향상된 SemanticKeywordMapper
 추출된 법률 용어를 기반으로 확장된 의미적 관계를 제공합니다.

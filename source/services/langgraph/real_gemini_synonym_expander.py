@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 실제 Gemini API를 사용한 동의어 확장 시스템
 환경 변수의 GOOGLE_API_KEY를 사용하여 실제 Gemini API 호출
