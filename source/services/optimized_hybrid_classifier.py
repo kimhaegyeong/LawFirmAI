@@ -5,28 +5,31 @@
 모델 경량화, 캐싱, 배치 처리, 임계값 조정 적용
 """
 
-import re
-import numpy as np
 import hashlib
-import time
-from typing import Dict, List, Tuple, Optional, Any, Union
-from dataclasses import dataclass
-from collections import defaultdict, deque
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-import joblib
-import os
 import json
-import threading
-from functools import lru_cache
+import os
+import re
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 import sys
+import threading
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import joblib
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from source.services.answer_structure_enhancer import QuestionType
+from .answer_structure_enhancer import QuestionType
+
 
 @dataclass
 class ClassificationResult:
@@ -40,22 +43,22 @@ class ClassificationResult:
 
 class OptimizedMLBasedClassifier:
     """최적화된 ML 기반 분류기"""
-    
+
     def __init__(self, model_path: str = "models/optimized_question_classifier.pkl"):
         self.model_path = model_path
         self.model = None
         self.vectorizer = None
         self.label_encoder = None
         self.is_trained = False
-        
+
         # 경량화 설정
         self.max_features = 2000  # 기존 5000에서 2000으로 감소
         self.ngram_range = (1, 2)  # 기존 (1,3)에서 (1,2)로 감소
         self.min_df = 3  # 기존 2에서 3으로 증가 (더 희소한 특성 제거)
-        
+
         # 모델 로드 시도
         self._load_model()
-    
+
     def _load_model(self):
         """저장된 모델 로드"""
         try:
@@ -69,17 +72,17 @@ class OptimizedMLBasedClassifier:
         except Exception as e:
             print(f"최적화된 ML 모델 로드 실패: {e}")
             self.is_trained = False
-    
+
     def train(self, training_data: List[Tuple[str, QuestionType]]):
         """경량화된 모델 훈련"""
         if not training_data:
             print("훈련 데이터가 없습니다.")
             return
-        
+
         # 데이터 준비
         questions = [data[0] for data in training_data]
         labels = [data[1].value for data in training_data]
-        
+
         # 경량화된 TF-IDF 벡터화
         self.vectorizer = TfidfVectorizer(
             max_features=self.max_features,  # 특성 수 감소
@@ -90,14 +93,14 @@ class OptimizedMLBasedClassifier:
             binary=True,                     # 이진 특성으로 메모리 절약
             sublinear_tf=True               # 서브리니어 TF로 계산 최적화
         )
-        
+
         X = self.vectorizer.fit_transform(questions)
-        
+
         # 라벨 인코딩
         unique_labels = list(set(labels))
         self.label_encoder = {label: idx for idx, label in enumerate(unique_labels)}
         y = [self.label_encoder[label] for label in labels]
-        
+
         # 경량화된 모델 훈련 (단일 모델 사용)
         self.model = LogisticRegression(
             max_iter=500,  # 기존 1000에서 500으로 감소
@@ -105,31 +108,31 @@ class OptimizedMLBasedClassifier:
             C=1.0,         # 정규화 강도 조정
             solver='liblinear'  # 빠른 solver 사용
         )
-        
+
         self.model.fit(X, y)
         self.is_trained = True
-        
+
         # 모델 저장
         self._save_model()
-        
+
         print(f"최적화된 ML 모델 훈련 완료. 특성 수: {self.max_features}")
-    
+
     def _save_model(self):
         """모델 저장"""
         try:
             os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
-            
+
             model_data = {
                 'model': self.model,
                 'vectorizer': self.vectorizer,
                 'label_encoder': self.label_encoder
             }
-            
+
             joblib.dump(model_data, self.model_path)
             print(f"최적화된 ML 모델 저장 완료: {self.model_path}")
         except Exception as e:
             print(f"최적화된 ML 모델 저장 실패: {e}")
-    
+
     def classify(self, question: str) -> ClassificationResult:
         """ML 기반 분류"""
         if not self.is_trained:
@@ -139,28 +142,28 @@ class OptimizedMLBasedClassifier:
                 method='ml_based',
                 reasoning="ML 모델이 훈련되지 않음"
             )
-        
+
         try:
             # 질문 벡터화
             X = self.vectorizer.transform([question])
-            
+
             # 예측
             prediction = self.model.predict(X)[0]
             probabilities = self.model.predict_proba(X)[0]
-            
+
             # 라벨 디코딩
             predicted_label = None
             for label, idx in self.label_encoder.items():
                 if idx == prediction:
                     predicted_label = label
                     break
-            
+
             if predicted_label is None:
                 predicted_label = QuestionType.GENERAL_QUESTION.value
-            
+
             # 신뢰도 계산
             confidence = max(probabilities)
-            
+
             return ClassificationResult(
                 question_type=QuestionType(predicted_label),
                 confidence=confidence,
@@ -168,7 +171,7 @@ class OptimizedMLBasedClassifier:
                 features={'probabilities': probabilities.tolist()},
                 reasoning=f"최적화된 ML 기반 분류: {predicted_label}"
             )
-            
+
         except Exception as e:
             return ClassificationResult(
                 question_type=QuestionType.GENERAL_QUESTION,
@@ -179,26 +182,26 @@ class OptimizedMLBasedClassifier:
 
 class PatternCache:
     """질문 패턴 캐시"""
-    
+
     def __init__(self, max_size: int = 1000, ttl: int = 3600):
         self.max_size = max_size
         self.ttl = ttl  # Time To Live (초)
         self.cache = {}
         self.access_times = {}
         self.lock = threading.RLock()
-    
+
     def _generate_key(self, question: str) -> str:
         """질문의 해시 키 생성"""
         # 질문을 정규화하여 키 생성
         normalized = re.sub(r'\s+', ' ', question.lower().strip())
         return hashlib.md5(normalized.encode()).hexdigest()
-    
+
     def get(self, question: str) -> Optional[ClassificationResult]:
         """캐시에서 결과 조회"""
         with self.lock:
             key = self._generate_key(question)
             current_time = time.time()
-            
+
             if key in self.cache:
                 # TTL 체크
                 if current_time - self.access_times[key] < self.ttl:
@@ -211,31 +214,31 @@ class PatternCache:
                     # TTL 만료된 항목 제거
                     del self.cache[key]
                     del self.access_times[key]
-            
+
             return None
-    
+
     def put(self, question: str, result: ClassificationResult):
         """캐시에 결과 저장"""
         with self.lock:
             key = self._generate_key(question)
             current_time = time.time()
-            
+
             # 캐시 크기 제한
             if len(self.cache) >= self.max_size:
                 # 가장 오래된 항목 제거 (LRU)
                 oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
                 del self.cache[oldest_key]
                 del self.access_times[oldest_key]
-            
+
             self.cache[key] = result
             self.access_times[key] = current_time
-    
+
     def clear(self):
         """캐시 초기화"""
         with self.lock:
             self.cache.clear()
             self.access_times.clear()
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """캐시 통계"""
         with self.lock:
@@ -248,23 +251,23 @@ class PatternCache:
 
 class OptimizedRuleBasedClassifier:
     """최적화된 규칙 기반 분류기"""
-    
+
     def __init__(self):
         self.patterns = self._load_patterns()
         self.keyword_weights = self._load_keyword_weights()
         self.conflict_rules = self._load_conflict_rules()
-        
+
         # 패턴 컴파일 캐시
         self._compiled_patterns = {}
         self._compile_patterns()
-    
+
     def _compile_patterns(self):
         """정규표현식 패턴 미리 컴파일"""
         for question_type, patterns in self.patterns.items():
             self._compiled_patterns[question_type] = [
                 re.compile(pattern) for pattern in patterns
             ]
-    
+
     def _load_patterns(self) -> Dict[QuestionType, List[str]]:
         """패턴 로딩"""
         return {
@@ -312,7 +315,7 @@ class OptimizedRuleBasedClassifier:
                 r'도움이?\s+필요', r'지원을?\s+받고'
             ]
         }
-    
+
     def _load_keyword_weights(self) -> Dict[str, Dict[str, float]]:
         """키워드 가중치 로딩"""
         return {
@@ -332,7 +335,7 @@ class OptimizedRuleBasedClassifier:
                 '무엇': 2.0, '뜻': 2.0, '내용': 1.5
             }
         }
-    
+
     def _load_conflict_rules(self) -> Dict[str, List[str]]:
         """충돌 해결 규칙"""
         return {
@@ -347,12 +350,12 @@ class OptimizedRuleBasedClassifier:
                 'resolution': 'term_explanation'
             }
         }
-    
+
     @lru_cache(maxsize=1000)
     def classify(self, question: str) -> ClassificationResult:
         """최적화된 규칙 기반 분류"""
         question_lower = question.lower().strip()
-        
+
         if not question_lower:
             return ClassificationResult(
                 question_type=QuestionType.GENERAL_QUESTION,
@@ -360,16 +363,16 @@ class OptimizedRuleBasedClassifier:
                 method='rule_based',
                 reasoning="빈 질문"
             )
-        
+
         # 점수 계산
         scores = self._calculate_scores(question_lower)
-        
+
         # 충돌 해결
         final_type = self._resolve_conflicts(question_lower, scores)
-        
+
         # 신뢰도 계산
         confidence = self._calculate_confidence(question_lower, final_type, scores)
-        
+
         return ClassificationResult(
             question_type=final_type,
             confidence=confidence,
@@ -377,83 +380,83 @@ class OptimizedRuleBasedClassifier:
             features={'scores': scores},
             reasoning=f"최적화된 규칙 기반 분류: {final_type.value}"
         )
-    
+
     def _calculate_scores(self, question_lower: str) -> Dict[QuestionType, float]:
         """각 질문 유형별 점수 계산 (최적화됨)"""
         scores = {}
-        
+
         for question_type, compiled_patterns in self._compiled_patterns.items():
             score = 0.0
-            
+
             # 컴파일된 패턴 매칭 (더 빠름)
             pattern_matches = sum(1 for pattern in compiled_patterns if pattern.search(question_lower))
             score += pattern_matches * 2.0
-            
+
             # 키워드 가중치 점수
             if question_type in self.keyword_weights:
                 for keyword, weight in self.keyword_weights[question_type].items():
                     if keyword in question_lower:
                         score += weight
-            
+
             scores[question_type] = score
-        
+
         return scores
-    
+
     def _resolve_conflicts(self, question_lower: str, scores: Dict[QuestionType, float]) -> QuestionType:
         """충돌 해결"""
         # 법률 자문 vs 절차 안내 충돌
-        if (scores.get(QuestionType.LEGAL_ADVICE, 0) > 0 and 
+        if (scores.get(QuestionType.LEGAL_ADVICE, 0) > 0 and
             scores.get(QuestionType.PROCEDURE_GUIDE, 0) > 0):
-            
+
             legal_keywords = self.conflict_rules['legal_advice_vs_procedure_guide']['legal_advice_keywords']
             if any(keyword in question_lower for keyword in legal_keywords):
                 return QuestionType.LEGAL_ADVICE
-        
+
         # 용어 설명 vs 계약서 검토 충돌
-        if (scores.get(QuestionType.TERM_EXPLANATION, 0) > 0 and 
+        if (scores.get(QuestionType.TERM_EXPLANATION, 0) > 0 and
             scores.get(QuestionType.CONTRACT_REVIEW, 0) > 0):
-            
+
             term_patterns = self.conflict_rules['term_explanation_vs_contract_review']['term_explanation_patterns']
             if any(re.search(pattern, question_lower) for pattern in term_patterns):
                 return QuestionType.TERM_EXPLANATION
-        
+
         # 최고 점수 반환
         if scores:
             return max(scores.items(), key=lambda x: x[1])[0]
-        
+
         return QuestionType.GENERAL_QUESTION
-    
+
     def _calculate_confidence(self, question_lower: str, question_type: QuestionType, scores: Dict[QuestionType, float]) -> float:
         """신뢰도 계산"""
         if not scores:
             return 0.5
-        
+
         max_score = max(scores.values())
         total_score = sum(scores.values())
-        
+
         if total_score == 0:
             return 0.5
-        
+
         # 점수 기반 신뢰도
         score_confidence = min(max_score / total_score, 1.0)
-        
+
         # 질문 길이 기반 신뢰도
         length_confidence = min(len(question_lower) / 20, 1.0)
-        
+
         # 최종 신뢰도
         confidence = (score_confidence * 0.7 + length_confidence * 0.3)
-        
+
         return min(max(confidence, 0.1), 1.0)
 
 class OptimizedHybridQuestionClassifier:
     """최적화된 하이브리드 질문 분류기"""
-    
+
     def __init__(self, confidence_threshold: float = 0.85):  # 임계값 상향 조정
         self.confidence_threshold = confidence_threshold
         self.rule_based = OptimizedRuleBasedClassifier()
         self.ml_based = OptimizedMLBasedClassifier()
         self.cache = PatternCache(max_size=500, ttl=1800)  # 30분 TTL
-        
+
         # 성능 통계
         self.stats = {
             'rule_based_calls': 0,
@@ -463,34 +466,34 @@ class OptimizedHybridQuestionClassifier:
             'total_calls': 0,
             'total_time': 0.0
         }
-    
+
     def classify(self, question: str) -> ClassificationResult:
         """최적화된 하이브리드 분류"""
         start_time = time.time()
         self.stats['total_calls'] += 1
-        
+
         # 캐시 확인
         cached_result = self.cache.get(question)
         if cached_result:
             self.stats['cached_calls'] += 1
             cached_result.processing_time = time.time() - start_time
             return cached_result
-        
+
         # 규칙 기반 분류
         rule_result = self.rule_based.classify(question)
         self.stats['rule_based_calls'] += 1
-        
+
         # 신뢰도가 임계값 이상이면 규칙 기반 결과 반환
         if rule_result.confidence >= self.confidence_threshold:
             rule_result.processing_time = time.time() - start_time
             self.cache.put(question, rule_result)
             return rule_result
-        
+
         # ML 모델이 훈련되어 있으면 ML 기반 분류 시도
         if self.ml_based.is_trained:
             ml_result = self.ml_based.classify(question)
             self.stats['ml_based_calls'] += 1
-            
+
             # ML 결과의 신뢰도가 더 높으면 ML 결과 반환
             if ml_result.confidence > rule_result.confidence:
                 ml_result.method = 'hybrid'
@@ -499,7 +502,7 @@ class OptimizedHybridQuestionClassifier:
                 self.stats['hybrid_calls'] += 1
                 self.cache.put(question, ml_result)
                 return ml_result
-        
+
         # 규칙 기반 결과 반환
         rule_result.method = 'hybrid'
         rule_result.reasoning = f"최적화된 하이브리드 분류: 규칙 기반 결과 사용 (신뢰도: {rule_result.confidence:.3f})"
@@ -507,15 +510,15 @@ class OptimizedHybridQuestionClassifier:
         self.stats['hybrid_calls'] += 1
         self.cache.put(question, rule_result)
         return rule_result
-    
+
     def classify_batch(self, questions: List[str]) -> List[ClassificationResult]:
         """배치 처리로 여러 질문 분류"""
         results = []
-        
+
         # 캐시된 결과 먼저 처리
         uncached_questions = []
         uncached_indices = []
-        
+
         for i, question in enumerate(questions):
             cached_result = self.cache.get(question)
             if cached_result:
@@ -525,7 +528,7 @@ class OptimizedHybridQuestionClassifier:
                 uncached_questions.append(question)
                 uncached_indices.append(i)
                 results.append(None)  # 플레이스홀더
-        
+
         # 캐시되지 않은 질문들 처리
         if uncached_questions:
             # 규칙 기반 배치 처리
@@ -534,7 +537,7 @@ class OptimizedHybridQuestionClassifier:
                 rule_result = self.rule_based.classify(question)
                 rule_results.append(rule_result)
                 self.stats['rule_based_calls'] += 1
-            
+
             # ML 기반 배치 처리 (필요한 경우)
             ml_results = []
             if self.ml_based.is_trained:
@@ -545,12 +548,12 @@ class OptimizedHybridQuestionClassifier:
                         self.stats['ml_based_calls'] += 1
                     else:
                         ml_results.append(None)
-            
+
             # 최종 결과 결정
             ml_idx = 0
             for i, idx in enumerate(uncached_indices):
                 rule_result = rule_results[i]
-                
+
                 if rule_result.confidence >= self.confidence_threshold:
                     rule_result.processing_time = 0.0  # 배치 처리에서는 개별 시간 측정 생략
                     results[idx] = rule_result
@@ -573,31 +576,31 @@ class OptimizedHybridQuestionClassifier:
                     rule_result.processing_time = 0.0
                     results[idx] = rule_result
                     self.cache.put(uncached_questions[i], rule_result)
-        
+
         return results
-    
+
     def train_ml_model(self, training_data: List[Tuple[str, QuestionType]]):
         """ML 모델 훈련"""
         self.ml_based.train(training_data)
-    
+
     def adjust_threshold(self, new_threshold: float):
         """신뢰도 임계값 조정"""
         self.confidence_threshold = max(0.1, min(1.0, new_threshold))
         print(f"신뢰도 임계값 조정: {self.confidence_threshold}")
-    
+
     def clear_cache(self):
         """캐시 초기화"""
         self.cache.clear()
         print("캐시가 초기화되었습니다.")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """성능 통계 반환"""
         total = self.stats['total_calls']
         if total == 0:
             return self.stats
-        
+
         cache_stats = self.cache.get_stats()
-        
+
         return {
             **self.stats,
             'rule_based_percentage': (self.stats['rule_based_calls'] / total) * 100,
@@ -611,7 +614,7 @@ class OptimizedHybridQuestionClassifier:
 def create_training_data() -> List[Tuple[str, QuestionType]]:
     """훈련 데이터 생성"""
     training_data = []
-    
+
     # 법률 문의
     law_inquiry_examples = [
         "민법 제123조의 내용이 무엇인가요?",
@@ -625,7 +628,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "형법 제789호 규정은?",
         "근로기준법 제12조 제3항은?"
     ]
-    
+
     # 판례 검색
     precedent_examples = [
         "대법원 판례를 찾아주세요",
@@ -639,7 +642,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "지방법원 판례를 찾아주세요",
         "판례를 찾아주세요"
     ]
-    
+
     # 계약서 검토
     contract_examples = [
         "계약서를 검토해주세요",
@@ -653,7 +656,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "불리한 조항이 있나요?",
         "계약서의 문제점은?"
     ]
-    
+
     # 이혼 절차
     divorce_examples = [
         "이혼 절차를 알려주세요",
@@ -667,7 +670,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "재판이혼 절차",
         "이혼 방법"
     ]
-    
+
     # 상속 절차
     inheritance_examples = [
         "상속 절차를 알려주세요",
@@ -681,7 +684,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "상속인 확인 절차",
         "상속세 신고 방법"
     ]
-    
+
     # 형사 사건
     criminal_examples = [
         "사기죄 구성요건은?",
@@ -695,7 +698,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "사기범죄 처벌",
         "절도범죄 처벌"
     ]
-    
+
     # 노동 분쟁
     labor_examples = [
         "노동 분쟁 해결 방법",
@@ -709,7 +712,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "부당해고 구제",
         "해고 대응"
     ]
-    
+
     # 절차 안내
     procedure_examples = [
         "소송 절차를 알려주세요",
@@ -723,7 +726,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "진행 절차를 알려주세요",
         "소송 제기 방법"
     ]
-    
+
     # 용어 설명
     term_examples = [
         "법인격의 의미는?",
@@ -737,7 +740,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "계약이 무엇인가요?",
         "계약이란 무엇인가요?"
     ]
-    
+
     # 법률 자문
     advice_examples = [
         "어떻게 대응해야 하나요?",
@@ -760,7 +763,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "법적 도움이 필요해요",
         "법적 지원을 받고 싶어요"
     ]
-    
+
     # 일반 질문
     general_examples = [
         "안녕하세요",
@@ -774,7 +777,7 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         "도와주세요",
         "궁금한 것이 있어요"
     ]
-    
+
     # 훈련 데이터 구성
     all_examples = [
         (law_inquiry_examples, QuestionType.LAW_INQUIRY),
@@ -789,25 +792,25 @@ def create_training_data() -> List[Tuple[str, QuestionType]]:
         (advice_examples, QuestionType.LEGAL_ADVICE),
         (general_examples, QuestionType.GENERAL_QUESTION)
     ]
-    
+
     for examples, question_type in all_examples:
         for example in examples:
             training_data.append((example, question_type))
-    
+
     return training_data
 
 if __name__ == "__main__":
     # 최적화된 하이브리드 분류기 생성
     classifier = OptimizedHybridQuestionClassifier(confidence_threshold=0.85)
-    
+
     # 훈련 데이터 생성 및 ML 모델 훈련
     print("훈련 데이터 생성 중...")
     training_data = create_training_data()
     print(f"총 {len(training_data)}개의 훈련 데이터 생성")
-    
+
     print("\n최적화된 ML 모델 훈련 중...")
     classifier.train_ml_model(training_data)
-    
+
     # 테스트
     test_questions = [
         "어떻게 대응해야 하나요?",
@@ -818,10 +821,10 @@ if __name__ == "__main__":
         "계약서를 검토해주세요",
         "무엇이 계약인가요?"
     ]
-    
+
     print("\n최적화된 하이브리드 분류 테스트:")
     print("=" * 60)
-    
+
     for question in test_questions:
         result = classifier.classify(question)
         print(f"질문: {question}")
@@ -831,7 +834,7 @@ if __name__ == "__main__":
         print(f"처리 시간: {result.processing_time:.3f}초")
         print(f"이유: {result.reasoning}")
         print("-" * 40)
-    
+
     # 통계 출력
     print("\n성능 통계:")
     stats = classifier.get_stats()

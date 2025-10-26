@@ -6,18 +6,67 @@ Ollama 클라이언트와 프롬프트 템플릿을 활용한 지능형 답변 �
 
 import logging
 import time
-from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from .gemini_client import GeminiClient, GeminiResponse
-from .prompt_templates import PromptTemplateManager
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
-from .prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
-from .semantic_domain_classifier import SemanticDomainClassifier
-from .confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
-from .question_classifier import QuestionType, QuestionClassification
+# GeminiClient import 시도 (파일이 없을 수 있음)
+try:
+    from .gemini_client import GeminiClient, GeminiResponse
+except ImportError:
+    # GeminiClient가 없는 경우 타입 힌트를 위한 빈 클래스
+    class GeminiClient:
+        def __init__(self, *args, **kwargs):
+            self.model_name = "unknown"
+        def generate(self, *args, **kwargs):
+            raise NotImplementedError("GeminiClient not available")
+
+    class GeminiResponse:
+        def __init__(self, *args, **kwargs):
+            self.response = ""
+
 from .answer_formatter import AnswerFormatter, FormattedAnswer
 from .context_builder import ContextBuilder, ContextWindow
+from .prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
+from .prompt_templates import PromptTemplateManager
+from .question_classifier import QuestionClassification, QuestionType
+from .semantic_domain_classifier import SemanticDomainClassifier
+from .unified_prompt_manager import LegalDomain, ModelType, UnifiedPromptManager
+
+# validation 모듈 import (안전한 초기화)
+try:
+    from .validation.confidence_calculator import (
+        ConfidenceCalculator,
+        ConfidenceInfo,
+        ConfidenceLevel,
+    )
+except ImportError as e:
+    logging.warning(f"ConfidenceCalculator를 import할 수 없습니다: {e}")
+    # 기본 클래스 정의
+    from dataclasses import dataclass
+    from enum import Enum
+    from typing import Dict
+
+    class ConfidenceLevel(Enum):
+        VERY_HIGH = "very_high"
+        HIGH = "high"
+        MEDIUM = "medium"
+        LOW = "low"
+        VERY_LOW = "very_low"
+
+    @dataclass
+    class ConfidenceInfo:
+        confidence: float = 0.5
+        level: ConfidenceLevel = ConfidenceLevel.MEDIUM
+        factors: Dict = None
+        explanation: str = ""
+
+        def __post_init__(self):
+            if self.factors is None:
+                self.factors = {}
+
+    class ConfidenceCalculator:
+        def calculate_confidence(self, *args, **kwargs) -> ConfidenceInfo:
+            return ConfidenceInfo(confidence=0.5, level=ConfidenceLevel.MEDIUM)
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +86,8 @@ class AnswerResult:
 
 class ImprovedAnswerGenerator:
     """개선된 답변 생성기"""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  gemini_client: Optional[GeminiClient] = None,
                  prompt_template_manager: Optional[PromptTemplateManager] = None,
                  confidence_calculator: Optional[ConfidenceCalculator] = None,
@@ -48,9 +97,14 @@ class ImprovedAnswerGenerator:
                  prompt_optimizer: Optional[PromptOptimizer] = None):
         """답변 생성기 초기화"""
         self.logger = logging.getLogger(__name__)
-        
-        # 컴포넌트 초기화
-        self.gemini_client = gemini_client or GeminiClient()
+
+        # 컴포넌트 초기화 (안전한 초기화)
+        try:
+            self.gemini_client = gemini_client or GeminiClient()
+        except (ImportError, NotImplementedError):
+            self.logger.warning("GeminiClient를 사용할 수 없습니다. 기본값으로 설정합니다.")
+            self.gemini_client = None
+
         self.prompt_template_manager = prompt_template_manager or PromptTemplateManager()
         self.confidence_calculator = confidence_calculator or ConfidenceCalculator()
         self.answer_formatter = answer_formatter or AnswerFormatter()
@@ -58,7 +112,7 @@ class ImprovedAnswerGenerator:
         self.unified_prompt_manager = unified_prompt_manager or UnifiedPromptManager()
         self.prompt_optimizer = prompt_optimizer or PromptOptimizer(self.unified_prompt_manager)
         self.semantic_domain_classifier = SemanticDomainClassifier()
-        
+
         # 답변 생성 설정
         self.generation_config = {
             "max_tokens": 2048,
@@ -66,7 +120,7 @@ class ImprovedAnswerGenerator:
             "retry_count": 3,
             "retry_delay": 1.0
         }
-        
+
         # 질문 유형별 특별 설정
         self.question_type_configs = {
             QuestionType.PRECEDENT_SEARCH: {
@@ -94,8 +148,8 @@ class ImprovedAnswerGenerator:
                 "max_tokens": 1500
             }
         }
-    
-    def generate_answer(self, 
+
+    def generate_answer(self,
                        query: str,
                        question_type: QuestionClassification,
                        context: str,
@@ -107,18 +161,18 @@ class ImprovedAnswerGenerator:
         try:
             start_time = time.time()
             self.logger.info(f"Generating answer for query: {query[:100]}...")
-            
+
             # 참고 데이터가 있는지 먼저 확인
             if not self._has_meaningful_sources(sources):
                 self.logger.info("No meaningful sources found, returning no-sources response")
                 return self._create_no_sources_answer(query, question_type)
-            
+
             # 질문 유형별 설정 적용
             config = self.question_type_configs.get(
-                question_type.question_type, 
+                question_type.question_type,
                 self.generation_config
             )
-            
+
             # 컨텍스트 윈도우 최적화
             context_window = self.context_builder.build_optimized_context(
                 query=query,
@@ -126,19 +180,19 @@ class ImprovedAnswerGenerator:
                 search_results=sources,
                 conversation_history=conversation_history
             )
-            
+
             # 최적화된 컨텍스트로 프롬프트 생성
             optimized_context = self.context_builder.format_context_for_llm(context_window)
-            
+
             # 의미 기반 도메인 분류 사용
             domain, domain_confidence, domain_reasoning = self.semantic_domain_classifier.classify_domain(
                 query, question_type.question_type
             )
             model_type = ModelType.GEMINI  # 기본값
-            
+
             # 도메인 분류 결과 로깅
             self.logger.info(f"Domain classification: {domain.value} (confidence: {domain_confidence:.2f}) - {domain_reasoning}")
-            
+
             prompt = self.unified_prompt_manager.get_optimized_prompt(
                 query=query,
                 question_type=question_type.question_type,
@@ -146,10 +200,10 @@ class ImprovedAnswerGenerator:
                 context=sources,
                 model_type=model_type
             )
-            
+
             # Ollama로 답변 생성 (재시도 로직 포함)
             raw_answer = self._generate_with_retry(prompt, config)
-            
+
             # 신뢰도 계산
             sources_list = []
             if hasattr(sources, '__dict__'):
@@ -164,16 +218,16 @@ class ImprovedAnswerGenerator:
                 sources_list = sources.get("results", [])
             elif isinstance(sources, list):
                 sources_list = sources
-            
+
             confidence = self.confidence_calculator.calculate_confidence(
                 answer=raw_answer,
                 sources=sources_list,
                 question_type=question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
             )
-            
+
             # 답변 후처리
             processed_answer = self._post_process_answer(raw_answer, question_type, sources)
-            
+
             # 답변 구조화
             formatted_answer = self.answer_formatter.format_answer(
                 raw_answer=raw_answer,
@@ -181,9 +235,9 @@ class ImprovedAnswerGenerator:
                 sources=sources,
                 confidence=confidence
             )
-            
+
             processing_time = time.time() - start_time
-            
+
             result = AnswerResult(
                 answer=processed_answer,
                 formatted_answer=formatted_answer,
@@ -194,7 +248,7 @@ class ImprovedAnswerGenerator:
                 tokens_used=self._estimate_tokens(raw_answer),
                 model_info={"model": self.gemini_client.model_name}
             )
-            
+
             # 성능 메트릭 기록
             self._record_performance_metrics(
                 query=query,
@@ -207,20 +261,20 @@ class ImprovedAnswerGenerator:
                 token_count=self._estimate_tokens(raw_answer),
                 domain_confidence=domain_confidence
             )
-            
+
             self.logger.info(f"Answer generated successfully: {len(processed_answer)} chars, "
                            f"confidence: {confidence.confidence:.3f}, "
                            f"time: {processing_time:.2f}s")
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"Error generating answer: {e}")
             # 오류 시 기본 답변 반환
             return self._create_fallback_answer(query, question_type, e)
-    
-    
-    def _record_performance_metrics(self, query: str, question_type: QuestionClassification, 
+
+
+    def _record_performance_metrics(self, query: str, question_type: QuestionClassification,
                                   domain: LegalDomain, model_type: ModelType,
                                   response_time: float, answer_quality: float,
                                   context_length: int, token_count: int,
@@ -229,7 +283,7 @@ class ImprovedAnswerGenerator:
         try:
             # 고유 프롬프트 ID 생성
             prompt_id = f"{domain.value}_{question_type.question_type.value}_{hash(query) % 10000}"
-            
+
             # 성능 메트릭 생성
             metrics = PromptPerformanceMetrics(
                 prompt_id=prompt_id,
@@ -241,21 +295,21 @@ class ImprovedAnswerGenerator:
                 context_length=context_length,
                 answer_quality_score=answer_quality
             )
-            
+
             # 도메인 분류 신뢰도 추가 (메타데이터로)
             if hasattr(metrics, 'metadata'):
                 metrics.metadata = {
                     "domain_confidence": domain_confidence,
                     "classification_method": "semantic"
                 }
-            
+
             # 성능 메트릭 기록
             self.prompt_optimizer.record_performance(metrics)
-            
+
         except Exception as e:
             self.logger.error(f"Error recording performance metrics: {e}")
-    
-    def _build_enhanced_prompt(self, 
+
+    def _build_enhanced_prompt(self,
                               query: str,
                               question_type: QuestionClassification,
                               context: str,
@@ -268,29 +322,29 @@ class ImprovedAnswerGenerator:
                 "law_articles": sources.get("law_results", []),
                 "context": sources.get("results", [])
             }
-            
+
             # 질문 유형별 프롬프트 템플릿 사용
             prompt = self.prompt_template_manager.format_prompt(
                 question_type=question_type.question_type,
                 context_data=context_data,
                 user_query=query
             )
-            
+
             # 추가 컨텍스트가 있으면 포함
             if context:
                 prompt += f"\n\n추가 컨텍스트:\n{context}"
-            
+
             # 질문 유형별 특별 지시사항 추가
             special_instructions = self._get_special_instructions(question_type.question_type)
             if special_instructions:
                 prompt += f"\n\n{special_instructions}"
-            
+
             return prompt
-            
+
         except Exception as e:
             self.logger.error(f"Error building enhanced prompt: {e}")
             return f"질문: {query}\n\n위 질문에 대해 전문적이고 정확한 답변을 작성하세요."
-    
+
     def _get_special_instructions(self, question_type: QuestionType) -> str:
         """질문 유형별 특별 지시사항"""
         instructions = {
@@ -300,28 +354,28 @@ class ImprovedAnswerGenerator:
 - 사건번호와 법원 정보를 정확히 인용하세요
 - 해당 판례의 실무적 시사점을 설명하세요
 - 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
-            
+
             QuestionType.LAW_INQUIRY: """
 특별 지시사항:
 - 법률 조문을 정확히 인용하세요
 - 법률의 목적과 취지를 설명하세요
 - 실제 적용 사례를 포함하세요
 - 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
-            
+
             QuestionType.LEGAL_ADVICE: """
 특별 지시사항:
 - 단계별 해결 방법을 제시하세요
 - 필요한 증거 자료를 명시하세요
 - 전문가 상담의 필요성을 언급하세요
 - 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
-            
+
             QuestionType.PROCEDURE_GUIDE: """
 특별 지시사항:
 - 절차를 순서대로 설명하세요
 - 필요한 서류와 비용을 명시하세요
 - 처리 기간을 포함하세요
 - 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)""",
-            
+
             QuestionType.TERM_EXPLANATION: """
 특별 지시사항:
 - 용어의 정확한 정의를 제시하세요
@@ -329,9 +383,9 @@ class ImprovedAnswerGenerator:
 - 실제 적용 예시를 포함하세요
 - 질문에 대한 완전한 답변을 제공하세요 (추가 질문 요청 금지)"""
         }
-        
+
         return instructions.get(question_type, "")
-    
+
     def _generate_with_retry(self, prompt: str, config: Dict[str, Any]) -> str:
         """재시도 로직을 포함한 답변 생성"""
         try:
@@ -342,34 +396,34 @@ class ImprovedAnswerGenerator:
                         temperature=config.get("temperature", self.generation_config["temperature"]),
                         max_tokens=config.get("max_tokens", self.generation_config["max_tokens"])
                     )
-                    
+
                     if response.response and len(response.response.strip()) > 0:
                         return response.response
                     else:
                         self.logger.warning(f"Empty response on attempt {attempt + 1}")
-                        
+
                 except Exception as e:
                     self.logger.warning(f"Generation attempt {attempt + 1} failed: {e}")
-                    
+
                 if attempt < self.generation_config["retry_count"] - 1:
                     time.sleep(self.generation_config["retry_delay"])
-            
+
             # 모든 재시도 실패 시 기본 답변
             return "죄송합니다. 답변 생성 중 오류가 발생했습니다. 다시 시도해주세요."
-            
+
         except Exception as e:
             self.logger.error(f"All generation attempts failed: {e}")
             return "답변 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
-    
-    def _post_process_answer(self, 
-                             raw_answer: str, 
+
+    def _post_process_answer(self,
+                             raw_answer: str,
                              question_type: QuestionClassification,
                              sources: Dict[str, List[Dict[str, Any]]]) -> str:
         """답변 후처리"""
         try:
             # 기본 정리
             processed = raw_answer.strip()
-            
+
             # 질문 유형별 후처리
             if question_type.question_type == QuestionType.PRECEDENT_SEARCH:
                 processed = self._enhance_precedent_answer(processed, sources)
@@ -377,16 +431,16 @@ class ImprovedAnswerGenerator:
                 processed = self._enhance_law_answer(processed, sources)
             elif question_type.question_type == QuestionType.LEGAL_ADVICE:
                 processed = self._enhance_advice_answer(processed, sources)
-            
+
             # 공통 후처리
             processed = self._add_disclaimer(processed)
-            
+
             return processed
-            
+
         except Exception as e:
             self.logger.error(f"Error in post-processing: {e}")
             return raw_answer
-    
+
     def _enhance_precedent_answer(self, answer: str, sources: Dict[str, List[Dict[str, Any]]]) -> str:
         """판례 답변 향상"""
         try:
@@ -399,7 +453,7 @@ class ImprovedAnswerGenerator:
         except Exception as e:
             self.logger.error(f"Error enhancing precedent answer: {e}")
             return answer
-    
+
     def _enhance_law_answer(self, answer: str, sources: Dict[str, List[Dict[str, Any]]]) -> str:
         """법률 답변 향상"""
         try:
@@ -412,25 +466,25 @@ class ImprovedAnswerGenerator:
         except Exception as e:
             self.logger.error(f"Error enhancing law answer: {e}")
             return answer
-    
+
     def _enhance_advice_answer(self, answer: str, sources: Dict[str, List[Dict[str, Any]]]) -> str:
         """조언 답변 향상"""
         try:
             laws = sources.get("law_results", [])
             precedents = sources.get("precedent_results", [])
-            
+
             if laws or precedents:
                 answer += f"\n\n**참고 자료:**\n"
                 if laws:
                     answer += f"- 관련 법률: {len(laws)}개\n"
                 if precedents:
                     answer += f"- 관련 판례: {len(precedents)}개\n"
-            
+
             return answer
         except Exception as e:
             self.logger.error(f"Error enhancing advice answer: {e}")
             return answer
-    
+
     def _add_disclaimer(self, answer: str) -> str:
         """면책 조항 추가"""
         disclaimer = """
@@ -440,16 +494,16 @@ class ImprovedAnswerGenerator:
 
 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
-        
+
         return answer + disclaimer
-    
+
     def _estimate_tokens(self, text: str) -> int:
         """토큰 수 추정 (대략적)"""
         # 한국어 기준 대략적인 토큰 수 추정
         return len(text) // 2
-    
-    def _create_fallback_answer(self, 
-                               query: str, 
+
+    def _create_fallback_answer(self,
+                               query: str,
                                question_type: QuestionClassification,
                                error: Exception) -> AnswerResult:
         """오류 시 기본 답변 생성"""
@@ -464,7 +518,7 @@ class ImprovedAnswerGenerator:
 3. 문제가 지속되면 관리자에게 문의해주세요
 
 전문적인 법률 상담이 필요하시면 변호사와 직접 상담하시기 바랍니다."""
-            
+
             return AnswerResult(
                 answer=fallback_answer,
                 formatted_answer=None,
@@ -479,7 +533,7 @@ class ImprovedAnswerGenerator:
                 tokens_used=self._estimate_tokens(fallback_answer),
                 model_info={"model": "fallback"}
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error creating fallback answer: {e}")
             # 최후의 수단
@@ -498,12 +552,12 @@ class ImprovedAnswerGenerator:
                 tokens_used=0,
                 model_info={"model": "error"}
             )
-    
+
     def _has_meaningful_sources(self, sources: Dict[str, List[Dict[str, Any]]]) -> bool:
         """의미있는 참고 데이터가 있는지 확인 - 강화된 버전"""
         if not sources:
             return False
-        
+
         # 소스 리스트 변환
         sources_list = []
         if isinstance(sources, dict):
@@ -512,43 +566,43 @@ class ImprovedAnswerGenerator:
             sources_list.extend(sources.get("precedent_results", []))
         elif isinstance(sources, list):
             sources_list = sources
-        
+
         if not sources_list:
             return False
-        
+
         # 최소 관련도 임계값 설정 (더 엄격하게)
         MIN_RELEVANCE_THRESHOLD = 0.4  # 0.3에서 0.4로 상향
         MIN_CONTENT_LENGTH = 100  # 50에서 100으로 상향
-        
+
         meaningful_sources = []
         for source in sources_list:
             relevance_score = source.get("similarity", source.get("score", 0.0))
             content = source.get("content", "")
-            
+
             # 관련도가 높고 내용이 충분한 소스만 유효한 것으로 판단
             if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
                 meaningful_sources.append(source)
-        
+
         # 추가 검증: 실제 법률 관련 내용인지 확인
         if meaningful_sources:
             legal_keywords = ["법률", "조문", "판례", "법원", "법령", "규정", "조항", "법적", "법률적"]
             legal_content_count = 0
-            
+
             for source in meaningful_sources:
                 content = source.get("content", "").lower()
                 if any(keyword in content for keyword in legal_keywords):
                     legal_content_count += 1
-            
+
             # 법률 관련 내용이 절반 이상이어야 유효
             return legal_content_count >= len(meaningful_sources) * 0.5
-        
+
         return False
-    
+
     def _create_no_sources_answer(self, query: str, question_type: QuestionClassification) -> AnswerResult:
         """참고 데이터가 없을 때의 답변 생성"""
         try:
             query_type_value = question_type.question_type.value if hasattr(question_type, 'question_type') else "general"
-            
+
             if query_type_value == "legal_advice":
                 no_sources_answer = f"""죄송합니다. '{query}'에 대한 구체적인 법률 정보를 찾을 수 없습니다.
 
@@ -558,7 +612,7 @@ class ImprovedAnswerGenerator:
 • 일반적인 법률 절차에 대해서는 안내해드릴 수 있습니다
 
 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
-            
+
             elif query_type_value == "precedent":
                 no_sources_answer = f"""죄송합니다. '{query}'와 관련된 판례를 찾을 수 없습니다.
 
@@ -568,7 +622,7 @@ class ImprovedAnswerGenerator:
 • 관련 법률 조문을 먼저 확인해보세요
 
 판례 검색이 어려우시면 법원 도서관이나 법률 데이터베이스를 이용해보시기 바랍니다."""
-            
+
             else:
                 no_sources_answer = f"""죄송합니다. '{query}'에 대한 관련 정보를 찾을 수 없습니다.
 
@@ -578,7 +632,7 @@ class ImprovedAnswerGenerator:
 • 키워드를 더 명확하게 해주세요
 
 일반적인 법률 상식이나 절차에 대해서는 안내해드릴 수 있습니다."""
-            
+
             return AnswerResult(
                 answer=no_sources_answer,
                 formatted_answer=None,
@@ -594,7 +648,7 @@ class ImprovedAnswerGenerator:
                 tokens_used=self._estimate_tokens(no_sources_answer),
                 model_info={"model": "no_sources"}
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error creating no-sources answer: {e}")
             return self._create_fallback_answer(query, question_type, e)
@@ -604,7 +658,7 @@ class ImprovedAnswerGenerator:
 def test_improved_answer_generator():
     """개선된 답변 생성기 테스트"""
     generator = ImprovedAnswerGenerator()
-    
+
     # 테스트 데이터
     test_query = "손해배상 청구 방법"
     test_question_type = QuestionClassification(
@@ -628,11 +682,11 @@ def test_improved_answer_generator():
             {"case_name": "손해배상 사건", "case_number": "2023다12345", "summary": "불법행위 손해배상"}
         ]
     }
-    
+
     print("=== 개선된 답변 생성기 테스트 ===")
     print(f"질문: {test_query}")
     print(f"질문 유형: {test_question_type.question_type.value}")
-    
+
     try:
         result = generator.generate_answer(
             query=test_query,
@@ -640,7 +694,7 @@ def test_improved_answer_generator():
             context=test_context,
             sources=test_sources
         )
-        
+
         print(f"\n답변 결과:")
         print(f"- 답변 길이: {len(result.answer)} 문자")
         print(f"- 구조화된 답변 길이: {len(result.formatted_answer.formatted_content) if result.formatted_answer else 0} 문자")
@@ -649,14 +703,14 @@ def test_improved_answer_generator():
         print(f"- 처리 시간: {result.processing_time:.2f}초")
         print(f"- 추정 토큰 수: {result.tokens_used}")
         print(f"- 모델: {result.model_info['model']}")
-        
+
         print(f"\n답변 내용:")
         print(result.answer[:500] + "..." if len(result.answer) > 500 else result.answer)
-        
+
         if result.formatted_answer:
             print(f"\n구조화된 답변 미리보기:")
             print(result.formatted_answer.formatted_content[:500] + "..." if len(result.formatted_answer.formatted_content) > 500 else result.formatted_answer.formatted_content)
-        
+
     except Exception as e:
         print(f"테스트 실패: {e}")
 
