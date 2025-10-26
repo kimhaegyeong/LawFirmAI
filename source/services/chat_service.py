@@ -94,7 +94,7 @@ class ChatService:
         
         if self.use_langgraph:
             try:
-                from .langgraph.workflow_service import LangGraphWorkflowService
+                from .langgraph_workflow.workflow_service import LangGraphWorkflowService
                 from ..utils.langgraph_config import LangGraphConfig
                 
                 langgraph_config = LangGraphConfig.from_env()
