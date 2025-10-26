@@ -10,12 +10,15 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+# 상대경로 import
 from ...data.database import DatabaseManager
 from ...data.vector_store import LegalVectorStore
 from ...utils.config import Config
 from ...utils.logger import get_logger
 from ...utils.memory_manager import get_memory_manager
-from ...utils.monitoring.realtime_memory_monitor import get_memory_monitor
+from ...utils.monitoring.realtime_memory_monitor import (
+    get_memory_monitor,
+)
 from ...utils.weakref_cleanup import get_weakref_registry
 
 # 하이브리드 분류기로 완전 대체됨 - 키워드 시스템 제거 완료
@@ -93,7 +96,7 @@ class EnhancedChatService:
 
         # 사용자 설정 관리자 초기화 (안전한 초기화)
         try:
-            from .user_preference_manager import preference_manager
+            from ..user_preference_manager import preference_manager
             self.user_preferences = preference_manager
         except ImportError:
             self.logger.warning("User preference manager를 import할 수 없습니다. 기본값으로 설정합니다.")
@@ -101,7 +104,7 @@ class EnhancedChatService:
 
         # 답변 완성도 검증자 초기화 (안전한 초기화)
         try:
-            from .answer_completion_validator import completion_validator
+            from ..answer_completion_validator import completion_validator
             self.completion_validator = completion_validator
         except ImportError:
             self.logger.warning("Answer completion validator를 import할 수 없습니다. 기본값으로 설정합니다.")
@@ -109,7 +112,7 @@ class EnhancedChatService:
 
         # 향상된 완성 시스템 초기화 (안전한 초기화)
         try:
-            from .enhanced_completion_system import enhanced_completion_system
+            from ..enhanced_completion_system import enhanced_completion_system
             self.enhanced_completion_system = enhanced_completion_system
         except ImportError:
             self.logger.warning("Enhanced completion system을 import할 수 없습니다. 기본값으로 설정합니다.")
@@ -149,15 +152,88 @@ class EnhancedChatService:
         self._initialize_quality_enhancement_systems()
 
         # 향상된 법률 검색 시스템 초기화
-        self._initialize_enhanced_law_search()
+        try:
+            self.logger.info("🔍 향상된 법률 검색 시스템 초기화 시작...")
+            self._initialize_enhanced_law_search()
+            self.logger.info("✅ 향상된 법률 검색 시스템 초기화 완료")
+        except Exception as e:
+            self.logger.error(f"❌ 향상된 법률 검색 시스템 초기화 실패: {e}")
+            import traceback
+            self.logger.error(f"상세 오류: {traceback.format_exc()}")
 
         # 지능형 응답 스타일 시스템 초기화
-        self._initialize_intelligent_style_system()
+        try:
+            self.logger.info("🔍 지능형 응답 스타일 시스템 초기화 시작...")
+            self._initialize_intelligent_style_system()
+            self.logger.info("✅ 지능형 응답 스타일 시스템 초기화 완료")
+        except Exception as e:
+            self.logger.error(f"❌ 지능형 응답 스타일 시스템 초기화 실패: {e}")
+            import traceback
+            self.logger.error(f"상세 오류: {traceback.format_exc()}")
 
         # LangGraph 워크플로우 서비스 초기화
-        self._initialize_langgraph_workflow()
+        try:
+            self.logger.info("🚀 LangGraph 워크플로우 초기화 시작...")
+            self._initialize_langgraph_workflow()
+            self.logger.info(f"🔍 LangGraph 초기화 완료 - 서비스 상태: {self.langgraph_service is not None}")
+        except Exception as e:
+            self.logger.error(f"❌ LangGraph 워크플로우 초기화 실패: {e}")
+            import traceback
+            self.logger.error(f"상세 오류: {traceback.format_exc()}")
+
+        # 🆕 LangGraph 초기화 검증 및 상태 로깅
+        self._validate_langgraph_initialization()
 
         self.logger.info("EnhancedChatService 초기화 완료")
+
+    def _validate_langgraph_initialization(self):
+        """LangGraph 초기화 상태 검증 및 상세 로깅"""
+        self.logger.info("=" * 70)
+        self.logger.info("🔍 LangGraph 초기화 상태 검증")
+        self.logger.info("=" * 70)
+
+        # 현재 상태 확인
+        self.logger.info("📊 현재 상태:")
+        self.logger.info(f"   - use_langgraph: {self.use_langgraph}")
+        self.logger.info(f"   - langgraph_service: {self.langgraph_service is not None}")
+
+        if self.langgraph_service is not None:
+            self.logger.info(f"   - langgraph_service 타입: {type(self.langgraph_service).__name__}")
+            self.logger.info(f"   - process_query 메서드: {hasattr(self.langgraph_service, 'process_query')}")
+
+        # 문제가 있는 경우 재시도
+        if self.use_langgraph and self.langgraph_service is None:
+            self.logger.warning("⚠️ LangGraph 활성화되었으나 서비스가 초기화되지 않음")
+            self.logger.info("🔄 LangGraph 재초기화 시도...")
+
+            try:
+                self._initialize_langgraph_workflow()
+
+                if self.langgraph_service and self.use_langgraph:
+                    self.logger.info("✅ LangGraph 재초기화 성공")
+                    self.logger.info(f"   - use_langgraph: {self.use_langgraph}")
+                    self.logger.info(f"   - langgraph_service: {self.langgraph_service is not None}")
+                else:
+                    self.logger.error("❌ LangGraph 재초기화 실패")
+                    self.logger.error("💡 해결 방법:")
+                    self.logger.error("   1. pip install langgraph langchain-core langchain-community")
+                    self.logger.error("   2. .env 파일에 GOOGLE_API_KEY 설정")
+                    self.logger.error("   3. 로그를 확인하여 구체적인 오류 원인 파악")
+
+            except Exception as e:
+                self.logger.error(f"❌ 재초기화 중 오류 발생: {e}")
+                import traceback
+                self.logger.error(f"상세 오류: {traceback.format_exc()}")
+
+        # 최종 상태
+        if self.langgraph_service and self.use_langgraph:
+            self.logger.info("=" * 70)
+            self.logger.info("✅ LangGraph 사용 가능 - 워크플로우가 활성화됩니다")
+            self.logger.info("=" * 70)
+        else:
+            self.logger.info("=" * 70)
+            self.logger.warning("⚠️ LangGraph 사용 불가 - 기본 RAG 시스템으로 폴백됩니다")
+            self.logger.info("=" * 70)
 
     def _setup_google_cloud_warnings(self):
         """Google Cloud 경고 설정"""
@@ -361,7 +437,7 @@ class EnhancedChatService:
 
             # 모델 매니저 (안전한 초기화)
             try:
-                from .optimized_model_manager import OptimizedModelManager
+                from ..optimized_model_manager import OptimizedModelManager
                 self.model_manager = OptimizedModelManager()
                 self._track_component(self.model_manager, "model_manager")
             except ImportError:
@@ -373,7 +449,7 @@ class EnhancedChatService:
 
             # 하이브리드 검색 엔진 (안전한 초기화)
             try:
-                from .hybrid_search_engine import HybridSearchEngine
+                from ..search.hybrid_search_engine import HybridSearchEngine
                 self.hybrid_search_engine = HybridSearchEngine()
                 self._track_component(self.hybrid_search_engine, "hybrid_search_engine")
             except ImportError:
@@ -382,7 +458,7 @@ class EnhancedChatService:
 
             # 질문 분류기 (안전한 초기화)
             try:
-                from .question_classifier import QuestionClassifier
+                from ..question_classifier import QuestionClassifier
                 self.question_classifier = QuestionClassifier()
                 self._track_component(self.question_classifier, "question_classifier")
             except ImportError:
@@ -391,11 +467,29 @@ class EnhancedChatService:
 
             # 향상된 답변 생성기 (안전한 초기화)
             try:
-                from .improved_answer_generator import ImprovedAnswerGenerator
+                self.logger.debug("ImprovedAnswerGenerator import 시도 중...")
+                from ..improved_answer_generator import ImprovedAnswerGenerator
+                self.logger.debug(f"ImprovedAnswerGenerator import 성공: {ImprovedAnswerGenerator}")
+
+                self.logger.debug("ImprovedAnswerGenerator 인스턴스 생성 시도 중...")
                 self.improved_answer_generator = ImprovedAnswerGenerator()
+                self.logger.debug("ImprovedAnswerGenerator 인스턴스 생성 성공")
+
                 self._track_component(self.improved_answer_generator, "improved_answer_generator")
-            except ImportError:
-                self.logger.warning("ImprovedAnswerGenerator를 import할 수 없습니다. 기본값으로 설정합니다.")
+                self.logger.info("ImprovedAnswerGenerator 초기화 완료")
+            except ImportError as e:
+                self.logger.warning(
+                    f"ImprovedAnswerGenerator를 import할 수 없습니다 (ImportError). "
+                    f"기본값으로 설정합니다. 상세 오류: {type(e).__name__}: {str(e)}"
+                )
+                self.logger.debug(f"ImportError 상세 정보: {e.__traceback__}")
+                self.improved_answer_generator = None
+            except Exception as e:
+                self.logger.error(
+                    f"ImprovedAnswerGenerator 초기화 중 예상치 못한 오류 발생: "
+                    f"{type(e).__name__}: {str(e)}"
+                )
+                self.logger.debug(f"오류 상세 정보: {e.__traceback__}", exc_info=True)
                 self.improved_answer_generator = None
 
             self.logger.info("핵심 컴포넌트 초기화 완료")
@@ -417,20 +511,36 @@ class EnhancedChatService:
     def _initialize_hybrid_classifier(self):
         """하이브리드 질문 분류기 초기화"""
         try:
+            self.logger.debug("IntegratedHybridQuestionClassifier import 시도 중...")
             # 하이브리드 분류기 초기화 (안전한 import)
-            from .integrated_hybrid_classifier import IntegratedHybridQuestionClassifier
+            from ..integrated_hybrid_classifier import (
+                IntegratedHybridQuestionClassifier,
+            )
+            self.logger.debug(f"IntegratedHybridQuestionClassifier import 성공: {IntegratedHybridQuestionClassifier}")
+
+            self.logger.debug("IntegratedHybridQuestionClassifier 인스턴스 생성 시도 중...")
             self.hybrid_classifier = IntegratedHybridQuestionClassifier(
                 confidence_threshold=0.7  # 기본 임계값
             )
+            self.logger.debug("IntegratedHybridQuestionClassifier 인스턴스 생성 성공")
+
             self._track_component(self.hybrid_classifier, "hybrid_classifier")
 
-            self.logger.info("하이브리드 질문 분류기 초기화 완료")
+            self.logger.info("✅ 하이브리드 질문 분류기 초기화 완료")
 
         except ImportError as e:
-            self.logger.warning(f"IntegratedHybridQuestionClassifier를 import할 수 없습니다: {e}")
+            self.logger.warning(
+                f"IntegratedHybridQuestionClassifier를 import할 수 없습니다 (ImportError). "
+                f"기본값으로 설정합니다. 상세 오류: {type(e).__name__}: {str(e)}"
+            )
+            self.logger.debug(f"ImportError 상세 정보: {e.__traceback__}", exc_info=True)
             self.hybrid_classifier = None
         except Exception as e:
-            self.logger.error(f"하이브리드 질문 분류기 초기화 실패: {e}")
+            self.logger.error(
+                f"하이브리드 질문 분류기 초기화 중 예상치 못한 오류 발생: "
+                f"{type(e).__name__}: {str(e)}"
+            )
+            self.logger.debug(f"오류 상세 정보: {e.__traceback__}", exc_info=True)
             self.hybrid_classifier = None
 
     def _initialize_unified_services(self):
@@ -448,26 +558,48 @@ class EnhancedChatService:
 
             # 통합 검색 엔진 (안전한 초기화)
             try:
-                from .unified_search_engine import UnifiedSearchEngine
+                from ..unified_search_engine import UnifiedSearchEngine
                 self.unified_search_engine = UnifiedSearchEngine(
                     vector_store=self.vector_store,
                     current_law_search_engine=self.current_law_search_engine
                 )
-            except ImportError:
-                self.logger.warning("UnifiedSearchEngine을 import할 수 없습니다. 기본값으로 설정합니다.")
+                self.logger.info("✅ UnifiedSearchEngine 초기화 성공")
+            except ImportError as e:
+                self.logger.warning(f"UnifiedSearchEngine을 import할 수 없습니다: {e}")
+                self.unified_search_engine = None
+            except Exception as e:
+                self.logger.error(f"UnifiedSearchEngine 초기화 실패: {e}")
                 self.unified_search_engine = None
 
             # 통합 RAG 서비스 (안전한 초기화)
             try:
-                from .unified_rag_service import UnifiedRAGService
+                self.logger.debug("UnifiedRAGService import 시도 중...")
+                from ..unified_rag_service import UnifiedRAGService
+                self.logger.debug(f"UnifiedRAGService import 성공: {UnifiedRAGService}")
+
+                self.logger.debug("UnifiedRAGService 인스턴스 생성 시도 중...")
                 self.unified_rag_service = UnifiedRAGService(
                     model_manager=self.model_manager,
                     search_engine=self.unified_search_engine,
                     answer_generator=self.improved_answer_generator,
                     question_classifier=self.question_classifier
                 )
-            except ImportError:
-                self.logger.warning("UnifiedRAGService를 import할 수 없습니다. 기본값으로 설정합니다.")
+                self.logger.debug("UnifiedRAGService 인스턴스 생성 성공")
+
+                self.logger.info("✅ UnifiedRAGService 초기화 완료")
+            except ImportError as e:
+                self.logger.warning(
+                    f"UnifiedRAGService를 import할 수 없습니다 (ImportError). "
+                    f"기본값으로 설정합니다. 상세 오류: {type(e).__name__}: {str(e)}"
+                )
+                self.logger.debug(f"ImportError 상세 정보: {e.__traceback__}", exc_info=True)
+                self.unified_rag_service = None
+            except Exception as e:
+                self.logger.error(
+                    f"UnifiedRAGService 초기화 중 예상치 못한 오류 발생: "
+                    f"{type(e).__name__}: {str(e)}"
+                )
+                self.logger.debug(f"오류 상세 정보: {e.__traceback__}", exc_info=True)
                 self.unified_rag_service = None
 
             self.logger.info("통합 서비스 초기화 완료")
@@ -527,7 +659,7 @@ class EnhancedChatService:
     def _initialize_current_law_search_engine(self):
         """현재법령 검색 엔진 초기화 - 안전한 초기화"""
         try:
-            from .current_law_search_engine import CurrentLawSearchEngine
+            from ..current_law_search_engine import CurrentLawSearchEngine
 
             self.current_law_search_engine = CurrentLawSearchEngine(
                 db_path="data/lawfirm.db",
@@ -590,7 +722,7 @@ class EnhancedChatService:
     def _initialize_performance_monitoring(self):
         """성능 모니터링 시스템 초기화 - 안전한 초기화"""
         try:
-            from ..utils.performance_monitor import PerformanceMonitor
+            from ...utils.monitoring.performance_monitor import PerformanceMonitor
 
             # 성능 모니터 초기화
             self.performance_monitor = PerformanceMonitor(self.config)
@@ -1281,7 +1413,7 @@ class EnhancedChatService:
                     detected_style = ResponseStyle.FRIENDLY  # 기본값
 
             # 🔥 1순위: LangGraph 워크플로우 (가장 고도화된 처리) - 강제 활성화
-            self.logger.info(f"🔍 LangGraph 실행 조건 확인:")
+            self.logger.info("🔍 LangGraph 실행 조건 확인:")
             self.logger.info(f"  - use_langgraph: {self.use_langgraph}")
             self.logger.info(f"  - langgraph_service: {self.langgraph_service is not None}")
 
@@ -1298,10 +1430,11 @@ class EnhancedChatService:
                         self.logger.info(f"⚙️ LangGraph 사용 설정: {self.use_langgraph}")
 
                         # LangGraph 워크플로우 실행
-                        self.logger.info(f"🔍 LangGraph 워크플로우 실행 전 상태 확인:")
+                        self.logger.info("🔍 LangGraph 워크플로우 실행 전 상태 확인:")
                         self.logger.info(f"  - langgraph_service: {self.langgraph_service is not None}")
                         self.logger.info(f"  - use_langgraph: {self.use_langgraph}")
                         self.logger.info(f"  - message: {message}")
+                        self.logger.info(f"  - langgraph_service type: {type(self.langgraph_service)}")
 
                         langgraph_result = await self.langgraph_service.process_query(
                             query=message,
@@ -1313,36 +1446,27 @@ class EnhancedChatService:
                         self.logger.info(f"✅ LangGraph 워크플로우 실행 완료: {langgraph_result is not None}")
                         self.logger.info("🔍 LangGraph 결과 키: " + str(list(langgraph_result.keys()) if langgraph_result else 'None'))
                         self.logger.info(f"🔍 LangGraph 응답 텍스트: {langgraph_result.get('response', 'NOT_FOUND')[:100] if langgraph_result else 'None'}")
+                        self.logger.info(f"🔍 LangGraph 전체 결과: {langgraph_result}")
 
-                        if langgraph_result and langgraph_result.get("response"):
-                            self.logger.info("🎯 LangGraph 워크플로우 처리 성공")
-
-                            # 스타일 적용된 응답 생성
-                            final_response = langgraph_result["response"]
-                            if detected_style and self.intelligent_style_system:
-                                try:
-                                    final_response = self.intelligent_style_system.generate_adaptive_response(
-                                        langgraph_result["response"], message, query_analysis, session_id
-                                    )
-                                except Exception as e:
-                                    self.logger.debug(f"Style application failed: {e}")
-
-                            processing_time = max(0.0, time.time() - start_time)
+                        if langgraph_result and langgraph_result.get('response'):
+                            self.logger.info("🎉 LangGraph에서 유효한 응답을 받았습니다!")
                             return {
-                                "response": final_response,
-                                "confidence": langgraph_result.get("confidence", 0.9),
-                                "sources": langgraph_result.get("sources", []),
-                                "query_analysis": query_analysis,
-                                "generation_method": "langgraph_workflow",
-                                "session_id": session_id,
-                                "user_id": user_id,
-                                "workflow_steps": langgraph_result.get("workflow_steps", []),
-                                "performance_metrics": langgraph_result.get("performance_metrics", {}),
-                                "detected_style": detected_style.value if detected_style else "unknown",
-                                "processing_time": processing_time
+                                'response': langgraph_result['response'],
+                                'confidence': langgraph_result.get('confidence', 0.8),
+                                'sources': langgraph_result.get('sources', []),
+                                'workflow_steps': langgraph_result.get('workflow_steps', []),
+                                'processing_time': time.time() - start_time,
+                                'session_id': session_id,
+                                'user_id': user_id,
+                                'quality_metrics': langgraph_result.get('quality_metrics', {}),
+                                'error_messages': langgraph_result.get('error_messages', []),
+                                'intermediate_results': langgraph_result.get('intermediate_results', {}),
+                                'langgraph_enabled': True,
+                                'generation_method': 'langgraph_workflow'
                             }
                         else:
-                            self.logger.warning("⚠️ LangGraph 워크플로우에서 유효한 응답을 생성하지 못했습니다.")
+                            self.logger.warning("⚠️ LangGraph에서 유효한 응답을 받지 못했습니다.")
+                            self.logger.warning(f"LangGraph 결과: {langgraph_result}")
 
                     except Exception as e:
                         self.logger.error(f"❌ LangGraph 워크플로우 실행 실패: {e}")
@@ -1403,7 +1527,95 @@ class EnhancedChatService:
                 except Exception as e:
                     self.logger.debug(f"Specific law article search failed: {e}")
 
-            # 3순위: 기본 RAG 서비스 (LangGraph 및 특정 조문 검색 실패 시)
+            # 3순위: UnifiedSearchEngine 사용 (LangGraph 및 특정 조문 검색 실패 시)
+            if self.unified_search_engine:
+                try:
+                    self.logger.info(f"🔍 UnifiedSearchEngine으로 검색 수행: {message}")
+
+                    # UnifiedSearchEngine으로 검색 수행
+                    search_result = await self.unified_search_engine.search(
+                        query=message,
+                        top_k=5,
+                        search_types=['vector', 'exact', 'current_law'],
+                        category='all',
+                        use_cache=True
+                    )
+
+                    self.logger.info(f"✅ UnifiedSearchEngine 검색 완료: {len(search_result.results)}개 결과")
+
+                    if search_result.results:
+                        # 검색 결과를 기반으로 답변 생성
+                        sources = []
+                        for result in search_result.results:
+                            sources.append({
+                                'content': result.get('content', ''),
+                                'score': result.get('score', 0.0),
+                                'source': result.get('source', 'unknown'),
+                                'metadata': result.get('metadata', {})
+                            })
+
+                        # 간단한 답변 생성 (실제 LLM 사용)
+                        if self.model_manager and hasattr(self.model_manager, 'generate_response'):
+                            try:
+                                context_text = "\n".join([f"- {source['content'][:200]}..." for source in sources[:3]])
+                                prompt = f"""
+다음 법률 문서를 참고하여 질문에 답변해주세요:
+
+질문: {message}
+
+참고 문서:
+{context_text}
+
+위 문서를 바탕으로 정확하고 도움이 되는 답변을 제공해주세요.
+"""
+
+                                response_text = await self.model_manager.generate_response(prompt)
+
+                                return {
+                                    'response': response_text,
+                                    'confidence': search_result.confidence,
+                                    'sources': sources,
+                                    'workflow_steps': ['unified_search_engine'],
+                                    'processing_time': time.time() - start_time,
+                                    'session_id': session_id,
+                                    'user_id': user_id,
+                                    'quality_metrics': {'search_results_count': len(sources)},
+                                    'error_messages': [],
+                                    'intermediate_results': {'search_result': search_result},
+                                    'langgraph_enabled': False,
+                                    'generation_method': 'unified_search_engine'
+                                }
+                            except Exception as e:
+                                self.logger.warning(f"LLM 응답 생성 실패: {e}")
+
+                        # LLM이 없으면 검색 결과만 반환
+                        response_text = f"'{message}'에 대한 검색 결과를 찾았습니다:\n\n"
+                        for i, source in enumerate(sources[:3], 1):
+                            response_text += f"{i}. {source['content'][:150]}...\n"
+
+                        return {
+                            'response': response_text,
+                            'confidence': search_result.confidence,
+                            'sources': sources,
+                            'workflow_steps': ['unified_search_engine'],
+                            'processing_time': time.time() - start_time,
+                            'session_id': session_id,
+                            'user_id': user_id,
+                            'quality_metrics': {'search_results_count': len(sources)},
+                            'error_messages': [],
+                            'intermediate_results': {'search_result': search_result},
+                            'langgraph_enabled': False,
+                            'generation_method': 'unified_search_engine'
+                        }
+                    else:
+                        self.logger.warning("UnifiedSearchEngine에서 검색 결과를 찾지 못했습니다.")
+
+                except Exception as e:
+                    self.logger.error(f"UnifiedSearchEngine 검색 실패: {e}")
+                    import traceback
+                    self.logger.error(f"상세 오류: {traceback.format_exc()}")
+
+            # 4순위: 기본 RAG 서비스 (UnifiedSearchEngine 실패 시)
             if self.unified_rag_service:
                 try:
                     self.logger.info(f"Calling RAG service for query: {message}")
@@ -2109,8 +2321,14 @@ class EnhancedChatService:
 
     def _initialize_langgraph_workflow(self):
         """LangGraph 워크플로우 서비스 초기화"""
+        self.logger.info("🔍 _initialize_langgraph_workflow 메서드 호출됨")
+        self.logger.info("=" * 70)
+        self.logger.info("🔍 LangGraph 초기화 진단 시작")
+        self.logger.info("=" * 70)
+
         try:
             self.logger.info("🚀 LangGraph 워크플로우 서비스 초기화 시작...")
+            self.logger.info("📍 단계 1: 기본 LangGraph 모듈 import 테스트")
 
             # 먼저 기본 LangGraph 모듈 import 테스트 (강화된 방식)
             try:
@@ -2124,12 +2342,19 @@ class EnhancedChatService:
                     sys.path.insert(0, current_dir)
 
                 # LangGraph import 시도
+                self.logger.info("   → langgraph.graph에서 END, StateGraph import 시도...")
                 from langgraph.graph import END, StateGraph
                 self.logger.info("✅ 기본 LangGraph 모듈 import 성공")
+                self.logger.info(f"   → StateGraph 클래스: {StateGraph}")
+                self.logger.info(f"   → END 상수: {END}")
 
-                # 추가 검증
-                self.logger.info(f"StateGraph 클래스: {StateGraph}")
-                self.logger.info(f"END 상수: {END}")
+                # langgraph 버전 확인
+                try:
+                    import langgraph
+                    version = getattr(langgraph, '__version__', 'unknown')
+                    self.logger.info(f"   → langgraph 버전: {version}")
+                except Exception as e:
+                    self.logger.debug(f"버전 확인 실패: {e}")
 
             except ImportError as e:
                 self.logger.error(f"❌ 기본 LangGraph 모듈 import 실패: {e}")
@@ -2145,48 +2370,75 @@ class EnhancedChatService:
                     self.logger.error(f"langgraph 모듈도 없음: {debug_e}")
 
                 self.langgraph_service = None
+                self.use_langgraph = False  # LangGraph 사용 불가로 설정
                 return
 
             # 프로젝트 모듈 import
+            self.logger.info("📍 단계 2: 프로젝트 LangGraph 모듈 import")
             try:
-                from ..utils.langgraph_config import langgraph_config
-                from .langgraph_workflow.integrated_workflow_service import (
+                self.logger.info("   → langgraph_config import 시도...")
+                from ...utils.langgraph_config import langgraph_config
+                self.logger.info("   → langgraph_config import 성공")
+
+                self.logger.info("   → IntegratedWorkflowService import 시도...")
+                from ..langgraph_workflow.integrated_workflow_service import (
                     IntegratedWorkflowService,
                 )
                 self.logger.info("✅ 프로젝트 LangGraph 모듈 import 성공")
             except ImportError as e:
                 self.logger.error(f"❌ 프로젝트 LangGraph 모듈 import 실패: {e}")
                 self.langgraph_service = None
+                self.use_langgraph = False  # LangGraph 사용 불가로 설정
                 return
 
             # 설정 검증
+            self.logger.info("📍 단계 3: LangGraph 설정 검증")
             config_errors = langgraph_config.validate()
             if config_errors:
                 self.logger.warning(f"⚠️ LangGraph 설정 오류: {config_errors}")
+            else:
+                self.logger.info("✅ 설정 검증 통과")
 
             # LangGraph 활성화 여부 확인
+            self.logger.info(f"   → langgraph_enabled: {langgraph_config.langgraph_enabled}")
             if not langgraph_config.langgraph_enabled:
                 self.logger.warning("⚠️ LangGraph가 비활성화되어 있습니다.")
                 self.langgraph_service = None
+                self.use_langgraph = False  # LangGraph 사용 불가로 설정
                 return
 
             self.logger.info(f"📋 LangGraph 설정: {langgraph_config.to_dict()}")
 
             # 워크플로우 서비스 초기화
-            self.langgraph_service = IntegratedWorkflowService(langgraph_config)
-            self.logger.info("🎉 LangGraph 워크플로우 서비스 초기화 완료")
+            self.logger.info("📍 단계 4: IntegratedWorkflowService 초기화")
+            try:
+                self.logger.info("   → IntegratedWorkflowService 인스턴스 생성 중...")
+                self.langgraph_service = IntegratedWorkflowService(langgraph_config)
+                self.logger.info("🎉 LangGraph 워크플로우 서비스 초기화 완료")
+                self.logger.info(f"   → LangGraph 서비스 타입: {type(self.langgraph_service).__name__}")
+                self.logger.info(f"   → process_query 메서드 존재: {hasattr(self.langgraph_service, 'process_query')}")
+                self.use_langgraph = True  # LangGraph 정상 초기화됨
+            except Exception as init_e:
+                self.logger.error(f"❌ IntegratedWorkflowService 초기화 실패: {init_e}")
+                import traceback
+                self.logger.error(f"상세 오류: {traceback.format_exc()}")
+                self.langgraph_service = None
+                self.use_langgraph = False  # LangGraph 사용 불가로 설정
+                return
 
         except ImportError as e:
             self.logger.error(f"❌ LangGraph 모듈 import 실패: {e}")
             self.logger.error("LangGraph 관련 패키지가 설치되지 않았을 수 있습니다.")
             self.logger.error("다음 명령어로 설치하세요: pip install langgraph langchain-core langchain-community")
             self.langgraph_service = None
+            self.use_langgraph = False  # LangGraph 사용 불가로 설정
         except Exception as e:
             self.logger.error(f"❌ LangGraph 워크플로우 서비스 초기화 실패: {e}")
             self.logger.error(f"오류 타입: {type(e).__name__}")
             import traceback
             self.logger.error(f"상세 오류: {traceback.format_exc()}")
             self.langgraph_service = None
+            self.use_langgraph = False  # LangGraph 사용 불가로 설정
 
     def _initialize_intelligent_style_system(self):
         """지능형 응답 스타일 시스템 초기화 - 테스트를 위해 주석 처리"""
@@ -2215,11 +2467,41 @@ class EnhancedChatService:
         start_time = time.time()
 
         try:
-            if not self.integrated_law_search:
-                return await self._fallback_response(message)
+            # 🆕 current_law_search_engine 사용 (적극적 활용)
+            if self.current_law_search_engine:
+                # 법률 조문 추출
+                article_info = self._extract_law_article_from_query(message)
 
-            # 법률 조문 검색 실행
-            search_result = await self.integrated_law_search.search_law_article(message)
+                if article_info and article_info.get('law_name') and article_info.get('article_number'):
+                    self.logger.info(f"🔍 특정 조문 검색: {article_info['law_name']} 제{article_info['article_number']}조")
+
+                    # 조문 검색
+                    search_result = self.current_law_search_engine.search_by_law_article(
+                        article_info['law_name'],
+                        article_info['article_number']
+                    )
+
+                    if search_result and search_result.article_content:
+                        return {
+                            'response': search_result.article_content,
+                            'confidence': 0.95,
+                            'sources': [{
+                                'content': search_result.article_content,
+                                'law_name': search_result.law_name_korean,
+                                'article_number': article_info['article_number'],
+                                'similarity': 1.0,
+                                'source': 'current_law'
+                            }],
+                            'processing_time': time.time() - start_time,
+                            'generation_method': 'law_article',
+                            'session_id': session_id,
+                            'user_id': user_id
+                        }
+
+            # 폴백: integrated_law_search 사용
+            if self.integrated_law_search:
+                # 법률 조문 검색 실행
+                search_result = await self.integrated_law_search.search_law_article(message)
 
             # 사용자 컨텍스트 분석
             user_context = await self._analyze_user_context(user_id, session_id)
