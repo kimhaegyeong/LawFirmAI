@@ -4,15 +4,15 @@
 판례 데이터베이스와 벡터 인덱스를 활용한 전문 검색 시스템
 """
 
-import logging
 import json
+import logging
 import sqlite3
-from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from data.database import DatabaseManager
-from data.vector_store import LegalVectorStore
+from ...data.database import DatabaseManager
+from ...data.vector_store import LegalVectorStore
 
 logger = logging.getLogger(__name__)
 

@@ -6,17 +6,48 @@
 병렬 처리, 캐싱, 결과 제한을 통한 성능 최적화
 """
 
-import logging
-import time
 import hashlib
+import logging
 import threading
-from typing import List, Dict, Any, Optional, Tuple
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-# from .exact_search_engine import ExactSearchEngine
+from typing import Any, Dict, List, Optional, Tuple
+
+from ..exact_search_engine import ExactSearchEngine
 from .semantic_search_engine import SemanticSearchEngine
-# from .result_merger import ResultMerger, ResultRanker
-# from .question_classifier import QuestionClassifier, QuestionType, QuestionClassification
+
+# 임시 처리: QuestionClassifier, ResultMerger, ResultRanker가 없으면 기본값 사용
+try:
+    from .result_merger import ResultMerger, ResultRanker
+except ImportError:
+    # 임시 더미 클래스
+    class ResultMerger:
+        def merge_results(self, *args):
+            return []
+
+    class ResultRanker:
+        def rank_results(self, *args):
+            return []
+
+try:
+    from .question_classifier import (
+        QuestionClassification,
+        QuestionClassifier,
+        QuestionType,
+    )
+except ImportError:
+    # 임시 더미 클래스
+    class QuestionClassifier:
+        def classify(self, query):
+            return "general"
+
+    class QuestionType:
+        GENERAL = "general"
+
+    class QuestionClassification:
+        pass
+
 from .precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResult
 
 logger = logging.getLogger(__name__)
