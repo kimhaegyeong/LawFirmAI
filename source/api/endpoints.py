@@ -4,31 +4,49 @@ API Endpoints (ML Enhanced)
 RESTful API 엔드포인트 정의 - ML 강화 버전
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
 import time
 from datetime import datetime
-from utils.validation.input_validator import get_input_validator, ValidationResult
-from utils.security.security_logger import get_security_logger, SecurityEventType, SecurityLevel
-from utils.security.privacy_compliance import get_privacy_compliance_manager, ProcessingPurpose
-from utils.logger import get_logger
-from utils.config import Config
-from services.chat.chat_service import ChatService
-from services.search.rag_service import MLEnhancedRAGService
-from services.search.search_service import MLEnhancedSearchService
+from typing import Any, Dict, List, Optional
+
+from data.vector_store import LegalVectorStore
+from fastapi import APIRouter, Depends, HTTPException, Query
+from models.model_manager import LegalModelManager
+from pydantic import BaseModel, Field
+from services.chat.enhanced_chat_service import EnhancedChatService
+from services.context_builder import ContextBuilder
+from services.feedback_system import (
+    FeedbackRating,
+    FeedbackType,
+    get_feedback_analyzer,
+    get_feedback_collector,
+)
+from services.improved_answer_generator import ImprovedAnswerGenerator
+from services.legal_basis_integration_service import LegalBasisIntegrationService
+from services.performance_monitoring import (
+    get_performance_monitor,
+    start_monitoring,
+    stop_monitoring,
+)
+from services.prompt_templates import PromptTemplateManager
 from services.question_classifier import QuestionClassifier, QuestionType
 from services.search.hybrid_search_engine import HybridSearchEngine
-from services.prompt_templates import PromptTemplateManager
+from services.search.rag_service import MLEnhancedRAGService
+from services.search.search_service import MLEnhancedSearchService
 from services.validation.confidence_calculator import ConfidenceCalculator
-from services.improved_answer_generator import ImprovedAnswerGenerator
-from services.context_builder import ContextBuilder
-from services.performance_monitoring import get_performance_monitor, start_monitoring, stop_monitoring
-from services.feedback_system import get_feedback_collector, get_feedback_analyzer, FeedbackType, FeedbackRating
-from services.legal_basis_integration_service import LegalBasisIntegrationService
+from utils.config import Config
+from utils.logger import get_logger
+from utils.security.privacy_compliance import (
+    ProcessingPurpose,
+    get_privacy_compliance_manager,
+)
+from utils.security.security_logger import (
+    SecurityEventType,
+    SecurityLevel,
+    get_security_logger,
+)
+from utils.validation.input_validator import ValidationResult, get_input_validator
+
 from data.database import DatabaseManager
-from data.vector_store import LegalVectorStore
-from models.model_manager import LegalModelManager
 
 logger = get_logger(__name__)
 
@@ -241,7 +259,7 @@ def setup_routes(app, config: Config):
     """ML 강화 라우트 설정"""
 
     # Initialize services
-    chat_service = ChatService(config)
+    chat_service = EnhancedChatService(config)
 
     # Initialize ML-enhanced services
     database = DatabaseManager(config.database_url)
@@ -356,33 +374,6 @@ def setup_routes(app, config: Config):
             raise
         except Exception as e:
             logger.error(f"Chat endpoint error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @api_router.post("/chat/ml-enhanced", response_model=MLEnhancedChatResponse)
-    async def ml_enhanced_chat_endpoint(request: MLEnhancedChatRequest):
-        """ML 강화 채팅 엔드포인트"""
-        try:
-            logger.info(f"ML-enhanced chat request received: {request.message[:100]}...")
-
-            # ML 강화 RAG 서비스 사용
-            result = ml_rag_service.process_query(
-                query=request.message,
-                top_k=5,
-                filters={"quality_threshold": request.quality_threshold} if request.use_ml_enhanced else None
-            )
-
-            return MLEnhancedChatResponse(
-                response=result.get("response", ""),
-                confidence=result.get("confidence", 0.0),
-                sources=result.get("sources", []),
-                processing_time=result.get("processing_time", 0.0),
-                ml_enhanced=result.get("ml_enhanced", True),
-                ml_stats=result.get("ml_stats", {}),
-                retrieved_docs_count=result.get("retrieved_docs_count", 0)
-            )
-
-        except Exception as e:
-            logger.error(f"ML-enhanced chat endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @api_router.post("/search", response_model=SearchResponse)
