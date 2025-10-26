@@ -247,6 +247,213 @@ taskkill /PID 12345 /F
 python gradio/stop_server.py
 ```
 
+## 🏗️ 새로운 디렉토리 구조 규칙 (2025-10-26)
+
+### 기능별 분리 구조
+
+```
+source/
+├── services/                    # 비즈니스 로직
+│   ├── chat/                   # 채팅 관련 서비스
+│   ├── search/                 # 검색 관련 서비스
+│   ├── analysis/               # 분석 관련 서비스
+│   ├── memory/                 # 메모리 관리 서비스
+│   ├── optimization/           # 최적화 서비스
+│   └── langgraph_workflow/     # LangGraph 워크플로우
+├── data/                       # 데이터 처리
+├── models/                     # AI 모델
+├── api/                        # API 관련
+└── utils/                      # 유틸리티
+    ├── validation/             # 입력 검증
+    ├── security/               # 보안 관련
+    └── monitoring/             # 모니터링
+```
+
+### Import 경로 규칙
+
+#### 1. 절대 경로 사용 (권장)
+```python
+# ✅ 올바른 예시
+from utils.config import Config
+from utils.logger import get_logger
+from services.search.search_service import MLEnhancedSearchService
+from services.chat.chat_service import ChatService
+from data.database import DatabaseManager
+from models.model_manager import LegalModelManager
+```
+
+#### 2. 상대 경로 사용 금지
+```python
+# ❌ 잘못된 예시 (사용 금지)
+from ..utils.config import Config
+from ...services.search.search_service import MLEnhancedSearchService
+from .database import DatabaseManager
+```
+
+#### 3. Import 경로 수정 가이드라인
+
+**기존 상대 경로 → 새로운 절대 경로**:
+```python
+# Before (상대 경로)
+from ..utils.config import Config
+from ..utils.logger import get_logger
+from .rag_service import MLEnhancedRAGService
+
+# After (절대 경로)
+from utils.config import Config
+from utils.logger import get_logger
+from services.search.rag_service import MLEnhancedRAGService
+```
+
+### 서비스 의존성 주입 규칙
+
+#### 1. 기본 구조
+```python
+class ServiceName:
+    def __init__(self, 
+                 config: Config = None,
+                 database: DatabaseManager = None,
+                 vector_store: VectorStore = None,
+                 model_manager: LegalModelManager = None):
+        # 기본값으로 인스턴스 생성
+        if config is None:
+            config = Config()
+        if database is None:
+            database = DatabaseManager()
+        if vector_store is None:
+            vector_store = VectorStore()
+        if model_manager is None:
+            model_manager = LegalModelManager()
+        
+        self.config = config
+        self.database = database
+        self.vector_store = vector_store
+        self.model_manager = model_manager
+```
+
+#### 2. 테스트 가능한 구조
+```python
+# 테스트 시 의존성 주입 가능
+def test_service():
+    mock_config = Mock(spec=Config)
+    mock_database = Mock(spec=DatabaseManager)
+    
+    service = ServiceName(
+        config=mock_config,
+        database=mock_database
+    )
+    
+    assert service.config == mock_config
+    assert service.database == mock_database
+```
+
+### 파일 명명 규칙
+
+#### 1. 디렉토리 명명
+- **소문자 + 언더스코어**: `chat_service`, `search_engine`
+- **기능별 그룹화**: `services/chat/`, `services/search/`
+
+#### 2. 파일 명명
+- **소문자 + 언더스코어**: `chat_service.py`, `search_service.py`
+- **클래스명과 구분**: 파일명은 소문자, 클래스명은 PascalCase
+
+#### 3. 클래스 명명
+- **PascalCase**: `ChatService`, `MLEnhancedSearchService`
+- **명확한 역할 표현**: `LegalModelManager`, `ContextualMemoryManager`
+
+## 🧪 핵심 기능 테스트 규칙 (2025-01-18)
+
+### 테스트 시스템 구축
+
+#### 1. 단계적 테스트 접근법
+```python
+# test_core_functions.py 예시
+def test_core_services():
+    """핵심 서비스 테스트"""
+    tests = [
+        ("DatabaseManager", test_database_manager),
+        ("VectorStore", test_vector_store),
+        ("LegalModelManager", test_model_manager),
+        ("MLEnhancedSearchService", test_search_service),
+        ("MLEnhancedRAGService", test_rag_service),
+        ("LegalDataProcessor", test_data_processor),
+        ("Config", test_config)
+    ]
+    
+    results = []
+    for test_name, test_func in tests:
+        try:
+            result = test_func()
+            results.append((test_name, "PASS", result))
+        except Exception as e:
+            results.append((test_name, "FAIL", str(e)))
+    
+    return results
+```
+
+#### 2. 서비스별 테스트 함수
+```python
+def test_search_service():
+    """검색 서비스 테스트"""
+    try:
+        search_service = MLEnhancedSearchService()
+        
+        # 기본 메서드 존재 확인
+        assert hasattr(search_service, 'search'), "search 메서드가 없습니다"
+        assert hasattr(search_service, 'search_documents'), "search_documents 메서드가 없습니다"
+        
+        # 간단한 검색 테스트
+        result = search_service.search("테스트 쿼리", max_results=5)
+        
+        assert isinstance(result, dict), "결과가 딕셔너리가 아닙니다"
+        assert "query" in result, "query 키가 없습니다"
+        assert "results" in result, "results 키가 없습니다"
+        assert "success" in result, "success 키가 없습니다"
+        
+        return f"검색 서비스 테스트 성공: {len(result.get('results', []))}개 결과"
+        
+    except Exception as e:
+        raise Exception(f"검색 서비스 테스트 실패: {str(e)}")
+```
+
+#### 3. 테스트 실행 규칙
+```python
+# 테스트 실행 스크립트 예시
+if __name__ == "__main__":
+    print("=" * 60)
+    print("LawFirmAI 핵심 기능 테스트")
+    print("=" * 60)
+    
+    results = test_core_services()
+    
+    passed = sum(1 for _, status, _ in results if status == "PASS")
+    total = len(results)
+    success_rate = (passed / total) * 100
+    
+    print(f"\n테스트 결과: {passed}/{total} 통과 ({success_rate:.1f}%)")
+    
+    if success_rate == 100:
+        print("🎉 모든 핵심 기능이 정상 작동합니다!")
+    else:
+        print("⚠️ 일부 기능에 문제가 있습니다.")
+```
+
+### 테스트 성공 기준
+
+#### 1. 기본 기능 테스트
+- ✅ **DatabaseManager**: 데이터베이스 연결 및 쿼리 실행
+- ✅ **VectorStore**: 벡터 저장소 로딩 및 검색
+- ✅ **LegalModelManager**: 모델 로딩 및 응답 생성
+- ✅ **MLEnhancedSearchService**: 검색 기능 및 결과 반환
+- ✅ **MLEnhancedRAGService**: RAG 기능 및 응답 생성
+- ✅ **LegalDataProcessor**: 데이터 처리 및 전역 인스턴스
+- ✅ **Config**: 설정 로딩 및 환경 변수 처리
+
+#### 2. 성공률 목표
+- **최소 성공률**: 85% 이상
+- **권장 성공률**: 95% 이상
+- **완벽한 성공률**: 100%
+
 ## 🚀 Phase별 개발 가이드라인
 
 ### Phase 1-3: 지능형 대화 시스템 개발
@@ -438,11 +645,21 @@ LawFirmAI/
 │   ├── stop_server.py               # 서버 종료 스크립트
 │   ├── requirements.txt             # Gradio 의존성
 │   └── Dockerfile                   # Gradio Docker 설정
-├── source/                          # 핵심 모듈
-│   ├── services/                    # 비즈니스 로직 (80+ 서비스)
-│   ├── data/                        # 데이터 처리
-│   ├── models/                      # AI 모델
-│   └── utils/                       # 유틸리티
+├── source/                          # 핵심 모듈 (기능별 재구성)
+│   ├── services/                    # 비즈니스 로직 (140+ 서비스)
+│   │   ├── chat/                   # 채팅 관련 서비스
+│   │   ├── search/                 # 검색 관련 서비스
+│   │   ├── analysis/               # 분석 관련 서비스
+│   │   ├── memory/                 # 메모리 관리 서비스
+│   │   ├── optimization/           # 최적화 서비스
+│   │   └── langgraph_workflow/     # LangGraph 워크플로우
+│   ├── data/                       # 데이터 처리
+│   ├── models/                     # AI 모델
+│   ├── api/                        # API 관련
+│   └── utils/                      # 유틸리티
+│       ├── validation/             # 입력 검증
+│       ├── security/               # 보안 관련
+│       └── monitoring/             # 모니터링
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
 │   └── embeddings/                  # 벡터 임베딩

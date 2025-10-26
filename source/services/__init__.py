@@ -2,67 +2,51 @@
 """
 Services Module
 비즈니스 로직 서비스 모듈
+
+이 모듈은 법률 AI 어시스턴트의 핵심 서비스들을 기능별로 구성합니다.
+- 채팅 서비스
+- 검색 서비스
+- 분석 서비스
+- 검증 서비스
+- 워크플로우 서비스
+- 통합 서비스
 """
 
-# 선택적 import로 의존성 문제 해결
-try:
-    from .chat_service import ChatService
-except ImportError as e:
-    print(f"Warning: Could not import ChatService: {e}")
-    ChatService = None
-
-try:
-    from .rag_service import RAGService
-except ImportError as e:
-    print(f"Warning: Could not import RAGService: {e}")
-    RAGService = None
-
-try:
-    from .search_service import SearchService
-except ImportError as e:
-    print(f"Warning: Could not import SearchService: {e}")
-    SearchService = None
-
-try:
-    from .analysis_service import AnalysisService
-except ImportError as e:
-    print(f"Warning: Could not import AnalysisService: {e}")
-    AnalysisService = None
-
-# TASK 3.2 하이브리드 검색 시스템 모듈들
-try:
-    from .exact_search_engine import ExactSearchEngine
-except ImportError as e:
-    print(f"Warning: Could not import ExactSearchEngine: {e}")
-    ExactSearchEngine = None
-
-try:
-    from .semantic_search_engine import SemanticSearchEngine
-except ImportError as e:
-    print(f"Warning: Could not import SemanticSearchEngine: {e}")
-    SemanticSearchEngine = None
-
-try:
-    from .result_merger import ResultMerger, ResultRanker
-except ImportError as e:
-    print(f"Warning: Could not import ResultMerger/ResultRanker: {e}")
-    ResultMerger = None
-    ResultRanker = None
-
-try:
-    from .hybrid_search_engine import HybridSearchEngine
-except ImportError as e:
-    print(f"Warning: Could not import HybridSearchEngine: {e}")
-    HybridSearchEngine = None
+# 기능별 서비스 모듈 import
+from .chat import *
+from .search import *
+from .analysis import *
+from .validation import *
+from .workflow import *
+from .integration import *
 
 __all__ = [
+    # 채팅 서비스
     "ChatService",
-    "RAGService", 
+    "EnhancedChatService",
+    "ConversationManager",
+    "MultiTurnHandler",
+
+    # 검색 서비스
     "SearchService",
-    "AnalysisService",
-    "ExactSearchEngine",
+    "RAGService",
+    "HybridSearchEngine",
     "SemanticSearchEngine",
-    "ResultMerger",
-    "ResultRanker",
-    "HybridSearchEngine"
+    "PrecedentSearchEngine",
+
+    # 분석 서비스
+    "AnalysisService",
+    "DocumentProcessor",
+    "LegalTermExtractor",
+    "BERTClassifier",
+
+    # 검증 서비스
+    "ResponseValidationSystem",
+    "QualityValidator",
+    "LegalBasisValidator",
+    "ConfidenceCalculator",
+
+    # 통합 서비스
+    "AKLSProcessor",
+    "LangfuseClient"
 ]

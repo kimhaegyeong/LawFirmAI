@@ -13,10 +13,10 @@ import threading
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from .exact_search_engine import ExactSearchEngine
+# from .exact_search_engine import ExactSearchEngine
 from .semantic_search_engine import SemanticSearchEngine
-from .result_merger import ResultMerger, ResultRanker
-from .question_classifier import QuestionClassifier, QuestionType, QuestionClassification
+# from .result_merger import ResultMerger, ResultRanker
+# from .question_classifier import QuestionClassifier, QuestionType, QuestionClassification
 from .precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResult
 
 logger = logging.getLogger(__name__)
@@ -273,7 +273,7 @@ class HybridSearchEngine:
 
     def search_with_question_type(self,
                                  query: str,
-                                 question_type: Optional[QuestionClassification] = None,
+                                 question_type: Optional[str] = None,
                                  max_results: int = None) -> Dict[str, Any]:
         """
         질문 유형을 고려한 지능형 검색
@@ -434,7 +434,7 @@ class HybridSearchEngine:
     def _merge_and_rerank_results(self,
                                  law_results: List[Dict[str, Any]],
                                  precedent_results: List[Dict[str, Any]],
-                                 question_type: QuestionClassification) -> List[Dict[str, Any]]:
+                                 question_type: str) -> List[Dict[str, Any]]:
         """결과 통합 및 재랭킹"""
         try:
             # 모든 결과 통합
@@ -477,7 +477,7 @@ class HybridSearchEngine:
                                          law_results: List[Dict[str, Any]],
                                          precedent_results: List[Dict[str, Any]],
                                          final_results: List[Dict[str, Any]],
-                                         question_type: QuestionClassification) -> Dict[str, Any]:
+                                         question_type: str) -> Dict[str, Any]:
         """지능형 검색 통계 생성"""
         try:
             stats = {

@@ -12,55 +12,55 @@ import gc
 import weakref
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
-from ..utils.config import Config
-from ..utils.logger import get_logger
-from ..utils.memory_manager import get_memory_manager, MemoryManager
-from ..utils.weakref_cleanup import get_weakref_registry, WeakRefRegistry
-from ..utils.realtime_memory_monitor import get_memory_monitor, RealTimeMemoryMonitor
-from ..utils.advanced_response_processor import advanced_response_processor
-from ..utils.quality_validator import quality_validator
-from .user_preference_manager import preference_manager, UserPreferences
-from .answer_completion_validator import completion_validator, CompletionCheck
-from .enhanced_completion_system import enhanced_completion_system, CompletionResult
-from .rag_service import MLEnhancedRAGService
-from .hybrid_search_engine import HybridSearchEngine
-from .improved_answer_generator import ImprovedAnswerGenerator
-from .question_classifier import QuestionClassifier
-from .integrated_hybrid_classifier import IntegratedHybridQuestionClassifier
-from .unified_question_types import UnifiedQuestionType
-from .question_type_adapter import QuestionTypeAdapter
-from ..models.model_manager import LegalModelManager
-from ..data.vector_store import LegalVectorStore
-from ..data.database import DatabaseManager
+from utils.config import Config
+from utils.logger import get_logger
+from utils.memory_manager import get_memory_manager, MemoryManager
+from utils.weakref_cleanup import get_weakref_registry, WeakRefRegistry
+from utils.monitoring.realtime_memory_monitor import get_memory_monitor, RealTimeMemoryMonitor
+from utils.advanced_response_processor import advanced_response_processor
+# from utils.quality_validator import quality_validator
+# from .user_preference_manager import preference_manager, UserPreferences
+# from .answer_completion_validator import completion_validator, CompletionCheck
+# from .enhanced_completion_system import enhanced_completion_system, CompletionResult
+from services.search.rag_service import MLEnhancedRAGService
+# from .hybrid_search_engine import HybridSearchEngine
+# from .improved_answer_generator import ImprovedAnswerGenerator
+# from .question_classifier import QuestionClassifier
+# from .integrated_hybrid_classifier import IntegratedHybridQuestionClassifier
+# from .unified_question_types import UnifiedQuestionType
+# from .question_type_adapter import QuestionTypeAdapter
+from models.model_manager import LegalModelManager
+from data.vector_store import LegalVectorStore
+from data.database import DatabaseManager
 
 # 하이브리드 분류기로 완전 대체됨 - 키워드 시스템 제거 완료
 # 모든 키워드 추출 및 도메인 분류 기능은 IntegratedHybridQuestionClassifier에서 처리
 
 # Phase 1: 대화 맥락 강화 모듈
-from .integrated_session_manager import IntegratedSessionManager
-from .multi_turn_handler import MultiTurnQuestionHandler
-from .context_compressor import ContextCompressor
+# from .integrated_session_manager import IntegratedSessionManager
+# from .multi_turn_handler import MultiTurnQuestionHandler
+# from .context_compressor import ContextCompressor
 
 # Phase 2: 개인화 및 지능형 분석 모듈
-from .user_profile_manager import UserProfileManager
-from .emotion_intent_analyzer import EmotionIntentAnalyzer
-from .conversation_flow_tracker import ConversationFlowTracker
+# from .user_profile_manager import UserProfileManager
+# from .emotion_intent_analyzer import EmotionIntentAnalyzer
+# from .conversation_flow_tracker import ConversationFlowTracker
 
 # Phase 3: 장기 기억 및 품질 모니터링 모듈
-from .contextual_memory_manager import ContextualMemoryManager
-from .conversation_quality_monitor import ConversationQualityMonitor
+# from .contextual_memory_manager import ContextualMemoryManager
+# from .conversation_quality_monitor import ConversationQualityMonitor
 
 # 지능형 응답 스타일 시스템
-from .intelligent_response_style_system import IntelligentResponseStyleSystem, ResponseStyle
+# from .intelligent_response_style_system import IntelligentResponseStyleSystem, ResponseStyle
 
 # 대화형 계약서 작성 모듈
-from .interactive_contract_assistant import InteractiveContractAssistant
-from .contract_query_handler import ContractQueryHandler
+# from .interactive_contract_assistant import InteractiveContractAssistant
+# from .contract_query_handler import ContractQueryHandler
 
 # 자연스러운 답변 개선 모듈
-from .conversation_connector import ConversationConnector
-from .emotional_tone_adjuster import EmotionalToneAdjuster
-from .personalized_style_learner import PersonalizedStyleLearner
+# from .conversation_connector import ConversationConnector
+# from .emotional_tone_adjuster import EmotionalToneAdjuster
+# from .personalized_style_learner import PersonalizedStyleLearner
 from .realtime_feedback_system import RealtimeFeedbackSystem
 from .naturalness_evaluator import NaturalnessEvaluator
 

@@ -9,7 +9,7 @@ import json
 from typing import Dict, Any, Optional, List, Tuple
 from enum import Enum
 from dataclasses import dataclass
-from .security_logger import get_security_logger, SecurityEventType, SecurityLevel
+from ..security.security_logger import get_security_logger, SecurityEventType, SecurityLevel
 
 
 class ValidationResult(Enum):
@@ -32,10 +32,10 @@ class ValidationReport:
 
 class SimpleInputValidator:
     """간소화된 입력 검증 시스템"""
-    
+
     def __init__(self):
         self.security_logger = get_security_logger()
-        
+
         # 간소화된 악성 패턴 (정규식 오류 방지)
         self.malicious_patterns = {
             'xss': [
@@ -97,13 +97,13 @@ class SimpleInputValidator:
                 r'\.\.%255c',
             ],
         }
-        
+
         # 허용된 문자 패턴 (수정됨)
         self.allowed_pattern = re.compile(r'^[가-힣a-zA-Z0-9\s.,!?()\-_]+$')
-        
+
         # 최대 길이 제한
         self.max_length = 10000
-        
+
         # 의심스러운 키워드
         self.suspicious_keywords = [
             'admin', 'administrator', 'root', 'system', 'config', 'password',
@@ -127,27 +127,27 @@ class SimpleInputValidator:
             'decompress', 'archive', 'extract', 'zip', 'unzip', 'tar',
             'gzip', 'gunzip', 'bzip2', 'bunzip2', '7z', 'rar', 'unrar',
         ]
-    
-    def validate_input(self, 
+
+    def validate_input(self,
                       input_data: str,
                       user_id: Optional[str] = None,
                       ip_address: Optional[str] = None,
                       session_id: Optional[str] = None) -> ValidationReport:
         """간소화된 입력 검증"""
-        
+
         violations = []
         risk_score = 0.0
-        
+
         # 1. 기본 길이 검증
         if len(input_data) > self.max_length:
             violations.append(f"입력 길이 초과: {len(input_data)} > {self.max_length}")
             risk_score += 0.3
-        
+
         # 2. 빈 입력 검증
         if not input_data.strip():
             violations.append("빈 입력")
             risk_score += 0.1
-        
+
         # 3. 악성 패턴 검증 (안전한 방식)
         for pattern_type, patterns in self.malicious_patterns.items():
             for pattern in patterns:
@@ -158,14 +158,14 @@ class SimpleInputValidator:
                 except re.error:
                     # 정규식 오류 시 무시
                     continue
-        
+
         # 4. 의심스러운 키워드 검증
         input_lower = input_data.lower()
         for keyword in self.suspicious_keywords:
             if keyword in input_lower:
                 violations.append(f"의심스러운 키워드: {keyword}")
                 risk_score += 0.1
-        
+
         # 5. 허용된 문자 패턴 검증 (안전한 방식)
         try:
             if not self.allowed_pattern.match(input_data):
@@ -174,50 +174,50 @@ class SimpleInputValidator:
         except re.error:
             # 정규식 오류 시 무시
             pass
-        
+
         # 6. 연속된 특수문자 검증
         if re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]{3,}', input_data):
             violations.append("연속된 특수문자")
             risk_score += 0.2
-        
+
         # 7. HTML 태그 검증
         if re.search(r'<[^>]+>', input_data):
             violations.append("HTML 태그 포함")
             risk_score += 0.3
-        
+
         # 8. URL 패턴 검증
         if re.search(r'https?://[^\s]+', input_data):
             violations.append("URL 포함")
             risk_score += 0.2
-        
+
         # 9. 이메일 패턴 검증
         if re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', input_data):
             violations.append("이메일 주소 포함")
             risk_score += 0.1
-        
+
         # 10. 전화번호 패턴 검증
         if re.search(r'\d{2,3}-\d{3,4}-\d{4}', input_data):
             violations.append("전화번호 포함")
             risk_score += 0.1
-        
+
         # 11. 주민번호 패턴 검증
         if re.search(r'\d{6}-\d{7}', input_data):
             violations.append("주민번호 포함")
             risk_score += 0.3
-        
+
         # 12. 신용카드 번호 패턴 검증
         if re.search(r'\d{4}-\d{4}-\d{4}-\d{4}', input_data):
             violations.append("신용카드 번호 포함")
             risk_score += 0.3
-        
+
         # 13. IP 주소 패턴 검증
         if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', input_data):
             violations.append("IP 주소 포함")
             risk_score += 0.2
-        
+
         # 위험 점수 정규화
         risk_score = min(risk_score, 1.0)
-        
+
         # 검증 결과 결정
         if risk_score >= 0.8:
             result = ValidationResult.BLOCKED
@@ -231,10 +231,10 @@ class SimpleInputValidator:
         else:
             result = ValidationResult.VALID
             message = "입력이 유효합니다."
-        
+
         # 입력 정화
         sanitized_input = self.sanitize_input(input_data)
-        
+
         # 보안 로그 기록
         self.security_logger.log_input_validation(
             input_data,
@@ -248,7 +248,7 @@ class SimpleInputValidator:
                 'sanitized_length': len(sanitized_input)
             }
         )
-        
+
         return ValidationReport(
             result=result,
             message=message,
@@ -256,21 +256,21 @@ class SimpleInputValidator:
             sanitized_input=sanitized_input,
             risk_score=risk_score
         )
-    
+
     def sanitize_input(self, input_data: str) -> str:
         """입력 데이터 정화"""
         # HTML 이스케이프
         sanitized = html.escape(input_data)
-        
+
         # 특수문자 제거 (일부 허용)
         sanitized = re.sub(r'[<>"\']', '', sanitized)
-        
+
         # 연속된 공백 정리
         sanitized = re.sub(r'\s+', ' ', sanitized)
-        
+
         # 앞뒤 공백 제거
         sanitized = sanitized.strip()
-        
+
         return sanitized
 
 

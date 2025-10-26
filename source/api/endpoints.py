@@ -9,26 +9,26 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 import time
 from datetime import datetime
-from source.utils.input_validator import get_input_validator, ValidationResult
-from source.utils.security_logger import get_security_logger, SecurityEventType, SecurityLevel
-from source.utils.privacy_compliance import get_privacy_compliance_manager, ProcessingPurpose
-from source.utils.logger import get_logger
-from source.utils.config import Config
-from source.services.chat_service import ChatService
-from source.services.rag_service import MLEnhancedRAGService
-from source.services.search_service import MLEnhancedSearchService
-from source.services.question_classifier import QuestionClassifier, QuestionType
-from source.services.hybrid_search_engine import HybridSearchEngine
-from source.services.prompt_templates import PromptTemplateManager
-from source.services.confidence_calculator import ConfidenceCalculator
-from source.services.improved_answer_generator import ImprovedAnswerGenerator
-from source.services.context_builder import ContextBuilder
-from source.services.performance_monitoring import get_performance_monitor, start_monitoring, stop_monitoring
-from source.services.feedback_system import get_feedback_collector, get_feedback_analyzer, FeedbackType, FeedbackRating
-from source.services.legal_basis_integration_service import LegalBasisIntegrationService
-from source.data.database import DatabaseManager
-from source.data.vector_store import LegalVectorStore
-from source.models.model_manager import LegalModelManager
+from utils.validation.input_validator import get_input_validator, ValidationResult
+from utils.security.security_logger import get_security_logger, SecurityEventType, SecurityLevel
+from utils.security.privacy_compliance import get_privacy_compliance_manager, ProcessingPurpose
+from utils.logger import get_logger
+from utils.config import Config
+from services.chat.chat_service import ChatService
+from services.search.rag_service import MLEnhancedRAGService
+from services.search.search_service import MLEnhancedSearchService
+from services.question_classifier import QuestionClassifier, QuestionType
+from services.search.hybrid_search_engine import HybridSearchEngine
+from services.prompt_templates import PromptTemplateManager
+from services.validation.confidence_calculator import ConfidenceCalculator
+from services.improved_answer_generator import ImprovedAnswerGenerator
+from services.context_builder import ContextBuilder
+from services.performance_monitoring import get_performance_monitor, start_monitoring, stop_monitoring
+from services.feedback_system import get_feedback_collector, get_feedback_analyzer, FeedbackType, FeedbackRating
+from services.legal_basis_integration_service import LegalBasisIntegrationService
+from data.database import DatabaseManager
+from data.vector_store import LegalVectorStore
+from models.model_manager import LegalModelManager
 
 logger = get_logger(__name__)
 

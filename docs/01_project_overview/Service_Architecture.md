@@ -6,14 +6,14 @@ LawFirmAI의 서비스 아키텍처는 140+ 개의 모듈화된 서비스로 구
 
 ## 아키텍처 개요
 
-### 전체 아키텍처
+### 전체 아키텍처 (2025-01-18 업데이트)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Streamlit UI (웹 인터페이스)                  │
 ├─────────────────────────────────────────────────────────────┤
 │                Enhanced Chat Service (통합)                   │
-│                    (2,574라인)                              │
+│                    (2,497라인)                              │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 1: 대화 맥락 강화    │  Phase 2: 개인화 분석    │  Phase 3: 장기 기억    │
 │  ├── IntegratedSessionManager │  ├── UserProfileManager    │  ├── ContextualMemoryManager │
@@ -24,12 +24,22 @@ LawFirmAI의 서비스 아키텍처는 140+ 개의 모듈화된 서비스로 구
 │  ├── UnifiedSearchEngine      │  ├── IntegratedLawSearchService │  ├── EnhancedLawSearchEngine │
 │  ├── PerformanceMonitor       │  ├── CurrentLawSearchEngine │  └── VectorSearchOptimizer    │
 ├─────────────────────────────────────────────────────────────┤
-│                    핵심 서비스 레이어                        │
-│  ├── RAGService              │  ├── SearchService         │  ├── ModelManager            │
-│  ├── HybridSearchEngine      │  ├── QuestionClassifier    │  └── AnswerGenerator         │
+│                    핵심 서비스 레이어 (기능별 분리)            │
+│  ├── services/chat/           │  ├── services/search/      │  ├── services/analysis/        │
+│  │   ├── ChatService          │  │   ├── SearchService     │  │   ├── QuestionClassifier     │
+│  │   ├── EnhancedChatService  │  │   ├── RAGService        │  │   ├── EmotionIntentAnalyzer │
+│  │   └── OptimizedChatService │  │   ├── HybridSearchEngine│  │   └── QualityMonitor         │
+│  ├── services/memory/         │  ├── services/optimization/│  └── services/langgraph_workflow/│
+│  │   ├── ContextualMemory     │  │   ├── PerformanceMonitor│  │   ├── LegalWorkflow         │
+│  │   ├── SessionManager       │  │   ├── CacheSystem       │  │   ├── KeywordMapper         │
+│  │   └── ConversationStore    │  │   └── MemoryOptimizer   │  │   └── SynonymExpander       │
 ├─────────────────────────────────────────────────────────────┤
 │                    데이터 레이어                            │
-│  ├── DatabaseManager         │  ├── VectorStore           │  └── ConversationStore      │
+│  ├── data/DatabaseManager     │  ├── data/VectorStore      │  └── data/DataProcessor       │
+│  ├── models/LegalModelManager  │  ├── models/KoBARTModel    │  └── models/SentenceBERT      │
+│  ├── api/Endpoints            │  ├── api/Middleware        │  └── api/Schemas              │
+│  └── utils/                   │  │   ├── Config            │  │   ├── Logger                │
+│      ├── validation/          │  │   ├── security/          │  │   └── monitoring/           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,11 +56,11 @@ LawFirmAI의 서비스 아키텍처는 140+ 개의 모듈화된 서비스로 구
 | **API 서비스** | 6개 | REST API, 엔드포인트 |
 | **기타 서비스** | 85개 | 유틸리티, 모니터링, LangGraph |
 
-## 핵심 서비스
+## 핵심 서비스 (2025-01-18 업데이트)
 
 ### 1. Enhanced Chat Service (통합 서비스)
 
-**파일**: `source/services/enhanced_chat_service.py` (2,574라인)
+**파일**: `source/services/chat/enhanced_chat_service.py` (2,497라인)
 
 **역할**: 모든 Phase를 통합하여 완전한 지능형 채팅 제공
 
@@ -73,36 +83,41 @@ class EnhancedChatService:
         """성능 모니터링 시스템 초기화"""
 ```
 
-### 2. 통합 검색 엔진 시스템
+### 2. 통합 검색 엔진 시스템 (services/search/)
 
 #### 2.1 Unified Search Engine
-
-**파일**: `source/services/unified_search_engine.py` (460라인)
-
+**파일**: `source/services/search/unified_search_engine.py` (460라인)
 **역할**: 모든 검색 기능을 통합한 단일 검색 엔진
 
 #### 2.2 Integrated Law Search Service
-
-**파일**: `source/services/integrated_law_search_service.py` (578라인)
-
+**파일**: `source/services/search/integrated_law_search_service.py` (578라인)
 **역할**: 통합 조문 검색 서비스
 
 #### 2.3 Enhanced Law Search Engine
-
-**파일**: `source/services/enhanced_law_search_engine.py` (1,299라인)
-
+**파일**: `source/services/search/enhanced_law_search_engine.py` (1,299라인)
 **역할**: 향상된 법령 검색 엔진
 
-### 3. ChatService (기본 서비스)
+#### 2.4 MLEnhancedSearchService
+**파일**: `source/services/search/search_service.py`
+**역할**: ML 강화된 검색 서비스 (의존성 주입 개선)
 
-**파일**: `source/services/chat_service.py`
+**개선된 구조**:
+```python
+class MLEnhancedSearchService:
+    def __init__(self, config: Config = None, database: DatabaseManager = None,
+                 vector_store: VectorStore = None, model_manager: LegalModelManager = None):
+        # 기본값으로 인스턴스 생성
+        if config is None:
+            config = Config()
+        # ... 기타 의존성 초기화
+        
+    def search(self, query: str, max_results: int = 10, search_type: str = "hybrid") -> Dict[str, Any]:
+        """통합 검색 메서드 (간편한 인터페이스)"""
+```
 
-**역할**: 기본 채팅 서비스 (Enhanced Chat Service의 기본 버전)
+### 3. RAGService (검색 증강 생성)
 
-### 4. RAGService (검색 증강 생성)
-
-**파일**: `source/services/rag_service.py`
-
+**파일**: `source/services/search/rag_service.py`
 **역할**: ML 강화된 RAG 시스템 구현
 
 **주요 컴포넌트**:
@@ -111,10 +126,29 @@ class EnhancedChatService:
 - 답변 생성
 - 신뢰도 계산
 
-### 5. HybridSearchEngine (하이브리드 검색)
+**개선된 메서드**:
+```python
+class MLEnhancedRAGService:
+    def generate_response(self, query: str, max_length: int = 512) -> str:
+        """RAG 기반 응답 생성"""
+        # 관련 문서 검색
+        relevant_docs = self.retrieve_relevant_documents(query, top_k=5)
+        
+        # 컨텍스트 구성
+        context = self.generate_context(query, relevant_docs)
+        
+        # 모델을 사용한 응답 생성
+        response = self.model_manager.generate_response(
+            prompt=f"질문: {query}\n\n관련 법률 정보:\n{context}\n\n답변:",
+            max_length=max_length
+        )
+        
+        return response
+```
 
-**파일**: `source/services/hybrid_search_engine.py`
+### 4. HybridSearchEngine (하이브리드 검색)
 
+**파일**: `source/services/search/hybrid_search_engine.py`
 **역할**: 의미적 검색 + 정확 매칭 통합
 
 **검색 방식**:
@@ -122,10 +156,9 @@ class EnhancedChatService:
 - 정확 매칭 (데이터베이스)
 - 하이브리드 병합
 
-### 6. QuestionClassifier (질문 분류)
+### 5. QuestionClassifier (질문 분류)
 
-**파일**: `source/services/question_classifier.py`
-
+**파일**: `source/services/analysis/question_classifier.py`
 **역할**: 질문 유형 분류 및 처리 전략 결정
 
 **분류 유형**:

@@ -10,58 +10,56 @@ import asyncio
 import hashlib
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from ..utils.config import Config
-from ..utils.logger import get_logger
-from .rag_service import MLEnhancedRAGService
-from .hybrid_search_engine import HybridSearchEngine
-from .improved_answer_generator import ImprovedAnswerGenerator
-from .question_classifier import QuestionClassifier
-from ..models.model_manager import LegalModelManager
-from ..data.vector_store import LegalVectorStore
-from ..data.database import DatabaseManager
+from utils.config import Config
+from utils.logger import get_logger
+from services.search.rag_service import MLEnhancedRAGService
+from services.search.hybrid_search_engine import HybridSearchEngine
+# from services.search.improved_answer_generator import ImprovedAnswerGenerator
+# from services.search.question_classifier import QuestionClassifier
+from models.model_manager import LegalModelManager
+from data.vector_store import LegalVectorStore
+from data.database import DatabaseManager
 
 # Phase 1: 대화 맥락 강화 모듈
-from .integrated_session_manager import IntegratedSessionManager
 from .multi_turn_handler import MultiTurnQuestionHandler
-from .context_compressor import ContextCompressor
 
 # Phase 2: 개인화 및 지능형 분석 모듈
-from .user_profile_manager import UserProfileManager
-from .emotion_intent_analyzer import EmotionIntentAnalyzer
-from .conversation_flow_tracker import ConversationFlowTracker
+# from ..user_profile_manager import UserProfileManager
+# from ..emotion_intent_analyzer import EmotionIntentAnalyzer
+# from .conversation_flow_tracker import ConversationFlowTracker
 
 # Phase 3: 장기 기억 및 품질 모니터링 모듈
-from .contextual_memory_manager import ContextualMemoryManager
-from .conversation_quality_monitor import ConversationQualityMonitor
+# from .contextual_memory_manager import ContextualMemoryManager
+# from .conversation_quality_monitor import ConversationQualityMonitor
 
 # 자연스러운 답변 개선 모듈
-from .conversation_connector import ConversationConnector
-from .emotional_tone_adjuster import EmotionalToneAdjuster
-from .personalized_style_learner import PersonalizedStyleLearner
-from .realtime_feedback_system import RealtimeFeedbackSystem
-from .naturalness_evaluator import NaturalnessEvaluator
+# from .conversation_connector import ConversationConnector
+# from .emotional_tone_adjuster import EmotionalToneAdjuster
+# from .personalized_style_learner import PersonalizedStyleLearner
+# from .realtime_feedback_system import RealtimeFeedbackSystem
+# from .naturalness_evaluator import NaturalnessEvaluator
 
 # 성능 최적화 모듈
-from .cache_manager import get_cache_manager, cached
-from .optimized_search_engine import OptimizedSearchEngine
+# from .cache_manager import get_cache_manager, cached
+# from .optimized_search_engine import OptimizedSearchEngine
 
 # 법률 제한 시스템 모듈 (ML 통합 최신 버전)
-from .ml_integrated_validation_system import MLIntegratedValidationSystem
-from .improved_legal_restriction_system import ImprovedLegalRestrictionSystem, ImprovedRestrictionResult
-from .intent_based_processor import IntentBasedProcessor, ProcessingResult
-from .content_filter_engine import ContentFilterEngine, FilterResult
-from .response_validation_system import ResponseValidationSystem, ValidationResult, ValidationStatus, ValidationLevel
-from .safe_response_generator import SafeResponseGenerator, SafeResponse
-from .legal_compliance_monitor import LegalComplianceMonitor, ComplianceStatus
-from .user_education_system import UserEducationSystem, WarningMessage
-from .multi_stage_validation_system import MultiStageValidationSystem, MultiStageValidationResult
+# from .ml_integrated_validation_system import MLIntegratedValidationSystem
+# from .improved_legal_restriction_system import ImprovedLegalRestrictionSystem, ImprovedRestrictionResult
+# from .intent_based_processor import IntentBasedProcessor, ProcessingResult
+# from .content_filter_engine import ContentFilterEngine, FilterResult
+# from .response_validation_system import ResponseValidationSystem, ValidationResult, ValidationStatus, ValidationLevel
+# from .safe_response_generator import SafeResponseGenerator, SafeResponse
+# from .legal_compliance_monitor import LegalComplianceMonitor, ComplianceStatus
+# from .user_education_system import UserEducationSystem, WarningMessage
+# from .multi_stage_validation_system import MultiStageValidationSystem, MultiStageValidationResult
 
 logger = get_logger(__name__)
 
 
 class ChatService:
     """채팅 서비스 클래스"""
-    
+
     def __init__(self, config: Config):
         """채팅 서비스 초기화"""
         # Google Cloud 관련 경고 방지 (더 포괄적)
@@ -74,7 +72,7 @@ class ChatService:
         os.environ['GOOGLE_CLOUD_DISABLE_GRPC'] = 'true'
         os.environ['GRPC_VERBOSITY'] = 'ERROR'
         os.environ['GRPC_TRACE'] = ''
-        
+
         # gRPC 로깅 레벨 조정 (더 포괄적)
         import logging
         logging.getLogger('grpc').setLevel(logging.ERROR)
@@ -85,18 +83,18 @@ class ChatService:
         logging.getLogger('google.auth.transport.requests').setLevel(logging.ERROR)
         logging.getLogger('google.cloud').setLevel(logging.ERROR)
         logging.getLogger('google.api_core').setLevel(logging.ERROR)
-        
+
         self.config = config
         self.logger = get_logger(__name__)
-        
+
         # LangGraph 사용 여부 확인 (비활성화)
         self.use_langgraph = False  # os.getenv("USE_LANGGRAPH", "false").lower() == "true"
-        
+
         if self.use_langgraph:
             try:
                 from .langgraph_workflow.workflow_service import LangGraphWorkflowService
                 from ..utils.langgraph_config import LangGraphConfig
-                
+
                 langgraph_config = LangGraphConfig.from_env()
                 self.langgraph_service = LangGraphWorkflowService(langgraph_config)
                 self.logger.info("LangGraph workflow service initialized")
@@ -106,16 +104,16 @@ class ChatService:
                 self.langgraph_service = None
         else:
             self.langgraph_service = None
-        
+
         # 실제 RAG 컴포넌트 초기화
         try:
             self.logger.info("Starting RAG components initialization...")
-            
+
             # 필요한 컴포넌트들 초기화
             self.logger.info("Initializing LegalModelManager...")
             model_manager = LegalModelManager()
             self.logger.info("LegalModelManager initialized successfully")
-            
+
             self.logger.info("Initializing LegalVectorStore...")
             vector_store = LegalVectorStore(
                 model_name="jhgan/ko-sroberta-multitask",
@@ -125,14 +123,14 @@ class ChatService:
                 enable_lazy_loading=True,
                 memory_threshold_mb=3000
             )
-            
+
             # 기존 인덱스 로드 시도 (실제 파일 경로로 수정)
             index_paths = [
                 "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index",
                 "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index",
                 "data/embeddings/legal_vector_index"
             ]
-            
+
             index_loaded = False
             for index_path in index_paths:
                 try:
@@ -145,16 +143,16 @@ class ChatService:
                 except Exception as e:
                     self.logger.warning(f"Error loading index from {index_path}: {e}")
                     continue
-            
+
             if not index_loaded:
                 self.logger.warning("No vector index loaded, will use keyword search fallback")
-            
+
             self.logger.info("LegalVectorStore initialized successfully")
-            
+
             self.logger.info("Initializing DatabaseManager...")
             database_manager = DatabaseManager()
             self.logger.info("DatabaseManager initialized successfully")
-            
+
             self.logger.info("Initializing MLEnhancedRAGService...")
             self.rag_service = MLEnhancedRAGService(
                 config=config,
@@ -163,31 +161,31 @@ class ChatService:
                 database=database_manager
             )
             self.logger.info("MLEnhancedRAGService initialized successfully")
-            
+
             self.logger.info("Initializing HybridSearchEngine...")
             self.hybrid_search_engine = HybridSearchEngine()
             self.logger.info("HybridSearchEngine initialized successfully")
-            
+
             self.logger.info("Initializing QuestionClassifier...")
             self.question_classifier = QuestionClassifier()
             self.logger.info("QuestionClassifier initialized successfully")
-            
+
             self.logger.info("Initializing ImprovedAnswerGenerator...")
             self.improved_answer_generator = ImprovedAnswerGenerator()
             self.logger.info("ImprovedAnswerGenerator initialized successfully")
-            
+
             # 최적화된 검색 엔진 초기화
             self.logger.info("Initializing OptimizedSearchEngine...")
             from .exact_search_engine import ExactSearchEngine
             from .semantic_search_engine import SemanticSearchEngine
-            
+
             exact_search_engine = ExactSearchEngine()
             semantic_search_engine = SemanticSearchEngine(
                 model_name="jhgan/ko-sroberta-multitask",
                 index_path="data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss",
                 metadata_path="data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.json"
             )
-            
+
             self.optimized_search_engine = OptimizedSearchEngine(
                 vector_store=vector_store,
                 exact_search_engine=exact_search_engine,
@@ -197,11 +195,11 @@ class ChatService:
                 enable_caching=True
             )
             self.logger.info("OptimizedSearchEngine initialized successfully")
-            
+
             # 캐시 매니저 초기화
             self.cache_manager = get_cache_manager()
             self.logger.info("CacheManager initialized successfully")
-            
+
             self.logger.info("All RAG components initialized successfully")
         except Exception as e:
             self.logger.error(f"Failed to initialize RAG components: {e}")
@@ -213,7 +211,7 @@ class ChatService:
             self.improved_answer_generator = None
             self.optimized_search_engine = None
             self.cache_manager = None
-        
+
         # Phase 1: 대화 맥락 강화 컴포넌트 초기화
         try:
             self.session_manager = IntegratedSessionManager("data/conversations.db")
@@ -225,7 +223,7 @@ class ChatService:
             self.session_manager = None
             self.multi_turn_handler = None
             self.context_compressor = None
-        
+
         # Phase 2: 개인화 및 지능형 분석 컴포넌트 초기화
         try:
             if self.session_manager:
@@ -240,7 +238,7 @@ class ChatService:
             self.user_profile_manager = None
             self.emotion_intent_analyzer = None
             self.conversation_flow_tracker = None
-        
+
         # Phase 3: 장기 기억 및 품질 모니터링 컴포넌트 초기화
         try:
             if self.session_manager:
@@ -254,7 +252,7 @@ class ChatService:
             self.logger.error(f"Failed to initialize Phase 3 components: {e}")
             self.contextual_memory_manager = None
             self.quality_monitor = None
-        
+
         # 자연스러운 답변 개선 컴포넌트 초기화
         try:
             self.conversation_connector = ConversationConnector()
@@ -270,7 +268,7 @@ class ChatService:
             self.personalized_style_learner = None
             self.realtime_feedback_system = None
             self.naturalness_evaluator = None
-        
+
         # 성능 최적화 컴포넌트 초기화
         try:
             # PerformanceMonitor와 MemoryOptimizer는 아직 구현되지 않았으므로 None으로 설정
@@ -283,12 +281,12 @@ class ChatService:
             self.performance_monitor = None
             self.memory_optimizer = None
             self.cache_manager = None
-        
+
         # 법률 제한 시스템 초기화 (ML 통합 최신 버전)
         try:
             # ML 통합 검증 시스템 (최신 버전)
             self.ml_integrated_validation_system = MLIntegratedValidationSystem()
-            
+
             # 기존 시스템들 (백업 및 호환성)
             self.improved_legal_restriction_system = ImprovedLegalRestrictionSystem()
             self.intent_based_processor = IntentBasedProcessor()
@@ -298,7 +296,7 @@ class ChatService:
             self.legal_compliance_monitor = LegalComplianceMonitor()
             self.user_education_system = UserEducationSystem()
             self.multi_stage_validation_system = MultiStageValidationSystem()
-            
+
             self.logger.info("ML 통합 검증 시스템 초기화 완료")
         except Exception as e:
             self.logger.error(f"Failed to initialize ML integrated validation system: {e}")
@@ -311,7 +309,7 @@ class ChatService:
                 self.logger.error(f"백업 시스템 초기화도 실패: {e2}")
                 self.improved_legal_restriction_system = None
                 self.multi_stage_validation_system = None
-            
+
             self.ml_integrated_validation_system = None
             self.intent_based_processor = None
             self.content_filter_engine = None
@@ -319,37 +317,37 @@ class ChatService:
             self.safe_response_generator = None
             self.legal_compliance_monitor = None
             self.user_education_system = None
-        
+
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
-    
+
     def _validate_and_preprocess_input(self, message: str) -> Dict[str, Any]:
         """입력 검증 및 전처리"""
         if not message or not message.strip():
             return {"is_valid": False, "error_message": "메시지가 비어있습니다."}
-        
+
         if len(message.strip()) < 2:
             return {"is_valid": False, "error_message": "메시지가 너무 짧습니다."}
-        
+
         if len(message) > 5000:
             return {"is_valid": False, "error_message": "메시지가 너무 깁니다. (최대 5000자)"}
-        
+
         # 기본 전처리
         processed_message = message.strip()
-        
+
         return {
-            "is_valid": True, 
+            "is_valid": True,
             "processed_message": processed_message,
             "original_length": len(message),
             "processed_length": len(processed_message)
         }
-    
+
     def _generate_cache_key(self, message: str, user_id: str, context: Optional[str] = None) -> str:
         """개선된 캐시 키 생성"""
         # 메시지 해시 (더 안정적)
         message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()[:16]
         context_hash = hashlib.sha256(context.encode('utf-8')).hexdigest()[:8] if context else "noctx"
         return f"chat_{message_hash}_{user_id}_{context_hash}"
-    
+
     def _create_error_response(self, error_message: str, session_id: str, user_id: str, start_time: float) -> Dict[str, Any]:
         """에러 응답 생성"""
         return {
@@ -363,7 +361,7 @@ class ChatService:
             "query_analysis": None,
             "restriction_result": None
         }
-    
+
     def _create_restricted_response(self, restriction_result: Dict[str, Any], session_id: str, user_id: str, start_time: float) -> Dict[str, Any]:
         """제한된 응답 생성"""
         return {
@@ -378,7 +376,7 @@ class ChatService:
             "query_analysis": restriction_result.get("query_analysis"),
             "restriction_result": restriction_result
         }
-    
+
     async def _analyze_query(self, message: str, context: Optional[str], user_id: str, session_id: str) -> Dict[str, Any]:
         """질의 분석 및 분류 (개선된 버전)"""
         try:
@@ -394,7 +392,7 @@ class ChatService:
                 "session_id": session_id,
                 "timestamp": datetime.now()
             }
-            
+
             # 질문 분류기 사용
             if self.question_classifier:
                 try:
@@ -406,7 +404,7 @@ class ChatService:
                     })
                 except Exception as e:
                     self.logger.warning(f"Question classification failed: {e}")
-            
+
             # 의도 분석
             if self.emotion_intent_analyzer:
                 try:
@@ -418,9 +416,9 @@ class ChatService:
                     })
                 except Exception as e:
                     self.logger.warning(f"Intent analysis failed: {e}")
-            
+
             return analysis_result
-            
+
         except Exception as e:
             self.logger.error(f"Query analysis failed: {e}")
             return {
@@ -436,7 +434,7 @@ class ChatService:
                 "timestamp": datetime.now(),
                 "error": str(e)
             }
-    
+
     async def _validate_legal_restrictions(self, message: str, query_analysis: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
         """법률 제한 검증 (최적화된 버전)"""
         try:
@@ -449,7 +447,7 @@ class ChatService:
                         session_id=session_id,
                         collect_feedback=True
                     )
-                    
+
                     if ml_result.get("final_decision") == "restricted":
                         return {
                             "is_restricted": True,
@@ -461,7 +459,7 @@ class ChatService:
                         }
                 except Exception as e:
                     self.logger.warning(f"ML validation failed, using fallback: {e}")
-            
+
             # 백업 검증 시스템들
             if self.improved_legal_restriction_system:
                 try:
@@ -477,14 +475,14 @@ class ChatService:
                         }
                 except Exception as e:
                     self.logger.warning(f"Improved restriction system failed: {e}")
-            
+
             # 제한되지 않음
             return {
                 "is_restricted": False,
                 "confidence": 0.8,
                 "query_analysis": query_analysis
             }
-            
+
         except Exception as e:
             self.logger.error(f"Legal restriction validation failed: {e}")
             # 안전을 위해 제한
@@ -495,19 +493,19 @@ class ChatService:
                 "safe_response": "죄송합니다. 시스템 오류로 인해 응답을 생성할 수 없습니다.",
                 "query_analysis": query_analysis
             }
-    
-    async def _generate_enhanced_response(self, message: str, query_analysis: Dict[str, Any], 
+
+    async def _generate_enhanced_response(self, message: str, query_analysis: Dict[str, Any],
                                          restriction_result: Dict[str, Any], user_id: str, session_id: str) -> Dict[str, Any]:
         """향상된 답변 생성"""
         try:
             # 검색 실행 (최적화된 버전)
             search_results = await self._perform_enhanced_search(message, query_analysis)
-            
+
             # 답변 생성 (우선순위 기반)
             response_result = await self._generate_answer_with_priority(
                 message, query_analysis, search_results, user_id, session_id
             )
-            
+
             return {
                 "response": response_result.get("answer", ""),
                 "confidence": response_result.get("confidence", 0.5),
@@ -518,7 +516,7 @@ class ChatService:
                 "session_id": session_id,
                 "user_id": user_id
             }
-            
+
         except Exception as e:
             self.logger.error(f"Enhanced response generation failed: {e}")
             # 폴백 응답
@@ -533,12 +531,12 @@ class ChatService:
                 "user_id": user_id,
                 "error": str(e)
             }
-    
+
     async def _perform_enhanced_search(self, message: str, query_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         """향상된 검색 수행"""
         try:
             search_results = []
-            
+
             # 최적화된 검색 엔진 사용
             if self.optimized_search_engine:
                 try:
@@ -551,7 +549,7 @@ class ChatService:
                     search_results.extend(search_result.results)
                 except Exception as e:
                     self.logger.warning(f"Optimized search failed: {e}")
-            
+
             # 하이브리드 검색 엔진 백업
             if not search_results and self.hybrid_search_engine:
                 try:
@@ -562,7 +560,7 @@ class ChatService:
                     )
                 except Exception as e:
                     self.logger.warning(f"Hybrid search failed: {e}")
-            
+
             # RAG 서비스 백업
             if not search_results and self.rag_service:
                 try:
@@ -570,14 +568,14 @@ class ChatService:
                     search_results.extend(rag_results)
                 except Exception as e:
                     self.logger.warning(f"RAG search failed: {e}")
-            
+
             return search_results[:10]  # 최대 10개 결과
-            
+
         except Exception as e:
             self.logger.error(f"Enhanced search failed: {e}")
             return []
-    
-    async def _generate_answer_with_priority(self, message: str, query_analysis: Dict[str, Any], 
+
+    async def _generate_answer_with_priority(self, message: str, query_analysis: Dict[str, Any],
                                           search_results: List[Dict[str, Any]], user_id: str, session_id: str) -> Dict[str, Any]:
         """우선순위 기반 답변 생성"""
         try:
@@ -598,7 +596,7 @@ class ChatService:
                     }
                 except Exception as e:
                     self.logger.warning(f"Improved answer generator failed: {e}")
-            
+
             # 2순위: RAG 서비스
             if self.rag_service:
                 try:
@@ -614,10 +612,10 @@ class ChatService:
                     }
                 except Exception as e:
                     self.logger.warning(f"RAG service failed: {e}")
-            
+
             # 3순위: 기본 템플릿 기반 답변
             return self._generate_template_response(message, query_analysis, search_results)
-            
+
         except Exception as e:
             self.logger.error(f"Answer generation failed: {e}")
             return {
@@ -625,11 +623,11 @@ class ChatService:
                 "confidence": 0.1,
                 "method": "error_fallback"
             }
-    
+
     def _generate_template_response(self, message: str, query_analysis: Dict[str, Any], search_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """템플릿 기반 답변 생성"""
         query_type = query_analysis.get("query_type", "general")
-        
+
         if query_type == "legal_advice":
             return {
                 "answer": f"'{message}'에 대한 법률적 조언을 요청하셨습니다. 구체적인 법률 자문은 변호사와 상담하시는 것을 권장합니다.",
@@ -655,8 +653,8 @@ class ChatService:
                 "confidence": 0.4,
                 "method": "template_general"
             }
-    
-    async def _post_process_response(self, response_result: Dict[str, Any], query_analysis: Dict[str, Any], 
+
+    async def _post_process_response(self, response_result: Dict[str, Any], query_analysis: Dict[str, Any],
                                    user_id: str, session_id: str) -> Dict[str, Any]:
         """응답 후처리 및 품질 검증"""
         try:
@@ -671,19 +669,19 @@ class ChatService:
                 "generation_method": response_result.get("generation_method", "unknown"),
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             # 자연스러운 답변 개선
             if self.conversation_connector and response_result.get("response"):
                 try:
                     improved_response = self.conversation_connector.connect_response(
-                        response_result["response"], 
+                        response_result["response"],
                         query_analysis.get("original_query", "")
                     )
                     final_response["response"] = improved_response
                     final_response["naturalness_improved"] = True
                 except Exception as e:
                     self.logger.warning(f"Conversation connector failed: {e}")
-            
+
             # 감정 톤 조정
             if self.emotional_tone_adjuster and response_result.get("response"):
                 try:
@@ -695,7 +693,7 @@ class ChatService:
                     final_response["tone_adjusted"] = True
                 except Exception as e:
                     self.logger.warning(f"Emotional tone adjustment failed: {e}")
-            
+
             # 품질 평가
             if self.naturalness_evaluator and response_result.get("response"):
                 try:
@@ -705,45 +703,45 @@ class ChatService:
                     final_response["quality_score"] = quality_score
                 except Exception as e:
                     self.logger.warning(f"Quality evaluation failed: {e}")
-            
+
             return final_response
-            
+
         except Exception as e:
             self.logger.error(f"Post-processing failed: {e}")
             return response_result
-    
-    async def process_message(self, message: str, context: Optional[str] = None, 
-                             session_id: Optional[str] = None, 
+
+    async def process_message(self, message: str, context: Optional[str] = None,
+                             session_id: Optional[str] = None,
                              user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         사용자 메시지 처리 (최적화된 질의 답변 시스템)
-        
+
         Args:
             message: 사용자 메시지
             context: 추가 컨텍스트 (선택사항)
             session_id: 세션 ID (선택사항)
             user_id: 사용자 ID (선택사항)
-            
+
         Returns:
             Dict[str, Any]: 처리 결과
         """
         try:
             start_time = time.time()
-            
+
             # 기본값 설정
             if not user_id:
                 user_id = "anonymous_user"
             if not session_id:
                 session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
+
             # 입력 검증 및 전처리
             validation_result = self._validate_and_preprocess_input(message)
             if not validation_result["is_valid"]:
                 return self._create_error_response(
-                    validation_result["error_message"], 
+                    validation_result["error_message"],
                     session_id, user_id, start_time
                 )
-            
+
             # 캐시 확인 (개선된 키 생성)
             cache_key = self._generate_cache_key(message, user_id, context)
             cached_response = self.cache_manager.get(cache_key) if self.cache_manager else None
@@ -752,44 +750,44 @@ class ChatService:
                 cached_response["from_cache"] = True
                 cached_response["processing_time"] = time.time() - start_time
                 return cached_response
-            
+
             # 질의 분석 및 분류 (개선된 버전)
             query_analysis = await self._analyze_query(message, context, user_id, session_id)
-            
+
             # 법률 제한 검증 (최적화된 버전)
             restriction_result = await self._validate_legal_restrictions(
                 message, query_analysis, user_id, session_id
             )
-            
+
             if restriction_result["is_restricted"]:
                 return self._create_restricted_response(
                     restriction_result, session_id, user_id, start_time
                 )
-            
+
             # 답변 생성 (개선된 버전)
             response_result = await self._generate_enhanced_response(
                 message, query_analysis, restriction_result, user_id, session_id
             )
-            
+
             # 응답 후처리 및 품질 검증
             final_response = await self._post_process_response(
                 response_result, query_analysis, user_id, session_id
             )
-            
+
             # 캐시 저장
             if self.cache_manager:
                 self.cache_manager.set(cache_key, final_response, ttl_seconds=3600)  # 1시간 TTL
-            
+
             # 처리 시간 추가
             final_response["processing_time"] = time.time() - start_time
-            
+
             return final_response
-            
+
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-            
+
             return {
                 "response": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
                 "confidence": 0.0,
@@ -800,7 +798,7 @@ class ChatService:
                 "error": True,
                 "error_details": str(e)
             }
-            
+
             # ML 통합 검증 시스템 사전 검사 (최신 버전 우선 사용)
             ml_validation_result = None
             multi_stage_validation_result = None
@@ -810,7 +808,7 @@ class ChatService:
             validation_result = None
             safe_response = None
             warning_message = None
-            
+
             # ML 통합 시스템 사용 (최신 버전)
             if self.ml_integrated_validation_system:
                 try:
@@ -821,33 +819,33 @@ class ChatService:
                         session_id=session_id,
                         collect_feedback=True
                     )
-                    
+
                     # 디버깅: ML 검증 결과 확인
                     self.logger.info(f"ML integrated validation result: {ml_validation_result.get('final_decision', 'unknown')}")
                     self.logger.info(f"ML confidence: {ml_validation_result.get('confidence', 0.0):.2f}")
                     self.logger.info(f"Edge case detected: {ml_validation_result.get('edge_case_info', {}).get('is_edge_case', False)}")
-                    
+
                     # ML 시스템이 제한을 권하는 경우 차단
                     should_block = ml_validation_result.get('final_decision') == 'restricted'
-                    
+
                     # ML 시스템이 차단한 경우 안전한 응답 반환
                     if should_block:
                         # ML 시스템의 안전한 응답 생성
                         ml_reasoning = ml_validation_result.get('reasoning', [])
                         edge_case_info = ml_validation_result.get('edge_case_info', {})
-                        
+
                         # Edge Case인 경우 더 관대한 응답
                         if edge_case_info.get('is_edge_case', False):
                             response_content = "일반적인 법률 정보는 제공할 수 있지만, 구체적인 개인 사안에 대한 조언은 변호사와 상담하시는 것이 좋습니다."
                         else:
                             response_content = "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
-                        
+
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                query=message, 
-                                response="", 
-                                restriction_result=None, 
+                                query=message,
+                                response="",
+                                restriction_result=None,
                                 filter_result=None,
                                 validation_result=ValidationResult(
                                     status=ValidationStatus.REJECTED,
@@ -859,11 +857,11 @@ class ChatService:
                                     validation_details=ml_validation_result,
                                     timestamp=datetime.now()
                                 ),
-                                user_id=user_id, 
-                                session_id=session_id, 
+                                user_id=user_id,
+                                session_id=session_id,
                                 processing_time=time.time() - start_time
                             )
-                        
+
                         return {
                             "response": response_content,
                             "confidence": ml_validation_result.get('confidence', 0.9),
@@ -883,56 +881,56 @@ class ChatService:
                                 "phase3": {"enabled": False}
                             }
                         }
-                    
+
                 except Exception as e:
                     self.logger.error(f"ML 통합 검증 오류: {e}")
                     ml_validation_result = None
-            
+
             # ML 시스템이 없거나 오류가 발생한 경우 백업 시스템 사용
             if not ml_validation_result and self.multi_stage_validation_system:
                 try:
                     # 1. 다단계 검증 수행
                     multi_stage_validation_result = self.multi_stage_validation_system.validate(message)
-                    
+
                     # 2. 기존 개선된 법률 제한 시스템도 함께 사용 (백업)
                     if self.improved_legal_restriction_system:
                         improved_restriction_result = self.improved_legal_restriction_system.check_restrictions(message)
-                    
+
                     # 3. 의도별 처리
                     if self.intent_based_processor:
                         processing_result = self.intent_based_processor.process_by_intent(message, improved_restriction_result)
-                    
+
                     # 4. 콘텐츠 필터링 (추가 검증)
                     if self.content_filter_engine:
                         filter_result = self.content_filter_engine.filter_content(message)
-                    
+
                     # 5. 사전 차단 여부 확인 (다단계 검증 우선)
                     # 디버깅: 각 검증 결과 확인
                     self.logger.info(f"Multi-stage validation result: {multi_stage_validation_result.final_decision.value}")
                     self.logger.info(f"Improved restriction result: {improved_restriction_result.is_restricted if improved_restriction_result else 'None'}")
                     self.logger.info(f"Processing result allowed: {processing_result.allowed if processing_result else 'None'}")
                     self.logger.info(f"Filter result blocked: {filter_result.is_blocked if filter_result else 'None'}")
-                    
+
                     should_block = (
                         multi_stage_validation_result.final_decision.value == "restricted" or
-                        (improved_restriction_result and improved_restriction_result.is_restricted) or 
+                        (improved_restriction_result and improved_restriction_result.is_restricted) or
                         (processing_result and not processing_result.allowed) or
                         (filter_result and filter_result.is_blocked)
                     )
-                    
+
                     self.logger.info(f"Should block: {should_block}")
-                    
+
                     if should_block:
                         # 안전한 답변 생성
                         if self.safe_response_generator:
                             safe_response = self.safe_response_generator.generate_safe_response(
                                 message, improved_restriction_result, filter_result
                             )
-                        
+
                         # 사용자 교육 및 경고
                         if self.user_education_system:
                             warning_message = self.user_education_system.generate_warning(
-                                improved_restriction_result, filter_result, 
+                                improved_restriction_result, filter_result,
                                 ValidationResult(
                                     status=ValidationStatus.REJECTED,
                                     validation_level=ValidationLevel.AUTOMATIC,
@@ -945,13 +943,13 @@ class ChatService:
                                 ),
                                 user_id, message
                             )
-                        
+
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                query=message, 
-                                response="", 
-                                restriction_result=improved_restriction_result, 
+                                query=message,
+                                response="",
+                                restriction_result=improved_restriction_result,
                                 filter_result=filter_result,
                                 validation_result=ValidationResult(
                                     status=ValidationStatus.REJECTED,
@@ -963,14 +961,14 @@ class ChatService:
                                     validation_details={},
                                     timestamp=datetime.now()
                                 ),
-                                user_id=user_id, 
-                                session_id=session_id, 
+                                user_id=user_id,
+                                session_id=session_id,
                                 processing_time=time.time() - start_time
                             )
-                        
+
                         # 안전한 응답 반환
                         response_content = safe_response.content if safe_response else "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
-                        
+
                         return {
                             "response": response_content,
                             "confidence": safe_response.confidence if safe_response else 0.9,
@@ -1016,40 +1014,40 @@ class ChatService:
                                 "phase3": {"enabled": False}
                             }
                         }
-                        
+
                 except Exception as e:
                     self.logger.error(f"Error in multi-stage validation system: {e}")
                     # 다단계 검증 오류 시 기존 시스템으로 폴백
                     improved_restriction_result = None
                     processing_result = None
                     filter_result = None
-                    
+
                     if self.improved_legal_restriction_system and self.intent_based_processor:
                         try:
                             # 기존 개선된 법률 제한 시스템 사용
                             improved_restriction_result = self.improved_legal_restriction_system.check_restrictions(message)
                             processing_result = self.intent_based_processor.process_by_intent(message, improved_restriction_result)
-                            
+
                             if self.content_filter_engine:
                                 filter_result = self.content_filter_engine.filter_content(message)
-                            
+
                             should_block = (
-                                improved_restriction_result.is_restricted or 
+                                improved_restriction_result.is_restricted or
                                 (processing_result and not processing_result.allowed) or
                                 (filter_result and filter_result.is_blocked)
                             )
-                            
+
                             if should_block:
                                 # 안전한 답변 생성
                                 if self.safe_response_generator:
                                     safe_response = self.safe_response_generator.generate_safe_response(
                                         message, improved_restriction_result, filter_result
                                     )
-                                
+
                                 # 사용자 교육 및 경고
                                 if self.user_education_system:
                                     warning_message = self.user_education_system.generate_warning(
-                                        improved_restriction_result, filter_result, 
+                                        improved_restriction_result, filter_result,
                                         ValidationResult(
                                             status=ValidationStatus.REJECTED,
                                             validation_level=ValidationLevel.AUTOMATIC,
@@ -1062,13 +1060,13 @@ class ChatService:
                                         ),
                                         user_id, message
                                     )
-                                
+
                                 # 준수 모니터링
                                 if self.legal_compliance_monitor:
                                     compliance_status = self.legal_compliance_monitor.monitor_request(
-                                        query=message, 
-                                        response="", 
-                                        restriction_result=improved_restriction_result, 
+                                        query=message,
+                                        response="",
+                                        restriction_result=improved_restriction_result,
                                         filter_result=filter_result,
                                         validation_result=ValidationResult(
                                             status=ValidationStatus.REJECTED,
@@ -1080,14 +1078,14 @@ class ChatService:
                                             validation_details={},
                                             timestamp=datetime.now()
                                         ),
-                                        user_id=user_id, 
-                                        session_id=session_id, 
+                                        user_id=user_id,
+                                        session_id=session_id,
                                         processing_time=time.time() - start_time
                                     )
-                                
+
                                 # 안전한 응답 반환
                                 response_content = safe_response.content if safe_response else "죄송합니다. 구체적인 법률 자문은 변호사와 상담하시는 것이 좋습니다."
-                                
+
                                 return {
                                     "response": response_content,
                                     "confidence": safe_response.confidence if safe_response else 0.9,
@@ -1143,25 +1141,25 @@ class ChatService:
                                     "phase3": {"enabled": False}
                                 }
                             }
-            
+
             # Phase 1: 대화 맥락 강화 처리
             phase1_info = await self._process_phase1_context(message, session_id, user_id)
-            
+
             # Phase 2: 개인화 및 지능형 분석 처리
             phase2_info = await self._process_phase2_personalization(message, session_id, user_id, phase1_info)
-            
+
             # Phase 3: 장기 기억 및 품질 모니터링 처리
             phase3_info = await self._process_phase3_memory_quality(message, session_id, user_id, phase1_info, phase2_info)
-            
+
             # 실제 답변 생성 (RAG 시스템 사용)
             response_result = await self._generate_response(message, phase1_info, phase2_info, phase3_info)
-            
+
             # 자연스러운 답변 개선 적용
             if response_result.get("response"):
                 response_result["response"] = await self._apply_naturalness_improvements(
                     response_result["response"], phase1_info, phase2_info, user_id
                 )
-            
+
             # 답변 생성 후 다단계 검증 시스템 검증
             if self.response_validation_system and response_result.get("response"):
                 try:
@@ -1169,11 +1167,11 @@ class ChatService:
                     validation_result = self.response_validation_system.validate_response(
                         message, response_result["response"]
                     )
-                    
+
                     # 다단계 검증 시스템으로 추가 검증
                     if self.multi_stage_validation_system:
                         response_validation = self.multi_stage_validation_system.validate(response_result["response"])
-                        
+
                         # 다단계 검증에서도 제한된 경우 추가 처리
                         if response_validation.final_decision.value == "restricted":
                             if self.safe_response_generator:
@@ -1181,7 +1179,7 @@ class ChatService:
                                     message, improved_restriction_result, filter_result
                                 )
                                 response_result["response"] = safe_response.content
-                            
+
                             # 다단계 검증 정보 추가
                             response_result["multi_stage_validation"] = {
                                 "final_decision": response_validation.final_decision.value,
@@ -1196,7 +1194,7 @@ class ChatService:
                                     } for stage in response_validation.stages
                                 ]
                             }
-                    
+
                     # 검증 실패 시 안전한 답변으로 교체
                     if validation_result.status in [ValidationStatus.REJECTED, ValidationStatus.MODIFIED]:
                         if validation_result.modified_response:
@@ -1206,26 +1204,26 @@ class ChatService:
                                 message, improved_restriction_result, filter_result
                             )
                             response_result["response"] = safe_response.content
-                        
+
                         # 사용자 교육 및 경고
                         if self.user_education_system:
                             warning_message = self.user_education_system.generate_warning(
                                 improved_restriction_result, filter_result, validation_result, user_id, message
                             )
-                        
+
                         # 준수 모니터링
                         if self.legal_compliance_monitor:
                             compliance_status = self.legal_compliance_monitor.monitor_request(
-                                query=message, 
-                                response=response_result["response"], 
-                                restriction_result=improved_restriction_result, 
-                                filter_result=filter_result, 
-                                validation_result=validation_result, 
-                                user_id=user_id, 
-                                session_id=session_id, 
+                                query=message,
+                                response=response_result["response"],
+                                restriction_result=improved_restriction_result,
+                                filter_result=filter_result,
+                                validation_result=validation_result,
+                                user_id=user_id,
+                                session_id=session_id,
                                 processing_time=time.time() - start_time
                             )
-                        
+
                         # 검증 정보 추가 (다단계 검증 정보 포함)
                         response_result["validation_info"] = {
                             "status": validation_result.status.value,
@@ -1242,20 +1240,20 @@ class ChatService:
                                 "reasoning": processing_result.reasoning if processing_result else "unknown"
                             }
                         }
-                    
+
                 except Exception as e:
                     self.logger.error(f"Error in response validation: {e}")
                     # 검증 오류 시에도 계속 진행
-            
+
             # 최종 결과 통합
             processing_time = time.time() - start_time
-            
+
             # 캐시 히트율 계산
             cache_hit_rate = 0.0
             if self.cache_manager:
                 cache_stats = self.cache_manager.get_stats()
                 cache_hit_rate = cache_stats.get("hit_rate", 0.0)
-            
+
             result = {
                 "response": response_result.get("response", "죄송합니다. 답변을 생성할 수 없습니다."),
                 "confidence": response_result.get("confidence", 0.0),
@@ -1280,16 +1278,16 @@ class ChatService:
                     "memory_usage_mb": self.memory_optimizer.get_memory_usage().process_memory / 1024 / 1024 if self.memory_optimizer else 0
                 }
             }
-            
+
             # 캐시에 결과 저장 (더 긴 TTL)
             if self.cache_manager and not result.get("errors"):
                 self.cache_manager.set(cache_key, result, ttl_seconds=1800)
-            
+
             # Phase 3: 품질 평가 및 메모리 저장
             if self.quality_monitor and phase1_info.get("context"):
                 quality_assessment = self.quality_monitor.assess_conversation_quality(phase1_info["context"])
                 result["quality_assessment"] = quality_assessment
-            
+
             if self.contextual_memory_manager and phase1_info.get("context"):
                 # 중요한 사실 추출 및 저장
                 facts = {}
@@ -1300,10 +1298,10 @@ class ChatService:
                         if fact_type not in facts:
                             facts[fact_type] = []
                         facts[fact_type].append(fact["content"])
-                
+
                 if facts:
                     self.contextual_memory_manager.store_important_facts(session_id, user_id, facts)
-            
+
             # 성능 메트릭 기록
             if self.performance_monitor:
                 active_sessions = 1  # 간단한 추정
@@ -1314,9 +1312,9 @@ class ChatService:
                     cache_hit_rate=cache_hit_rate,
                     db_query_time=db_query_time
                 )
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
             return {
@@ -1333,7 +1331,7 @@ class ChatService:
                     "phase3": {"enabled": False}
                 }
             }
-    
+
     async def _process_phase1_context(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
         """Phase 1: 대화 맥락 강화 처리"""
         try:
@@ -1347,16 +1345,16 @@ class ChatService:
                 "compression_info": None,
                 "errors": []
             }
-            
+
             if not self.session_manager:
                 phase1_info["enabled"] = False
                 phase1_info["errors"].append("Session manager not available")
                 return phase1_info
-            
+
             # 세션 로드 또는 생성
             context = self.session_manager.get_or_create_session(session_id, user_id)
             phase1_info["context"] = context
-            
+
             # 다중 턴 질문 처리
             if self.multi_turn_handler:
                 multi_turn_result = self.multi_turn_handler.build_complete_query(message, context)
@@ -1366,14 +1364,14 @@ class ChatService:
                     "confidence": multi_turn_result["confidence"],
                     "reasoning": multi_turn_result["reasoning"]
                 }
-            
+
             # 컨텍스트 압축 (필요시)
             if self.context_compressor and context:
                 compression_info = self.context_compressor.compress_context_if_needed(context)
                 phase1_info["compression_info"] = compression_info
-            
+
             return phase1_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 1 processing: {e}")
             return {
@@ -1381,8 +1379,8 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
-    async def _process_phase2_personalization(self, message: str, session_id: str, user_id: str, 
+
+    async def _process_phase2_personalization(self, message: str, session_id: str, user_id: str,
                                             phase1_info: Dict[str, Any]) -> Dict[str, Any]:
         """Phase 2: 개인화 및 지능형 분석 처리"""
         try:
@@ -1396,7 +1394,7 @@ class ChatService:
                 "flow_tracking_info": {},
                 "errors": []
             }
-            
+
             # 사용자 프로필 관리
             if self.user_profile_manager:
                 try:
@@ -1404,17 +1402,17 @@ class ChatService:
                     phase2_info["personalized_context"] = personalized_context
                 except Exception as e:
                     phase2_info["errors"].append(f"User profile error: {str(e)}")
-            
+
             # 감정 및 의도 분석
             if self.emotion_intent_analyzer:
                 try:
                     emotion_result = self.emotion_intent_analyzer.analyze_emotion(message)
                     intent_result = self.emotion_intent_analyzer.analyze_intent(message, phase1_info.get("context"))
-                    
+
                     response_tone = self.emotion_intent_analyzer.get_contextual_response_tone(
                         emotion_result, intent_result, phase2_info.get("personalized_context", {})
                     )
-                    
+
                     phase2_info["emotion_intent_info"] = {
                         "emotion": {
                             "primary_emotion": emotion_result.primary_emotion.value,
@@ -1438,14 +1436,14 @@ class ChatService:
                     }
                 except Exception as e:
                     phase2_info["errors"].append(f"Emotion intent analysis error: {str(e)}")
-            
+
             # 대화 흐름 추적
             if self.conversation_flow_tracker and phase1_info.get("context"):
                 try:
                     from .conversation_manager import ConversationTurn
-                    
+
                     # 대화 흐름 추적
-                    self.conversation_flow_tracker.track_conversation_flow(session_id, 
+                    self.conversation_flow_tracker.track_conversation_flow(session_id,
                         ConversationTurn(
                             user_query=message,
                             bot_response="",  # 아직 생성되지 않음
@@ -1453,12 +1451,12 @@ class ChatService:
                             question_type="general_question"
                         )
                     )
-                    
+
                     # 다음 의도 예측 및 후속 질문 제안
                     predicted_intents = self.conversation_flow_tracker.predict_next_intent(phase1_info["context"])
                     suggested_questions = self.conversation_flow_tracker.suggest_follow_up_questions(phase1_info["context"])
                     conversation_state = self.conversation_flow_tracker.get_conversation_state(phase1_info["context"])
-                    
+
                     phase2_info["flow_tracking_info"] = {
                         "predicted_intents": [
                             {
@@ -1483,9 +1481,9 @@ class ChatService:
                     }
                 except Exception as e:
                     phase2_info["errors"].append(f"Flow tracking error: {str(e)}")
-            
+
             return phase2_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 2 processing: {e}")
             return {
@@ -1493,7 +1491,7 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
+
     async def _process_phase3_memory_quality(self, message: str, session_id: str, user_id: str,
                                            phase1_info: Dict[str, Any], phase2_info: Dict[str, Any]) -> Dict[str, Any]:
         """Phase 3: 장기 기억 및 품질 모니터링 처리"""
@@ -1506,7 +1504,7 @@ class ChatService:
                 "quality_assessment": {},
                 "errors": []
             }
-            
+
             # 맥락적 메모리 검색
             if self.contextual_memory_manager:
                 try:
@@ -1523,7 +1521,7 @@ class ChatService:
                     ]
                 except Exception as e:
                     phase3_info["errors"].append(f"Memory search error: {str(e)}")
-            
+
             # 품질 평가
             if self.quality_monitor and phase1_info.get("context"):
                 try:
@@ -1538,9 +1536,9 @@ class ChatService:
                     }
                 except Exception as e:
                     phase3_info["errors"].append(f"Quality assessment error: {str(e)}")
-            
+
             return phase3_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 3 processing: {e}")
             return {
@@ -1548,8 +1546,8 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
-    async def _generate_response(self, message: str, phase1_info: Dict[str, Any], 
+
+    async def _generate_response(self, message: str, phase1_info: Dict[str, Any],
                                phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]) -> Dict[str, Any]:
         """실제 답변 생성 (RAG 시스템 사용)"""
         try:
@@ -1557,13 +1555,13 @@ class ChatService:
             resolved_query = message
             if phase1_info.get("multi_turn_result", {}).get("is_multi_turn"):
                 resolved_query = phase1_info["multi_turn_result"]["resolved_query"]
-            
+
             # LangGraph 사용 여부에 따른 처리
             if self.use_langgraph and self.langgraph_service:
                 return await self._process_with_langgraph(resolved_query, phase1_info.get("session_id"))
             else:
                 return await self._process_legacy(resolved_query, None)
-            
+
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")
             return {
@@ -1572,12 +1570,12 @@ class ChatService:
                 "sources": [],
                 "errors": [str(e)]
             }
-    
+
     async def _process_with_langgraph(self, message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """LangGraph를 사용한 메시지 처리"""
         try:
             result = await self.langgraph_service.process_query(message, session_id)
-            
+
             # LangGraph 결과를 기존 형식으로 변환
             return {
                 "response": result.get("answer", ""),
@@ -1591,7 +1589,7 @@ class ChatService:
                 "metadata": result.get("metadata", {}),
                 "errors": result.get("errors", [])
             }
-            
+
         except Exception as e:
             self.logger.error(f"LangGraph processing error: {e}")
             return {
@@ -1601,24 +1599,24 @@ class ChatService:
                 "processing_time": 0.0,
                 "errors": [str(e)]
             }
-    
+
     async def _process_legacy(self, message: str, context: Optional[str] = None) -> Dict[str, Any]:
         """기존 방식으로 메시지 처리"""
         try:
             start_time = time.time()
-            
+
             # 기존 처리 로직 (placeholder)
             response_data = self._generate_response_sync(message, context)
-            
+
             processing_time = time.time() - start_time
-            
+
             return {
                 "response": response_data.get("response", ""),
                 "confidence": response_data.get("confidence", 0.8),
                 "sources": response_data.get("sources", []),
                 "processing_time": processing_time
             }
-            
+
         except Exception as e:
             self.logger.error(f"Legacy processing error: {e}")
             return {
@@ -1628,8 +1626,8 @@ class ChatService:
                 "processing_time": 0.0,
                 "errors": [str(e)]
             }
-    
-    def _generate_response_sync(self, message: str, context: Optional[str] = None, 
+
+    def _generate_response_sync(self, message: str, context: Optional[str] = None,
                           *args, **kwargs) -> Dict[str, Any]:
         """실제 RAG 시스템을 사용한 응답 생성"""
         try:
@@ -1641,7 +1639,7 @@ class ChatService:
                 question_classification = type('QuestionClassification', (), {
                     'question_type': type('QuestionType', (), {'value': 'general'})()
                 })()
-            
+
             # 검색 실행
             if self.hybrid_search_engine:
                 search_results = self.hybrid_search_engine.search_with_question_type(
@@ -1651,7 +1649,7 @@ class ChatService:
                 )
             else:
                 search_results = []
-            
+
             # 답변 생성
             if self.improved_answer_generator:
                 answer_result = self.improved_answer_generator.generate_answer(
@@ -1675,7 +1673,7 @@ class ChatService:
                     "sources": [],
                     "processing_time": 0.0
                 }
-                
+
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")
             return {
@@ -1684,17 +1682,17 @@ class ChatService:
                 "sources": [],
                 "processing_time": 0.0
             }
-    
+
     def validate_input(self, message: str) -> bool:
         """입력 검증"""
         if not message or not message.strip():
             return False
-        
+
         if len(message) > 10000:  # Max 10,000 characters
             return False
-        
+
         return True
-    
+
     def get_service_status(self) -> Dict[str, Any]:
         """서비스 상태 조회"""
         try:
@@ -1703,7 +1701,7 @@ class ChatService:
             self.logger.info(f"Hybrid search engine: {self.hybrid_search_engine is not None}")
             self.logger.info(f"Question classifier: {self.question_classifier is not None}")
             self.logger.info(f"Improved answer generator: {self.improved_answer_generator is not None}")
-            
+
             status = {
                 "service_name": "ChatService",
                 "langgraph_enabled": self.use_langgraph,
@@ -1731,7 +1729,7 @@ class ChatService:
                 "overall_status": "healthy" if self._is_healthy() else "degraded",
                 "last_updated": datetime.now().isoformat()
             }
-            
+
             # LangGraph 상태 추가
             if self.use_langgraph and self.langgraph_service:
                 try:
@@ -1739,9 +1737,9 @@ class ChatService:
                     status["langgraph_status"] = langgraph_status
                 except Exception as e:
                     status["langgraph_error"] = str(e)
-            
+
             return status
-            
+
         except Exception as e:
             self.logger.error(f"Error getting service status: {e}")
             import traceback
@@ -1752,7 +1750,7 @@ class ChatService:
                 "error": str(e),
                 "last_updated": datetime.now().isoformat()
             }
-    
+
     def _is_healthy(self) -> bool:
         """서비스 건강 상태 확인"""
         try:
@@ -1763,20 +1761,20 @@ class ChatService:
                 self.question_classifier is not None,
                 self.improved_answer_generator is not None
             ])
-            
+
             # Phase 1 컴포넌트 중 하나라도 사용 가능하면 healthy
             phase1_available = any([
                 self.session_manager is not None,
                 self.multi_turn_handler is not None,
                 self.context_compressor is not None
             ])
-            
+
             return rag_available or phase1_available
-            
+
         except Exception as e:
             self.logger.error(f"Error checking health status: {e}")
             return False
-    
+
     def get_phase_statistics(self) -> Dict[str, Any]:
         """Phase별 통계 조회"""
         try:
@@ -1800,7 +1798,7 @@ class ChatService:
                     "consolidation_count": 0
                 }
             }
-            
+
             # Phase 1 통계
             if self.session_manager:
                 try:
@@ -1809,7 +1807,7 @@ class ChatService:
                     stats["phase1"]["total_turns"] = session_stats.get("total_turns", 0)
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 1 stats: {e}")
-            
+
             # Phase 2 통계
             if self.user_profile_manager:
                 try:
@@ -1817,7 +1815,7 @@ class ChatService:
                     stats["phase2"]["user_count"] = 0  # Placeholder
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 2 stats: {e}")
-            
+
             # Phase 3 통계
             if self.contextual_memory_manager:
                 try:
@@ -1825,9 +1823,9 @@ class ChatService:
                     stats["phase3"]["memory_count"] = 0  # Placeholder
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 3 stats: {e}")
-            
+
             return stats
-            
+
         except Exception as e:
             self.logger.error(f"Error getting phase statistics: {e}")
             return {
@@ -1835,7 +1833,7 @@ class ChatService:
                 "phase2": {"enabled": False, "error": str(e)},
                 "phase3": {"enabled": False, "error": str(e)}
             }
-    
+
     def optimize_performance(self) -> Dict[str, Any]:
         """성능 최적화 수행"""
         try:
@@ -1846,13 +1844,13 @@ class ChatService:
                 "cache_optimization": {},
                 "performance_summary": {}
             }
-            
+
             # 메모리 최적화
             if self.memory_optimizer:
                 memory_result = self.memory_optimizer.optimize_memory()
                 optimization_results["memory_optimization"] = memory_result
                 optimization_results["actions_taken"].extend(memory_result.get("actions_taken", []))
-            
+
             # 캐시 최적화
             if self.cache_manager:
                 cache_stats_before = self.cache_manager.get_stats()
@@ -1862,18 +1860,18 @@ class ChatService:
                     "stats_before": cache_stats_before
                 }
                 optimization_results["actions_taken"].append(f"Cache cleared: {cache_cleared} entries")
-            
+
             # 성능 요약
             if self.performance_monitor:
                 performance_summary = self.performance_monitor.get_performance_summary()
                 optimization_results["performance_summary"] = performance_summary
-            
+
             return optimization_results
-            
+
         except Exception as e:
             self.logger.error(f"Error optimizing performance: {e}")
             return {"error": str(e)}
-    
+
     def get_performance_metrics(self) -> Dict[str, Any]:
         """성능 메트릭 조회"""
         try:
@@ -1884,14 +1882,14 @@ class ChatService:
                 "cache_manager": {},
                 "system_health": {}
             }
-            
+
             # 성능 모니터 메트릭
             if self.performance_monitor:
                 metrics["performance_monitor"] = {
                     "summary": self.performance_monitor.get_performance_summary(),
                     "system_health": self.performance_monitor.get_system_health()
                 }
-            
+
             # 메모리 최적화 메트릭
             if self.memory_optimizer:
                 memory_usage = self.memory_optimizer.get_memory_usage()
@@ -1907,18 +1905,18 @@ class ChatService:
                     },
                     "memory_trend": memory_trend
                 }
-            
+
             # 캐시 관리 메트릭
             if self.cache_manager:
                 cache_stats = self.cache_manager.get_stats()
                 metrics["cache_manager"] = cache_stats
-            
+
             return metrics
-            
+
         except Exception as e:
             self.logger.error(f"Error getting performance metrics: {e}")
             return {"error": str(e)}
-    
+
     def cleanup_resources(self) -> Dict[str, Any]:
         """리소스 정리"""
         try:
@@ -1927,30 +1925,30 @@ class ChatService:
                 "actions_taken": [],
                 "resources_freed": {}
             }
-            
+
             # 메모리 정리
             if self.memory_optimizer:
                 memory_result = self.memory_optimizer.optimize_memory()
                 cleanup_results["resources_freed"]["memory_mb"] = memory_result.get("memory_freed_mb", 0)
                 cleanup_results["actions_taken"].extend(memory_result.get("actions_taken", []))
-            
+
             # 캐시 정리
             if self.cache_manager:
                 cache_cleared = self.cache_manager.clear()
                 cleanup_results["resources_freed"]["cache_entries"] = cache_cleared
                 cleanup_results["actions_taken"].append(f"Cache cleared: {cache_cleared} entries")
-            
+
             # 세션 정리 (오래된 세션)
             if self.session_manager:
                 # 간단한 세션 정리 로직 (실제 구현은 세션 관리자에 따라 다름)
                 cleanup_results["actions_taken"].append("Session cleanup completed")
-            
+
             return cleanup_results
-            
+
         except Exception as e:
             self.logger.error(f"Error cleaning up resources: {e}")
             return {"error": str(e)}
-    
+
     def get_conversation_history(self, session_id: str) -> List[Dict]:
         """대화 기록 조회"""
         if self.use_langgraph and self.langgraph_service:
@@ -1963,7 +1961,7 @@ class ChatService:
         else:
             # 기존 방식 (placeholder)
             return []
-    
+
     def clear_conversation_history(self, session_id: str) -> None:
         """대화 기록 삭제"""
         if self.use_langgraph and self.langgraph_service:
@@ -1976,40 +1974,40 @@ class ChatService:
         else:
             # 기존 방식 (placeholder)
             pass
-    
-    async def _apply_naturalness_improvements(self, answer: str, phase1_info: Dict[str, Any], 
+
+    async def _apply_naturalness_improvements(self, answer: str, phase1_info: Dict[str, Any],
                                            phase2_info: Dict[str, Any], user_id: str) -> str:
         """
         자연스러운 답변 개선사항 적용
-        
+
         Args:
             answer: 원본 답변
             phase1_info: Phase 1 정보 (대화 맥락)
             phase2_info: Phase 2 정보 (개인화 및 감정 분석)
             user_id: 사용자 ID
-            
+
         Returns:
             str: 개선된 답변
         """
         try:
             if not answer or not isinstance(answer, str):
                 return answer
-            
+
             # 1. 대화 연결어 추가
             answer = await self._add_conversation_connectors(answer, phase1_info, phase2_info)
-            
+
             # 2. 감정 톤 조절
             answer = await self._adjust_emotional_tone(answer, phase2_info)
-            
+
             # 3. 개인화된 스타일 적용
             if self.personalized_style_learner:
                 answer = self.personalized_style_learner.apply_personalized_style(answer, user_id)
-            
+
             # 4. 실시간 피드백 기반 개선사항 적용
             if self.realtime_feedback_system:
                 improvements = self.realtime_feedback_system.get_next_response_improvements()
                 answer = self._apply_feedback_improvements(answer, improvements)
-            
+
             # 5. 자연스러움 평가 및 최종 검증
             if self.naturalness_evaluator:
                 context = {
@@ -2020,56 +2018,56 @@ class ChatService:
                     "question_type": phase1_info.get("question_classification", {}).get("question_type", "general"),
                     "previous_topic": phase1_info.get("session_context", {}).get("current_topic", "")
                 }
-                
+
                 metrics = self.naturalness_evaluator.evaluate_naturalness(answer, context)
-                
+
                 # 자연스러움이 매우 낮으면 추가 개선
                 if metrics.overall_naturalness < 0.3:
                     recommendations = self.naturalness_evaluator.get_improvement_recommendations(metrics)
                     answer = self._apply_naturalness_recommendations(answer, recommendations)
-            
+
             return answer
-            
+
         except Exception as e:
             self.logger.error(f"Error applying naturalness improvements: {e}")
             return answer
-    
-    async def _add_conversation_connectors(self, answer: str, phase1_info: Dict[str, Any], 
+
+    async def _add_conversation_connectors(self, answer: str, phase1_info: Dict[str, Any],
                                         phase2_info: Dict[str, Any]) -> str:
         """대화 연결어 추가"""
         try:
             if not self.conversation_connector:
                 return answer
-            
+
             context = {
                 "previous_topic": phase1_info.get("session_context", {}).get("current_topic", ""),
                 "conversation_flow": phase1_info.get("session_context", {}).get("flow_type", "new"),
                 "user_emotion": phase2_info.get("emotion_analysis", {}).get("primary_emotion", "neutral"),
                 "question_type": phase1_info.get("question_classification", {}).get("question_type", "general")
             }
-            
+
             return self.conversation_connector.add_natural_connectors(answer, context)
-            
+
         except Exception as e:
             self.logger.error(f"Error adding conversation connectors: {e}")
             return answer
-    
+
     async def _adjust_emotional_tone(self, answer: str, phase2_info: Dict[str, Any]) -> str:
         """감정 톤 조절"""
         try:
             if not self.emotional_tone_adjuster:
                 return answer
-            
+
             emotion_analysis = phase2_info.get("emotion_analysis", {})
             user_emotion = emotion_analysis.get("primary_emotion", "neutral")
             emotion_intensity = emotion_analysis.get("intensity", 0.5)
-            
+
             return self.emotional_tone_adjuster.adjust_tone(answer, user_emotion, emotion_intensity)
-            
+
         except Exception as e:
             self.logger.error(f"Error adjusting emotional tone: {e}")
             return answer
-    
+
     def _apply_feedback_improvements(self, answer: str, improvements: List[str]) -> str:
         """피드백 기반 개선사항 적용"""
         try:
@@ -2082,13 +2080,13 @@ class ChatService:
                     answer = self._make_friendly(answer)
                 elif "단계별" in improvement:
                     answer = self._structure_step_by_step(answer)
-            
+
             return answer
-            
+
         except Exception as e:
             self.logger.error(f"Error applying feedback improvements: {e}")
             return answer
-    
+
     def _apply_naturalness_recommendations(self, answer: str, recommendations: List[str]) -> str:
         """자연스러움 권장사항 적용"""
         try:
@@ -2103,13 +2101,13 @@ class ChatService:
                     answer = self._add_personalization(answer)
                 elif "읽기 쉽게" in recommendation:
                     answer = self._improve_readability(answer)
-            
+
             return answer
-            
+
         except Exception as e:
             self.logger.error(f"Error applying naturalness recommendations: {e}")
             return answer
-    
+
     def _make_concise(self, answer: str) -> str:
         """답변을 간결하게 만들기"""
         try:
@@ -2119,7 +2117,7 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _add_details(self, answer: str) -> str:
         """세부사항 추가"""
         try:
@@ -2128,7 +2126,7 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _make_friendly(self, answer: str) -> str:
         """친근하게 만들기"""
         try:
@@ -2137,14 +2135,14 @@ class ChatService:
                 "~합니다": "~해요",
                 "~하시기 바랍니다": "~하시면 돼요"
             }
-            
+
             for formal, casual in replacements.items():
                 answer = answer.replace(formal, casual)
-            
+
             return answer
         except Exception:
             return answer
-    
+
     def _structure_step_by_step(self, answer: str) -> str:
         """단계별로 구조화"""
         try:
@@ -2153,7 +2151,7 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _make_casual(self, answer: str) -> str:
         """캐주얼하게 만들기"""
         try:
@@ -2164,14 +2162,14 @@ class ChatService:
                 "귀하": "질문하신",
                 "~하시기 바랍니다": "~하시면 돼요"
             }
-            
+
             for formal, casual in replacements.items():
                 answer = answer.replace(formal, casual)
-            
+
             return answer
         except Exception:
             return answer
-    
+
     def _add_connectors(self, answer: str) -> str:
         """연결어 추가"""
         try:
@@ -2181,7 +2179,7 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _add_empathy(self, answer: str) -> str:
         """공감 표현 추가"""
         try:
@@ -2191,7 +2189,7 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _add_personalization(self, answer: str) -> str:
         """개인화 표현 추가"""
         try:
@@ -2201,14 +2199,14 @@ class ChatService:
             return answer
         except Exception:
             return answer
-    
+
     def _improve_readability(self, answer: str) -> str:
         """가독성 개선"""
         try:
             # 문장을 더 짧게 만들기
             sentences = answer.split(".")
             improved_sentences = []
-            
+
             for sentence in sentences:
                 if len(sentence.split()) > 20:  # 너무 긴 문장
                     # 간단히 나누기
@@ -2218,49 +2216,49 @@ class ChatService:
                     improved_sentences.append(" ".join(words[mid_point:]))
                 else:
                     improved_sentences.append(sentence)
-            
+
             return ". ".join(filter(None, improved_sentences)) + "."
         except Exception:
             return answer
-    
+
     def collect_user_feedback(self, session_id: str, feedback_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         사용자 피드백 수집
-        
+
         Args:
             session_id: 세션 ID
             feedback_data: 피드백 데이터
-            
+
         Returns:
             Dict[str, Any]: 피드백 처리 결과
         """
         try:
             if not self.realtime_feedback_system:
                 return {"feedback_received": False, "error": "Feedback system not available"}
-            
+
             return self.realtime_feedback_system.collect_feedback(session_id, feedback_data)
-            
+
         except Exception as e:
             self.logger.error(f"Error collecting user feedback: {e}")
             return {"feedback_received": False, "error": str(e)}
-    
+
     def get_naturalness_evaluation(self, answer: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         답변의 자연스러움 평가
-        
+
         Args:
             answer: 평가할 답변
             context: 평가 맥락
-            
+
         Returns:
             Dict[str, Any]: 자연스러움 평가 결과
         """
         try:
             if not self.naturalness_evaluator:
                 return {"error": "Naturalness evaluator not available"}
-            
+
             metrics = self.naturalness_evaluator.evaluate_naturalness(answer, context)
-            
+
             return {
                 "overall_score": metrics.overall_naturalness,
                 "category_scores": {
@@ -2276,35 +2274,35 @@ class ChatService:
                 "suggestions": metrics.detailed_analysis["suggestions"],
                 "evaluation_timestamp": metrics.evaluation_timestamp
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error evaluating naturalness: {e}")
             return {"error": str(e)}
-    
-    async def process_message_stream(self, message: str, context: Optional[str] = None, 
-                                   session_id: Optional[str] = None, 
+
+    async def process_message_stream(self, message: str, context: Optional[str] = None,
+                                   session_id: Optional[str] = None,
                                    user_id: Optional[str] = None):
         """
         스트림 형태로 사용자 메시지 처리
-        
+
         Args:
             message: 사용자 메시지
             context: 추가 컨텍스트 (선택사항)
             session_id: 세션 ID (선택사항)
             user_id: 사용자 ID (선택사항)
-            
+
         Yields:
             Dict[str, Any]: 스트림 청크 데이터
         """
         try:
             start_time = time.time()
-            
+
             # 기본값 설정
             if not user_id:
                 user_id = "anonymous_user"
             if not session_id:
                 session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
+
             # 입력 검증
             if not self.validate_input(message):
                 yield {
@@ -2315,7 +2313,7 @@ class ChatService:
                     "timestamp": datetime.now().isoformat()
                 }
                 return
-            
+
             # Phase 1: 대화 맥락 강화 처리
             yield {
                 "type": "status",
@@ -2324,9 +2322,9 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             phase1_info = await self._process_phase1_context(message, session_id, user_id)
-            
+
             # Phase 2: 개인화 및 지능형 분석 처리
             yield {
                 "type": "status",
@@ -2335,9 +2333,9 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             phase2_info = await self._process_phase2_personalization(message, session_id, user_id, phase1_info)
-            
+
             # Phase 3: 장기 기억 및 품질 모니터링 처리
             yield {
                 "type": "status",
@@ -2346,9 +2344,9 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             phase3_info = await self._process_phase3_memory_quality(message, session_id, user_id, phase1_info, phase2_info)
-            
+
             # 실제 답변 생성 (스트림 형태)
             yield {
                 "type": "status",
@@ -2357,7 +2355,7 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             async for chunk in self._generate_response_stream(message, phase1_info, phase2_info, phase3_info):
                 chunk.update({
                     "session_id": session_id,
@@ -2365,7 +2363,7 @@ class ChatService:
                     "timestamp": datetime.now().isoformat()
                 })
                 yield chunk
-            
+
             # 최종 메타데이터 전송
             processing_time = time.time() - start_time
             yield {
@@ -2384,7 +2382,7 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error processing message stream: {e}")
             yield {
@@ -2394,18 +2392,18 @@ class ChatService:
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }
-    
-    async def _generate_response_stream(self, message: str, phase1_info: Dict[str, Any], 
+
+    async def _generate_response_stream(self, message: str, phase1_info: Dict[str, Any],
                                       phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]):
         """
         스트림 형태로 답변 생성
-        
+
         Args:
             message: 사용자 메시지
             phase1_info: Phase 1 정보
             phase2_info: Phase 2 정보
             phase3_info: Phase 3 정보
-            
+
         Yields:
             Dict[str, Any]: 답변 청크
         """
@@ -2414,7 +2412,7 @@ class ChatService:
             resolved_query = message
             if phase1_info.get("multi_turn_result", {}).get("is_multi_turn"):
                 resolved_query = phase1_info["multi_turn_result"]["resolved_query"]
-            
+
             # LangGraph 사용 여부에 따른 처리
             if self.use_langgraph and self.langgraph_service:
                 async for chunk in self._process_with_langgraph_stream(resolved_query, phase1_info.get("session_id")):
@@ -2422,14 +2420,14 @@ class ChatService:
             else:
                 async for chunk in self._process_legacy_stream(resolved_query, None):
                     yield chunk
-            
+
         except Exception as e:
             self.logger.error(f"Error generating response stream: {e}")
             yield {
                 "type": "error",
                 "content": "답변 생성 중 오류가 발생했습니다."
             }
-    
+
     async def _process_with_langgraph_stream(self, message: str, session_id: Optional[str] = None):
         """LangGraph를 사용한 스트림 처리"""
         try:
@@ -2440,7 +2438,7 @@ class ChatService:
                 "content": f"LangGraph를 사용하여 '{message}'에 대한 답변을 생성하고 있습니다.",
                 "is_final": False
             }
-            
+
             # 시뮬레이션된 스트림 응답
             response_parts = [
                 "안녕하세요! 질문해주신 내용에 대해 답변드리겠습니다.",
@@ -2448,7 +2446,7 @@ class ChatService:
                 " 해당 사안에 대한 판례도 검토해보겠습니다.",
                 " 종합적으로 분석한 결과를 말씀드리겠습니다."
             ]
-            
+
             for i, part in enumerate(response_parts):
                 await asyncio.sleep(0.5)  # 실제 처리 시간 시뮬레이션
                 yield {
@@ -2456,14 +2454,14 @@ class ChatService:
                     "content": part,
                     "is_final": i == len(response_parts) - 1
                 }
-            
+
         except Exception as e:
             self.logger.error(f"LangGraph stream processing error: {e}")
             yield {
                 "type": "error",
                 "content": "LangGraph 처리 중 오류가 발생했습니다."
             }
-    
+
     async def _process_legacy_stream(self, message: str, context: Optional[str] = None):
         """기존 방식으로 스트림 처리"""
         try:
@@ -2474,13 +2472,13 @@ class ChatService:
                 question_classification = type('QuestionClassification', (), {
                     'question_type': type('QuestionType', (), {'value': 'general'})()
                 })()
-            
+
             yield {
                 "type": "status",
                 "content": f"질문 유형을 분석했습니다: {question_classification.question_type.value}",
                 "is_final": False
             }
-            
+
             # 검색 실행
             if self.hybrid_search_engine:
                 yield {
@@ -2488,13 +2486,13 @@ class ChatService:
                     "content": "관련 법령과 판례를 검색하고 있습니다...",
                     "is_final": False
                 }
-                
+
                 search_results = self.hybrid_search_engine.search_with_question_type(
                     query=message,
                     question_type=question_classification,
                     max_results=10
                 )
-                
+
                 yield {
                     "type": "status",
                     "content": f"{len(search_results)}개의 관련 자료를 찾았습니다.",
@@ -2502,7 +2500,7 @@ class ChatService:
                 }
             else:
                 search_results = []
-            
+
             # 답변 생성 (스트림 형태)
             if self.improved_answer_generator:
                 yield {
@@ -2510,7 +2508,7 @@ class ChatService:
                     "content": "답변을 생성하고 있습니다...",
                     "is_final": False
                 }
-                
+
                 # 실제 답변 생성
                 answer_result = self.improved_answer_generator.generate_answer(
                     query=message,
@@ -2519,18 +2517,18 @@ class ChatService:
                     sources=search_results,
                     conversation_history=None
                 )
-                
+
                 # 답변을 청크로 나누어 스트림 전송
                 answer_text = answer_result.answer
                 words = answer_text.split()
                 chunk_size = 5  # 한 번에 5개 단어씩 전송
-                
+
                 for i in range(0, len(words), chunk_size):
                     chunk_words = words[i:i + chunk_size]
                     chunk_text = " ".join(chunk_words)
-                    
+
                     await asyncio.sleep(0.1)  # 스트림 효과를 위한 지연
-                    
+
                     yield {
                         "type": "content",
                         "content": chunk_text + (" " if i + chunk_size < len(words) else ""),
@@ -2539,23 +2537,23 @@ class ChatService:
             else:
                 # 폴백: 기본 응답
                 response_text = f"안녕하세요! '{message}'에 대한 질문을 받았습니다. 현재 개발 중인 기능입니다."
-                
+
                 # 기본 응답도 스트림으로 전송
                 words = response_text.split()
                 chunk_size = 3
-                
+
                 for i in range(0, len(words), chunk_size):
                     chunk_words = words[i:i + chunk_size]
                     chunk_text = " ".join(chunk_words)
-                    
+
                     await asyncio.sleep(0.2)
-                    
+
                     yield {
                         "type": "content",
                         "content": chunk_text + (" " if i + chunk_size < len(words) else ""),
                         "is_final": i + chunk_size >= len(words)
                     }
-            
+
         except Exception as e:
             self.logger.error(f"Legacy stream processing error: {e}")
             yield {
@@ -2567,20 +2565,20 @@ class ChatService:
         """서비스 테스트"""
         try:
             result = await self.process_message(test_message)
-            
+
             test_passed = (
-                "response" in result and 
-                result["response"] and 
+                "response" in result and
+                result["response"] and
                 "processing_time" in result
             )
-            
+
             return {
                 "test_passed": test_passed,
                 "test_message": test_message,
                 "result": result,
                 "langgraph_enabled": self.use_langgraph
             }
-            
+
         except Exception as e:
             return {
                 "test_passed": False,

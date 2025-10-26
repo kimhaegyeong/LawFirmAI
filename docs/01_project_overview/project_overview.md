@@ -65,29 +65,63 @@
 - **벡터 임베딩**: ko-sroberta-multitask 모델 사용
 - **검색 성능**: 평균 응답 시간 < 1초
 
-## 📁 프로젝트 구조
+## 📁 프로젝트 구조조
 
 ```
 LawFirmAI/
 ├── streamlit/                          # Streamlit 애플리케이션
 │   └── streamlit_app.py               # Streamlit 메인 애플리케이션
-├── source/                          # 핵심 모듈
+├── source/                          # 핵심 모듈 (기능별 재구성)
 │   ├── services/                    # 비즈니스 로직 (140+ 서비스)
-│   │   ├── enhanced_chat_service.py # Enhanced Chat Service (2,574라인)
-│   │   ├── unified_search_engine.py # 통합 검색 엔진 (460라인)
-│   │   ├── integrated_law_search_service.py # 통합 조문 검색 (578라인)
-│   │   ├── enhanced_law_search_engine.py # 향상된 법령 검색 (1,299라인)
-│   │   ├── chat_service.py          # 기본 채팅 서비스
-│   │   ├── rag_service.py           # RAG 서비스
-│   │   ├── hybrid_search_engine.py  # 하이브리드 검색
-│   │   ├── question_classifier.py   # 질문 분류기
-│   │   ├── performance_monitor.py   # 성능 모니터링 (356라인)
+│   │   ├── chat/                    # 채팅 관련 서비스
+│   │   │   ├── enhanced_chat_service.py # Enhanced Chat Service (2,497라인)
+│   │   │   ├── chat_service.py      # 기본 채팅 서비스
+│   │   │   └── optimized_chat_service.py # 최적화된 채팅 서비스
+│   │   ├── search/                  # 검색 관련 서비스
+│   │   │   ├── unified_search_engine.py # 통합 검색 엔진 (460라인)
+│   │   │   ├── integrated_law_search_service.py # 통합 조문 검색 (578라인)
+│   │   │   ├── enhanced_law_search_engine.py # 향상된 법령 검색 (1,299라인)
+│   │   │   ├── search_service.py    # 기본 검색 서비스
+│   │   │   ├── rag_service.py       # RAG 서비스
+│   │   │   ├── hybrid_search_engine.py # 하이브리드 검색
+│   │   │   └── semantic_search_engine.py # 의미적 검색
+│   │   ├── analysis/                # 분석 관련 서비스
+│   │   │   ├── question_classifier.py # 질문 분류기
+│   │   │   ├── emotion_intent_analyzer.py # 감정/의도 분석
+│   │   │   └── conversation_quality_monitor.py # 대화 품질 모니터링
+│   │   ├── memory/                  # 메모리 관리 서비스
+│   │   │   ├── contextual_memory_manager.py # 맥락적 메모리 관리
+│   │   │   ├── integrated_session_manager.py # 통합 세션 관리
+│   │   │   └── conversation_store.py # 대화 저장소
+│   │   ├── optimization/            # 최적화 서비스
+│   │   │   ├── performance_monitor.py # 성능 모니터링 (356라인)
+│   │   │   ├── integrated_cache_system.py # 통합 캐시 시스템
+│   │   │   └── memory_optimizer.py   # 메모리 최적화
+│   │   ├── langgraph_workflow/      # LangGraph 워크플로우
+│   │   │   ├── legal_workflow.py    # 법률 워크플로우
+│   │   │   ├── keyword_mapper.py    # 키워드 매핑
+│   │   │   └── synonym_expander.py  # 동의어 확장
 │   │   └── ...                      # 기타 서비스들
 │   ├── data/                        # 데이터 처리
 │   │   ├── database.py              # 데이터베이스 관리
-│   │   └── vector_store.py          # 벡터 저장소
+│   │   ├── vector_store.py          # 벡터 저장소
+│   │   ├── data_processor.py        # 데이터 처리기
+│   │   └── conversation_store.py    # 대화 저장소
 │   ├── models/                      # AI 모델
+│   │   ├── model_manager.py        # 모델 관리자
+│   │   ├── kobart_model.py         # KoBART 모델
+│   │   └── sentence_bert.py        # Sentence BERT 모델
+│   ├── api/                         # API 관련
+│   │   ├── endpoints.py             # API 엔드포인트
+│   │   ├── middleware.py            # 미들웨어
+│   │   └── schemas.py               # 데이터 스키마
 │   └── utils/                       # 유틸리티
+│       ├── config.py               # 설정 관리
+│       ├── logger.py               # 로깅 시스템
+│       ├── validation/              # 입력 검증
+│       ├── security/                # 보안 관련
+│       ├── monitoring/              # 모니터링
+│       └── helpers.py              # 헬퍼 함수
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
 │   ├── embeddings/                  # 벡터 임베딩
@@ -106,7 +140,7 @@ LawFirmAI/
 ## 🎉 주요 성과
 
 ### 시스템 완성도
-- ✅ **Enhanced Chat Service**: Phase 1-3 통합 완전한 채팅 서비스 (2,574라인)
+- ✅ **Enhanced Chat Service**: Phase 1-3 통합 완전한 채팅 서비스 (2,497라인)
 - ✅ **통합 검색 엔진**: 모든 검색 기능을 통합한 단일 엔진 시스템
 - ✅ **현행법령 검색**: 국가법령정보센터 OpenAPI 기반 실시간 검색
 - ✅ **성능 최적화**: 실시간 모니터링 및 메모리 관리 시스템
@@ -116,6 +150,14 @@ LawFirmAI/
 - ✅ **지능형 챗봇**: 질문 유형별 최적화된 답변 시스템
 - ✅ **완전한 API**: RESTful API 및 웹 인터페이스
 - ✅ **컨테이너화**: Docker 기반 배포 준비 완료
+
+### 새로운 개선사항 (2025-10-26)
+- ✅ **디렉토리 구조 재구성**: 기능별 분리로 유지보수성 향상
+- ✅ **Import 경로 최적화**: 상대 경로에서 절대 경로로 변경하여 안정성 확보
+- ✅ **의존성 주입 개선**: 테스트 가능한 구조로 서비스 개선
+- ✅ **핵심 기능 테스트**: 100% 성공률로 기본 기능 검증 완료
+- ✅ **서비스 모듈화**: 기능별 분류로 코드 가독성 및 관리성 향상
+- ✅ **테스트 시스템 구축**: 단계적 테스트를 통한 안정성 확보
 
 ### 기술적 혁신
 - ✅ **규칙 기반 파서**: 안정적인 법률 문서 구조 분석
