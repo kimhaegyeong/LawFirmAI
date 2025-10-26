@@ -10,11 +10,11 @@
 from .chat_service import ChatService
 from .enhanced_chat_service import EnhancedChatService
 from .conversation_manager import ConversationManager
-from .multi_turn_handler import MultiTurnHandler
+from .multi_turn_handler import MultiTurnQuestionHandler
 
 __all__ = [
     'ChatService',
     'EnhancedChatService',
     'ConversationManager',
-    'MultiTurnHandler'
+    'MultiTurnQuestionHandler'
 ]

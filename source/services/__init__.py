@@ -25,7 +25,7 @@ __all__ = [
     "ChatService",
     "EnhancedChatService",
     "ConversationManager",
-    "MultiTurnHandler",
+    "MultiTurnQuestionHandler",
 
     # 검색 서비스
     "SearchService",
