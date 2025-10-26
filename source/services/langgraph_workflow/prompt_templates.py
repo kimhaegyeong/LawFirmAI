@@ -5,13 +5,13 @@
 통합 프롬프트 관리 시스템과 연동
 """
 
-from typing import Dict, List, Optional
-import sys
 import os
+import sys
+from typing import Dict, List, Optional
 
 # 상위 디렉토리의 모듈 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ..unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from ..unified_prompt_manager import LegalDomain, ModelType, UnifiedPromptManager
 
 
 class LegalPromptTemplates:
@@ -357,59 +357,9 @@ class LegalPromptTemplates:
     def get_template_for_query_type(self, query_type: str, domain: Optional[str] = None, model_type: str = "gemini") -> str:
         """질문 유형별 템플릿 반환 (통합 시스템 사용)"""
         try:
-            # 통합 프롬프트 관리자 사용
-            if hasattr(self, 'unified_manager'):
-                # 질문 유형 매핑
-                question_type_mapping = {
-                    "contract_review": "LEGAL_ADVICE",
-                    "family_law": "LEGAL_ADVICE",
-                    "criminal_law": "LEGAL_ADVICE",
-                    "civil_law": "LEGAL_ADVICE",
-                    "labor_law": "LEGAL_ADVICE",
-                    "property_law": "LEGAL_ADVICE",
-                    "intellectual_property": "LEGAL_ADVICE",
-                    "tax_law": "LEGAL_ADVICE",
-                    "civil_procedure": "PROCEDURE_GUIDE",
-                    "general_question": "GENERAL_QUESTION"
-                }
-
-                # 도메인 매핑
-                domain_mapping = {
-                    "contract_review": LegalDomain.CIVIL_LAW,
-                    "family_law": LegalDomain.FAMILY_LAW,
-                    "criminal_law": LegalDomain.CRIMINAL_LAW,
-                    "civil_law": LegalDomain.CIVIL_LAW,
-                    "labor_law": LegalDomain.LABOR_LAW,
-                    "property_law": LegalDomain.PROPERTY_LAW,
-                    "intellectual_property": LegalDomain.INTELLECTUAL_PROPERTY,
-                    "tax_law": LegalDomain.TAX_LAW,
-                    "civil_procedure": LegalDomain.CIVIL_PROCEDURE,
-                    "general_question": LegalDomain.GENERAL
-                }
-
-                # 모델 타입 매핑
-                model_mapping = {
-                    "gemini": ModelType.GEMINI,
-                    "ollama": ModelType.OLLAMA,
-                    "openai": ModelType.OPENAI
-                }
-
-                from question_classifier import QuestionType
-                question_type = getattr(QuestionType, question_type_mapping.get(query_type, "GENERAL_QUESTION"))
-                legal_domain = domain_mapping.get(query_type, LegalDomain.GENERAL)
-                model_type_enum = model_mapping.get(model_type, ModelType.GEMINI)
-
-                # 통합 프롬프트 관리자에서 템플릿 가져오기
-                return self.unified_manager.get_optimized_prompt(
-                    query="",  # 빈 쿼리로 템플릿만 가져오기
-                    question_type=question_type,
-                    domain=legal_domain,
-                    context={},
-                    model_type=model_type_enum
-                )
-            else:
-                # 기존 방식으로 폴백
-                return self._get_template_legacy(query_type)
+            # 🔧 통합 프롬프트 관리자는 완성된 프롬프트를 반환하므로 템플릿을 얻기에는 부적합합니다.
+            # 대신 기존 방식(_get_template_legacy)을 사용합니다.
+            return self._get_template_legacy(query_type)
 
         except Exception as e:
             print(f"Error getting template for query type {query_type}: {e}")

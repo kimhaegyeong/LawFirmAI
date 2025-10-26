@@ -4,21 +4,21 @@
 LangGraph 기반 통합 법률 AI 워크플로우 서비스
 """
 
+import asyncio
 import logging
 import time
-import asyncio
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from langgraph.graph import StateGraph, END
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint
-from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import END, StateGraph
 
-from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from .state_definitions import LegalWorkflowState
-from .checkpoint_manager import CheckpointManager
 from ...utils.langgraph_config import LangGraphConfig, langgraph_config
 from ...utils.logger import get_logger
+from .checkpoint_manager import CheckpointManager
+from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+from .state_definitions import LegalWorkflowState
 
 logger = get_logger(__name__)
 
@@ -68,11 +68,17 @@ class IntegratedWorkflowService:
                 query, context, session_id, user_id
             )
 
+            self.logger.info(f"🚀 LangGraph 워크플로우 실행 시작")
+            self.logger.info(f"📊 초기 상태 키: {list(initial_state.keys())}")
+            self.logger.info(f"📊 초기 상태 쿼리: '{initial_state.get('query', 'NOT_FOUND')}'")
+
             # 워크플로우 실행
             result = await self.graph_app.ainvoke(
                 initial_state,
                 config={"configurable": {"thread_id": session_id}}
             )
+
+            self.logger.info(f"✅ LangGraph 워크플로우 실행 완료")
 
             # 결과 디버깅
             self.logger.info(f"LangGraph workflow result keys: {list(result.keys())}")
@@ -104,6 +110,7 @@ class IntegratedWorkflowService:
             # 기본 쿼리 정보
             "query": query,
             "user_query": query,
+            "original_query": query,
             "context": context or "",
             "session_id": session_id or f"session_{int(time.time())}",
             "user_id": user_id or f"user_{int(time.time())}",

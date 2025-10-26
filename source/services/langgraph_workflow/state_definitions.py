@@ -4,85 +4,89 @@
 LangGraph 기반 법률 워크플로우를 위한 확장된 상태 정의
 """
 
-from typing import TypedDict, List, Optional, Dict, Any, Union
 from datetime import datetime
+from typing import Any, Dict, List, Optional, TypedDict, Union
+
 from langchain_core.messages import BaseMessage
 
 
 class LegalWorkflowState(TypedDict):
     """법률 워크플로우 상태 정의"""
-    
+
     # === 기본 입력 정보 ===
-    user_query: str
+    query: Optional[str]  # 워크플로우 내부에서 사용되는 쿼리
+    user_query: str  # 사용자 원본 쿼리
     context: Optional[str]
     session_id: str
     user_id: str
-    
+
     # === 처리 단계별 결과 ===
     input_validation: Dict[str, Any]
     question_classification: Dict[str, Any]
     domain_analysis: Dict[str, Any]
-    retrieved_documents: List[Dict[str, Any]]
+    retrieved_docs: List[Dict[str, Any]]  # 🆕 필드명 통일
     legal_analysis: Dict[str, Any]
     generated_response: str
+    answer: str  # 🆕 최종 답변 (generated_response와 동일)
+    response: str  # 🆕 응답 텍스트
     quality_metrics: Dict[str, Any]
-    
+
     # === 메타데이터 ===
     workflow_steps: List[str]
     processing_time: float
     confidence_score: float
     error_messages: List[str]
-    
+
     # === 대화 히스토리 ===
     conversation_history: List[BaseMessage]
     user_preferences: Dict[str, Any]
-    
+
     # === 중간 결과들 ===
     intermediate_results: Dict[str, Any]
     validation_results: Dict[str, Any]
-    
+
     # === 확장된 필드들 ===
     enriched_context: Dict[str, Any]
     agent_coordination: Dict[str, Any]
     synthesis_result: Dict[str, Any]
     quality_assurance_result: Dict[str, Any]
-    
+
     # === 멀티 에이전트 결과 ===
     research_agent_result: Dict[str, Any]
     analysis_agent_result: Dict[str, Any]
     review_agent_result: Dict[str, Any]
-    
+
     # === 성능 메트릭 ===
     performance_metrics: Dict[str, Any]
     memory_usage: Dict[str, Any]
-    
+
     # === 사용자 컨텍스트 ===
     user_expertise_level: str
     preferred_response_style: str
     device_info: Dict[str, Any]
-    
+
     # === 법률 특화 정보 ===
     legal_domain: str
     statute_references: List[Dict[str, Any]]
     precedent_references: List[Dict[str, Any]]
     legal_confidence: float
-    
+
     # === 워크플로우 제어 ===
     current_step: str
     next_step: Optional[str]
     workflow_completed: bool
     requires_human_review: bool
-    
+
     # === 캐싱 및 최적화 ===
     cache_hits: List[str]
     cache_misses: List[str]
     optimization_applied: List[str]
-    
+
     # === 모니터링 및 로깅 ===
     trace_id: Optional[str]
     span_id: Optional[str]
     log_entries: List[Dict[str, Any]]
-    
+
     # === 확장성 필드 ===
     custom_fields: Dict[str, Any]
     plugin_results: Dict[str, Any]
@@ -210,6 +214,7 @@ class WorkflowCheckpoint(TypedDict):
 def create_empty_state() -> LegalWorkflowState:
     """빈 상태 생성"""
     return LegalWorkflowState(
+        query="",
         user_query="",
         context=None,
         session_id="",
@@ -217,9 +222,11 @@ def create_empty_state() -> LegalWorkflowState:
         input_validation={},
         question_classification={},
         domain_analysis={},
-        retrieved_documents=[],
+        retrieved_docs=[],  # retrieved_documents -> retrieved_docs로 통일
         legal_analysis={},
         generated_response="",
+        answer="",  # 🆕 최종 답변
+        response="",  # 🆕 응답 텍스트
         quality_metrics={},
         workflow_steps=[],
         processing_time=0.0,
@@ -261,12 +268,13 @@ def create_empty_state() -> LegalWorkflowState:
     )
 
 
-def create_initial_state(query: str, session_id: str, user_id: str, 
+def create_initial_state(query: str, session_id: str, user_id: str,
                         context: Optional[str] = None) -> LegalWorkflowState:
     """초기 상태 생성"""
     state = create_empty_state()
     state.update({
-        "user_query": query,
+        "query": query,  # 워크플로우 내부용 쿼리
+        "user_query": query,  # 원본 사용자 쿼리
         "context": context,
         "session_id": session_id,
         "user_id": user_id,
@@ -277,13 +285,13 @@ def create_initial_state(query: str, session_id: str, user_id: str,
     return state
 
 
-def update_workflow_step(state: LegalWorkflowState, step_name: str, 
+def update_workflow_step(state: LegalWorkflowState, step_name: str,
                         step_data: Dict[str, Any]) -> LegalWorkflowState:
     """워크플로우 단계 업데이트"""
     workflow_steps = state.get("workflow_steps", [])
     if step_name not in workflow_steps:
         workflow_steps.append(step_name)
-    
+
     return {
         **state,
         "workflow_steps": workflow_steps,
@@ -296,7 +304,7 @@ def add_error_message(state: LegalWorkflowState, error_message: str) -> LegalWor
     """오류 메시지 추가"""
     error_messages = state.get("error_messages", [])
     error_messages.append(error_message)
-    
+
     return {
         **state,
         "error_messages": error_messages

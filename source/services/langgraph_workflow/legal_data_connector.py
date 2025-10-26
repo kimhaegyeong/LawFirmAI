@@ -4,34 +4,34 @@
 모의 데이터 대신 실제 법률 데이터베이스 사용
 """
 
+import json
 import logging
 import sqlite3
-from typing import List, Dict, Any, Optional
 from pathlib import Path
-import json
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class LegalDataConnector:
     """실제 법률 데이터베이스 연결 및 검색 서비스"""
-    
-    def __init__(self, db_path: str = "./data/lawfirm.db"):
+
+    def __init__(self, db_path: str = "data/lawfirm.db"):
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         self._ensure_database_exists()
-    
+
     def _ensure_database_exists(self):
         """데이터베이스 존재 확인 및 초기화"""
         if not Path(self.db_path).exists():
             self.logger.warning(f"Database {self.db_path} not found. Creating with sample data.")
             self._create_sample_database()
-    
+
     def _create_sample_database(self):
         """샘플 법률 데이터베이스 생성"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # 법률 문서 테이블 생성
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS legal_documents (
@@ -43,7 +43,7 @@ class LegalDataConnector:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
+
         # 샘플 데이터 삽입
         sample_documents = [
             {
@@ -107,102 +107,289 @@ class LegalDataConnector:
                 "source": "민사소송법"
             }
         ]
-        
+
         for doc in sample_documents:
             cursor.execute('''
                 INSERT INTO legal_documents (title, content, category, source)
                 VALUES (?, ?, ?, ?)
             ''', (doc["title"], doc["content"], doc["category"], doc["source"]))
-        
+
         conn.commit()
         conn.close()
         self.logger.info(f"Sample database created with {len(sample_documents)} documents")
-    
+
+    async def search_legal_documents(self, query: str, domain_hints: List[str] = None) -> List[Dict[str, Any]]:
+        """법률 문서 비동기 검색 (LangGraph 워크플로우용)"""
+        try:
+            # 도메인 힌트가 있으면 해당 카테고리로 검색
+            category = None
+            if domain_hints:
+                # 도메인 힌트를 카테고리로 매핑
+                domain_mapping = {
+                    "labor": "labor_law",
+                    "family": "family_law",
+                    "criminal": "criminal_law",
+                    "civil": "civil_law",
+                    "property": "property_law",
+                    "intellectual_property": "intellectual_property",
+                    "tax": "tax_law",
+                    "contract": "contract_review",
+                    "procedure": "civil_procedure"
+                }
+
+                for hint in domain_hints:
+                    if hint in domain_mapping:
+                        category = domain_mapping[hint]
+                        break
+
+            # 동기 메서드 호출
+            results = self.search_documents(query, category, limit=5)
+
+            # 결과를 LangGraph 워크플로우 형식으로 변환
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "id": result["id"],
+                    "title": result["title"],
+                    "content": result["content"],
+                    "category": result["category"],
+                    "source": result["source"],
+                    "relevance_score": result["relevance_score"],
+                    "created_at": result["created_at"]
+                })
+
+            self.logger.info(f"Found {len(formatted_results)} legal documents for query: {query}")
+            return formatted_results
+
+        except Exception as e:
+            self.logger.error(f"Error searching legal documents: {e}")
+            return []
+
+    def _extract_keywords(self, query: str) -> List[str]:
+        """질문에서 법률 관련 키워드 추출"""
+        keywords = []
+
+        # 법률 키워드 매핑
+        legal_keywords = {
+            "야간수당": ["야간", "야간수당", "야근", "야간근로"],
+            "연장근무": ["연장근무", "연장", "초과근무", "휴일근무"],
+            "중복": ["중복", "이중"],
+            "상속분": ["상속분", "상속"],
+            "유언장": ["유언장", "유언"],
+            "법정상속인": ["상속인", "법정상속"],
+            "손해배상": ["손해배상", "손해", "배상"],
+            "불법행위": ["불법행위", "불법"],
+        }
+
+        # 질문에서 키워드 찾기
+        for keyword, variations in legal_keywords.items():
+            if any(v in query for v in variations):
+                keywords.append(keyword)
+
+        # 질문 자체를 키워드로 추가
+        keywords.append(query)
+
+        return keywords
+
     def search_documents(self, query: str, category: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
-        """법률 문서 검색"""
+        """실제 데이터베이스 테이블에서 법률 문서 검색"""
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
-            # 검색 쿼리 구성
-            if category:
-                sql = '''
-                    SELECT id, title, content, category, source, created_at
-                    FROM legal_documents 
-                    WHERE category = ? AND (title LIKE ? OR content LIKE ?)
-                    ORDER BY 
-                        CASE WHEN title LIKE ? THEN 1 ELSE 2 END,
-                        LENGTH(content) DESC
-                    LIMIT ?
-                '''
-                search_term = f"%{query}%"
-                params = (category, search_term, search_term, search_term, limit)
-            else:
-                sql = '''
-                    SELECT id, title, content, category, source, created_at
-                    FROM legal_documents 
-                    WHERE title LIKE ? OR content LIKE ?
-                    ORDER BY 
-                        CASE WHEN title LIKE ? THEN 1 ELSE 2 END,
-                        LENGTH(content) DESC
-                    LIMIT ?
-                '''
-                search_term = f"%{query}%"
-                params = (search_term, search_term, search_term, limit)
-            
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-            
+
             results = []
-            for row in rows:
+
+            # 🆕 키워드 추출 및 확장
+            keywords = self._extract_keywords(query)
+            self.logger.info(f"🔍 검색 키워드: {keywords}")
+
+            # 검색어 생성 (OR 조건으로 확장된 검색)
+            search_conditions = " OR ".join(["article_content LIKE ?" for _ in keywords])
+            search_params = [f"%{kw}%" for kw in keywords]
+
+            # 🆕 추가 로깅
+            self.logger.info(f"📝 search_conditions: {search_conditions}")
+            self.logger.info(f"📝 search_params 개수: {len(search_params)}")
+            self.logger.info(f"📝 search_params: {search_params[:3]}...")  # 처음 3개만
+
+            search_term = f"%{query}%"
+
+            # 1. 현행법 조문 검색 (current_laws_articles) - 🆕 키워드 확장 검색
+            search_sql = f'''
+                SELECT
+                    'current_law' as source_type,
+                    law_name_korean as title,
+                    article_content as content,
+                    'current_law' as category,
+                    article_number as article_num,
+                    law_id as source
+                FROM current_laws_articles
+                WHERE ({search_conditions}) OR law_name_korean LIKE ?
+                ORDER BY
+                    CASE
+                        WHEN article_content LIKE ? THEN 1
+                        WHEN law_name_korean LIKE ? THEN 2
+                        ELSE 3
+                    END,
+                    LENGTH(article_content) DESC
+                LIMIT ?
+            '''
+
+            # 파라미터 구성: 키워드 검색 조건들 + OR law_name LIKE + 정렬용 + LIMIT
+            params = search_params + [search_term] + [search_term, search_term, limit]
+
+            self.logger.info(f"🔍 검색 SQL 실행: {len(keywords)}개 키워드")
+            cursor.execute(search_sql, params)
+
+            current_law_results = cursor.fetchall()
+            self.logger.info(f"📊 현재법 조문 검색: {len(current_law_results)}개 발견")
+            for row in current_law_results:
                 results.append({
-                    "id": row["id"],
-                    "title": row["title"],
+                    "id": f"current_{row['source']}_{row['article_num']}",
+                    "title": f"{row['title']} 제{row['article_num']}조",
                     "content": row["content"],
-                    "category": row["category"],
+                    "category": "current_law",
                     "source": row["source"],
-                    "created_at": row["created_at"],
+                    "created_at": "2024-01-01",
                     "relevance_score": self._calculate_relevance_score(query, row["content"])
                 })
-            
+
+            # 2. 법령 조문 검색 (assembly_articles) - 🆕 키워드 확장 검색
+            remaining_limit = limit - len(results)
+            if remaining_limit > 0:
+                assembly_sql = f'''
+                    SELECT
+                        'assembly_law' as source_type,
+                        article_title as title,
+                        article_content as content,
+                        'assembly_law' as category,
+                        article_number as article_num,
+                        law_id as source
+                    FROM assembly_articles
+                    WHERE ({search_conditions}) OR article_title LIKE ?
+                    ORDER BY
+                        CASE
+                            WHEN article_content LIKE ? THEN 1
+                            WHEN article_title LIKE ? THEN 2
+                            ELSE 3
+                        END,
+                        LENGTH(article_content) DESC
+                    LIMIT ?
+                '''
+
+                assembly_params = search_params + [search_term] + [search_term, search_term, remaining_limit]
+                cursor.execute(assembly_sql, assembly_params)
+
+                assembly_results = cursor.fetchall()
+                for row in assembly_results:
+                    results.append({
+                        "id": f"assembly_{row['source']}_{row['article_num']}",
+                        "title": f"{row['title']} 제{row['article_num']}조",
+                        "content": row["content"],
+                        "category": "assembly_law",
+                        "source": row["source"],
+                        "created_at": "2024-01-01",
+                        "relevance_score": self._calculate_relevance_score(query, row["content"])
+                    })
+
+            # 3. 판례 검색 (precedent_cases) - 🆕 키워드 확장 검색
+            remaining_limit = limit - len(results)
+            if remaining_limit > 0:
+                precedent_sql = f'''
+                    SELECT
+                        'precedent' as source_type,
+                        case_name as title,
+                        full_text as content,
+                        category as category,
+                        case_number as article_num,
+                        court as source
+                    FROM precedent_cases
+                    WHERE ({search_conditions}) OR case_name LIKE ?
+                    ORDER BY
+                        CASE
+                            WHEN full_text LIKE ? THEN 1
+                            WHEN case_name LIKE ? THEN 2
+                            ELSE 3
+                        END,
+                        LENGTH(full_text) DESC
+                    LIMIT ?
+                '''
+
+                precedent_params = search_params + [search_term] + [search_term, search_term, remaining_limit]
+                cursor.execute(precedent_sql, precedent_params)
+
+                precedent_results = cursor.fetchall()
+                for row in precedent_results:
+                    results.append({
+                        "id": f"precedent_{row['article_num']}",
+                        "title": row["title"],
+                        "content": row["content"],
+                        "category": row["category"],
+                        "source": row["source"],
+                        "created_at": "2024-01-01",
+                        "relevance_score": self._calculate_relevance_score(query, row["content"])
+                    })
+
             conn.close()
             self.logger.info(f"Found {len(results)} documents for query: {query}")
             return results
-            
+
         except Exception as e:
             self.logger.error(f"Error searching documents: {e}")
             return []
-    
+
     def _calculate_relevance_score(self, query: str, content: str) -> float:
-        """간단한 관련성 점수 계산"""
-        query_words = set(query.lower().split())
-        content_words = set(content.lower().split())
-        
-        if not query_words:
+        """개선된 관련성 점수 계산"""
+        if not query or not content:
             return 0.0
-        
-        common_words = len(query_words.intersection(content_words))
-        return min(1.0, common_words / len(query_words))
-    
+
+        query_words = set(query.lower().split())
+        content_lower = content.lower()
+
+        # 단어별 매칭 점수
+        word_matches = 0
+        for word in query_words:
+            if word in content_lower:
+                word_matches += 1
+
+        # 기본 점수 계산
+        base_score = word_matches / len(query_words) if query_words else 0.0
+
+        # 구문 매칭 보너스
+        phrase_bonus = 0.0
+        if len(query) > 2:
+            if query.lower() in content_lower:
+                phrase_bonus = 0.3
+
+        # 길이 기반 보너스 (너무 짧거나 긴 내용에 대한 패널티)
+        length_penalty = 0.0
+        if len(content) < 50:
+            length_penalty = -0.2
+        elif len(content) > 2000:
+            length_penalty = -0.1
+
+        final_score = min(1.0, max(0.0, base_score + phrase_bonus + length_penalty))
+        return round(final_score, 2)
+
     def get_document_by_category(self, category: str, limit: int = 3) -> List[Dict[str, Any]]:
         """카테고리별 문서 조회"""
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
+
             cursor.execute('''
                 SELECT id, title, content, category, source, created_at
-                FROM legal_documents 
+                FROM legal_documents
                 WHERE category = ?
                 ORDER BY created_at DESC
                 LIMIT ?
             ''', (category, limit))
-            
+
             rows = cursor.fetchall()
             results = []
-            
+
             for row in rows:
                 results.append({
                     "id": row["id"],
@@ -213,47 +400,47 @@ class LegalDataConnector:
                     "created_at": row["created_at"],
                     "relevance_score": 0.8  # 카테고리 매칭 시 높은 점수
                 })
-            
+
             conn.close()
             return results
-            
+
         except Exception as e:
             self.logger.error(f"Error getting documents by category: {e}")
             return []
-    
+
     def get_all_categories(self) -> List[str]:
         """모든 카테고리 조회"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             cursor.execute('SELECT DISTINCT category FROM legal_documents ORDER BY category')
             categories = [row[0] for row in cursor.fetchall()]
-            
+
             conn.close()
             return categories
-            
+
         except Exception as e:
             self.logger.error(f"Error getting categories: {e}")
             return []
-    
+
     def add_document(self, title: str, content: str, category: str, source: str = "Manual") -> bool:
         """새 문서 추가"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             cursor.execute('''
                 INSERT INTO legal_documents (title, content, category, source)
                 VALUES (?, ?, ?, ?)
             ''', (title, content, category, source))
-            
+
             conn.commit()
             conn.close()
-            
+
             self.logger.info(f"Added new document: {title}")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error adding document: {e}")
             return False
