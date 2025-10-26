@@ -33,6 +33,8 @@
 - `search-engine`: 검색 엔진 관련
 - `database`: 데이터베이스 관련
 - `chat-service`: 채팅 서비스 관련
+- `langgraph`: LangGraph 워크플로우 관련 (NEW - 2025.01.18)
+- `vector-store`: 벡터 스토어 및 FAISS 관련 (NEW - 2025.01.18)
 - `api`: API 관련
 - `ui`: 사용자 인터페이스 관련
 - `config`: 설정 관련
@@ -104,6 +106,27 @@ fix(legal-terms): resolve JSON serialization issue
 - Improve data validation logic
 
 Fixes #790
+```
+
+```
+feat(langgraph): integrate vector store into legal workflow
+
+- Add vector store initialization to EnhancedLegalQuestionWorkflow
+- Implement hybrid search (vector + database) in retrieve_documents
+- Update confidence calculation with dynamic scoring logic
+- Optimize memory usage with 1500MB threshold
+
+Closes #123
+```
+
+```
+fix(langgraph): resolve vector search initialization issue
+
+- Fix vector store loading from multiple index paths
+- Add proper error handling for missing vector indices
+- Improve logging for vector store status
+
+Fixes #456
 ```
 
 ### 커밋 메시지 작성 가이드라인
@@ -643,4 +666,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 CMD ["python", "gradio/simple_langchain_app.py"]
 ```
-

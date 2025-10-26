@@ -11,6 +11,14 @@
 - **신뢰도 표시**: 답변 신뢰성을 수치화하여 투명성 제공
 - **자연스러운 대화**: 감정 톤 조절, 개인화 스타일 학습
 
+### 🔄 LangGraph 워크플로우 시스템 (신규)
+- **상태 기반 워크플로우**: LangGraph를 활용한 고도화된 질문 처리 파이프라인
+- **벡터 검색 통합**: 워크플로우에 벡터 스토어 통합으로 의미적 검색 활성화
+- **동적 신뢰도 계산**: 응답 길이, 문서 수, 질문 유형, 법률 키워드 종합 분석
+- **하이브리드 검색**: 벡터 검색 우선, 데이터베이스 검색 보완하는 통합 시스템
+- **메모리 최적화**: 벡터 스토어 메모리 임계값 조정 및 적극적 메모리 정리
+- **응답 품질 개선**: 자연스럽고 친근한 법률 상담 스타일로 프롬프트 개선
+
 ### 🔍 하이브리드 검색 시스템
 - **정확한 매칭**: 법령명, 조문번호, 사건번호 등 정확한 검색
 - **의미적 검색**: FAISS 기반 벡터 검색으로 맥락적 검색
@@ -35,6 +43,8 @@
 - **BGE-M3-Korean**: 다국어 임베딩 모델
 - **FAISS**: 고성능 벡터 검색 엔진
 - **질문 분류 모델**: 사용자 질문 유형 자동 분류
+- **LangGraph**: 상태 기반 AI 워크플로우 프레임워크
+- **Google Gemini**: 고성능 LLM 모델 (ChatGoogleGenerativeAI)
 
 ### Backend
 - **FastAPI**: RESTful API 서버 (v2.0.0)
@@ -72,13 +82,23 @@ gradio/stop_server.bat
 - **[개발 규칙 및 가이드라인](docs/01_project_overview/development_rules.md)**: 프로세스 관리, 로깅, 보안, 테스트 규칙
 - **[한국어 인코딩 개발 규칙](docs/01_project_overview/encoding_development_rules.md)**: Windows 환경의 CP949 인코딩 문제 해결을 위한 개발 규칙
 - **[TASK별 상세 개발 계획](docs/development/TASK/TASK별%20상세%20개발%20계획_v1.0.md)**: 프로젝트 진행 현황 및 계획
+- **[LangGraph 워크플로우 가이드](docs/07_performance_optimization/langgraph_workflow_guide.md)**: LangGraph 기반 고도화된 질문 처리 시스템 가이드 (NEW - 2025.01.18)
 - **[성능 최적화 완료 보고서](docs/07_performance_optimization/performance_optimization_report.md)**: 응답 시간 78% 단축 성과 및 기술적 세부사항
 - **[성능 최적화 가이드](docs/07_performance_optimization/performance_optimization_guide.md)**: 최적화된 컴포넌트 사용법 및 성능 튜닝 방법
 
 ## 🔧 최신 업데이트
 
+### 2025-01-18: LangGraph 워크플로우 시스템 및 벡터 검색 통합 완료 🚀
+- ✅ **LangGraph 워크플로우 통합**: Enhanced Legal Question Workflow로 고도화된 질문 처리
+- ✅ **벡터 검색 활성화**: LangGraph 워크플로우에 벡터 스토어 통합으로 의미적 검색 활성화
+- ✅ **동적 신뢰도 계산**: 응답 길이, 문서 수, 질문 유형, 법률 키워드를 종합한 신뢰도 시스템
+- ✅ **메모리 최적화**: 벡터 스토어 메모리 임계값 조정 및 적극적 메모리 정리 시스템
+- ✅ **응답 품질 개선**: 자연스럽고 친근한 법률 상담 스타일로 프롬프트 템플릿 개선
+- ✅ **하이브리드 검색**: 벡터 검색 우선, 데이터베이스 검색 보완하는 통합 검색 시스템
+- ✅ **성능 최적화**: 캐싱 시스템 개선 및 워크플로우 효율성 향상
+
 ### 2025-10-25: Enhanced Chat Service 및 통합 검색 엔진 시스템 완료 🚀
-- ✅ **Enhanced Chat Service**: Phase 1-3 통합 완전한 채팅 서비스 (2,574라인)
+- ✅ **Enhanced Chat Service**: Phase 1-3 통합 완전한 채팅 서비스 (2,497라인)
 - ✅ **통합 검색 엔진**: UnifiedSearchEngine, IntegratedLawSearchService, EnhancedLawSearchEngine 통합
 - ✅ **성능 모니터링**: 실시간 성능 추적 및 메모리 관리 시스템 (356라인)
 - ✅ **현행법령 검색**: 국가법령정보센터 OpenAPI 기반 실시간 법령 검색
@@ -317,7 +337,12 @@ gradio/stop_server.bat
 LawFirmAI/
 ├── source/                    # 핵심 소스 코드
 │   ├── services/             # 비즈니스 로직
-│   │   ├── enhanced_chat_service.py      # Enhanced Chat Service (3,588라인)
+│   │   ├── enhanced_chat_service.py      # Enhanced Chat Service (2,497라인)
+│   │   ├── langgraph_workflow/           # LangGraph 워크플로우 시스템
+│   │   │   ├── legal_workflow_enhanced.py # 향상된 법률 워크플로우 (694라인)
+│   │   │   ├── integrated_workflow_service.py # 통합 워크플로우 서비스
+│   │   │   ├── prompt_templates.py       # 법률 프롬프트 템플릿
+│   │   │   └── ...                       # 기타 워크플로우 컴포넌트
 │   │   ├── unified_search_engine.py     # 통합 검색 엔진 (460라인)
 │   │   ├── integrated_law_search_service.py # 통합 조문 검색 (578라인)
 │   │   ├── enhanced_law_search_engine.py # 향상된 법령 검색 (1,299라인)
@@ -325,6 +350,7 @@ LawFirmAI/
 │   │   └── ...                         # 기타 서비스들
 │   ├── models/               # AI 모델 관련
 │   ├── data/                 # 데이터 처리
+│   │   └── vector_store.py   # 벡터 스토어 관리 (FAISS 통합)
 │   ├── api/                  # API 관련
 │   │   └── main.py           # FastAPI 서버 실행
 │   └── utils/                # 유틸리티
@@ -332,12 +358,17 @@ LawFirmAI/
 │   ├── raw/                  # 원본 데이터
 │   ├── processed/            # 전처리된 데이터
 │   ├── embeddings/           # 벡터 임베딩
+│   │   ├── ml_enhanced_ko_sroberta/      # 최대 데이터셋 벡터 인덱스
+│   │   ├── ml_enhanced_ko_sroberta_precedents/ # 판례 벡터 인덱스
+│   │   └── legal_vector_index/          # 기본 벡터 인덱스
 │   └── database/             # SQLite 데이터베이스
 ├── tests/                    # 테스트 코드 (13개 카테고리)
 │   ├── unit/                 # 단위 테스트
 │   ├── integration/          # 통합 테스트
 │   ├── performance/          # 성능 테스트
 │   ├── quality/              # 품질 테스트
+│   ├── demos/                # 데모 및 예제 테스트
+│   │   └── final_comprehensive_test_simple.py # 종합 답변 품질 테스트
 │   └── ...                   # 기타 테스트 카테고리
 ├── scripts/                  # 유틸리티 스크립트
 │   ├── data_collection/      # 데이터 수집
@@ -346,6 +377,7 @@ LawFirmAI/
 │   └── monitoring/           # 모니터링
 ├── docs/                     # 문서
 ├── monitoring/               # Grafana + Prometheus 모니터링
+├── .env                      # 환경 변수 설정
 └── requirements.txt          # 의존성
 ```
 
@@ -378,14 +410,25 @@ pip install -r requirements.txt
 ### 2. 환경 변수 설정 (선택사항)
 
 ```bash
-# OpenAI API 키 설정
-export OPENAI_API_KEY="your_openai_key"
-
-# Google AI API 키 설정
+# Google AI API 키 설정 (필수)
 export GOOGLE_API_KEY="your_google_key"
+
+# Langfuse 모니터링 설정 (선택사항)
+export LANGFUSE_PUBLIC_KEY="pk-lf-your-public-key"
+export LANGFUSE_SECRET_KEY="sk-lf-your-secret-key"
+export LANGFUSE_HOST="https://cloud.langfuse.com"
 
 # 디버그 모드 활성화
 export DEBUG="true"
+export LOG_LEVEL="INFO"
+
+# 벡터 스토어 설정
+export VECTOR_STORE_PATH="./data/embeddings/faiss_index"
+export EMBEDDING_MODEL="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# LangGraph 설정
+export LANGGRAPH_ENABLED="true"
+export LANGGRAPH_CHECKPOINT_DB="./data/checkpoints/langgraph.db"
 ```
 
 ### 3. 애플리케이션 실행
@@ -400,6 +443,17 @@ python source/api/main.py
 - **API 문서**: http://localhost:8000/docs
 
 ## 📊 성능 벤치마크
+
+### LangGraph 워크플로우 시스템 성능 (2025-01-18)
+
+| 지표 | 값 | 설명 |
+|------|-----|------|
+| **평균 처리 시간** | 21.810초 | LangGraph 워크플로우 기반 질문 처리 |
+| **성공률** | 100% | 모든 테스트 케이스 통과 |
+| **평균 신뢰도** | 0.30 | 동적 신뢰도 계산 시스템 |
+| **메모리 사용량** | 1500MB 임계값 | 최적화된 메모리 관리 |
+| **벡터 검색 통합** | 활성화 | LangGraph 워크플로우에 벡터 스토어 통합 |
+| **하이브리드 검색** | 벡터+DB | 벡터 검색 우선, 데이터베이스 보완 |
 
 ### 성능 최적화 결과 (2025-01-10)
 
@@ -473,24 +527,27 @@ python tests/run_tests.py performance
 python tests/run_tests.py quality
 ```
 
-#### 테스트 카테고리 (13개)
-- **unit**: 단위 테스트
-- **integration**: 통합 테스트
-- **performance**: 성능 테스트
-- **quality**: 품질 테스트
-- **memory**: 메모리 관련 테스트
-- **classification**: 분류 시스템 테스트
-- **legal_systems**: 법률 시스템 테스트
-- **contracts**: 계약 관련 테스트
-- **external_integrations**: 외부 시스템 통합 테스트
-- **conversational**: 대화 관련 테스트
-- **database**: 데이터베이스 테스트
-- **demos**: 데모 및 예제 테스트
-- **regression**: 회귀 테스트
+#### 종합 답변 품질 테스트
+```bash
+# LangGraph 워크플로우 기반 종합 테스트
+python tests/demos/final_comprehensive_test_simple.py
+
+# 테스트 결과 예시:
+# - 총 테스트: 5개
+# - 성공률: 100%
+# - 평균 신뢰도: 0.30
+# - 평균 처리 시간: 21.810초
+# - 벡터 검색 통합: 활성화
+```
 
 ## 📚 API 문서
 
 ### 주요 엔드포인트
+
+#### LangGraph 워크플로우 API (신규)
+- `POST /api/v1/chat/langgraph` - LangGraph 기반 고도화된 질문 처리
+- `POST /api/v1/chat/langgraph-enhanced` - 향상된 LangGraph 워크플로우
+- `GET /api/v1/langgraph/status` - LangGraph 워크플로우 상태 확인
 
 #### Enhanced Chat Service API
 - `POST /api/v1/chat/ml-enhanced` - ML 강화 채팅
@@ -512,6 +569,28 @@ python tests/run_tests.py quality
 - `GET /docs` - API 문서 (Swagger UI)
 
 ### 사용 예제
+
+#### LangGraph 워크플로우 API (신규)
+```python
+import requests
+
+# LangGraph 기반 고도화된 질문 처리
+response = requests.post(
+    "http://localhost:8000/api/v1/chat/langgraph-enhanced",
+    json={
+        "message": "퇴직금 계산 방법과 지급 시기를 알려주세요",
+        "session_id": "user_session_123",
+        "context": "노동법 관련 질문",
+        "user_id": "user_001"
+    }
+)
+
+result = response.json()
+print(f"답변: {result['response']}")
+print(f"신뢰도: {result['confidence']}")
+print(f"처리 시간: {result['processing_time']}초")
+print(f"검색 결과 수: {len(result['sources'])}")
+```
 
 #### 지능형 채팅 v2 API
 ```python
