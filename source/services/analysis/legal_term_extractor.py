@@ -4,18 +4,19 @@
 Gemini 2.5 Flash Lite를 활용한 용어 검증
 """
 
-import os
 import json
 import logging
-import requests
-import time
-from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import dataclass
-from pathlib import Path
+import os
 import re
+import time
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from .gemini_client import GeminiClient, GeminiResponse
+import requests
+
+from ...models.gemini_client import GeminiClient, GeminiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,11 @@ class LegalTerm:
 
 class LegalActTermExtractor:
     """법령 기반 용어 추출기"""
-    
+
     def __init__(self):
         """법령 기반 용어 추출기 초기화"""
         self.logger = logging.getLogger(__name__)
-        
+
         # 주요 법령별 핵심 용어 정의
         self.legal_acts_terms = {
             "민법": {
@@ -177,14 +178,14 @@ class LegalActTermExtractor:
                 }
             }
         }
-    
+
     def extract_terms_from_legal_acts(self) -> List[LegalTerm]:
         """법령에서 용어 추출"""
         extracted_terms = []
-        
+
         for act_name, act_data in self.legal_acts_terms.items():
             domain = act_data["domain"]
-            
+
             for term_name, term_data in act_data["terms"].items():
                 legal_term = LegalTerm(
                     term=term_name,
@@ -197,18 +198,18 @@ class LegalActTermExtractor:
                     confidence=0.9  # 법령 기반이므로 높은 신뢰도
                 )
                 extracted_terms.append(legal_term)
-        
+
         self.logger.info(f"법령에서 {len(extracted_terms)}개 용어 추출 완료")
         return extracted_terms
 
 
 class PrecedentTermExtractor:
     """판례 기반 용어 추출기"""
-    
+
     def __init__(self):
         """판례 기반 용어 추출기 초기화"""
         self.logger = logging.getLogger(__name__)
-        
+
         # 판례에서 자주 등장하는 용어들
         self.precedent_terms = {
             "가족법": {
@@ -284,11 +285,11 @@ class PrecedentTermExtractor:
                 }
             }
         }
-    
+
     def extract_terms_from_precedents(self) -> List[LegalTerm]:
         """판례에서 용어 추출"""
         extracted_terms = []
-        
+
         for domain, terms in self.precedent_terms.items():
             for term_name, term_data in terms.items():
                 legal_term = LegalTerm(
@@ -302,19 +303,19 @@ class PrecedentTermExtractor:
                     confidence=0.8  # 판례 기반이므로 중간 신뢰도
                 )
                 extracted_terms.append(legal_term)
-        
+
         self.logger.info(f"판례에서 {len(extracted_terms)}개 용어 추출 완료")
         return extracted_terms
 
 
 class GeminiTermValidator:
     """Gemini 2.5 Flash Lite를 활용한 용어 검증기"""
-    
+
     def __init__(self):
         """Gemini 용어 검증기 초기화"""
         self.gemini_client = GeminiClient()
         self.logger = logging.getLogger(__name__)
-    
+
     def validate_term(self, term: LegalTerm) -> Tuple[bool, float, str]:
         """개별 용어 검증"""
         try:
@@ -339,18 +340,18 @@ class GeminiTermValidator:
 신뢰도: [0.0-1.0]
 개선사항: [구체적인 개선사항이나 문제점]
 """
-            
+
             response = self.gemini_client.generate(validation_prompt)
-            
+
             # 응답 파싱
             accuracy, confidence, improvement = self._parse_validation_response(response)
-            
+
             return accuracy, confidence, improvement
-            
+
         except Exception as e:
             self.logger.error(f"용어 검증 중 오류 발생: {e}")
             return False, 0.0, f"검증 오류: {str(e)}"
-    
+
     def _parse_validation_response(self, response: GeminiResponse) -> Tuple[bool, float, str]:
         """검증 응답 파싱"""
         try:
@@ -358,7 +359,7 @@ class GeminiTermValidator:
             accuracy = False
             confidence = 0.0
             improvement = ""
-            
+
             for line in lines:
                 if line.startswith("정확성:"):
                     accuracy_text = line.split(":")[1].strip()
@@ -368,66 +369,66 @@ class GeminiTermValidator:
                     confidence = float(confidence_text)
                 elif line.startswith("개선사항:"):
                     improvement = line.split(":", 1)[1].strip()
-            
+
             return accuracy, confidence, improvement
-            
+
         except Exception as e:
             self.logger.error(f"응답 파싱 중 오류: {e}")
             return False, 0.0, f"파싱 오류: {str(e)}"
-    
+
     def batch_validate_terms(self, terms: List[LegalTerm]) -> List[LegalTerm]:
         """용어 일괄 검증"""
         validated_terms = []
-        
+
         for i, term in enumerate(terms):
             self.logger.info(f"용어 검증 중 ({i+1}/{len(terms)}): {term.term}")
-            
+
             accuracy, confidence, improvement = self.validate_term(term)
-            
+
             # 검증 결과 반영
             term.verified = accuracy
             term.confidence = confidence
-            
+
             if improvement:
                 self.logger.info(f"개선사항: {improvement}")
-            
+
             validated_terms.append(term)
-            
+
             # API 호출 제한을 위한 대기
             time.sleep(1)
-        
+
         return validated_terms
 
 
 class LegalTermDatabaseUpdater:
     """법률 용어 데이터베이스 업데이터"""
-    
+
     def __init__(self, database_path: str = "data/legal_terms_database.json"):
         """데이터베이스 업데이터 초기화"""
         self.database_path = Path(database_path)
         self.logger = logging.getLogger(__name__)
-    
+
     def update_database(self, new_terms: List[LegalTerm]) -> bool:
         """데이터베이스 업데이트"""
         try:
             # 기존 데이터베이스 로드
             existing_data = self._load_existing_database()
-            
+
             # 새 용어 추가
             for term in new_terms:
                 if term.verified:  # 검증된 용어만 추가
                     self._add_term_to_database(existing_data, term)
-            
+
             # 데이터베이스 저장
             self._save_database(existing_data)
-            
+
             self.logger.info(f"데이터베이스 업데이트 완료: {len(new_terms)}개 용어 추가")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"데이터베이스 업데이트 실패: {e}")
             return False
-    
+
     def _load_existing_database(self) -> Dict[str, Any]:
         """기존 데이터베이스 로드"""
         if self.database_path.exists():
@@ -435,14 +436,14 @@ class LegalTermDatabaseUpdater:
                 return json.load(f)
         else:
             return {}
-    
+
     def _add_term_to_database(self, database: Dict[str, Any], term: LegalTerm):
         """데이터베이스에 용어 추가"""
         domain_name = term.domain
-        
+
         if domain_name not in database:
             database[domain_name] = {}
-        
+
         database[domain_name][term.term] = {
             "weight": term.weight,
             "synonyms": term.synonyms,
@@ -453,64 +454,64 @@ class LegalTermDatabaseUpdater:
             "verified": term.verified,
             "added_date": datetime.now().isoformat()
         }
-    
+
     def _save_database(self, database: Dict[str, Any]):
         """데이터베이스 저장"""
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(self.database_path, 'w', encoding='utf-8') as f:
             json.dump(database, f, ensure_ascii=False, indent=2)
 
 
 class LegalTermExtractionPipeline:
     """법률 용어 추출 파이프라인"""
-    
+
     def __init__(self):
         """파이프라인 초기화"""
         self.logger = logging.getLogger(__name__)
-        
+
         # 컴포넌트 초기화
         self.legal_act_extractor = LegalActTermExtractor()
         self.precedent_extractor = PrecedentTermExtractor()
         self.validator = GeminiTermValidator()
         self.database_updater = LegalTermDatabaseUpdater()
-    
+
     def run_extraction_pipeline(self) -> bool:
         """용어 추출 파이프라인 실행"""
         try:
             self.logger.info("법률 용어 추출 파이프라인 시작")
-            
+
             # 1. 법령에서 용어 추출
             self.logger.info("1단계: 법령에서 용어 추출")
             legal_act_terms = self.legal_act_extractor.extract_terms_from_legal_acts()
-            
+
             # 2. 판례에서 용어 추출
             self.logger.info("2단계: 판례에서 용어 추출")
             precedent_terms = self.precedent_extractor.extract_terms_from_precedents()
-            
+
             # 3. 용어 통합
             all_terms = legal_act_terms + precedent_terms
             self.logger.info(f"총 {len(all_terms)}개 용어 추출 완료")
-            
+
             # 4. Gemini로 용어 검증
             self.logger.info("3단계: Gemini로 용어 검증")
             validated_terms = self.validator.batch_validate_terms(all_terms)
-            
+
             # 5. 검증 결과 통계
             verified_count = sum(1 for term in validated_terms if term.verified)
             self.logger.info(f"검증 완료: {verified_count}/{len(validated_terms)}개 용어 검증됨")
-            
+
             # 6. 데이터베이스 업데이트
             self.logger.info("4단계: 데이터베이스 업데이트")
             success = self.database_updater.update_database(validated_terms)
-            
+
             if success:
                 self.logger.info("용어 추출 파이프라인 완료")
                 return True
             else:
                 self.logger.error("데이터베이스 업데이트 실패")
                 return False
-                
+
         except Exception as e:
             self.logger.error(f"용어 추출 파이프라인 실패: {e}")
             return False
@@ -528,10 +529,10 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # 용어 추출 실행
     success = run_legal_term_extraction()
-    
+
     if success:
         print("법률 용어 추출이 성공적으로 완료되었습니다.")
     else:
