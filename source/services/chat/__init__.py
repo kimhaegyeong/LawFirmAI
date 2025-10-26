@@ -7,13 +7,11 @@
 - 멀티턴 대화 처리
 """
 
-from .chat_service import ChatService
-from .enhanced_chat_service import EnhancedChatService
 from .conversation_manager import ConversationManager
+from .enhanced_chat_service import EnhancedChatService
 from .multi_turn_handler import MultiTurnQuestionHandler
 
 __all__ = [
-    'ChatService',
     'EnhancedChatService',
     'ConversationManager',
     'MultiTurnQuestionHandler'

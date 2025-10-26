@@ -9,9 +9,9 @@
 """
 
 from .analysis_service import AnalysisService
-from .document_processor import DocumentProcessor
-from .legal_term_extractor import LegalTermExtractor
 from .bert_classifier import BERTClassifier
+from .document_processor import LegalDocumentProcessor as DocumentProcessor
+from .legal_term_extractor import LegalActTermExtractor as LegalTermExtractor
 
 __all__ = [
     'AnalysisService',
