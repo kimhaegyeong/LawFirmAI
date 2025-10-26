@@ -21,7 +21,6 @@ from ..utils.advanced_response_processor import advanced_response_processor
 from ..utils.quality_validator import quality_validator
 from .user_preference_manager import preference_manager, UserPreferences
 from .answer_completion_validator import completion_validator, CompletionCheck
-from .example_database import example_database, dynamic_generator
 from .enhanced_completion_system import enhanced_completion_system, CompletionResult
 from .rag_service import MLEnhancedRAGService
 from .hybrid_search_engine import HybridSearchEngine
@@ -50,6 +49,9 @@ from .conversation_flow_tracker import ConversationFlowTracker
 # Phase 3: 장기 기억 및 품질 모니터링 모듈
 from .contextual_memory_manager import ContextualMemoryManager
 from .conversation_quality_monitor import ConversationQualityMonitor
+
+# 지능형 응답 스타일 시스템
+from .intelligent_response_style_system import IntelligentResponseStyleSystem, ResponseStyle
 
 # 대화형 계약서 작성 모듈
 from .interactive_contract_assistant import InteractiveContractAssistant
@@ -103,10 +105,6 @@ class EnhancedChatService:
         # 답변 완성도 검증자 초기화
         self.completion_validator = completion_validator
 
-        # 예제 데이터베이스 초기화
-        self.example_database = example_database
-        self.dynamic_generator = dynamic_generator
-
         # 향상된 완성 시스템 초기화
         self.enhanced_completion_system = enhanced_completion_system
 
@@ -146,6 +144,12 @@ class EnhancedChatService:
         # 향상된 법률 검색 시스템 초기화
         self._initialize_enhanced_law_search()
 
+        # 지능형 응답 스타일 시스템 초기화
+        self._initialize_intelligent_style_system()
+
+        # LangGraph 워크플로우 서비스 초기화
+        self._initialize_langgraph_workflow()
+
         self.logger.info("EnhancedChatService 초기화 완료")
 
     def _setup_google_cloud_warnings(self):
@@ -173,8 +177,8 @@ class EnhancedChatService:
     def _initialize_memory_management(self):
         """메모리 관리 시스템 초기화"""
         try:
-            # 메모리 매니저 초기화
-            self.memory_manager = get_memory_manager(max_memory_mb=1024)
+            # 메모리 매니저 초기화 - 메모리 제한 증가
+            self.memory_manager = get_memory_manager(max_memory_mb=2048)  # 1024에서 2048로 증가
 
             # WeakRef 레지스트리 초기화
             self.weakref_registry = get_weakref_registry()
@@ -211,11 +215,11 @@ class EnhancedChatService:
         """메모리 알림 처리"""
         self.logger.warning(f"메모리 알림 [{alert.severity}]: {alert.message}")
 
-        # 심각한 메모리 부족 시 강제 정리
-        if alert.severity in ['high', 'critical']:
-            self.logger.info("강제 메모리 정리 시작")
+        # 메모리 부족 시 강제 정리 (기준 완화)
+        if alert.severity in ['medium', 'high', 'critical']:  # medium 추가
+            self.logger.info("메모리 정리 시작")
             cleanup_result = self.perform_memory_cleanup()
-            self.logger.info(f"강제 정리 완료: {cleanup_result.get('memory_freed_mb', 0):.1f}MB 해제")
+            self.logger.info(f"메모리 정리 완료: {cleanup_result.get('memory_freed_mb', 0):.1f}MB 해제")
 
     def perform_memory_cleanup(self):
         """메모리 정리 수행 (고급 최적화 포함)"""
@@ -312,14 +316,40 @@ class EnhancedChatService:
             self._track_component(self.db_manager, "db_manager")
 
             # 벡터 스토어
-            self.vector_store = LegalVectorStore()
+            self.vector_store = LegalVectorStore(
+                model_name="jhgan/ko-sroberta-multitask",
+                dimension=768,
+                index_type="flat",
+                enable_quantization=True,
+                enable_lazy_loading=True,
+                memory_threshold_mb=3000
+            )
             self._track_component(self.vector_store, "vector_store")
-            # 벡터 인덱스 로드
-            try:
-                self.vector_store.load_index()
-                self.logger.info("벡터 인덱스 로드 성공")
-            except Exception as e:
-                self.logger.warning(f"벡터 인덱스 로드 실패: {e}")
+
+            # 벡터 인덱스 로드 - 개선된 오류 처리 (여러 경로 시도)
+            index_paths = [
+                "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index",  # 가장 큰 데이터셋
+                "data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index",  # 판례 데이터
+                "data/embeddings/legal_vector_index"  # 기본 데이터
+            ]
+
+            index_loaded = False
+            for index_path in index_paths:
+                try:
+                    if self.vector_store.load_index(index_path):
+                        self.logger.info(f"벡터 인덱스 로드 성공: {index_path}")
+                        index_loaded = True
+                        break
+                    else:
+                        self.logger.warning(f"벡터 인덱스 로드 실패: {index_path}")
+                except Exception as e:
+                    self.logger.warning(f"벡터 인덱스 로드 오류 {index_path}: {e}")
+                    continue
+
+            if not index_loaded:
+                self.logger.warning("모든 벡터 인덱스 로드 실패, 키워드 검색으로 대체")
+                # 벡터 인덱스가 없어도 서비스는 계속 동작하도록 함
+                self.logger.info("벡터 인덱스 없이 서비스 계속 진행")
 
             # 모델 매니저
             from .optimized_model_manager import OptimizedModelManager
@@ -750,14 +780,14 @@ class EnhancedChatService:
                         response_result["completion_method"] = completion_result.completion_method
                         response_result["completion_confidence"] = completion_result.confidence
 
-                    # 예제 추가 (사용자 선호도 확인)
-                    if self.user_preferences.get_preference("example_preference"):
-                        enhanced_response = self._add_examples_to_response(
-                            response_result["response"], message, query_analysis
-                        )
-                        if enhanced_response != response_result["response"]:
-                            response_result["response"] = enhanced_response
-                            response_result["examples_added"] = True
+                    # 예제 추가 기능 제거 (의존성 문제로 비활성화됨)
+                    # if self.user_preferences.get_preference("example_preference"):
+                    #     enhanced_response = self._add_examples_to_response(
+                    #         response_result["response"], message, query_analysis
+                    #     )
+                    #     if enhanced_response != response_result["response"]:
+                    #         response_result["response"] = enhanced_response
+                    #         response_result["examples_added"] = True
 
             # 사용자 선호도 기반 면책 조항 처리
             final_response_text = self.user_preferences.add_disclaimer_to_response(
@@ -765,10 +795,32 @@ class EnhancedChatService:
             )
             response_result["response"] = final_response_text
 
-            # 처리 시간 추가
-            response_result["processing_time"] = time.time() - start_time
+            # 처리 시간 추가 (음수 방지)
+            processing_time = max(0.0, time.time() - start_time)
+            response_result["processing_time"] = processing_time
             response_result["session_id"] = session_id
             response_result["user_id"] = user_id
+
+            # 메모리 정리 (더 적극적으로)
+            if processing_time > 3.0:  # 3초 이상 걸린 경우에 메모리 정리
+                try:
+                    cleanup_result = self.perform_memory_cleanup()
+                    if cleanup_result.get('success'):
+                        response_result["memory_cleanup"] = {
+                            "memory_freed_mb": cleanup_result.get('memory_freed_mb', 0),
+                            "objects_collected": cleanup_result.get('objects_collected', 0)
+                        }
+                except Exception as e:
+                    self.logger.warning(f"메모리 정리 실패: {e}")
+
+            # 추가 메모리 정리 (매번 실행)
+            try:
+                import gc
+                collected = gc.collect()
+                if collected > 0:
+                    self.logger.debug(f"Garbage collection freed {collected} objects")
+            except Exception as e:
+                self.logger.warning(f"Garbage collection failed: {e}")
 
             # 캐시 저장 (추가 최적화 - 캐시 시간 증가)
             if self.cache_manager:
@@ -1224,24 +1276,97 @@ class EnhancedChatService:
     async def _generate_enhanced_response(self, message: str, query_analysis: Dict[str, Any],
                                          restriction_result: Dict[str, Any], user_id: str, session_id: str,
                                          phase1_info: Dict[str, Any], phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]) -> Dict[str, Any]:
-        """향상된 답변 생성 - 우선 순위별로 답변"""
+        """향상된 답변 생성 - LangGraph 워크플로우 우선 사용"""
         self.logger.info(f"_generate_enhanced_response called for: {message}")
+        start_time = time.time()  # start_time 변수 추가
         try:
-            # 0순위: 템플릿 기반 답변 (빠르고 정확한 답변 우선)
-            template_response = self._generate_improved_template_response(message, query_analysis)
-            if template_response and template_response.get("response"):
-                self.logger.info("Using template-based response")
-                return {
-                    "response": template_response["response"],
-                    "confidence": template_response.get("confidence", 0.8),
-                    "sources": template_response.get("sources", []),
-                    "query_analysis": query_analysis,
-                    "generation_method": template_response.get("generation_method", "template"),
-                    "session_id": session_id,
-                    "user_id": user_id
-                }
+            # 스타일 분석 및 결정
+            detected_style = None
+            if self.intelligent_style_system:
+                try:
+                    detected_style = self.intelligent_style_system.determine_optimal_style(
+                        message, query_analysis, session_id
+                    )
+                    self.logger.info(f"Detected response style: {detected_style.value}")
+                except Exception as e:
+                    self.logger.debug(f"Style detection failed: {e}")
+                    detected_style = ResponseStyle.FRIENDLY  # 기본값
 
-            # 1순위: 특정 법률 조문 검색 (우선 처리)
+            # 🔥 1순위: LangGraph 워크플로우 (가장 고도화된 처리) - 강제 활성화
+            self.logger.info(f"🔍 LangGraph 실행 조건 확인:")
+            self.logger.info(f"  - use_langgraph: {self.use_langgraph}")
+            self.logger.info(f"  - langgraph_service: {self.langgraph_service is not None}")
+
+            if self.use_langgraph:
+                # LangGraph 서비스가 None이면 재초기화 시도
+                if not self.langgraph_service:
+                    self.logger.warning("⚠️ LangGraph 서비스가 None입니다. 재초기화 시도...")
+                    self._initialize_langgraph_workflow()
+
+                if self.langgraph_service:
+                    try:
+                        self.logger.info(f"🚀 LangGraph 워크플로우로 처리 시작: {message}")
+                        self.logger.info(f"📊 LangGraph 서비스 상태: {self.langgraph_service is not None}")
+                        self.logger.info(f"⚙️ LangGraph 사용 설정: {self.use_langgraph}")
+
+                        # LangGraph 워크플로우 실행
+                        self.logger.info(f"🔍 LangGraph 워크플로우 실행 전 상태 확인:")
+                        self.logger.info(f"  - langgraph_service: {self.langgraph_service is not None}")
+                        self.logger.info(f"  - use_langgraph: {self.use_langgraph}")
+                        self.logger.info(f"  - message: {message}")
+
+                        langgraph_result = await self.langgraph_service.process_query(
+                            query=message,
+                            context=query_analysis.get("context"),
+                            session_id=session_id,
+                            user_id=user_id
+                        )
+
+                        self.logger.info(f"✅ LangGraph 워크플로우 실행 완료: {langgraph_result is not None}")
+                        self.logger.info(f"🔍 LangGraph 결과 키: {list(langgraph_result.keys()) if langgraph_result else 'None'}")
+                        self.logger.info(f"🔍 LangGraph 응답 텍스트: {langgraph_result.get('response', 'NOT_FOUND')[:100] if langgraph_result else 'None'}")
+
+                        if langgraph_result and langgraph_result.get("response"):
+                            self.logger.info("🎯 LangGraph 워크플로우 처리 성공")
+
+                            # 스타일 적용된 응답 생성
+                            final_response = langgraph_result["response"]
+                            if detected_style and self.intelligent_style_system:
+                                try:
+                                    final_response = self.intelligent_style_system.generate_adaptive_response(
+                                        langgraph_result["response"], message, query_analysis, session_id
+                                    )
+                                except Exception as e:
+                                    self.logger.debug(f"Style application failed: {e}")
+
+                            processing_time = max(0.0, time.time() - start_time)
+                            return {
+                                "response": final_response,
+                                "confidence": langgraph_result.get("confidence", 0.9),
+                                "sources": langgraph_result.get("sources", []),
+                                "query_analysis": query_analysis,
+                                "generation_method": "langgraph_workflow",
+                                "session_id": session_id,
+                                "user_id": user_id,
+                                "workflow_steps": langgraph_result.get("workflow_steps", []),
+                                "performance_metrics": langgraph_result.get("performance_metrics", {}),
+                                "detected_style": detected_style.value if detected_style else "unknown",
+                                "processing_time": processing_time
+                            }
+                        else:
+                            self.logger.warning("⚠️ LangGraph 워크플로우에서 유효한 응답을 생성하지 못했습니다.")
+
+                    except Exception as e:
+                        self.logger.error(f"❌ LangGraph 워크플로우 실행 실패: {e}")
+                        self.logger.error(f"오류 타입: {type(e).__name__}")
+                        import traceback
+                        self.logger.error(f"상세 오류: {traceback.format_exc()}")
+                else:
+                    self.logger.error("❌ LangGraph service initialization failed completely")
+            else:
+                self.logger.warning("⚠️ LangGraph 사용이 비활성화되어 있습니다.")
+
+            # 2순위: 특정 법률 조문 검색 (LangGraph 실패 시)
             statute_law = query_analysis.get("statute_law")
             statute_article = query_analysis.get("statute_article")
 
@@ -1290,7 +1415,7 @@ class EnhancedChatService:
                 except Exception as e:
                     self.logger.debug(f"Specific law article search failed: {e}")
 
-            # 1순위: 기본 RAG 서비스 (실제 AI 답변 우선)
+            # 3순위: 기본 RAG 서비스 (LangGraph 및 특정 조문 검색 실패 시)
             if self.unified_rag_service:
                 try:
                     self.logger.info(f"Calling RAG service for query: {message}")
@@ -1298,23 +1423,34 @@ class EnhancedChatService:
                         query=message,
                         context=query_analysis.get("context"),
                         max_length=800,  # 토큰 제한을 300에서 800으로 증가
-                        top_k=2,  # 검색 결과 수를 3에서 2로 감소 (처리시간 단축)
+                        top_k=3,  # 검색 결과 수를 2에서 3으로 증가 (더 많은 소스 확보)
                         use_cache=True
                     )
 
-                    # 의미 있는 소스가 있는지 확인
-                    if rag_response and rag_response.response and self._has_meaningful_sources(rag_response.sources):
+                    # 완화된 소스 검증 - 더 관대한 기준 적용
+                    if rag_response and rag_response.response and self._has_meaningful_sources_relaxed(rag_response.sources):
                         # 응답 신뢰도 계산
                         confidence = self._calculate_confidence(rag_response.sources, "good")
 
+                        # 스타일 적용된 응답 생성
+                        final_response = rag_response.response
+                        if detected_style and self.intelligent_style_system:
+                            try:
+                                final_response = self.intelligent_style_system.generate_adaptive_response(
+                                    rag_response.response, message, query_analysis, session_id
+                                )
+                            except Exception as e:
+                                self.logger.debug(f"Style application failed: {e}")
+
                         return {
-                            "response": rag_response.response,
+                            "response": final_response,
                             "confidence": confidence,
                             "sources": rag_response.sources,
                             "query_analysis": query_analysis,
-                            "generation_method": "simple_rag",
+                            "generation_method": "rag_with_style",
                             "session_id": session_id,
-                            "user_id": user_id
+                            "user_id": user_id,
+                            "detected_style": detected_style.value if detected_style else "unknown"
                         }
                     else:
                         # 의미 있는 소스가 없으면 안내하고 알려줌
@@ -1324,6 +1460,21 @@ class EnhancedChatService:
                     self.logger.debug(f"Simple RAG service failed: {e}")
             else:
                 self.logger.warning("unified_rag_service is None, skipping RAG generation")
+
+            # 4순위: 템플릿 기반 답변 (최후 수단)
+            template_response = self._generate_improved_template_response(message, query_analysis, detected_style)
+            if template_response and template_response.get("response"):
+                self.logger.info("Using template-based response as fallback")
+                return {
+                    "response": template_response["response"],
+                    "confidence": template_response.get("confidence", 0.8),
+                    "sources": template_response.get("sources", []),
+                    "query_analysis": query_analysis,
+                    "generation_method": template_response.get("generation_method", "template"),
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "detected_style": detected_style.value if detected_style else "unknown"
+                }
 
             # 의미 있는 소스가 없으면 안내 답변으로 처리
             return self._create_no_sources_response(message, query_analysis, session_id, user_id)
@@ -1371,6 +1522,49 @@ class EnhancedChatService:
 
             # 법률 관련 내용이 1개 이상이고 높은 관련도 소스가 있으면 유효
             return legal_content_count >= 1 and len(high_relevance_sources) >= 1
+
+        return False
+
+    def _has_meaningful_sources_relaxed(self, sources: List[Dict[str, Any]]) -> bool:
+        """완화된 의미있는 법률 소스 확인 - 더 관대한 기준 적용"""
+        if not sources:
+            return False
+
+        # 완화된 관련도 임계값 적용
+        MIN_RELEVANCE_THRESHOLD = 0.2  # 0.4에서 0.2로 완화
+        MIN_CONTENT_LENGTH = 30  # 60에서 30으로 완화
+
+        meaningful_sources = []
+        high_relevance_sources = []
+
+        for source in sources:
+            relevance_score = source.get("similarity", source.get("score", 0.0))
+            content = source.get("content", "")
+
+            # 완화된 기준으로 소스 검증
+            if relevance_score >= MIN_RELEVANCE_THRESHOLD and len(content.strip()) > MIN_CONTENT_LENGTH:
+                meaningful_sources.append(source)
+
+                # 높은 관련도 소스 별도 카운트
+                if relevance_score >= 0.4:  # 0.6에서 0.4로 완화
+                    high_relevance_sources.append(source)
+
+        # 최소 1개 이상의 의미있는 소스가 있으면 유효
+        if len(meaningful_sources) >= 1:
+            # 법률 관련 콘텐츠 확인 (완화된 키워드)
+            legal_keywords = ["법률", "조문", "판례", "법령", "규정", "소송", "계약", "권리", "의무",
+                           "민법", "형법", "상법", "헌법", "행정", "형사", "민사", "이혼", "상속", "재산분할",
+                           "손해배상", "채권", "채무", "불법행위", "임금", "근로", "해고", "임대차", "매매",
+                           "부동산", "가족", "회사", "주식", "이사", "노동", "근로기준법"]
+            legal_content_count = 0
+
+            for source in meaningful_sources:
+                content = source.get("content", "").lower()
+                if any(keyword in content for keyword in legal_keywords):
+                    legal_content_count += 1
+
+            # 법률 관련 내용이 있거나 높은 관련도 소스가 있으면 유효
+            return legal_content_count >= 1 or len(high_relevance_sources) >= 1
 
         return False
 
@@ -1588,8 +1782,8 @@ class EnhancedChatService:
 
         return suggestions[:3]  # 최대 3개 제안
 
-    def _generate_improved_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """개선된 템플릿 기반 답변 생성 - 빠르고 정확한 답변 우선"""
+    def _generate_improved_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
+        """개선된 템플릿 기반 답변 생성 - 스타일 지원"""
         self.logger.info(f"_generate_improved_template_response called for: {message}")
 
         # 도메인별 특화 템플릿 답변 생성
@@ -1598,24 +1792,24 @@ class EnhancedChatService:
 
         # 계약서 관련 질문 처리
         if any(keyword in message_lower for keyword in ["계약서", "계약", "작성", "체결"]):
-            return self._generate_contract_template_response(message, query_analysis)
+            return self._generate_contract_template_response(message, query_analysis, detected_style)
 
         # 부동산 관련 질문 처리
         elif any(keyword in message_lower for keyword in ["부동산", "매매", "임대차", "등기"]):
-            return self._generate_real_estate_template_response(message, query_analysis)
+            return self._generate_real_estate_template_response(message, query_analysis, detected_style)
 
         # 가족법 관련 질문 처리
         elif any(keyword in message_lower for keyword in ["이혼", "상속", "양육권", "재산분할"]):
-            return self._generate_family_law_template_response(message, query_analysis)
+            return self._generate_family_law_template_response(message, query_analysis, detected_style)
 
         # 법률 조문 관련 질문 처리
         elif query_analysis.get("statute_match"):
-            return self._generate_statute_template_response(message, query_analysis)
+            return self._generate_statute_template_response(message, query_analysis, detected_style)
 
         # 기본 템플릿 답변
-        return self._generate_general_template_response(message, query_analysis)
+        return self._generate_general_template_response(message, query_analysis, detected_style)
 
-    def _generate_contract_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_contract_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
         """계약서 관련 템플릿 답변 생성"""
         response = """📋 **계약서 작성을 도와드리겠습니다!**
 
@@ -1652,7 +1846,7 @@ class EnhancedChatService:
             "query_analysis": query_analysis
         }
 
-    def _generate_real_estate_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_real_estate_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
         """부동산 관련 템플릿 답변 생성"""
         response = """🏠 **부동산 관련 도움을 드리겠습니다!**
 
@@ -1690,7 +1884,7 @@ class EnhancedChatService:
             "query_analysis": query_analysis
         }
 
-    def _generate_family_law_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_family_law_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
         """가족법 관련 템플릿 답변 생성"""
         response = """👨‍👩‍👧‍👦 **가족법 관련 도움을 드리겠습니다!**
 
@@ -1730,7 +1924,7 @@ class EnhancedChatService:
             "query_analysis": query_analysis
         }
 
-    def _generate_statute_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_statute_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
         """법률 조문 관련 템플릿 답변 생성"""
         statute_law = query_analysis.get("statute_law")
         statute_article = query_analysis.get("statute_article")
@@ -1768,7 +1962,7 @@ class EnhancedChatService:
             "query_analysis": query_analysis
         }
 
-    def _generate_general_template_response(self, message: str, query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_general_template_response(self, message: str, query_analysis: Dict[str, Any], detected_style: ResponseStyle = None) -> Dict[str, Any]:
         """일반 템플릿 답변 생성"""
         response = """⚖️ **법률 관련 도움을 드리겠습니다!**
 
@@ -1865,51 +2059,6 @@ class EnhancedChatService:
 
         return recommendations
 
-    def _add_examples_to_response(self, response: str, question: str, query_analysis: Dict[str, Any]) -> str:
-        """답변에 예제 추가"""
-        try:
-            category = query_analysis.get("category", "일반")
-            question_type = query_analysis.get("question_type", "일반")
-
-            # 카테고리별 예제 키 매핑
-            example_key_mapping = {
-                "손해배상": "민법_750조",
-                "계약서": "계약서_작성",
-                "임대차": "임대차_분쟁",
-                "이혼": "이혼_소송",
-                "상속": "재산분할_청구"
-            }
-
-            example_key = example_key_mapping.get(category, category)
-
-            # 데이터베이스에서 예제 가져오기
-            examples = self.example_database.get_examples(example_key, 1)
-
-            if examples:
-                example = examples[0]
-                example_text = f"\n\n예를 들어, {example.situation}의 경우 {example.analysis}입니다."
-
-                # 실무 팁이 있으면 추가
-                if example.practical_tips:
-                    tips_text = "실무 팁: " + ", ".join(example.practical_tips[:3])
-                    example_text += f" {tips_text}."
-
-                return response + example_text
-
-            else:
-                # 동적 예제 생성
-                dynamic_example = self.dynamic_generator.generate_example(
-                    category, question, question_type
-                )
-                if dynamic_example and len(dynamic_example) > 50:
-                    return response + f"\n\n{dynamic_example}"
-
-            return response
-
-        except Exception as e:
-            self.logger.error(f"예제 추가 실패: {e}")
-            return response
-
     def _add_fallback_ending(self, response: str) -> str:
         """답변 마무리 추가"""
         try:
@@ -1989,6 +2138,94 @@ class EnhancedChatService:
             self.progressive_response_system = None
             self.precedent_service = None
             self.enhanced_law_search_engine = None
+
+    def _initialize_langgraph_workflow(self):
+        """LangGraph 워크플로우 서비스 초기화"""
+        try:
+            self.logger.info("🚀 LangGraph 워크플로우 서비스 초기화 시작...")
+
+            # 먼저 기본 LangGraph 모듈 import 테스트 (강화된 방식)
+            try:
+                # 여러 방법으로 import 시도
+                import sys
+                import os
+
+                # 현재 디렉토리를 Python 경로에 추가
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+
+                # LangGraph import 시도
+                from langgraph.graph import StateGraph, END
+                self.logger.info("✅ 기본 LangGraph 모듈 import 성공")
+
+                # 추가 검증
+                self.logger.info(f"StateGraph 클래스: {StateGraph}")
+                self.logger.info(f"END 상수: {END}")
+
+            except ImportError as e:
+                self.logger.error(f"❌ 기본 LangGraph 모듈 import 실패: {e}")
+                self.logger.error(f"Python 경로: {sys.path[:3]}...")  # 처음 3개만 표시
+                self.logger.error(f"현재 작업 디렉토리: {os.getcwd()}")
+
+                # 추가 디버깅 정보
+                try:
+                    import langgraph
+                    self.logger.error(f"langgraph 모듈은 존재: {langgraph}")
+                    self.logger.error(f"langgraph 경로: {getattr(langgraph, '__path__', 'No path')}")
+                except Exception as debug_e:
+                    self.logger.error(f"langgraph 모듈도 없음: {debug_e}")
+
+                self.langgraph_service = None
+                return
+
+            # 프로젝트 모듈 import
+            try:
+                from .langgraph_workflow.integrated_workflow_service import IntegratedWorkflowService
+                from ..utils.langgraph_config import langgraph_config
+                self.logger.info("✅ 프로젝트 LangGraph 모듈 import 성공")
+            except ImportError as e:
+                self.logger.error(f"❌ 프로젝트 LangGraph 모듈 import 실패: {e}")
+                self.langgraph_service = None
+                return
+
+            # 설정 검증
+            config_errors = langgraph_config.validate()
+            if config_errors:
+                self.logger.warning(f"⚠️ LangGraph 설정 오류: {config_errors}")
+
+            # LangGraph 활성화 여부 확인
+            if not langgraph_config.langgraph_enabled:
+                self.logger.warning("⚠️ LangGraph가 비활성화되어 있습니다.")
+                self.langgraph_service = None
+                return
+
+            self.logger.info(f"📋 LangGraph 설정: {langgraph_config.to_dict()}")
+
+            # 워크플로우 서비스 초기화
+            self.langgraph_service = IntegratedWorkflowService(langgraph_config)
+            self.logger.info("🎉 LangGraph 워크플로우 서비스 초기화 완료")
+
+        except ImportError as e:
+            self.logger.error(f"❌ LangGraph 모듈 import 실패: {e}")
+            self.logger.error("LangGraph 관련 패키지가 설치되지 않았을 수 있습니다.")
+            self.logger.error("다음 명령어로 설치하세요: pip install langgraph langchain-core langchain-community")
+            self.langgraph_service = None
+        except Exception as e:
+            self.logger.error(f"❌ LangGraph 워크플로우 서비스 초기화 실패: {e}")
+            self.logger.error(f"오류 타입: {type(e).__name__}")
+            import traceback
+            self.logger.error(f"상세 오류: {traceback.format_exc()}")
+            self.langgraph_service = None
+
+    def _initialize_intelligent_style_system(self):
+        """지능형 응답 스타일 시스템 초기화"""
+        try:
+            self.intelligent_style_system = IntelligentResponseStyleSystem()
+            self.logger.info("지능형 응답 스타일 시스템 초기화 완료")
+        except Exception as e:
+            self.logger.error(f"지능형 응답 스타일 시스템 초기화 실패: {e}")
+            self.intelligent_style_system = None
 
     def _is_law_article_query(self, query: str) -> bool:
         """법률 조문 쿼리인지 확인"""
