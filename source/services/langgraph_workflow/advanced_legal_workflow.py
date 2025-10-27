@@ -566,9 +566,59 @@ class AdvancedLegalWorkflow:
             final_response = state.get("refinement", {}).get("refined_response") or \
                            state.get("synthesis_agent", {}).get("synthesized_response", "")
 
-            # 면책 조항 추가
-            disclaimer = "\n\n※ 이 답변은 일반적인 법률 정보 제공을 목적으로 하며, 구체적인 법률 문제에 대해서는 변호사와 상담하시기 바랍니다."
-            final_response += disclaimer
+            # 면책 조항 추가 (UserPreferenceManager 통합)
+            try:
+                from ...user_preference_manager import (
+                    DisclaimerPosition,
+                    DisclaimerStyle,
+                    preference_manager,
+                )
+
+                # 사용자 설정 가져오기
+                user_preferences = state.get("user_preferences", {})
+                show_disclaimer = user_preferences.get("show_disclaimer", True)
+
+                if show_disclaimer:
+                    # 스타일 가져오기
+                    disclaimer_style_str = user_preferences.get("disclaimer_style", "natural")
+                    try:
+                        disclaimer_style = DisclaimerStyle(disclaimer_style_str)
+                    except ValueError:
+                        disclaimer_style = DisclaimerStyle.NATURAL
+
+                    # 위치 가져오기
+                    disclaimer_position_str = user_preferences.get("disclaimer_position", "end")
+                    try:
+                        disclaimer_position = DisclaimerPosition(disclaimer_position_str)
+                    except ValueError:
+                        disclaimer_position = DisclaimerPosition.END
+
+                    # preference_manager에 현재 설정 반영
+                    if hasattr(preference_manager, 'preferences'):
+                        preference_manager.preferences.disclaimer_style = disclaimer_style
+                        preference_manager.preferences.disclaimer_position = disclaimer_position
+                        preference_manager.preferences.show_disclaimer = show_disclaimer
+
+                    # UserPreferenceManager를 사용하여 면책 조항 추가
+                    question_text = state.get("user_query", "")
+                    final_response = preference_manager.add_disclaimer_to_response(
+                        final_response,
+                        question_text
+                    )
+                    self.logger.info(f"UserPreferenceManager를 사용하여 면책 조항 추가 (스타일: {disclaimer_style.value}, 위치: {disclaimer_position.value})")
+                else:
+                    self.logger.info("사용자 설정에 따라 면책 조항을 추가하지 않습니다.")
+
+            except ImportError as e:
+                # UserPreferenceManager를 import할 수 없는 경우 기본 로직 사용
+                self.logger.warning(f"UserPreferenceManager를 import할 수 없습니다. 기본 로직 사용: {e}")
+                disclaimer = "\n\n※ 이 답변은 일반적인 법률 정보 제공을 목적으로 하며, 구체적인 법률 문제에 대해서는 변호사와 상담하시기 바랍니다."
+                final_response += disclaimer
+            except Exception as e:
+                # 기타 오류 발생 시 기본 로직 사용
+                self.logger.warning(f"면책 조항 추가 중 오류: {e}. 기본 로직 사용.")
+                disclaimer = "\n\n※ 이 답변은 일반적인 법률 정보 제공을 목적으로 하며, 구체적인 법률 문제에 대해서는 변호사와 상담하시기 바랍니다."
+                final_response += disclaimer
 
             response_generation_result = {
                 "final_response": final_response,

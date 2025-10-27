@@ -6,12 +6,9 @@
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from langchain_community.llms import Ollama
-from langchain_core.messages import HumanMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
@@ -62,9 +59,102 @@ class EnhancedLegalQuestionWorkflow:
         # LLM 초기화
         self.llm = self._initialize_llm()
 
+        # 실제 서비스 초기화
+        self.current_law_search_engine = None
+        self.unified_search_engine = None
+        self.unified_rag_service = None
+        self.conversation_store = None
+        self.user_profile_manager = None
+        self._initialize_external_services()
+
         # 워크플로우 그래프 구축
         self.graph = self._build_graph()
         logger.info("EnhancedLegalQuestionWorkflow initialized.")
+
+    def _initialize_external_services(self):
+        """외부 서비스 초기화"""
+        try:
+            # CurrentLawSearchEngine 초기화
+            from ..current_law_search_engine import CurrentLawSearchEngine
+            self.current_law_search_engine = CurrentLawSearchEngine(
+                db_path="data/lawfirm.db",
+                vector_store=self.vector_store
+            )
+            logger.info("✅ CurrentLawSearchEngine 초기화 완료")
+        except Exception as e:
+            logger.warning(f"CurrentLawSearchEngine 초기화 실패: {e}")
+            self.current_law_search_engine = None
+
+        try:
+            # UnifiedSearchEngine 초기화
+            from ..unified_search_engine import UnifiedSearchEngine
+            self.unified_search_engine = UnifiedSearchEngine(
+                vector_store=self.vector_store,
+                current_law_search_engine=self.current_law_search_engine,
+                enable_caching=True
+            )
+            logger.info("✅ UnifiedSearchEngine 초기화 완료")
+        except Exception as e:
+            logger.warning(f"UnifiedSearchEngine 초기화 실패: {e}")
+            self.unified_search_engine = None
+
+        try:
+            # UnifiedRAGService 초기화
+            logger.info("UnifiedRAGService 초기화 시도 중...")
+
+            # 모델 매니저 초기화
+            # 경로 수정: models는 services의 형제 디렉토리
+            import sys
+            from pathlib import Path
+            models_path = Path(__file__).parent.parent.parent / "models"
+            if str(models_path) not in sys.path:
+                sys.path.insert(0, str(models_path))
+
+            from model_manager import LegalModelManager
+            logger.info("LegalModelManager import 성공")
+
+            model_manager = LegalModelManager()
+            logger.info("LegalModelManager 인스턴스 생성 성공")
+
+            # UnifiedRAGService import
+            from ..unified_rag_service import UnifiedRAGService
+            logger.info("UnifiedRAGService import 성공")
+
+            # UnifiedRAGService 초기화 (search_engine이 None이어도 가능하도록 개선)
+            if self.unified_search_engine is None:
+                logger.warning("unified_search_engine이 None입니다. UnifiedRAGService는 제한적으로 사용됩니다.")
+
+            self.unified_rag_service = UnifiedRAGService(
+                model_manager=model_manager,
+                search_engine=self.unified_search_engine,
+                enable_caching=True
+            )
+            logger.info("✅ UnifiedRAGService 초기화 완료")
+        except ImportError as e:
+            logger.error(f"UnifiedRAGService import 실패 (ImportError): {e}")
+            logger.debug(f"ImportError 상세: {type(e).__name__}", exc_info=True)
+            self.unified_rag_service = None
+        except Exception as e:
+            logger.error(f"UnifiedRAGService 초기화 실패: {type(e).__name__}: {e}")
+            logger.debug(f"Exception 상세: {e.__class__.__name__}", exc_info=True)
+            self.unified_rag_service = None
+
+        try:
+            # ConversationStore 초기화
+            from ...data.conversation_store import ConversationStore
+            self.conversation_store = ConversationStore(db_path="data/conversations.db")
+            logger.info("✅ ConversationStore 초기화 완료")
+
+            # UserProfileManager 초기화
+            from ..user_profile_manager import UserProfileManager
+            self.user_profile_manager = UserProfileManager(
+                conversation_store=self.conversation_store
+            )
+            logger.info("✅ UserProfileManager 초기화 완료")
+        except Exception as e:
+            logger.warning(f"ConversationStore/UserProfileManager 초기화 실패: {e}")
+            self.conversation_store = None
+            self.user_profile_manager = None
 
     def _initialize_vector_store(self):
         """벡터 스토어 초기화"""
@@ -111,12 +201,19 @@ class EnhancedLegalQuestionWorkflow:
         """LLM 초기화 (Google Gemini 우선, Ollama 백업)"""
         if self.config.llm_provider == "google":
             try:
+                # Google API 키를 환경변수로 설정 (api_key 파라미터는 ADC만 지원)
+                import os
+                if self.config.google_api_key:
+                    os.environ['GOOGLE_API_KEY'] = self.config.google_api_key
+                    logger.info(f"GOOGLE_API_KEY set in environment variables")
+                else:
+                    logger.warning("GOOGLE_API_KEY is not set in config. Falling back to Ollama.")
+
                 gemini_llm = ChatGoogleGenerativeAI(
                     model=self.config.google_model,
                     temperature=0.3,
                     max_output_tokens=500,  # 답변 길이 증가
                     timeout=30,  # 타임아웃 증가
-                    api_key=self.config.google_api_key
                 )
                 # 간단한 테스트 호출로 모델 로드 확인 (제거)
                 # test_response = gemini_llm.invoke("안녕하세요")
@@ -151,12 +248,35 @@ class EnhancedLegalQuestionWorkflow:
                 context = ""
                 question = ""
 
-                if "context:" in prompt.lower():
+                # 프롬프트 파싱 - 다양한 형식 지원
+                if "## 관련 법률 문서" in prompt:
+                    parts = prompt.split("## 관련 법률 문서")
+                    if len(parts) > 1:
+                        context = parts[1].strip()
+                elif "관련 문서:" in prompt:
+                    parts = prompt.split("관련 문서:")
+                    if len(parts) > 1:
+                        context = parts[1].strip()
+                elif "관련 법률 문서" in prompt:
+                    parts = prompt.split("관련 법률 문서")
+                    if len(parts) > 1:
+                        context = parts[1].strip()
+                elif "context:" in prompt.lower():
                     parts = prompt.split("context:")
                     if len(parts) > 1:
                         context = parts[1].strip()
 
-                if "question:" in prompt.lower():
+                if "## 사용자 질문" in prompt:
+                    parts = prompt.split("## 사용자 질문")
+                    if len(parts) > 1:
+                        question = parts[1].split("##")[0].strip()
+                elif "질문:" in prompt:
+                    question_part = prompt.split("질문:")[-1]
+                    if "##" in question_part:
+                        question = question_part.split("##")[0].strip()
+                    else:
+                        question = question_part.strip()
+                elif "question:" in prompt.lower():
                     question_part = prompt.split("question:")[-1]
                     if "context:" in question_part:
                         question = question_part.split("context:")[0].strip()
@@ -164,7 +284,7 @@ class EnhancedLegalQuestionWorkflow:
                         question = question_part.strip()
 
                 # 컨텍스트가 있으면 검색 결과 기반 답변
-                if context and context != "" and len(context) > 10:
+                if context and context != "" and len(context) > 100:
                     # 검색 결과를 요약하여 답변 생성
                     return self._generate_response_from_context(question, context)
 
@@ -172,41 +292,232 @@ class EnhancedLegalQuestionWorkflow:
                 return "죄송합니다. 해당 질문에 대한 관련 법률 정보를 찾을 수 없었습니다. 다른 법률 조문이나 구체적인 상황을 알려주시면 더 정확한 답변을 드릴 수 있습니다."
 
             def _generate_response_from_context(self, question, context):
-                """컨텍스트를 활용한 답변 생성"""
+                """컨텍스트를 활용한 답변 생성 - 질문에 맞춰 핵심 내용 동적 추출"""
                 # 검색 결과에서 핵심 내용 추출
                 lines = context.split('\n')
 
-                # 첫 번째 주요 내용 찾기
-                main_content = ""
+                # 전체 컨텍스트 내용 추출
+                contents = []
                 for line in lines:
-                    if line.strip() and len(line.strip()) > 20:
-                        main_content = line.strip()
-                        break
+                    line = line.strip()
+                    # 딕셔너리 형태나 JSON 형태 파싱
+                    if line and len(line) > 20:
+                        # {'score': ..., 'text': '...'} 형태 처리
+                        if "'text':" in line or '"text":' in line:
+                            try:
+                                # 텍스트 추출
+                                if "'text':" in line:
+                                    text_part = line.split("'text':")[-1].strip().replace("'", "")
+                                else:
+                                    text_part = line.split('"text":')[-1].strip().replace('"', "")
+                                if text_part and len(text_part) > 20:
+                                    contents.append(text_part)
+                            except (ValueError, IndexError):
+                                pass
+                        elif not line.startswith("{'score':"):
+                            contents.append(line)
 
-                # 질문 유형에 따른 답변 생성
-                if "상속" in question or "유언" in question:
-                    return f"""참고하신 내용에 따르면:
+                # 질문의 핵심 키워드 추출
+                question_keywords = self._extract_keywords(question)
 
-{main_content if main_content else '관련 법률 조문을 찾았습니다.'}
+                # 컨텍스트에서 질문과 가장 관련성 높은 내용 추출
+                relevant_contents = self._extract_relevant_content(contents, question_keywords, question)
 
-이에 대해 간략히 설명드리면, 상속과 관련된 법률은 민법에 규정되어 있으며, 각 가족 구성원별로 상속분이 다릅니다. 구체적인 조문을 확인하시면 더 정확한 정보를 얻으실 수 있습니다."""
+                # 관련성 높은 내용 선택 (질문 길이와 빈도 기반)
+                main_content = self._select_best_content(relevant_contents, question)
 
-                elif "야간" in question or "근무" in question or "수당" in question:
-                    return f"""근로기준법에 따르면:
+                # 답변 생성
+                if main_content:
+                    # 질문 유형 파악
+                    question_type = self._identify_question_type(question)
 
-{main_content if main_content else '야간근무와 관련된 법률 조문을 확인했습니다.'}
+                    # 질문 유형별 적절한 서론 작성
+                    intro = self._generate_intro(question, question_type)
 
-일반적으로 야간근무는 특정 시간대(보통 오후 10시 이후)에 수행되는 근무를 의미하며, 야간수당이 별도로 지급되어야 합니다. 연장근무와는 별개의 개념입니다."""
+                    # 핵심 내용을 질문에 맞게 구조화
+                    structured_content = self._structure_content(main_content, question, question_type)
 
+                    response_text = f"""{intro}
+
+{structured_content}
+
+구체적인 상황을 알려주시면 더 정확한 정보를 제공할 수 있습니다."""
+
+                    return response_text
                 else:
-                    # 일반적인 법률 답변
-                    return f"""다음과 같은 법률 정보를 확인했습니다:
+                    # 컨텍스트가 없으면 기본 답변
+                    return "죄송합니다. 해당 질문에 대한 관련 법률 정보를 찾을 수 없었습니다. 다른 법률 조문이나 구체적인 상황을 알려주시면 더 정확한 답변을 드릴 수 있습니다."
 
-{main_content[:300] if main_content else '관련 법률 조문을 확인했습니다'}
+            def _extract_keywords(self, question):
+                """질문에서 핵심 키워드 추출"""
+                # 법률 관련 키워드
+                legal_keywords = [
+                    "법", "조문", "조항", "법률", "법령", "규정", "판례", "판결",
+                    "이혼", "협의이혼", "재산분할", "양육권", "양육비",
+                    "상속", "유언", "상속분", "상속세", "상속인",
+                    "근로", "근무", "임금", "퇴직금", "수당", "야간", "휴가",
+                    "계약", "매매", "임대", "보증", "대리",
+                    "손해배상", "배상", "불법행위", "채권", "채무",
+                    "소송", "소제기", "관할", "증거", "집행",
+                    "세금", "세법", "소득세", "부가가치세"
+                ]
 
-이 내용이 도움이 되셨는지 확인해주시고, 추가로 궁금한 사항이 있으시면 알려주세요.
+                # 질문을 소문자로 변환하여 키워드 매칭
+                question_lower = question.lower()
+                matched_keywords = [kw for kw in legal_keywords if kw in question_lower]
 
-※ 이 답변은 법률 정보 제공을 목적으로 하며, 구체적인 사안에 대한 법률 자문은 변호사와 상담하시기 바랍니다."""
+                # 질문 단어 중 의미있는 단어 추출 (2글자 이상)
+                import re
+                words = re.findall(r'\b\w{2,}\b', question)
+                matched_keywords.extend([w for w in words if len(w) >= 2 and w not in matched_keywords])
+
+                return matched_keywords
+
+            def _extract_relevant_content(self, contents, keywords, question):
+                """컨텍스트에서 질문과 관련성 높은 내용 추출"""
+                if not contents:
+                    return []
+
+                # 각 컨텍스트의 관련성 점수 계산
+                scored_contents = []
+                for content in contents:
+                    score = 0
+                    content_lower = content.lower()
+                    question_lower = question.lower()
+
+                    # 키워드 매칭 점수
+                    for keyword in keywords:
+                        if keyword in content_lower:
+                            score += 2
+
+                    # 질문의 핵심 단어가 포함된 경우 추가 점수
+                    for word in question_lower.split():
+                        if len(word) >= 2 and word in content_lower:
+                            score += 1
+
+                    # 컨텍스트 길이도 고려 (너무 짧거나 길면 감점)
+                    if 50 <= len(content) <= 1000:
+                        score += 1
+
+                    scored_contents.append((score, content))
+
+                # 점수 순으로 정렬
+                scored_contents.sort(reverse=True, key=lambda x: x[0])
+
+                return scored_contents
+
+            def _select_best_content(self, scored_contents, question):
+                """가장 적합한 내용 선택"""
+                if not scored_contents:
+                    return ""
+
+                # 상위 3개 선택하고 품질이 좋은 것만 포함
+                selected_contents = []
+                for score, content in scored_contents[:5]:
+                    if score >= 2:  # 최소 점수 이상인 경우만 선택
+                        selected_contents.append(content)
+
+                if not selected_contents:
+                    # 점수가 낮아도 최고 점수 내용은 포함
+                    if scored_contents:
+                        selected_contents.append(scored_contents[0][1])
+
+                # 중복 제거 및 길이 조절
+                unique_contents = []
+                seen = set()
+                total_length = 0
+                max_length = 800  # 최대 800자
+
+                for content in selected_contents:
+                    content_hash = hash(content[:100])  # 중복 체크를 위한 해시
+                    if content_hash not in seen:
+                        if total_length + len(content) <= max_length:
+                            unique_contents.append(content)
+                            seen.add(content_hash)
+                            total_length += len(content)
+                        else:
+                            # 공간이 부족하면 자름
+                            remaining = max_length - total_length
+                            if remaining > 100:
+                                unique_contents.append(content[:remaining])
+                            break
+
+                return "\n\n".join(unique_contents)
+
+            def _identify_question_type(self, question):
+                """질문 유형 파악"""
+                question_lower = question.lower()
+
+                if any(kw in question_lower for kw in ["이혼", "협의이혼", "재산분할", "양육권"]):
+                    return "가족법"
+                elif any(kw in question_lower for kw in ["상속", "유언", "상속분", "상속세"]):
+                    return "상속법"
+                elif any(kw in question_lower for kw in ["근로", "근무", "임금", "퇴직금", "수당", "야간", "휴가"]):
+                    return "노동법"
+                elif any(kw in question_lower for kw in ["계약", "매매", "임대", "보증", "대리"]):
+                    return "계약법"
+                elif any(kw in question_lower for kw in ["손해배상", "배상", "불법행위", "채권", "채무"]):
+                    return "민사법"
+                elif any(kw in question_lower for kw in ["소송", "소제기", "관할", "증거", "집행"]):
+                    return "민사소송법"
+                elif any(kw in question_lower for kw in ["절도", "범죄", "형사", "사기", "폭행", "강도"]):
+                    return "형사법"
+                elif any(kw in question_lower for kw in ["세금", "세법", "소득세", "부가가치세"]):
+                    return "세법"
+                else:
+                    return "일반"
+
+            def _generate_intro(self, question, question_type):
+                """질문 유형에 맞는 서론 생성"""
+                if question_type == "일반":
+                    return "관련 법률 정보를 확인했습니다."
+                elif question_type == "가족법":
+                    return "가족법 관련 질문이시군요. 관련 법률 정보입니다."
+                elif question_type == "상속법":
+                    return "상속 관련 법률 정보입니다."
+                elif question_type == "노동법":
+                    return "노동법 관련 정보입니다."
+                elif question_type == "계약법":
+                    return "계약 관련 법률 정보입니다."
+                elif question_type == "민사법":
+                    return "민사법 관련 정보입니다."
+                elif question_type == "민사소송법":
+                    return "민사소송 관련 법률 정보입니다."
+                elif question_type == "형사법":
+                    return "형사법 관련 정보입니다."
+                elif question_type == "세법":
+                    return "세법 관련 정보입니다."
+                else:
+                    return "관련 법률 정보를 확인했습니다."
+
+            def _structure_content(self, content, question, question_type):
+                """내용을 질문에 맞게 구조화"""
+                # 이미 구조화된 내용인지 확인
+                if "##" in content or "1." in content or "\n\n" in content:
+                    return content
+
+                # 내용을 문장 단위로 분리
+                sentences = [s.strip() for s in content.split('.') if s.strip()]
+
+                # 핵심 문장 우선 추출
+                relevant_sentences = []
+                question_words = set(question.split())
+
+                for sentence in sentences:
+                    if len(sentence) > 30:  # 너무 짧은 문장은 제외
+                        sentence_words = set(sentence.lower().split())
+                        # 질문과의 공통 단어가 있으면 우선 포함
+                        if question_words & sentence_words:
+                            relevant_sentences.insert(0, sentence)
+                        else:
+                            relevant_sentences.append(sentence)
+
+                # 상위 5개만 선택
+                result = ". ".join(relevant_sentences[:5])
+                if result and not result.endswith('.'):
+                    result += "."
+
+                return result
 
             async def ainvoke(self, prompt):
                 return self.invoke(prompt)
@@ -218,18 +529,125 @@ class EnhancedLegalQuestionWorkflow:
         """워크플로우 그래프 구축"""
         workflow = StateGraph(LegalWorkflowState)
 
-        # 노드 추가
+        # 기존 노드 추가
         workflow.add_node("classify_query", self.classify_query)
         workflow.add_node("retrieve_documents", self.retrieve_documents)
         workflow.add_node("generate_answer_enhanced", self.generate_answer_enhanced)
         workflow.add_node("format_response", self.format_response)
 
-        # 엣지 설정
-        workflow.set_entry_point("classify_query")
-        workflow.add_edge("classify_query", "retrieve_documents")
-        workflow.add_edge("retrieve_documents", "generate_answer_enhanced")
-        workflow.add_edge("generate_answer_enhanced", "format_response")
-        workflow.add_edge("format_response", END)
+        # Phase 1: 입력 검증 및 특수 쿼리 처리 노드 추가
+        workflow.add_node("validate_input", self.validate_input)
+        workflow.add_node("detect_special_queries", self.detect_special_queries)
+        workflow.add_node("handle_law_article", self.handle_law_article_query)
+        workflow.add_node("handle_contract", self.handle_contract_query)
+
+        # Phase 2: 하이브리드 질문 분석 및 법률 제한 검증 노드 추가
+        workflow.add_node("analyze_query_hybrid", self.analyze_query_hybrid)
+        workflow.add_node("validate_legal_restrictions", self.validate_legal_restrictions)
+        workflow.add_node("generate_restricted_response", self.generate_restricted_response)
+
+        # Phase 4: 답변 생성 폴백 체인 노드 추가
+        workflow.add_node("try_specific_law_search", self.try_specific_law_search)
+        workflow.add_node("try_unified_search", self.try_unified_search)
+        workflow.add_node("try_rag_service", self.try_rag_service)
+        workflow.add_node("generate_template_response", self.generate_template_response)
+
+        # Phase 3: Phase 시스템 통합 노드 추가
+        workflow.add_node("enrich_conversation_context", self.enrich_conversation_context)
+        workflow.add_node("personalize_response", self.personalize_response)
+        workflow.add_node("manage_memory_quality", self.manage_memory_quality)
+
+        # Phase 5: 후처리 노드 추가
+        workflow.add_node("enhance_completion", self.enhance_completion)
+        workflow.add_node("add_disclaimer", self.add_disclaimer)
+
+        # 엣지 설정 (Phase 1: 새로운 엔트리 포인트)
+        workflow.set_entry_point("validate_input")
+        workflow.add_edge("validate_input", "detect_special_queries")
+
+        # 특수 쿼리 라우팅 (조건부)
+        workflow.add_conditional_edges(
+            "detect_special_queries",
+            self.should_route_special,
+            {
+                "law_article": "handle_law_article",
+                "contract": "handle_contract",
+                "regular": "classify_query"
+            }
+        )
+
+        # 특수 쿼리 핸들러에서 종료
+        workflow.add_edge("handle_law_article", END)
+        workflow.add_edge("handle_contract", END)
+
+        # Phase 2: classify_query 다음에 하이브리드 분석 노드 추가
+        workflow.add_edge("classify_query", "analyze_query_hybrid")
+        workflow.add_edge("analyze_query_hybrid", "validate_legal_restrictions")
+
+        # 법률 제한 검증 후 라우팅
+        workflow.add_conditional_edges(
+            "validate_legal_restrictions",
+            self.should_continue_after_restriction,
+            {
+                "restricted": "generate_restricted_response",
+                "continue": "retrieve_documents"
+            }
+        )
+        workflow.add_edge("generate_restricted_response", END)
+
+        # Phase 3: retrieve_documents 다음에 Phase 노드들 병렬 실행
+        workflow.add_edge("retrieve_documents", "enrich_conversation_context")
+        workflow.add_edge("retrieve_documents", "personalize_response")
+        workflow.add_edge("retrieve_documents", "manage_memory_quality")
+
+        # 모든 Phase가 완료되면 답변 생성으로
+        workflow.add_edge("enrich_conversation_context", "generate_answer_enhanced")
+        workflow.add_edge("personalize_response", "generate_answer_enhanced")
+        workflow.add_edge("manage_memory_quality", "generate_answer_enhanced")
+
+        # Phase 4: 폴백 체인 설정
+        workflow.add_conditional_edges(
+            "generate_answer_enhanced",
+            self.route_generation_fallback,
+            {
+                "success": "format_response",
+                "fallback": "try_specific_law_search"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "try_specific_law_search",
+            self.route_generation_fallback,
+            {
+                "success": "format_response",
+                "fallback": "try_unified_search"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "try_unified_search",
+            self.route_generation_fallback,
+            {
+                "success": "format_response",
+                "fallback": "try_rag_service"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "try_rag_service",
+            self.route_generation_fallback,
+            {
+                "success": "format_response",
+                "fallback": "generate_template_response"
+            }
+        )
+
+        workflow.add_edge("generate_template_response", "format_response")
+
+        # Phase 5: format_response 다음에 후처리 노드 추가
+        workflow.add_edge("format_response", "enhance_completion")
+        workflow.add_edge("enhance_completion", "add_disclaimer")
+        workflow.add_edge("add_disclaimer", END)
 
         return workflow
 
@@ -357,7 +775,6 @@ class EnhancedLegalQuestionWorkflow:
             print(f"Document retrieval - Query: '{query}', Type: {query_type}")
 
             # 캐시에서 문서 확인 (더 적극적인 캐싱)
-            cache_key = f"{query}_{query_type}"
             cached_documents = self.performance_optimizer.cache.get_cached_documents(query, query_type)
 
             if cached_documents:
@@ -365,13 +782,13 @@ class EnhancedLegalQuestionWorkflow:
                 state["processing_steps"].append(f"{len(cached_documents)}개 캐시된 문서 사용")
                 print(f"Using cached documents for query: {query[:50]}...")
             else:
-                # 벡터 검색 우선 시도
+                # 벡터 검색 우선 시도 (성능 최적화: top_k를 5에서 3으로 감소)
                 documents = []
 
                 # 벡터 스토어에서 검색 시도
                 try:
                     if hasattr(self, 'vector_store') and self.vector_store and hasattr(self.vector_store, 'search'):
-                        vector_results = self.vector_store.search(query, top_k=5)
+                        vector_results = self.vector_store.search(query, top_k=3)  # 5→3으로 최적화
                         if vector_results:
                             # 벡터 검색 결과를 문서 형식으로 변환
                             for i, result in enumerate(vector_results):
@@ -384,25 +801,32 @@ class EnhancedLegalQuestionWorkflow:
                                 }
                                 documents.append(doc)
                             print(f"Vector search found {len(documents)} documents")
+
+                            # 벡터 검색 결과 캐싱
+                            self.performance_optimizer.cache.cache_documents(query, query_type, documents)
                 except Exception as e:
                     print(f"⚠️ Vector search failed: {e}")
 
-                # 데이터베이스 검색 항상 수행 (실제 법률 문서 사용)
-                try:
-                    print(f"🔍 데이터베이스 검색 시작: query='{query}', query_type='{query_type}'")
-                    db_documents = self.data_connector.search_documents(query, query_type, limit=5)
-                    print(f"✅ 데이터베이스 검색 완료: {len(db_documents)}개 문서 발견")
+                # 벡터 검색 결과가 충분하면 DB 검색 생략 (성능 최적화)
+                if len(documents) >= 3:
+                    print(f"✅ 벡터 검색 결과 충분 ({len(documents)}개). DB 검색 생략")
+                else:
+                    # 데이터베이스 검색 수행 (결과가 부족한 경우만)
+                    try:
+                        print(f"🔍 데이터베이스 검색 시작: query='{query}', query_type='{query_type}'")
+                        db_documents = self.data_connector.search_documents(query, query_type, limit=3)  # 5→3으로 최적화
+                        print(f"✅ 데이터베이스 검색 완료: {len(db_documents)}개 문서 발견")
 
-                    # 중복 제거
-                    existing_contents = {doc["content"][:100] for doc in documents}
-                    for doc in db_documents:
-                        if doc.get("content", "")[:100] not in existing_contents:
-                            documents.append(doc)
-                    print(f"📊 데이터베이스 검색으로 {len(db_documents)}개 문서 추가")
-                except Exception as e:
-                    print(f"❌ 데이터베이스 검색 실패: {e}")
-                    import traceback
-                    print(f"상세 오류: {traceback.format_exc()}")
+                        # 중복 제거
+                        existing_contents = {doc["content"][:100] for doc in documents}
+                        for doc in db_documents:
+                            if doc.get("content", "")[:100] not in existing_contents:
+                                documents.append(doc)
+                        print(f"📊 데이터베이스 검색으로 {len([doc for doc in db_documents if doc.get('content', '')[:100] not in existing_contents])}개 문서 추가")
+                    except Exception as e:
+                        print(f"❌ 데이터베이스 검색 실패: {e}")
+                        import traceback
+                        print(f"상세 오류: {traceback.format_exc()}")
 
                 # 여전히 결과가 부족한 경우 카테고리별 문서 추가
                 if len(documents) < 3:
@@ -513,8 +937,56 @@ class EnhancedLegalQuestionWorkflow:
                 print(f"  [{i}] Source: {source}, Category: {category}, Relevance: {relevance_score:.2f}")
                 print(f"      Title: {title[:80]}...")
 
-            # 컨텍스트 구성
-            context = "\n".join([doc.get("content", str(doc)) for doc in retrieved_docs if doc])
+            # 컨텍스트 구성 - 메타데이터 제외하고 실제 내용만 추출
+            import re
+            context_parts = []
+            for doc in retrieved_docs:
+                if not doc:
+                    continue
+
+                # content 필드에서 실제 텍스트 추출
+                content = doc.get("content", "")
+
+                # content가 딕셔너리인 경우 'text' 필드에서 추출
+                if isinstance(content, dict):
+                    content_text = content.get("text", "")
+                # content가 문자열인 경우
+                elif isinstance(content, str):
+                    # {'score': ..., 'text': '...'} 형태의 문자열인지 확인
+                    if "'text':" in content or '"text":' in content:
+                        # 텍스트 추출을 위한 정규식
+                        text_pattern = r"(?:'text':|[\"']text[\"']:\s*)[\"']([^\"']+)[\"']"
+                        matches = re.findall(text_pattern, content)
+                        if matches:
+                            content_text = matches[0]
+                        else:
+                            # 간단한 파싱 시도
+                            if "'text':" in content:
+                                parts = content.split("'text':")
+                                if len(parts) > 1:
+                                    text_part = parts[1].strip()
+                                    # 따옴표 제거
+                                    content_text = text_part.strip("'\"")
+                                else:
+                                    content_text = content
+                            else:
+                                content_text = content
+                    else:
+                        content_text = content
+                # 그 외의 경우 문자열 변환
+                else:
+                    content_text = str(content)
+
+                # 메타데이터 키워드 제거
+                if "metadata:" in content_text or "law_id:" in content_text:
+                    lines = content_text.split('\n')
+                    content_text = '\n'.join([line for line in lines if "metadata:" not in line and "law_id:" not in line])
+
+                # 최종 검증 및 추가
+                if content_text and len(content_text) > 20 and not content_text.startswith("{"):
+                    context_parts.append(content_text)
+
+            context = "\n\n".join(context_parts)
 
             # 원본 쿼리 사용
             original_query = updated_state.get("user_query") or updated_state.get("original_query") or updated_state.get("query")
@@ -628,6 +1100,10 @@ class EnhancedLegalQuestionWorkflow:
             print(f"  - response 길이: {len(updated_state['response'])}")
             print(f"  - confidence: {confidence:.2f}")
 
+            # 성공 플래그 설정
+            updated_state["generation_success"] = True
+            updated_state["generation_method"] = "enhanced_llm"
+
             processing_time = time.time() - start_time
             updated_state["processing_time"] = updated_state.get("processing_time", 0.0) + processing_time
 
@@ -645,8 +1121,8 @@ class EnhancedLegalQuestionWorkflow:
             updated_state["processing_steps"].append(error_msg)
             print(f"❌ {error_msg}")
 
-            # 기본 답변 설정
-            updated_state["answer"] = self._generate_fallback_answer(updated_state)
+            # 실패 플래그 설정 (폴백 체인으로)
+            updated_state["generation_success"] = False
 
         return updated_state
 
@@ -930,5 +1406,915 @@ class EnhancedLegalQuestionWorkflow:
             state["errors"].append(error_msg)
             state["processing_steps"].append(error_msg)
             print(f"❌ {error_msg}")
+
+        return state
+
+    # ========== Phase 1: 입력 검증 및 특수 쿼리 처리 노드 ==========
+
+    def validate_input(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """입력 검증 (enhanced_chat_service._validate_and_preprocess_input 로직)"""
+        print(f"🔍 validate_input 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "errors" not in state:
+                state["errors"] = []
+            if "validation_results" not in state:
+                state["validation_results"] = {}
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+
+            # 검증 로직
+            if not message or not message.strip():
+                error = "메시지가 비어있습니다"
+                state["errors"].append(error)
+                state["validation_results"] = {"valid": False, "error": error}
+            elif len(message) > 10000:
+                error = "메시지가 너무 깁니다 (최대 10,000자)"
+                state["errors"].append(error)
+                state["validation_results"] = {"valid": False, "error": error}
+            else:
+                state["validation_results"] = {
+                    "valid": True,
+                    "message": message.strip(),
+                    "length": len(message)
+                }
+
+            state["processing_steps"].append("입력 검증 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 입력 검증 완료: {state['validation_results'].get('valid', False)}")
+
+        except Exception as e:
+            error_msg = f"입력 검증 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def detect_special_queries(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """특수 쿼리 감지"""
+        print(f"🔍 detect_special_queries 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "is_law_article_query" not in state:
+                state["is_law_article_query"] = False
+            if "is_contract_query" not in state:
+                state["is_contract_query"] = False
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+
+            # 법률 조문 쿼리 감지
+            import re
+            law_patterns = [
+                r'(\w+법)\s*제\s*(\d+)조',
+                r'제\s*(\d+)조',
+                r'(\w+법)제(\d+)조'
+            ]
+
+            is_law_article = False
+            for pattern in law_patterns:
+                if re.search(pattern, message):
+                    is_law_article = True
+                    break
+
+            state["is_law_article_query"] = is_law_article
+
+            # 계약서 쿼리 감지
+            contract_keywords = ["계약서", "계약", "작성", "체결", "계약이"]
+            is_contract = any(keyword in message for keyword in contract_keywords)
+            state["is_contract_query"] = is_contract
+
+            state["processing_steps"].append(f"특수 쿼리 감지 완료 (법률조문: {is_law_article}, 계약서: {is_contract})")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 특수 쿼리 감지 완료: law_article={is_law_article}, contract={is_contract}")
+
+        except Exception as e:
+            error_msg = f"특수 쿼리 감지 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def should_route_special(self, state: LegalWorkflowState) -> str:
+        """특수 쿼리 라우팅 결정"""
+        try:
+            if state.get("is_law_article_query"):
+                return "law_article"
+            elif state.get("is_contract_query"):
+                return "contract"
+            return "regular"
+        except Exception as e:
+            print(f"라우팅 결정 중 오류: {e}")
+            return "regular"
+
+    def handle_law_article_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """법률 조문 쿼리 처리"""
+        print(f"🔍 handle_law_article_query 시작")
+        start_time = time.time()
+
+        try:
+            # 현재는 법률 조문 검색 로직 연결 (향후 CurrentLawSearchEngine 통합)
+            message = state.get("user_query", "")
+
+            # 기본 응답 생성
+            response_text = f"법률 조문 검색 기능은 현재 개발 중입니다. 질문: {message}"
+
+            state["answer"] = response_text
+            state["generated_response"] = response_text
+            state["response"] = response_text
+            state["generation_method"] = "law_article_query"
+            state["generation_success"] = True
+
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+            state["processing_steps"].append("법률 조문 쿼리 처리 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 법률 조문 쿼리 처리 완료")
+
+        except Exception as e:
+            error_msg = f"법률 조문 쿼리 처리 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def handle_contract_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """계약서 쿼리 처리"""
+        print(f"🔍 handle_contract_query 시작")
+        start_time = time.time()
+
+        try:
+            message = state.get("user_query", "")
+
+            # 기본 응답 생성 (향후 ContractQueryHandler 통합)
+            response_text = f"계약서 관련 질문입니다. 질문: {message}"
+
+            state["answer"] = response_text
+            state["generated_response"] = response_text
+            state["response"] = response_text
+            state["generation_method"] = "contract_query"
+            state["generation_success"] = True
+
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+            state["processing_steps"].append("계약서 쿼리 처리 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 계약서 쿼리 처리 완료")
+
+        except Exception as e:
+            error_msg = f"계약서 쿼리 처리 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    # ========== Phase 2: 하이브리드 질문 분석 및 법률 제한 검증 노드 ==========
+
+    def analyze_query_hybrid(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """하이브리드 질문 분석 (enhanced_chat_service._analyze_query 로직)"""
+        print(f"🔍 analyze_query_hybrid 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "query_analysis" not in state:
+                state["query_analysis"] = {}
+            if "hybrid_classification" not in state:
+                state["hybrid_classification"] = {}
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+
+            # 하이브리드 분류기 사용
+            try:
+                from ..integrated_hybrid_classifier import (
+                    IntegratedHybridQuestionClassifier,
+                )
+
+                classifier = IntegratedHybridQuestionClassifier(confidence_threshold=0.7)
+                classification_result = classifier.classify(message)
+
+                # 도메인 분석 (향후 구현)
+                domain_analysis = {}
+
+                # 결과를 state에 저장
+                state["query_analysis"] = {
+                    "query_type": classification_result.question_type_value,
+                    "confidence": classification_result.confidence,
+                    "domain": domain_analysis.get("domain", "general"),
+                    "keywords": classification_result.features.get("keywords", []) if classification_result.features else [],
+                    "classification_method": classification_result.method,
+                    "hybrid_analysis": True
+                }
+                state["hybrid_classification"] = {
+                    "result": classification_result,
+                    "domain_analysis": domain_analysis
+                }
+
+            except Exception as e:
+                # 폴백: 기본 분류
+                state["query_analysis"] = {
+                    "query_type": "general",
+                    "confidence": 0.5,
+                    "hybrid_analysis": False,
+                    "error": str(e)
+                }
+
+            state["processing_steps"].append("하이브리드 쿼리 분석 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 하이브리드 쿼리 분석 완료")
+
+        except Exception as e:
+            error_msg = f"하이브리드 쿼리 분석 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def validate_legal_restrictions(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """법률 제한 검증 (enhanced_chat_service._validate_legal_restrictions 로직)"""
+        print(f"🔍 validate_legal_restrictions 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "legal_restriction_result" not in state:
+                state["legal_restriction_result"] = {}
+            if "is_restricted" not in state:
+                state["is_restricted"] = False
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+            query_analysis = state.get("query_analysis", {})
+
+            # 법률 제한 시스템 호출 (현재는 비활성화 상태이므로 기본값)
+            restriction_result = {
+                "restricted": False,
+                "reason": None,
+                "safe_response": None,
+                "confidence": 1.0
+            }
+
+            state["legal_restriction_result"] = restriction_result
+            state["is_restricted"] = restriction_result["restricted"]
+            state["processing_steps"].append("법률 제한 검증 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 법률 제한 검증 완료: restricted={restriction_result['restricted']}")
+
+        except Exception as e:
+            error_msg = f"법률 제한 검증 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def should_continue_after_restriction(self, state: LegalWorkflowState) -> str:
+        """제한 검증 후 라우팅"""
+        try:
+            if state.get("is_restricted"):
+                return "restricted"
+            return "continue"
+        except Exception as e:
+            print(f"라우팅 결정 중 오류: {e}")
+            return "continue"
+
+    def generate_restricted_response(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """제한된 응답 생성"""
+        print(f"🔍 generate_restricted_response 시작")
+        start_time = time.time()
+
+        try:
+            restriction_result = state.get("legal_restriction_result", {})
+
+            # 제한된 응답 생성
+            response_text = "죄송합니다. 해당 질문은 법률 제한으로 인해 답변 드릴 수 없습니다."
+
+            if restriction_result.get("safe_response"):
+                response_text = restriction_result["safe_response"]
+
+            state["answer"] = response_text
+            state["generated_response"] = response_text
+            state["response"] = response_text
+            state["generation_method"] = "restricted_response"
+            state["generation_success"] = True
+
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+            state["processing_steps"].append("제한된 응답 생성 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 제한된 응답 생성 완료")
+
+        except Exception as e:
+            error_msg = f"제한된 응답 생성 중 오류 발생: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    # ========== Phase 4: 답변 생성 폴백 체인 노드 ==========
+
+    def route_generation_fallback(self, state: LegalWorkflowState) -> str:
+        """답변 생성 폴백 라우팅"""
+        try:
+            if state.get("generation_success"):
+                return "success"
+            return "fallback"
+        except Exception as e:
+            print(f"폴백 라우팅 중 오류: {e}")
+            return "fallback"
+
+    def try_specific_law_search(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """특정 법률 조문 검색 (enhanced_chat_service._generate_enhanced_response 2순위 로직)"""
+        print(f"🔍 try_specific_law_search 시작")
+        start_time = time.time()
+
+        try:
+            query_analysis = state.get("query_analysis", {})
+            message = state.get("user_query", "")
+
+            # CurrentLawSearchEngine 사용
+            if self.current_law_search_engine:
+                try:
+                    results = self.current_law_search_engine.search_current_laws(
+                        query=message,
+                        search_type='hybrid',
+                        top_k=5
+                    )
+
+                    if results:
+                        # 첫 번째 결과 사용
+                        first_result = results[0]
+                        response_text = f"관련 법령: {first_result.law_name_korean}\n\n{first_result.detailed_info}"
+
+                        state["answer"] = response_text
+                        state["generated_response"] = response_text
+                        state["response"] = response_text
+                        state["generation_method"] = "current_law_search"
+                        state["generation_success"] = True
+                        state["processing_steps"] = state.get("processing_steps", [])
+                        state["processing_steps"].append(f"특정 법률 검색 성공: {len(results)}개 결과")
+                        return state
+                except Exception as e:
+                    print(f"CurrentLawSearchEngine 검색 실패: {e}")
+
+            # 실패 시
+            state["generation_success"] = False
+            state["processing_steps"] = state.get("processing_steps", [])
+            state["processing_steps"].append("특정 법률 검색 실패 또는 미구현")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+        except Exception as e:
+            error_msg = f"특정 법률 검색 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            state["generation_success"] = False
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def try_unified_search(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """통합 검색 엔진 (enhanced_chat_service._generate_enhanced_response 3순위 로직)"""
+        print(f"🔍 try_unified_search 시작")
+        start_time = time.time()
+
+        try:
+            message = state.get("user_query", "")
+
+            # UnifiedSearchEngine 사용 (비동기는 동기로 변환)
+            if self.unified_search_engine:
+                try:
+                    import asyncio
+                    # 비동기 함수를 동기적으로 호출
+                    if hasattr(self.unified_search_engine, 'search'):
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        search_result = loop.run_until_complete(
+                            self.unified_search_engine.search(
+                                query=message,
+                                top_k=5,
+                                search_types=['vector', 'exact'],
+                                use_cache=True
+                            )
+                        )
+                        loop.close()
+
+                        if search_result.results:
+                            # 검색 결과를 답변으로 변환
+                            sources_text = "\n\n".join([
+                                f"- {r.get('title', r.get('content', ''))[:200]}"
+                                for r in search_result.results[:3]
+                            ])
+
+                            response_text = f"관련 문서를 찾았습니다:\n\n{sources_text}"
+
+                            state["answer"] = response_text
+                            state["generated_response"] = response_text
+                            state["response"] = response_text
+                            state["generation_method"] = "unified_search"
+                            state["generation_success"] = True
+                            state["processing_steps"] = state.get("processing_steps", [])
+                            state["processing_steps"].append(f"통합 검색 성공: {len(search_result.results)}개 결과")
+                            return state
+                except Exception as e:
+                    print(f"UnifiedSearchEngine 검색 실패: {e}")
+
+            # 실패 시
+            state["generation_success"] = False
+            state["processing_steps"] = state.get("processing_steps", [])
+            state["processing_steps"].append("통합 검색 실패 또는 미구현")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+        except Exception as e:
+            error_msg = f"통합 검색 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            state["generation_success"] = False
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def try_rag_service(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """RAG 서비스 (enhanced_chat_service._generate_enhanced_response 4순위 로직)"""
+        print(f"🔍 try_rag_service 시작")
+        start_time = time.time()
+
+        try:
+            message = state.get("user_query", "")
+            query_analysis = state.get("query_analysis", {})
+
+            # UnifiedRAGService 사용 (비동기는 동기로 변환)
+            if self.unified_rag_service:
+                try:
+                    import asyncio
+                    # 비동기 함수를 동기적으로 호출
+                    if hasattr(self.unified_rag_service, 'generate_response'):
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        rag_response = loop.run_until_complete(
+                            self.unified_rag_service.generate_response(
+                                query=message,
+                                max_length=500,
+                                top_k=10,
+                                use_cache=True
+                            )
+                        )
+                        loop.close()
+
+                        if rag_response and hasattr(rag_response, 'response'):
+                            response_text = rag_response.response
+
+                            state["answer"] = response_text
+                            state["generated_response"] = response_text
+                            state["response"] = response_text
+                            state["generation_method"] = "unified_rag"
+                            state["generation_success"] = True
+                            state["confidence"] = rag_response.confidence if hasattr(rag_response, 'confidence') else 0.7
+                            state["processing_steps"] = state.get("processing_steps", [])
+                            state["processing_steps"].append("RAG 서비스 성공")
+                            return state
+                except Exception as e:
+                    print(f"UnifiedRAGService 처리 실패: {e}")
+
+            # 실패 시
+            state["generation_success"] = False
+            state["processing_steps"] = state.get("processing_steps", [])
+            state["processing_steps"].append("RAG 서비스 실패 또는 미구현")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+        except Exception as e:
+            error_msg = f"RAG 서비스 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            state["generation_success"] = False
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def generate_template_response(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """템플릿 기반 답변 (enhanced_chat_service._generate_improved_template_response 로직)"""
+        print(f"🔍 generate_template_response 시작")
+        start_time = time.time()
+
+        try:
+            message = state.get("user_query", "")
+            query_type = state.get("query_type", "GENERAL_QUESTION")
+
+            # 템플릿 기반 기본 답변 생성
+            templates = {
+                "FAMILY_LAW": "가족법 관련 질문이시군요. 상세한 사안을 알려주시면 더 정확한 답변을 드릴 수 있습니다.",
+                "CRIMINAL_LAW": "형사법 관련 질문이시군요. 구체적인 상황을 설명해주시면 관련 조문을 찾아드리겠습니다.",
+                "CIVIL_LAW": "민사법 관련 질문이시군요. 자세한 내용을 알려주시면 법률 조언을 드리겠습니다.",
+                "LABOR_LAW": "노동법 관련 질문이시군요. 구체적인 사안을 알려주시면 관련 법령을 찾아드리겠습니다.",
+            }
+
+            response_text = templates.get(query_type,
+                f"죄송합니다. '{message}'에 대한 답변을 생성할 수 없었습니다. "
+                "다른 방식으로 문의해주시면 도움을 드리겠습니다.")
+
+            state["answer"] = response_text
+            state["generated_response"] = response_text
+            state["response"] = response_text
+            state["generation_method"] = "template"
+            state["generation_success"] = True
+            state["confidence"] = 0.5
+            state["processing_steps"] = state.get("processing_steps", [])
+            state["processing_steps"].append("템플릿 기반 답변 생성 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 템플릿 기반 답변 생성 완료")
+
+        except Exception as e:
+            error_msg = f"템플릿 기반 답변 생성 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            state["generation_success"] = False
+            print(f"❌ {error_msg}")
+
+        return state
+
+    # ========== Phase 3: Phase 시스템 통합 노드 ==========
+
+    def enrich_conversation_context(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """Phase 1: 대화 맥락 강화 (enhanced_chat_service._process_phase1_context 로직)"""
+        print(f"🔍 enrich_conversation_context 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "phase1_context" not in state:
+                state["phase1_context"] = {}
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+            session_id = state.get("session_id", "")
+            user_id = state.get("user_id", "")
+
+            # Phase 1 정보 설정
+            phase1_info = {
+                "session_context": None,
+                "multi_turn_context": None,
+                "compressed_context": None,
+                "enabled": False  # 현재 비활성화 상태
+            }
+
+            # 실제 Phase 1 로직 (향후 활성화 시 구현)
+            # integrated_session_manager, multi_turn_handler, context_compressor 호출
+
+            state["phase1_context"] = phase1_info
+            state["processing_steps"].append("Phase 1: 대화 맥락 강화 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ Phase 1: 대화 맥락 강화 완료")
+
+        except Exception as e:
+            error_msg = f"Phase 1 처리 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def personalize_response(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """Phase 2: 개인화 (enhanced_chat_service._process_phase2_personalization 로직)"""
+        print(f"🔍 personalize_response 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "phase2_personalization" not in state:
+                state["phase2_personalization"] = {}
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+            user_id = state.get("user_id", "")
+            # session_id와 phase1_info는 향후 확장 시 사용 예정
+            _session_id = state.get("session_id", "")
+            _phase1_info = state.get("phase1_context", {})
+
+            # Phase 2 정보 설정
+            phase2_info = {
+                "user_profile": None,
+                "emotion_intent": None,
+                "conversation_flow": None,
+                "enabled": True  # UserProfileManager 사용 시 활성화
+            }
+
+            # UserProfileManager를 사용한 실제 Phase 2 로직 구현
+            if self.user_profile_manager and user_id:
+                try:
+                    # 1. 사용자 프로필 조회 또는 생성
+                    profile = self.user_profile_manager.get_profile(user_id)
+                    if not profile:
+                        # 프로필이 없으면 기본 프로필 생성
+                        self.user_profile_manager.create_profile(user_id, {})
+                        profile = self.user_profile_manager.get_profile(user_id)
+
+                    if profile:
+                        # 2. 개인화된 컨텍스트 생성
+                        personalized_context = self.user_profile_manager.get_personalized_context(
+                            user_id, message
+                        )
+
+                        # 3. 관심 분야 업데이트
+                        self.user_profile_manager.update_interest_areas(user_id, message)
+
+                        # 4. 상태에 개인화 정보 설정
+                        phase2_info["user_profile"] = personalized_context
+
+                        # 5. 전역 상태에도 개인화 정보 반영
+                        if "user_expertise_level" not in state:
+                            state["user_expertise_level"] = profile.get("expertise_level", "beginner")
+                        else:
+                            state["user_expertise_level"] = profile.get("expertise_level", state["user_expertise_level"])
+
+                        if "preferred_response_style" not in state:
+                            state["preferred_response_style"] = personalized_context.get("response_style", "medium")
+                        else:
+                            state["preferred_response_style"] = personalized_context.get("response_style", state["preferred_response_style"])
+
+                        state["expertise_context"] = personalized_context.get("expertise_context", {})
+                        state["interest_areas"] = personalized_context.get("interest_areas", [])
+                        state["personalization_score"] = personalized_context.get("personalization_score", 0.0)
+
+                        logger.info(f"✅ Phase 2: 개인화 완료 - 전문성: {profile.get('expertise_level')}, 관심분야: {len(personalized_context.get('interest_areas', []))}개")
+                    else:
+                        logger.warning("프로필 생성 또는 조회 실패")
+
+                except Exception as e:
+                    logger.error(f"UserProfileManager 처리 중 오류: {e}")
+                    # 에러가 나도 계속 진행
+                    phase2_info["enabled"] = False
+            else:
+                logger.info("UserProfileManager를 사용할 수 없음 - 기본 모드로 진행")
+
+            state["phase2_personalization"] = phase2_info
+            state["processing_steps"].append("Phase 2: 개인화 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ Phase 2: 개인화 완료")
+
+        except Exception as e:
+            error_msg = f"Phase 2 처리 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            logger.error(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def manage_memory_quality(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """Phase 3: 장기 기억 및 품질 모니터링 (enhanced_chat_service._process_phase3_memory_quality 로직)"""
+        print(f"🔍 manage_memory_quality 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "phase3_memory_quality" not in state:
+                state["phase3_memory_quality"] = {}
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+
+            message = state.get("user_query", "")
+            user_id = state.get("user_id", "")
+            # session_id, phase1_info, phase2_info는 향후 확장 시 사용 예정
+            _session_id = state.get("session_id", "")
+            _phase1_info = state.get("phase1_context", {})
+            _phase2_info = state.get("phase2_personalization", {})
+
+            # Phase 3 정보 설정
+            phase3_info = {
+                "contextual_memory": None,
+                "quality_metrics": None,
+                "enabled": False  # 현재 비활성화 상태
+            }
+
+            # 실제 Phase 3 로직 (향후 활성화 시 구현)
+            # contextual_memory_manager, conversation_quality_monitor 호출
+
+            state["phase3_memory_quality"] = phase3_info
+            state["processing_steps"].append("Phase 3: 장기 기억 및 품질 모니터링 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ Phase 3: 장기 기억 및 품질 모니터링 완료")
+
+        except Exception as e:
+            error_msg = f"Phase 3 처리 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    # ========== Phase 5: 후처리 노드 ==========
+
+    def enhance_completion(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """답변 완성도 검증 및 보완 (enhanced_chat_service.process_message 로직)"""
+        print(f"🔍 enhance_completion 시작")
+        start_time = time.time()
+
+        try:
+            # 상태 초기화
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+            if "completion_result" not in state:
+                state["completion_result"] = {}
+
+            response_text = state.get("response", "")
+            # message와 query_analysis는 향후 확장 시 사용 예정
+            _message = state.get("user_query", "")
+            _query_analysis = state.get("query_analysis", {})
+
+            # 향후 enhanced_completion_system 통합
+            # 현재는 기본 검증만 수행
+            was_truncated = False
+            if response_text and len(response_text) < 50:
+                # 너무 짧은 답변은 보완 필요
+                was_truncated = True
+                state["completion_result"] = {
+                    "improved": True,
+                    "method": "length_validation",
+                    "confidence": 0.7
+                }
+
+            if was_truncated:
+                # 답변을 조금 더 풍부하게 만들어줌
+                enhanced_response = response_text + "\n\n추가 정보가 필요하시면 더 구체적으로 질문해주세요."
+                state["response"] = enhanced_response
+                state["answer"] = enhanced_response
+                state["generated_response"] = enhanced_response
+
+            state["processing_steps"].append("답변 완성도 검증 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+            print(f"✅ 답변 완성도 검증 완료")
+
+        except Exception as e:
+            error_msg = f"답변 완성도 검증 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+
+        return state
+
+    def add_disclaimer(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """면책 조항 추가 (UserPreferenceManager 통합)"""
+        print(f"🔍 add_disclaimer 시작")
+        start_time = time.time()
+
+        try:
+            # UserPreferenceManager import
+            from ...user_preference_manager import (
+                DisclaimerPosition,
+                DisclaimerStyle,
+                preference_manager,
+            )
+
+            # 상태 초기화
+            if "processing_steps" not in state:
+                state["processing_steps"] = []
+            if "disclaimer_added" not in state:
+                state["disclaimer_added"] = False
+
+            response_text = state.get("response", "")
+
+            # 사용자 설정 가져오기 (state에서 또는 기본값)
+            user_preferences = state.get("user_preferences", {})
+            show_disclaimer = user_preferences.get("show_disclaimer", True)
+
+            # 사용자 설정에 따라 면책 조항 추가
+            if response_text and show_disclaimer:
+                # 스타일 가져오기
+                disclaimer_style_str = user_preferences.get("disclaimer_style", "natural")
+                try:
+                    disclaimer_style = DisclaimerStyle(disclaimer_style_str)
+                except ValueError:
+                    disclaimer_style = DisclaimerStyle.NATURAL
+
+                # 위치 가져오기
+                disclaimer_position_str = user_preferences.get("disclaimer_position", "end")
+                try:
+                    disclaimer_position = DisclaimerPosition(disclaimer_position_str)
+                except ValueError:
+                    disclaimer_position = DisclaimerPosition.END
+
+                # preference_manager에 현재 설정 반영
+                if hasattr(preference_manager, 'preferences'):
+                    preference_manager.preferences.disclaimer_style = disclaimer_style
+                    preference_manager.preferences.disclaimer_position = disclaimer_position
+                    preference_manager.preferences.show_disclaimer = show_disclaimer
+
+                # UserPreferenceManager를 사용하여 면책 조항 추가
+                question_text = state.get("user_query", "")
+                enhanced_response = preference_manager.add_disclaimer_to_response(
+                    response_text,
+                    question_text
+                )
+
+                # 면책 조항이 추가된 경우에만 상태 업데이트
+                if enhanced_response != response_text:
+                    state["response"] = enhanced_response
+                    state["answer"] = enhanced_response
+                    state["generated_response"] = enhanced_response
+                    state["disclaimer_added"] = True
+                    print(f"✅ 면책 조항 추가 완료 (스타일: {disclaimer_style.value}, 위치: {disclaimer_position.value})")
+                else:
+                    print(f"ℹ️ 면책 조항 추가 안함 (설정에 따라 건너뜀)")
+
+            state["processing_steps"].append("면책 조항 추가 완료")
+
+            processing_time = time.time() - start_time
+            state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+
+        except ImportError as e:
+            # UserPreferenceManager를 import할 수 없는 경우 기본 로직 사용
+            print(f"⚠️ UserPreferenceManager를 import할 수 없습니다. 기본 로직 사용: {e}")
+            response_text = state.get("response", "")
+
+            if response_text and not response_text.endswith(".") and not response_text.endswith("!"):
+                disclaimer = "\n\n※ 이 답변은 일반적인 법률 정보 제공을 목적으로 하며, 구체적인 법률 자문은 변호사와 상담하시기 바랍니다."
+                state["response"] = response_text + disclaimer
+                state["answer"] = state["response"]
+                state["generated_response"] = state["response"]
+                state["disclaimer_added"] = True
+                print(f"✅ 기본 면책 조항 추가 완료")
+
+        except Exception as e:
+            error_msg = f"면책 조항 추가 중 오류: {str(e)}"
+            if "errors" not in state:
+                state["errors"] = []
+            state["errors"].append(error_msg)
+            print(f"❌ {error_msg}")
+            import traceback
+            print(f"상세 오류: {traceback.format_exc()}")
 
         return state

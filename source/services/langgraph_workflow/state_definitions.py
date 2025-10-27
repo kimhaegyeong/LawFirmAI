@@ -65,11 +65,41 @@ class LegalWorkflowState(TypedDict):
     preferred_response_style: str
     device_info: Dict[str, Any]
 
+    # === 개인화 추가 필드 ===
+    expertise_context: Dict[str, Any]
+    interest_areas: List[str]
+    personalization_score: float
+
     # === 법률 특화 정보 ===
     legal_domain: str
     statute_references: List[Dict[str, Any]]
     precedent_references: List[Dict[str, Any]]
     legal_confidence: float
+
+    # === Phase 시스템 정보 ===
+    phase1_context: Dict[str, Any]
+    phase2_personalization: Dict[str, Any]
+    phase3_memory_quality: Dict[str, Any]
+
+    # === 법률 제한 정보 ===
+    legal_restriction_result: Dict[str, Any]
+    is_restricted: bool
+
+    # === 특수 쿼리 플래그 ===
+    is_law_article_query: bool
+    is_contract_query: bool
+
+    # === 답변 완성도 정보 ===
+    completion_result: Dict[str, Any]
+    disclaimer_added: bool
+
+    # === 쿼리 분석 결과 (하이브리드 분류기) ===
+    query_analysis: Dict[str, Any]
+    hybrid_classification: Dict[str, Any]
+
+    # === 답변 생성 성공 여부 ===
+    generation_success: bool
+    generation_method: str
 
     # === 워크플로우 제어 ===
     current_step: str
@@ -248,10 +278,26 @@ def create_empty_state() -> LegalWorkflowState:
         user_expertise_level="beginner",
         preferred_response_style="formal",
         device_info={},
+        expertise_context={},
+        interest_areas=[],
+        personalization_score=0.0,
         legal_domain="",
         statute_references=[],
         precedent_references=[],
         legal_confidence=0.0,
+        phase1_context={},
+        phase2_personalization={},
+        phase3_memory_quality={},
+        legal_restriction_result={},
+        is_restricted=False,
+        is_law_article_query=False,
+        is_contract_query=False,
+        completion_result={},
+        disclaimer_added=False,
+        query_analysis={},
+        hybrid_classification={},
+        generation_success=False,
+        generation_method="",
         current_step="",
         next_step=None,
         workflow_completed=False,

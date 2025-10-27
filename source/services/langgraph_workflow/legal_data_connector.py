@@ -204,8 +204,8 @@ class LegalDataConnector:
             keywords = self._extract_keywords(query)
             self.logger.info(f"🔍 검색 키워드: {keywords}")
 
-            # 검색어 생성 (OR 조건으로 확장된 검색)
-            search_conditions = " OR ".join(["article_content LIKE ?" for _ in keywords])
+            # 검색어 생성 (OR 조건으로 확장된 검색) - JOIN 테이블에 맞게 컬럼명 수정
+            search_conditions = " OR ".join(["aa.article_content LIKE ?" for _ in keywords])
             search_params = [f"%{kw}%" for kw in keywords]
 
             # 🆕 추가 로깅
@@ -215,24 +215,25 @@ class LegalDataConnector:
 
             search_term = f"%{query}%"
 
-            # 1. 현행법 조문 검색 (current_laws_articles) - 🆕 키워드 확장 검색
+            # 1. 법률 조문 검색 (assembly_articles) - 🆕 키워드 확장 검색
             search_sql = f'''
                 SELECT
-                    'current_law' as source_type,
-                    law_name_korean as title,
-                    article_content as content,
-                    'current_law' as category,
-                    article_number as article_num,
-                    law_id as source
-                FROM current_laws_articles
-                WHERE ({search_conditions}) OR law_name_korean LIKE ?
+                    'assembly_law' as source_type,
+                    al.law_name as title,
+                    aa.article_content as content,
+                    'assembly_law' as category,
+                    aa.article_number as article_num,
+                    aa.law_id as source
+                FROM assembly_articles aa
+                JOIN assembly_laws al ON aa.law_id = al.law_id
+                WHERE ({search_conditions}) OR al.law_name LIKE ?
                 ORDER BY
                     CASE
-                        WHEN article_content LIKE ? THEN 1
-                        WHEN law_name_korean LIKE ? THEN 2
+                        WHEN aa.article_content LIKE ? THEN 1
+                        WHEN al.law_name LIKE ? THEN 2
                         ELSE 3
                     END,
-                    LENGTH(article_content) DESC
+                    LENGTH(aa.article_content) DESC
                 LIMIT ?
             '''
 
@@ -242,60 +243,25 @@ class LegalDataConnector:
             self.logger.info(f"🔍 검색 SQL 실행: {len(keywords)}개 키워드")
             cursor.execute(search_sql, params)
 
-            current_law_results = cursor.fetchall()
-            self.logger.info(f"📊 현재법 조문 검색: {len(current_law_results)}개 발견")
-            for row in current_law_results:
+            assembly_results = cursor.fetchall()
+            self.logger.info(f"📊 Assembly 법률 조문 검색: {len(assembly_results)}개 발견")
+            for row in assembly_results:
                 results.append({
-                    "id": f"current_{row['source']}_{row['article_num']}",
+                    "id": f"assembly_{row['source']}_{row['article_num']}",
                     "title": f"{row['title']} 제{row['article_num']}조",
                     "content": row["content"],
-                    "category": "current_law",
+                    "category": "assembly_law",
                     "source": row["source"],
                     "created_at": "2024-01-01",
                     "relevance_score": self._calculate_relevance_score(query, row["content"])
                 })
 
-            # 2. 법령 조문 검색 (assembly_articles) - 🆕 키워드 확장 검색
+            # 2. 판례 검색 (precedent_cases) - 🆕 키워드 확장 검색
             remaining_limit = limit - len(results)
             if remaining_limit > 0:
-                assembly_sql = f'''
-                    SELECT
-                        'assembly_law' as source_type,
-                        article_title as title,
-                        article_content as content,
-                        'assembly_law' as category,
-                        article_number as article_num,
-                        law_id as source
-                    FROM assembly_articles
-                    WHERE ({search_conditions}) OR article_title LIKE ?
-                    ORDER BY
-                        CASE
-                            WHEN article_content LIKE ? THEN 1
-                            WHEN article_title LIKE ? THEN 2
-                            ELSE 3
-                        END,
-                        LENGTH(article_content) DESC
-                    LIMIT ?
-                '''
+                # 판례는 full_text 컬럼 사용
+                precedent_search_conditions = " OR ".join(["full_text LIKE ?" for _ in keywords])
 
-                assembly_params = search_params + [search_term] + [search_term, search_term, remaining_limit]
-                cursor.execute(assembly_sql, assembly_params)
-
-                assembly_results = cursor.fetchall()
-                for row in assembly_results:
-                    results.append({
-                        "id": f"assembly_{row['source']}_{row['article_num']}",
-                        "title": f"{row['title']} 제{row['article_num']}조",
-                        "content": row["content"],
-                        "category": "assembly_law",
-                        "source": row["source"],
-                        "created_at": "2024-01-01",
-                        "relevance_score": self._calculate_relevance_score(query, row["content"])
-                    })
-
-            # 3. 판례 검색 (precedent_cases) - 🆕 키워드 확장 검색
-            remaining_limit = limit - len(results)
-            if remaining_limit > 0:
                 precedent_sql = f'''
                     SELECT
                         'precedent' as source_type,
@@ -305,7 +271,7 @@ class LegalDataConnector:
                         case_number as article_num,
                         court as source
                     FROM precedent_cases
-                    WHERE ({search_conditions}) OR case_name LIKE ?
+                    WHERE ({precedent_search_conditions}) OR case_name LIKE ?
                     ORDER BY
                         CASE
                             WHEN full_text LIKE ? THEN 1
