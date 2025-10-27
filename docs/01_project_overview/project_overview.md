@@ -44,7 +44,7 @@
 
 - **백엔드**: FastAPI, SQLite, FAISS, LangChain
 - **AI/ML**: Google Gemini 2.5 Flash Lite, ko-sroberta-multitask
-- **프론트엔드**: Gradio 4.0.0 (LangChain 기반)
+- **프론트엔드**: Streamlit 1.28.0 (LangChain 기반)
 - **검색**: 하이브리드 검색 (의미적 + 정확 매칭)
 - **RAG**: ML 강화 RAG 시스템
 - **배포**: Docker, HuggingFace Spaces 준비
@@ -60,12 +60,14 @@
 
 ```
 LawFirmAI/
-├── gradio/                          # Gradio 웹 애플리케이션
-│   ├── simple_langchain_app.py      # 메인 LangChain 기반 앱
+├── streamlit/                       # Streamlit 웹 애플리케이션
+│   ├── app.py                       # 메인 Streamlit 앱
+│   ├── requirements.txt             # Streamlit 의존성
+│   └── Dockerfile                   # Streamlit Docker 설정
+├── gradio/                          # Gradio 웹 애플리케이션 (레거시)
 │   ├── app.py                       # 기본 Gradio 앱
 │   ├── components/                  # UI 컴포넌트
-│   ├── requirements.txt             # Gradio 의존성
-│   └── Dockerfile                   # Gradio Docker 설정
+│   └── ...
 ├── source/                          # 핵심 모듈
 │   ├── services/                    # 비즈니스 로직 (80+ 서비스)
 │   │   ├── chat_service.py          # 통합 채팅 서비스
