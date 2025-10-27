@@ -8,9 +8,37 @@
 
 ## 🎯 프로젝트 개요
 
-LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니다. LangChain 기반 RAG 시스템과 하이브리드 검색을 통해 법률 질문에 정확하고 신뢰할 수 있는 답변을 제공합니다.
+LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니다. LangGraph 기반 상태 관리 워크플로우와 LangChain RAG 시스템을 통해 법률 질문에 정확하고 신뢰할 수 있는 답변을 제공합니다.
 
-## 🆕 최신 업데이트 (2025-10-26) - 디렉토리 구조 재구성 및 핵심 기능 테스트 완료
+## 🆕 최신 업데이트 
+
+### 🎯 LangGraph 기반 워크플로우 통합
+- **Phase 1-5 완료**: 모든 핵심 기능 구현 완료
+- **20개 노드 구현**: 입력 검증 → 특수 쿼리 처리 → 하이브리드 분석 → 폴백 체인 → 후처리
+- **실제 서비스 연결**: CurrentLawSearchEngine, UnifiedSearchEngine 통합
+- **테스트 완료**: 모든 Phase 테스트 통과, 전체 워크플로우 정상 작동
+
+### 🔧 주요 구현 내용
+1. **Phase 1**: 입력 검증 및 특수 쿼리 감지 (법률 조문, 계약서)
+2. **Phase 2**: 하이브리드 질문 분석 및 법률 제한 검증
+3. **Phase 3**: Phase 시스템 통합 (대화 맥락 강화, 개인화, 장기 기억)
+4. **Phase 4**: 4단계 폴백 체인 (답변 생성 보장)
+5. **Phase 5**: 후처리 및 품질 검증
+
+### 📊 테스트 결과
+- **성공률**: 100% (모든 Phase 테스트 통과)
+- **처리 단계**: 13개 단계
+- **평균 처리 시간**: 4.14초
+- **오류 발생**: 0개
+
+### 기술 문서
+- **[LangGraph 마이그레이션 요약](08_langgraph_migration_summary.md)**: 전체 마이그레이션 내용
+- **[LangGraph 테스트 결과](08_langgraph_test_results.md)**: 테스트 결과 상세
+- **[LangGraph 최종 보고서](08_langgraph_final_summary.md)**: 최종 완료 보고서
+
+---
+
+## 🆕 이전 업데이트 (2025-10-26) - 디렉토리 구조 재구성 및 핵심 기능 테스트 완료
 
 ### 🎯 디렉토리 구조 재구성 완료
 - **기능별 분리**: 140+ 서비스를 기능별로 체계적으로 분류
@@ -263,26 +291,32 @@ LawFirmAI는 한국 법률 문서를 기반으로 한 AI 어시스턴트입니�
 
 ### 주요 특징
 
+#### LangGraph 워크플로우
+- ✅ **20개 노드 구현**: 입력 검증 → 특수 쿼리 처리 → 하이브리드 분석 → 폴백 체인 → 후처리
+- ✅ **5개 Phase 완료**: 모든 핵심 기능 구현 완료
+- ✅ **조건부 라우팅**: 6개 라우팅 포인트로 스마트 워크플로우 제어
+- ✅ **4단계 폴백 체인**: 답변 생성 보장 (최종 답변 100% 생성)
+- ✅ **실제 서비스 통합**: CurrentLawSearchEngine, UnifiedSearchEngine 연결
+- ✅ **테스트 완료**: 100% 성공률 (모든 Phase 테스트 통과)
+
+#### RAG 시스템
 - ✅ **완전한 RAG 시스템**: LangChain 기반 고도화된 검색 증강 생성
-- ✅ **현행법령 검색**: 1,686개 현행법령 기반 정확한 조문 검색 시스템
-- ✅ **법령 조문 정확 매칭**: "민법 제750조" 형태 질문의 정확한 조문 검색
-- ✅ **AKLS 통합**: 법률전문대학원협의회 표준판례 완전 통합
 - ✅ **하이브리드 검색**: 의미적 검색 + FTS + 정확 매칭 통합 시스템
 - ✅ **실제 소스 검색**: 법률/판례 데이터베이스에서 실제 근거 자료 제공
 - ✅ **ML 강화 서비스**: 품질 기반 문서 필터링 및 검색
+
+#### 법률 데이터
+- ✅ **현행법령 검색**: 1,686개 현행법령 기반 정확한 조문 검색 시스템
+- ✅ **법령 조문 정확 매칭**: "민법 제750조" 형태 질문의 정확한 조문 검색
+- ✅ **AKLS 통합**: 법률전문대학원협의회 표준판례 완전 통합
 - ✅ **다중 모델 지원**: BGE-M3-Korean + ko-sroberta-multitask
+
+#### 성능 및 인프라
 - ✅ **완전한 API**: RESTful API 및 웹 인터페이스
 - ✅ **모니터링 시스템**: Prometheus + Grafana 기반 성능 추적
 - ✅ **컨테이너화**: Docker 기반 배포 준비 완료
-- 🆕 **Phase 1-5 완료**: 지능형 대화 시스템 + 현행법령 검색 완전 구현
-- 🆕 **LangGraph 통합**: 상태 기반 워크플로우 관리 및 세션 지속성
-- 🆕 **개인화 시스템**: 사용자 프로필 기반 맞춤형 응답
-- 🆕 **장기 기억**: 중요한 정보를 기억하고 활용하는 시스템
-- 🆕 **품질 모니터링**: 실시간 대화 품질 평가 및 개선
 - 🎯 **현행법령 검색**: 신뢰도 0.95 달성, 850% 향상
 - 🎯 **오분류 패턴 개선**: 91.2% 정확도 달성, 31.8% 오분류 감소
-- 🎯 **다단계 검증 시스템**: 키워드 → 패턴 → 맥락 → 의도 → 최종 결정
-- 🎯 **ML 통합 검증**: 규칙 기반 + ML 예측 통합으로 정확도 향상
 - 🎯 **대규모 테스트**: 3000개 질의 테스트로 확장성 검증 완료
 
 ## 🚀 빠른 시작
@@ -436,8 +470,11 @@ LawFirmAI/
 │   │   │   ├── performance_monitor.py # 성능 모니터링 (356라인)
 │   │   │   ├── integrated_cache_system.py # 통합 캐시 시스템
 │   │   │   └── memory_optimizer.py   # 메모리 최적화
-│   │   ├── langgraph_workflow/      # LangGraph 워크플로우
-│   │   │   ├── legal_workflow.py    # 법률 워크플로우
+│   │   ├── langgraph_workflow/      # LangGraph 워크플로우 ⭐
+│   │   │   ├── legal_workflow_enhanced.py # 향상된 법률 워크플로우 (2,115줄)
+│   │   │   ├── state_definitions.py       # 상태 정의 (LegalWorkflowState)
+│   │   │   ├── integrated_workflow_service.py # 통합 워크플로우 서비스
+│   │   │   ├── legal_workflow.py    # 기본 법률 워크플로우
 │   │   │   ├── keyword_mapper.py    # 키워드 매핑
 │   │   │   └── synonym_expander.py  # 동의어 확장
 │   │   └── ...                      # 기타 서비스들
@@ -478,15 +515,18 @@ LawFirmAI/
 
 ## 📚 문서 가이드
 
-### 📖 주요 문서 (2025-10-26 업데이트)
+### 📖 주요 문서 (2024 업데이트)
 
 | 카테고리 | 문서 | 설명 |
 |----------|------|------|
-| **🆕 최신 개선사항** | [2025년 1월 18일 디렉토리 구조 재구성](01_project_overview/project_overview.md) | 디렉토리 구조 재구성 및 핵심 기능 테스트 완료 보고서 |
-| **🆕 테스트 시스템** | [핵심 기능 테스트 가이드라인](01_project_overview/Testing_Guide_2025_01_18.md) | 100% 성공률 핵심 기능 테스트 시스템 문서 |
-| **🆕 개발 규칙** | [개발 규칙 및 가이드라인](01_project_overview/development_rules.md) | 새로운 구조 및 테스트 가이드라인 포함 |
-| **🆕 서비스 아키텍처** | [서비스 아키텍처](01_project_overview/Service_Architecture.md) | 개선된 서비스 구조 반영 |
-| **🆕 API 문서** | [API 문서](08_api_documentation/API_Documentation.md) | 개선된 구조 반영 |
+| **🆕 LangGraph 통합** | [LangGraph 마이그레이션 요약](08_langgraph_migration_summary.md) | LangGraph 전체 마이그레이션 내용 |
+| **🆕 LangGraph 테스트** | [LangGraph 테스트 결과](08_langgraph_test_results.md) | LangGraph 테스트 결과 및 검증 |
+| **🆕 LangGraph 최종** | [LangGraph 최종 보고서](08_langgraph_final_summary.md) | LangGraph 최종 완료 보고서 |
+| **최신 개선사항** | [2025년 1월 18일 디렉토리 구조 재구성](01_project_overview/project_overview.md) | 디렉토리 구조 재구성 및 핵심 기능 테스트 완료 보고서 |
+| **테스트 시스템** | [핵심 기능 테스트 가이드라인](01_project_overview/Testing_Guide_2025_01_18.md) | 100% 성공률 핵심 기능 테스트 시스템 문서 |
+| **개발 규칙** | [개발 규칙 및 가이드라인](01_project_overview/development_rules.md) | 새로운 구조 및 테스트 가이드라인 포함 |
+| **서비스 아키텍처** | [서비스 아키텍처](01_project_overview/Service_Architecture.md) | 개선된 서비스 구조 반영 |
+| **API 문서** | [API 문서](08_api_documentation/API_Documentation.md) | 개선된 구조 반영 |
 | **프로젝트 개요** | [프로젝트 개요](01_project_overview/project_overview.md) | 프로젝트 현황 및 주요 성과 |
 | **데이터 수집** | [데이터 수집 가이드](02_data_collection/data_collection_guide.md) | 데이터 수집 시스템 사용법 |
 | **데이터 처리** | [전처리 가이드](03_data_processing/preprocessing_guide.md) | 데이터 전처리 파이프라인 |
@@ -501,13 +541,14 @@ LawFirmAI/
 | **배포 가이드** | [배포 가이드](07_deployment_operations/Deployment_Guide.md) | HuggingFace Spaces 배포 |
 | **문제 해결** | [문제 해결 가이드](10_technical_reference/Troubleshooting_Guide.md) | 일반적인 문제 해결 |
 
-### 🔍 빠른 참조 (2025-10-26 업데이트)
+### 🔍 빠른 참조 (2024 업데이트)
 
-- **🆕 최신 개선사항**: [2025년 1월 18일 디렉토리 구조 재구성](01_project_overview/project_overview.md)
-- **🆕 테스트 시스템**: [핵심 기능 테스트 가이드라인](01_project_overview/Testing_Guide_2025_01_18.md)
-- **🆕 개발 규칙**: [개발 규칙 및 가이드라인](01_project_overview/development_rules.md)
-- **🆕 서비스 아키텍처**: [서비스 아키텍처](01_project_overview/Service_Architecture.md)
-- **🆕 API 문서**: [API 문서](08_api_documentation/API_Documentation.md)
+- **🆕 LangGraph**: [LangGraph 마이그레이션 요약](08_langgraph_migration_summary.md) - [테스트 결과](08_langgraph_test_results.md) - [최종 보고서](08_langgraph_final_summary.md)
+- **최신 개선사항**: [2025년 1월 18일 디렉토리 구조 재구성](01_project_overview/project_overview.md)
+- **테스트 시스템**: [핵심 기능 테스트 가이드라인](01_project_overview/Testing_Guide_2025_01_18.md)
+- **개발 규칙**: [개발 규칙 및 가이드라인](01_project_overview/development_rules.md)
+- **서비스 아키텍처**: [서비스 아키텍처](01_project_overview/Service_Architecture.md)
+- **API 문서**: [API 문서](08_api_documentation/API_Documentation.md)
 - **시작하기**: [프로젝트 개요](01_project_overview/project_overview.md)
 - **개발 환경 설정**: [개발 규칙](01_project_overview/development_rules.md)
 - **데이터 수집**: [데이터 수집 가이드](02_data_collection/data_collection_guide.md)
@@ -527,13 +568,22 @@ LawFirmAI/
 ## 🛠️ 기술 스택
 
 ### 핵심 기술
+- **워크플로우**: LangGraph (상태 기반 워크플로우 관리)
 - **백엔드**: FastAPI, SQLite, FAISS, LangChain, LangGraph
 - **AI/ML**: Google Gemini 2.5 Flash Lite, KoGPT-2, BGE-M3-Korean, ko-sroberta-multitask
 - **프론트엔드**: Streamlit (현대적 웹 인터페이스)
 - **검색**: 하이브리드 검색 (의미적 + FTS + 정확 매칭)
 - **현행법령 검색**: 국가법령정보센터 OpenAPI 연동
+- **워크플로우 노드**: 20개 노드 구현 (입력 검증 → 폴백 체인 → 후처리)
 - **모니터링**: Prometheus + Grafana
 - **배포**: Docker, HuggingFace Spaces 준비 완료
+
+### LangGraph 워크플로우 기술 
+- **상태 관리**: LegalWorkflowState (확장 가능한 상태 정의)
+- **Phase 시스템**: 5개 Phase (검증 → 분석 → 통합 → 폴백 → 후처리)
+- **조건부 라우팅**: 6개 라우팅 포인트 (스마트 워크플로우 제어)
+- **폴백 체인**: 4단계 자동 폴백 (답변 생성 보장)
+- **통합 서비스**: EnhancedLegalQuestionWorkflow (2,115줄)
 
 ### 오분류 패턴 개선 기술 (2025-10-21)
 - **다단계 검증**: MultiStageValidationSystem (키워드 → 패턴 → 맥락 → 의도 → 최종 결정)
@@ -552,6 +602,13 @@ LawFirmAI/
 - **벡터 검색**: FAISS + BGE-M3-Korean 임베딩
 
 ### Phase 1-5 기술 스택
+- **Phase 1**: 입력 검증, 특수 쿼리 감지, 조건부 라우팅
+- **Phase 2**: 하이브리드 질문 분석, 법률 제한 검증
+- **Phase 3**: 대화 맥락 강화, 개인화, 장기 기억 (병렬 처리)
+- **Phase 4**: 4단계 폴백 체인 (답변 생성 보장)
+- **Phase 5**: 답변 완성도 검증, 면책 조항 추가
+
+### 통합 기능
 - **대화 맥락**: 통합 세션 관리, 다중 턴 처리, 컨텍스트 압축
 - **개인화**: 사용자 프로필, 감정/의도 분석, 대화 흐름 추적
 - **장기 기억**: 맥락적 메모리 관리, 품질 모니터링
