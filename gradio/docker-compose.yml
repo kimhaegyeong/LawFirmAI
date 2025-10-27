@@ -1,13 +1,13 @@
-# LawFirmAI Gradio Docker Compose
-# Local development environment for Gradio interface
+# LawFirmAI Streamlit Docker Compose
+# Local development environment for Streamlit interface
 
 version: '3.8'
 
 services:
-  lawfirm-gradio:
+  lawfirm-streamlit:
     build: .
     ports:
-      - "7860:7860"  # Gradio interface
+      - "8501:8501"  # Streamlit interface
     environment:
       - PYTHONPATH=/app
       - DATABASE_URL=sqlite:///./data/lawfirm.db
@@ -21,7 +21,7 @@ services:
       - ../model_cache:/app/model_cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8501/"]
       interval: 30s
       timeout: 10s
       retries: 3
