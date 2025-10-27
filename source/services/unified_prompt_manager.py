@@ -4,15 +4,21 @@
 법률 도메인 특화 프롬프트의 통합 관리 및 최적화
 """
 
-import os
 import json
 import logging
+import os
+import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from .question_classifier import QuestionType
+# 상대 import 문제 해결
+try:
+    from .question_classifier import QuestionType
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from question_classifier import QuestionType
 
 logger = logging.getLogger(__name__)
 
@@ -42,20 +48,20 @@ class ModelType(Enum):
 
 class UnifiedPromptManager:
     """통합 프롬프트 관리 시스템"""
-    
-    def __init__(self, prompts_dir: str = "gradio/prompts"):
+
+    def __init__(self, prompts_dir: str = "streamlit/prompts"):
         """통합 프롬프트 매니저 초기화"""
         self.prompts_dir = Path(prompts_dir)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 기본 프롬프트 로드
         self.base_prompts = self._load_base_prompts()
         self.domain_templates = self._load_domain_templates()
         self.question_type_templates = self._load_question_type_templates()
         self.model_optimizations = self._load_model_optimizations()
-        
+
         logger.info("UnifiedPromptManager initialized successfully")
-    
+
     def _load_base_prompts(self) -> Dict[str, str]:
         """기본 프롬프트 로드"""
         return {
@@ -63,7 +69,7 @@ class UnifiedPromptManager:
             "natural_consultant": self._get_natural_consultant_prompt(),
             "professional_advisor": self._get_professional_advisor_prompt()
         }
-    
+
     def _load_domain_templates(self) -> Dict[LegalDomain, Dict[str, Any]]:
         """도메인별 템플릿 로드"""
         return {
@@ -134,7 +140,7 @@ class UnifiedPromptManager:
                 "template": self._get_criminal_procedure_template()
             }
         }
-    
+
     def _load_question_type_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
         """질문 유형별 템플릿 로드"""
         return {
@@ -175,7 +181,7 @@ class UnifiedPromptManager:
                 "priority": "low"
             }
         }
-    
+
     def _load_model_optimizations(self) -> Dict[ModelType, Dict[str, Any]]:
         """모델별 최적화 설정 로드"""
         return {
@@ -198,8 +204,8 @@ class UnifiedPromptManager:
                 "context_window": 0.9
             }
         }
-    
-    def get_optimized_prompt(self, 
+
+    def get_optimized_prompt(self,
                            query: str,
                            question_type: QuestionType,
                            domain: Optional[LegalDomain] = None,
@@ -210,35 +216,35 @@ class UnifiedPromptManager:
         try:
             # 1. 기본 프롬프트 로드
             base_prompt = self.base_prompts.get(base_prompt_type, self.base_prompts["korean_legal_expert"])
-            
+
             # 2. 도메인 특화 강화
             if domain and domain in self.domain_templates:
                 domain_info = self.domain_templates[domain]
                 base_prompt = self._add_domain_specificity(base_prompt, domain_info)
-            
+
             # 3. 질문 유형별 구조화
             question_template = self.question_type_templates.get(question_type)
             if question_template:
                 base_prompt = self._add_question_structure(base_prompt, question_template)
-            
+
             # 4. 컨텍스트 최적화
             if context:
                 base_prompt = self._optimize_context(base_prompt, context, question_template)
-            
+
             # 5. 모델별 최적화
             model_config = self.model_optimizations.get(model_type)
             if model_config:
                 base_prompt = self._model_specific_optimization(base_prompt, model_config)
-            
+
             # 6. 최종 프롬프트 구성
             final_prompt = self._build_final_prompt(base_prompt, query, context, question_type)
-            
+
             return final_prompt
-            
+
         except Exception as e:
             logger.error(f"Error generating optimized prompt: {e}")
             return self._get_fallback_prompt(query)
-    
+
     def _add_domain_specificity(self, base_prompt: str, domain_info: Dict[str, Any]) -> str:
         """도메인 특화 강화 - 답변 품질 향상을 위한 개선"""
         domain_specificity = f"""
@@ -258,7 +264,7 @@ class UnifiedPromptManager:
 {domain_info['template']}
 """
         return base_prompt + domain_specificity
-    
+
     def _add_question_structure(self, base_prompt: str, question_template: Dict[str, Any]) -> str:
         """질문 유형별 구조화 - 답변 품질 향상을 위한 개선"""
         structure_guidance = f"""
@@ -278,15 +284,15 @@ class UnifiedPromptManager:
 5. **신뢰성**: 근거 있는 법적 분석 및 판례 인용
 """
         return base_prompt + structure_guidance
-    
+
     def _optimize_context(self, base_prompt: str, context: Dict[str, Any], question_template: Dict[str, Any]) -> str:
         """컨텍스트 최적화"""
         if not context:
             return base_prompt
-        
+
         max_length = question_template.get('max_context_length', 2000)
         context_keys = question_template.get('context_keys', [])
-        
+
         optimized_context = {}
         for key in context_keys:
             if key in context:
@@ -294,14 +300,14 @@ class UnifiedPromptManager:
                 if isinstance(content, str) and len(content) > max_length:
                     content = content[:max_length] + "..."
                 optimized_context[key] = content
-        
+
         context_guidance = f"""
 
 ## 제공된 컨텍스트
 {self._format_context(optimized_context)}
 """
         return base_prompt + context_guidance
-    
+
     def _model_specific_optimization(self, base_prompt: str, model_config: Dict[str, Any]) -> str:
         """모델별 최적화"""
         optimization = f"""
@@ -313,7 +319,7 @@ class UnifiedPromptManager:
 - 컨텍스트 윈도우: {model_config['context_window']}
 """
         return base_prompt + optimization
-    
+
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
         """최종 프롬프트 구성 - 자연스럽고 친근한 답변 스타일"""
         final_prompt = f"""{base_prompt}
@@ -344,7 +350,7 @@ class UnifiedPromptManager:
 답변을 시작하세요:
 """
         return final_prompt
-    
+
     def _format_context(self, context: Dict[str, Any]) -> str:
         """컨텍스트 포맷팅"""
         formatted_parts = []
@@ -356,7 +362,7 @@ class UnifiedPromptManager:
             else:
                 formatted_parts.append(f"**{key}**: {value}")
         return "\n\n".join(formatted_parts)
-    
+
     def _get_fallback_prompt(self, query: str) -> str:
         """폴백 프롬프트"""
         return f"""당신은 법률 전문가입니다. 다음 질문에 대해 정확하고 전문적인 답변을 제공해주세요.
@@ -443,7 +449,7 @@ class UnifiedPromptManager:
 귀하의 질문은 ~에 관한 것으로 이해됩니다.
 
 [관련 법률]
-- 적용 법률: 
+- 적용 법률:
 - 주요 조항:
 
 [법적 해설]
@@ -525,7 +531,7 @@ class UnifiedPromptManager:
 
 2. **질문 이해 확인**: "말씀하신 [구체적 질문 내용]에 대해 궁금하시군요."
 
-3. **핵심 답변**: 
+3. **핵심 답변**:
    - 법률 조항을 먼저 제시
    - 쉬운 말로 해석 설명
    - 실제 적용 사례나 예시 포함
@@ -849,7 +855,7 @@ class UnifiedPromptManager:
     # 질문 유형별 템플릿들
     def _get_precedent_search_template(self) -> str:
         """판례 검색 템플릿"""
-        return """당신은 판례 전문가입니다. 
+        return """당신은 판례 전문가입니다.
 
 관련 판례:
 {precedent_list}
@@ -949,14 +955,14 @@ class UnifiedPromptManager:
                 "created_at": datetime.now().isoformat(),
                 "created_by": "unified_prompt_manager"
             }
-            
+
             version_file = self.prompts_dir / f"{version}.json"
             with open(version_file, 'w', encoding='utf-8') as f:
                 json.dump(prompt_data, f, ensure_ascii=False, indent=2)
-            
+
             logger.info(f"Prompt version {version} updated successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to update prompt version {version}: {e}")
             return False
@@ -977,8 +983,8 @@ class UnifiedPromptManager:
         except Exception as e:
             logger.error(f"Failed to get prompt analytics: {e}")
             return {}
-    
-    def enhance_answer_quality(self, query: str, question_type: QuestionType, 
+
+    def enhance_answer_quality(self, query: str, question_type: QuestionType,
                              domain: Optional[LegalDomain] = None) -> str:
         """답변 품질 향상을 위한 특화 프롬프트 생성"""
         try:
@@ -1016,7 +1022,7 @@ class UnifiedPromptManager:
 - 주의사항 및 제한사항 안내
 - 전문가 상담 필요성 판단
 """
-            
+
             # 도메인별 특화 강화
             if domain and domain in self.domain_templates:
                 domain_info = self.domain_templates[domain]
@@ -1027,7 +1033,7 @@ class UnifiedPromptManager:
 - **주요 법령**: {', '.join(domain_info['key_laws'])}
 - **최신 개정**: {domain_info['recent_changes']}
 """
-            
+
             # 질문 유형별 특화
             question_template = self.question_type_templates.get(question_type)
             if question_template:
@@ -1038,13 +1044,13 @@ class UnifiedPromptManager:
 - **컨텍스트 활용**: 최대 {question_template['max_context_length']}자
 - **구조화 요구사항**: {question_template['template']}
 """
-            
+
             return quality_guidance
-            
+
         except Exception as e:
             logger.error(f"Error enhancing answer quality: {e}")
             return ""
-    
+
     def get_quality_metrics_template(self) -> Dict[str, Any]:
         """답변 품질 메트릭 템플릿 반환"""
         return {
