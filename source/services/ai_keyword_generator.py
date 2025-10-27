@@ -2,9 +2,9 @@
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,36 +20,38 @@ class KeywordExpansionResult:
 
 class AIKeywordGenerator:
     """AI 모델을 사용한 키워드 확장 클래스"""
-    
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.gemini_client = None
         self._initialize_gemini()
-    
+
     def _initialize_gemini(self):
         """Gemini API 클라이언트 초기화"""
         try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
             from langchain_core.messages import HumanMessage
-            
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
             api_key = os.getenv('GOOGLE_API_KEY')
+            model_name = os.getenv('GEMINI_MODEL_NAME', 'gemini-2.5-flash-lite')
+
             if api_key:
                 self.gemini_client = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash-exp",
+                    model=model_name,
                     temperature=0.3,
                     max_output_tokens=1000,
                     timeout=30,
                     api_key=api_key
                 )
-                self.logger.info("Gemini API 클라이언트 초기화 완료")
+                self.logger.info(f"Gemini API 클라이언트 초기화 완료 (모델: {model_name})")
             else:
                 self.logger.warning("GOOGLE_API_KEY가 설정되지 않음. AI 키워드 확장 비활성화")
         except ImportError as e:
             self.logger.warning(f"Gemini API 라이브러리 없음: {e}")
         except Exception as e:
             self.logger.error(f"Gemini API 초기화 실패: {e}")
-    
-    async def expand_domain_keywords(self, domain: str, base_keywords: List[str], 
+
+    async def expand_domain_keywords(self, domain: str, base_keywords: List[str],
                                    target_count: int = 50) -> KeywordExpansionResult:
         """도메인별 키워드 확장"""
         if not self.gemini_client:
@@ -61,12 +63,12 @@ class AIKeywordGenerator:
                 expansion_method="fallback",
                 api_call_success=False
             )
-        
+
         try:
             prompt = self._create_expansion_prompt(domain, base_keywords, target_count)
             response = await self._call_gemini_api(prompt)
             expanded_keywords = self._parse_gemini_response(response)
-            
+
             return KeywordExpansionResult(
                 domain=domain,
                 base_keywords=base_keywords,
@@ -75,7 +77,7 @@ class AIKeywordGenerator:
                 expansion_method="gemini_ai",
                 api_call_success=True
             )
-            
+
         except Exception as e:
             self.logger.error(f"키워드 확장 실패 ({domain}): {e}")
             return KeywordExpansionResult(
@@ -86,7 +88,7 @@ class AIKeywordGenerator:
                 expansion_method="error",
                 api_call_success=False
             )
-    
+
     def _create_expansion_prompt(self, domain: str, base_keywords: List[str], target_count: int) -> str:
         """키워드 확장을 위한 프롬프트 생성"""
         return f"""
@@ -124,58 +126,58 @@ class AIKeywordGenerator:
 
 최대 {target_count}개의 키워드를 생성해주세요. 중복을 피하고, 한국 법률 분야에 특화된 용어를 우선적으로 포함해주세요.
 """
-    
+
     async def _call_gemini_api(self, prompt: str) -> str:
         """Gemini API 호출"""
         try:
             from langchain_core.messages import HumanMessage
-            
+
             message = HumanMessage(content=prompt)
             response = self.gemini_client.invoke([message])
             return response.content
         except Exception as e:
             self.logger.error(f"Gemini API 호출 실패: {e}")
             raise
-    
+
     def _parse_gemini_response(self, response: str) -> List[str]:
         """Gemini 응답 파싱"""
         try:
             # JSON 부분 추출
             start_idx = response.find('{')
             end_idx = response.rfind('}') + 1
-            
+
             if start_idx == -1 or end_idx == 0:
                 self.logger.warning("JSON 형식 응답을 찾을 수 없음")
                 return []
-            
+
             json_str = response[start_idx:end_idx]
             data = json.loads(json_str)
-            
+
             # 모든 키워드 수집
             all_keywords = set()
-            
+
             if 'expanded_keywords' in data:
                 all_keywords.update(data['expanded_keywords'])
-            
+
             if 'categories' in data:
                 for category, keywords in data['categories'].items():
                     if isinstance(keywords, list):
                         all_keywords.update(keywords)
-            
+
             return list(all_keywords)
-            
+
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON 파싱 실패: {e}")
             return []
         except Exception as e:
             self.logger.error(f"응답 파싱 실패: {e}")
             return []
-    
+
     def expand_keywords_with_fallback(self, domain: str, base_keywords: List[str]) -> List[str]:
         """폴백 메서드를 사용한 키워드 확장"""
         # AI 확장이 실패한 경우 기본 확장 규칙 적용
         expanded = set(base_keywords)
-        
+
         # 도메인별 기본 확장 규칙
         expansion_rules = {
             '민사법': [
@@ -199,20 +201,20 @@ class AIKeywordGenerator:
                 '친권자', '친권행사', '친권제한', '친권상실', '친권회복'
             ]
         }
-        
+
         # 도메인별 확장 규칙 적용
         if domain in expansion_rules:
             expanded.update(expansion_rules[domain])
-        
+
         return list(expanded)
-    
+
     def get_expansion_confidence(self, domain: str, expanded_keywords: List[str]) -> float:
         """키워드 확장 신뢰도 계산"""
         base_score = 0.5
-        
+
         # 키워드 수에 따른 보너스
         count_bonus = min(0.3, len(expanded_keywords) / 100.0)
-        
+
         # 도메인별 가중치
         domain_weights = {
             '민사법': 1.0,
@@ -227,7 +229,7 @@ class AIKeywordGenerator:
             '형사소송법': 1.0,
             '기타/일반': 0.5
         }
-        
+
         domain_weight = domain_weights.get(domain, 0.5)
-        
+
         return min(1.0, (base_score + count_bonus) * domain_weight)
