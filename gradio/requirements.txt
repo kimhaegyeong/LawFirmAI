@@ -1,6 +1,8 @@
-# LawFirmAI - Gradio Dependencies
-# Gradio Web Interface
-gradio==4.0.0
+# LawFirmAI - Streamlit Dependencies
+# Streamlit Web Interface
+streamlit==1.28.0
+streamlit-chat==0.1.1
+streamlit-aggrid==0.3.4
 
 # AI/ML Libraries
 torch==2.1.0

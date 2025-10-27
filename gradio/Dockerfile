@@ -1,5 +1,5 @@
-# LawFirmAI Gradio Dockerfile
-# Multi-stage build for HuggingFace Spaces deployment
+# LawFirmAI Streamlit Dockerfile
+# Multi-stage build for Streamlit deployment
 
 # Stage 1: Builder
 FROM python:3.9-slim as builder
@@ -35,7 +35,8 @@ COPY --from=builder /root/.local /home/app/.local
 ENV PATH=/home/app/.local/bin:$PATH
 
 # Copy application code
-COPY --chown=app:app gradio/ ./gradio/
+COPY --chown=app:app streamlit/ ./streamlit/
+COPY --chown=app:app gradio/ ./gradio/  # For backward compatibility
 COPY --chown=app:app source/ ./source/
 
 # Create necessary directories
@@ -47,11 +48,11 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 # Expose port
-EXPOSE 7860
+EXPOSE 8501
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+    CMD curl -f http://localhost:8501/ || exit 1
 
 # Run the application
-CMD ["python", "gradio/app.py"]
+CMD ["streamlit", "run", "streamlit/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
