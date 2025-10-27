@@ -49,7 +49,7 @@
 
 ## 📋 개발 규칙 및 가이드라인
 
-### ⚠️ 중요: Gradio 서버 관리 규칙
+### ⚠️ 중요: Streamlit 서버 관리 규칙
 
 **절대 사용하지 말 것**:
 ```bash
@@ -60,10 +60,10 @@ taskkill /f /im python.exe
 **올바른 서버 종료 방법**:
 ```bash
 # PID 기반 종료 (권장)
-python gradio/stop_server.py
+python streamlit/stop_server.py
 
 # 또는 배치 파일 사용
-gradio/stop_server.bat
+streamlit/stop_server.bat
 ```
 
 ### 📚 상세 개발 규칙
@@ -76,6 +76,16 @@ gradio/stop_server.bat
 - **[성능 최적화 가이드](docs/07_performance_optimization/performance_optimization_guide.md)**: 최적화된 컴포넌트 사용법 및 성능 튜닝 방법
 
 ## 🔧 최신 업데이트
+
+### 2025-01-11: 하이브리드 검색 통합 완료 - 벡터 + 키워드 검색 🎯
+- ✅ **SemanticSearchEngine 통합**: FAISS 기반 벡터 검색을 LangGraph에 통합
+- ✅ **하이브리드 검색 시스템**: 의미적 검색 + 키워드 검색 결합으로 검색 정확도 향상
+- ✅ **안정적인 폴백**: 벡터 검색 실패 시 자동으로 키워드 검색으로 전환
+- ✅ **성능 최적화**: 상위 5개 문서만 선택하여 처리 속도 유지
+- ✅ **검색 메타데이터**: 검색 결과 수, 검색 모드, 검색 시간 등 상세 정보 제공
+- ✅ **155,819개 벡터**: FAISS 인덱스에 155,819개의 법률 문서 벡터 로드
+- ✅ **테스트 완료**: SemanticSearchEngine 통합 및 워크플로우 초기화 검증 완료
+- ✅ **문서 작성**: 하이브리드 검색 통합 가이드 및 사용법 제공
 
 ### 2025-01-10: 성능 최적화 완료 - 응답 시간 78% 단축 🚀
 - ✅ **응답 시간 대폭 개선**: 10.05초 → 2.21초로 78% 단축 달성
@@ -159,7 +169,7 @@ gradio/stop_server.bat
 - ✅ **문서 업데이트**: 모든 문서가 실제 구조와 일치하도록 업데이트
 - ✅ **마이그레이션 가이드**: 구조 변경사항을 상세히 기록한 가이드 생성
 
-### 2025-10-16: Gradio 애플리케이션 리팩토링 완료 🎉
+### Streamlit 애플리케이션 리팩토링 완료 🎉
 - ✅ **코드 리팩토링**: simple_langchain_app.py를 클래스 기반 구조로 전환
 - ✅ **파일 정리**: 사용하지 않는 Gradio 파일들 삭제 (11개 파일)
 - ✅ **코드 라인 감소**: 1,488라인 → 559라인 (62.4% 감소)
@@ -265,18 +275,18 @@ gradio/stop_server.bat
 - **통합 캐싱 시스템**: 다층 캐싱으로 응답 속도 최적화 (신규)
 
 ### Frontend
-- **Gradio**: 웹 인터페이스
+- **Streamlit**: 웹 인터페이스
 - **HuggingFace Spaces**: 배포 플랫폼
 
 ## 📁 프로젝트 구조
 
 ```
 LawFirmAI/
-├── gradio/                  # Gradio 애플리케이션
-│   ├── app.py              # Gradio 메인 애플리케이션
-│   ├── requirements.txt    # Gradio 의존성
-│   ├── Dockerfile         # Gradio Docker 설정
-│   └── docker-compose.yml # Gradio 로컬 개발 환경
+├── streamlit/              # Streamlit 애플리케이션
+│   ├── app.py              # Streamlit 메인 애플리케이션
+│   ├── requirements.txt    # Streamlit 의존성
+│   ├── Dockerfile         # Streamlit Docker 설정
+│   └── docker-compose.yml # Streamlit 로컬 개발 환경
 ├── api/                    # FastAPI 애플리케이션
 │   ├── main.py            # FastAPI 메인 애플리케이션
 │   ├── requirements.txt   # FastAPI 의존성
@@ -744,7 +754,7 @@ python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민�
 
 ### 5. 애플리케이션 실행
 
-#### Gradio 인터페이스 실행 (리팩토링된 버전)
+#### Streamlit 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
@@ -769,13 +779,13 @@ python main.py
 
 ### 5. 접속
 
-- **Gradio 인터페이스**: http://localhost:7860
+- **Streamlit 인터페이스**: http://localhost:8501
 - **FastAPI 서버**: http://localhost:8000
 - **API 문서**: http://localhost:8000/docs
 
 ## 🐳 Docker 사용
 
-### Gradio 인터페이스 실행 (리팩토링된 버전)
+### Streamlit 인터페이스 실행 (리팩토링된 버전)
 
 ```bash
 cd gradio
@@ -792,8 +802,8 @@ docker-compose up -d
 ### 전체 서비스 실행 (개발용)
 
 ```bash
-# Gradio와 FastAPI를 동시에 실행하려면 각각의 폴더에서 실행
-cd gradio && docker-compose up -d &
+# Streamlit과 FastAPI를 동시에 실행하려면 각각의 폴더에서 실행
+cd streamlit && docker-compose up -d &
 cd api && docker-compose up -d &
 ```
 
@@ -1010,7 +1020,7 @@ for law in result["results"]:
 
 ## 📊 로그 확인
 
-### Gradio 애플리케이션 로그
+### Streamlit 애플리케이션 로그
 ```bash
 # Windows PowerShell - 실시간 로그 모니터링
 Get-Content logs\gradio_app.log -Wait -Tail 50
@@ -1042,7 +1052,7 @@ python gradio/app.py
 ```
 
 ### 로그 파일 위치
-- **Gradio 앱 로그**: `logs/gradio_app.log`
+- **Streamlit 앱 로그**: `logs/streamlit_app.log`
 - **데이터 처리 로그**: `logs/` 디렉토리의 각종 `.log` 파일들
 - **상세 로깅 가이드**: [docs/development/logging_guide.md](docs/development/logging_guide.md)
 
@@ -1063,7 +1073,7 @@ python gradio/app.py
 
 - [HuggingFace](https://huggingface.co/) - AI 모델 제공
 - [FastAPI](https://fastapi.tiangolo.com/) - 웹 프레임워크
-- [Gradio](https://gradio.app/) - UI 프레임워크
+- [Streamlit](https://streamlit.io/) - UI 프레임워크
 - [ChromaDB](https://www.trychroma.com/) - 벡터 데이터베이스
 
 ---

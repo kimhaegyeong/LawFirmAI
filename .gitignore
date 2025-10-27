@@ -31,7 +31,7 @@ env.bak/
 venv.bak/
 
 # Environment Variables
-.env
+# .env
 .env.local
 .env.development.local
 .env.test.local
