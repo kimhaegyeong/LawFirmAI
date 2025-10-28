@@ -2,14 +2,20 @@
 """
 개선된 LangGraph Legal Workflow
 답변 품질 향상을 위한 향상된 워크플로우 구현
-UnifiedPromptManager 통합 완료
+
+주요 기능:
+- 긴급도 평가 (Urgency Assessment)
+- 법률분야 분류 강화 (Legal Field Classification)
+- 법령 검증 (Legal Basis Validation)
+- 문서 분석 (Document Analysis) - 계약서/고소장 등
+- 전문가 라우팅 (Expert Router) - 가족법/기업법/지적재산권
+- 멀티턴 대화 처리 (Multi-turn Conversation)
 """
 
+import asyncio
 import logging
 import re
-import sys
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from langchain_community.llms import Ollama
@@ -29,23 +35,25 @@ except ImportError:
         return decorator
 
 from ...utils.langgraph_config import LangGraphConfig
+from ..question_classifier import QuestionType
 from ..result_merger import ResultMerger, ResultRanker
 from ..semantic_search_engine import SemanticSearchEngine
 from ..term_integration_system import TermIntegrator
+from ..unified_prompt_manager import LegalDomain, ModelType, UnifiedPromptManager
 from .keyword_mapper import LegalKeywordMapper
 from .legal_data_connector import LegalDataConnector
 from .performance_optimizer import PerformanceOptimizer
 from .state_definitions import LegalWorkflowState
-
-# 프로젝트 경로 추가하여 unified_prompt_manager import
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from .state_utils import (
+    MAX_DOCUMENT_CONTENT_LENGTH,
+    MAX_PROCESSING_STEPS,
+    MAX_RETRIEVED_DOCS,
+    prune_processing_steps,
+    prune_retrieved_docs,
+)
 
 # Logger 초기화
 logger = logging.getLogger(__name__)
-
-# 상대 경로로 import (더 안정적)
-from ..question_classifier import QuestionType
-from ..unified_prompt_manager import LegalDomain, ModelType, UnifiedPromptManager
 
 # AnswerStructureEnhancer 통합 (답변 구조화 및 법적 근거 강화)
 try:
@@ -98,14 +106,6 @@ class EnhancedLegalQuestionWorkflow:
         self.result_merger = ResultMerger()
         self.result_ranker = ResultRanker()
 
-        # KeywordDatabaseLoader 초기화 (키워드 추출 노드용)
-        try:
-            from ..keyword_database_loader import KeywordDatabaseLoader
-            self.keyword_loader = KeywordDatabaseLoader()
-            self.logger.info("KeywordDatabaseLoader initialized successfully")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize KeywordDatabaseLoader: {e}")
-            self.keyword_loader = None
 
         # AnswerStructureEnhancer 초기화 (답변 구조화 및 법적 근거 강화)
         if ANSWER_STRUCTURE_ENHANCER_AVAILABLE:
@@ -144,6 +144,44 @@ class EnhancedLegalQuestionWorkflow:
             self.multi_turn_handler = None
             self.conversation_manager = None
 
+        # AIKeywordGenerator 초기화 (AI 키워드 확장)
+        try:
+            from ..ai_keyword_generator import AIKeywordGenerator
+            self.ai_keyword_generator = AIKeywordGenerator()
+            self.logger.info("AIKeywordGenerator initialized successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize AIKeywordGenerator: {e}")
+            self.ai_keyword_generator = None
+
+        # EmotionIntentAnalyzer 초기화 (긴급도 평가용)
+        try:
+            from ..emotion_intent_analyzer import EmotionIntentAnalyzer
+            self.emotion_analyzer = EmotionIntentAnalyzer()
+            self.logger.info("EmotionIntentAnalyzer initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize EmotionIntentAnalyzer: {e}")
+            self.emotion_analyzer = None
+
+        # LegalBasisValidator 초기화 (법령 검증용)
+        try:
+            from ..legal_basis_validator import LegalBasisValidator
+            self.legal_validator = LegalBasisValidator()
+            self.logger.info("LegalBasisValidator initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize LegalBasisValidator: {e}")
+            self.legal_validator = None
+
+        # DocumentProcessor 초기화 (문서 분석용)
+        try:
+            from ...utils.config import Config as UtilsConfig
+            from ..document_processor import LegalDocumentProcessor
+            utils_config = UtilsConfig()
+            self.document_processor = LegalDocumentProcessor(utils_config)
+            self.logger.info("LegalDocumentProcessor initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize LegalDocumentProcessor: {e}")
+            self.document_processor = None
+
         # LLM 초기화
         self.llm = self._initialize_llm()
 
@@ -154,7 +192,7 @@ class EnhancedLegalQuestionWorkflow:
             'avg_response_time': 0.0,
             'avg_confidence': 0.0,
             'total_errors': 0
-        } if config.enable_statistics else None
+        } if self.config.enable_statistics else None
 
         # 워크플로우 그래프 구축
         self.graph = self._build_graph()
@@ -214,44 +252,54 @@ class EnhancedLegalQuestionWorkflow:
         return MockLLM()
 
     def _build_graph(self) -> StateGraph:
-        """워크플로우 그래프 구축 - 조건부 엣지 및 재시도 로직 포함 (개선된 버전)"""
+        """워크플로우 그래프 구축 - 전체 노드 포함"""
         workflow = StateGraph(LegalWorkflowState)
 
-        # 노드 추가 (기존)
+        # 노드 추가
         workflow.add_node("classify_query", self.classify_query)
-        workflow.add_node("resolve_multi_turn", self.resolve_multi_turn)  # 멀티턴 처리 노드 추가
-        workflow.add_node("extract_keywords", self.extract_keywords)
+        workflow.add_node("assess_urgency", self.assess_urgency)  # 새로 추가
+        workflow.add_node("resolve_multi_turn", self.resolve_multi_turn)
+        workflow.add_node("route_expert", self.route_expert)  # 새로 추가
+        workflow.add_node("analyze_document", self.analyze_document)  # 새로 추가
+        workflow.add_node("expand_keywords_ai", self.expand_keywords_ai)
         workflow.add_node("retrieve_documents", self.retrieve_documents)
         workflow.add_node("process_legal_terms", self.process_legal_terms)
         workflow.add_node("generate_answer_enhanced", self.generate_answer_enhanced)
         workflow.add_node("validate_answer_quality", self.validate_answer_quality)
-
-        # 새로운 포맷팅 노드들 추가
         workflow.add_node("enhance_answer_structure", self.enhance_answer_structure)
         workflow.add_node("apply_visual_formatting", self.apply_visual_formatting)
         workflow.add_node("prepare_final_response", self.prepare_final_response)
 
-        # 레거시 노드 (호환성을 위해 유지하지만 사용 안함)
-        workflow.add_node("format_response", self.format_response)
 
         # Entry point
         workflow.set_entry_point("classify_query")
 
-        # classify_query -> resolve_multi_turn (멀티턴 처리 먼저)
-        workflow.add_edge("classify_query", "resolve_multi_turn")
+        # 플로우 정의
+        workflow.add_edge("classify_query", "assess_urgency")
+        workflow.add_edge("assess_urgency", "resolve_multi_turn")
+        workflow.add_edge("resolve_multi_turn", "route_expert")
 
-        # 조건부 엣지 1: 질문 복잡도에 따라 검색 스킵 여부 결정
+        # 조건부: 전문가 라우팅 후 문서 분석 여부
         workflow.add_conditional_edges(
-            "resolve_multi_turn",
-            self._should_skip_document_search,
+            "route_expert",
+            self._should_analyze_document,
             {
-                "search": "extract_keywords",
-                "skip_search": "generate_answer_enhanced"
+                "analyze": "analyze_document",
+                "skip": "expand_keywords_ai"
             }
         )
 
-        # 키워드 추출 후 문서 검색
-        workflow.add_edge("extract_keywords", "retrieve_documents")
+        workflow.add_edge("analyze_document", "expand_keywords_ai")
+
+        # 키워드 확장 파이프라인
+        workflow.add_conditional_edges(
+            "expand_keywords_ai",
+            self._should_expand_keywords_ai,
+            {
+                "expand": "retrieve_documents",
+                "skip": "retrieve_documents"
+            }
+        )
 
         # Linear flow (검색을 수행하는 경우)
         workflow.add_edge("retrieve_documents", "process_legal_terms")
@@ -285,20 +333,29 @@ class EnhancedLegalQuestionWorkflow:
 
         return workflow
 
-    def _should_skip_document_search(self, state: LegalWorkflowState) -> str:
-        """문서 검색 스킵 여부 결정 - 간단한 질문의 경우 검색 생략"""
+
+    def _should_expand_keywords_ai(self, state: LegalWorkflowState) -> str:
+        """AI 키워드 확장 여부 결정"""
+        # AI 확장 조건:
+        # 1. AI 키워드 생성기가 초기화되어 있는가
+        # 2. 추출된 키워드가 충분히 있는가
+        # 3. 질문 복잡도가 충분히 높은가
+
+        if not self.ai_keyword_generator:
+            return "skip"
+
+        keywords = state.get("extracted_keywords", [])
+        if len(keywords) < 3:
+            return "skip"
+
+        # 복잡한 질문인 경우 확장
         query_type = state.get("query_type", "")
-        confidence = state.get("confidence", 0.0)
+        complex_types = ["precedent_search", "law_inquiry", "legal_advice"]
 
-        # 간단한 용어 설명이나 일반 질문이면서 높은 신뢰도의 경우 검색 생략
-        simple_types = ["term_explanation", "general_question"]
-        if query_type in simple_types and confidence > 0.8:
-            state["skip_document_search"] = True
-            self.logger.info(f"Skipping document search for simple query: {query_type}")
-            return "skip_search"
+        if query_type in complex_types:
+            return "expand"
 
-        state["skip_document_search"] = False
-        return "search"
+        return "skip"
 
     def _should_retry_or_continue(self, state: LegalWorkflowState) -> str:
         """재시도 여부 결정 - 답변 품질 체크"""
@@ -344,13 +401,14 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="validate_answer_quality")
     def validate_answer_quality(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """답변 품질 검증"""
+        """답변 품질 및 법령 검증"""
         try:
             start_time = time.time()
             answer = state.get("answer", "")
             errors = state.get("errors", [])
             sources = state.get("sources", [])
 
+            # 기존 품질 검증
             quality_checks = {
                 "has_answer": len(answer) > 0,
                 "min_length": len(answer) >= 50,
@@ -358,6 +416,32 @@ class EnhancedLegalQuestionWorkflow:
                 "has_sources": len(sources) > 0 or len(state.get("retrieved_docs", [])) > 0
             }
 
+            # 법령 검증 추가
+            if self.legal_validator and len(answer) > 0:
+                try:
+                    validation_result = self.legal_validator.validate_legal_basis(
+                        state["query"], answer
+                    )
+                    state["legal_validity_check"] = validation_result.is_valid
+                    state["legal_basis_validation"] = {
+                        "confidence": validation_result.confidence,
+                        "issues": validation_result.issues,
+                        "recommendations": validation_result.recommendations
+                    }
+
+                    # 품질 체크에 법령 검증 추가
+                    quality_checks["legal_basis_valid"] = validation_result.is_valid
+
+                    self.logger.info(f"Legal basis validation: {validation_result.is_valid}")
+                except Exception as e:
+                    self.logger.warning(f"Legal validation failed: {e}")
+                    state["legal_validity_check"] = True  # 실패시 통과
+                    quality_checks["legal_basis_valid"] = True
+            else:
+                state["legal_validity_check"] = True
+                quality_checks["legal_basis_valid"] = True
+
+            # 품질 점수 계산
             passed_checks = sum(quality_checks.values())
             total_checks = len(quality_checks)
             quality_score = passed_checks / total_checks
@@ -369,8 +453,8 @@ class EnhancedLegalQuestionWorkflow:
             self._update_processing_time(state, start_time)
 
             quality_status = "통과" if quality_check_passed else "실패"
-            self._add_step(state, "답변 품질 검증",
-                         f"답변 품질 검증: {quality_status} (점수: {quality_score:.2f})")
+            self._add_step(state, "답변 검증",
+                         f"품질: {quality_score:.2f}, 법령: {state['legal_validity_check']}")
 
             self.logger.info(
                 f"Answer quality validation: {quality_status}, "
@@ -378,8 +462,9 @@ class EnhancedLegalQuestionWorkflow:
             )
 
         except Exception as e:
-            self._handle_error(state, str(e), "답변 품질 검증 중 오류 발생")
+            self._handle_error(state, str(e), "답변 검증 중 오류")
             state["quality_check_passed"] = False
+            state["legal_validity_check"] = True
 
         return state
 
@@ -391,10 +476,17 @@ class EnhancedLegalQuestionWorkflow:
         return processing_time
 
     def _add_step(self, state: LegalWorkflowState, step_prefix: str, step_message: str):
-        """처리 단계 추가 (중복 방지)"""
+        """처리 단계 추가 (중복 방지 및 pruning)"""
         existing_steps = state.get("processing_steps", [])
         if not any(step_prefix in step for step in existing_steps):
             state["processing_steps"].append(step_message)
+
+        # Always prune if too many steps (check on every add)
+        if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
+            state["processing_steps"] = prune_processing_steps(
+                state["processing_steps"],
+                max_items=MAX_PROCESSING_STEPS
+            )
 
     def _handle_error(self, state: LegalWorkflowState, error_msg: str, context: str = ""):
         """에러 처리 헬퍼"""
@@ -427,11 +519,15 @@ class EnhancedLegalQuestionWorkflow:
             state["query_type"] = query_type_str
             state["confidence"] = confidence
 
+            # 법률 분야 추출
+            state["legal_field"] = self._extract_legal_field(query_type_str, state["query"])
+            state["legal_domain"] = self._map_to_legal_domain(state["legal_field"])
+
             processing_time = self._update_processing_time(state, start_time)
             self._add_step(state, "질문 분류 완료",
-                         f"질문 분류 완료: {query_type_str} (시간: {processing_time:.3f}s)")
+                         f"질문 분류 완료: {query_type_str}, 법률분야: {state['legal_field']} (시간: {processing_time:.3f}s)")
 
-            self.logger.info(f"LLM classified query as {query_type_str} with confidence {confidence}")
+            self.logger.info(f"LLM classified query as {query_type_str} with confidence {confidence}, field: {state['legal_field']}")
 
         except Exception as e:
             self._handle_error(state, str(e), "LLM 질문 분류 중 오류 발생")
@@ -439,6 +535,11 @@ class EnhancedLegalQuestionWorkflow:
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
             state["query_type"] = query_type_str
             state["confidence"] = confidence
+
+            # 법률 분야 추출 (폴백)
+            state["legal_field"] = self._extract_legal_field(query_type_str, state["query"])
+            state["legal_domain"] = self._map_to_legal_domain(state["legal_field"])
+
             self._add_step(state, "폴백 키워드 기반 분류 사용", "폴백 키워드 기반 분류 사용")
 
         return state
@@ -452,8 +553,7 @@ class EnhancedLegalQuestionWorkflow:
             # 멀티턴 핸들러와 세션 관리자가 없으면 스킵
             if not self.multi_turn_handler or not self.conversation_manager:
                 state["is_multi_turn"] = False
-                state["resolved_query"] = state["query"]
-                state["original_query"] = state["query"]
+                state["search_query"] = state["query"]
                 self.logger.debug("Multi-turn handler not available, skipping multi-turn resolution")
                 return state
 
@@ -472,36 +572,28 @@ class EnhancedLegalQuestionWorkflow:
                     # 완전한 질문 구성
                     multi_turn_result = self.multi_turn_handler.build_complete_query(query, conversation_context)
 
-                    state["original_query"] = query
-                    state["resolved_query"] = multi_turn_result.get("resolved_query", query)
+                    resolved_query = multi_turn_result.get("resolved_query", query)
                     state["multi_turn_confidence"] = multi_turn_result.get("confidence", 1.0)
-                    state["multi_turn_reasoning"] = multi_turn_result.get("reasoning", "")
 
                     # 대화 맥락 정보 저장
                     state["conversation_context"] = self._build_conversation_context_dict(conversation_context)
 
                     # 검색 쿼리 업데이트 (해결된 쿼리 사용)
-                    state["search_query"] = state["resolved_query"]
+                    state["search_query"] = resolved_query
 
-                    self.logger.info(f"Multi-turn question resolved: '{query}' -> '{state['resolved_query']}'")
+                    self.logger.info(f"Multi-turn question resolved: '{query}' -> '{resolved_query}'")
                     self._add_step(state, "멀티턴 처리",
                                  f"멀티턴 질문 해결: {multi_turn_result.get('reasoning', '')}")
                 else:
                     # 멀티턴 질문이 아님
-                    state["resolved_query"] = query
-                    state["original_query"] = query
                     state["multi_turn_confidence"] = 1.0
-                    state["multi_turn_reasoning"] = "멀티턴 질문 아님"
 
                     # 단일 턴이므로 search_query는 그대로
                     state["search_query"] = query
             else:
                 # 대화 맥락이 없음
                 state["is_multi_turn"] = False
-                state["resolved_query"] = query
-                state["original_query"] = query
                 state["multi_turn_confidence"] = 1.0
-                state["multi_turn_reasoning"] = "대화 맥락 없음"
                 state["search_query"] = query
 
             self._update_processing_time(state, start_time)
@@ -510,8 +602,7 @@ class EnhancedLegalQuestionWorkflow:
             self.logger.error(f"Error in resolve_multi_turn: {e}")
             # 에러 발생 시 원본 쿼리 유지
             state["is_multi_turn"] = False
-            state["resolved_query"] = state.get("resolved_query", state["query"])
-            state["original_query"] = state.get("original_query", state["query"])
+            state["search_query"] = state.get("search_query", state["query"])
             self._handle_error(state, str(e), "멀티턴 처리 중 오류 발생")
 
         return state
@@ -609,11 +700,10 @@ class EnhancedLegalQuestionWorkflow:
             start_time = time.time()
             # 강화된 검색 쿼리 사용 (키워드 추출 노드에서 생성됨)
             search_query = state.get("search_query", state["query"])
-            original_query = state.get("original_query", state["query"])
             query_type_str = self._get_query_type_str(state["query_type"])
 
             # 캐시 확인
-            if self._check_cache(state, original_query, query_type_str, start_time):
+            if self._check_cache(state, search_query, query_type_str, start_time):
                 return state
 
             # 하이브리드 검색 (강화된 쿼리 사용)
@@ -622,11 +712,17 @@ class EnhancedLegalQuestionWorkflow:
 
             # 결과 통합
             documents = self._merge_search_results(semantic_results, keyword_results)
-            state["retrieved_docs"] = documents[:WorkflowConstants.MAX_DOCUMENTS]
+
+            # Apply pruning and summarization to reduce state size
+            state["retrieved_docs"] = prune_retrieved_docs(
+                documents[:WorkflowConstants.MAX_DOCUMENTS],
+                max_items=MAX_RETRIEVED_DOCS,
+                max_content_per_doc=MAX_DOCUMENT_CONTENT_LENGTH
+            )
 
             # 메타데이터 및 상태 업데이트
             self._update_search_metadata(state, semantic_count, keyword_count, documents, query_type_str, start_time)
-            self.performance_optimizer.cache.cache_documents(original_query, query_type_str, state["retrieved_docs"])
+            self.performance_optimizer.cache.cache_documents(search_query, query_type_str, state["retrieved_docs"])
             self._update_processing_time(state, start_time)
 
             self.logger.info(f"Hybrid search completed: {len(state['retrieved_docs'])} documents retrieved")
@@ -781,8 +877,12 @@ class EnhancedLegalQuestionWorkflow:
 
     def _update_search_metadata(self, state: LegalWorkflowState, semantic_count: int,
                                 keyword_count: int, documents: List[Dict], query_type_str: str, start_time: float):
-        """검색 메타데이터 업데이트"""
-        state["search_metadata"] = {
+        """검색 메타데이터 업데이트 (consolidated metadata)"""
+        # Merge into consolidated metadata dict
+        if "metadata" not in state or not isinstance(state["metadata"], dict):
+            state["metadata"] = {}
+
+        state["metadata"]["search"] = {
             "semantic_results_count": semantic_count,
             "keyword_results_count": keyword_count,
             "total_candidates": len(documents),
@@ -824,51 +924,86 @@ class EnhancedLegalQuestionWorkflow:
                 {"content": f"'{state['query']}'에 대한 기본 법률 정보입니다.", "source": "Default DB"}
             ]
 
-    @observe(name="extract_keywords")
-    def extract_keywords(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """질문에서 키워드를 추출하여 검색에 활용"""
+
+    @observe(name="expand_keywords_ai")
+    def expand_keywords_ai(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """AI 키워드 확장 (AIKeywordGenerator 사용)"""
         try:
             start_time = time.time()
-            query = state["query"]
+
+            if not self.ai_keyword_generator:
+                self.logger.debug("AIKeywordGenerator not available, skipping")
+                return state
+
+            # 기존 키워드가 없으면 기본 키워드 생성
+            keywords = state.get("extracted_keywords", [])
+            if len(keywords) == 0:
+                query = state.get("query", "")
+                query_type_str = self._get_query_type_str(state.get("query_type", "general_question"))
+                # LegalKeywordMapper를 사용하여 기본 키워드 추출
+                keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
+                keywords = list(set(keywords))  # 중복 제거
+                state["extracted_keywords"] = keywords
+                self.logger.info(f"Generated base keywords: {len(keywords)} keywords from query")
+
             query_type_str = self._get_query_type_str(state["query_type"])
+            domain = self._get_domain_from_query_type(query_type_str)
 
-            # 1. LegalKeywordMapper를 사용하여 키워드 추출
-            keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
+            # AI 키워드 확장 (동기 실행 - 비동기는 지원 안됨)
+            expansion_result = asyncio.run(
+                self.ai_keyword_generator.expand_domain_keywords(
+                    domain=domain,
+                    base_keywords=keywords,
+                    target_count=30
+                )
+            )
 
-            # 2. KeywordDatabaseLoader를 사용하여 도메인별 키워드 확장
-            if self.keyword_loader:
-                try:
-                    all_keywords = self.keyword_loader.load_all_keywords()
-                    domain = self._get_domain_from_query_type(query_type_str)
-                    domain_keywords = all_keywords.get(domain, [])
+            if expansion_result.api_call_success:
+                # 확장된 키워드 추가
+                all_keywords = keywords + expansion_result.expanded_keywords
+                all_keywords = list(set(all_keywords))
+                state["extracted_keywords"] = all_keywords
 
-                    # 도메인 키워드와 질문 키워드 매칭
-                    matched_domain_keywords = self._match_domain_keywords(query, domain_keywords)
-                    keywords.extend(matched_domain_keywords)
+                # 메타데이터 저장 (새 딕셔너리 생성)
+                state["ai_keyword_expansion"] = {
+                    "domain": expansion_result.domain,
+                    "original_keywords": expansion_result.base_keywords,
+                    "expanded_keywords": expansion_result.expanded_keywords,
+                    "confidence": expansion_result.confidence,
+                    "method": expansion_result.expansion_method
+                }
 
-                except Exception as e:
-                    self.logger.warning(f"Failed to load domain keywords: {e}")
+                processing_time = self._update_processing_time(state, start_time)
+                self._add_step(state, "AI 키워드 확장",
+                             f"AI 키워드 확장 완료: +{len(expansion_result.expanded_keywords)}개 (총 {len(all_keywords)}개, {processing_time:.3f}s)")
 
-            # 3. 키워드 정리 및 저장
-            keywords = list(set(keywords))  # 중복 제거
-            state["extracted_keywords"] = keywords
+                self.logger.info(f"AI keyword expansion: {len(expansion_result.expanded_keywords)} keywords added in {processing_time:.3f}s")
+            else:
+                # 폴백 사용
+                self.logger.warning("AI keyword expansion failed, using fallback")
+                fallback_keywords = self.ai_keyword_generator.expand_keywords_with_fallback(
+                    domain, keywords
+                )
+                all_keywords = keywords + fallback_keywords
+                all_keywords = list(set(all_keywords))
+                state["extracted_keywords"] = all_keywords
 
-            # 4. 키워드 기반 검색 쿼리 강화
-            enhanced_query = self._build_enhanced_query(query, keywords)
-            state["search_query"] = enhanced_query
-            state["original_query"] = query
+                # 메타데이터 저장 (새 딕셔너리 생성)
+                state["ai_keyword_expansion"] = {
+                    "domain": domain,
+                    "original_keywords": keywords,
+                    "expanded_keywords": fallback_keywords,
+                    "confidence": 0.5,
+                    "method": "fallback"
+                }
 
-            processing_time = self._update_processing_time(state, start_time)
-            self._add_step(state, "키워드 추출 완료",
-                          f"키워드 추출 완료: {len(keywords)}개 ({processing_time:.3f}s)")
-
-            self.logger.info(f"Extracted {len(keywords)} keywords: {keywords[:5]}...")
+                processing_time = self._update_processing_time(state, start_time)
+                self._add_step(state, "AI 키워드 확장 (폴백)",
+                             f"AI 키워드 확장 (폴백): +{len(fallback_keywords)}개 ({processing_time:.3f}s)")
+                self.logger.info(f"Fallback keyword expansion: {len(fallback_keywords)} keywords added in {processing_time:.3f}s")
 
         except Exception as e:
-            self._handle_error(state, str(e), "키워드 추출 중 오류 발생")
-            # 실패 시 원본 쿼리 사용
-            state["search_query"] = state["query"]
-            state["extracted_keywords"] = []
+            self._handle_error(state, str(e), "AI 키워드 확장 중 오류 발생")
 
         return state
 
@@ -883,25 +1018,6 @@ class EnhancedLegalQuestionWorkflow:
             "general_question": "기타/일반"
         }
         return domain_mapping.get(query_type, "기타/일반")
-
-    def _match_domain_keywords(self, query: str, domain_keywords: List[str]) -> List[str]:
-        """질문과 도메인 키워드 매칭"""
-        matched = []
-        query_lower = query.lower()
-
-        for keyword in domain_keywords:
-            if isinstance(keyword, str) and len(keyword) >= 2 and keyword.lower() in query_lower:
-                matched.append(keyword)
-
-        return matched
-
-    def _build_enhanced_query(self, original_query: str, keywords: List[str]) -> str:
-        """키워드를 활용한 검색 쿼리 강화"""
-        # 원본 쿼리와 키워드를 결합
-        combined_keywords = ' '.join(keywords[:10])  # 상위 10개만 사용
-        enhanced_query = f"{original_query} {combined_keywords}"
-
-        return enhanced_query.strip()
 
     @observe(name="process_legal_terms")
     def process_legal_terms(self, state: LegalWorkflowState) -> LegalWorkflowState:
@@ -976,21 +1092,21 @@ class EnhancedLegalQuestionWorkflow:
             state["answer"] = self._generate_fallback_answer(state)
         return state
 
-    def _get_question_type_and_domain(self, query_type) -> Tuple[QuestionType, LegalDomain]:
+    def _get_question_type_and_domain(self, query_type) -> Tuple[QuestionType, str]:
         """질문 유형과 도메인 매핑"""
         query_type_mapping = {
-            "contract_review": (QuestionType.LEGAL_ADVICE, LegalDomain.CIVIL_LAW),
-            "family_law": (QuestionType.LEGAL_ADVICE, LegalDomain.FAMILY_LAW),
-            "criminal_law": (QuestionType.LEGAL_ADVICE, LegalDomain.CRIMINAL_LAW),
-            "civil_law": (QuestionType.LEGAL_ADVICE, LegalDomain.CIVIL_LAW),
-            "labor_law": (QuestionType.LEGAL_ADVICE, LegalDomain.LABOR_LAW),
-            "property_law": (QuestionType.LEGAL_ADVICE, LegalDomain.PROPERTY_LAW),
-            "intellectual_property": (QuestionType.LEGAL_ADVICE, LegalDomain.INTELLECTUAL_PROPERTY),
-            "tax_law": (QuestionType.LEGAL_ADVICE, LegalDomain.TAX_LAW),
-            "civil_procedure": (QuestionType.PROCEDURE_GUIDE, LegalDomain.CIVIL_PROCEDURE),
-            "general_question": (QuestionType.GENERAL_QUESTION, LegalDomain.GENERAL)
+            "contract_review": (QuestionType.LEGAL_ADVICE, "민사법"),
+            "family_law": (QuestionType.LEGAL_ADVICE, "가족법"),
+            "criminal_law": (QuestionType.LEGAL_ADVICE, "형사법"),
+            "civil_law": (QuestionType.LEGAL_ADVICE, "민사법"),
+            "labor_law": (QuestionType.LEGAL_ADVICE, "노동법"),
+            "property_law": (QuestionType.LEGAL_ADVICE, "부동산법"),
+            "intellectual_property": (QuestionType.LEGAL_ADVICE, "지적재산권법"),
+            "tax_law": (QuestionType.LEGAL_ADVICE, "세법"),
+            "civil_procedure": (QuestionType.PROCEDURE_GUIDE, "민사소송법"),
+            "general_question": (QuestionType.GENERAL_QUESTION, "일반")
         }
-        return query_type_mapping.get(query_type, (QuestionType.GENERAL_QUESTION, LegalDomain.GENERAL))
+        return query_type_mapping.get(query_type, (QuestionType.GENERAL_QUESTION, "일반"))
 
     def _build_context(self, state: LegalWorkflowState) -> Dict[str, Any]:
         """컨텍스트 구성 (길이 제한 관리)"""
@@ -1203,6 +1319,18 @@ class EnhancedLegalQuestionWorkflow:
         try:
             start_time = time.time()
 
+            # Final pruning before returning response
+            # Prune processing steps
+            if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
+                state["processing_steps"] = prune_processing_steps(
+                    state["processing_steps"],
+                    max_items=MAX_PROCESSING_STEPS
+                )
+
+            # Prune errors if too many
+            if len(state.get("errors", [])) > 10:
+                state["errors"] = state["errors"][-10:]
+
             # 신뢰도 조정
             final_confidence = state.get("structure_confidence") or state.get("confidence", 0.0)
 
@@ -1223,6 +1351,13 @@ class EnhancedLegalQuestionWorkflow:
 
             self._update_processing_time(state, start_time)
             self._add_step(state, "최종 준비", "최종 응답 준비 완료")
+
+            # Final pruning after adding last step
+            if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
+                state["processing_steps"] = prune_processing_steps(
+                    state["processing_steps"],
+                    max_items=MAX_PROCESSING_STEPS
+                )
 
             # 통계 업데이트
             self.update_statistics(state)
@@ -1249,85 +1384,6 @@ class EnhancedLegalQuestionWorkflow:
             return ConfidenceLevel.LOW
         else:
             return ConfidenceLevel.VERY_LOW
-
-    @observe(name="format_response")
-    def format_response(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """응답 포맷팅 (AnswerStructureEnhancer 통합 버전)"""
-        try:
-            start_time = time.time()
-
-            final_answer = state.get("answer", "답변을 생성하지 못했습니다.")
-            final_confidence = state.get("confidence", 0.0)
-            query = state.get("query", "")
-            query_type = state.get("query_type", "general_question")
-
-            # AnswerStructureEnhancer를 사용한 답변 구조화 및 강화
-            if self.answer_structure_enhancer:
-                try:
-                    self.logger.info("Applying AnswerStructureEnhancer for answer quality enhancement")
-
-                    # 1. 답변 구조화 향상
-                    enhanced_result = self.answer_structure_enhancer.enhance_answer_structure(
-                        answer=final_answer,
-                        question_type=query_type,
-                        question=query,
-                        domain="general"
-                    )
-
-                    # 구조화된 답변 적용 (성공한 경우만)
-                    if enhanced_result and "structured_answer" in enhanced_result:
-                        final_answer = enhanced_result["structured_answer"]
-
-                        # 품질 메트릭 업데이트
-                        quality_metrics = enhanced_result.get("quality_metrics", {})
-                        if quality_metrics:
-                            final_confidence = quality_metrics.get("overall_score", final_confidence)
-                            state["quality_metrics"] = quality_metrics
-                            self.logger.info(f"Answer quality score: {final_confidence:.3f}")
-
-                        # 법적 근거 정보 추가
-                        if "legal_citations" in enhanced_result:
-                            state["legal_citations"] = enhanced_result["legal_citations"]
-
-                        self.logger.info("Answer successfully enhanced with structure and legal basis")
-                    else:
-                        self.logger.warning("AnswerStructureEnhancer returned no enhancement, using original answer")
-
-                except Exception as enhancer_error:
-                    self.logger.warning(f"AnswerStructureEnhancer failed, using original answer: {enhancer_error}")
-                    # 원본 답변 유지
-            else:
-                self.logger.debug("AnswerStructureEnhancer not available, using basic formatting")
-
-            # 키워드 포함도 계산 (기존 로직 유지)
-            keyword_coverage = self._calculate_keyword_coverage(state, final_answer)
-            adjusted_confidence = min(0.9, max(final_confidence, final_confidence + (keyword_coverage * 0.2)))
-
-            # 상태 업데이트
-            state["answer"] = final_answer
-            state["confidence"] = adjusted_confidence
-            state["sources"] = list(set([doc.get("source", "Unknown") for doc in state.get("retrieved_docs", [])]))
-
-            # 법적 참조 정보 추가 (기존 legal_references도 유지)
-            if "legal_references" not in state:
-                state["legal_references"] = []
-
-            # 메타데이터 설정
-            self._set_metadata(state, final_answer, keyword_coverage)
-
-            self._update_processing_time(state, start_time)
-            self._add_step(state, "응답 포맷팅 완료", "응답 포맷팅 완료 (AnswerStructureEnhancer 적용)")
-
-            # 통계 업데이트
-            self.update_statistics(state)
-
-            self.logger.info(f"Enhanced response formatting completed with confidence: {adjusted_confidence:.3f}")
-
-        except Exception as e:
-            self._handle_error(state, str(e), "응답 포맷팅 중 오류 발생")
-            # 에러 발생 시에도 통계 업데이트
-            self.update_statistics(state)
-        return state
 
     def _calculate_keyword_coverage(self, state: LegalWorkflowState, answer: str) -> float:
         """키워드 포함도 계산"""
@@ -1420,3 +1476,410 @@ class EnhancedLegalQuestionWorkflow:
                 if self.stats['total_queries'] > 0 else 0
             )
         }
+
+    def _extract_legal_field(self, query_type: str, query: str) -> str:
+        """법률 분야 추출"""
+        # 키워드 매핑
+        field_keywords = {
+            "civil": ["민사", "계약", "손해배상", "재산", "계약서"],
+            "criminal": ["형사", "범죄", "처벌", "형량", "범죄자"],
+            "family": ["가족", "이혼", "양육", "상속", "부부"],
+            "labor": ["노동", "근로", "해고", "임금", "근로자"],
+            "corporate": ["기업", "회사", "주주", "법인", "회사법"],
+            "tax": ["세금", "세무", "과세", "세법"],
+            "intellectual_property": ["특허", "상표", "저작권", "지적재산"]
+        }
+
+        query_lower = query.lower()
+        for field, keywords in field_keywords.items():
+            if any(k in query_lower for k in keywords):
+                return field
+
+        # 질문 유형 기반 폴백
+        type_to_field = {
+            "precedent_search": "civil",
+            "law_inquiry": "civil",
+            "procedure_guide": "civil",
+            "term_explanation": "civil",
+            "legal_advice": "civil"
+        }
+        return type_to_field.get(query_type, "general")
+
+    def _map_to_legal_domain(self, legal_field: str) -> str:
+        """LegalDomain enum으로 매핑"""
+        # LegalDomain enum 값 확인 후 매핑
+        mapping = {
+            "civil": LegalDomain.CIVIL_LAW.value if hasattr(LegalDomain.CIVIL_LAW, 'value') else "민사법",
+            "criminal": LegalDomain.CRIMINAL_LAW.value if hasattr(LegalDomain.CRIMINAL_LAW, 'value') else "형사법",
+            "family": LegalDomain.FAMILY_LAW.value if hasattr(LegalDomain.FAMILY_LAW, 'value') else "가족법",
+            "labor": LegalDomain.LABOR_LAW.value if hasattr(LegalDomain.LABOR_LAW, 'value') else "노동법",
+            "corporate": LegalDomain.COMMERCIAL_LAW.value if hasattr(LegalDomain.COMMERCIAL_LAW, 'value') else "상사법",
+            "tax": LegalDomain.TAX_LAW.value if hasattr(LegalDomain.TAX_LAW, 'value') else "세법",
+            "intellectual_property": LegalDomain.INTELLECTUAL_PROPERTY.value if hasattr(LegalDomain.INTELLECTUAL_PROPERTY, 'value') else "지적재산권법",
+        }
+        return mapping.get(legal_field, "일반")
+
+    @observe(name="assess_urgency")
+    def assess_urgency(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """긴급도 평가 노드"""
+        try:
+            start_time = time.time()
+            query = state["query"]
+
+            if self.emotion_analyzer:
+                # 감정 및 의도 분석 (의도 분석만 사용)
+                intent_result = self.emotion_analyzer.analyze_intent(query, None)
+
+                # 긴급도 설정
+                state["urgency_level"] = intent_result.urgency_level.value
+                state["urgency_reasoning"] = intent_result.reasoning
+
+                # 긴급 유형 판별
+                if "기한" in query or "마감" in query or "데드라인" in query:
+                    state["emergency_type"] = "legal_deadline"
+                elif "소송" in query or "재판" in query or "법원" in query:
+                    state["emergency_type"] = "case_progress"
+                else:
+                    state["emergency_type"] = None
+
+                self.logger.info(f"Urgency assessed: {state['urgency_level']}")
+            else:
+                # 폴백: 키워드 기반 긴급도 평가
+                state["urgency_level"] = self._assess_urgency_fallback(query)
+                state["urgency_reasoning"] = "키워드 기반 평가"
+                state["emergency_type"] = None
+
+            self._update_processing_time(state, start_time)
+            self._add_step(state, "긴급도 평가", f"긴급도: {state['urgency_level']}")
+
+        except Exception as e:
+            self._handle_error(state, str(e), "긴급도 평가 중 오류")
+            state["urgency_level"] = "medium"
+            state["urgency_reasoning"] = "기본값"
+            state["emergency_type"] = None
+
+        return state
+
+    def _assess_urgency_fallback(self, query: str) -> str:
+        """폴백 긴급도 평가"""
+        urgent_keywords = ["긴급", "급해", "빨리", "즉시", "당장"]
+        high_keywords = ["오늘", "내일", "이번주", "마감"]
+
+        query_lower = query.lower()
+        if any(k in query_lower for k in urgent_keywords):
+            return "critical"
+        elif any(k in query_lower for k in high_keywords):
+            return "high"
+        else:
+            return "medium"
+
+    @observe(name="analyze_document")
+    def analyze_document(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """업로드된 문서 분석"""
+        try:
+            start_time = time.time()
+
+            # Check if document analysis is available in metadata or session context
+            # Document would be passed via external parameter or session
+            doc_text = state.get("document_analysis", {}).get("raw_text") if isinstance(state.get("document_analysis"), dict) else None
+
+            if not doc_text:
+                # Check if there's a document in document_analysis field
+                if state.get("document_analysis") and isinstance(state["document_analysis"], str):
+                    doc_text = state["document_analysis"]
+                else:
+                    self.logger.info("No document provided for analysis, skipping")
+                    return state
+
+            # 문서 유형 판별
+            doc_type = self._detect_document_type(doc_text)
+            state["document_type"] = doc_type
+
+            # 문서 분석
+            analysis_result = self._analyze_legal_document(doc_text, doc_type)
+
+            # Store analysis in state (summarized)
+            if isinstance(state["document_analysis"], dict):
+                state["document_analysis"].update({
+                    "document_type": doc_type,
+                    "summary": analysis_result.get("summary", ""),
+                    "analysis_time": time.time() - start_time
+                })
+            else:
+                state["document_analysis"] = {
+                    "document_type": doc_type,
+                    "summary": analysis_result.get("summary", ""),
+                    "analysis_time": time.time() - start_time
+                }
+
+            state["key_clauses"] = analysis_result.get("key_clauses", [])
+            state["potential_issues"] = analysis_result.get("issues", [])
+
+            # 분석 결과를 컨텍스트에 추가 (pruned)
+            doc_summary = self._create_document_summary(analysis_result)
+            summary_doc = {
+                "content": doc_summary[:MAX_DOCUMENT_CONTENT_LENGTH],  # Summarize
+                "source": "Uploaded Document Analysis",
+                "type": "document_analysis",
+                "relevance_score": 1.0,
+                "is_summarized": True
+            }
+
+            # Prune retrieved_docs before inserting
+            if len(state["retrieved_docs"]) >= MAX_RETRIEVED_DOCS:
+                state["retrieved_docs"] = prune_retrieved_docs(
+                    state["retrieved_docs"],
+                    max_items=MAX_RETRIEVED_DOCS - 1,
+                    max_content_per_doc=MAX_DOCUMENT_CONTENT_LENGTH
+                )
+
+            state["retrieved_docs"].insert(0, summary_doc)
+
+            self._update_processing_time(state, start_time)
+            self._add_step(state, "문서 분석", f"{doc_type} 분석 완료")
+
+        except Exception as e:
+            self._handle_error(state, str(e), "문서 분석 중 오류")
+
+        return state
+
+    def _detect_document_type(self, text: str) -> str:
+        """문서 유형 감지"""
+        type_keywords = {
+            "contract": ["계약서", "계약", "갑", "을", "본 계약"],
+            "complaint": ["고소장", "피고소인", "고소인", "고소취지"],
+            "agreement": ["합의서", "합의", "쌍방"],
+            "power_of_attorney": ["위임장", "위임인", "수임인"]
+        }
+
+        text_lower = text.lower()
+        for doc_type, keywords in type_keywords.items():
+            if any(k in text_lower for k in keywords):
+                return doc_type
+
+        return "general_legal_document"
+
+    def _analyze_legal_document(self, text: str, doc_type: str) -> Dict[str, Any]:
+        """법률 문서 분석"""
+        analysis = {
+            "document_type": doc_type,
+            "key_clauses": [],
+            "issues": [],
+            "summary": "",
+            "recommendations": []
+        }
+
+        # 주요 조항 추출
+        if doc_type == "contract":
+            analysis["key_clauses"] = self._extract_contract_clauses(text)
+            analysis["issues"] = self._identify_contract_issues(text, analysis["key_clauses"])
+        elif doc_type == "complaint":
+            analysis["key_clauses"] = self._extract_complaint_elements(text)
+            analysis["issues"] = self._identify_complaint_issues(text)
+
+        # 요약 생성
+        analysis["summary"] = self._generate_document_summary(text, doc_type, analysis)
+
+        return analysis
+
+    def _extract_contract_clauses(self, text: str) -> List[Dict[str, Any]]:
+        """계약서 주요 조항 추출"""
+        clauses = []
+
+        # 조항 패턴 매칭
+        clause_patterns = {
+            "payment": r"(대금|금액|지급|결제).*?조",
+            "period": r"(기간|기한|만료).*?조",
+            "termination": r"(해지|해제|종료).*?조",
+            "liability": r"(책임|손해배상|위약).*?조",
+            "confidentiality": r"(비밀|기밀|보안).*?조"
+        }
+
+        for clause_type, pattern in clause_patterns.items():
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                # 조항 전체 추출 (제N조 형식)
+                article_match = re.search(r'제\d+조[^제]*', text[match.start():match.start()+500])
+                if article_match:
+                    clauses.append({
+                        "type": clause_type,
+                        "text": article_match.group(0).strip()[:200],
+                        "position": match.start()
+                    })
+
+        return clauses[:10]  # 상위 10개만
+
+    def _identify_contract_issues(self, text: str, clauses: List[Dict]) -> List[Dict[str, Any]]:
+        """계약서 잠재 문제점 식별"""
+        issues = []
+
+        # 필수 조항 확인
+        required_clauses = ["payment", "period", "termination"]
+        found_types = set(c["type"] for c in clauses)
+
+        for req_type in required_clauses:
+            if req_type not in found_types:
+                issues.append({
+                    "severity": "high",
+                    "type": "missing_clause",
+                    "description": f"필수 조항 누락: {req_type}",
+                    "recommendation": f"{req_type} 조항을 추가하십시오"
+                })
+
+        # 불명확한 표현 확인
+        vague_terms = ["기타", "등등", "적절한", "합당한"]
+        for term in vague_terms:
+            if term in text:
+                issues.append({
+                    "severity": "medium",
+                    "type": "vague_term",
+                    "description": f"불명확한 용어 사용: {term}",
+                    "recommendation": "구체적인 용어로 대체하십시오"
+                })
+
+        return issues[:5]  # 상위 5개만
+
+    def _extract_complaint_elements(self, text: str) -> List[Dict[str, Any]]:
+        """고소장 요건 추출"""
+        elements = []
+
+        # 기본 요소 패턴
+        patterns = {
+            "parties": r"(피고소인|피해자|가해자)",
+            "facts": r"(사실관계|경위|내용)",
+            "claims": r"(청구|요구|주장)",
+        }
+
+        for elem_type, pattern in patterns.items():
+            if re.search(pattern, text, re.IGNORECASE):
+                elements.append({
+                    "type": elem_type,
+                    "found": True
+                })
+
+        return elements
+
+    def _identify_complaint_issues(self, text: str) -> List[Dict[str, Any]]:
+        """고소장 문제점 식별"""
+        issues = []
+
+        # 필수 요소 확인
+        required_elements = ["피고소인", "사실관계", "청구"]
+        for elem in required_elements:
+            if elem not in text:
+                issues.append({
+                    "severity": "high",
+                    "type": "missing_element",
+                    "description": f"필수 요소 누락: {elem}",
+                    "recommendation": f"{elem} 정보를 추가하십시오"
+                })
+
+        return issues
+
+    def _generate_document_summary(self, text: str, doc_type: str, analysis: Dict[str, Any]) -> str:
+        """문서 요약 생성"""
+        summary_parts = [f"문서 유형: {doc_type}"]
+        summary_parts.append(f"분석된 조항 수: {len(analysis.get('key_clauses', []))}")
+        summary_parts.append(f"발견된 문제점: {len(analysis.get('issues', []))}")
+
+        if analysis.get("issues"):
+            summary_parts.append("\n주요 문제점:")
+            for issue in analysis["issues"][:3]:
+                summary_parts.append(f"- {issue['description']}")
+
+        return "\n".join(summary_parts)
+
+    def _create_document_summary(self, analysis: Dict[str, Any]) -> str:
+        """문서 분석 요약 생성"""
+        summary_parts = [f"## 업로드 문서 분석 ({analysis['document_type']})"]
+
+        if analysis.get("key_clauses"):
+            summary_parts.append("\n### 주요 조항")
+            for clause in analysis["key_clauses"][:3]:
+                summary_parts.append(f"- {clause['type']}: {clause['text'][:100]}...")
+
+        if analysis.get("issues"):
+            summary_parts.append("\n### 잠재 문제점")
+            for issue in analysis["issues"]:
+                summary_parts.append(f"- [{issue['severity']}] {issue['description']}")
+
+        return "\n".join(summary_parts)
+
+    @observe(name="route_expert")
+    def route_expert(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """전문가 서브그래프로 라우팅"""
+        try:
+            start_time = time.time()
+
+            # 복잡도 평가
+            complexity = self._assess_complexity(state)
+            state["complexity_level"] = complexity
+
+            # 전문가 라우팅 필요 여부
+            requires_expert = (
+                complexity == "complex" and
+                state.get("legal_field") in ["family", "corporate", "intellectual_property"]
+            )
+            state["requires_expert"] = requires_expert
+
+            if requires_expert:
+                # 전문가 서브그래프 결정
+                expert_map = {
+                    "family": "family_law_expert",
+                    "corporate": "corporate_law_expert",
+                    "intellectual_property": "ip_law_expert"
+                }
+                state["expert_subgraph"] = expert_map.get(state.get("legal_field"))
+                self.logger.info(f"Routing to expert: {state['expert_subgraph']}")
+            else:
+                state["expert_subgraph"] = None
+
+            self._update_processing_time(state, start_time)
+            self._add_step(state, "전문가 라우팅", f"복잡도: {complexity}, 전문가: {requires_expert}")
+
+        except Exception as e:
+            self._handle_error(state, str(e), "전문가 라우팅 중 오류")
+            state["complexity_level"] = "simple"
+            state["requires_expert"] = False
+            state["expert_subgraph"] = None
+
+        return state
+
+    def _assess_complexity(self, state: LegalWorkflowState) -> str:
+        """질문 복잡도 평가"""
+        # 복잡도 지표들
+        indicators = {
+            "query_length": len(state["query"]),
+            "num_keywords": len(state.get("extracted_keywords", [])),
+            "has_document": bool(state.get("uploaded_document")),
+            "high_urgency": state.get("urgency_level") in ["high", "critical"],
+            "multiple_legal_issues": len(state.get("potential_issues", [])) > 2
+        }
+
+        complexity_score = 0
+
+        # 점수 계산
+        if indicators["query_length"] > 200:
+            complexity_score += 2
+        if indicators["num_keywords"] > 10:
+            complexity_score += 2
+        if indicators["has_document"]:
+            complexity_score += 3
+        if indicators["high_urgency"]:
+            complexity_score += 1
+        if indicators["multiple_legal_issues"]:
+            complexity_score += 2
+
+        # 복잡도 판정
+        if complexity_score >= 7:
+            return "complex"
+        elif complexity_score >= 4:
+            return "medium"
+        else:
+            return "simple"
+
+    def _should_analyze_document(self, state: LegalWorkflowState) -> str:
+        """문서 분석 필요 여부 결정"""
+        if state.get("uploaded_document"):
+            return "analyze"
+        return "skip"

@@ -2,50 +2,94 @@
 """
 LangGraph State Definitions
 LangGraph 워크플로우 상태 정의 모듈
+
+기존 flat 구조를 유지하여 최대 호환성 확보
 """
 
 from operator import add
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
+# Configuration constants
+from .state_utils import (
+    MAX_CONVERSATION_HISTORY,
+    MAX_DOCUMENT_CONTENT_LENGTH,
+    MAX_PROCESSING_STEPS,
+    MAX_RETRIEVED_DOCS,
+)
+
+# Re-export configuration constants
+__all__ = [
+    "LegalWorkflowState",
+    "AgentWorkflowState",
+    "StreamingWorkflowState",
+    "create_initial_legal_state",
+    "create_initial_agent_state",
+    "create_initial_streaming_state",
+    "MAX_RETRIEVED_DOCS",
+    "MAX_DOCUMENT_CONTENT_LENGTH",
+    "MAX_CONVERSATION_HISTORY",
+    "MAX_PROCESSING_STEPS",
+]
+
 
 class LegalWorkflowState(TypedDict):
-    """법률 워크플로우 상태 정의"""
+    """법률 워크플로우 상태 정의 - Flat 구조 (호환성 유지)"""
 
     # 입력 데이터
     query: str
     session_id: str
 
     # 질문 분류 결과
-    query_type: str  # "simple", "complex", "contract_review", "precedent_search"
+    query_type: str
     confidence: float
 
-    # 멀티턴 처리 결과 (새로 추가)
+    # 긴급도 평가 결과
+    urgency_level: str
+    urgency_reasoning: str
+    emergency_type: Optional[str]
+
+    # 법률 분야 분류
+    legal_field: str
+    legal_domain: str
+
+    # 법령 검증 결과
+    legal_validity_check: bool
+    legal_basis_validation: Optional[Dict[str, Any]]
+    outdated_laws: List[str]
+
+    # 문서 분석 결과
+    document_type: Optional[str]
+    document_analysis: Optional[Dict[str, Any]]
+    key_clauses: List[Dict[str, Any]]
+    potential_issues: List[Dict[str, Any]]
+
+    # 전문가 라우팅
+    complexity_level: str
+    requires_expert: bool
+    expert_subgraph: Optional[str]
+
+    # 멀티턴 처리 결과
     is_multi_turn: bool
-    original_query: str  # 원본 쿼리 (대명사 해결 전)
-    resolved_query: str  # 대명사 해결된 최종 쿼리
-    multi_turn_confidence: float  # 멀티턴 해결 신뢰도
-    multi_turn_reasoning: str  # 멀티턴 해결 추론 과정
-    conversation_history: Annotated[List[Dict[str, Any]], add]  # 대화 이력
-    conversation_context: Optional[Dict[str, Any]]  # 대화 맥락 정보
+    multi_turn_confidence: float
+    conversation_history: List[Dict[str, Any]]
+    conversation_context: Optional[Dict[str, Any]]
 
     # 키워드 추출 결과
     extracted_keywords: List[str]
-    search_query: str  # 강화된 검색 쿼리
+    search_query: str
+    ai_keyword_expansion: Optional[Dict[str, Any]]
 
     # 문서 검색 결과
-    retrieved_docs: Annotated[List[Dict[str, Any]], add]
-    search_metadata: Dict[str, Any]
+    retrieved_docs: List[Dict[str, Any]]
 
     # 컨텍스트 분석 결과
     analysis: Optional[str]
     legal_references: List[str]
 
-    # 답변 처리 중간 결과 (새로 추가)
-    enhanced_answer: Optional[str]  # 구조화된 답변
-    structure_confidence: float  # 구조화 후 신뢰도
-    format_metadata: Optional[Dict[str, Any]]  # 포맷팅 메타데이터
-    quality_metrics: Optional[Dict[str, Any]]  # 품질 메트릭
-    legal_citations: Optional[List[Dict[str, Any]]]  # 법적 인용
+    # 답변 처리 중간 결과
+    enhanced_answer: Optional[str]
+    structure_confidence: float
+    legal_citations: Optional[List[Dict[str, Any]]]
 
     # 최종 답변
     answer: str
@@ -60,11 +104,10 @@ class LegalWorkflowState(TypedDict):
     processing_time: float
     tokens_used: int
 
-    # 재시도 제어 (조건부 흐름 및 재귀적 그래프용)
+    # 재시도 제어
     retry_count: int
     quality_check_passed: bool
     needs_enhancement: bool
-    skip_document_search: bool
 
 
 class AgentWorkflowState(TypedDict):
@@ -88,6 +131,54 @@ class AgentWorkflowState(TypedDict):
     metadata: Dict[str, Any]
 
 
+def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowState:
+    """법률 워크플로우 초기 상태 생성"""
+    return LegalWorkflowState(
+        query=query,
+        session_id=session_id,
+        query_type="",
+        confidence=0.0,
+        urgency_level="medium",
+        urgency_reasoning="",
+        emergency_type=None,
+        legal_field="general",
+        legal_domain="general",
+        legal_validity_check=True,
+        legal_basis_validation=None,
+        outdated_laws=[],
+        document_type=None,
+        document_analysis=None,
+        key_clauses=[],
+        potential_issues=[],
+        complexity_level="simple",
+        requires_expert=False,
+        expert_subgraph=None,
+        is_multi_turn=False,
+        multi_turn_confidence=1.0,
+        conversation_history=[],
+        conversation_context=None,
+        extracted_keywords=[],
+        search_query=query,
+        ai_keyword_expansion=None,
+        retrieved_docs=[],
+        analysis=None,
+        legal_references=[],
+        enhanced_answer=None,
+        structure_confidence=0.0,
+        legal_citations=None,
+        answer="",
+        sources=[],
+        processing_steps=[],
+        errors=[],
+        metadata={},
+        processing_time=0.0,
+        tokens_used=0,
+        retry_count=0,
+        quality_check_passed=False,
+        needs_enhancement=False
+    )
+
+
 class StreamingWorkflowState(TypedDict):
     """스트리밍 워크플로우 상태 정의 (향후 확장용)"""
 
@@ -107,49 +198,6 @@ class StreamingWorkflowState(TypedDict):
     processing_steps: Annotated[List[str], add]
     errors: Annotated[List[str], add]
     metadata: Dict[str, Any]
-
-
-# 상태 초기화 헬퍼 함수들
-def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowState:
-    """법률 워크플로우 초기 상태 생성"""
-    return LegalWorkflowState(
-        query=query,
-        session_id=session_id,
-        query_type="",
-        confidence=0.0,
-        # 멀티턴 관련 필드 초기화
-        is_multi_turn=False,
-        original_query=query,
-        resolved_query=query,
-        multi_turn_confidence=1.0,
-        multi_turn_reasoning="",
-        conversation_history=[],
-        conversation_context=None,
-        # 기존 필드들
-        extracted_keywords=[],
-        search_query=query,
-        retrieved_docs=[],
-        search_metadata={},
-        analysis=None,
-        legal_references=[],
-        # 답변 처리 중간 결과
-        enhanced_answer=None,
-        structure_confidence=0.0,
-        format_metadata=None,
-        quality_metrics=None,
-        legal_citations=None,
-        answer="",
-        sources=[],
-        processing_steps=[],
-        errors=[],
-        metadata={},
-        processing_time=0.0,
-        tokens_used=0,
-        retry_count=0,
-        quality_check_passed=False,
-        needs_enhancement=False,
-        skip_document_search=False
-    )
 
 
 def create_initial_agent_state(query: str, session_id: str) -> AgentWorkflowState:
