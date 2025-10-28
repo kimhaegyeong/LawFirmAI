@@ -117,6 +117,12 @@ chroma_db/
 # Docker
 .dockerignore
 
+# backup
+.backup/
+
+# Cursor IDE
+.cursor/
+
 data/
 reports/
 results/
