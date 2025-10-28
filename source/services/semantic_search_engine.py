@@ -69,7 +69,7 @@ class SemanticSearchEngine:
                     else:
                         # 설정 정보만 있는 경우, 빈 리스트로 초기화
                         self.metadata = []
-                        self.logger.warning("Metadata contains only configuration, no document data")
+                        self.logger.debug("Metadata contains only configuration, no document data")
                 else:
                     self.metadata = metadata_content
 
@@ -106,7 +106,7 @@ class SemanticSearchEngine:
         """
         try:
             if self.index is None or self.model is None or not self.metadata:
-                self.logger.warning("Vector index or model not available, falling back to keyword search")
+                self.logger.debug("Vector index or model not available, falling back to keyword search")
                 return self._fallback_keyword_search(query, k)
 
             # 쿼리 벡터화
@@ -286,7 +286,7 @@ class SemanticSearchEngine:
 
             # 결과가 없으면 로그만 남기고 빈 리스트 반환 (Mock 결과 대신)
             if len(results) == 0:
-                self.logger.warning(f"No results found in database for query '{query}'")
+                self.logger.debug(f"No results found in database for query '{query}'")
                 return []
 
             return results[:k]
