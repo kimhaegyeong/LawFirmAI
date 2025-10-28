@@ -23,8 +23,8 @@ os.environ["USE_LANGGRAPH"] = "true"
 import streamlit as st
 
 # LangGraph 워크플로우 서비스만 사용
-from source.services.langgraph.workflow_service import LangGraphWorkflowService
-from source.utils.langgraph_config import LangGraphConfig
+from core.agents.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 로깅 설정
 logging.basicConfig(
