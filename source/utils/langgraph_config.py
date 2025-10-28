@@ -59,6 +59,12 @@ class LangGraphConfig:
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_debug: bool = False
 
+    # LangSmith 설정 (LangChain 모니터링)
+    langsmith_enabled: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "LawFirmAI"
+    langsmith_tracing: bool = True
+
     # RAG 품질 제어 설정
     similarity_threshold: float = 0.3  # 문서 유사도 임계값
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
@@ -67,6 +73,13 @@ class LangGraphConfig:
     # 통계 관리 설정
     enable_statistics: bool = True
     stats_update_alpha: float = 0.1  # 이동 평균 업데이트 계수
+
+    # State optimization settings (for reducing memory usage)
+    max_retrieved_docs: int = 10
+    max_document_content_length: int = 500
+    max_conversation_history: int = 5
+    max_processing_steps: int = 20
+    enable_state_pruning: bool = True
 
     @classmethod
     def from_env(cls) -> 'LangGraphConfig':
@@ -110,6 +123,12 @@ class LangGraphConfig:
         config.langfuse_host = os.getenv("LANGFUSE_HOST", config.langfuse_host)
         config.langfuse_debug = os.getenv("LANGFUSE_DEBUG", "false").lower() == "true"
 
+        # LangSmith 설정 (LangChain 환경 변수 사용)
+        config.langsmith_enabled = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+        config.langsmith_api_key = os.getenv("LANGCHAIN_API_KEY", config.langsmith_api_key)
+        config.langsmith_project = os.getenv("LANGCHAIN_PROJECT", config.langsmith_project)
+        config.langsmith_tracing = os.getenv("LANGCHAIN_TRACING", "true").lower() == "true"
+
         # RAG 품질 제어 설정
         config.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", config.similarity_threshold))
         config.max_context_length = int(os.getenv("MAX_CONTEXT_LENGTH", config.max_context_length))
@@ -119,7 +138,14 @@ class LangGraphConfig:
         config.enable_statistics = os.getenv("ENABLE_STATISTICS", "true").lower() == "true"
         config.stats_update_alpha = float(os.getenv("STATS_UPDATE_ALPHA", config.stats_update_alpha))
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}")
+        # State optimization settings
+        config.max_retrieved_docs = int(os.getenv("MAX_RETRIEVED_DOCS", config.max_retrieved_docs))
+        config.max_document_content_length = int(os.getenv("MAX_DOCUMENT_CONTENT_LENGTH", config.max_document_content_length))
+        config.max_conversation_history = int(os.getenv("MAX_CONVERSATION_HISTORY", config.max_conversation_history))
+        config.max_processing_steps = int(os.getenv("MAX_PROCESSING_STEPS", config.max_processing_steps))
+        config.enable_state_pruning = os.getenv("ENABLE_STATE_PRUNING", "true").lower() == "true"
+
+        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}")
         return config
 
     def validate(self) -> List[str]:
@@ -158,10 +184,17 @@ class LangGraphConfig:
             "ollama_model": self.ollama_model,
             "ollama_timeout": self.ollama_timeout,
             "langgraph_enabled": self.langgraph_enabled,
+            "langfuse_enabled": self.langfuse_enabled,
+            "langsmith_enabled": self.langsmith_enabled,
             "similarity_threshold": self.similarity_threshold,
             "max_context_length": self.max_context_length,
             "max_tokens": self.max_tokens,
-            "enable_statistics": self.enable_statistics
+            "enable_statistics": self.enable_statistics,
+            "max_retrieved_docs": self.max_retrieved_docs,
+            "max_document_content_length": self.max_document_content_length,
+            "max_conversation_history": self.max_conversation_history,
+            "max_processing_steps": self.max_processing_steps,
+            "enable_state_pruning": self.enable_state_pruning
         }
 
 
