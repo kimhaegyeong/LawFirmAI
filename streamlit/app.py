@@ -51,6 +51,7 @@ from source.services.improved_answer_generator import ImprovedAnswerGenerator
 
 # Phase 1: 대화 맥락 강화 모듈
 from source.services.integrated_session_manager import IntegratedSessionManager
+from source.services.langgraph.workflow_service import LangGraphWorkflowService
 from source.services.legal_term_expander import LegalTermExpander
 
 # AKLS 모듈 (임시 비활성화)
@@ -60,7 +61,6 @@ from source.services.performance_monitor import PerformanceContext
 from source.services.performance_monitor import (
     PerformanceMonitor as SourcePerformanceMonitor,
 )
-from source.services.prompt_optimizer import create_prompt_optimizer
 from source.services.prompt_templates import PromptTemplateManager
 from source.services.question_classifier import QuestionClassifier, QuestionType
 from source.services.unified_prompt_manager import (
@@ -76,6 +76,7 @@ from source.services.user_profile_manager import (
     UserProfileManager,
 )
 from source.utils.config import Config
+from source.utils.langgraph_config import LangGraphConfig
 
 # 로깅 설정
 logging.basicConfig(
@@ -181,7 +182,6 @@ class StreamlitApp:
         self.prompt_template_manager = None
         self.unified_prompt_manager = None
         self.dynamic_prompt_updater = None
-        self.prompt_optimizer = None
         self.confidence_calculator = None
         self.legal_term_expander = None
         self.gemini_client = None
@@ -191,6 +191,9 @@ class StreamlitApp:
 
         # ChatService 초기화 (LangGraph 통합)
         self.chat_service = None
+
+        # LangGraph 워크플로우 서비스
+        self.langgraph_workflow = None
 
         # Phase 1: 대화 맥락 강화 컴포넌트
         self.session_manager = None
@@ -261,10 +264,6 @@ class StreamlitApp:
                 # 동적 프롬프트 업데이터
                 self.dynamic_prompt_updater = create_dynamic_prompt_updater(self.unified_prompt_manager)
                 self.logger.info("Dynamic prompt updater initialized")
-
-                # 프롬프트 최적화기
-                self.prompt_optimizer = create_prompt_optimizer(self.unified_prompt_manager)
-                self.logger.info("Prompt optimizer initialized")
 
                 # 신뢰도 계산기 초기화
                 self.confidence_calculator = ConfidenceCalculator()
