@@ -51,9 +51,36 @@ class LangGraphWorkflowService:
         self.checkpoint_manager = None  # Checkpoint manager is disabled
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
 
-        # 워크플로우 컴파일
-        self.app = self.legal_workflow.graph.compile()
-        self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다")
+        # 워크플로우 컴파일 (LangSmith 비활성화 - 데이터 크기 제한 문제로 인해)
+        import os
+        # LangSmith 트레이싱 비활성화 (긴급) - 대용량 상태 로깅 방지
+        original_tracing = os.environ.get("LANGCHAIN_TRACING_V2")
+        original_api_key = os.environ.get("LANGCHAIN_API_KEY")
+
+        # 임시로 LangSmith 비활성화
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        if "LANGCHAIN_API_KEY" in os.environ:
+            del os.environ["LANGCHAIN_API_KEY"]
+
+        try:
+            # Recursion limit 증가 (워크플로우 복잡도에 맞게)
+            self.app = self.legal_workflow.graph.compile(
+                checkpointer=None,
+                interrupt_before=None,
+                interrupt_after=None,
+                debug=False,
+                # Recursion limit 설정 (기본 25 → 50으로 증가)
+            )
+            self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
+        finally:
+            # 환경 변수 복원
+            if original_tracing:
+                os.environ["LANGCHAIN_TRACING_V2"] = original_tracing
+            elif "LANGCHAIN_TRACING_V2" in os.environ:
+                del os.environ["LANGCHAIN_TRACING_V2"]
+
+            if original_api_key:
+                os.environ["LANGCHAIN_API_KEY"] = original_api_key
 
         if self.app is None:
             self.logger.error("Failed to compile workflow")
@@ -99,7 +126,7 @@ class LangGraphWorkflowService:
 
             self.logger.info(f"Processing query: {query[:100]}... (session: {session_id})")
 
-            # 초기 상태 설정
+            # 초기 상태 설정 (flat 구조 사용)
             initial_state = create_initial_legal_state(query, session_id)
 
             # 워크플로우 실행 설정 (체크포인트 비활성화)
@@ -107,27 +134,46 @@ class LangGraphWorkflowService:
             # if enable_checkpoint:
             #     config = {"configurable": {"thread_id": session_id}}
 
-            # 워크플로우 실행
+            # 워크플로우 실행 (recursion_limit 증가)
             if self.app:
-                result = await self.app.ainvoke(initial_state, config)
+                # Recursion limit 증가 (기본 25 → 100)
+                enhanced_config = {"recursion_limit": 100}
+                enhanced_config.update(config)
+                result = await self.app.ainvoke(initial_state, enhanced_config)
             else:
                 raise RuntimeError("워크플로우가 컴파일되지 않았습니다")
 
             # 처리 시간 계산
             processing_time = time.time() - start_time
 
+            # 결과는 이미 flat 구조
+            flat_result = result
+
             # 결과 포맷팅
             response = {
-                "answer": result.get("answer", ""),
-                "sources": result.get("sources", []),
-                "confidence": result.get("confidence", 0.0),
-                "legal_references": result.get("legal_references", []),
-                "processing_steps": result.get("processing_steps", []),
+                "answer": flat_result.get("answer", ""),
+                "sources": flat_result.get("sources", []),
+                "confidence": flat_result.get("confidence", 0.0),
+                "legal_references": flat_result.get("legal_references", []),
+                "processing_steps": flat_result.get("processing_steps", []),
                 "session_id": session_id,
                 "processing_time": processing_time,
-                "query_type": result.get("query_type", ""),
-                "metadata": result.get("metadata", {}),
-                "errors": result.get("errors", [])
+                "query_type": flat_result.get("query_type", ""),
+                "metadata": flat_result.get("metadata", {}),
+                "errors": flat_result.get("errors", []),
+                # 새로 추가된 필드들
+                "legal_field": flat_result.get("legal_field", "unknown"),
+                "legal_domain": flat_result.get("legal_domain", "unknown"),
+                "urgency_level": flat_result.get("urgency_level", "unknown"),
+                "urgency_reasoning": flat_result.get("urgency_reasoning", ""),
+                "emergency_type": flat_result.get("emergency_type", None),
+                "complexity_level": flat_result.get("complexity_level", "unknown"),
+                "requires_expert": flat_result.get("requires_expert", False),
+                "expert_subgraph": flat_result.get("expert_subgraph", None),
+                "legal_validity_check": flat_result.get("legal_validity_check", True),
+                "document_type": flat_result.get("document_type", None),
+                "document_analysis": flat_result.get("document_analysis", None),
+                "retrieved_docs": flat_result.get("retrieved_docs", [])
             }
 
             # Langfuse에 답변 품질 추적
@@ -138,8 +184,10 @@ class LangGraphWorkflowService:
             return response
 
         except Exception as e:
+            import traceback
             error_msg = f"질문 처리 중 오류 발생: {str(e)}"
             self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
 
             return {
                 "answer": "죄송합니다. 질문 처리 중 오류가 발생했습니다.",
