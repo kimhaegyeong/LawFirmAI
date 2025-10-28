@@ -554,7 +554,7 @@ class AnswerStructureEnhancer:
             traceback.print_exc()
             return {"error": str(e)}
 
-    def _map_question_type(self, question_type: str, question: str) -> QuestionType:
+    def _map_question_type(self, question_type: any, question: str) -> QuestionType:
         """질문 유형 매핑"""
         try:
             # 명시적 질문 유형 처리
@@ -575,9 +575,14 @@ class AnswerStructureEnhancer:
             # 폴백: 기존 방식 사용
             return self._map_question_type_fallback(question_type, question)
 
-    def _handle_explicit_question_type(self, question_type: str) -> QuestionType:
+    def _handle_explicit_question_type(self, question_type: any) -> QuestionType:
         """명시적 질문 유형 처리"""
-        if not question_type or question_type.lower() == "general":
+        # QuestionType enum인 경우 value 사용
+        if isinstance(question_type, QuestionType):
+            return question_type
+
+        # 문자열인 경우 처리
+        if not question_type or (isinstance(question_type, str) and question_type.lower() == "general"):
             return QuestionType.GENERAL_QUESTION
 
         # 명시적 매핑
@@ -595,260 +600,47 @@ class AnswerStructureEnhancer:
             'general_question': QuestionType.GENERAL_QUESTION
         }
 
-        return explicit_mapping.get(question_type.lower(), QuestionType.GENERAL_QUESTION)
+        # 문자열 변환
+        if isinstance(question_type, str):
+            return explicit_mapping.get(question_type.lower(), QuestionType.GENERAL_QUESTION)
 
-    def _map_with_database_keywords(self, question: str, db_manager) -> QuestionType:
-        """개선된 데이터베이스 기반 키워드 매핑"""
-        try:
-            question_lower = question.lower()
-            question_words = set(question_lower.split())
+        return QuestionType.GENERAL_QUESTION
 
-            # 법조문 패턴 우선 체크
-            if re.search(r'제\d+조|제\d+항|제\d+호', question):
-                # 법령명과 함께 나타나는지 확인
-                law_names = ['민법', '형법', '근로기준법', '상법', '행정법']
-                if any(law_name in question_lower for law_name in law_names):
-                    return QuestionType.LAW_INQUIRY
+    # 사용되지 않는 데이터베이스 기반 메서드들 제거됨
+    # 실제 구현에서는 하드코딩된 키워드 매칭 방식 사용
 
-            # 모든 질문 유형에 대해 점수 계산
-            scores = {}
-            question_types = db_manager.get_all_question_types()
-
-            for qt_info in question_types:
-                question_type = qt_info['type_name']
-
-                # 법률 문의에 특별 가중치 적용
-                if question_type == "law_inquiry":
-                    score = self._calculate_law_inquiry_score(question_lower, question_words, db_manager)
-                else:
-                    score = self._calculate_normal_score(question_type, question_lower, question_words, db_manager)
-
-                scores[question_type] = score
-
-            # 최고 점수 질문 유형 반환
-            if scores:
-                best_match = max(scores.items(), key=lambda x: x[1])
-                if best_match[1] >= 2.0:  # 최소 임계값
-                    try:
-                        return QuestionType(best_match[0])
-                    except ValueError:
-                        pass
-
-            return QuestionType.GENERAL_QUESTION
-
-        except Exception as e:
-            print(f"Database keyword mapping error: {e}")
-            return QuestionType.GENERAL_QUESTION
-
-    def _calculate_law_inquiry_score(self, question_lower: str, question_words: set, db_manager) -> float:
-        """법률 문의 전용 점수 계산 (데이터베이스 기반)"""
-        score = 0.0
-
-        # 데이터베이스에서 법률 문의 설정 조회
-        try:
-            config = self.template_db_manager.get_question_type_config("law_inquiry")
-            if config:
-                # 동적 법령명 조회
-                law_names = config.get('law_names', [])
-                for law_name in law_names:
-                    if law_name in question_lower:
-                        score += 4.0
-
-                # 동적 질문어 조회
-                question_words_special = config.get('question_words', [])
-                for word in question_words_special:
-                    if word in question_lower:
-                        score += 3.0
-
-                # 특별 키워드 조회
-                special_keywords = config.get('special_keywords', [])
-                for keyword in special_keywords:
-                    if keyword in question_lower:
-                        score += 2.0
-
-                # 보너스 점수 적용
-                bonus_score = config.get('bonus_score', 0.0)
-                if bonus_score > 0:
-                    score += bonus_score
-        except Exception as e:
-            print(f"Failed to get law_inquiry config: {e}")
-            # 폴백: 하드코딩된 값 사용
-            law_names = ['민법', '형법', '근로기준법', '상법', '행정법']
-            for law_name in law_names:
-                if law_name in question_lower:
-                    score += 4.0
-
-            question_words_special = ['내용', '규정', '기준', '처벌', '얼마', '몇', '언제']
-            for word in question_words_special:
-                if word in question_lower:
-                    score += 3.0
-
-        # 법조문 패턴 보너스
-        if re.search(r'제\d+조|제\d+항|제\d+호', question_lower):
-            score += 5.0
-
-        # 일반 키워드 점수
-        keywords = db_manager.get_keywords_for_type("law_inquiry", limit=50)
-        for kw in keywords:
-            if kw['keyword'].lower() in question_words:
-                score += kw['weight_value']
-            elif kw['keyword'].lower() in question_lower:
-                score += kw['weight_value'] * 0.7
-
-        return score
-
-    def _calculate_normal_score(self, question_type: str, question_lower: str, question_words: set, db_manager) -> float:
-        """일반 질문 유형 점수 계산"""
-        score = 0.0
-
-        # 각 가중치 레벨별로 키워드 조회
-        high_keywords = db_manager.get_keywords_for_type(question_type, 'high', 50)
-        medium_keywords = db_manager.get_keywords_for_type(question_type, 'medium', 50)
-        low_keywords = db_manager.get_keywords_for_type(question_type, 'low', 50)
-
-        # 고가중치 키워드
-        for kw in high_keywords:
-            if kw['keyword'].lower() in question_words:
-                score += kw['weight_value']
-            elif kw['keyword'].lower() in question_lower:
-                score += kw['weight_value'] * 0.7  # 부분 매칭
-
-        # 중가중치 키워드
-        for kw in medium_keywords:
-            if kw['keyword'].lower() in question_words:
-                score += kw['weight_value']
-            elif kw['keyword'].lower() in question_lower:
-                score += kw['weight_value'] * 0.7  # 부분 매칭
-
-        # 저가중치 키워드
-        for kw in low_keywords:
-            if kw['keyword'].lower() in question_words:
-                score += kw['weight_value']
-            elif kw['keyword'].lower() in question_lower:
-                score += kw['weight_value'] * 0.7  # 부분 매칭
-
-        return score
-
-    def _resolve_keyword_conflicts(self, question_lower: str, scores: Dict[str, float]) -> str:
-        """동적 키워드 충돌 해결 (데이터베이스 기반)"""
-        try:
-            # 데이터베이스에서 충돌 해결 규칙 조회
-            conflict_rules = self.template_db_manager.get_conflict_resolution_rules()
-
-            # 각 충돌 규칙 적용
-            for conflict_type, rule in conflict_rules.items():
-                target_type = rule['target_type']
-                keywords = rule['keywords']
-                bonus_score = rule['bonus_score']
-
-                # 충돌하는 질문 유형이 모두 점수가 있는지 확인
-                if self._should_apply_conflict_rule(conflict_type, scores):
-                    if any(word in question_lower for word in keywords):
-                        scores[target_type] += bonus_score
-
-            # 기존 하드코딩된 충돌 해결 로직 (폴백)
-            self._apply_fallback_conflict_rules(question_lower, scores)
-
-        except Exception as e:
-            print(f"Failed to resolve conflicts with database rules: {e}")
-            # 폴백: 기존 하드코딩된 규칙 사용
-            self._apply_fallback_conflict_rules(question_lower, scores)
-
-        return max(scores.items(), key=lambda x: x[1])[0]
-
-    def _should_apply_conflict_rule(self, conflict_type: str, scores: Dict[str, float]) -> bool:
-        """충돌 규칙 적용 여부 확인"""
-        # 충돌 유형에서 관련 질문 유형들 추출
-        if "law_inquiry_vs_" in conflict_type:
-            target_type = conflict_type.replace("law_inquiry_vs_", "")
-            return "law_inquiry" in scores and target_type in scores
-
-        return False
-
-    def _apply_fallback_conflict_rules(self, question_lower: str, scores: Dict[str, float]):
-        """폴백 충돌 해결 규칙 적용"""
-        # 법률 문의 vs 계약서 검토 충돌 해결
-        if "law_inquiry" in scores and "contract_review" in scores:
-            if any(word in question_lower for word in ['계약서', '계약', '조항', '검토', '수정', '불리한']):
-                scores["contract_review"] += 3.0
-
-        # 법률 문의 vs 노동 분쟁 충돌 해결
-        if "law_inquiry" in scores and "labor_dispute" in scores:
-            if any(word in question_lower for word in ['노동', '근로', '임금', '해고', '부당해고', '임금체불', '근로시간']):
-                scores["labor_dispute"] += 3.0
-            elif re.search(r'제\d+조|제\d+항|제\d+호', question_lower):
-                scores["law_inquiry"] += 2.0
-
-        # 법률 문의 vs 상속 절차 충돌 해결
-        if "law_inquiry" in scores and "inheritance_procedure" in scores:
-            if any(word in question_lower for word in ['상속', '유산', '상속인', '상속세', '유언']):
-                scores["inheritance_procedure"] += 3.0
-
-        # 법률 문의 vs 절차 안내 충돌 해결
-        if "law_inquiry" in scores and "procedure_guide" in scores:
-            if any(word in question_lower for word in ['절차', '신청', '방법', '어떻게', '소액사건', '민사조정', '이혼조정']):
-                scores["procedure_guide"] += 3.0
-
-        # 법률 문의 vs 일반 질문 충돌 해결
-        if "law_inquiry" in scores and "general_question" in scores:
-            if any(word in question_lower for word in ['어디서', '얼마나', '비용', '상담', '변호사', '소송', '제기']):
-                scores["general_question"] += 3.0
-
-    def _map_with_database_patterns(self, question: str, db_manager) -> QuestionType:
-        """데이터베이스 기반 패턴 매칭"""
-        try:
-            import re
-
-            question_types = db_manager.get_all_question_types()
-
-            for qt_info in question_types:
-                question_type = qt_info['type_name']
-                patterns = db_manager.get_patterns_for_type(question_type)
-
-                for pattern_info in patterns:
-                    try:
-                        if pattern_info['pattern_type'] == 'regex':
-                            if re.search(pattern_info['pattern'], question, re.IGNORECASE):
-                                return QuestionType(question_type)
-                        elif pattern_info['pattern_type'] == 'keyword':
-                            if pattern_info['pattern'].lower() in question.lower():
-                                return QuestionType(question_type)
-                        elif pattern_info['pattern_type'] == 'phrase':
-                            if pattern_info['pattern'].lower() in question.lower():
-                                return QuestionType(question_type)
-                    except ValueError:
-                        continue  # 잘못된 QuestionType 무시
-
-            return QuestionType.GENERAL_QUESTION
-
-        except Exception as e:
-            print(f"Database pattern mapping error: {e}")
-            return QuestionType.GENERAL_QUESTION
-
-    def _map_question_type_fallback(self, question_type: str, question: str) -> QuestionType:
+    def _map_question_type_fallback(self, question_type: any, question: str) -> QuestionType:
         """폴백 질문 유형 매핑 (기존 방식)"""
         question_lower = question.lower()
 
+        # question_type을 문자열로 변환
+        if isinstance(question_type, QuestionType):
+            question_type_str = question_type.value if hasattr(question_type, 'value') else str(question_type)
+        elif isinstance(question_type, str):
+            question_type_str = question_type.lower()
+        else:
+            question_type_str = str(question_type).lower()
+
         # 키워드 기반 매핑
-        if "판례" in question or "precedent" in question_type:
+        if "판례" in question or "precedent" in question_type_str:
             return QuestionType.PRECEDENT_SEARCH
-        elif "계약서" in question or "contract" in question_type:
+        elif "계약서" in question or "contract" in question_type_str:
             return QuestionType.CONTRACT_REVIEW
-        elif "이혼" in question or "divorce" in question_type:
+        elif "이혼" in question or "divorce" in question_type_str:
             return QuestionType.DIVORCE_PROCEDURE
-        elif "상속" in question or "inheritance" in question_type:
+        elif "상속" in question or "inheritance" in question_type_str:
             return QuestionType.INHERITANCE_PROCEDURE
-        elif "범죄" in question or "criminal" in question_type:
+        elif "범죄" in question or "criminal" in question_type_str:
             return QuestionType.CRIMINAL_CASE
-        elif "노동" in question or "labor" in question_type:
+        elif "노동" in question or "labor" in question_type_str:
             return QuestionType.LABOR_DISPUTE
-        elif "절차" in question or "procedure" in question_type:
+        elif "절차" in question or "procedure" in question_type_str:
             return QuestionType.PROCEDURE_GUIDE
-        elif "용어" in question or "term" in question_type:
+        elif "용어" in question or "term" in question_type_str:
             return QuestionType.TERM_EXPLANATION
-        elif "조언" in question or "advice" in question_type:
+        elif "조언" in question or "advice" in question_type_str:
             return QuestionType.LEGAL_ADVICE
-        elif "법률" in question or "law" in question_type:
+        elif "법률" in question or "law" in question_type_str:
             return QuestionType.LAW_INQUIRY
         else:
             return QuestionType.GENERAL_QUESTION
