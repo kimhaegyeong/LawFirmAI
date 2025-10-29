@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from core.services.enhancement.confidence_calculator import ConfidenceInfo
-
-from .question_classifier import QuestionType
+from core.services.search.question_classifier import QuestionType
 
 logger = logging.getLogger(__name__)
 

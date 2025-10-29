@@ -43,13 +43,6 @@ except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
     logging.warning("SentenceTransformers not available. Please install sentence-transformers")
 
-# FlagEmbedding (BGE-M3) 관련 import
-try:
-    from FlagEmbedding import FlagModel, FlagReranker
-    FLAG_EMBEDDING_AVAILABLE = True
-except ImportError:
-    FLAG_EMBEDDING_AVAILABLE = False
-    logging.warning("FlagEmbedding not available. Please install FlagEmbedding")
 
 # PyTorch 관련 import (양자화용)
 try:
@@ -75,7 +68,7 @@ class LegalVectorStore:
         벡터 스토어 초기화
 
         Args:
-            model_name: 사용할 임베딩 모델명 (Sentence-BERT 또는 BGE-M3)
+            model_name: 사용할 임베딩 모델명 (Sentence-BERT)
             dimension: 벡터 차원
             index_type: FAISS 인덱스 타입 ("flat", "ivf", "hnsw")
             enable_quantization: Float16 양자화 활성화
@@ -115,12 +108,10 @@ class LegalVectorStore:
         self._last_memory_check = time.time()
         self._memory_check_interval = 30  # 30초마다 메모리 체크
 
-        # 모델 타입 감지
-        self.is_bge_model = "bge-m3" in model_name.lower()
 
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"LegalVectorStore initialized with model: {model_name}")
-        self.logger.info(f"Model type: {'BGE-M3' if self.is_bge_model else 'Sentence-BERT'}")
+        self.logger.info(f"Model type: Sentence-BERT")
         self.logger.info(f"Device: {self.device}")
         self.logger.info(f"Quantization: {'Enabled' if enable_quantization else 'Disabled'}")
         self.logger.info(f"Lazy Loading: {'Enabled' if enable_lazy_loading else 'Disabled'}")
@@ -181,50 +172,33 @@ class LegalVectorStore:
                 return
 
             try:
-                if self.is_bge_model:
-                    # BGE-M3 모델 로딩
-                    if not FLAG_EMBEDDING_AVAILABLE:
-                        raise ImportError("FlagEmbedding is required for BGE-M3 models but not installed")
+                # Sentence-BERT 모델 로딩
+                if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                    raise ImportError("SentenceTransformers is required but not installed")
 
-                    self.model = FlagModel(self.model_name, query_instruction_for_retrieval="")
-
-                    # GPU 사용
-                    if self.device == "cuda" and TORCH_AVAILABLE:
-                        try:
-                            if hasattr(self.model, 'to'):
-                                self.model = self.model.to("cuda")
-                        except Exception as e:
-                            self.logger.warning(f"GPU not available for BGE-M3: {e}")
-
-                    self.logger.info(f"BGE-M3 model loaded: {self.model_name} on {self.device}")
+                # GPU 사용 여부에 따라 모델 로딩
+                # safetensors 우선 사용 (PyTorch 보안 취약점 회피)
+                if self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
+                    self.model = SentenceTransformer(self.model_name, device="cuda")
+                    self.logger.info("Model loaded on GPU")
                 else:
-                    # Sentence-BERT 모델 로딩
-                    if not SENTENCE_TRANSFORMERS_AVAILABLE:
-                        raise ImportError("SentenceTransformers is required but not installed")
+                    self.model = SentenceTransformer(self.model_name)
+                    self.logger.info("Model loaded on CPU")
 
-                    # GPU 사용 여부에 따라 모델 로딩
-                    # safetensors 우선 사용 (PyTorch 보안 취약점 회피)
-                    if self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
-                        self.model = SentenceTransformer(self.model_name, device="cuda")
-                        self.logger.info("Model loaded on GPU")
-                    else:
-                        self.model = SentenceTransformer(self.model_name)
-                        self.logger.info("Model loaded on CPU")
+                # Float16 양자화 적용
+                if self.enable_quantization and TORCH_AVAILABLE:
+                    try:
+                        # 모델의 모든 파라미터를 Float16으로 변환
+                        if hasattr(self.model, 'model') and hasattr(self.model.model, 'half'):
+                            self.model.model = self.model.model.half()
+                            self.logger.info("Model quantized to Float16")
+                        elif hasattr(self.model, 'half'):
+                            self.model = self.model.half()
+                            self.logger.info("Model quantized to Float16")
+                    except Exception as e:
+                        self.logger.warning(f"Quantization failed: {e}")
 
-                    # Float16 양자화 적용
-                    if self.enable_quantization and TORCH_AVAILABLE:
-                        try:
-                            # 모델의 모든 파라미터를 Float16으로 변환
-                            if hasattr(self.model, 'model') and hasattr(self.model.model, 'half'):
-                                self.model.model = self.model.model.half()
-                                self.logger.info("Model quantized to Float16")
-                            elif hasattr(self.model, 'half'):
-                                self.model = self.model.half()
-                                self.logger.info("Model quantized to Float16")
-                        except Exception as e:
-                            self.logger.warning(f"Quantization failed: {e}")
-
-                    self.logger.info(f"Sentence-BERT model loaded: {self.model_name}")
+                self.logger.info(f"Sentence-BERT model loaded: {self.model_name}")
 
                 self._model_loaded = True
 

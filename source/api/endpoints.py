@@ -222,8 +222,8 @@ def setup_routes(app, config: Config):
     # Initialize ML-enhanced services
     database = DatabaseManager(config.database_url)
     vector_store = LegalVectorStore(
-        model_name="BAAI/bge-m3",
-        dimension=1024,
+        model_name="jhgan/ko-sroberta-multitask",
+        dimension=768,
         index_type="flat"
     )
     model_manager = LegalModelManager(config)
