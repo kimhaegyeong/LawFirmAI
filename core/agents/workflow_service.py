@@ -5,6 +5,7 @@ LangGraph Workflow Service
 """
 
 import logging
+import os
 import sys
 import time
 import uuid
@@ -15,6 +16,15 @@ from typing import Any, Dict, List, Optional
 # 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+# .env 파일 로드 (python-dotenv 패키지 필요)
+try:
+    from dotenv import load_dotenv
+    # 프로젝트 루트에서 .env 파일 로드
+    load_dotenv(dotenv_path=str(project_root / ".env"))
+except ImportError:
+    # python-dotenv가 설치되지 않은 경우 경고만 출력하고 계속 진행
+    logging.warning("python-dotenv not installed. .env file will not be loaded.")
 
 from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 from infrastructure.utils.langgraph_config import LangGraphConfig
@@ -57,36 +67,48 @@ class LangGraphWorkflowService:
         self.checkpoint_manager = None  # Checkpoint manager is disabled
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
 
-        # 워크플로우 컴파일 (LangSmith 비활성화 - 데이터 크기 제한 문제로 인해)
+        # LangSmith 활성화 여부 확인 (환경 변수로 제어 가능)
         import os
-        # LangSmith 트레이싱 비활성화 (긴급) - 대용량 상태 로깅 방지
-        original_tracing = os.environ.get("LANGCHAIN_TRACING_V2")
-        original_api_key = os.environ.get("LANGCHAIN_API_KEY")
+        enable_langsmith = os.environ.get("ENABLE_LANGSMITH", "false").lower() == "true"
 
-        # 임시로 LangSmith 비활성화
-        os.environ["LANGCHAIN_TRACING_V2"] = "false"
-        if "LANGCHAIN_API_KEY" in os.environ:
-            del os.environ["LANGCHAIN_API_KEY"]
+        if not enable_langsmith:
+            # LangSmith 비활성화 모드 (기본값) - State Reduction으로 최적화된 후에도 기본은 비활성화
+            # LangSmith 트레이싱 비활성화 (긴급) - 대용량 상태 로깅 방지
+            original_tracing = os.environ.get("LANGCHAIN_TRACING_V2")
+            original_api_key = os.environ.get("LANGCHAIN_API_KEY")
 
-        try:
-            # Recursion limit 증가 (워크플로우 복잡도에 맞게)
+            # 임시로 LangSmith 비활성화
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+            if "LANGCHAIN_API_KEY" in os.environ:
+                del os.environ["LANGCHAIN_API_KEY"]
+
+            try:
+                # 워크플로우 컴파일
+                self.app = self.legal_workflow.graph.compile(
+                    checkpointer=None,
+                    interrupt_before=None,
+                    interrupt_after=None,
+                    debug=False,
+                )
+                self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
+            finally:
+                # 환경 변수 복원
+                if original_tracing:
+                    os.environ["LANGCHAIN_TRACING_V2"] = original_tracing
+                elif "LANGCHAIN_TRACING_V2" in os.environ:
+                    del os.environ["LANGCHAIN_TRACING_V2"]
+
+                if original_api_key:
+                    os.environ["LANGCHAIN_API_KEY"] = original_api_key
+        else:
+            # LangSmith 활성화 모드 (ENABLE_LANGSMITH=true로 설정된 경우)
             self.app = self.legal_workflow.graph.compile(
                 checkpointer=None,
                 interrupt_before=None,
                 interrupt_after=None,
                 debug=False,
-                # Recursion limit 설정 (기본 25 → 50으로 증가)
             )
-            self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
-        finally:
-            # 환경 변수 복원
-            if original_tracing:
-                os.environ["LANGCHAIN_TRACING_V2"] = original_tracing
-            elif "LANGCHAIN_TRACING_V2" in os.environ:
-                del os.environ["LANGCHAIN_TRACING_V2"]
-
-            if original_api_key:
-                os.environ["LANGCHAIN_API_KEY"] = original_api_key
+            self.logger.info("워크플로우가 LangSmith 추적으로 컴파일되었습니다 (State Reduction 적용됨)")
 
         if self.app is None:
             self.logger.error("Failed to compile workflow")
@@ -142,8 +164,9 @@ class LangGraphWorkflowService:
 
             # 워크플로우 실행 (recursion_limit 증가)
             if self.app:
-                # Recursion limit 증가 (기본 25 → 100)
-                enhanced_config = {"recursion_limit": 100}
+                # Recursion limit 증가 (재시도 로직 개선으로 인해 더 높게 설정)
+                # 재시도 최대 3회 + 각 단계별 노드 실행을 고려하여 여유있게 설정
+                enhanced_config = {"recursion_limit": 200}
                 enhanced_config.update(config)
                 result = await self.app.ainvoke(initial_state, enhanced_config)
             else:

@@ -1,0 +1,452 @@
+# -*- coding: utf-8 -*-
+"""
+LangGraph 노드별 Input/Output 사양 정의
+각 노드가 사용하는 입력 데이터와 출력 데이터를 명확히 정의
+
+효과:
+- 메모리 사용량 최적화: 필요한 데이터만 전달
+- 타입 안전성 향상: 런타임 검증
+- 디버깅 용이: 명확한 Input/Output
+- 문서화: 각 노드의 역할 명확화
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
+
+
+class NodeCategory(str, Enum):
+    """노드 카테고리"""
+    INPUT = "input"
+    CLASSIFICATION = "classification"
+    SEARCH = "search"
+    GENERATION = "generation"
+    VALIDATION = "validation"
+    ENHANCEMENT = "enhancement"
+    CONTROL = "control"
+
+
+@dataclass
+class NodeIOSpec:
+    """노드별 Input/Output 사양"""
+    node_name: str
+    category: NodeCategory
+    description: str
+    required_input: Dict[str, str]  # {필드명: 설명}
+    optional_input: Dict[str, str]
+    output: Dict[str, str]
+    required_state_groups: Set[str]  # 필요한 State 그룹
+    output_state_groups: Set[str]  # 출력되는 State 그룹
+
+    def validate_input(self, state: Dict) -> tuple[bool, Optional[str]]:
+        """Input 유효성 검증"""
+        missing_fields = []
+        for field in self.required_input:
+            if self._check_field_in_state(field, state):
+                continue
+            missing_fields.append(field)
+
+        if missing_fields:
+            return False, f"Missing required fields in {self.node_name}: {missing_fields}"
+        return True, None
+
+    def _check_field_in_state(self, field: str, state: Dict) -> bool:
+        """State에서 필드 존재 확인 (nested/flat 모두 지원)"""
+        # Nested 구조 확인
+        if "input" in state and isinstance(state["input"], dict) and field in state.get("input", {}):
+            return True
+
+        # Flat 구조 확인
+        if field in state:
+            return True
+
+        # Search, Answer 등 그룹 내 확인
+        for group in ["search", "answer", "classification", "validation", "control", "common"]:
+            if group in state and isinstance(state[group], dict) and field in state[group]:
+                return True
+
+        return False
+
+
+# ============================================
+# 노드별 Input/Output 사양 정의
+# ============================================
+
+NODE_SPECS: Dict[str, NodeIOSpec] = {
+    "classify_query": NodeIOSpec(
+        node_name="classify_query",
+        category=NodeCategory.CLASSIFICATION,
+        description="질문 유형 분류 및 법률 분야 판단",
+        required_input={
+            "query": "사용자 질문",
+        },
+        optional_input={
+            "conversation_history": "대화 이력",
+            "legal_field": "법률 분야 힌트"
+        },
+        output={
+            "query_type": "질문 유형",
+            "confidence": "신뢰도 점수",
+            "legal_field": "법률 분야",
+            "legal_domain": "법률 도메인"
+        },
+        required_state_groups={"input"},
+        output_state_groups={"classification"}
+    ),
+
+    "assess_urgency": NodeIOSpec(
+        node_name="assess_urgency",
+        category=NodeCategory.CLASSIFICATION,
+        description="질문의 긴급도 평가",
+        required_input={
+            "query": "사용자 질문",
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "legal_field": "법률 분야"
+        },
+        output={
+            "urgency_level": "긴급도 레벨 (low/medium/high/critical)",
+            "urgency_reasoning": "긴급도 평가 근거",
+            "emergency_type": "긴급 상황 유형"
+        },
+        required_state_groups={"input", "classification"},
+        output_state_groups={"classification"}
+    ),
+
+    "resolve_multi_turn": NodeIOSpec(
+        node_name="resolve_multi_turn",
+        category=NodeCategory.CLASSIFICATION,
+        description="멀티턴 대화 처리",
+        required_input={
+            "query": "사용자 질문"
+        },
+        optional_input={
+            "conversation_history": "대화 이력"
+        },
+        output={
+            "is_multi_turn": "멀티턴 여부",
+            "multi_turn_confidence": "멀티턴 확신도",
+            "conversation_history": "대화 이력",
+            "conversation_context": "대화 컨텍스트"
+        },
+        required_state_groups={"input", "classification"},
+        output_state_groups={"multi_turn"}
+    ),
+
+    "route_expert": NodeIOSpec(
+        node_name="route_expert",
+        category=NodeCategory.CLASSIFICATION,
+        description="전문가 라우팅 결정",
+        required_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형"
+        },
+        optional_input={
+            "legal_field": "법률 분야",
+            "urgency_level": "긴급도"
+        },
+        output={
+            "complexity_level": "복잡도 레벨 (simple/medium/complex)",
+            "requires_expert": "전문가 필요 여부",
+            "expert_subgraph": "전문가 서브그래프"
+        },
+        required_state_groups={"input", "classification"},
+        output_state_groups={"classification"}
+    ),
+
+    "analyze_document": NodeIOSpec(
+        node_name="analyze_document",
+        category=NodeCategory.CLASSIFICATION,
+        description="업로드된 문서 분석",
+        required_input={
+            "query": "사용자 질문"
+        },
+        optional_input={
+            "document_file": "업로드된 문서"
+        },
+        output={
+            "document_type": "문서 유형",
+            "document_analysis": "문서 분석 결과",
+            "key_clauses": "핵심 조항",
+            "potential_issues": "잠재적 문제점"
+        },
+        required_state_groups={"input"},
+        output_state_groups={"document"}
+    ),
+
+    "expand_keywords_ai": NodeIOSpec(
+        node_name="expand_keywords_ai",
+        category=NodeCategory.SEARCH,
+        description="AI 기반 키워드 확장",
+        required_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형"
+        },
+        optional_input={
+            "legal_field": "법률 분야",
+            "extracted_keywords": "기존 키워드"
+        },
+        output={
+            "search_query": "개선된 검색 쿼리",
+            "extracted_keywords": "추출된 키워드",
+            "ai_keyword_expansion": "AI 키워드 확장 결과"
+        },
+        required_state_groups={"input", "classification"},
+        output_state_groups={"search"}
+    ),
+
+    "retrieve_documents": NodeIOSpec(
+        node_name="retrieve_documents",
+        category=NodeCategory.SEARCH,
+        description="문서 검색 (하이브리드: 벡터 + 키워드)",
+        required_input={
+            "query": "사용자 질문",
+            "search_query": "검색 쿼리"
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "extracted_keywords": "키워드",
+            "legal_field": "법률 분야"
+        },
+        output={
+            "retrieved_docs": "검색된 문서 리스트",
+            "metadata.search": "검색 메타데이터"
+        },
+        required_state_groups={"input", "search", "classification"},
+        output_state_groups={"search"}
+    ),
+
+    "process_legal_terms": NodeIOSpec(
+        node_name="process_legal_terms",
+        category=NodeCategory.ENHANCEMENT,
+        description="법률 용어 처리 및 통합",
+        required_input={
+            "query": "사용자 질문",
+            "retrieved_docs": "검색된 문서"
+        },
+        optional_input={
+            "legal_field": "법률 분야"
+        },
+        output={
+            "legal_references": "법령 참조 리스트",
+            "legal_citations": "법령 인용 정보",
+            "analysis": "법률 분석 결과"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"analysis"}
+    ),
+
+    "generate_answer_enhanced": NodeIOSpec(
+        node_name="generate_answer_enhanced",
+        category=NodeCategory.GENERATION,
+        description="향상된 답변 생성 (LLM 활용)",
+        required_input={
+            "query": "사용자 질문",
+            "retrieved_docs": "검색된 문서"
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "legal_field": "법률 분야",
+            "analysis": "법률 분석",
+            "legal_references": "법령 참조"
+        },
+        output={
+            "answer": "생성된 답변",
+            "enhanced_answer": "향상된 답변",
+            "confidence": "신뢰도 점수",
+            "legal_references": "법령 참조",
+            "legal_citations": "법령 인용"
+        },
+        required_state_groups={"input", "search", "classification", "analysis"},
+        output_state_groups={"answer", "analysis"}
+    ),
+
+    "validate_answer_quality": NodeIOSpec(
+        node_name="validate_answer_quality",
+        category=NodeCategory.VALIDATION,
+        description="답변 품질 및 법령 검증",
+        required_input={
+            "answer": "생성된 답변",
+            "query": "원본 질문"
+        },
+        optional_input={
+            "retrieved_docs": "검색 문서",
+            "sources": "소스",
+            "legal_references": "법령 참조"
+        },
+        output={
+            "quality_check_passed": "품질 검증 통과 여부",
+            "quality_score": "품질 점수",
+            "legal_validity_check": "법령 검증",
+            "legal_basis_validation": "법적 근거 검증"
+        },
+        required_state_groups={"input", "answer", "search"},
+        output_state_groups={"validation", "control"}
+    ),
+
+    "enhance_answer_structure": NodeIOSpec(
+        node_name="enhance_answer_structure",
+        category=NodeCategory.ENHANCEMENT,
+        description="답변 구조화 및 법적 근거 강화",
+        required_input={
+            "answer": "생성된 답변",
+            "query_type": "질문 유형"
+        },
+        optional_input={
+            "legal_references": "법령 참조",
+            "legal_citations": "법령 인용",
+            "retrieved_docs": "검색 문서"
+        },
+        output={
+            "answer": "구조화된 답변",
+            "enhanced_answer": "향상된 답변",
+            "structure_confidence": "구조화 신뢰도"
+        },
+        required_state_groups={"input", "answer", "validation"},
+        output_state_groups={"answer"}
+    ),
+
+    "apply_visual_formatting": NodeIOSpec(
+        node_name="apply_visual_formatting",
+        category=NodeCategory.ENHANCEMENT,
+        description="시각적 포맷팅 적용",
+        required_input={
+            "answer": "답변",
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "legal_references": "법령 참조"
+        },
+        output={
+            "answer": "포맷팅된 답변"
+        },
+        required_state_groups={"answer"},
+        output_state_groups={"answer"}
+    ),
+
+    "prepare_final_response": NodeIOSpec(
+        node_name="prepare_final_response",
+        category=NodeCategory.GENERATION,
+        description="최종 응답 준비",
+        required_input={
+            "answer": "답변"
+        },
+        optional_input={
+            "sources": "소스",
+            "legal_references": "법령 참조",
+            "confidence": "신뢰도",
+            "legal_validity_check": "법령 검증 결과"
+        },
+        output={
+            "answer": "최종 답변",
+            "sources": "최종 소스",
+            "confidence": "최종 신뢰도"
+        },
+        required_state_groups={"answer", "validation", "control"},
+        output_state_groups={"answer", "common"}
+    )
+}
+
+
+# ============================================
+# 헬퍼 함수
+# ============================================
+
+def get_node_spec(node_name: str) -> Optional[NodeIOSpec]:
+    """노드별 사양 조회"""
+    return NODE_SPECS.get(node_name)
+
+
+def validate_node_input(node_name: str, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """
+    노드 Input 유효성 검증
+
+    Args:
+        node_name: 노드 이름
+        state: State 객체
+
+    Returns:
+        (is_valid, error_message) 튜플
+    """
+    spec = get_node_spec(node_name)
+    if not spec:
+        return True, None  # 사양이 없으면 검증 통과
+
+    return spec.validate_input(state)
+
+
+def get_required_state_groups(node_name: str) -> Set[str]:
+    """노드에 필요한 State 그룹 반환"""
+    spec = get_node_spec(node_name)
+    if spec:
+        return spec.required_state_groups
+    return set()
+
+
+def get_output_state_groups(node_name: str) -> Set[str]:
+    """노드가 출력하는 State 그룹 반환"""
+    spec = get_node_spec(node_name)
+    if spec:
+        return spec.output_state_groups
+    return set()
+
+
+def get_all_node_names() -> List[str]:
+    """모든 노드 이름 반환"""
+    return list(NODE_SPECS.keys())
+
+
+def get_nodes_by_category(category: NodeCategory) -> List[NodeIOSpec]:
+    """카테고리별 노드 반환"""
+    return [spec for spec in NODE_SPECS.values() if spec.category == category]
+
+
+# ============================================
+# 검증 및 디버깅
+# ============================================
+
+def validate_workflow_flow() -> Dict[str, Any]:
+    """전체 워크플로우 흐름 검증"""
+    issues = []
+
+    # 각 노드의 Input이 이전 노드의 Output과 일치하는지 확인
+    node_names = get_all_node_names()
+
+    for node_name in node_names:
+        spec = get_node_spec(node_name)
+        if not spec:
+            continue
+
+        # Required input 체크
+        for required_field in spec.required_input:
+            # 이전 노드에서 제공되는지 확인
+            found = False
+            for other_node in node_names:
+                if other_node == node_name:
+                    continue
+                other_spec = get_node_spec(other_node)
+                if other_spec and required_field in other_spec.output:
+                    found = True
+                    break
+
+            if not found and not required_field.startswith("query"):  # query는 초기 입력
+                issues.append(f"{node_name}: 필수 입력 '{required_field}'이 이전 노드에서 제공되지 않음")
+
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "total_nodes": len(node_names)
+    }
+
+
+if __name__ == "__main__":
+    # 검증 실행
+    result = validate_workflow_flow()
+    print(f"워크플로우 검증 결과: {'✅ Valid' if result['valid'] else '❌ Invalid'}")
+    print(f"총 노드 수: {result['total_nodes']}")
+
+    if result['issues']:
+        print("\n문제점:")
+        for issue in result['issues']:
+            print(f"  - {issue}")

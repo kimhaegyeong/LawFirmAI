@@ -8,9 +8,10 @@ State Adapter Layer
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .modular_states import LegalWorkflowState
+from .node_input_output_spec import validate_node_input
 
 logger = logging.getLogger(__name__)
 
@@ -263,3 +264,42 @@ def flatten_state(state: LegalWorkflowState) -> Dict[str, Any]:
     기존 API 호환성을 위해 제공되는 함수
     """
     return StateAdapter.to_flat(state)
+
+
+def validate_state_for_node(
+    state: Dict[str, Any],
+    node_name: str,
+    auto_convert: bool = True
+) -> tuple[bool, Optional[str], Dict[str, Any]]:
+    """
+    노드 실행 전 State 검증 및 변환
+
+    Args:
+        state: State 객체 (flat 또는 nested)
+        node_name: 노드 이름
+        auto_convert: 자동 변환 여부
+
+    Returns:
+        (is_valid, error_message, converted_state) 튜플
+    """
+    # 0. State가 딕셔너리인지 확인
+    if not isinstance(state, dict):
+        error_msg = (
+            f"State must be a dict for node {node_name}, "
+            f"got {type(state).__name__}"
+        )
+        logger.error(error_msg)
+        # 빈 딕셔너리 반환 (에러 발생 방지)
+        return False, error_msg, {}
+
+    # 1. 자동 변환 (필요한 경우)
+    converted_state = state
+    if auto_convert:
+        # Nested 구조가 아니면 변환
+        if "input" not in state or not isinstance(state.get("input"), dict):
+            converted_state = adapt_state(state)
+
+    # 2. Input 유효성 검증
+    is_valid, error = validate_node_input(node_name, converted_state)
+
+    return is_valid, error, converted_state
