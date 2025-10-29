@@ -124,7 +124,7 @@ LawFirmAI/
 # 현재 사용 중인 벡터 저장소
 vector_store_paths = [
     "data/embeddings/ml_enhanced_ko_sroberta",  # ko-sroberta 벡터
-    "data/embeddings/ml_enhanced_bge_m3",       # BGE-M3 벡터
+    "data/embeddings/ml_enhanced_ko_sroberta",       # ko-sroberta 벡터
 ]
 ```
 
@@ -223,6 +223,27 @@ required_env_vars = [
     "DATABASE_URL",        # 데이터베이스 URL
     "MODEL_PATH"           # 모델 경로
 ]
+```
+
+### .env.example 동기화 규칙 (필수)
+
+다음 규칙을 반드시 준수하세요. 누락 시 리뷰에서 변경 요청됩니다.
+
+- 신규/변경된 환경변수는 실제 `.env`에 추가하는 동시에 반드시 `.env.example`에도 동일 키를 추가합니다.
+- 민감한 값은 `.env.example`에는 비워두거나 예시값으로 대체합니다. 예: `OPENAI_API_KEY=your-api-key-here`
+- 불필요해진 환경변수 제거 시 `.env.example`에서도 함께 제거합니다.
+- PR에 환경변수 변경이 포함되면, 변경사항을 `docs/08_api_documentation`의 관련 문서 또는 README의 설정 섹션에도 간단히 반영합니다.
+- 로컬 실행 또는 배포 스크립트가 참조하는 키 목록은 `.env.example`와 불일치가 없도록 검증합니다.
+
+권장 템플릿 예시:
+```env
+# API Keys
+OPENAI_API_KEY=
+GOOGLE_API_KEY=
+
+# Application
+DATABASE_URL=sqlite:///./data/lawfirm.db
+MODEL_PATH=./models
 ```
 
 ## 🧪 테스트 규칙
@@ -336,4 +357,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 CMD ["python", "gradio/simple_langchain_app.py"]
 ```
-

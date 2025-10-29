@@ -62,7 +62,7 @@ python scripts/vector_embedding/test_faiss_direct.py
 
 ### 모델 설정
 - **기본 모델**: `jhgan/ko-sroberta-multitask` (768차원)
-- **대안 모델**: `BAAI/bge-m3` (1024차원)
+- **대안 모델**: `jhgan/ko-sroberta-multitask` (768차원)
 - **인덱스 타입**: `flat` (정확도 우선)
 
 ### 성능 설정
@@ -88,7 +88,7 @@ export LOG_LEVEL="INFO"
 | 모델 | 차원 | 처리 속도 | 메모리 사용량 |
 |------|------|-----------|---------------|
 | ko-sroberta-multitask | 768 | 1-2분/청크 | 190MB |
-| BGE-M3 | 1024 | 6-7분/청크 | 16.5GB |
+| ko-sroberta | 768 | 3-4분/청크 | 8.2GB |
 
 ### 최적화 결과
 - **처리 시간**: 5-7배 단축 (88시간 → 2시간 46분)
