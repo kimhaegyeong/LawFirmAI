@@ -60,7 +60,11 @@ class UnifiedPromptManager:
         self.question_type_templates = self._load_question_type_templates()
         self.model_optimizations = self._load_model_optimizations()
 
-        logger.info("UnifiedPromptManager initialized successfully")
+        try:
+            logger.info("UnifiedPromptManager initialized successfully")
+        except Exception:
+            # 로깅 오류를 무시하고 계속 진행
+            pass
 
     def _load_base_prompts(self) -> Dict[str, str]:
         """기본 프롬프트 로드"""
@@ -285,10 +289,13 @@ class UnifiedPromptManager:
 """
         return base_prompt + structure_guidance
 
-    def _optimize_context(self, base_prompt: str, context: Dict[str, Any], question_template: Dict[str, Any]) -> str:
+    def _optimize_context(self, base_prompt: str, context: Dict[str, Any], question_template: Optional[Dict[str, Any]]) -> str:
         """컨텍스트 최적화"""
         if not context:
             return base_prompt
+
+        if question_template is None:
+            question_template = {}
 
         max_length = question_template.get('max_context_length', 2000)
         context_keys = question_template.get('context_keys', [])
