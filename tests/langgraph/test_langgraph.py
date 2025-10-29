@@ -85,11 +85,34 @@ async def test_langgraph_workflow():
                 result = await workflow_service.process_query(query, session_id, enable_checkpoint=False)
                 processing_time = time.time() - start_time
 
-                # 결과 검증
-                has_answer = bool(result.get("answer"))
-                has_sources = bool(result.get("sources")) or bool(result.get("retrieved_docs"))
-                confidence = result.get("confidence", 0.0)
-                has_errors = len(result.get("errors", [])) > 0
+                # 결과 검증 (중첩 딕셔너리 안전하게 추출)
+                answer = result.get("answer", "") if isinstance(result, dict) else ""
+
+                # 중첩 딕셔너리에서 문자열 추출
+                if isinstance(answer, dict):
+                    depth = 0
+                    max_depth = 20
+                    while isinstance(answer, dict) and depth < max_depth:
+                        if "answer" in answer:
+                            answer = answer["answer"]
+                        elif "content" in answer:
+                            answer = answer["content"]
+                        elif "text" in answer:
+                            answer = answer["text"]
+                        else:
+                            answer = str(answer)
+                            break
+                        depth += 1
+                    if isinstance(answer, dict):
+                        answer = str(answer)
+
+                # 최종 문자열 보장
+                answer = str(answer) if not isinstance(answer, str) else answer
+                has_answer = bool(answer) and len(answer) > 0
+                has_sources = bool(result.get("sources") if isinstance(result, dict) else None) or bool(result.get("retrieved_docs") if isinstance(result, dict) else None)
+                confidence = result.get("confidence", 0.0) if isinstance(result, dict) else 0.0
+                errors = result.get("errors", []) if isinstance(result, dict) else []
+                has_errors = len(errors) > 0 if isinstance(errors, list) else False
 
                 # 성공 여부 판정
                 is_success = has_answer and not has_errors
@@ -98,7 +121,8 @@ async def test_langgraph_workflow():
                 # 결과 출력
                 logger.info(f"\n{result_status} 답변 생성 완료 (처리 시간: {processing_time:.2f}초)")
                 logger.info(f"   - 답변 유무: {'있음' if has_answer else '없음'}")
-                logger.info(f"   - 답변 길이: {len(result.get('answer', ''))}자")
+                answer_length = len(answer) if isinstance(answer, str) else 0
+                logger.info(f"   - 답변 길이: {answer_length}자")
                 logger.info(f"   - 소스 유무: {'있음' if has_sources else '없음'}")
                 logger.info(f"   - 신뢰도: {confidence:.2%}")
                 logger.info(f"   - 에러 유무: {'있음' if has_errors else '없음'}")
@@ -106,20 +130,25 @@ async def test_langgraph_workflow():
                 # stdout에도 출력 (버퍼링 방지)
                 print(f"\n{result_status} 질의 {i}/{len(test_queries)}: {query} (처리 시간: {processing_time:.2f}초)", flush=True)
                 print(f"   - 답변 유무: {'있음' if has_answer else '없음'}", flush=True)
-                print(f"   - 답변 길이: {len(result.get('answer', ''))}자", flush=True)
+                print(f"   - 답변 길이: {answer_length}자", flush=True)
                 print(f"   - 소스 유무: {'있음' if has_sources else '없음'}", flush=True)
                 print(f"   - 신뢰도: {confidence:.2%}", flush=True)
                 print(f"   - 에러 유무: {'있음' if has_errors else '없음'}", flush=True)
 
                 if has_answer:
                     logger.info(f"\n📝 답변 미리보기:")
-                    answer_preview = result.get("answer", "")[:200]
-                    logger.info(f"   {answer_preview}{'...' if len(result.get('answer', '')) > 200 else ''}")
+                    # answer가 문자열인지 확인
+                    if isinstance(answer, str):
+                        answer_preview = answer[:200]
+                        logger.info(f"   {answer_preview}{'...' if len(answer) > 200 else ''}")
+                    else:
+                        logger.info(f"   답변 타입: {type(answer).__name__}, 값: {answer}")
 
                 if has_errors:
                     logger.warning(f"\n⚠️ 에러 목록:")
                     print(f"   ⚠️ 에러 목록:", flush=True)
-                    for error in result.get("errors", [])[:5]:
+                    error_list = errors if isinstance(errors, list) else []
+                    for error in error_list[:5]:
                         logger.warning(f"   - {error}")
                         print(f"     - {error}", flush=True)
 
@@ -142,12 +171,13 @@ async def test_langgraph_workflow():
                     "success": is_success,
                     "processing_time": processing_time,
                     "confidence": confidence,
-                    "answer_length": len(result.get("answer", "")),
+                    "answer_length": answer_length,
                     "has_answer": has_answer,
                     "has_sources": has_sources,
                     "has_errors": has_errors,
-                    "errors": result.get("errors", []),
-                    "result_keys": list(result.keys()) if isinstance(result, dict) else []
+                    "errors": errors if isinstance(errors, list) else [],
+                    "result_keys": list(result.keys()) if isinstance(result, dict) else [],
+                    "result_type": type(result).__name__
                 }
                 results.append(test_result)
 

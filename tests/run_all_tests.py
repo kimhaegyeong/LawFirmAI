@@ -24,6 +24,8 @@ TEST_CATEGORIES = {
         "test_all_state_systems.py",
         "test_core_state_systems.py",
         "test_state_reduction_performance.py",
+        "test_state_reduction.py",
+        "test_state_reduction_manual.py",
         "test_monitoring_switch_basic.py",
         "test_profile_loading.py",
         "test_with_monitoring_switch.py",
