@@ -149,9 +149,43 @@ class LangGraphWorkflowService:
             # 결과는 이미 flat 구조
             flat_result = result
 
+            # answer 필드를 안전하게 추출 (중첩 딕셔너리 처리)
+            answer_value = flat_result.get("answer", "")
+
+            # 강력한 중첩 딕셔너리 해결 (무한 루프 방지)
+            if isinstance(answer_value, dict):
+                self.logger.warning(f"process_query: answer_value is dict, extracting...")
+                depth = 0
+                max_depth = 20
+                while isinstance(answer_value, dict) and depth < max_depth:
+                    # 가능한 키들을 확인
+                    if "answer" in answer_value:
+                        answer_value = answer_value["answer"]
+                    elif "content" in answer_value:
+                        answer_value = answer_value["content"]
+                    elif "text" in answer_value:
+                        answer_value = answer_value["text"]
+                    else:
+                        # 딕셔너리를 문자열로 변환
+                        answer_value = str(answer_value)
+                        break
+                    depth += 1
+
+                # 최종적으로 문자열로 보장
+                if isinstance(answer_value, dict):
+                    self.logger.error(f"process_query: answer_value is still dict after extraction!")
+                    answer_value = str(answer_value)
+
+            # 최종 검증: 항상 문자열로 보장
+            answer_value = str(answer_value) if not isinstance(answer_value, str) else answer_value
+
+            # 디버깅: 빈 문자열인 경우 로그
+            if len(answer_value) == 0:
+                self.logger.warning("process_query: answer_value is empty after extraction")
+
             # 결과 포맷팅
             response = {
-                "answer": flat_result.get("answer", ""),
+                "answer": answer_value,  # 항상 문자열
                 "sources": flat_result.get("sources", []),
                 "confidence": flat_result.get("confidence", 0.0),
                 "legal_references": flat_result.get("legal_references", []),

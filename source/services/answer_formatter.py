@@ -107,7 +107,24 @@ class AnswerFormatter:
             FormattedAnswer: 구조화된 답변
         """
         try:
-            self.logger.info(f"Formatting answer for question type: {question_type.value}")
+            # raw_answer 타입 검증 및 문자열 변환
+            if isinstance(raw_answer, dict):
+                self.logger.warning(f"AnswerFormatter.format_answer: raw_answer is dict, converting to string")
+                # 중첩 딕셔너리에서 문자열 추출 시도
+                if "answer" in raw_answer:
+                    raw_answer = raw_answer["answer"]
+                elif "content" in raw_answer:
+                    raw_answer = raw_answer["content"]
+                elif "text" in raw_answer:
+                    raw_answer = raw_answer["text"]
+                else:
+                    raw_answer = str(raw_answer)
+
+            # 최종 문자열 보장
+            if not isinstance(raw_answer, str):
+                raw_answer = str(raw_answer)
+
+            self.logger.info(f"Formatting answer for question type: {question_type.value} (answer length: {len(raw_answer)})")
 
             template = self.templates.get(question_type, self.templates[QuestionType.GENERAL_QUESTION])
 
