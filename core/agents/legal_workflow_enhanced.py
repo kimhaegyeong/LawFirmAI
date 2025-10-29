@@ -43,6 +43,7 @@ sys.path.insert(0, str(project_root))
 
 from core.agents.keyword_mapper import LegalKeywordMapper
 from core.agents.legal_data_connector import LegalDataConnector
+from core.agents.node_wrappers import with_state_optimization
 from core.agents.performance_optimizer import PerformanceOptimizer
 from core.agents.state_definitions import LegalWorkflowState
 from core.agents.state_utils import (
@@ -355,12 +356,12 @@ class EnhancedLegalQuestionWorkflow:
         if not self.ai_keyword_generator:
             return "skip"
 
-        keywords = state.get("extracted_keywords", [])
+        keywords = self._get_state_value(state, "extracted_keywords", [])
         if len(keywords) < 3:
             return "skip"
 
         # 복잡한 질문인 경우 확장
-        query_type = state.get("query_type", "")
+        query_type = self._get_state_value(state, "query_type", "")
         complex_types = ["precedent_search", "law_inquiry", "legal_advice"]
 
         if query_type in complex_types:
@@ -370,75 +371,120 @@ class EnhancedLegalQuestionWorkflow:
 
     def _should_retry_or_continue(self, state: LegalWorkflowState) -> str:
         """재시도 여부 결정 - 답변 품질 체크"""
-        answer = state.get("answer", "")
-        errors = state.get("errors", [])
-        retry_count = state.get("retry_count", 0)
+        answer = self._get_state_value(state, "answer", "")
+        errors = self._get_state_value(state, "errors", [])
+        retry_count = self._get_state_value(state, "retry_count", 0)
+
+        # 메타데이터에서도 재시도 횟수 확인 (더 안전한 추적)
+        metadata = self._get_state_value(state, "metadata", {})
+        metadata_retry_count = metadata.get("_retry_count", retry_count)
+
+        # 두 값 중 큰 것을 사용 (더 안전)
+        actual_retry_count = max(retry_count, metadata_retry_count)
+
+        # 무한 루프 방지: 최대 재시도 횟수 초과 시 무조건 진행
+        MAX_RETRY_COUNT = 3
+        if actual_retry_count >= MAX_RETRY_COUNT:
+            self.logger.warning(f"Maximum retry count ({MAX_RETRY_COUNT}) reached. Forcing continuation.")
+            if len(answer) > 0:
+                return "validate"
+            return "format"
 
         # 심각한 에러가 있고 재시도 횟수가 남아있는 경우
-        if len(errors) > 0 and retry_count < 2:
-            state["retry_count"] = retry_count + 1
-            state["needs_enhancement"] = True
-            self.logger.warning(f"Retrying due to errors (attempt {retry_count + 1}/2)")
+        if len(errors) > 0 and actual_retry_count < 2:
+            # 상태 업데이트 (메타데이터에도 저장)
+            new_retry_count = actual_retry_count + 1
+            self._set_state_value(state, "retry_count", new_retry_count)
+            metadata["_retry_count"] = new_retry_count
+            self._set_state_value(state, "metadata", metadata)
+            self._set_state_value(state, "needs_enhancement", True)
+            self.logger.warning(f"Retrying due to errors (attempt {new_retry_count}/{MAX_RETRY_COUNT})")
             return "retry"
 
         # 답변이 너무 짧은 경우
-        if len(answer) < 50 and retry_count < 1:
-            state["retry_count"] = retry_count + 1
-            state["needs_enhancement"] = True
-            self.logger.info(f"Retrying due to short answer (attempt {retry_count + 1}/1)")
+        if len(answer) < 50 and actual_retry_count < 1:
+            new_retry_count = actual_retry_count + 1
+            self._set_state_value(state, "retry_count", new_retry_count)
+            metadata["_retry_count"] = new_retry_count
+            self._set_state_value(state, "metadata", metadata)
+            self._set_state_value(state, "needs_enhancement", True)
+            self.logger.info(f"Retrying due to short answer (attempt {new_retry_count}/{MAX_RETRY_COUNT})")
             return "retry"
 
-        # 기본적으로 검증 진행
+        # 기본적으로 검증 진행 (답변이 있는 경우)
         if len(answer) > 0:
             return "validate"
 
+        # 답변이 없으면 포맷팅으로 진행 (최소한의 답변 생성)
         return "format"
 
     def _should_accept_answer(self, state: LegalWorkflowState) -> str:
         """답변 수락 여부 결정"""
-        quality_check_passed = state.get("quality_check_passed", False)
-        retry_count = state.get("retry_count", 0)
+        quality_check_passed = self._get_state_value(state, "quality_check_passed", False)
+        retry_count = self._get_state_value(state, "retry_count", 0)
+
+        # 메타데이터에서도 재시도 횟수 확인
+        metadata = self._get_state_value(state, "metadata", {})
+        metadata_retry_count = metadata.get("_retry_count", retry_count)
+        actual_retry_count = max(retry_count, metadata_retry_count)
+
+        # 무한 루프 방지: 최대 재시도 횟수 초과 시 무조건 수락
+        MAX_RETRY_COUNT = 3
+        if actual_retry_count >= MAX_RETRY_COUNT:
+            self.logger.warning(f"Maximum retry count ({MAX_RETRY_COUNT}) reached in validation. Forcing acceptance.")
+            return "accept"
 
         if quality_check_passed:
             return "accept"
 
         # 품질 검증 실패한 경우, 재시도 횟수에 따라 결정
-        if retry_count < 2:
-            state["retry_count"] = retry_count + 1
+        if actual_retry_count < 2:
+            new_retry_count = actual_retry_count + 1
+            self._set_state_value(state, "retry_count", new_retry_count)
+            metadata["_retry_count"] = new_retry_count
+            self._set_state_value(state, "metadata", metadata)
+            self.logger.info(f"Retrying after quality check failed (attempt {new_retry_count}/{MAX_RETRY_COUNT})")
             return "retry"
 
         # 최대 재시도 횟수 초과 시 수락
         return "accept"
 
     @observe(name="validate_answer_quality")
+    @with_state_optimization("validate_answer_quality", enable_reduction=False)
     def validate_answer_quality(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """답변 품질 및 법령 검증"""
         try:
             start_time = time.time()
-            answer = state.get("answer", "")
-            errors = state.get("errors", [])
-            sources = state.get("sources", [])
+            answer = self._get_state_value(state, "answer", "")
+            # answer가 문자열인지 확인하고 변환
+            if isinstance(answer, dict):
+                answer = answer.get("content", answer.get("answer", str(answer)))
+            answer = str(answer) if not isinstance(answer, str) else answer
+
+            errors = self._get_state_value(state, "errors", [])
+            sources = self._get_state_value(state, "sources", [])
 
             # 기존 품질 검증
             quality_checks = {
                 "has_answer": len(answer) > 0,
                 "min_length": len(answer) >= 50,
                 "no_errors": len(errors) == 0,
-                "has_sources": len(sources) > 0 or len(state.get("retrieved_docs", [])) > 0
+                "has_sources": len(sources) > 0 or len(self._get_state_value(state, "retrieved_docs", [])) > 0
             }
 
             # 법령 검증 추가
             if self.legal_validator and len(answer) > 0:
                 try:
+                    query = self._get_state_value(state, "query", "")
                     validation_result = self.legal_validator.validate_legal_basis(
-                        state["query"], answer
+                        query, answer
                     )
-                    state["legal_validity_check"] = validation_result.is_valid
-                    state["legal_basis_validation"] = {
+                    self._set_state_value(state, "legal_validity_check", validation_result.is_valid)
+                    self._set_state_value(state, "legal_basis_validation", {
                         "confidence": validation_result.confidence,
                         "issues": validation_result.issues,
                         "recommendations": validation_result.recommendations
-                    }
+                    })
 
                     # 품질 체크에 법령 검증 추가
                     quality_checks["legal_basis_valid"] = validation_result.is_valid
@@ -446,10 +492,10 @@ class EnhancedLegalQuestionWorkflow:
                     self.logger.info(f"Legal basis validation: {validation_result.is_valid}")
                 except Exception as e:
                     self.logger.warning(f"Legal validation failed: {e}")
-                    state["legal_validity_check"] = True  # 실패시 통과
+                    self._set_state_value(state, "legal_validity_check", True)  # 실패시 통과
                     quality_checks["legal_basis_valid"] = True
             else:
-                state["legal_validity_check"] = True
+                self._set_state_value(state, "legal_validity_check", True)
                 quality_checks["legal_basis_valid"] = True
 
             # 품질 점수 계산
@@ -459,13 +505,14 @@ class EnhancedLegalQuestionWorkflow:
 
             # 품질 점수가 0.75 이상이면 통과
             quality_check_passed = quality_score >= 0.75
-            state["quality_check_passed"] = quality_check_passed
+            self._set_state_value(state, "quality_check_passed", quality_check_passed)
 
             self._update_processing_time(state, start_time)
 
             quality_status = "통과" if quality_check_passed else "실패"
+            legal_validity = self._get_state_value(state, "legal_validity_check", True)
             self._add_step(state, "답변 검증",
-                         f"품질: {quality_score:.2f}, 법령: {state['legal_validity_check']}")
+                         f"품질: {quality_score:.2f}, 법령: {legal_validity}")
 
             self.logger.info(
                 f"Answer quality validation: {quality_status}, "
@@ -474,36 +521,193 @@ class EnhancedLegalQuestionWorkflow:
 
         except Exception as e:
             self._handle_error(state, str(e), "답변 검증 중 오류")
-            state["quality_check_passed"] = False
-            state["legal_validity_check"] = True
+            self._set_state_value(state, "quality_check_passed", False)
+            self._set_state_value(state, "legal_validity_check", True)
 
         return state
 
     # Helper methods for common operations
+    def _get_state_value(self, state: LegalWorkflowState, key: str, default: Any = None) -> Any:
+        """
+        State에서 값을 안전하게 가져오기 (flat/nested 모두 지원)
+
+        Args:
+            state: State 객체 (flat 또는 nested)
+            key: 접근할 키
+            default: 기본값
+
+        Returns:
+            State에서 가져온 값 또는 기본값
+        """
+        # Flat 구조 확인
+        if key in state:
+            return state[key]
+
+        # Nested 구조 확인
+        nested_mapping = {
+            "query": ("input", "query"),
+            "session_id": ("input", "session_id"),
+            "query_type": ("classification", "query_type"),
+            "confidence": ("classification", "confidence"),
+            "legal_field": ("classification", "legal_field"),
+            "legal_domain": ("classification", "legal_domain"),
+            "urgency_level": ("classification", "urgency_level"),
+            "urgency_reasoning": ("classification", "urgency_reasoning"),
+            "emergency_type": ("classification", "emergency_type"),
+            "complexity_level": ("classification", "complexity_level"),
+            "requires_expert": ("classification", "requires_expert"),
+            "expert_subgraph": ("classification", "expert_subgraph"),
+            "search_query": ("search", "search_query"),
+            "extracted_keywords": ("search", "extracted_keywords"),
+            "ai_keyword_expansion": ("search", "ai_keyword_expansion"),
+            "retrieved_docs": ("search", "retrieved_docs"),
+            "analysis": ("analysis", "analysis"),
+            "legal_references": ("analysis", "legal_references"),
+            "legal_citations": ("analysis", "legal_citations"),
+            "answer": ("answer", "answer"),
+            "sources": ("answer", "sources"),
+            "enhanced_answer": ("answer", "enhanced_answer"),
+            "structure_confidence": ("answer", "structure_confidence"),
+            "document_type": ("document", "document_type"),
+            "document_analysis": ("document", "document_analysis"),
+            "key_clauses": ("document", "key_clauses"),
+            "potential_issues": ("document", "potential_issues"),
+            "is_multi_turn": ("multi_turn", "is_multi_turn"),
+            "multi_turn_confidence": ("multi_turn", "multi_turn_confidence"),
+            "conversation_history": ("multi_turn", "conversation_history"),
+            "conversation_context": ("multi_turn", "conversation_context"),
+            "legal_validity_check": ("validation", "legal_validity_check"),
+            "legal_basis_validation": ("validation", "legal_basis_validation"),
+            "outdated_laws": ("validation", "outdated_laws"),
+            "retry_count": ("control", "retry_count"),
+            "quality_check_passed": ("control", "quality_check_passed"),
+            "needs_enhancement": ("control", "needs_enhancement"),
+            "processing_steps": ("common", "processing_steps"),
+            "errors": ("common", "errors"),
+            "metadata": ("common", "metadata"),
+            "processing_time": ("common", "processing_time"),
+            "tokens_used": ("common", "tokens_used"),
+        }
+
+        if key in nested_mapping:
+            group, nested_key = nested_mapping[key]
+            if group in state and isinstance(state[group], dict):
+                return state[group].get(nested_key, default)
+
+        return default
+
+    def _set_state_value(self, state: LegalWorkflowState, key: str, value: Any) -> None:
+        """
+        State에 값을 안전하게 설정하기 (flat/nested 모두 지원)
+
+        Args:
+            state: State 객체 (flat 또는 nested)
+            key: 설정할 키
+            value: 설정할 값
+        """
+        # Flat 구조 확인
+        if key in state or not ("input" in state and isinstance(state.get("input"), dict)):
+            state[key] = value
+            return
+
+        # Nested 구조인 경우
+        nested_mapping = {
+            "query": ("input", "query"),
+            "session_id": ("input", "session_id"),
+            "query_type": ("classification", "query_type"),
+            "confidence": ("classification", "confidence"),
+            "legal_field": ("classification", "legal_field"),
+            "legal_domain": ("classification", "legal_domain"),
+            "urgency_level": ("classification", "urgency_level"),
+            "urgency_reasoning": ("classification", "urgency_reasoning"),
+            "emergency_type": ("classification", "emergency_type"),
+            "complexity_level": ("classification", "complexity_level"),
+            "requires_expert": ("classification", "requires_expert"),
+            "expert_subgraph": ("classification", "expert_subgraph"),
+            "search_query": ("search", "search_query"),
+            "extracted_keywords": ("search", "extracted_keywords"),
+            "ai_keyword_expansion": ("search", "ai_keyword_expansion"),
+            "retrieved_docs": ("search", "retrieved_docs"),
+            "analysis": ("analysis", "analysis"),
+            "legal_references": ("analysis", "legal_references"),
+            "legal_citations": ("analysis", "legal_citations"),
+            "answer": ("answer", "answer"),
+            "sources": ("answer", "sources"),
+            "enhanced_answer": ("answer", "enhanced_answer"),
+            "structure_confidence": ("answer", "structure_confidence"),
+            "document_type": ("document", "document_type"),
+            "document_analysis": ("document", "document_analysis"),
+            "key_clauses": ("document", "key_clauses"),
+            "potential_issues": ("document", "potential_issues"),
+            "is_multi_turn": ("multi_turn", "is_multi_turn"),
+            "multi_turn_confidence": ("multi_turn", "multi_turn_confidence"),
+            "conversation_history": ("multi_turn", "conversation_history"),
+            "conversation_context": ("multi_turn", "conversation_context"),
+            "legal_validity_check": ("validation", "legal_validity_check"),
+            "legal_basis_validation": ("validation", "legal_basis_validation"),
+            "outdated_laws": ("validation", "outdated_laws"),
+            "retry_count": ("control", "retry_count"),
+            "quality_check_passed": ("control", "quality_check_passed"),
+            "needs_enhancement": ("control", "needs_enhancement"),
+            "processing_steps": ("common", "processing_steps"),
+            "errors": ("common", "errors"),
+            "metadata": ("common", "metadata"),
+            "processing_time": ("common", "processing_time"),
+            "tokens_used": ("common", "tokens_used"),
+        }
+
+        if key in nested_mapping:
+            group, nested_key = nested_mapping[key]
+            if group not in state:
+                state[group] = {}
+            if not isinstance(state[group], dict):
+                state[group] = {}
+            state[group][nested_key] = value
+        else:
+            # 매핑에 없는 키는 직접 설정
+            state[key] = value
+
     def _update_processing_time(self, state: LegalWorkflowState, start_time: float):
         """처리 시간 업데이트"""
         processing_time = time.time() - start_time
-        state["processing_time"] = state.get("processing_time", 0.0) + processing_time
+        current_time = self._get_state_value(state, "processing_time", 0.0)
+        self._set_state_value(state, "processing_time", current_time + processing_time)
         return processing_time
 
     def _add_step(self, state: LegalWorkflowState, step_prefix: str, step_message: str):
         """처리 단계 추가 (중복 방지 및 pruning)"""
-        existing_steps = state.get("processing_steps", [])
-        if not any(step_prefix in step for step in existing_steps):
-            state["processing_steps"].append(step_message)
+        processing_steps = self._get_state_value(state, "processing_steps", [])
+        if not processing_steps:
+            processing_steps = []
+            self._set_state_value(state, "processing_steps", processing_steps)
+
+        if not any(step_prefix in step for step in processing_steps):
+            processing_steps.append(step_message)
+            self._set_state_value(state, "processing_steps", processing_steps)
 
         # Always prune if too many steps (check on every add)
-        if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
-            state["processing_steps"] = prune_processing_steps(
-                state["processing_steps"],
+        if len(processing_steps) > MAX_PROCESSING_STEPS:
+            pruned_steps = prune_processing_steps(
+                processing_steps,
                 max_items=MAX_PROCESSING_STEPS
             )
+            self._set_state_value(state, "processing_steps", pruned_steps)
 
     def _handle_error(self, state: LegalWorkflowState, error_msg: str, context: str = ""):
         """에러 처리 헬퍼"""
         full_error = f"{context}: {error_msg}" if context else error_msg
-        state["errors"].append(full_error)
-        state["processing_steps"].append(full_error)
+
+        # errors 리스트 가져오기 및 초기화
+        errors = self._get_state_value(state, "errors", [])
+        if not errors:
+            errors = []
+            self._set_state_value(state, "errors", errors)
+        errors.append(full_error)
+        self._set_state_value(state, "errors", errors)
+
+        # processing_steps에 추가
+        self._add_step(state, "ERROR", full_error)
+
         self.logger.error(full_error)
 
     def _get_category_mapping(self) -> Dict[str, List[str]]:
@@ -518,44 +722,50 @@ class EnhancedLegalQuestionWorkflow:
         }
 
     @observe(name="classify_query")
+    @with_state_optimization("classify_query", enable_reduction=True)
     def classify_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """질문 분류 (LLM 기반)"""
         try:
             start_time = time.time()
 
-            classified_type, confidence = self._classify_with_llm(state["query"])
+            query = self._get_state_value(state, "query", "")
+            classified_type, confidence = self._classify_with_llm(query)
 
             # QuestionType enum을 문자열로 변환하여 저장
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
-            state["query_type"] = query_type_str
-            state["confidence"] = confidence
+            self._set_state_value(state, "query_type", query_type_str)
+            self._set_state_value(state, "confidence", confidence)
 
             # 법률 분야 추출
-            state["legal_field"] = self._extract_legal_field(query_type_str, state["query"])
-            state["legal_domain"] = self._map_to_legal_domain(state["legal_field"])
+            legal_field = self._extract_legal_field(query_type_str, query)
+            self._set_state_value(state, "legal_field", legal_field)
+            self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
 
             processing_time = self._update_processing_time(state, start_time)
             self._add_step(state, "질문 분류 완료",
-                         f"질문 분류 완료: {query_type_str}, 법률분야: {state['legal_field']} (시간: {processing_time:.3f}s)")
+                         f"질문 분류 완료: {query_type_str}, 법률분야: {legal_field} (시간: {processing_time:.3f}s)")
 
-            self.logger.info(f"LLM classified query as {query_type_str} with confidence {confidence}, field: {state['legal_field']}")
+            self.logger.info(f"LLM classified query as {query_type_str} with confidence {confidence}, field: {legal_field}")
 
         except Exception as e:
             self._handle_error(state, str(e), "LLM 질문 분류 중 오류 발생")
-            classified_type, confidence = self._fallback_classification(state["query"])
+            query = self._get_state_value(state, "query", "")
+            classified_type, confidence = self._fallback_classification(query)
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
-            state["query_type"] = query_type_str
-            state["confidence"] = confidence
+            self._set_state_value(state, "query_type", query_type_str)
+            self._set_state_value(state, "confidence", confidence)
 
             # 법률 분야 추출 (폴백)
-            state["legal_field"] = self._extract_legal_field(query_type_str, state["query"])
-            state["legal_domain"] = self._map_to_legal_domain(state["legal_field"])
+            legal_field = self._extract_legal_field(query_type_str, query)
+            self._set_state_value(state, "legal_field", legal_field)
+            self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
 
             self._add_step(state, "폴백 키워드 기반 분류 사용", "폴백 키워드 기반 분류 사용")
 
         return state
 
     @observe(name="resolve_multi_turn")
+    @with_state_optimization("resolve_multi_turn", enable_reduction=True)
     def resolve_multi_turn(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """멀티턴 질문 해결 노드"""
         try:
@@ -563,13 +773,14 @@ class EnhancedLegalQuestionWorkflow:
 
             # 멀티턴 핸들러와 세션 관리자가 없으면 스킵
             if not self.multi_turn_handler or not self.conversation_manager:
-                state["is_multi_turn"] = False
-                state["search_query"] = state["query"]
+                self._set_state_value(state, "is_multi_turn", False)
+                query = self._get_state_value(state, "query", "")
+                self._set_state_value(state, "search_query", query)
                 self.logger.debug("Multi-turn handler not available, skipping multi-turn resolution")
                 return state
 
-            query = state["query"]
-            session_id = state["session_id"]
+            query = self._get_state_value(state, "query", "")
+            session_id = self._get_state_value(state, "session_id", "")
 
             # 세션에서 대화 맥락 가져오기
             conversation_context = self._get_or_create_conversation_context(session_id)
@@ -577,43 +788,46 @@ class EnhancedLegalQuestionWorkflow:
             if conversation_context and conversation_context.turns:
                 # 멀티턴 질문 감지
                 is_multi_turn = self.multi_turn_handler.detect_multi_turn_question(query, conversation_context)
-                state["is_multi_turn"] = is_multi_turn
+                self._set_state_value(state, "is_multi_turn", is_multi_turn)
 
                 if is_multi_turn:
                     # 완전한 질문 구성
                     multi_turn_result = self.multi_turn_handler.build_complete_query(query, conversation_context)
 
                     resolved_query = multi_turn_result.get("resolved_query", query)
-                    state["multi_turn_confidence"] = multi_turn_result.get("confidence", 1.0)
+                    self._set_state_value(state, "multi_turn_confidence", multi_turn_result.get("confidence", 1.0))
 
                     # 대화 맥락 정보 저장
-                    state["conversation_context"] = self._build_conversation_context_dict(conversation_context)
+                    self._set_state_value(state, "conversation_context", self._build_conversation_context_dict(conversation_context))
 
                     # 검색 쿼리 업데이트 (해결된 쿼리 사용)
-                    state["search_query"] = resolved_query
+                    self._set_state_value(state, "search_query", resolved_query)
 
                     self.logger.info(f"Multi-turn question resolved: '{query}' -> '{resolved_query}'")
                     self._add_step(state, "멀티턴 처리",
                                  f"멀티턴 질문 해결: {multi_turn_result.get('reasoning', '')}")
                 else:
                     # 멀티턴 질문이 아님
-                    state["multi_turn_confidence"] = 1.0
+                    self._set_state_value(state, "multi_turn_confidence", 1.0)
 
                     # 단일 턴이므로 search_query는 그대로
-                    state["search_query"] = query
+                    self._set_state_value(state, "search_query", query)
             else:
                 # 대화 맥락이 없음
-                state["is_multi_turn"] = False
-                state["multi_turn_confidence"] = 1.0
-                state["search_query"] = query
+                self._set_state_value(state, "is_multi_turn", False)
+                self._set_state_value(state, "multi_turn_confidence", 1.0)
+                self._set_state_value(state, "search_query", query)
 
             self._update_processing_time(state, start_time)
 
         except Exception as e:
             self.logger.error(f"Error in resolve_multi_turn: {e}")
             # 에러 발생 시 원본 쿼리 유지
-            state["is_multi_turn"] = False
-            state["search_query"] = state.get("search_query", state["query"])
+            self._set_state_value(state, "is_multi_turn", False)
+            search_query = self._get_state_value(state, "search_query")
+            if not search_query:
+                search_query = self._get_state_value(state, "query", "")
+            self._set_state_value(state, "search_query", search_query)
             self._handle_error(state, str(e), "멀티턴 처리 중 오류 발생")
 
         return state
@@ -705,13 +919,16 @@ class EnhancedLegalQuestionWorkflow:
             return QuestionType.GENERAL_QUESTION, WorkflowConstants.DEFAULT_CONFIDENCE
 
     @observe(name="retrieve_documents")
+    @with_state_optimization("retrieve_documents", enable_reduction=True)
     def retrieve_documents(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """문서 검색 (하이브리드: 벡터 + 키워드 검색)"""
         try:
             start_time = time.time()
             # 강화된 검색 쿼리 사용 (키워드 추출 노드에서 생성됨)
-            search_query = state.get("search_query", state["query"])
-            query_type_str = self._get_query_type_str(state["query_type"])
+            search_query = self._get_state_value(state, "search_query")
+            if not search_query:
+                search_query = self._get_state_value(state, "query", "")
+            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
 
             # 캐시 확인
             if self._check_cache(state, search_query, query_type_str, start_time):
@@ -725,18 +942,20 @@ class EnhancedLegalQuestionWorkflow:
             documents = self._merge_search_results(semantic_results, keyword_results)
 
             # Apply pruning and summarization to reduce state size
-            state["retrieved_docs"] = prune_retrieved_docs(
+            pruned_docs = prune_retrieved_docs(
                 documents[:WorkflowConstants.MAX_DOCUMENTS],
                 max_items=MAX_RETRIEVED_DOCS,
                 max_content_per_doc=MAX_DOCUMENT_CONTENT_LENGTH
             )
+            self._set_state_value(state, "retrieved_docs", pruned_docs)
 
             # 메타데이터 및 상태 업데이트
             self._update_search_metadata(state, semantic_count, keyword_count, documents, query_type_str, start_time)
-            self.performance_optimizer.cache.cache_documents(search_query, query_type_str, state["retrieved_docs"])
+            self.performance_optimizer.cache.cache_documents(search_query, query_type_str, pruned_docs)
             self._update_processing_time(state, start_time)
 
-            self.logger.info(f"Hybrid search completed: {len(state['retrieved_docs'])} documents retrieved")
+            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            self.logger.info(f"Hybrid search completed: {len(retrieved_docs)} documents retrieved")
         except Exception as e:
             self._handle_error(state, str(e), "문서 검색 중 오류 발생")
             self._fallback_search(state)
@@ -751,7 +970,7 @@ class EnhancedLegalQuestionWorkflow:
         """캐시에서 문서 확인"""
         cached_documents = self.performance_optimizer.cache.get_cached_documents(query, query_type_str)
         if cached_documents:
-            state["retrieved_docs"] = cached_documents
+            self._set_state_value(state, "retrieved_docs", cached_documents)
             self._add_step(state, "문서 검색 완료", f"문서 검색 완료: {len(cached_documents)}개 (캐시)")
             self.logger.info(f"Using cached documents for query: {query[:50]}...")
             self._update_processing_time(state, start_time)
@@ -890,26 +1109,30 @@ class EnhancedLegalQuestionWorkflow:
                                 keyword_count: int, documents: List[Dict], query_type_str: str, start_time: float):
         """검색 메타데이터 업데이트 (consolidated metadata)"""
         # Merge into consolidated metadata dict
-        if "metadata" not in state or not isinstance(state["metadata"], dict):
-            state["metadata"] = {}
+        metadata = self._get_state_value(state, "metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
 
-        state["metadata"]["search"] = {
+        retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+        metadata["search"] = {
             "semantic_results_count": semantic_count,
             "keyword_results_count": keyword_count,
             "total_candidates": len(documents),
-            "final_count": len(state["retrieved_docs"]),
+            "final_count": len(retrieved_docs),
             "search_time": time.time() - start_time,
             "query_type": query_type_str,
             "search_mode": "hybrid"
         }
+        self._set_state_value(state, "metadata", metadata)
 
+        retrieved_docs_count = len(retrieved_docs)
         self._add_step(state, "하이브리드 검색 완료",
-                      f"하이브리드 검색 완료: 의미적 {semantic_count}개, 키워드 {keyword_count}개, 최종 {len(state['retrieved_docs'])}개")
+                      f"하이브리드 검색 완료: 의미적 {semantic_count}개, 키워드 {keyword_count}개, 최종 {retrieved_docs_count}개")
 
     def _fallback_search(self, state: LegalWorkflowState):
         """폴백 검색"""
         try:
-            query_type_str = self._get_query_type_str(state.get("query_type"))
+            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
             category_mapping = self._get_category_mapping()
             fallback_categories = category_mapping.get(query_type_str, ["civil_law"])
 
@@ -921,22 +1144,25 @@ class EnhancedLegalQuestionWorkflow:
                     break
 
             if fallback_docs:
-                state["retrieved_docs"] = fallback_docs
+                self._set_state_value(state, "retrieved_docs", fallback_docs)
                 self._add_step(state, "폴백", f"폴백: {len(fallback_docs)}개 문서 사용")
                 self.logger.info(f"Using fallback documents: {len(fallback_docs)} docs")
             else:
-                state["retrieved_docs"] = [
-                    {"content": f"'{state['query']}'에 대한 기본 법률 정보입니다.", "source": "Default DB"}
-                ]
+                query = self._get_state_value(state, "query", "")
+                self._set_state_value(state, "retrieved_docs", [
+                    {"content": f"'{query}'에 대한 기본 법률 정보입니다.", "source": "Default DB"}
+                ])
                 self.logger.warning("No fallback documents available")
         except Exception as fallback_error:
             self.logger.error(f"Fallback also failed: {fallback_error}")
-            state["retrieved_docs"] = [
-                {"content": f"'{state['query']}'에 대한 기본 법률 정보입니다.", "source": "Default DB"}
-            ]
+            query = self._get_state_value(state, "query", "")
+            self._set_state_value(state, "retrieved_docs", [
+                {"content": f"'{query}'에 대한 기본 법률 정보입니다.", "source": "Default DB"}
+            ])
 
 
     @observe(name="expand_keywords_ai")
+    @with_state_optimization("expand_keywords_ai", enable_reduction=True)
     def expand_keywords_ai(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """AI 키워드 확장 (AIKeywordGenerator 사용)"""
         try:
@@ -947,17 +1173,17 @@ class EnhancedLegalQuestionWorkflow:
                 return state
 
             # 기존 키워드가 없으면 기본 키워드 생성
-            keywords = state.get("extracted_keywords", [])
+            keywords = self._get_state_value(state, "extracted_keywords", [])
             if len(keywords) == 0:
-                query = state.get("query", "")
-                query_type_str = self._get_query_type_str(state.get("query_type", "general_question"))
+                query = self._get_state_value(state, "query", "")
+                query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", "general_question"))
                 # LegalKeywordMapper를 사용하여 기본 키워드 추출
                 keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
                 keywords = list(set(keywords))  # 중복 제거
-                state["extracted_keywords"] = keywords
+                self._set_state_value(state, "extracted_keywords", keywords)
                 self.logger.info(f"Generated base keywords: {len(keywords)} keywords from query")
 
-            query_type_str = self._get_query_type_str(state["query_type"])
+            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
             domain = self._get_domain_from_query_type(query_type_str)
 
             # AI 키워드 확장 (동기 실행 - 비동기는 지원 안됨)
@@ -973,16 +1199,16 @@ class EnhancedLegalQuestionWorkflow:
                 # 확장된 키워드 추가
                 all_keywords = keywords + expansion_result.expanded_keywords
                 all_keywords = list(set(all_keywords))
-                state["extracted_keywords"] = all_keywords
+                self._set_state_value(state, "extracted_keywords", all_keywords)
 
                 # 메타데이터 저장 (새 딕셔너리 생성)
-                state["ai_keyword_expansion"] = {
+                self._set_state_value(state, "ai_keyword_expansion", {
                     "domain": expansion_result.domain,
                     "original_keywords": expansion_result.base_keywords,
                     "expanded_keywords": expansion_result.expanded_keywords,
                     "confidence": expansion_result.confidence,
                     "method": expansion_result.expansion_method
-                }
+                })
 
                 processing_time = self._update_processing_time(state, start_time)
                 self._add_step(state, "AI 키워드 확장",
@@ -997,16 +1223,16 @@ class EnhancedLegalQuestionWorkflow:
                 )
                 all_keywords = keywords + fallback_keywords
                 all_keywords = list(set(all_keywords))
-                state["extracted_keywords"] = all_keywords
+                self._set_state_value(state, "extracted_keywords", all_keywords)
 
                 # 메타데이터 저장 (새 딕셔너리 생성)
-                state["ai_keyword_expansion"] = {
+                self._set_state_value(state, "ai_keyword_expansion", {
                     "domain": domain,
                     "original_keywords": keywords,
                     "expanded_keywords": fallback_keywords,
                     "confidence": 0.5,
                     "method": "fallback"
-                }
+                })
 
                 processing_time = self._update_processing_time(state, start_time)
                 self._add_step(state, "AI 키워드 확장 (폴백)",
@@ -1031,29 +1257,43 @@ class EnhancedLegalQuestionWorkflow:
         return domain_mapping.get(query_type, "기타/일반")
 
     @observe(name="process_legal_terms")
+    @with_state_optimization("process_legal_terms", enable_reduction=True)
     def process_legal_terms(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """법률 용어 추출 및 통합 (문서 검색 후, 답변 생성 전)"""
         try:
             start_time = time.time()
 
-            all_terms = self._extract_terms_from_documents(state["retrieved_docs"])
+            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            all_terms = self._extract_terms_from_documents(retrieved_docs)
             self.logger.info(f"추출된 용어 수: {len(all_terms)}")
 
             if all_terms:
                 representative_terms = self._integrate_and_process_terms(all_terms)
-                state["metadata"]["extracted_terms"] = representative_terms
-                state["metadata"]["total_terms_extracted"] = len(all_terms)
-                state["metadata"]["unique_terms"] = len(representative_terms)
+                metadata = self._get_state_value(state, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["extracted_terms"] = representative_terms
+                metadata["total_terms_extracted"] = len(all_terms)
+                metadata["unique_terms"] = len(representative_terms)
+                self._set_state_value(state, "metadata", metadata)
                 self._add_step(state, "용어 통합 완료", f"용어 통합 완료: {len(representative_terms)}개")
                 self.logger.info(f"통합된 용어 수: {len(representative_terms)}")
             else:
-                state["metadata"]["extracted_terms"] = []
+                metadata = self._get_state_value(state, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["extracted_terms"] = []
+                self._set_state_value(state, "metadata", metadata)
                 self._add_step(state, "용어 추출 없음", "용어 추출 없음 (문서 내용 부족)")
 
             self._update_processing_time(state, start_time)
         except Exception as e:
             self._handle_error(state, str(e), "법률 용어 처리 중 오류 발생")
-            state["metadata"]["extracted_terms"] = []
+            metadata = self._get_state_value(state, "metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["extracted_terms"] = []
+            self._set_state_value(state, "metadata", metadata)
         return state
 
     def _extract_terms_from_documents(self, docs: List[Dict]) -> List[str]:
@@ -1073,17 +1313,20 @@ class EnhancedLegalQuestionWorkflow:
         return [term["representative_term"] for term in processed_terms]
 
     @observe(name="generate_answer_enhanced")
+    @with_state_optimization("generate_answer_enhanced", enable_reduction=True)
     def generate_answer_enhanced(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """개선된 답변 생성 - UnifiedPromptManager 활용"""
         try:
             start_time = time.time()
 
-            question_type, domain = self._get_question_type_and_domain(state["query_type"])
+            query_type = self._get_state_value(state, "query_type", "")
+            question_type, domain = self._get_question_type_and_domain(query_type)
             model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA
 
             context_dict = self._build_context(state)
+            query = self._get_state_value(state, "query", "")
             optimized_prompt = self.unified_prompt_manager.get_optimized_prompt(
-                query=state["query"],
+                query=query,
                 question_type=question_type,
                 domain=domain,
                 context=context_dict,
@@ -1092,7 +1335,11 @@ class EnhancedLegalQuestionWorkflow:
             )
 
             response = self._call_llm_with_retry(optimized_prompt)
-            state["answer"] = response
+            # 응답이 문자열인지 확인하고 변환
+            if isinstance(response, dict):
+                # 딕셔너리인 경우 'content' 또는 'answer' 키에서 가져오거나 전체를 문자열로 변환
+                response = response.get("content", response.get("answer", str(response)))
+            self._set_state_value(state, "answer", str(response) if not isinstance(response, str) else response)
 
             processing_time = self._update_processing_time(state, start_time)
             self._add_step(state, "답변 생성 완료", "답변 생성 완료")
@@ -1100,7 +1347,7 @@ class EnhancedLegalQuestionWorkflow:
             self.logger.info(f"Enhanced answer generated with UnifiedPromptManager in {processing_time:.2f}s")
         except Exception as e:
             self._handle_error(state, str(e), "개선된 답변 생성 중 오류 발생")
-            state["answer"] = self._generate_fallback_answer(state)
+            self._set_state_value(state, "answer", self._generate_fallback_answer(state))
         return state
 
     def _get_question_type_and_domain(self, query_type) -> Tuple[QuestionType, str]:
@@ -1126,7 +1373,8 @@ class EnhancedLegalQuestionWorkflow:
         current_length = 0
         docs_truncated = 0
 
-        for doc in state["retrieved_docs"]:
+        retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+        for doc in retrieved_docs:
             doc_content = doc.get("content", "")
             doc_length = len(doc_content)
 
@@ -1152,8 +1400,8 @@ class EnhancedLegalQuestionWorkflow:
 
         return {
             "context": context_text,
-            "legal_references": state.get("legal_references", []),
-            "query_type": state["query_type"],
+            "legal_references": self._get_state_value(state, "legal_references", []),
+            "query_type": self._get_state_value(state, "query_type", ""),
             "context_length": current_length,
             "docs_truncated": docs_truncated
         }
@@ -1175,15 +1423,23 @@ class EnhancedLegalQuestionWorkflow:
     def _extract_response_content(self, response) -> str:
         """응답에서 내용 추출"""
         if hasattr(response, 'content'):
-            return response.content
+            content = response.content
+            # content가 문자열인지 확인
+            if isinstance(content, dict):
+                content = content.get("content", content.get("answer", str(content)))
+            return str(content) if not isinstance(content, str) else content
+        # response 자체를 처리
+        if isinstance(response, dict):
+            return response.get("content", response.get("answer", str(response)))
         return str(response)
 
 
     def _generate_fallback_answer(self, state: LegalWorkflowState) -> str:
         """폴백 답변 생성"""
-        query = state["query"]
-        query_type = state["query_type"]
-        context = "\n".join([doc["content"] for doc in state["retrieved_docs"]])
+        query = self._get_state_value(state, "query", "")
+        query_type = self._get_state_value(state, "query_type", "")
+        retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+        context = "\n".join([doc.get("content", "") for doc in retrieved_docs])
 
         return f"""## 답변
 
@@ -1204,14 +1460,15 @@ class EnhancedLegalQuestionWorkflow:
 - 실제 사안에 대해서는 전문 변호사와 상담하시기 바랍니다."""
 
     @observe(name="enhance_answer_structure")
+    @with_state_optimization("enhance_answer_structure", enable_reduction=True)
     def enhance_answer_structure(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """답변 구조화 및 법적 근거 강화"""
         try:
             start_time = time.time()
 
-            answer = state.get("answer", "")
-            query = state.get("query", "")
-            query_type = state.get("query_type", "general_question")
+            answer = self._get_state_value(state, "answer", "")
+            query = self._get_state_value(state, "query", "")
+            query_type = self._get_state_value(state, "query_type", "general_question")
 
             if self.answer_structure_enhancer:
                 try:
@@ -1223,36 +1480,51 @@ class EnhancedLegalQuestionWorkflow:
                     )
 
                     if enhanced_result and "structured_answer" in enhanced_result:
-                        # 구조화된 답변 저장
-                        state["enhanced_answer"] = enhanced_result["structured_answer"]
+                        # 구조화된 답변 저장 (문자열로 변환)
+                        structured_answer = enhanced_result["structured_answer"]
+                        if isinstance(structured_answer, dict):
+                            structured_answer = structured_answer.get("content", structured_answer.get("answer", str(structured_answer)))
+                        self._set_state_value(state, "enhanced_answer", str(structured_answer) if not isinstance(structured_answer, str) else structured_answer)
 
                         # 품질 메트릭 저장
                         quality_metrics = enhanced_result.get("quality_metrics", {})
                         if quality_metrics:
-                            state["quality_metrics"] = quality_metrics
-                            state["structure_confidence"] = quality_metrics.get("overall_score", state.get("confidence", 0.0))
+                            self._set_state_value(state, "quality_metrics", quality_metrics)
+                            confidence = self._get_state_value(state, "confidence", 0.0)
+                            self._set_state_value(state, "structure_confidence", quality_metrics.get("overall_score", confidence))
 
                         # 법적 근거 저장
                         if "legal_citations" in enhanced_result:
-                            state["legal_citations"] = enhanced_result["legal_citations"]
+                            self._set_state_value(state, "legal_citations", enhanced_result["legal_citations"])
 
                         self.logger.info("Answer structure enhanced successfully")
                 except Exception as e:
                     self.logger.warning(f"AnswerStructureEnhancer failed: {e}")
-                    state["enhanced_answer"] = answer
+                    # answer가 문자열인지 확인하고 변환
+                    if isinstance(answer, dict):
+                        answer = answer.get("content", answer.get("answer", str(answer)))
+                    self._set_state_value(state, "enhanced_answer", str(answer) if not isinstance(answer, str) else answer)
             else:
-                state["enhanced_answer"] = answer
+                # answer가 문자열인지 확인하고 변환
+                if isinstance(answer, dict):
+                    answer = answer.get("content", answer.get("answer", str(answer)))
+                self._set_state_value(state, "enhanced_answer", str(answer) if not isinstance(answer, str) else answer)
 
             self._update_processing_time(state, start_time)
             self._add_step(state, "구조화", "답변 구조화 완료")
 
         except Exception as e:
             self._handle_error(state, str(e), "답변 구조화 중 오류 발생")
-            state["enhanced_answer"] = state.get("answer", "")
+            answer = self._get_state_value(state, "answer", "")
+            # answer가 문자열인지 확인하고 변환
+            if isinstance(answer, dict):
+                answer = answer.get("content", answer.get("answer", str(answer)))
+            self._set_state_value(state, "enhanced_answer", str(answer) if not isinstance(answer, str) else answer)
 
         return state
 
     @observe(name="apply_visual_formatting")
+    @with_state_optimization("apply_visual_formatting", enable_reduction=True)
     def apply_visual_formatting(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """시각적 포맷팅 (이모지 + 섹션 구조)"""
         try:
@@ -1263,6 +1535,11 @@ class EnhancedLegalQuestionWorkflow:
                 try:
                     # 답변 가져오기 (구조화된 것이 있으면 그것 사용)
                     raw_answer = state.get("enhanced_answer") or state.get("answer", "")
+                    # raw_answer가 문자열인지 확인하고 변환
+                    if isinstance(raw_answer, dict):
+                        raw_answer = raw_answer.get("content", raw_answer.get("answer", str(raw_answer)))
+                    if not isinstance(raw_answer, str):
+                        raw_answer = str(raw_answer)
                     query_type = state.get("query_type", "general_question")
                     confidence = state.get("structure_confidence") or state.get("confidence", 0.0)
 
@@ -1306,29 +1583,48 @@ class EnhancedLegalQuestionWorkflow:
                     )
 
                     if formatted_result:
-                        state["answer"] = formatted_result.formatted_content
+                        # formatted_content가 문자열인지 확인
+                        content = formatted_result.formatted_content
+                        if isinstance(content, dict):
+                            content = content.get("content", content.get("answer", str(content)))
+                        state["answer"] = str(content) if not isinstance(content, str) else content
                         state["format_metadata"] = formatted_result.metadata
                         self.logger.info("Visual formatting applied successfully")
                     else:
-                        state["answer"] = raw_answer
+                        # raw_answer가 문자열인지 확인
+                        answer_val = raw_answer
+                        if isinstance(answer_val, dict):
+                            answer_val = answer_val.get("content", answer_val.get("answer", str(answer_val)))
+                        state["answer"] = str(answer_val) if not isinstance(answer_val, str) else answer_val
 
                 except Exception as e:
                     self.logger.warning(f"AnswerFormatter failed: {e}")
-                    state["answer"] = state.get("enhanced_answer") or state.get("answer", "")
+                    # 안전하게 문자열로 변환
+                    fallback_answer = state.get("enhanced_answer") or state.get("answer", "")
+                    if isinstance(fallback_answer, dict):
+                        fallback_answer = fallback_answer.get("content", fallback_answer.get("answer", str(fallback_answer)))
+                    state["answer"] = str(fallback_answer) if not isinstance(fallback_answer, str) else fallback_answer
             else:
                 # AnswerFormatter가 없으면 구조화된 답변 사용
-                state["answer"] = state.get("enhanced_answer") or state.get("answer", "")
+                fallback_answer = state.get("enhanced_answer") or state.get("answer", "")
+                if isinstance(fallback_answer, dict):
+                    fallback_answer = fallback_answer.get("content", fallback_answer.get("answer", str(fallback_answer)))
+                state["answer"] = str(fallback_answer) if not isinstance(fallback_answer, str) else fallback_answer
 
             self._update_processing_time(state, start_time)
             self._add_step(state, "포맷팅", "시각적 포맷팅 완료")
 
         except Exception as e:
             self._handle_error(state, str(e), "시각적 포맷팅 중 오류 발생")
-            state["answer"] = state.get("enhanced_answer") or state.get("answer", "")
+            fallback_answer = state.get("enhanced_answer") or state.get("answer", "")
+            if isinstance(fallback_answer, dict):
+                fallback_answer = fallback_answer.get("content", fallback_answer.get("answer", str(fallback_answer)))
+            state["answer"] = str(fallback_answer) if not isinstance(fallback_answer, str) else fallback_answer
 
         return state
 
     @observe(name="prepare_final_response")
+    @with_state_optimization("prepare_final_response", enable_reduction=False)
     def prepare_final_response(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """최종 응답 상태 준비"""
         try:
@@ -1343,8 +1639,9 @@ class EnhancedLegalQuestionWorkflow:
                 )
 
             # Prune errors if too many
-            if len(state.get("errors", [])) > 10:
-                state["errors"] = state["errors"][-10:]
+            errors = self._get_state_value(state, "errors", [])
+            if len(errors) > 10:
+                self._set_state_value(state, "errors", errors[-10:])
 
             # 신뢰도 조정
             final_confidence = state.get("structure_confidence") or state.get("confidence", 0.0)
@@ -1403,8 +1700,10 @@ class EnhancedLegalQuestionWorkflow:
     def _calculate_keyword_coverage(self, state: LegalWorkflowState, answer: str) -> float:
         """키워드 포함도 계산"""
         try:
+            query = self._get_state_value(state, "query", "")
+            query_type = self._get_state_value(state, "query_type", "")
             required_keywords = self.keyword_mapper.get_keywords_for_question(
-                state["query"], state["query_type"]
+                query, query_type
             )
             return self.keyword_mapper.calculate_keyword_coverage(answer, required_keywords)
         except Exception as e:
@@ -1414,24 +1713,32 @@ class EnhancedLegalQuestionWorkflow:
     def _set_metadata(self, state: LegalWorkflowState, answer: str, keyword_coverage: float):
         """메타데이터 설정"""
         try:
+            query = self._get_state_value(state, "query", "")
+            query_type = self._get_state_value(state, "query_type", "")
             required_keywords = self.keyword_mapper.get_keywords_for_question(
-                state["query"], state["query_type"]
+                query, query_type
             )
             missing_keywords = self.keyword_mapper.get_missing_keywords(answer, required_keywords)
 
-            state["metadata"] = {
+            metadata = self._get_state_value(state, "metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.update({
                 "keyword_coverage": keyword_coverage,
                 "required_keywords_count": len(required_keywords),
                 "matched_keywords_count": len(required_keywords) - len(missing_keywords),
                 "response_length": len(answer),
-                "query_type": state["query_type"]
-            }
+                "query_type": query_type
+            })
+            self._set_state_value(state, "metadata", metadata)
         except Exception as e:
             self.logger.warning(f"Metadata setting failed: {e}")
-            state["metadata"] = {
+            query_type = self._get_state_value(state, "query_type", "")
+            metadata = {
                 "response_length": len(answer),
-                "query_type": state["query_type"]
+                "query_type": query_type
             }
+            self._set_state_value(state, "metadata", metadata)
 
     def update_statistics(self, state: LegalWorkflowState):
         """통계 업데이트 (이동 평균 사용)"""
@@ -1535,43 +1842,46 @@ class EnhancedLegalQuestionWorkflow:
         return mapping.get(legal_field, "일반")
 
     @observe(name="assess_urgency")
+    @with_state_optimization("assess_urgency", enable_reduction=True)
     def assess_urgency(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """긴급도 평가 노드"""
         try:
             start_time = time.time()
-            query = state["query"]
+            query = self._get_state_value(state, "query", "")
 
             if self.emotion_analyzer:
                 # 감정 및 의도 분석 (의도 분석만 사용)
                 intent_result = self.emotion_analyzer.analyze_intent(query, None)
 
                 # 긴급도 설정
-                state["urgency_level"] = intent_result.urgency_level.value
-                state["urgency_reasoning"] = intent_result.reasoning
+                urgency_level = intent_result.urgency_level.value
+                self._set_state_value(state, "urgency_level", urgency_level)
+                self._set_state_value(state, "urgency_reasoning", intent_result.reasoning)
 
                 # 긴급 유형 판별
                 if "기한" in query or "마감" in query or "데드라인" in query:
-                    state["emergency_type"] = "legal_deadline"
+                    self._set_state_value(state, "emergency_type", "legal_deadline")
                 elif "소송" in query or "재판" in query or "법원" in query:
-                    state["emergency_type"] = "case_progress"
+                    self._set_state_value(state, "emergency_type", "case_progress")
                 else:
-                    state["emergency_type"] = None
+                    self._set_state_value(state, "emergency_type", None)
 
-                self.logger.info(f"Urgency assessed: {state['urgency_level']}")
+                self.logger.info(f"Urgency assessed: {urgency_level}")
             else:
                 # 폴백: 키워드 기반 긴급도 평가
-                state["urgency_level"] = self._assess_urgency_fallback(query)
-                state["urgency_reasoning"] = "키워드 기반 평가"
-                state["emergency_type"] = None
+                urgency_level = self._assess_urgency_fallback(query)
+                self._set_state_value(state, "urgency_level", urgency_level)
+                self._set_state_value(state, "urgency_reasoning", "키워드 기반 평가")
+                self._set_state_value(state, "emergency_type", None)
 
             self._update_processing_time(state, start_time)
-            self._add_step(state, "긴급도 평가", f"긴급도: {state['urgency_level']}")
+            self._add_step(state, "긴급도 평가", f"긴급도: {urgency_level}")
 
         except Exception as e:
             self._handle_error(state, str(e), "긴급도 평가 중 오류")
-            state["urgency_level"] = "medium"
-            state["urgency_reasoning"] = "기본값"
-            state["emergency_type"] = None
+            self._set_state_value(state, "urgency_level", "medium")
+            self._set_state_value(state, "urgency_reasoning", "기본값")
+            self._set_state_value(state, "emergency_type", None)
 
         return state
 
@@ -1589,6 +1899,7 @@ class EnhancedLegalQuestionWorkflow:
             return "medium"
 
     @observe(name="analyze_document")
+    @with_state_optimization("analyze_document", enable_reduction=True)
     def analyze_document(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """업로드된 문서 분석"""
         try:
@@ -1821,6 +2132,7 @@ class EnhancedLegalQuestionWorkflow:
         return "\n".join(summary_parts)
 
     @observe(name="route_expert")
+    @with_state_optimization("route_expert", enable_reduction=True)
     def route_expert(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """전문가 서브그래프로 라우팅"""
         try:
@@ -1863,10 +2175,12 @@ class EnhancedLegalQuestionWorkflow:
     def _assess_complexity(self, state: LegalWorkflowState) -> str:
         """질문 복잡도 평가"""
         # 복잡도 지표들
+        query = self._get_state_value(state, "query", "")
+        extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
         indicators = {
-            "query_length": len(state["query"]),
-            "num_keywords": len(state.get("extracted_keywords", [])),
-            "has_document": bool(state.get("uploaded_document")),
+            "query_length": len(query),
+            "num_keywords": len(extracted_keywords),
+            "has_document": bool(self._get_state_value(state, "uploaded_document")),
             "high_urgency": state.get("urgency_level") in ["high", "critical"],
             "multiple_legal_issues": len(state.get("potential_issues", [])) > 2
         }
