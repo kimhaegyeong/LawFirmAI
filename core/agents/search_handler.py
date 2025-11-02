@@ -45,7 +45,7 @@ class SearchHandler:
             config: 설정 객체
             logger: 로거 (없으면 자동 생성)
         """
-        self.semantic_search = semantic_search
+        self.semantic_search_engine = semantic_search
         self.keyword_mapper = keyword_mapper
         self.data_connector = data_connector
         self.result_merger = result_merger
@@ -73,7 +73,7 @@ class SearchHandler:
 
     def semantic_search(self, query: str, k: Optional[int] = None) -> Tuple[List[Dict[str, Any]], int]:
         """의미적 벡터 검색"""
-        if not self.semantic_search:
+        if not self.semantic_search_engine:
             self.logger.info("Semantic search not available")
             return [], 0
 
@@ -84,7 +84,7 @@ class SearchHandler:
             config_threshold = getattr(self.config, 'similarity_threshold', 0.3)
             similarity_threshold = max(0.5, config_threshold)  # 최소 0.5 보장
 
-            results = self.semantic_search.search(query, k=search_k, similarity_threshold=similarity_threshold)
+            results = self.semantic_search_engine.search(query, k=search_k, similarity_threshold=similarity_threshold)
             self.logger.info(f"Semantic search found {len(results)} results")
 
             formatted_results = []
