@@ -6,21 +6,19 @@ LawFirmAI는 법률 관련 질문에 답변하는 지능형 AI 어시스턴트�
 
 ## 주요 기능
 
-### Phase 1: 대화 맥락 강화
-- **영구적 세션 저장**: 대화 기록을 데이터베이스에 저장
-- **다중 턴 질문 처리**: 대명사 해결 및 불완전한 질문 완성
-- **컨텍스트 압축**: 긴 대화를 요약하여 토큰 제한 해결
-- **통합 세션 관리**: 메모리와 DB를 동시에 관리
+### LangGraph 워크플로우 기반 처리
+- **질문 분류**: 자동 질문 유형 분류 및 처리 전략 결정
+- **하이브리드 검색**: 의미적 검색과 정확한 매칭 통합
+- **답변 생성**: LLM 기반 법률 답변 생성
+- **신뢰도 계산**: 답변의 신뢰도 자동 계산
 
-### Phase 2: 개인화 및 지능형 분석
-- **사용자 프로필 관리**: 전문성 수준, 관심 분야, 선호도 관리
-- **감정 및 의도 분석**: 사용자 감정과 의도를 파악하여 적절한 응답 톤 결정
-- **대화 흐름 추적**: 대화 패턴 학습 및 다음 질문 예측
+### 세션 관리
+- **세션 기반 대화**: 대화 맥락 유지
+- **멀티턴 처리**: 대명사 해결 및 질문 확장
 
-### Phase 3: 장기 기억 및 품질 모니터링
-- **맥락적 메모리 관리**: 중요한 사실을 장기 기억으로 저장
-- **대화 품질 모니터링**: 품질 평가 및 개선점 제안
-- **성능 최적화**: 메모리 관리 및 캐시 시스템
+### 품질 개선
+- **답변 품질 검증**: 자동 품질 평가
+- **법적 근거 제공**: 관련 법령 및 판례 인용
 
 ## API 엔드포인트
 
@@ -33,175 +31,34 @@ LawFirmAI는 법률 관련 질문에 답변하는 지능형 AI 어시스턴트�
 
 #### `POST /api/v1/chat`
 
-기본 채팅 엔드포인트 (레거시 호환성)
+채팅 메시지 처리 엔드포인트 (LangGraph 워크플로우)
 
 **요청 파라미터:**
 ```json
 {
   "message": "민법 제750조에 대해 설명해주세요",
-  "context": "추가 컨텍스트 (선택사항)",
-  "session_id": "session_20241220_143022"
+  "session_id": "session_id_123"
 }
 ```
 
 **응답:**
 ```json
 {
-  "response": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정하는 중요한 조문입니다...",
+  "answer": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정하는 중요한 조문입니다...",
   "confidence": 0.85,
   "sources": ["민법 제750조", "대법원 판례 2020다12345"],
-  "processing_time": 1.2,
-  "session_id": "session_20241220_143022",
+  "session_id": "session_id_123",
   "question_type": "law_inquiry",
   "legal_references": ["민법 제750조"],
-  "processing_steps": ["질문분류", "검색", "답변생성"],
-  "metadata": {
-    "entities": ["민법", "제750조", "손해배상"],
-    "topics": ["불법행위", "손해배상"]
-  },
-  "errors": []
-}
-```
-
-#### `POST /api/v1/chat/ml-enhanced`
-
-ML 강화 채팅 엔드포인트 (Phase 1-3 통합)
-
-**요청 파라미터:**
-```json
-{
-  "message": "민법 제750조에 대해 설명해주세요",
-  "context": "추가 컨텍스트 (선택사항)",
-  "session_id": "session_20241220_143022",
-  "user_id": "user123",
-  "enable_phases": {
-    "phase1": true,
-    "phase2": true,
-    "phase3": true
-  }
-}
-```
-
-**응답:**
-```json
-{
-  "response": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정하는 중요한 조문입니다...",
-  "confidence": 0.85,
-  "sources": ["민법 제750조", "대법원 판례 2020다12345"],
-  "processing_time": 1.2,
-  "session_id": "session_20241220_143022",
-  "user_id": "user123",
-  "question_type": "law_inquiry",
-  "legal_references": ["민법 제750조"],
-  "processing_steps": ["질문분류", "검색", "답변생성"],
-  "metadata": {
-    "entities": ["민법", "제750조", "손해배상"],
-    "topics": ["불법행위", "손해배상"]
-  },
-  "errors": [],
-  "phase_info": {
-    "phase1": {
-      "enabled": true,
-      "context": {...},
-      "multi_turn_result": {...},
-      "compression_info": {...}
-    },
-    "phase2": {
-      "enabled": true,
-      "personalized_context": {...},
-      "emotion_intent_info": {...},
-      "flow_tracking_info": {...}
-    },
-    "phase3": {
-      "enabled": true,
-      "memory_search_results": [...],
-      "quality_assessment": {...}
-    }
-  },
-  "quality_assessment": {
-    "overall_score": 0.82,
-    "completeness_score": 0.85,
-    "satisfaction_score": 0.80,
-    "accuracy_score": 0.81,
-    "issues": [],
-    "suggestions": []
-  },
-  "performance_info": {
-    "processing_time": 1.2,
-    "cache_hit_rate": 0.75,
-    "from_cache": false,
-    "memory_usage_mb": 256.5
-  }
-}
-```
-
-#### `POST /api/v1/chat/intelligent`
-
-지능형 채팅 엔드포인트 (최신 버전)
-
-**요청 파라미터:**
-```json
-{
-  "message": "민법 제750조에 대해 설명해주세요",
-  "context": "추가 컨텍스트 (선택사항)",
-  "session_id": "session_20241220_143022",
-  "user_id": "user123",
-  "options": {
-    "enable_emotion_analysis": true,
-    "enable_intent_analysis": true,
-    "enable_flow_tracking": true,
-    "enable_quality_monitoring": true
-  }
-}
-```
-
-**응답:**
-```json
-{
-  "response": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정하는 중요한 조문입니다...",
-  "confidence": 0.85,
-  "sources": ["민법 제750조", "대법원 판례 2020다12345"],
-  "processing_time": 1.2,
-  "session_id": "session_20241220_143022",
-  "user_id": "user123",
-  "question_type": "law_inquiry",
-  "legal_references": ["민법 제750조"],
-  "processing_steps": ["질문분류", "검색", "답변생성"],
-  "metadata": {
-    "entities": ["민법", "제750조", "손해배상"],
-    "topics": ["불법행위", "손해배상"]
-  },
-  "errors": [],
-  "intelligent_features": {
-    "emotion_analysis": {
-      "emotion": "neutral",
-      "urgency": "normal",
-      "confidence": 0.8
-    },
-    "intent_analysis": {
-      "intent": "question",
-      "confidence": 0.9
-    },
-    "flow_tracking": {
-      "predicted_next_intent": "follow_up_question",
-      "suggested_questions": ["손해배상 청구 절차는?", "손해배상 범위는?"]
-    },
-    "quality_monitoring": {
-      "completeness_score": 0.85,
-      "satisfaction_score": 0.80,
-      "accuracy_score": 0.81
-    }
-  },
-  "warnings": [],
-  "recommendations": []
+  "processing_time": 1.2
 }
 ```
 
 ### 2. 검색 API
 
-#### `POST /api/v1/search`
+#### `POST /api/v1/search/hybrid`
 
-ML 강화 검색 엔드포인트
+하이브리드 검색 엔드포인트
 
 **요청 파라미터:**
 ```json
@@ -210,11 +67,8 @@ ML 강화 검색 엔드포인트
   "search_type": "hybrid",
   "limit": 10,
   "filters": {
-    "law_type": "민법",
-    "date_range": {
-      "start": "2020-01-01",
-      "end": "2024-12-31"
-    }
+    "document_type": "precedent",
+    "court_name": "대법원"
   }
 }
 ```
@@ -228,14 +82,67 @@ ML 강화 검색 엔드포인트
       "title": "손해배상 관련 대법원 판례",
       "content": "판례 내용...",
       "source": "대법원 판례 2020다12345",
-      "relevance_score": 0.95,
-      "search_method": "semantic"
+      "similarity_score": 0.95,
+      "search_type": "hybrid"
     }
   ],
   "total_count": 1,
   "search_type": "hybrid",
-  "ml_enhanced": true,
   "processing_time": 0.5
+}
+```
+
+#### `POST /api/v1/search/semantic`
+
+의미적 검색 엔드포인트
+
+**요청 파라미터:**
+```json
+{
+  "query": "계약 해지 조건",
+  "limit": 5
+}
+```
+
+**응답:**
+```json
+{
+  "results": [
+    {
+      "id": "doc_001",
+      "title": "계약 해지 관련 법령",
+      "similarity_score": 0.92
+    }
+  ],
+  "total_count": 1,
+  "search_type": "semantic"
+}
+```
+
+#### `POST /api/v1/search/exact`
+
+정확한 매칭 검색 엔드포인트
+
+**요청 파라미터:**
+```json
+{
+  "query": "민법 제543조",
+  "limit": 5
+}
+```
+
+**응답:**
+```json
+{
+  "results": [
+    {
+      "id": "law_001",
+      "title": "민법 제543조",
+      "content": "조문 내용..."
+    }
+  ],
+  "total_count": 1,
+  "search_type": "exact"
 }
 ```
 
@@ -299,7 +206,7 @@ ML 강화 검색 엔드포인트
     "active_sessions": 15,
     "total_requests": 1250
   },
-  "timestamp": "2024-12-20T14:30:22Z"
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -317,7 +224,7 @@ ML 강화 검색 엔드포인트
     "ml_models": "healthy",
     "cache": "healthy"
   },
-  "timestamp": "2024-12-20T14:30:22Z"
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -330,7 +237,7 @@ ML 강화 검색 엔드포인트
 **요청 파라미터:**
 ```json
 {
-  "session_id": "session_20241220_143022",
+  "session_id": "session_id_example",
   "user_id": "user123",
   "feedback_type": "rating",
   "rating": 5,
@@ -343,7 +250,7 @@ ML 강화 검색 엔드포인트
 {
   "feedback_id": "feedback_001",
   "status": "received",
-  "timestamp": "2024-12-20T14:30:22Z"
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -362,7 +269,7 @@ ML 강화 검색 엔드포인트
     "common_issues": ["응답 속도", "정확성"],
     "improvement_suggestions": ["캐시 최적화", "모델 업데이트"]
   },
-  "timestamp": "2024-12-20T14:30:22Z"
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -392,7 +299,7 @@ ML 강화 검색 엔드포인트
       "issue": "필수 필드가 누락되었습니다."
     }
   },
-  "timestamp": "2024-12-20T14:30:22Z"
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -415,26 +322,9 @@ def chat_with_lawfirm_ai(message, session_id=None):
     response = requests.post(url, json=data)
     return response.json()
 
-# ML 강화 채팅 API 사용
-def ml_enhanced_chat(message, user_id, session_id=None):
-    url = "http://localhost:8000/api/v1/chat/ml-enhanced"
-    data = {
-        "message": message,
-        "user_id": user_id,
-        "session_id": session_id,
-        "enable_phases": {
-            "phase1": True,
-            "phase2": True,
-            "phase3": True
-        }
-    }
-    
-    response = requests.post(url, json=data)
-    return response.json()
-
 # 사용 예제
-result = chat_with_lawfirm_ai("민법 제750조에 대해 설명해주세요")
-print(result["response"])
+result = chat_with_lawfirm_ai("민법 제750조에 대해 설명해주세요", "session_id_123")
+print(result["answer"])
 ```
 
 ### JavaScript 예제
@@ -456,48 +346,22 @@ async function chatWithLawFirmAI(message, sessionId = null) {
     return await response.json();
 }
 
-// ML 강화 채팅 API 사용
-async function mlEnhancedChat(message, userId, sessionId = null) {
-    const response = await fetch('http://localhost:8000/api/v1/chat/ml-enhanced', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            message: message,
-            user_id: userId,
-            session_id: sessionId,
-            enable_phases: {
-                phase1: true,
-                phase2: true,
-                phase3: true
-            }
-        })
-    });
-    
-    return await response.json();
-}
-
 // 사용 예제
-chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
-    .then(result => console.log(result.response));
+chatWithLawFirmAI("민법 제750조에 대해 설명해주세요", "session_id_123")
+    .then(result => console.log(result.answer));
 ```
 
 ## 성능 최적화 팁
 
-### 1. 캐시 활용
-- 동일한 질문에 대해서는 캐시된 응답을 받을 수 있습니다
-- `performance_info.from_cache` 필드로 캐시 사용 여부 확인 가능
-
-### 2. 세션 관리
+### 1. 세션 관리
 - `session_id`를 사용하여 대화 맥락을 유지하세요
 - 세션을 재사용하면 더 나은 응답을 받을 수 있습니다
 
-### 3. Phase 기능 활용
-- Phase 1-3 기능을 적절히 활용하여 더 정확한 응답을 받으세요
-- 사용자 프로필을 설정하여 개인화된 응답을 받으세요
+### 2. 검색 옵션 활용
+- 하이브리드 검색을 통해 의미적 검색과 정확한 매칭을 통합하세요
+- 질문 유형에 따라 적절한 검색 방식을 선택하세요
 
-### 4. 에러 처리
+### 3. 에러 처리
 - 적절한 에러 처리를 구현하여 사용자 경험을 향상시키세요
 - 재시도 로직을 구현하여 일시적인 오류를 처리하세요
 
@@ -532,9 +396,9 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 {
   "sessions": [
     {
-      "session_id": "session_20241220_143022",
-      "created_at": "2024-12-20T14:30:22Z",
-      "last_updated": "2024-12-20T15:45:30Z",
+      "session_id": "session_id_example",
+      "created_at": "2025-01-01T00:00:00Z",
+      "last_updated": "2025-01-01T00:00:00Z",
       "turn_count": 5,
       "topics": ["민법", "손해배상"],
       "summary": "민법 제750조 관련 질문들"
@@ -550,21 +414,21 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 **응답:**
 ```json
 {
-  "session_id": "session_20241220_143022",
+  "session_id": "session_id_example",
   "user_id": "user123",
   "turns": [
     {
       "user_query": "민법 제750조에 대해 설명해주세요",
       "bot_response": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정합니다...",
-      "timestamp": "2024-12-20T14:30:22Z",
+      "timestamp": "2025-01-01T00:00:00Z",
       "question_type": "law_inquiry",
       "entities": {"laws": ["민법"], "articles": ["제750조"]}
     }
   ],
   "entities": {...},
   "topic_stack": ["민법", "손해배상"],
-  "created_at": "2024-12-20T14:30:22Z",
-  "last_updated": "2024-12-20T15:45:30Z"
+  "created_at": "2025-01-01T00:00:00Z",
+  "last_updated": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -578,7 +442,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 ```json
 {
   "query": "손해배상 관련 질문",
-  "session_id": "session_20241220_143022",
+  "session_id": "session_id_example",
   "user_id": "user123"
 }
 ```
@@ -588,7 +452,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 {
   "results": [
     {
-      "memory_id": "mem_user123_session_20241220_143022_abc123",
+      "memory_id": "mem_user123_session_id_example_abc123",
       "content": "민법 제750조는 불법행위로 인한 손해배상 책임을 규정합니다",
       "memory_type": "legal_knowledge",
       "importance_score": 0.85,
@@ -630,7 +494,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
     "답변에 더 구체적인 예시를 포함하세요",
     "관련 법령이나 판례를 추가로 언급하세요"
   ],
-  "assessment_timestamp": "2024-12-20T15:45:30Z"
+  "assessment_timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -643,7 +507,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 {
   "periods": [
     {
-      "period": "2024-12-20",
+      "period": "2025-01-01",
       "avg_completeness": 0.85,
       "avg_satisfaction": 0.80,
       "avg_accuracy": 0.81,
@@ -666,7 +530,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 **응답:**
 ```json
 {
-  "timestamp": "2024-12-20T15:45:30Z",
+  "timestamp": "2025-01-01T00:00:00Z",
   "performance_monitor": {
     "summary": {
       "period_hours": 24,
@@ -719,7 +583,7 @@ chatWithLawFirmAI("민법 제750조에 대해 설명해주세요")
 **응답:**
 ```json
 {
-  "timestamp": "2024-12-20T15:45:30Z",
+  "timestamp": "2025-01-01T00:00:00Z",
   "actions_taken": [
     "Garbage collection: 45 objects collected",
     "Cache cleanup: 12 entries removed"
@@ -762,27 +626,14 @@ headers = {
 }
 
 # 메시지 전송
-def send_message(message, session_id=None, user_id=None):
-    url = f"{BASE_URL}/api/chat"
+def send_message(message, session_id=None):
+    url = f"{BASE_URL}/api/v1/chat"
     data = {
         "message": message,
-        "session_id": session_id,
-        "user_id": user_id
+        "session_id": session_id
     }
     
     response = requests.post(url, headers=headers, json=data)
-    return response.json()
-
-# 사용자 프로필 조회
-def get_user_profile(user_id):
-    url = f"{BASE_URL}/api/user/profile/{user_id}"
-    response = requests.get(url, headers=headers)
-    return response.json()
-
-# 세션 목록 조회
-def get_user_sessions(user_id):
-    url = f"{BASE_URL}/api/sessions/{user_id}"
-    response = requests.get(url, headers=headers)
     return response.json()
 
 # 사용 예제
@@ -790,19 +641,10 @@ if __name__ == "__main__":
     # 메시지 전송
     result = send_message(
         "민법 제750조에 대해 설명해주세요",
-        session_id="session_20241220_143022",
-        user_id="user123"
+        session_id="session_id_example"
     )
-    print(f"응답: {result['response']}")
-    print(f"신뢰도: {result['confidence']}")
-    
-    # 사용자 프로필 조회
-    profile = get_user_profile("user123")
-    print(f"전문성 수준: {profile['expertise_level']}")
-    
-    # 세션 목록 조회
-    sessions = get_user_sessions("user123")
-    print(f"총 세션 수: {len(sessions['sessions'])}")
+    print(f"답변: {result['answer']}")
+    print(f"신뢰도: {result.get('confidence', 'N/A')}")
 ```
 
 ### JavaScript 예제
@@ -818,12 +660,11 @@ const headers = {
 };
 
 // 메시지 전송
-async function sendMessage(message, sessionId = null, userId = null) {
-    const url = `${BASE_URL}/api/chat`;
+async function sendMessage(message, sessionId = null) {
+    const url = `${BASE_URL}/api/v1/chat`;
     const data = {
         message: message,
-        session_id: sessionId,
-        user_id: userId
+        session_id: sessionId
     };
     
     const response = await fetch(url, {
@@ -835,32 +676,16 @@ async function sendMessage(message, sessionId = null, userId = null) {
     return await response.json();
 }
 
-// 사용자 프로필 조회
-async function getUserProfile(userId) {
-    const url = `${BASE_URL}/api/user/profile/${userId}`;
-    const response = await fetch(url, {
-        method: 'GET',
-        headers: headers
-    });
-    
-    return await response.json();
-}
-
 // 사용 예제
 async function example() {
     try {
         // 메시지 전송
         const result = await sendMessage(
             '민법 제750조에 대해 설명해주세요',
-            'session_20241220_143022',
-            'user123'
+            'session_id_example'
         );
-        console.log('응답:', result.response);
+        console.log('답변:', result.answer);
         console.log('신뢰도:', result.confidence);
-        
-        // 사용자 프로필 조회
-        const profile = await getUserProfile('user123');
-        console.log('전문성 수준:', profile.expertise_level);
         
     } catch (error) {
         console.error('오류 발생:', error);

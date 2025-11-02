@@ -4,11 +4,11 @@
 
 LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) 시스템 사용법을 설명합니다. 이 시스템은 법률 문서를 효율적으로 검색하고 AI 모델을 통해 정확한 답변을 생성하는 것을 목표로 합니다.
 
-## 🆕 최신 업데이트 (2025-10-20)
+## 주요 기능
 
-### 소스 검색 시스템 대폭 개선
+### 검색 시스템
 - **의미적 검색 엔진**: FAISS 벡터 인덱스와 SentenceTransformer 모델 통합
-- **데이터베이스 폴백**: 벡터 메타데이터 없이도 데이터베이스에서 직접 검색
+- **데이터베이스 검색**: SQLite 기반 정확한 매칭 검색
 - **실제 소스 제공**: 법률/판례 데이터베이스에서 실제 근거 자료 검색
 - **하이브리드 검색**: 정확한 매칭과 의미적 검색 결과 병합
 
@@ -18,83 +18,66 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    LangChain RAG System                     │
+│                    LangGraph RAG System                     │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Client    │  │   API       │  │   Gradio    │        │
-│  │  Request    │  │  Gateway    │  │  Interface  │        │
+│  │   Client    │  │   API        │  │  Streamlit   │        │
+│  │  Request    │  │  (FastAPI)   │  │  Interface   │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘        │
 │           │               │               │                │
 │           └───────────────┼───────────────┘                │
 │                           │                                │
 │  ┌─────────────────────────────────────────────────────────┤
-│  │              LangChainRAGService                        │
+│  │              LangGraph Workflow                         │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  │ Document    │  │ Context     │  │ Answer      │    │
-│  │  │ Processor   │  │ Manager     │  │ Generator   │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘    │
-│  └─────────────────────────────────────────────────────────┤
-│                           │                                │
-│  ┌─────────────────────────────────────────────────────────┤
-│  │              Langfuse Observability                     │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  │   Tracing   │  │  Metrics    │  │  Debugging  │    │
-│  │  │   System    │  │ Collection  │  │ Dashboard   │    │
+│  │  │ Workflow    │  │ Search      │  │ Generation  │    │
+│  │  │ Service     │  │ Engine      │  │ Service     │    │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘    │
 │  └─────────────────────────────────────────────────────────┤
 │                           │                                │
 │  ┌─────────────────────────────────────────────────────────┤
 │  │              Data Layer                                 │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  │ Vector      │  │ Database    │  │ File        │    │
-│  │  │ Store       │  │ Manager     │  │ System      │    │
-│  │  │ (FAISS)     │  │ (SQLite)   │  │ Storage     │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘    │
+│  │  ┌─────────────┐  ┌─────────────┐                     │
+│  │  │ Vector      │  │ Database    │                     │
+│  │  │ Store       │  │ (SQLite)    │                     │
+│  │  │ (FAISS)     │  └─────────────┘                     │
+│  │  └─────────────┘                                     │
 │  └─────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 핵심 컴포넌트
 
-#### 1. LangChainRAGService (메인 서비스)
-- **역할**: 전체 RAG 파이프라인의 오케스트레이션
-- **주요 기능**:
-  - 쿼리 처리 및 라우팅
-  - 컴포넌트 간 데이터 흐름 관리
-  - 성능 모니터링 및 통계 수집
-  - 오류 처리 및 복구
+#### 1. LangGraph Workflow Service
+**파일**: `core/agents/workflow_service.py`
 
-#### 2. DocumentProcessor (문서 처리기)
-- **역할**: 법률 문서의 전처리 및 청킹
+- **역할**: LangGraph 기반 법률 질문 처리 워크플로우 오케스트레이션
 - **주요 기능**:
-  - 다양한 문서 형식 지원 (TXT, PDF, DOCX)
-  - 법률 문서 특화 전처리
-  - 지능적 텍스트 분할 (RecursiveCharacterTextSplitter)
-  - 법률 패턴 인식 및 메타데이터 추출
+  - 질문 처리 워크플로우 실행
+  - 상태 관리 및 최적화
+  - 세션 관리
 
-#### 3. ContextManager (컨텍스트 관리자)
-- **역할**: 검색된 문서의 컨텍스트 윈도우 관리
-- **주요 기능**:
-  - 세션 기반 컨텍스트 관리
-  - 동적 컨텍스트 길이 조절
-  - 관련성 기반 컨텍스트 필터링
-  - 컨텍스트 캐싱 및 최적화
+#### 2. 검색 엔진
+**파일**: `core/services/search/`
 
-#### 4. AnswerGenerator (답변 생성기)
-- **역할**: LLM을 통한 답변 생성
-- **주요 기능**:
-  - 다양한 프롬프트 템플릿 지원
-  - LLM 체인 관리 (LangChain)
-  - 답변 품질 검증
-  - 소스 인용 및 참조 생성
+- **HybridSearchEngine**: 하이브리드 검색 (의미적 + 정확 매칭)
+- **SemanticSearchEngine**: FAISS 벡터 기반 의미적 검색
+- **ExactSearchEngine**: SQLite FTS 기반 정확한 매칭 검색
+- **QuestionClassifier**: 질문 유형 분류
 
-#### 5. LangfuseClient (관찰성 클라이언트)
-- **역할**: LLM 호출 추적 및 성능 모니터링
-- **주요 기능**:
-  - 실시간 LLM 호출 추적
-  - 성능 메트릭 수집
-  - 오류 추적 및 디버깅
-  - A/B 테스트 지원
+#### 3. 답변 생성 서비스
+**파일**: `core/services/generation/`
+
+- **AnswerGenerator**: LLM 기반 답변 생성
+- **ContextBuilder**: 검색 결과 기반 컨텍스트 구축
+- **AnswerFormatter**: 답변 포맷팅
+
+#### 4. 데이터 레이어
+**파일**: `core/data/`
+
+- **VectorStore**: FAISS 벡터 스토어 관리
+- **Database**: SQLite 데이터베이스 관리
+- **ConversationStore**: 대화 이력 저장
 
 ## 설치 및 설정
 
@@ -102,7 +85,7 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 
 ```bash
 pip install langchain langfuse faiss-cpu sentence-transformers
-pip install gradio fastapi uvicorn
+pip install streamlit fastapi uvicorn
 ```
 
 ### 2. 환경 변수 설정
@@ -173,27 +156,20 @@ class LangChainConfig:
 
 ## 기본 사용법
 
-### 1. Gradio 웹 인터페이스 실행
+### 1. Streamlit 웹 인터페이스 실행
 
 ```bash
-# Gradio 서버 시작
-cd gradio
-python simple_langchain_app.py
+# Streamlit 서버 시작
+cd apps/streamlit
+streamlit run app.py
 ```
 
-### 2. 간단한 테스트 실행
-
-```bash
-# 질의-답변 테스트 스크립트 실행
-cd gradio
-python test_simple_query.py
-```
-
-### 3. API 서버 실행
+### 2. API 서버 실행
 
 ```bash
 # FastAPI 서버 시작
-uvicorn source.api.endpoints:app --host 0.0.0.0 --port 8000
+cd apps/api
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ## 데이터 플로우
@@ -201,21 +177,24 @@ uvicorn source.api.endpoints:app --host 0.0.0.0 --port 8000
 ### 1. 쿼리 처리 플로우
 
 ```
-사용자 쿼리
+사용자 쿼리 (apps/streamlit 또는 apps/api)
     ↓
-LangChainRAGService.process_query()
+core/agents/workflow_service.py
     ↓
-ContextManager.add_query_to_session()
+core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+    ├── classify_query (질문 분류)
+    ├── resolve_multi_turn (멀티턴 처리)
+    ├── retrieve_documents (문서 검색)
+    │   ├── core/services/search/hybrid_search_engine.py
+    │   ├── core/services/search/semantic_search_engine.py
+    │   └── core/services/search/exact_search_engine.py
+    ├── generate_answer (답변 생성)
+    │   ├── core/services/generation/answer_generator.py
+    │   └── core/services/generation/context_builder.py
+    └── calculate_confidence (신뢰도 계산)
+        └── core/services/enhancement/confidence_calculator.py
     ↓
-DocumentProcessor.retrieve_documents()
-    ↓
-ContextManager.build_context_window()
-    ↓
-AnswerGenerator.generate_answer()
-    ↓
-LangfuseClient.track_rag_query()
-    ↓
-RAGResult 반환
+최종 응답 반환
 ```
 
 ### 2. 문서 추가 플로우
@@ -223,31 +202,15 @@ RAGResult 반환
 ```
 문서 입력
     ↓
-DocumentProcessor.load_documents()
+core/data/data_processor.py (문서 전처리)
     ↓
-DocumentProcessor.preprocess_document()
+core/data/vector_store.py (벡터 임베딩 생성)
     ↓
-DocumentProcessor.split_document()
+FAISS 인덱스 업데이트
     ↓
-Vector Store 업데이트 (FAISS/Chroma)
-    ↓
-기존 LegalVectorStore 업데이트
+core/data/database.py (메타데이터 저장)
     ↓
 성공/실패 응답
-```
-
-### 3. 관찰성 플로우
-
-```
-LLM 호출
-    ↓
-LangfuseClient.track_llm_call()
-    ↓
-MetricsCollector.collect_rag_metrics()
-    ↓
-Langfuse Dashboard 업데이트
-    ↓
-성능 분석 및 디버깅
 ```
 
 ## 기술 스택
@@ -355,191 +318,119 @@ logging.basicConfig(
 ### 검색 엔진 구성
 
 #### 1. 의미적 검색 엔진
+**파일**: `core/services/search/semantic_search_engine.py`
+
 ```python
-class SemanticSearchEngine:
-    """의미적 유사도 기반 검색"""
-    
-    def search(self, query: str, k: int = 5) -> List[SearchResult]:
-        # 벡터 임베딩 기반 검색
-        query_embedding = self.embedding_model.encode(query)
-        scores, indices = self.vector_store.search(query_embedding, k)
-        
-        return [SearchResult(
-            document_id=indices[i],
-            score=scores[i],
-            search_type="semantic"
-        ) for i in range(len(indices))]
+from core.services.search import SemanticSearchEngine
+
+engine = SemanticSearchEngine()
+results = engine.search("계약 해지", k=5)
 ```
+
+**주요 기능**:
+- FAISS 벡터 인덱스 기반 검색
+- Sentence-BERT 모델을 사용한 의미적 유사도 계산
 
 #### 2. 정확 매칭 검색 엔진
+**파일**: `core/services/search/exact_search_engine.py`
+
 ```python
-class ExactSearchEngine:
-    """키워드 기반 정확 매칭 검색"""
-    
-    def search(self, query: str, k: int = 5) -> List[SearchResult]:
-        # SQLite FTS5 기반 검색
-        results = self.db.execute(
-            "SELECT * FROM documents_fts WHERE documents_fts MATCH ? LIMIT ?",
-            (query, k)
-        ).fetchall()
-        
-        return [SearchResult(
-            document_id=row['id'],
-            score=row['rank'],
-            search_type="exact"
-        ) for row in results]
+from core.services.search import ExactSearchEngine
+
+engine = ExactSearchEngine()
+results = engine.search("민법 제543조", k=5)
 ```
+
+**주요 기능**:
+- SQLite FTS5 기반 키워드 검색
+- 법령명, 조문번호 등 정확한 매칭
 
 #### 3. 하이브리드 검색 엔진
-```python
-class HybridSearchEngine:
-    """의미적 + 정확 매칭 통합 검색"""
-    
-    def search(self, query: str, k: int = 5) -> List[SearchResult]:
-        # 의미적 검색
-        semantic_results = self.semantic_engine.search(query, k)
-        
-        # 정확 매칭 검색
-        exact_results = self.exact_engine.search(query, k)
-        
-        # 결과 통합 및 재순위화
-        combined_results = self._combine_results(
-            semantic_results, exact_results, k
-        )
-        
-        return combined_results
-    
-    def _combine_results(self, semantic: List, exact: List, k: int) -> List:
-        """검색 결과 통합"""
-        # 가중 평균으로 점수 계산
-        combined_scores = {}
-        
-        for result in semantic:
-            doc_id = result.document_id
-            combined_scores[doc_id] = {
-                'semantic_score': result.score,
-                'exact_score': 0.0,
-                'combined_score': result.score * 0.7  # 의미적 검색 가중치
-            }
-        
-        for result in exact:
-            doc_id = result.document_id
-            if doc_id in combined_scores:
-                combined_scores[doc_id]['exact_score'] = result.score
-                combined_scores[doc_id]['combined_score'] += result.score * 0.3
-            else:
-                combined_scores[doc_id] = {
-                    'semantic_score': 0.0,
-                    'exact_score': result.score,
-                    'combined_score': result.score * 0.3
-                }
-        
-        # 점수 기준으로 정렬
-        sorted_results = sorted(
-            combined_scores.items(),
-            key=lambda x: x[1]['combined_score'],
-            reverse=True
-        )
-        
-        return [SearchResult(
-            document_id=doc_id,
-            score=scores['combined_score'],
-            search_type="hybrid"
-        ) for doc_id, scores in sorted_results[:k]]
-```
-
-## ML 강화 RAG 시스템
-
-### ML 강화 서비스
+**파일**: `core/services/search/hybrid_search_engine.py`
 
 ```python
-class MLEnhancedRAGService:
-    """ML 강화 RAG 서비스"""
-    
-    def __init__(self):
-        self.quality_classifier = self._load_quality_classifier()
-        self.hybrid_search_engine = HybridSearchEngine()
-        self.answer_generator = AnswerGenerator()
-    
-    def process_query(self, query: str) -> RAGResult:
-        """ML 강화 쿼리 처리"""
-        # 1. 하이브리드 검색
-        search_results = self.hybrid_search_engine.search(query, k=10)
-        
-        # 2. ML 기반 품질 필터링
-        filtered_results = self._filter_by_quality(search_results)
-        
-        # 3. 컨텍스트 구축
-        context = self._build_context(filtered_results)
-        
-        # 4. 답변 생성
-        answer = self.answer_generator.generate(query, context)
-        
-        return RAGResult(
-            query=query,
-            answer=answer,
-            sources=filtered_results,
-            confidence=self._calculate_confidence(answer, filtered_results)
-        )
-    
-    def _filter_by_quality(self, results: List[SearchResult]) -> List[SearchResult]:
-        """ML 기반 품질 필터링"""
-        quality_scores = self.quality_classifier.predict_proba([
-            self._extract_features(result) for result in results
-        ])
-        
-        # 품질 점수가 임계값 이상인 결과만 반환
-        filtered_results = []
-        for i, result in enumerate(results):
-            if quality_scores[i][1] > 0.7:  # 고품질 임계값
-                result.quality_score = quality_scores[i][1]
-                filtered_results.append(result)
-        
-        return filtered_results
+from core.services.search import HybridSearchEngine
+
+engine = HybridSearchEngine()
+results = engine.search("계약 해지", question_type="law_inquiry")
 ```
+
+**주요 기능**:
+- 의미적 검색과 정확 매칭 검색 결과 통합
+- 가중 평균을 통한 결과 재순위화
+- 질문 유형별 동적 가중치 조정
+
+## LangGraph 기반 RAG 시스템
+
+### 워크플로우 서비스
+
+```python
+from core.agents.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
+
+# 워크플로우 서비스 초기화
+config = LangGraphConfig.from_env()
+workflow = LangGraphWorkflowService(config)
+
+# 쿼리 처리
+result = await workflow.process_query("계약 해지 조건은?", "session_id")
+
+# 결과 확인
+print(result["answer"])
+print(f"신뢰도: {result.get('confidence', 'N/A')}")
+print(f"소스: {result.get('sources', [])}")
+```
+
+**주요 기능**:
+- LangGraph 기반 State 워크플로우
+- 질문 분류 및 긴급도 평가
+- 하이브리드 검색 자동 실행
+- 답변 생성 및 품질 검증
 
 ## 사용 예시
 
 ### 1. 기본 RAG 쿼리
 
 ```python
-from source.services.rag_service import LangChainRAGService
+from core.agents.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
-# RAG 서비스 초기화
-rag_service = LangChainRAGService()
+# 워크플로우 서비스 초기화
+config = LangGraphConfig.from_env()
+workflow = LangGraphWorkflowService(config)
 
 # 쿼리 처리
-result = rag_service.process_query("계약서에서 주의해야 할 조항은 무엇인가요?")
+result = await workflow.process_query("계약서에서 주의해야 할 조항은 무엇인가요?", "session_id")
 
-print(f"답변: {result.answer}")
-print(f"신뢰도: {result.confidence}")
-print(f"참조 문서: {len(result.sources)}개")
+print(f"답변: {result['answer']}")
+print(f"신뢰도: {result.get('confidence', 'N/A')}")
+print(f"참조 문서: {len(result.get('sources', []))}개")
 ```
 
 ### 2. 하이브리드 검색
 
 ```python
-from source.services.search_service import MLEnhancedSearchService
+from core.services.search import HybridSearchEngine
 
-# 검색 서비스 초기화
-search_service = MLEnhancedSearchService()
+# 검색 엔진 초기화
+search_engine = HybridSearchEngine()
 
 # 하이브리드 검색
-results = search_service.hybrid_search("민법 제543조", k=5)
+results = search_engine.search("민법 제543조", question_type="law_inquiry")
 
 for result in results:
-    print(f"문서: {result.document_id}")
-    print(f"점수: {result.score}")
-    print(f"검색 유형: {result.search_type}")
+    print(f"문서: {result.get('document_id')}")
+    print(f"점수: {result.get('score', 0)}")
+    print(f"검색 유형: {result.get('search_type', 'hybrid')}")
 ```
 
 ### 3. 벡터 저장소 관리
 
 ```python
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import VectorStore
 
 # 벡터 저장소 초기화
-vector_store = LegalVectorStore("ko-sroberta-multitask")
+vector_store = VectorStore("ko-sroberta-multitask")
 
 # 문서 추가
 vector_store.add_documents(documents)

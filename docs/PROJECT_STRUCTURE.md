@@ -2,20 +2,21 @@
 
 ## 개요
 
-LawFirmAI는 리팩토링을 통해 명확한 계층 구조로 재구성되었습니다.
+LawFirmAI는 명확한 계층 구조로 구성된 법률 AI 시스템입니다.
 
 ## 전체 구조
 
 ```
 LawFirmAI/
 ├── core/                    # 핵심 비즈니스 로직
-├── apps/                    # 애플리케이션 레이어
-├── infrastructure/          # 인프라 및 유틸리티
-├── scripts/                 # 실행 스크립트
-├── data/                    # 데이터 파일
-├── tests/                   # 테스트 코드
-├── docs/                    # 문서
-└── monitoring/             # 모니터링 시스템
+├── apps/                     # 애플리케이션 레이어
+├── infrastructure/           # 인프라 및 유틸리티
+├── source/                   # 레거시 모듈 (호환성 유지)
+├── scripts/                  # 실행 스크립트
+├── data/                     # 데이터 파일
+├── tests/                    # 테스트 코드
+├── docs/                     # 문서
+└── monitoring/               # 모니터링 시스템
 ```
 
 ## 📦 Core 모듈
@@ -27,11 +28,16 @@ LawFirmAI/
 core/agents/
 ├── workflow_service.py              # 워크플로우 서비스 (메인)
 ├── legal_workflow_enhanced.py       # 법률 워크플로우
-├── state_definitions.py            # 상태 정의
-├── state_utils.py                  # 상태 유틸리티
-├── keyword_mapper.py               # 키워드 매퍼
-├── legal_data_connector.py         # 데이터 커넥터
-└── performance_optimizer.py        # 성능 최적화
+├── state_definitions.py             # 상태 정의
+├── state_utils.py                   # 상태 유틸리티
+├── state_helpers.py                 # 상태 헬퍼 함수
+├── state_reduction.py                # 상태 최적화
+├── keyword_mapper.py                # 키워드 매퍼
+├── legal_data_connector_v2.py       # 데이터 커넥터 (v2)
+├── performance_optimizer.py          # 성능 최적화
+├── node_wrappers.py                 # 노드 래퍼
+├── query_optimizer.py               # 쿼리 최적화
+└── ...
 ```
 
 **사용 예시**:
@@ -49,12 +55,12 @@ result = await workflow.process_query("질문", "session_id")
 
 ```
 core/services/search/
-├── hybrid_search_engine.py        # 하이브리드 검색
-├── exact_search_engine.py          # 정확한 매칭
-├── semantic_search_engine.py       # 의미적 검색
-├── precedent_search_engine.py     # 판례 검색
-├── question_classifier.py          # 질문 분류
-└── result_merger.py                # 결과 병합
+├── hybrid_search_engine.py          # 하이브리드 검색
+├── exact_search_engine.py           # 정확한 매칭
+├── semantic_search_engine.py        # 의미적 검색
+├── precedent_search_engine.py       # 판례 검색
+├── question_classifier.py           # 질문 분류
+└── result_merger.py                 # 결과 병합
 ```
 
 **사용 예시**:
@@ -97,9 +103,9 @@ core/services/enhancement/
 
 ```
 core/models/
-├── model_manager.py               # 모델 관리자
-├── sentence_bert.py               # Sentence BERT
-└── gemini_client.py              # Gemini 클라이언트
+├── model_manager.py                # 모델 관리자
+├── sentence_bert.py                # Sentence BERT
+└── gemini_client.py                # Gemini 클라이언트
 ```
 
 ### core/data/ - 데이터 레이어
@@ -107,10 +113,11 @@ core/models/
 
 ```
 core/data/
-├── database.py                    # SQLite 데이터베이스
-├── vector_store.py                # FAISS 벡터 스토어
-├── data_processor.py              # 데이터 처리
-└── conversation_store.py          # 대화 저장소
+├── database.py                     # SQLite 데이터베이스
+├── vector_store.py                 # FAISS 벡터 스토어
+├── data_processor.py               # 데이터 처리
+├── conversation_store.py            # 대화 저장소
+└── legal_term_normalizer.py        # 법률 용어 정규화
 ```
 
 ## 📱 Apps 모듈
@@ -121,8 +128,7 @@ core/data/
 ```
 apps/streamlit/
 ├── app.py                          # 메인 앱
-├── Dockerfile                      # Docker 설정
-└── docker-compose.yml              # Docker Compose
+└── ...
 ```
 
 ### apps/api/
@@ -130,8 +136,8 @@ apps/streamlit/
 
 ```
 apps/api/
-├── main.py                         # FastAPI 앱
-└── routes/                          # API 라우트
+├── routes/                         # API 라우트
+└── ...
 ```
 
 ## 🔧 Infrastructure 모듈
@@ -141,10 +147,12 @@ apps/api/
 
 ```
 infrastructure/utils/
-├── langgraph_config.py            # LangGraph 설정
-├── langchain_config.py            # LangChain 설정
+├── langgraph_config.py             # LangGraph 설정
+├── langchain_config.py             # LangChain 설정
 ├── logger.py                       # 로깅
-└── config.py                       # 일반 설정
+├── config.py                       # 일반 설정
+├── ollama_client.py                # Ollama 클라이언트
+└── ...
 ```
 
 ## 📊 데이터 흐름
@@ -153,9 +161,11 @@ infrastructure/utils/
 ```
 User Input
     ↓
-streamlit/app.py
+apps/streamlit/app.py 또는 apps/api/
     ↓
 core/agents/workflow_service.py
+    ↓
+core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ↓
 core/services/search/ (검색)
     ↓
@@ -226,9 +236,10 @@ from infrastructure.utils.langgraph_config import LangGraphConfig
 | `core/services/enhancement/` | 품질 개선 | generation |
 | `core/models/` | AI 모델 | - |
 | `core/data/` | 데이터 관리 | - |
-| `apps/streamlit/` | 웹 UI | agents |
-| `apps/api/` | API 서버 | agents |
+| `apps/streamlit/` | 웹 UI | core/agents |
+| `apps/api/` | API 서버 | core/agents |
 | `infrastructure/` | 인프라 | - |
+| `source/` | 레거시 모듈 | (호환성 유지) |
 
 ## 🚀 개발 워크플로우
 
