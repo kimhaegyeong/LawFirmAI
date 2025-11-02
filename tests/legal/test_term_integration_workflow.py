@@ -17,7 +17,7 @@ sys.path.insert(0, str(project_root))
 os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 
-from source.services.langgraph.workflow_service import LangGraphWorkflowService
+from core.agents.workflow_service import LangGraphWorkflowService
 from source.utils.langgraph_config import LangGraphConfig
 
 

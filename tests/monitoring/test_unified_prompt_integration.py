@@ -26,10 +26,10 @@ sys.path.insert(0, str(project_root))
 os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 
-from source.services.langgraph.legal_workflow_enhanced import (
+from core.agents.legal_workflow_enhanced import (
     EnhancedLegalQuestionWorkflow,
 )
-from source.services.langgraph.state_definitions import create_initial_legal_state
+from core.agents.state_definitions import create_initial_legal_state
 from source.services.question_classifier import QuestionType
 from source.services.unified_prompt_manager import (
     LegalDomain,

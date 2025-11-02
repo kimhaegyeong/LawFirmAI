@@ -18,7 +18,7 @@ os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 os.environ["LANGGRAPH_CHECKPOINT_STORAGE"] = "memory"  # 빠른 테스트를 위해 메모리 사용
 
-from source.services.langgraph.workflow_service import LangGraphWorkflowService
+from core.agents.workflow_service import LangGraphWorkflowService
 from source.utils.langgraph_config import LangGraphConfig
 
 

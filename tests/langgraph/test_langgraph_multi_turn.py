@@ -22,10 +22,10 @@ sys.path.insert(0, str(project_root))
 from datetime import datetime
 
 from source.services.conversation_manager import ConversationManager, ConversationTurn
-from source.services.langgraph.legal_workflow_enhanced import (
+from core.agents.legal_workflow_enhanced import (
     EnhancedLegalQuestionWorkflow,
 )
-from source.services.langgraph.state_definitions import create_initial_legal_state
+from core.agents.state_definitions import create_initial_legal_state
 from source.utils.langgraph_config import LangGraphConfig
 
 

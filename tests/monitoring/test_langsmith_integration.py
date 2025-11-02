@@ -67,7 +67,7 @@ else:
     print("✓ 모든 필수 패키지가 설치되어 있습니다.\n")
 
 # LangGraph 관련 import (환경변수 로드 후)
-from source.services.langgraph.workflow_service import (
+from core.agents.workflow_service import (
     LangGraphWorkflowService,  # noqa: E402
 )
 from source.utils.langgraph_config import LangGraphConfig  # noqa: E402
@@ -102,26 +102,6 @@ class LangSmithIntegrationTest:
         self.config = LangGraphConfig()
         self.service = LangGraphWorkflowService(self.config)
         self.test_start_time = None
-
-    async def verify_langsmith_connection(self) -> bool:
-        """LangSmith 연결 상태 확인"""
-        try:
-            langchain_api_key = os.getenv("LANGCHAIN_API_KEY", "")
-            if not langchain_api_key:
-                return False
-
-            # LangSmith 클라이언트로 연결 테스트
-            from langsmith import Client
-            client = Client()
-            # 간단한 프로젝트 목록 조회로 연결 확인
-            _ = list(client.list_projects())[:1]
-            return True
-        except ImportError:
-            print("⚠ LangSmith 클라이언트를 사용할 수 없습니다. 설치: pip install langsmith")
-            return False
-        except Exception as e:
-            print(f"⚠ LangSmith 연결 확인 실패: {e}")
-            return False
 
     def calculate_quality_score(self, result: Dict[str, Any]) -> float:
         """답변 품질 점수 계산"""
@@ -273,13 +253,6 @@ class LangSmithIntegrationTest:
             for error in validation_errors:
                 print(f"  - {error}")
             print("테스트를 계속 진행하지만 일부 기능이 제한될 수 있습니다.")
-
-        # LangSmith 연결 확인
-        langsmith_connected = await self.verify_langsmith_connection()
-        if not langsmith_connected:
-            print("\n⚠ LangSmith 연결 확인 실패. 추적이 제한될 수 있습니다.")
-        else:
-            print("\n✓ LangSmith 연결 확인됨")
 
         print("=" * 80)
 

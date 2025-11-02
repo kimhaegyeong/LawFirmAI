@@ -25,23 +25,36 @@ class SafeStreamHandler(logging.StreamHandler):
             # detached buffer 에러나 기타 스트림 에러 무시
             pass
 
-# 로깅 설정
+# 로깅 설정 (DEBUG 레벨로 변경하여 상세 로그 확인)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[SafeStreamHandler()],
     force=True  # 기존 설정을 강제로 재설정
 )
+
+# 특정 로거의 레벨을 DEBUG로 설정
+logging.getLogger('core.agents.legal_workflow_enhanced').setLevel(logging.DEBUG)
+logging.getLogger('source.services.semantic_search_engine_v2').setLevel(logging.DEBUG)
+logging.getLogger('core.agents.legal_data_connector_v2').setLevel(logging.DEBUG)
 
 # 로깅 에러를 억제
 logging.raiseExceptions = False
 
 logger = logging.getLogger(__name__)
 
+# pytest-asyncio 지원 (선택적)
+try:
+    import pytest
+    pytest_available = True
+except ImportError:
+    pytest_available = False
+
 
 async def test_langgraph_workflow():
     """LangGraph 워크플로우 테스트"""
     try:
+        # core/agents/legal_workflow_enhanced.py를 사용하도록 변경
         from core.agents.workflow_service import LangGraphWorkflowService
         from infrastructure.utils.langgraph_config import LangGraphConfig
 
@@ -61,11 +74,9 @@ async def test_langgraph_workflow():
         init_time = time.time() - start_time
         logger.info(f"   ✅ 워크플로우 서비스 초기화 완료 ({init_time:.2f}초)")
 
-        # 테스트 질의
+        # 테스트 질의 (민사법 관련, 1개)
         test_queries = [
-            "계약서 작성 시 주의사항은?",
-            "이혼 소송 절차는 어떻게 되나요?",
-            "손해배상 청구권의 성립 요건은?"
+            "민사법에서 계약 해지 요건은 무엇인가요?"
         ]
 
         logger.info("3. 테스트 질의 실행 중...")
@@ -109,7 +120,54 @@ async def test_langgraph_workflow():
                 # 최종 문자열 보장
                 answer = str(answer) if not isinstance(answer, str) else answer
                 has_answer = bool(answer) and len(answer) > 0
-                has_sources = bool(result.get("sources") if isinstance(result, dict) else None) or bool(result.get("retrieved_docs") if isinstance(result, dict) else None)
+
+                # Sources 확인 로직 개선 (V2 최적화)
+                sources = result.get("sources", []) if isinstance(result, dict) else []
+                retrieved_docs = result.get("retrieved_docs", []) if isinstance(result, dict) else []
+
+                # Sources 확인: 직접 sources 필드 또는 retrieved_docs에서 추출
+                has_sources = False
+                sources_count = 0
+                sources_list = []
+
+                if isinstance(sources, list) and len(sources) > 0:
+                    # sources 필드가 있고 비어있지 않은 경우
+                    has_sources = True
+                    sources_count = len(sources)
+                    sources_list = sources[:5]  # 상위 5개만
+                elif isinstance(retrieved_docs, list) and len(retrieved_docs) > 0:
+                    # retrieved_docs에서 sources 추출 시도
+                    extracted_sources = []
+                    for doc in retrieved_docs:
+                        if isinstance(doc, dict):
+                            # 다양한 필드에서 source 추출 시도
+                            source = (
+                                doc.get("source") or
+                                doc.get("source_name") or
+                                doc.get("statute_name") or
+                                None
+                            )
+
+                            # metadata에서도 추출 시도
+                            if not source:
+                                metadata = doc.get("metadata", {})
+                                if isinstance(metadata, dict):
+                                    source = (
+                                        metadata.get("statute_name") or
+                                        metadata.get("statute_abbrv") or
+                                        metadata.get("court") or
+                                        metadata.get("org") or
+                                        None
+                                    )
+
+                            if source and source not in extracted_sources:
+                                extracted_sources.append(source)
+
+                    if len(extracted_sources) > 0:
+                        has_sources = True
+                        sources_count = len(extracted_sources)
+                        sources_list = extracted_sources[:5]
+
                 confidence = result.get("confidence", 0.0) if isinstance(result, dict) else 0.0
                 errors = result.get("errors", []) if isinstance(result, dict) else []
                 has_errors = len(errors) > 0 if isinstance(errors, list) else False
@@ -124,6 +182,12 @@ async def test_langgraph_workflow():
                 answer_length = len(answer) if isinstance(answer, str) else 0
                 logger.info(f"   - 답변 길이: {answer_length}자")
                 logger.info(f"   - 소스 유무: {'있음' if has_sources else '없음'}")
+                if has_sources:
+                    logger.info(f"   - 소스 개수: {sources_count}개")
+                    if sources_list:
+                        logger.info(f"   - 주요 소스: {', '.join(str(s) for s in sources_list)}")
+                else:
+                    logger.warning(f"   - 소스 없음 (retrieved_docs: {len(retrieved_docs)}개)")
                 logger.info(f"   - 신뢰도: {confidence:.2%}")
                 logger.info(f"   - 에러 유무: {'있음' if has_errors else '없음'}")
 
@@ -132,6 +196,12 @@ async def test_langgraph_workflow():
                 print(f"   - 답변 유무: {'있음' if has_answer else '없음'}", flush=True)
                 print(f"   - 답변 길이: {answer_length}자", flush=True)
                 print(f"   - 소스 유무: {'있음' if has_sources else '없음'}", flush=True)
+                if has_sources:
+                    print(f"   - 소스 개수: {sources_count}개", flush=True)
+                    if sources_list:
+                        print(f"   - 주요 소스: {', '.join(str(s) for s in sources_list)}", flush=True)
+                else:
+                    print(f"   - 소스 없음 (retrieved_docs: {len(retrieved_docs)}개)", flush=True)
                 print(f"   - 신뢰도: {confidence:.2%}", flush=True)
                 print(f"   - 에러 유무: {'있음' if has_errors else '없음'}", flush=True)
 
@@ -174,6 +244,9 @@ async def test_langgraph_workflow():
                     "answer_length": answer_length,
                     "has_answer": has_answer,
                     "has_sources": has_sources,
+                    "sources_count": sources_count,
+                    "sources_list": sources_list,
+                    "retrieved_docs_count": len(retrieved_docs) if isinstance(retrieved_docs, list) else 0,
                     "has_errors": has_errors,
                     "errors": errors if isinstance(errors, list) else [],
                     "result_keys": list(result.keys()) if isinstance(result, dict) else [],
@@ -250,6 +323,20 @@ async def test_langgraph_workflow():
                         logger.error(f"   - 답변 생성: {'예' if result.get('has_answer') else '아니오'}")
                         print(f"   - 답변 생성: {'예' if result.get('has_answer') else '아니오'}", flush=True)
 
+                    # Sources 상태
+                    if "has_sources" in result:
+                        sources_count = result.get('sources_count', 0)
+                        sources_list = result.get('sources_list', [])
+                        logger.error(f"   - 소스: {'있음' if result.get('has_sources') else '없음'} ({sources_count}개)")
+                        print(f"   - 소스: {'있음' if result.get('has_sources') else '없음'} ({sources_count}개)", flush=True)
+                        if sources_list:
+                            logger.error(f"   - 소스 목록: {', '.join(str(s) for s in sources_list)}")
+                            print(f"   - 소스 목록: {', '.join(str(s) for s in sources_list)}", flush=True)
+                        retrieved_count = result.get('retrieved_docs_count', 0)
+                        if retrieved_count > 0:
+                            logger.error(f"   - 검색된 문서: {retrieved_count}개")
+                            print(f"   - 검색된 문서: {retrieved_count}개", flush=True)
+
                     # 에러 상태
                     if result.get("has_errors"):
                         logger.error(f"   - 에러 발생: 예")
@@ -303,9 +390,11 @@ async def test_langgraph_workflow():
                 if not result.get("success"):
                     logger.warning(f"  질의 {i}: {result.get('query')}")
                     logger.warning(f"    - 답변: {'있음' if result.get('has_answer') else '없음'}")
+                    logger.warning(f"    - 소스: {'있음' if result.get('has_sources') else '없음'} ({result.get('sources_count', 0)}개)")
                     logger.warning(f"    - 에러: {'있음' if result.get('has_errors') else '없음'}")
                     print(f"  질의 {i}: {result.get('query')}", flush=True)
                     print(f"    - 답변: {'있음' if result.get('has_answer') else '없음'}", flush=True)
+                    print(f"    - 소스: {'있음' if result.get('has_sources') else '없음'} ({result.get('sources_count', 0)}개)", flush=True)
                     print(f"    - 에러: {'있음' if result.get('has_errors') else '없음'}", flush=True)
         else:
             logger.error("❌ 모든 테스트 실패: LangGraph에 문제가 있습니다.")
