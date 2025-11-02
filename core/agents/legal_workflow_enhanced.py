@@ -611,11 +611,12 @@ class EnhancedLegalQuestionWorkflow:
 
         # 개선된 검색 플로우 (Adaptive RAG 적용, Phase 6)
         # Phase 9 리팩토링: 조건부 엣지 함수를 WorkflowRoutes로 이동
+        # 개선: 검색 스킵 시 prepare_documents_and_terms를 건너뛰고 답변 생성으로 직접 라우팅
         workflow.add_conditional_edges(
             "prepare_search_query",
             self._should_skip_search_adaptive,  # 래퍼 메서드 사용
             {
-                "skip": "prepare_documents_and_terms",
+                "skip": "generate_and_validate_answer",  # 검색 스킵 시 문서 준비 생략하고 바로 답변 생성
                 "continue": "execute_searches_parallel"
             }
         )
