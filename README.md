@@ -15,11 +15,9 @@ taskkill /f /im python.exe
 
 **올바른 서버 종료 방법**:
 ```bash
-# PID 기반 종료 (권장)
-python streamlit/stop_server.py
-
-# 또는 배치 파일 사용
-streamlit/stop_server.bat
+# Streamlit 서버 종료
+# Ctrl+C로 안전하게 종료하거나
+# 프로세스 매니저에서 streamlit 프로세스 종료
 ```
 
 ### 📚 상세 개발 규칙
@@ -31,49 +29,38 @@ streamlit/stop_server.bat
 - **[성능 최적화 완료 보고서](docs/07_performance_optimization/performance_optimization_report.md)**: 응답 시간 78% 단축 성과 및 기술적 세부사항
 - **[성능 최적화 가이드](docs/07_performance_optimization/performance_optimization_guide.md)**: 최적화된 컴포넌트 사용법 및 성능 튜닝 방법
 
-## 🔧 최신 업데이트
+## 🔧 주요 기능
 
-### 주요 업데이트 🎯
-- ✅ **LangGraph 워크플로우 최적화**: State 최적화, Pruning 전략, Recursion limit 100 증가
-- ✅ **하이브리드 검색 통합**: FAISS 벡터 검색 (155,819개 벡터) + 키워드 검색 결합
-- ✅ **성능 최적화**: 응답 시간 78% 단축 (10.05초 → 2.21초)
-- ✅ **문서 재작성**: 최신 구조 반영한 LangGraph 통합 가이드 작성
+### 핵심 기능
+- ✅ **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
+- ✅ **하이브리드 검색**: FAISS 벡터 검색 + 키워드 검색 결합
+- ✅ **성능 최적화**: 응답 시간 최소화, 메모리 효율 관리
+- ✅ **통합 프롬프트 관리**: 법률 도메인별 최적화된 프롬프트 시스템
 
-### 데이터 시스템 구축 📊
-- ✅ **Assembly 데이터 수집**: 국회 법률정보시스템 기반 데이터 수집 (300개 법률)
-- ✅ **벡터 임베딩**: 6,285개 텍스트 청크 벡터화, FAISS 기반 초고속 검색
-- ✅ **증분 전처리**: 자동화된 데이터 파이프라인, 180,684개 조문 처리
-- ✅ **Q&A 데이터셋**: 2,709개 법률 Q&A 쌍 생성 (품질 점수 93.5%)
+### 데이터 시스템
+- ✅ **Assembly 데이터 수집**: 국회 법률정보시스템 기반 데이터 수집
+- ✅ **벡터 임베딩**: FAISS 기반 초고속 검색
+- ✅ **증분 전처리**: 자동화된 데이터 파이프라인
+- ✅ **Q&A 데이터셋**: 법률 Q&A 쌍 생성 및 관리
 - ✅ **메모리 최적화**: Float16 양자화, 지연 로딩, 자동 메모리 정리
-
-### 초기 구축 🏗️
-- ✅ **프로젝트 구조**: 스크립트 통합 및 구조 개편
-- ✅ **벡터DB 구축**: 642개 법률 문서 임베딩, 평균 0.0003초 검색 시간
-- ✅ **네트워크 안정성**: DNS 해결 실패 처리, 재시도 로직 강화
-- ✅ **메모리 관리**: 실시간 모니터링 및 자동 정리 시스템
-
-> 📌 자세한 업데이트 내역은 [아카이브 문서](docs/archive/)에서 확인하실 수 있습니다.
 
 ## 🛠️ 기술 스택
 
 ### AI/ML
-- **KoBART**: 한국어 생성 모델 (법률 특화 파인튜닝)
+- **LangGraph**: State 기반 워크플로우 관리
+- **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
 - **Sentence-BERT**: 텍스트 임베딩 모델 (jhgan/ko-sroberta-multitask)
 - **FAISS**: 벡터 검색 엔진
 - **Ollama Qwen2.5:7b**: 로컬 LLM 모델 (Q&A 생성, 답변 생성)
-- **질문 분류 모델**: 사용자 질문 유형 자동 분류 (신규)
+- **UnifiedPromptManager**: 법률 도메인별 프롬프트 통합 관리
 
 ### Backend
 - **FastAPI**: RESTful API 서버
 - **SQLite**: 관계형 데이터베이스 (정확한 매칭 검색)
 - **FAISS**: 벡터 데이터베이스 (의미적 검색)
 - **Pydantic**: 데이터 검증
+- **LangChain**: LLM 통합 프레임워크
 - **psutil**: 메모리 모니터링 및 시스템 리소스 관리
-- **지능형 검색 엔진**: 질문 유형별 동적 가중치 검색 (신규)
-- **신뢰도 계산 시스템**: 답변 신뢰성 수치화 (신규)
-- **최적화된 모델 관리자**: 싱글톤 패턴과 지연 로딩 (신규)
-- **병렬 검색 엔진**: 동시 처리로 성능 향상 (신규)
-- **통합 캐싱 시스템**: 다층 캐싱으로 응답 속도 최적화 (신규)
 
 ### Frontend
 - **Streamlit**: 웹 인터페이스
@@ -83,65 +70,52 @@ streamlit/stop_server.bat
 
 ```
 LawFirmAI/
-├── streamlit/              # Streamlit 애플리케이션
-│   ├── app.py              # Streamlit 메인 애플리케이션
-│   ├── requirements.txt    # Streamlit 의존성
-│   ├── Dockerfile         # Streamlit Docker 설정
-│   └── docker-compose.yml # Streamlit 로컬 개발 환경
-├── api/                    # FastAPI 애플리케이션
-│   ├── main.py            # FastAPI 메인 애플리케이션
-│   ├── requirements.txt   # FastAPI 의존성
-│   ├── Dockerfile        # FastAPI Docker 설정
-│   └── docker-compose.yml # FastAPI 로컬 개발 환경
-├── source/                 # Core Modules (공통 소스 코드)
-│   ├── models/            # AI 모델 관련
-│   ├── services/          # 비즈니스 로직
-│   │   ├── hybrid_search_engine.py      # 하이브리드 검색 엔진 (확장)
-│   │   ├── question_classifier.py       # 질문 분류기 (신규)
-│   │   ├── precedent_search_engine.py   # 판례 검색 엔진 (신규)
-│   │   ├── prompt_templates.py          # 프롬프트 템플릿 (신규)
-│   │   ├── confidence_calculator.py     # 신뢰도 계산기 (신규)
-│   │   ├── legal_term_expander.py       # 법률 용어 확장기 (신규)
-│   │   ├── ollama_client.py             # Ollama 클라이언트 (신규)
-│   │   ├── improved_answer_generator.py  # 개선된 답변 생성기 (신규)
-│   │   ├── answer_formatter.py          # 답변 포맷터 (신규)
-│   │   ├── context_builder.py           # 컨텍스트 빌더 (신규)
-│   │   ├── optimized_model_manager.py   # 최적화된 모델 관리자 (신규)
-│   │   ├── optimized_hybrid_search_engine.py # 병렬 검색 엔진 (신규)
-│   │   ├── integrated_cache_system.py   # 통합 캐싱 시스템 (신규)
-│   │   └── optimized_chat_service.py    # 최적화된 채팅 서비스 (신규)
-│   ├── data/              # 데이터 처리
-│   ├── api/               # API 관련
-│   │   └── endpoints.py   # API 엔드포인트 (확장)
-│   └── utils/             # 유틸리티
+├── core/                   # 핵심 비즈니스 로직
+│   ├── agents/            # LangGraph 워크플로우 에이전트
+│   │   ├── workflow_service.py           # 워크플로우 서비스 (메인)
+│   │   ├── legal_workflow_enhanced.py    # 법률 워크플로우
+│   │   ├── state_definitions.py          # 상태 정의
+│   │   └── ...
+│   ├── services/          # 비즈니스 서비스
+│   │   ├── search/        # 검색 서비스
+│   │   │   ├── hybrid_search_engine.py   # 하이브리드 검색
+│   │   │   ├── semantic_search_engine.py # 의미적 검색
+│   │   │   ├── exact_search_engine.py    # 정확한 매칭
+│   │   │   └── question_classifier.py    # 질문 분류
+│   │   ├── generation/    # 답변 생성
+│   │   │   ├── answer_generator.py        # 답변 생성기
+│   │   │   └── context_builder.py         # 컨텍스트 빌더
+│   │   └── enhancement/   # 품질 개선
+│   │       └── confidence_calculator.py  # 신뢰도 계산
+│   ├── data/              # 데이터 레이어
+│   │   ├── database.py                   # SQLite 데이터베이스
+│   │   ├── vector_store.py               # FAISS 벡터 스토어
+│   │   └── ...
+│   └── models/            # AI 모델
+│       ├── model_manager.py              # 모델 관리자
+│       ├── sentence_bert.py              # Sentence BERT
+│       └── gemini_client.py              # Gemini 클라이언트
+├── streamlit/             # Streamlit 웹 인터페이스
+│   └── app.py            # Streamlit 메인 애플리케이션
+├── apps/                  # 애플리케이션 레이어 (추가 구성)
+│   ├── streamlit/         # Streamlit 추가 구성
+│   └── api/               # FastAPI 라우트 정의
+├── infrastructure/        # 인프라 및 유틸리티
+│   └── utils/             # 유틸리티 함수
+│       ├── langgraph_config.py          # LangGraph 설정
+│       └── ...
+├── source/                # 레거시 모듈 (호환성 유지)
+│   └── services/          # 레거시 서비스
 ├── data/                  # 데이터 파일
 │   ├── raw/               # 원본 데이터
 │   ├── processed/         # 전처리된 데이터
 │   ├── embeddings/        # 벡터 임베딩
-│   │   ├── ml_enhanced_ko_sroberta/        # 법률 벡터 임베딩
-│   │   └── ml_enhanced_ko_sroberta_precedents/ # 판례 벡터 임베딩 (신규)
-│   ├── qa_dataset/        # Q&A 데이터셋
-│   └── legal_term_dictionary.json # 법률 용어 사전 (신규)
+│   └── qa_dataset/        # Q&A 데이터셋
+├── scripts/               # 유틸리티 스크립트
+│   ├── run_data_pipeline.py    # 통합 데이터 파이프라인
+│   └── ...
 ├── tests/                 # 테스트 코드
 ├── docs/                  # 문서
-├── scripts/               # 유틸리티 스크립트
-│   ├── collect_data_only.py    # 데이터 수집 전용 (JSON 저장)
-│   ├── build_vector_db.py      # 벡터DB 구축 전용
-│   ├── run_data_pipeline.py    # 통합 데이터 파이프라인 실행
-│   ├── collect_laws.py         # 법령 데이터 수집 (기존)
-│   ├── collect_precedents.py   # 판례 데이터 수집 (기존)
-│   ├── collect_legal_terms.py  # 법령용어 데이터 수집
-│   ├── collect_administrative_rules.py # 행정규칙 데이터 수집
-│   ├── collect_local_ordinances.py # 자치법규 데이터 수집
-│   ├── collect_all_data.py     # 통합 데이터 수집 (기존)
-│   ├── validate_data_quality.py # 데이터 품질 검증
-│   ├── generate_qa_dataset.py  # Q&A 데이터셋 생성 (기본)
-│   ├── enhanced_generate_qa_dataset.py # Q&A 데이터셋 생성 (향상)
-│   ├── large_scale_generate_qa_dataset.py # Q&A 데이터셋 생성 (대규모)
-│   ├── llm_qa_generator.py     # LLM 기반 Q&A 생성기 (신규)
-│   └── generate_qa_with_llm.py # LLM Q&A 생성 실행 스크립트 (신규)
-├── env.example            # 환경 변수 템플릿
-├── .gitignore             # Git 무시 파일
 └── README.md              # 프로젝트 문서
 ```
 
@@ -151,18 +125,18 @@ LawFirmAI/
 
 LawFirmAI는 국가법령정보센터의 LAW OPEN API를 통해 법률 데이터를 수집합니다.
 
-### 국회 법률정보시스템 웹 스크래핑 (NEW)
+### 국회 법률정보시스템 웹 스크래핑
 
-API 서비스 중단으로 인해 국회 법률정보시스템(https://likms.assembly.go.kr/law)을 대안으로 사용합니다.
+국회 법률정보시스템(https://likms.assembly.go.kr/law)을 사용합니다.
 
 ```bash
 # Assembly 시스템으로 법률 수집
 python scripts/assembly/collect_laws.py --sample 100
 
-# Assembly 시스템으로 판례 수집 (NEW)
+# Assembly 시스템으로 판례 수집
 python scripts/assembly/collect_precedents.py --sample 50
 
-# 분야별 판례 수집 (NEW)
+# 분야별 판례 수집
 python scripts/assembly/collect_precedents_by_category.py --category civil --sample 20
 python scripts/assembly/collect_precedents_by_category.py --category criminal --sample 20
 python scripts/assembly/collect_precedents_by_category.py --category family --sample 20
@@ -220,7 +194,7 @@ python scripts/build_vector_db.py --mode laws
 python scripts/build_vector_db.py --mode multiple --types laws precedents constitutional
 ```
 
-### 📦 데이터 전처리 (NEW)
+### 📦 데이터 전처리
 
 수집된 raw 데이터를 벡터 DB에 적합한 형태로 전처리합니다.
 
@@ -261,7 +235,7 @@ python scripts/validate_processed_data.py --data-type laws
 - [데이터 전처리 계획서](docs/development/raw_data_preprocessing_plan.md)
 - [법률 용어 정규화 전략](docs/development/legal_term_normalization_strategy.md)
 
-### 📝 Q&A 데이터셋 생성 (NEW)
+### 📝 Q&A 데이터셋 생성
 
 법령/판례 데이터를 기반으로 자동으로 Q&A 데이터셋을 생성합니다.
 
@@ -291,18 +265,16 @@ python scripts/generate_qa_with_llm.py \
 
 #### 생성 결과
 
-**템플릿 기반 생성 (기존)**
-- **총 Q&A 쌍 수**: 2,709개 (목표 대비 90.3%)
-- **평균 품질 점수**: 93.5% (목표 90% 초과)
-- **고품질 비율**: 99.96% (2,708개/2,709개)
-- **데이터 소스**: 법령 42개, 판례 621개
+**템플릿 기반 생성**
+- **총 Q&A 쌍 수**: 2,709개
+- **평균 품질 점수**: 93.5%
+- **고품질 비율**: 99.96%
+- **데이터 소스**: 법령 및 판례 데이터
 
-**LLM 기반 생성 (신규)**
-- **총 Q&A 쌍 수**: 36개 (테스트 단계)
-- **평균 품질 점수**: 68.3% (개선 중)
-- **질문 유형**: 12가지 다양한 유형
-- **자연스러움**: 템플릿 방식 대비 400% 향상
-- **실용성**: 법률 실무 중심 질문 생성
+**LLM 기반 생성**
+- **총 Q&A 쌍 수**: 계속 증가 중
+- **질문 유형**: 다양한 패턴
+- **자연스러움**: 법률 실무 중심 질문 생성
 
 #### 생성된 파일
 
@@ -328,7 +300,7 @@ python scripts/generate_qa_with_llm.py \
 - **판례 쟁점 Q&A**: 사건의 핵심 쟁점과 문제
 - **판결 내용 Q&A**: 법원의 판단과 결론
 
-**LLM 기반 유형 (자연스러운 질문)**
+**LLM 기반 유형**
 - **개념 설명**: "~란 무엇인가요?"
 - **실제 적용**: "~한 경우 어떻게 해야 하나요?"
 - **요건/효과**: "~의 요건은 무엇인가요?"
@@ -342,18 +314,6 @@ python scripts/generate_qa_with_llm.py \
 - **실무 적용**: "실무에서 ~는 어떻게 적용되나요?"
 - **예외 사항**: "~의 예외 사항은 무엇인가요?"
 
-```bash
-
-# 기존 통합 스크립트 (레거시)
-python scripts/collect_laws.py                    # 법령 수집
-python scripts/collect_precedents.py              # 판례 수집
-python scripts/collect_constitutional_decisions.py # 헌재결정례 수집
-python scripts/collect_legal_interpretations.py   # 법령해석례 수집
-python scripts/collect_all_data.py                # 통합 데이터 수집
-
-# 데이터 품질 검증
-python scripts/validate_data_quality.py
-```
 
 #### API 설정
 
@@ -502,73 +462,41 @@ export GOOGLE_API_KEY="your_google_key"
 export DEBUG="true"
 ```
 
-### 4. 데이터 수집 (NEW)
+### 4. 데이터 수집
 
-#### 판례 수집
 ```bash
-# 2025년 판례 수집 (무제한) - 안정성 향상
-python scripts/precedent/collect_by_date.py --strategy yearly --year 2025 --unlimited
-
-# 2024년 판례 수집 (무제한) - 안정성 향상
-python scripts/precedent/collect_by_date.py --strategy yearly --year 2024 --unlimited
-
-# 연도별 수집 (최근 5년, 연간 2000건)
-python scripts/precedent/collect_by_date.py --strategy yearly --target 10000
-```
-
-#### 헌재결정례 수집 (신규)
-```bash
-# 2025년 헌재결정례 수집 (종국일자 기준) - 안정성 향상
-python scripts/constitutional_decision/collect_by_date.py --strategy yearly --year 2025 --final-date
-
-# 2024년 헌재결정례 수집 (선고일자 기준) - 안정성 향상
-python scripts/constitutional_decision/collect_by_date.py --strategy yearly --year 2024
-
-# 특정 건수만 수집
-python scripts/constitutional_decision/collect_by_date.py --strategy yearly --year 2025 --target 100 --final-date
-
-# 분기별 수집
-python scripts/constitutional_decision/collect_by_date.py --strategy quarterly --year 2025 --quarter 1
-
-# 월별 수집
-python scripts/constitutional_decision/collect_by_date.py --strategy monthly --year 2025 --month 8
-```
-
-#### 기타 데이터 수집
-```bash
-# 전체 데이터 수집
+# 전체 데이터 수집 및 벡터DB 구축
 python scripts/run_data_pipeline.py --mode full --oc your_email_id
 
-# 법령 데이터만 수집
-python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민법" --display 50
+# 특정 데이터 타입만 수집
+python scripts/run_data_pipeline.py --mode laws --oc your_email_id --query "민법"
+python scripts/run_data_pipeline.py --mode precedents --oc your_email_id --query "계약 해지"
+
+# 벡터DB 구축만 실행
+python scripts/run_data_pipeline.py --mode build
 ```
 
 ### 5. 애플리케이션 실행
 
-#### Streamlit 인터페이스 실행 (리팩토링된 버전)
+#### Streamlit 인터페이스 실행
 
 ```bash
-cd gradio
+cd streamlit
 pip install -r requirements.txt
-python simple_langchain_app.py
-```
-
-#### 간단한 테스트 실행
-
-```bash
-cd gradio
-python test_simple_query.py
+streamlit run app.py
 ```
 
 #### FastAPI 서버 실행
 
 ```bash
-cd api
-pip install -r requirements.txt
+# FastAPI 서버는 source/api/main.py를 실행하거나
+# Streamlit 앱에서 통합되어 실행됩니다
+cd source/api
+pip install -r ../../requirements.txt
 python main.py
 ```
 
-### 5. 접속
+### 6. 접속
 
 - **Streamlit 인터페이스**: http://localhost:8501
 - **FastAPI 서버**: http://localhost:8000
@@ -576,26 +504,18 @@ python main.py
 
 ## 🐳 Docker 사용
 
-### Streamlit 인터페이스 실행 (리팩토링된 버전)
+### Streamlit 인터페이스 실행
 
 ```bash
-cd gradio
+cd streamlit
 docker-compose up -d
 ```
 
 ### FastAPI 서버 실행
 
 ```bash
-cd api
-docker-compose up -d
-```
-
-### 전체 서비스 실행 (개발용)
-
-```bash
-# Streamlit과 FastAPI를 동시에 실행하려면 각각의 폴더에서 실행
-cd streamlit && docker-compose up -d &
-cd api && docker-compose up -d &
+# FastAPI는 별도 Docker 컨테이너로 실행하거나
+# Streamlit과 통합되어 실행됩니다
 ```
 
 ## 🔧 개발
@@ -613,12 +533,12 @@ pip install psutil>=5.9.0
 pip install -e .[dev]
 
 # 코드 포맷팅
-black source/
-isort source/
+black core/ apps/
+isort core/ apps/
 
 # 린팅
-flake8 source/
-mypy source/
+flake8 core/ apps/
+mypy core/ apps/
 
 # 테스트 실행
 pytest tests/
@@ -635,18 +555,10 @@ pytest tests/
 
 ### 주요 엔드포인트
 
-#### Phase 2 신규 엔드포인트
-- `POST /api/v1/chat/intelligent-v2` - 지능형 채팅 v2 (모든 개선사항 통합)
-- `GET /api/v1/system/status` - 시스템 상태 확인 (모든 컴포넌트 점검)
-
-#### 기존 엔드포인트
-- `POST /api/v1/chat` - 채팅 메시지 처리
-- `POST /api/v1/chat/intelligent` - 지능형 채팅 (Phase 1)
+- `POST /api/v1/chat` - 채팅 메시지 처리 (LangGraph 워크플로우)
 - `POST /api/v1/search/hybrid` - 하이브리드 검색 (정확한 매칭 + 의미적 검색)
 - `POST /api/v1/search/exact` - 정확한 매칭 검색
 - `POST /api/v1/search/semantic` - 의미적 검색
-- `POST /api/v1/external/law/search` - 법령 검색 (국가법령정보 API)
-- `POST /api/v1/external/precedent/search` - 판례 검색 (국가법령정보 API)
 - `GET /api/v1/health` - 헬스체크
 - `GET /docs` - API 문서 (Swagger UI)
 
@@ -658,67 +570,25 @@ pytest tests/
 
 ### 사용 예제
 
-#### 지능형 채팅 v2 API (신규)
+#### 채팅 API
 ```python
 import requests
 
-# 지능형 채팅 v2 요청
-response = requests.post(
-    "http://localhost:8000/api/v1/chat/intelligent-v2",
-    json={
-        "message": "계약 해제 조건이 무엇인가요?",
-        "session_id": "user_session_123",
-        "max_results": 10,
-        "include_law_sources": True,
-        "include_precedent_sources": True,
-        "include_conversation_history": True,
-        "context_optimization": True,
-        "answer_formatting": True
-    }
-)
-
-result = response.json()
-print(f"질문 유형: {result['question_type']}")
-print(f"답변: {result['answer']}")
-print(f"신뢰도: {result['confidence']['reliability_level']}")
-print(f"법률 소스: {len(result['law_sources'])}개")
-print(f"판례 소스: {len(result['precedent_sources'])}개")
-```
-
-#### 시스템 상태 확인 API (신규)
-```python
-import requests
-
-# 시스템 상태 확인
-response = requests.get("http://localhost:8000/api/v1/system/status")
-status = response.json()
-
-print(f"전체 상태: {status['overall_status']}")
-print(f"데이터베이스: {status['components']['database']['status']}")
-print(f"벡터 스토어: {status['components']['vector_store']['status']}")
-print(f"AI 모델: {status['components']['ai_models']['status']}")
-print(f"검색 엔진: {status['components']['search_engines']['status']}")
-print(f"답변 생성기: {status['components']['answer_generator']['status']}")
-```
-
-#### 채팅 API (기존)
-```python
-import requests
-
-# 채팅 요청
+# 채팅 요청 (LangGraph 워크플로우)
 response = requests.post(
     "http://localhost:8000/api/v1/chat",
     json={
-        "message": "계약서에서 주의해야 할 조항은 무엇인가요?",
-        "context": "부동산 매매계약"
+        "message": "계약 해제 조건이 무엇인가요?",
+        "session_id": "user_session_123"
     }
 )
 
 result = response.json()
-print(result["response"])
+print(f"답변: {result['answer']}")
+print(f"신뢰도: {result.get('confidence', 'N/A')}")
 ```
 
-#### 하이브리드 검색 API (기존)
+#### 하이브리드 검색 API
 ```python
 import requests
 
@@ -740,60 +610,41 @@ result = response.json()
 print(f"총 {result['total_count']}건의 결과")
 for doc in result['results']:
     print(f"제목: {doc['title']}")
-    print(f"정확한 매칭: {doc['exact_match']}")
     print(f"유사도 점수: {doc['similarity_score']:.3f}")
-```
-
-#### 외부 API 연동 (법령 검색)
-```python
-import requests
-
-# 법령 검색 요청
-response = requests.post(
-    "http://localhost:8000/api/v1/external/law/search",
-    json={
-        "query": "자동차관리법",
-        "filters": {
-            "date_from": "20240101",
-            "date_to": "20241231"
-        },
-        "limit": 10
-    }
-)
-
-result = response.json()
-for law in result["results"]:
-    print(f"법령명: {law['법령명한글']}")
 ```
 
 ## 📊 데이터 현황
 
 | 데이터 타입 | 수량 | 상태 | 비고 |
 |------------|------|------|------|
-| 법령 (API) | 13개 | ✅ 완료 | 민법, 상법, 형법 등 주요 법령 |
-| 법령 (Assembly) | 7,680개 | ✅ 완료 | 전체 Raw 데이터 전처리 완료 (815개 파일, 규칙 기반 파서) (2025-10-13) |
-| 판례 (Assembly) | 민사: 397개, 형사: 8개, 조세: 472개 | ✅ 완료 | 민사: 15,589개 섹션 임베딩, 형사: 372개 섹션 임베딩, 조세: 472개 파일 (2025-10-17) |
-| 판례 (API) | 11개 | ✅ 완료 | 계약서 관련 판례 |
-| 헌재결정례 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
-| 법령해석례 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
-| 행정규칙 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
-| 자치법규 | 0개 | ⏳ 대기 | 데이터 수집 필요 |
+| 법령 (Assembly) | 7,680개 | ✅ 완료 | 전체 Raw 데이터 전처리 완료 |
+| 판례 (Assembly) | 민사: 397개, 형사: 8개, 조세: 472개 | ✅ 완료 | 섹션별 임베딩 완료 |
+| 헌재결정례 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
+| 법령해석례 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
+| 행정규칙 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
+| 자치법규 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
 
 ## 📊 로그 확인
 
 ### Streamlit 애플리케이션 로그
 ```bash
 # Windows PowerShell - 실시간 로그 모니터링
-Get-Content logs\gradio_app.log -Wait -Tail 50
+Get-Content logs\streamlit_app.log -Wait -Tail 50
 
 # Windows CMD - 전체 로그 확인
-type logs\gradio_app.log
+type logs\streamlit_app.log
 
 # Linux/Mac - 실시간 로그 모니터링
-tail -f logs/gradio_app.log
+tail -f logs/streamlit_app.log
 
 # Linux/Mac - 최근 50줄 확인
-tail -n 50 logs/gradio_app.log
+tail -n 50 logs/streamlit_app.log
+```
+
+### LangGraph 워크플로우 로그
+```bash
+# LangGraph 워크플로우 실행 로그 확인
+# 로그는 logs/ 디렉토리에 자동 저장됩니다
 ```
 
 ### 로그 레벨 설정
@@ -801,21 +652,23 @@ tail -n 50 logs/gradio_app.log
 # DEBUG 레벨로 실행 (더 자세한 로그)
 # Windows
 set LOG_LEVEL=DEBUG
-python gradio/app.py
+cd streamlit
+streamlit run app.py
 
 # PowerShell
 $env:LOG_LEVEL="DEBUG"
-python gradio/app.py
+cd streamlit
+streamlit run app.py
 
 # Linux/Mac
 export LOG_LEVEL=DEBUG
-python gradio/app.py
+cd streamlit
+streamlit run app.py
 ```
 
 ### 로그 파일 위치
 - **Streamlit 앱 로그**: `logs/streamlit_app.log`
 - **데이터 처리 로그**: `logs/` 디렉토리의 각종 `.log` 파일들
-- **상세 로깅 가이드**: [docs/development/logging_guide.md](docs/development/logging_guide.md)
 
 ## 🤝 기여하기
 
@@ -835,7 +688,9 @@ python gradio/app.py
 - [HuggingFace](https://huggingface.co/) - AI 모델 제공
 - [FastAPI](https://fastapi.tiangolo.com/) - 웹 프레임워크
 - [Streamlit](https://streamlit.io/) - UI 프레임워크
-- [ChromaDB](https://www.trychroma.com/) - 벡터 데이터베이스
+- [LangGraph](https://langchain-ai.github.io/langgraph/) - 워크플로우 관리
+- [FAISS](https://github.com/facebookresearch/faiss) - 벡터 검색 엔진
+- [Sentence-BERT](https://www.sbert.net/) - 텍스트 임베딩 모델
 
 ---
 

@@ -6,78 +6,30 @@
 
 ## 🚀 프로세스 관리 규칙
 
-### Gradio 서버 관리
+### Streamlit 서버 관리
 
 #### 서버 시작
 ```bash
-# Gradio 서버 시작 (LangChain 기반)
-cd gradio
-python simple_langchain_app.py
+# Streamlit 서버 시작
+cd apps/streamlit
+streamlit run app.py
 ```
 
-#### 서버 종료 (PID 기준)
+#### 서버 종료
+
 **⚠️ 중요**: `taskkill /f /im python.exe` 사용 금지
 
 **올바른 종료 방법**:
 
-1. **PID 파일 기반 종료** (권장):
-```bash
-# Windows
-python gradio/stop_server.py
-
-# 또는 배치 파일 사용
-gradio/stop_server.bat
-```
+1. **Ctrl+C로 종료**: 터미널에서 `Ctrl+C` 입력
 
 2. **포트 기반 종료**:
 ```bash
-# 7860 포트 사용 프로세스 확인
-netstat -ano | findstr :7860
+# 8501 포트 사용 프로세스 확인
+netstat -ano | findstr :8501
 
 # 특정 PID 종료
 taskkill /PID [PID번호] /F
-```
-
-#### PID 관리 구현 규칙
-
-**모든 Gradio 애플리케이션은 다음 규칙을 따라야 합니다**:
-
-1. **PID 파일 생성**:
-```python
-import os
-import signal
-import atexit
-from pathlib import Path
-
-def save_pid():
-    """현재 프로세스 PID를 파일에 저장"""
-    pid = os.getpid()
-    pid_file = Path("gradio_server.pid")
-    
-    try:
-        with open(pid_file, 'w') as f:
-            f.write(str(pid))
-        print(f"PID {pid} saved to {pid_file}")
-    except Exception as e:
-        print(f"Failed to save PID: {e}")
-
-def cleanup_pid():
-    """PID 파일 정리"""
-    pid_file = Path("gradio_server.pid")
-    if pid_file.exists():
-        try:
-            pid_file.unlink()
-            print("PID file removed")
-        except Exception as e:
-            print(f"Failed to remove PID file: {e}")
-
-# 앱 시작 시
-save_pid()
-
-# 앱 종료 시 정리
-atexit.register(cleanup_pid)
-signal.signal(signal.SIGINT, lambda s, f: cleanup_pid() or exit(0))
-signal.signal(signal.SIGTERM, lambda s, f: cleanup_pid() or exit(0))
 ```
 
 #### 금지 사항
@@ -92,9 +44,6 @@ taskkill /f /im python.exe
 ```bash
 # 특정 PID만 종료
 taskkill /PID 12345 /F
-
-# 또는 제공된 스크립트 사용
-python gradio/stop_server.py
 ```
 
 ## 🔧 개발 환경 규칙
@@ -102,30 +51,61 @@ python gradio/stop_server.py
 ### 디렉토리 구조 준수
 ```
 LawFirmAI/
-├── gradio/                          # Gradio 웹 애플리케이션
-│   ├── simple_langchain_app.py      # 메인 LangChain 기반 앱
-│   ├── app.py                       # 기본 Gradio 앱
-│   ├── stop_server.py               # 서버 종료 스크립트
-│   ├── requirements.txt             # Gradio 의존성
-│   └── Dockerfile                   # Gradio Docker 설정
-├── source/                          # 핵심 모듈
-│   ├── services/                    # 비즈니스 로직 (80+ 서비스)
-│   ├── data/                        # 데이터 처리
-│   ├── models/                      # AI 모델
-│   └── utils/                       # 유틸리티
+├── core/                            # 핵심 비즈니스 로직
+│   ├── agents/                      # LangGraph 워크플로우 에이전트
+│   ├── services/                    # 비즈니스 서비스
+│   │   ├── search/                  # 검색 서비스
+│   │   ├── generation/              # 답변 생성
+│   │   └── enhancement/             # 품질 개선
+│   ├── data/                        # 데이터 레이어
+│   └── models/                      # AI 모델
+├── apps/                            # 애플리케이션 레이어
+│   ├── streamlit/                   # Streamlit 웹 인터페이스
+│   │   ├── app.py                   # 메인 앱
+│   │   └── requirements.txt         # 의존성
+│   └── api/                         # FastAPI 서버
+├── infrastructure/                  # 인프라 및 유틸리티
+│   └── utils/                       # 유틸리티 함수
+├── source/                          # 레거시 모듈 (호환성 유지)
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
 │   └── embeddings/                  # 벡터 임베딩
 └── docs/                            # 문서
 ```
 
-### 벡터 저장소 경로 규칙
+### Import 규칙
+
+**프로젝트 모듈 Import**:
 ```python
-# 현재 사용 중인 벡터 저장소
-vector_store_paths = [
-    "data/embeddings/ml_enhanced_ko_sroberta",  # ko-sroberta 벡터
-    "data/embeddings/ml_enhanced_ko_sroberta",       # ko-sroberta 벡터
-]
+# 프로젝트 루트 설정
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# Core 모듈 Import
+from core.agents.workflow_service import LangGraphWorkflowService
+from core.services.search import HybridSearchEngine
+from core.services.generation import AnswerGenerator
+from infrastructure.utils.langgraph_config import LangGraphConfig
+```
+
+**Import 순서**:
+```python
+# 1. 표준 라이브러리
+import os
+import sys
+from typing import Dict, List, Optional
+
+# 2. 서드파티 라이브러리
+import torch
+from fastapi import FastAPI
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+# 3. 프로젝트 모듈
+from core.agents.workflow_service import LangGraphWorkflowService
+from core.services.search import HybridSearchEngine
 ```
 
 ## 📝 로깅 규칙
@@ -177,7 +157,7 @@ safe_print("벡터 저장소 로딩 완료")
 
 ### 현재 구현된 로깅 시스템
 ```python
-# gradio/simple_langchain_app.py에서 사용 중
+# infrastructure/utils/logger.py에서 사용 중
 import logging
 
 # 로깅 설정
@@ -186,7 +166,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('logs/simple_langchain_gradio.log')
+        logging.FileHandler('logs/lawfirm_ai.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -250,38 +230,29 @@ MODEL_PATH=./models
 
 ### 현재 구현된 테스트 시스템
 ```python
-# gradio/test_simple_query.py에서 구현
+# tests/ 디렉토리에서 구현
 import sys
 from pathlib import Path
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent.parent
-sys.path.append(str(project_root))
+sys.path.insert(0, str(project_root))
 
 def test_vector_store_loading():
     """벡터 저장소 로딩 테스트"""
-    from source.data.vector_store import LegalVectorStore
+    from core.data.vector_store import VectorStore
     
-    vector_store = LegalVectorStore("test-model")
+    vector_store = VectorStore("test-model")
     assert vector_store is not None
 
-def test_gradio_app_startup():
-    """Gradio 앱 시작 테스트"""
-    import subprocess
-    import time
+def test_workflow_service():
+    """워크플로우 서비스 테스트"""
+    from core.agents.workflow_service import LangGraphWorkflowService
+    from infrastructure.utils.langgraph_config import LangGraphConfig
     
-    # 앱 시작
-    process = subprocess.Popen(['python', 'gradio/simple_langchain_app.py'])
-    
-    # 잠시 대기
-    time.sleep(5)
-    
-    # 프로세스 상태 확인
-    assert process.poll() is None, "App should be running"
-    
-    # 정리
-    process.terminate()
-    process.wait()
+    config = LangGraphConfig.from_env()
+    workflow = LangGraphWorkflowService(config)
+    assert workflow is not None
 ```
 
 ## 📊 성능 모니터링 규칙
@@ -331,29 +302,30 @@ def search_documents(query):
 
 ### 현재 구현된 Docker 설정
 ```dockerfile
-# gradio/Dockerfile (현재 구현)
+# apps/streamlit/Dockerfile
 FROM python:3.9-slim
 
 WORKDIR /app
 
 # 의존성 설치
-COPY gradio/requirements.txt .
+COPY apps/streamlit/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 복사
-COPY gradio/ ./gradio/
-COPY source/ ./source/
+COPY apps/streamlit/ ./apps/streamlit/
+COPY core/ ./core/
+COPY infrastructure/ ./infrastructure/
 
 # 비root 사용자로 실행
 RUN useradd --create-home --shell /bin/bash app
 USER app
 
 # 포트 노출
-EXPOSE 7860
+EXPOSE 8501
 
 # 헬스체크 추가
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+    CMD curl -f http://localhost:8501/ || exit 1
 
-CMD ["python", "gradio/simple_langchain_app.py"]
+CMD ["streamlit", "run", "apps/streamlit/app.py"]
 ```

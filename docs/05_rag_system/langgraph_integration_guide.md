@@ -124,7 +124,7 @@ END
 
 #### 9. generate_answer_enhanced
 - **기능**: LLM 기반 답변 생성
-- **결과**: enhanced_answer
+- **결과**: answer
 - **도구**: Google Gemini (우선), Ollama (백업)
 
 #### 10. validate_answer_quality
@@ -201,7 +201,6 @@ class LegalWorkflowState(TypedDict):
     # 분석 & 답변
     analysis: Optional[str]
     legal_references: List[str]
-    enhanced_answer: Optional[str]
     structure_confidence: float
     legal_citations: Optional[List[Dict[str, Any]]]
     answer: str
@@ -289,15 +288,15 @@ MAX_PROCESSING_STEPS=20
 ### 기본 사용법
 
 ```python
-from source.services.langgraph.workflow_service import LangGraphWorkflowService
-from source.utils.langgraph_config import LangGraphConfig
+from core.agents.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 설정 및 서비스 초기화
 config = LangGraphConfig.from_env()
 service = LangGraphWorkflowService(config)
 
 # 질문 처리
-result = await service.process_query("계약서 작성 시 주의사항은?")
+result = await service.process_query("계약서 작성 시 주의사항은?", "session_id")
 
 # 결과 확인
 print(result["answer"])
@@ -570,8 +569,8 @@ print(f"Errors: {result.get('errors', [])}")
 
 ```python
 import asyncio
-from source.services.langgraph.workflow_service import LangGraphWorkflowService
-from source.utils.langgraph_config import LangGraphConfig
+from core.agents.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
 async def main():
     # 설정 및 서비스 초기화
@@ -677,10 +676,10 @@ print(f"LLM 제공자: {status.get('llm_provider', 'unknown')}")
 
 ## 관련 파일
 
-- `source/services/langgraph/legal_workflow_enhanced.py` - 워크플로우 구현
-- `source/services/langgraph/state_definitions.py` - State 정의
-- `source/services/langgraph/workflow_service.py` - 워크플로우 서비스
-- `source/services/langgraph/state_utils.py` - State 최적화 유틸리티
-- `source/utils/langgraph_config.py` - 설정 관리
+- `core/agents/legal_workflow_enhanced.py` - 워크플로우 구현
+- `core/agents/state_definitions.py` - State 정의
+- `core/agents/workflow_service.py` - 워크플로우 서비스
+- `core/agents/state_utils.py` - State 최적화 유틸리티
+- `infrastructure/utils/langgraph_config.py` - 설정 관리
 
 이 가이드를 통해 LawFirmAI의 LangGraph 워크플로우를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으시면 프로젝트 이슈를 통해 문의해주세요.

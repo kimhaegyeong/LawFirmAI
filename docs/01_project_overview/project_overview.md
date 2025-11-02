@@ -4,8 +4,7 @@
 
 **프로젝트명**: LawFirmAI - 지능형 법률 AI 어시스턴트  
 **목표**: HuggingFace Spaces 배포를 위한 법률 AI 시스템 개발  
-**현재 상태**: ✅ Phase 3 완료 - 시스템 통합 및 성능 최적화 완료  
-**마지막 업데이트**: 2025-10-20
+**현재 상태**: 시스템 통합 및 성능 최적화 완료
 
 ## 🚀 핵심 기능
 
@@ -35,15 +34,16 @@
 ### 5. AI 모델 시스템
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
 - **LangChain 기반**: 안정적인 LLM 관리
-- **법률 용어 확장**: LLM 기반 동의어 자동 생성
+- **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
+- **UnifiedPromptManager**: 법률 도메인별 프롬프트 통합 관리
 
 ## 🔧 기술 스택
 
-- **백엔드**: FastAPI, SQLite, FAISS, LangChain
-- **AI/ML**: Google Gemini 2.5 Flash Lite, ko-sroberta-multitask
-- **프론트엔드**: Streamlit 1.28.0 (LangChain 기반)
+- **백엔드**: FastAPI, SQLite, FAISS, LangChain, LangGraph
+- **AI/ML**: Google Gemini 2.5 Flash Lite, ko-sroberta-multitask, Sentence-BERT
+- **프론트엔드**: Streamlit (LangChain 기반)
 - **검색**: 하이브리드 검색 (의미적 + 정확 매칭)
-- **RAG**: ML 강화 RAG 시스템
+- **RAG**: LangGraph 기반 RAG 시스템
 - **배포**: Docker, HuggingFace Spaces 준비
 
 ## 📊 데이터 현황
@@ -56,29 +56,28 @@
 
 ```
 LawFirmAI/
-├── streamlit/                       # Streamlit 웹 애플리케이션
-│   ├── app.py                       # 메인 Streamlit 앱
-│   ├── requirements.txt             # Streamlit 의존성
-│   └── Dockerfile                   # Streamlit Docker 설정
-├── gradio/                          # Gradio 웹 애플리케이션 (레거시)
-│   ├── app.py                       # 기본 Gradio 앱
-│   ├── components/                  # UI 컴포넌트
-│   └── ...
-├── source/                          # 핵심 모듈
-│   ├── services/                    # 비즈니스 로직 (80+ 서비스)
-│   │   ├── chat_service.py          # 통합 채팅 서비스
-│   │   ├── rag_service.py           # RAG 서비스
-│   │   ├── hybrid_search_engine.py  # 하이브리드 검색
-│   │   ├── question_classifier.py   # 질문 분류기
-│   │   ├── langgraph/               # LangGraph 워크플로우
-│   │   └── ...                      # 기타 서비스들
-│   ├── data/                        # 데이터 처리
-│   │   ├── database.py              # 데이터베이스 관리
-│   │   └── vector_store.py          # 벡터 저장소
-│   ├── models/                      # AI 모델
-│   └── utils/                       # 유틸리티
+├── core/                            # 핵심 비즈니스 로직
+│   ├── agents/                      # LangGraph 워크플로우 에이전트
+│   │   ├── workflow_service.py      # 워크플로우 서비스 (메인)
+│   │   ├── legal_workflow_enhanced.py # 법률 워크플로우
+│   │   └── ...
+│   ├── services/                    # 비즈니스 서비스
+│   │   ├── search/                  # 검색 서비스
+│   │   ├── generation/              # 답변 생성
+│   │   └── enhancement/             # 품질 개선
+│   ├── data/                        # 데이터 레이어
+│   │   ├── database.py              # SQLite 데이터베이스
+│   │   └── vector_store.py          # FAISS 벡터 스토어
+│   └── models/                      # AI 모델
+│       ├── model_manager.py         # 모델 관리자
+│       └── sentence_bert.py         # Sentence BERT
+├── apps/                            # 애플리케이션 레이어
+│   ├── streamlit/                   # Streamlit 웹 인터페이스
+│   └── api/                         # FastAPI 서버
+├── infrastructure/                  # 인프라 및 유틸리티
+│   └── utils/                       # 유틸리티 함수
+├── source/                          # 레거시 모듈 (호환성 유지)
 ├── data/                            # 데이터 파일
-│   ├── lawfirm.db                   # SQLite 데이터베이스
 │   ├── embeddings/                  # 벡터 임베딩
 │   ├── raw/                         # 원본 데이터
 │   └── processed/                   # 전처리된 데이터
@@ -90,9 +89,10 @@ LawFirmAI/
 ## 🎉 주요 성과
 
 ### 시스템 완성도
-- ✅ **완전한 RAG 시스템**: LangChain 기반 검색 증강 생성
+- ✅ **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
 - ✅ **하이브리드 검색**: 의미적 검색 + 정확 매칭 통합
 - ✅ **지능형 챗봇**: 질문 유형별 최적화된 답변 시스템
+- ✅ **통합 프롬프트 관리**: 법률 도메인별 최적화된 프롬프트 시스템
 - ✅ **완전한 API**: RESTful API 및 웹 인터페이스
 - ✅ **컨테이너화**: Docker 기반 배포 준비 완료
 
