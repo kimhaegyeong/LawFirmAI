@@ -24,10 +24,6 @@
 
 ## 🔗 관련 섹션
 
-- [04_Vector_Embedding](../04_vector_embedding/README.md): 벡터 임베딩
-- [06_Models_Performance](../06_models_performance/README.md): 모델 성능 분석
-- [08_API_Documentation](../08_api_documentation/README.md): API 문서
-
----
-
-**LawFirmAI 개발팀**
+- [02_Data_Embedding](../02_data/embedding/README.md): 벡터 임베딩
+- [04_Models_Performance](../04_models/performance/README.md): 모델 성능 분석
+- [07_API_Documentation](../07_api/README.md): API 문서

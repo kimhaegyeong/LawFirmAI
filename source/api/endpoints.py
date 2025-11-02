@@ -4,28 +4,38 @@ API Endpoints (ML Enhanced)
 RESTful API 엔드포인트 정의 - ML 강화 버전
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
 import time
 from datetime import datetime
-from source.utils.config import Config
-from source.utils.logger import get_logger
-from source.services.chat_service import ChatService
-from source.services.rag_service import MLEnhancedRAGService
-from source.services.search_service import MLEnhancedSearchService
-from source.services.question_classifier import QuestionClassifier, QuestionType
-from source.services.hybrid_search_engine import HybridSearchEngine
-from source.services.prompt_templates import PromptTemplateManager
-from source.services.confidence_calculator import ConfidenceCalculator
-from source.services.improved_answer_generator import ImprovedAnswerGenerator
-from source.services.context_builder import ContextBuilder
-from source.services.performance_monitoring import get_performance_monitor, start_monitoring, stop_monitoring
-from source.services.feedback_system import get_feedback_collector, get_feedback_analyzer, FeedbackType, FeedbackRating
-from source.services.legal_basis_integration_service import LegalBasisIntegrationService
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
 from source.data.database import DatabaseManager
 from source.data.vector_store import LegalVectorStore
 from source.models.model_manager import LegalModelManager
+from source.services.chat_service import ChatService
+from source.services.confidence_calculator import ConfidenceCalculator
+from source.services.context_builder import ContextBuilder
+from source.services.feedback_system import (
+    FeedbackRating,
+    FeedbackType,
+    get_feedback_analyzer,
+    get_feedback_collector,
+)
+from source.services.hybrid_search_engine_v2 import HybridSearchEngineV2
+from source.services.improved_answer_generator import ImprovedAnswerGenerator
+from source.services.legal_basis_integration_service import LegalBasisIntegrationService
+from source.services.performance_monitoring import (
+    get_performance_monitor,
+    start_monitoring,
+    stop_monitoring,
+)
+from source.services.prompt_templates import PromptTemplateManager
+from source.services.question_classifier import QuestionClassifier, QuestionType
+from source.services.search_service import MLEnhancedSearchService
+from source.utils.config import Config
+from source.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -106,7 +116,7 @@ class LegalBasisRequest(BaseModel):
 class LegalBasisResponse(BaseModel):
     success: bool
     original_answer: str
-    enhanced_answer: str
+    answer: str
     structured_answer: str
     legal_basis: Dict[str, Any]
     confidence: float
@@ -205,103 +215,103 @@ class IntelligentChatV2Response(BaseModel):
 
 def setup_routes(app, config: Config):
     """ML 강화 라우트 설정"""
-    
+
     # Initialize services
     chat_service = ChatService(config)
-    
+
     # Initialize ML-enhanced services
     database = DatabaseManager(config.database_url)
     vector_store = LegalVectorStore(
-        model_name="BAAI/bge-m3",
-        dimension=1024,
+        model_name="jhgan/ko-sroberta-multitask",
+        dimension=768,
         index_type="flat"
     )
     model_manager = LegalModelManager(config)
-    
-    ml_rag_service = MLEnhancedRAGService(config, model_manager, vector_store, database)
+
+    # MLEnhancedRAGService 제거됨 - chat_service 사용
     ml_search_service = MLEnhancedSearchService(config, database, vector_store, model_manager)
-    
-    # Initialize intelligent chat services
+
+    # Initialize intelligent chat services (lawfirm_v2_faiss.index 사용)
     question_classifier = QuestionClassifier()
-    hybrid_search_engine = HybridSearchEngine()
+    db_path = config.database_path
+    hybrid_search_engine = HybridSearchEngineV2(db_path=db_path)
     prompt_template_manager = PromptTemplateManager()
     confidence_calculator = ConfidenceCalculator()
     context_builder = ContextBuilder()
     improved_answer_generator = ImprovedAnswerGenerator()
-    
+
     # Initialize Phase 3 services
     performance_monitor = get_performance_monitor()
     feedback_collector = get_feedback_collector()
     feedback_analyzer = get_feedback_analyzer()
-    
+
     # Start performance monitoring
     start_monitoring()
-    
+
     # Create API router
     api_router = APIRouter(prefix="/api/v1")
-    
+
     @api_router.post("/chat", response_model=ChatResponse)
     async def chat_endpoint(request: ChatRequest):
         """기본 채팅 엔드포인트 (레거시 호환성)"""
         try:
             logger.info(f"Chat request received: {request.message[:100]}...")
-            
+
             result = chat_service.process_message(
                 message=request.message,
                 context=request.context
             )
-            
+
             return ChatResponse(**result)
-            
+
         except Exception as e:
             logger.error(f"Chat endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/chat/ml-enhanced", response_model=MLEnhancedChatResponse)
     async def ml_enhanced_chat_endpoint(request: MLEnhancedChatRequest):
-        """ML 강화 채팅 엔드포인트"""
+        """ML 강화 채팅 엔드포인트 (deprecated - chat_service 사용)"""
         try:
             logger.info(f"ML-enhanced chat request received: {request.message[:100]}...")
-            
-            # ML 강화 RAG 서비스 사용
-            result = ml_rag_service.process_query(
-                query=request.message,
-                top_k=5,
-                filters={"quality_threshold": request.quality_threshold} if request.use_ml_enhanced else None
+
+            # chat_service 사용 (MLEnhancedRAGService 제거됨)
+            result = chat_service.process_message(
+                message=request.message,
+                context=request.context
             )
-            
+
             return MLEnhancedChatResponse(
                 response=result.get("response", ""),
                 confidence=result.get("confidence", 0.0),
                 sources=result.get("sources", []),
                 processing_time=result.get("processing_time", 0.0),
-                ml_enhanced=result.get("ml_enhanced", True),
-                ml_stats=result.get("ml_stats", {}),
-                retrieved_docs_count=result.get("retrieved_docs_count", 0)
+                ml_enhanced=False,  # MLEnhancedRAGService 제거됨
+                ml_stats={},  # MLEnhancedRAGService 제거됨
+                retrieved_docs_count=len(result.get("sources", []))
             )
-            
+
         except Exception as e:
             logger.error(f"ML-enhanced chat endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/search", response_model=SearchResponse)
     async def search_endpoint(request: SearchRequest):
         """ML 강화 검색 엔드포인트"""
         try:
             logger.info(f"Search request received: {request.query[:100]}...")
-            
+
             import time
             start_time = time.time()
-            
+
             results = ml_search_service.search_documents(
                 query=request.query,
                 search_type=request.search_type,
                 limit=request.limit,
                 filters=request.filters
             )
-            
+
             processing_time = time.time() - start_time
-            
+
             return SearchResponse(
                 results=results,
                 total_count=len(results),
@@ -309,30 +319,30 @@ def setup_routes(app, config: Config):
                 ml_enhanced=True,
                 processing_time=processing_time
             )
-            
+
         except Exception as e:
             logger.error(f"Search endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/legal-entities", response_model=LegalEntityResponse)
     async def legal_entities_endpoint(request: LegalEntityRequest):
         """법률 엔티티 추출 엔드포인트"""
         try:
             logger.info(f"Legal entities request received: {request.query[:100]}...")
-            
+
             entities = ml_search_service.search_legal_entities(request.query)
-            
+
             return LegalEntityResponse(
                 laws=entities.get("laws", []),
                 articles=entities.get("articles", []),
                 cases=entities.get("cases", []),
                 supplementary=entities.get("supplementary", [])
             )
-            
+
         except Exception as e:
             logger.error(f"Legal entities endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/search/suggestions")
     async def search_suggestions_endpoint(
         query: str = Query(..., description="검색 쿼리"),
@@ -341,24 +351,24 @@ def setup_routes(app, config: Config):
         """검색 제안 엔드포인트"""
         try:
             logger.info(f"Search suggestions request received: {query[:100]}...")
-            
+
             suggestions = ml_search_service.get_search_suggestions(query, limit)
-            
+
             return {"suggestions": suggestions}
-            
+
         except Exception as e:
             logger.error(f"Search suggestions endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/quality-stats", response_model=QualityStatsResponse)
     async def quality_stats_endpoint():
         """품질 통계 엔드포인트"""
         try:
             logger.info("Quality stats request received")
-            
+
             # 데이터베이스에서 품질 통계 조회
             stats_query = """
-                SELECT 
+                SELECT
                     COUNT(*) as total_documents,
                     SUM(CASE WHEN ml_enhanced = 1 THEN 1 ELSE 0 END) as ml_enhanced_documents,
                     AVG(parsing_quality_score) as avg_quality_score,
@@ -366,19 +376,19 @@ def setup_routes(app, config: Config):
                     SUM(CASE WHEN article_type = 'supplementary' THEN 1 ELSE 0 END) as supplementary_articles_count
                 FROM assembly_articles
             """
-            
+
             parsing_methods_query = """
                 SELECT parsing_method, COUNT(*) as count
                 FROM assembly_articles
                 GROUP BY parsing_method
             """
-            
+
             stats_result = database.execute_query(stats_query)
             parsing_methods_result = database.execute_query(parsing_methods_query)
-            
+
             stats = stats_result[0] if stats_result else {}
             parsing_methods = {row["parsing_method"]: row["count"] for row in parsing_methods_result}
-            
+
             return QualityStatsResponse(
                 total_documents=stats.get("total_documents", 0),
                 ml_enhanced_documents=stats.get("ml_enhanced_documents", 0),
@@ -387,23 +397,23 @@ def setup_routes(app, config: Config):
                 supplementary_articles_count=stats.get("supplementary_articles_count", 0),
                 parsing_methods=parsing_methods
             )
-            
+
         except Exception as e:
             logger.error(f"Quality stats endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/health", response_model=HealthResponse)
     async def health_check():
         """ML 강화 헬스체크 엔드포인트"""
         try:
             # 벡터 스토어 상태 확인
             vector_stats = vector_store.get_stats()
-            
+
             # 데이터베이스 상태 확인
             db_stats_query = "SELECT COUNT(*) as count FROM assembly_articles"
             db_result = database.execute_query(db_stats_query)
             db_count = db_result[0]["count"] if db_result else 0
-            
+
             return HealthResponse(
                 status="healthy",
                 service="LawFirmAI API (ML Enhanced)",
@@ -412,43 +422,43 @@ def setup_routes(app, config: Config):
                 vector_store_status=vector_stats,
                 database_status={"total_articles": db_count}
             )
-            
+
         except Exception as e:
             logger.error(f"Health check error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/chat/intelligent", response_model=IntelligentChatResponse)
     async def intelligent_chat_endpoint(request: IntelligentChatRequest):
         """지능형 채팅 엔드포인트 - 질문 유형별 최적화된 답변 제공"""
         import time
         start_time = time.time()
-        
+
         try:
             logger.info(f"Intelligent chat request received: {request.message[:100]}...")
-            
+
             # 1. 질문 분류
             question_classification = question_classifier.classify_question(request.message)
-            
+
             # 2. 지능형 검색 실행
             search_results = hybrid_search_engine.search_with_question_type(
                 query=request.message,
                 question_type=question_classification,
                 max_results=request.max_results
             )
-            
+
             # 3. 프롬프트 생성
             context_data = {
                 "precedent_list": search_results.get("precedent_results", []),
                 "law_articles": search_results.get("law_results", []),
                 "context": search_results.get("results", [])
             }
-            
+
             prompt = prompt_template_manager.format_prompt(
                 question_type=question_classification.question_type,
                 context_data=context_data,
                 user_query=request.message
             )
-            
+
             # 4. 답변 생성 (ImprovedAnswerGenerator 사용)
             answer_result = improved_answer_generator.generate_answer(
                 query=request.message,
@@ -456,19 +466,19 @@ def setup_routes(app, config: Config):
                 context=prompt,
                 sources=search_results
             )
-            
+
             # 5. 소스 분리
             law_sources = []
             precedent_sources = []
-            
+
             if request.include_law_sources:
                 law_sources = search_results.get("law_results", [])
-            
+
             if request.include_precedent_sources:
                 precedent_sources = search_results.get("precedent_results", [])
-            
+
             processing_time = time.time() - start_time
-            
+
             # 구조화된 답변 정보 준비
             formatted_answer_info = None
             if answer_result.formatted_answer:
@@ -477,7 +487,7 @@ def setup_routes(app, config: Config):
                     "sections": answer_result.formatted_answer.sections,
                     "metadata": answer_result.formatted_answer.metadata
                 }
-            
+
             return IntelligentChatResponse(
                 answer=answer_result.answer,
                 formatted_answer=formatted_answer_info,
@@ -496,36 +506,36 @@ def setup_routes(app, config: Config):
                 warnings=answer_result.confidence.warnings,
                 recommendations=answer_result.confidence.recommendations
             )
-            
+
         except Exception as e:
             logger.error(f"Intelligent chat endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/chat/intelligent-v2", response_model=IntelligentChatV2Response)
     async def intelligent_chat_v2_endpoint(request: IntelligentChatV2Request):
         """지능형 채팅 엔드포인트 v2 - 모든 개선사항 통합"""
         import time
         start_time = time.time()
-        
+
         try:
             logger.info(f"Intelligent chat v2 request received: {request.message[:100]}...")
-            
+
             # 1. 질문 분류
             question_classification = question_classifier.classify_question(request.message)
-            
+
             # 2. 지능형 검색 실행
             search_results = hybrid_search_engine.search_with_question_type(
                 query=request.message,
                 question_type=question_classification,
                 max_results=request.max_results
             )
-            
+
             # 3. 대화 이력 준비 (세션 기반)
             conversation_history = None
             if request.include_conversation_history and request.session_id:
                 # TODO: 실제 세션 관리 시스템과 연동
                 conversation_history = []
-            
+
             # 4. 컨텍스트 최적화
             context_stats = None
             if request.context_optimization:
@@ -541,7 +551,7 @@ def setup_routes(app, config: Config):
                     "utilization_rate": context_window.utilization_rate,
                     "priority_distribution": context_window.priority_distribution
                 }
-            
+
             # 5. 답변 생성 (ImprovedAnswerGenerator 사용)
             answer_result = improved_answer_generator.generate_answer(
                 query=request.message,
@@ -550,19 +560,19 @@ def setup_routes(app, config: Config):
                 sources=search_results,
                 conversation_history=conversation_history
             )
-            
+
             # 6. 소스 분리
             law_sources = []
             precedent_sources = []
-            
+
             if request.include_law_sources:
                 law_sources = search_results.get("law_results", [])
-            
+
             if request.include_precedent_sources:
                 precedent_sources = search_results.get("precedent_results", [])
-            
+
             processing_time = time.time() - start_time
-            
+
             # 7. 구조화된 답변 정보 준비
             formatted_answer_info = None
             if request.answer_formatting and answer_result.formatted_answer:
@@ -571,7 +581,7 @@ def setup_routes(app, config: Config):
                     "sections": answer_result.formatted_answer.sections,
                     "metadata": answer_result.formatted_answer.metadata
                 }
-            
+
             return IntelligentChatV2Response(
                 answer=answer_result.answer,
                 formatted_answer=formatted_answer_info,
@@ -591,30 +601,30 @@ def setup_routes(app, config: Config):
                 warnings=answer_result.confidence.warnings,
                 recommendations=answer_result.confidence.recommendations
             )
-            
+
         except Exception as e:
             logger.error(f"Intelligent chat v2 endpoint error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/system/status", response_model=Dict[str, Any])
     async def system_status_endpoint():
         """시스템 상태 확인 엔드포인트 - 모든 컴포넌트 상태 점검"""
         try:
             logger.info("System status check requested")
-            
+
             status = {
                 "timestamp": time.time(),
                 "overall_status": "healthy",
                 "components": {},
                 "version": "2.0.0"
             }
-            
+
             # 데이터베이스 상태 확인
             try:
                 db_stats_query = "SELECT COUNT(*) as count FROM assembly_articles"
                 db_result = database.execute_query(db_stats_query)
                 db_count = db_result[0]["count"] if db_result else 0
-                
+
                 status["components"]["database"] = {
                     "status": "healthy",
                     "total_articles": db_count,
@@ -626,7 +636,7 @@ def setup_routes(app, config: Config):
                     "error": str(e)
                 }
                 status["overall_status"] = "degraded"
-            
+
             # 벡터 스토어 상태 확인
             try:
                 vector_stats = vector_store.get_stats()
@@ -640,7 +650,7 @@ def setup_routes(app, config: Config):
                     "error": str(e)
                 }
                 status["overall_status"] = "degraded"
-            
+
             # AI 모델 상태 확인
             try:
                 # 간단한 모델 테스트
@@ -656,7 +666,7 @@ def setup_routes(app, config: Config):
                     "error": str(e)
                 }
                 status["overall_status"] = "degraded"
-            
+
             # 검색 엔진 상태 확인
             try:
                 # 간단한 검색 테스트
@@ -672,7 +682,7 @@ def setup_routes(app, config: Config):
                     "error": str(e)
                 }
                 status["overall_status"] = "degraded"
-            
+
             # 답변 생성기 상태 확인
             try:
                 # 간단한 답변 생성 테스트
@@ -697,9 +707,9 @@ def setup_routes(app, config: Config):
                     "error": str(e)
                 }
                 status["overall_status"] = "degraded"
-            
+
             return status
-            
+
         except Exception as e:
             logger.error(f"System status check error: {e}")
             return {
@@ -708,17 +718,17 @@ def setup_routes(app, config: Config):
                 "error": str(e),
                 "version": "2.0.0"
             }
-    
+
     @api_router.post("/feedback", response_model=FeedbackResponse)
     async def submit_feedback_endpoint(request: FeedbackRequest):
         """피드백 제출 엔드포인트"""
         try:
             logger.info(f"Feedback submission received: {request.feedback_type}")
-            
+
             # 피드백 타입 변환
             feedback_type = FeedbackType(request.feedback_type)
             rating = FeedbackRating(request.rating) if request.rating else None
-            
+
             # 피드백 제출
             feedback_id = feedback_collector.submit_feedback(
                 feedback_type=feedback_type,
@@ -731,41 +741,41 @@ def setup_routes(app, config: Config):
                 context=request.context,
                 metadata=request.metadata
             )
-            
+
             return FeedbackResponse(
                 feedback_id=feedback_id,
                 message="피드백이 성공적으로 제출되었습니다.",
                 timestamp=datetime.now().isoformat()
             )
-            
+
         except Exception as e:
             logger.error(f"Feedback submission error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/feedback/stats", response_model=FeedbackStatsResponse)
     async def get_feedback_stats_endpoint(days: int = Query(30, ge=1, le=365)):
         """피드백 통계 조회 엔드포인트"""
         try:
             logger.info(f"Feedback stats requested for {days} days")
-            
+
             stats = feedback_collector.get_feedback_stats(days)
-            
+
             return FeedbackStatsResponse(**stats)
-            
+
         except Exception as e:
             logger.error(f"Feedback stats error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/performance/stats", response_model=PerformanceStatsResponse)
     async def get_performance_stats_endpoint():
         """성능 통계 조회 엔드포인트"""
         try:
             logger.info("Performance stats requested")
-            
+
             current_metrics = performance_monitor.get_current_metrics()
             alert_stats = performance_monitor.get_alert_stats()
             health_status = performance_monitor.get_health_status()
-            
+
             return PerformanceStatsResponse(
                 current_metrics=current_metrics,
                 alert_stats=alert_stats,
@@ -774,19 +784,19 @@ def setup_routes(app, config: Config):
                 request_count=current_metrics.get("request_count", 0),
                 error_count=current_metrics.get("error_count", 0)
             )
-            
+
         except Exception as e:
             logger.error(f"Performance stats error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.get("/performance/alerts")
     async def get_performance_alerts_endpoint():
         """성능 알림 조회 엔드포인트"""
         try:
             logger.info("Performance alerts requested")
-            
+
             active_alerts = performance_monitor.alert_manager.get_active_alerts()
-            
+
             return {
                 "active_alerts": [
                     {
@@ -802,39 +812,39 @@ def setup_routes(app, config: Config):
                 ],
                 "total_active": len(active_alerts)
             }
-            
+
         except Exception as e:
             logger.error(f"Performance alerts error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/performance/alerts/{alert_id}/resolve")
     async def resolve_alert_endpoint(alert_id: str):
         """알림 해결 엔드포인트"""
         try:
             logger.info(f"Alert resolution requested: {alert_id}")
-            
+
             performance_monitor.alert_manager.resolve_alert(alert_id)
-            
+
             return {
                 "message": "알림이 해결되었습니다.",
                 "alert_id": alert_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Alert resolution error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     # 법적 근거 관련 엔드포인트
     @api_router.post("/legal-basis/enhance", response_model=LegalBasisResponse)
     async def enhance_answer_with_legal_basis(request: LegalBasisRequest):
         """법적 근거를 포함한 답변 강화 엔드포인트"""
         try:
             logger.info(f"Legal basis enhancement requested for query: {request.query[:100]}...")
-            
+
             # 법적 근거 통합 서비스 초기화
             legal_basis_service = LegalBasisIntegrationService()
-            
+
             # 질문 유형 변환
             question_type = None
             if request.question_type:
@@ -843,18 +853,18 @@ def setup_routes(app, config: Config):
                     question_type = QuestionType(request.question_type)
                 except ValueError:
                     logger.warning(f"Invalid question type: {request.question_type}")
-            
+
             # 법적 근거 강화 처리
             result = legal_basis_service.process_query_with_legal_basis(
-                request.query, 
-                request.answer, 
+                request.query,
+                request.answer,
                 question_type
             )
-            
+
             return LegalBasisResponse(
                 success=True,
                 original_answer=result["original_answer"],
-                enhanced_answer=result["enhanced_answer"],
+                answer=result.get("enhanced_answer", result.get("structured_answer", result["original_answer"])),
                 structured_answer=result["structured_answer"],
                 legal_basis=result["legal_basis"],
                 confidence=result["confidence"],
@@ -862,13 +872,13 @@ def setup_routes(app, config: Config):
                 analysis=result["analysis"],
                 processing_timestamp=result["processing_timestamp"]
             )
-            
+
         except Exception as e:
             logger.error(f"Legal basis enhancement error: {e}")
             return LegalBasisResponse(
                 success=False,
                 original_answer=request.answer,
-                enhanced_answer=request.answer,
+                answer=request.answer,
                 structured_answer=request.answer,
                 legal_basis={"citations": {}, "validation": {}, "summary": {}},
                 confidence=0.0,
@@ -877,19 +887,19 @@ def setup_routes(app, config: Config):
                 processing_timestamp=datetime.now().isoformat(),
                 error=str(e)
             )
-    
+
     @api_router.post("/legal-citations/validate", response_model=LegalCitationResponse)
     async def validate_legal_citations(request: LegalCitationRequest):
         """법적 인용 검증 엔드포인트"""
         try:
             logger.info(f"Legal citation validation requested for text: {request.text[:100]}...")
-            
+
             # 법적 근거 통합 서비스 초기화
             legal_basis_service = LegalBasisIntegrationService()
-            
+
             # 법적 인용 검증
             result = legal_basis_service.validate_legal_citations(request.text)
-            
+
             if result["success"]:
                 return LegalCitationResponse(
                     success=True,
@@ -911,7 +921,7 @@ def setup_routes(app, config: Config):
                     legal_basis_summary={},
                     error=result.get("error", "Unknown error")
                 )
-            
+
         except Exception as e:
             logger.error(f"Legal citation validation error: {e}")
             return LegalCitationResponse(
@@ -924,49 +934,49 @@ def setup_routes(app, config: Config):
                 legal_basis_summary={},
                 error=str(e)
             )
-    
+
     @api_router.get("/legal-basis/statistics")
     async def get_legal_basis_statistics(days: int = Query(default=30, ge=1, le=365)):
         """법적 근거 통계 조회 엔드포인트"""
         try:
             logger.info(f"Legal basis statistics requested for {days} days")
-            
+
             # 법적 근거 통합 서비스 초기화
             legal_basis_service = LegalBasisIntegrationService()
-            
+
             # 통계 조회
             stats = legal_basis_service.get_legal_basis_statistics(days)
-            
+
             return {
                 "success": True,
                 "statistics": stats,
                 "period_days": days,
                 "generated_at": datetime.now().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Legal basis statistics error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @api_router.post("/legal-basis/enhance-existing")
     async def enhance_existing_answer(request: LegalBasisRequest):
         """기존 답변을 법적 근거로 강화하는 엔드포인트"""
         try:
             logger.info(f"Existing answer enhancement requested for query: {request.query[:100]}...")
-            
+
             # 법적 근거 통합 서비스 초기화
             legal_basis_service = LegalBasisIntegrationService()
-            
+
             # 기존 답변 강화
             result = legal_basis_service.enhance_existing_answer(
-                request.answer, 
+                request.answer,
                 request.query
             )
-            
+
             return {
                 "success": result["success"],
                 "original_answer": result["original_answer"],
-                "enhanced_answer": result["enhanced_answer"],
+                "answer": result.get("enhanced_answer", result.get("structured_answer", result["original_answer"])),
                 "legal_citations": result.get("legal_citations", {}),
                 "validation": result.get("validation", {}),
                 "confidence": result.get("confidence", 0.0),
@@ -974,12 +984,12 @@ def setup_routes(app, config: Config):
                 "error": result.get("error"),
                 "processing_timestamp": datetime.now().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Existing answer enhancement error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     # Include router in app
     app.include_router(api_router)
-    
+
     logger.info("ML-enhanced API routes configured successfully")

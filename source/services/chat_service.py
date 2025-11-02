@@ -6,57 +6,57 @@ Chat Service
 
 import os
 import time
-from typing import Dict, List, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from ..utils.config import Config
 from ..utils.logger import get_logger
-from .rag_service import MLEnhancedRAGService
-from .hybrid_search_engine import HybridSearchEngine
+
+# 성능 최적화 모듈
+from ..utils.performance_optimizer import (
+    CacheManager,
+    MemoryOptimizer,
+    PerformanceMonitor,
+    memory_optimized,
+    performance_monitor,
+)
+from .context_compressor import ContextCompressor
+
+# Phase 3: 장기 기억 및 품질 모니터링 모듈
+from .contextual_memory_manager import ContextualMemoryManager
+from .conversation_flow_tracker import ConversationFlowTracker
+from .conversation_quality_monitor import ConversationQualityMonitor
+from .emotion_intent_analyzer import EmotionIntentAnalyzer
+from .hybrid_search_engine_v2 import HybridSearchEngineV2
 from .improved_answer_generator import ImprovedAnswerGenerator
-from .question_classifier import QuestionClassifier
-from ..models.model_manager import LegalModelManager
-from ..data.vector_store import LegalVectorStore
-from ..data.database import DatabaseManager
 
 # Phase 1: 대화 맥락 강화 모듈
 from .integrated_session_manager import IntegratedSessionManager
 from .multi_turn_handler import MultiTurnQuestionHandler
-from .context_compressor import ContextCompressor
+from .question_classifier import QuestionClassifier
 
 # Phase 2: 개인화 및 지능형 분석 모듈
 from .user_profile_manager import UserProfileManager
-from .emotion_intent_analyzer import EmotionIntentAnalyzer
-from .conversation_flow_tracker import ConversationFlowTracker
-
-# Phase 3: 장기 기억 및 품질 모니터링 모듈
-from .contextual_memory_manager import ContextualMemoryManager
-from .conversation_quality_monitor import ConversationQualityMonitor
-
-# 성능 최적화 모듈
-from ..utils.performance_optimizer import (
-    PerformanceMonitor, MemoryOptimizer, CacheManager,
-    performance_monitor, memory_optimized
-)
 
 logger = get_logger(__name__)
 
 
 class ChatService:
     """채팅 서비스 클래스"""
-    
+
     def __init__(self, config: Config):
         """채팅 서비스 초기화"""
         self.config = config
         self.logger = get_logger(__name__)
-        
+
         # LangGraph 사용 여부 확인 (비활성화)
         self.use_langgraph = False  # os.getenv("USE_LANGGRAPH", "false").lower() == "true"
-        
+
         if self.use_langgraph:
             try:
-                from .langgraph.workflow_service import LangGraphWorkflowService
                 from ..utils.langgraph_config import LangGraphConfig
-                
+                from core.agents.workflow_service import LangGraphWorkflowService
+
                 langgraph_config = LangGraphConfig.from_env()
                 self.langgraph_service = LangGraphWorkflowService(langgraph_config)
                 self.logger.info("LangGraph workflow service initialized")
@@ -66,31 +66,22 @@ class ChatService:
                 self.langgraph_service = None
         else:
             self.langgraph_service = None
-        
-        # 실제 RAG 컴포넌트 초기화
+
+        # 실제 RAG 컴포넌트 초기화 (lawfirm_v2_faiss.index 사용)
+        self.rag_service = None  # MLEnhancedRAGService 제거됨
         try:
-            # 필요한 컴포넌트들 초기화
-            model_manager = LegalModelManager()
-            vector_store = LegalVectorStore()
-            database_manager = DatabaseManager()
-            
-            self.rag_service = MLEnhancedRAGService(
-                config=config,
-                model_manager=model_manager,
-                vector_store=vector_store,
-                database=database_manager
-            )
-            self.hybrid_search_engine = HybridSearchEngine()
+            # 필요한 컴포넌트들 초기화 - HybridSearchEngineV2는 lawfirm_v2_faiss.index를 사용
+            db_path = self.config.database_path
+            self.hybrid_search_engine = HybridSearchEngineV2(db_path=db_path)
             self.question_classifier = QuestionClassifier()
             self.improved_answer_generator = ImprovedAnswerGenerator()
-            self.logger.info("RAG components initialized successfully")
+            self.logger.info(f"RAG components initialized successfully with {db_path}")
         except Exception as e:
             self.logger.error(f"Failed to initialize RAG components: {e}")
-            self.rag_service = None
             self.hybrid_search_engine = None
             self.question_classifier = None
             self.improved_answer_generator = None
-        
+
         # Phase 1: 대화 맥락 강화 컴포넌트 초기화
         try:
             self.session_manager = IntegratedSessionManager("data/conversations.db")
@@ -102,7 +93,7 @@ class ChatService:
             self.session_manager = None
             self.multi_turn_handler = None
             self.context_compressor = None
-        
+
         # Phase 2: 개인화 및 지능형 분석 컴포넌트 초기화
         try:
             if self.session_manager:
@@ -117,7 +108,7 @@ class ChatService:
             self.user_profile_manager = None
             self.emotion_intent_analyzer = None
             self.conversation_flow_tracker = None
-        
+
         # Phase 3: 장기 기억 및 품질 모니터링 컴포넌트 초기화
         try:
             if self.session_manager:
@@ -131,7 +122,7 @@ class ChatService:
             self.logger.error(f"Failed to initialize Phase 3 components: {e}")
             self.contextual_memory_manager = None
             self.quality_monitor = None
-        
+
         # 성능 최적화 컴포넌트 초기화
         try:
             self.performance_monitor = PerformanceMonitor()
@@ -143,45 +134,45 @@ class ChatService:
             self.performance_monitor = None
             self.memory_optimizer = None
             self.cache_manager = None
-        
+
         self.logger.info(f"ChatService initialized (LangGraph: {self.use_langgraph})")
-    
+
     @performance_monitor
     @memory_optimized
-    async def process_message(self, message: str, context: Optional[str] = None, 
-                             session_id: Optional[str] = None, 
+    async def process_message(self, message: str, context: Optional[str] = None,
+                             session_id: Optional[str] = None,
                              user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         사용자 메시지 처리 (모든 Phase 기능 통합)
-        
+
         Args:
             message: 사용자 메시지
             context: 추가 컨텍스트 (선택사항)
             session_id: 세션 ID (선택사항)
             user_id: 사용자 ID (선택사항)
-            
+
         Returns:
             Dict[str, Any]: 처리 결과
         """
         try:
             start_time = time.time()
-            
+
             # 캐시에서 응답 확인
             cache_key = f"response:{hash(message)}:{session_id}:{user_id}"
             cached_response = self.cache_manager.get(cache_key) if self.cache_manager else None
-            
+
             if cached_response:
                 self.logger.info(f"Cache hit for message: {message[:50]}...")
                 cached_response["from_cache"] = True
                 cached_response["processing_time"] = time.time() - start_time
                 return cached_response
-            
+
             # 기본값 설정
             if not user_id:
                 user_id = "anonymous_user"
             if not session_id:
                 session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
+
             # 입력 검증
             if not self.validate_input(message):
                 return {
@@ -197,28 +188,28 @@ class ChatService:
                         "phase3": {"enabled": False}
                     }
                 }
-            
+
             # Phase 1: 대화 맥락 강화 처리
             phase1_info = await self._process_phase1_context(message, session_id, user_id)
-            
+
             # Phase 2: 개인화 및 지능형 분석 처리
             phase2_info = await self._process_phase2_personalization(message, session_id, user_id, phase1_info)
-            
+
             # Phase 3: 장기 기억 및 품질 모니터링 처리
             phase3_info = await self._process_phase3_memory_quality(message, session_id, user_id, phase1_info, phase2_info)
-            
+
             # 실제 답변 생성 (RAG 시스템 사용)
             response_result = await self._generate_response(message, phase1_info, phase2_info, phase3_info)
-            
+
             # 최종 결과 통합
             processing_time = time.time() - start_time
-            
+
             # 캐시 히트율 계산
             cache_hit_rate = 0.0
             if self.cache_manager:
                 cache_stats = self.cache_manager.get_stats()
                 cache_hit_rate = cache_stats.get("hit_rate", 0.0)
-            
+
             result = {
                 "response": response_result.get("response", "죄송합니다. 답변을 생성할 수 없습니다."),
                 "confidence": response_result.get("confidence", 0.0),
@@ -243,16 +234,16 @@ class ChatService:
                     "memory_usage_mb": self.memory_optimizer.get_memory_usage().process_memory / 1024 / 1024 if self.memory_optimizer else 0
                 }
             }
-            
+
             # 캐시에 결과 저장
             if self.cache_manager and not result.get("errors"):
                 self.cache_manager.set(cache_key, result)
-            
+
             # Phase 3: 품질 평가 및 메모리 저장
             if self.quality_monitor and phase1_info.get("context"):
                 quality_assessment = self.quality_monitor.assess_conversation_quality(phase1_info["context"])
                 result["quality_assessment"] = quality_assessment
-            
+
             if self.contextual_memory_manager and phase1_info.get("context"):
                 # 중요한 사실 추출 및 저장
                 facts = {}
@@ -263,10 +254,10 @@ class ChatService:
                         if fact_type not in facts:
                             facts[fact_type] = []
                         facts[fact_type].append(fact["content"])
-                
+
                 if facts:
                     self.contextual_memory_manager.store_important_facts(session_id, user_id, facts)
-            
+
             # 성능 메트릭 기록
             if self.performance_monitor:
                 active_sessions = 1  # 간단한 추정
@@ -277,9 +268,9 @@ class ChatService:
                     cache_hit_rate=cache_hit_rate,
                     db_query_time=db_query_time
                 )
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
             return {
@@ -296,7 +287,7 @@ class ChatService:
                     "phase3": {"enabled": False}
                 }
             }
-    
+
     async def _process_phase1_context(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
         """Phase 1: 대화 맥락 강화 처리"""
         try:
@@ -310,16 +301,16 @@ class ChatService:
                 "compression_info": None,
                 "errors": []
             }
-            
+
             if not self.session_manager:
                 phase1_info["enabled"] = False
                 phase1_info["errors"].append("Session manager not available")
                 return phase1_info
-            
+
             # 세션 로드 또는 생성
             context = self.session_manager.get_or_create_session(session_id, user_id)
             phase1_info["context"] = context
-            
+
             # 다중 턴 질문 처리
             if self.multi_turn_handler:
                 multi_turn_result = self.multi_turn_handler.build_complete_query(message, context)
@@ -329,14 +320,14 @@ class ChatService:
                     "confidence": multi_turn_result["confidence"],
                     "reasoning": multi_turn_result["reasoning"]
                 }
-            
+
             # 컨텍스트 압축 (필요시)
             if self.context_compressor and context:
                 compression_info = self.context_compressor.compress_context_if_needed(context, message)
                 phase1_info["compression_info"] = compression_info
-            
+
             return phase1_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 1 processing: {e}")
             return {
@@ -344,8 +335,8 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
-    async def _process_phase2_personalization(self, message: str, session_id: str, user_id: str, 
+
+    async def _process_phase2_personalization(self, message: str, session_id: str, user_id: str,
                                             phase1_info: Dict[str, Any]) -> Dict[str, Any]:
         """Phase 2: 개인화 및 지능형 분석 처리"""
         try:
@@ -359,7 +350,7 @@ class ChatService:
                 "flow_tracking_info": {},
                 "errors": []
             }
-            
+
             # 사용자 프로필 관리
             if self.user_profile_manager:
                 try:
@@ -367,17 +358,17 @@ class ChatService:
                     phase2_info["personalized_context"] = personalized_context
                 except Exception as e:
                     phase2_info["errors"].append(f"User profile error: {str(e)}")
-            
+
             # 감정 및 의도 분석
             if self.emotion_intent_analyzer:
                 try:
                     emotion_result = self.emotion_intent_analyzer.analyze_emotion(message)
                     intent_result = self.emotion_intent_analyzer.analyze_intent(message, phase1_info.get("context"))
-                    
+
                     response_tone = self.emotion_intent_analyzer.get_contextual_response_tone(
                         emotion_result, intent_result, phase2_info.get("personalized_context", {})
                     )
-                    
+
                     phase2_info["emotion_intent_info"] = {
                         "emotion": {
                             "primary_emotion": emotion_result.primary_emotion.value,
@@ -401,14 +392,14 @@ class ChatService:
                     }
                 except Exception as e:
                     phase2_info["errors"].append(f"Emotion intent analysis error: {str(e)}")
-            
+
             # 대화 흐름 추적
             if self.conversation_flow_tracker and phase1_info.get("context"):
                 try:
                     from .conversation_manager import ConversationTurn
-                    
+
                     # 대화 흐름 추적
-                    self.conversation_flow_tracker.track_conversation_flow(session_id, 
+                    self.conversation_flow_tracker.track_conversation_flow(session_id,
                         ConversationTurn(
                             user_query=message,
                             bot_response="",  # 아직 생성되지 않음
@@ -416,12 +407,12 @@ class ChatService:
                             question_type="general_question"
                         )
                     )
-                    
+
                     # 다음 의도 예측 및 후속 질문 제안
                     predicted_intents = self.conversation_flow_tracker.predict_next_intent(phase1_info["context"])
                     suggested_questions = self.conversation_flow_tracker.suggest_follow_up_questions(phase1_info["context"])
                     conversation_state = self.conversation_flow_tracker.get_conversation_state(phase1_info["context"])
-                    
+
                     phase2_info["flow_tracking_info"] = {
                         "predicted_intents": [
                             {
@@ -446,9 +437,9 @@ class ChatService:
                     }
                 except Exception as e:
                     phase2_info["errors"].append(f"Flow tracking error: {str(e)}")
-            
+
             return phase2_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 2 processing: {e}")
             return {
@@ -456,7 +447,7 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
+
     async def _process_phase3_memory_quality(self, message: str, session_id: str, user_id: str,
                                            phase1_info: Dict[str, Any], phase2_info: Dict[str, Any]) -> Dict[str, Any]:
         """Phase 3: 장기 기억 및 품질 모니터링 처리"""
@@ -469,7 +460,7 @@ class ChatService:
                 "quality_assessment": {},
                 "errors": []
             }
-            
+
             # 맥락적 메모리 검색
             if self.contextual_memory_manager:
                 try:
@@ -486,7 +477,7 @@ class ChatService:
                     ]
                 except Exception as e:
                     phase3_info["errors"].append(f"Memory search error: {str(e)}")
-            
+
             # 품질 평가
             if self.quality_monitor and phase1_info.get("context"):
                 try:
@@ -501,9 +492,9 @@ class ChatService:
                     }
                 except Exception as e:
                     phase3_info["errors"].append(f"Quality assessment error: {str(e)}")
-            
+
             return phase3_info
-            
+
         except Exception as e:
             self.logger.error(f"Error in Phase 3 processing: {e}")
             return {
@@ -511,8 +502,8 @@ class ChatService:
                 "error": str(e),
                 "errors": [str(e)]
             }
-    
-    async def _generate_response(self, message: str, phase1_info: Dict[str, Any], 
+
+    async def _generate_response(self, message: str, phase1_info: Dict[str, Any],
                                phase2_info: Dict[str, Any], phase3_info: Dict[str, Any]) -> Dict[str, Any]:
         """실제 답변 생성 (RAG 시스템 사용)"""
         try:
@@ -520,13 +511,13 @@ class ChatService:
             resolved_query = message
             if phase1_info.get("multi_turn_result", {}).get("is_multi_turn"):
                 resolved_query = phase1_info["multi_turn_result"]["resolved_query"]
-            
+
             # LangGraph 사용 여부에 따른 처리
             if self.use_langgraph and self.langgraph_service:
                 return await self._process_with_langgraph(resolved_query, phase1_info.get("session_id"))
             else:
                 return await self._process_legacy(resolved_query, None)
-            
+
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")
             return {
@@ -535,12 +526,12 @@ class ChatService:
                 "sources": [],
                 "errors": [str(e)]
             }
-    
+
     async def _process_with_langgraph(self, message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """LangGraph를 사용한 메시지 처리"""
         try:
             result = await self.langgraph_service.process_query(message, session_id)
-            
+
             # LangGraph 결과를 기존 형식으로 변환
             return {
                 "response": result.get("answer", ""),
@@ -554,7 +545,7 @@ class ChatService:
                 "metadata": result.get("metadata", {}),
                 "errors": result.get("errors", [])
             }
-            
+
         except Exception as e:
             self.logger.error(f"LangGraph processing error: {e}")
             return {
@@ -564,24 +555,24 @@ class ChatService:
                 "processing_time": 0.0,
                 "errors": [str(e)]
             }
-    
+
     async def _process_legacy(self, message: str, context: Optional[str] = None) -> Dict[str, Any]:
         """기존 방식으로 메시지 처리"""
         try:
             start_time = time.time()
-            
+
             # 기존 처리 로직 (placeholder)
             response_data = self._generate_response_sync(message, context)
-            
+
             processing_time = time.time() - start_time
-            
+
             return {
                 "response": response_data.get("response", ""),
                 "confidence": response_data.get("confidence", 0.8),
                 "sources": response_data.get("sources", []),
                 "processing_time": processing_time
             }
-            
+
         except Exception as e:
             self.logger.error(f"Legacy processing error: {e}")
             return {
@@ -591,8 +582,8 @@ class ChatService:
                 "processing_time": 0.0,
                 "errors": [str(e)]
             }
-    
-    def _generate_response_sync(self, message: str, context: Optional[str] = None, 
+
+    def _generate_response_sync(self, message: str, context: Optional[str] = None,
                           *args, **kwargs) -> Dict[str, Any]:
         """실제 RAG 시스템을 사용한 응답 생성"""
         try:
@@ -604,7 +595,7 @@ class ChatService:
                 question_classification = type('QuestionClassification', (), {
                     'question_type': type('QuestionType', (), {'value': 'general'})()
                 })()
-            
+
             # 검색 실행
             if self.hybrid_search_engine:
                 search_results = self.hybrid_search_engine.search_with_question_type(
@@ -614,7 +605,7 @@ class ChatService:
                 )
             else:
                 search_results = []
-            
+
             # 답변 생성
             if self.improved_answer_generator:
                 answer_result = self.improved_answer_generator.generate_answer(
@@ -638,7 +629,7 @@ class ChatService:
                     "sources": [],
                     "processing_time": 0.0
                 }
-                
+
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")
             return {
@@ -647,17 +638,17 @@ class ChatService:
                 "sources": [],
                 "processing_time": 0.0
             }
-    
+
     def validate_input(self, message: str) -> bool:
         """입력 검증"""
         if not message or not message.strip():
             return False
-        
+
         if len(message) > 10000:  # Max 10,000 characters
             return False
-        
+
         return True
-    
+
     def get_service_status(self) -> Dict[str, Any]:
         """서비스 상태 조회"""
         try:
@@ -665,7 +656,6 @@ class ChatService:
                 "service_name": "ChatService",
                 "langgraph_enabled": self.use_langgraph,
                 "rag_components": {
-                    "rag_service": self.rag_service is not None,
                     "hybrid_search_engine": self.hybrid_search_engine is not None,
                     "question_classifier": self.question_classifier is not None,
                     "improved_answer_generator": self.improved_answer_generator is not None
@@ -687,9 +677,9 @@ class ChatService:
                 "overall_status": "healthy" if self._is_healthy() else "degraded",
                 "last_updated": datetime.now().isoformat()
             }
-            
+
             return status
-            
+
         except Exception as e:
             self.logger.error(f"Error getting service status: {e}")
             return {
@@ -698,31 +688,30 @@ class ChatService:
                 "error": str(e),
                 "last_updated": datetime.now().isoformat()
             }
-    
+
     def _is_healthy(self) -> bool:
         """서비스 건강 상태 확인"""
         try:
             # 기본 RAG 컴포넌트 중 하나라도 사용 가능하면 healthy
             rag_available = any([
-                self.rag_service is not None,
                 self.hybrid_search_engine is not None,
                 self.question_classifier is not None,
                 self.improved_answer_generator is not None
             ])
-            
+
             # Phase 1 컴포넌트 중 하나라도 사용 가능하면 healthy
             phase1_available = any([
                 self.session_manager is not None,
                 self.multi_turn_handler is not None,
                 self.context_compressor is not None
             ])
-            
+
             return rag_available or phase1_available
-            
+
         except Exception as e:
             self.logger.error(f"Error checking health status: {e}")
             return False
-    
+
     def get_phase_statistics(self) -> Dict[str, Any]:
         """Phase별 통계 조회"""
         try:
@@ -746,7 +735,7 @@ class ChatService:
                     "consolidation_count": 0
                 }
             }
-            
+
             # Phase 1 통계
             if self.session_manager:
                 try:
@@ -755,7 +744,7 @@ class ChatService:
                     stats["phase1"]["total_turns"] = session_stats.get("total_turns", 0)
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 1 stats: {e}")
-            
+
             # Phase 2 통계
             if self.user_profile_manager:
                 try:
@@ -763,7 +752,7 @@ class ChatService:
                     stats["phase2"]["user_count"] = 0  # Placeholder
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 2 stats: {e}")
-            
+
             # Phase 3 통계
             if self.contextual_memory_manager:
                 try:
@@ -771,9 +760,9 @@ class ChatService:
                     stats["phase3"]["memory_count"] = 0  # Placeholder
                 except Exception as e:
                     self.logger.warning(f"Error getting Phase 3 stats: {e}")
-            
+
             return stats
-            
+
         except Exception as e:
             self.logger.error(f"Error getting phase statistics: {e}")
             return {
@@ -781,7 +770,7 @@ class ChatService:
                 "phase2": {"enabled": False, "error": str(e)},
                 "phase3": {"enabled": False, "error": str(e)}
             }
-    
+
     def optimize_performance(self) -> Dict[str, Any]:
         """성능 최적화 수행"""
         try:
@@ -792,13 +781,13 @@ class ChatService:
                 "cache_optimization": {},
                 "performance_summary": {}
             }
-            
+
             # 메모리 최적화
             if self.memory_optimizer:
                 memory_result = self.memory_optimizer.optimize_memory()
                 optimization_results["memory_optimization"] = memory_result
                 optimization_results["actions_taken"].extend(memory_result.get("actions_taken", []))
-            
+
             # 캐시 최적화
             if self.cache_manager:
                 cache_stats_before = self.cache_manager.get_stats()
@@ -808,18 +797,18 @@ class ChatService:
                     "stats_before": cache_stats_before
                 }
                 optimization_results["actions_taken"].append(f"Cache cleared: {cache_cleared} entries")
-            
+
             # 성능 요약
             if self.performance_monitor:
                 performance_summary = self.performance_monitor.get_performance_summary()
                 optimization_results["performance_summary"] = performance_summary
-            
+
             return optimization_results
-            
+
         except Exception as e:
             self.logger.error(f"Error optimizing performance: {e}")
             return {"error": str(e)}
-    
+
     def get_performance_metrics(self) -> Dict[str, Any]:
         """성능 메트릭 조회"""
         try:
@@ -830,14 +819,14 @@ class ChatService:
                 "cache_manager": {},
                 "system_health": {}
             }
-            
+
             # 성능 모니터 메트릭
             if self.performance_monitor:
                 metrics["performance_monitor"] = {
                     "summary": self.performance_monitor.get_performance_summary(),
                     "system_health": self.performance_monitor.get_system_health()
                 }
-            
+
             # 메모리 최적화 메트릭
             if self.memory_optimizer:
                 memory_usage = self.memory_optimizer.get_memory_usage()
@@ -853,18 +842,18 @@ class ChatService:
                     },
                     "memory_trend": memory_trend
                 }
-            
+
             # 캐시 관리 메트릭
             if self.cache_manager:
                 cache_stats = self.cache_manager.get_stats()
                 metrics["cache_manager"] = cache_stats
-            
+
             return metrics
-            
+
         except Exception as e:
             self.logger.error(f"Error getting performance metrics: {e}")
             return {"error": str(e)}
-    
+
     def cleanup_resources(self) -> Dict[str, Any]:
         """리소스 정리"""
         try:
@@ -873,30 +862,30 @@ class ChatService:
                 "actions_taken": [],
                 "resources_freed": {}
             }
-            
+
             # 메모리 정리
             if self.memory_optimizer:
                 memory_result = self.memory_optimizer.optimize_memory()
                 cleanup_results["resources_freed"]["memory_mb"] = memory_result.get("memory_freed_mb", 0)
                 cleanup_results["actions_taken"].extend(memory_result.get("actions_taken", []))
-            
+
             # 캐시 정리
             if self.cache_manager:
                 cache_cleared = self.cache_manager.clear()
                 cleanup_results["resources_freed"]["cache_entries"] = cache_cleared
                 cleanup_results["actions_taken"].append(f"Cache cleared: {cache_cleared} entries")
-            
+
             # 세션 정리 (오래된 세션)
             if self.session_manager:
                 # 간단한 세션 정리 로직 (실제 구현은 세션 관리자에 따라 다름)
                 cleanup_results["actions_taken"].append("Session cleanup completed")
-            
+
             return cleanup_results
-            
+
         except Exception as e:
             self.logger.error(f"Error cleaning up resources: {e}")
             return {"error": str(e)}
-    
+
     def get_conversation_history(self, session_id: str) -> List[Dict]:
         """대화 기록 조회"""
         if self.use_langgraph and self.langgraph_service:
@@ -909,7 +898,7 @@ class ChatService:
         else:
             # 기존 방식 (placeholder)
             return []
-    
+
     def clear_conversation_history(self, session_id: str) -> None:
         """대화 기록 삭제"""
         if self.use_langgraph and self.langgraph_service:
@@ -922,7 +911,7 @@ class ChatService:
         else:
             # 기존 방식 (placeholder)
             pass
-    
+
     def get_service_status(self) -> Dict[str, Any]:
         """서비스 상태 조회"""
         status = {
@@ -931,34 +920,34 @@ class ChatService:
             "langgraph_service_available": self.langgraph_service is not None,
             "timestamp": time.time()
         }
-        
+
         if self.use_langgraph and self.langgraph_service:
             try:
                 langgraph_status = self.langgraph_service.get_service_status()
                 status["langgraph_status"] = langgraph_status
             except Exception as e:
                 status["langgraph_error"] = str(e)
-        
+
         return status
-    
+
     async def test_service(self, test_message: str = "테스트 질문입니다") -> Dict[str, Any]:
         """서비스 테스트"""
         try:
             result = await self.process_message(test_message)
-            
+
             test_passed = (
-                "response" in result and 
-                result["response"] and 
+                "response" in result and
+                result["response"] and
                 "processing_time" in result
             )
-            
+
             return {
                 "test_passed": test_passed,
                 "test_message": test_message,
                 "result": result,
                 "langgraph_enabled": self.use_langgraph
             }
-            
+
         except Exception as e:
             return {
                 "test_passed": False,
