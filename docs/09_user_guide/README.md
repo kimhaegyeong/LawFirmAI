@@ -8,10 +8,6 @@
 
 ## 🔗 관련 섹션
 
-- [01_Project_Overview](../01_project_overview/README.md): 프로젝트 개요
-- [08_API_Documentation](../08_api_documentation/README.md): API 문서
-- [07_Deployment_Operations](../07_deployment_operations/README.md): 배포 및 운영
-
----
-
-**LawFirmAI 개발팀**
+- [01_Getting_Started](../01_getting_started/README.md): 프로젝트 개요
+- [07_API_Documentation](../07_api/README.md): API 문서
+- [06_Deployment](../06_deployment/README.md): 배포 및 운영

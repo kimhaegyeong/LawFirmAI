@@ -7,7 +7,8 @@ import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Path, Body
 from pydantic import BaseModel, Field
-from services.hybrid_search_engine import HybridSearchEngine
+from source.services.hybrid_search_engine_v2 import HybridSearchEngineV2
+from source.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,13 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 # 하이브리드 검색 엔진 인스턴스
 search_engine = None
 
-def get_search_engine() -> HybridSearchEngine:
-    """검색 엔진 인스턴스 반환"""
+def get_search_engine() -> HybridSearchEngineV2:
+    """검색 엔진 인스턴스 반환 (lawfirm_v2_faiss.index 사용)"""
     global search_engine
     if search_engine is None:
-        search_engine = HybridSearchEngine()
+        config = Config()
+        db_path = config.database_path
+        search_engine = HybridSearchEngineV2(db_path=db_path)
     return search_engine
 
 # Pydantic 모델 정의
@@ -67,9 +70,9 @@ async def search_documents(request: SearchRequest):
     """하이브리드 검색 실행"""
     try:
         logger.info(f"Search request received: {request.query}")
-        
+
         search_engine = get_search_engine()
-        
+
         result = search_engine.search(
             query=request.query,
             search_types=request.search_types,
@@ -77,15 +80,18 @@ async def search_documents(request: SearchRequest):
             include_exact=request.include_exact,
             include_semantic=request.include_semantic
         )
-        
+
         return SearchResponse(
             query=request.query,
-            results=result["results"],
-            total_results=result["total_results"],
-            search_stats=result["search_stats"],
+            results=result.get("results", []),
+            total_results=result.get("total", 0),
+            search_stats={
+                "exact_count": result.get("exact_count", 0),
+                "semantic_count": result.get("semantic_count", 0)
+            },
             success=True
         )
-        
+
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -98,15 +104,19 @@ async def search_laws(
     """법령만 검색"""
     try:
         search_engine = get_search_engine()
-        results = search_engine.search_laws_only(query, max_results)
-        
+        result = search_engine.search(
+            query=query,
+            search_types=["law"],
+            max_results=max_results
+        )
+
         return {
             "query": query,
-            "results": results,
-            "total_results": len(results),
+            "results": result.get("results", []),
+            "total_results": result.get("total", 0),
             "search_type": "laws_only"
         }
-        
+
     except Exception as e:
         logger.error(f"Laws search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -119,15 +129,19 @@ async def search_precedents(
     """판례만 검색"""
     try:
         search_engine = get_search_engine()
-        results = search_engine.search_precedents_only(query, max_results)
-        
+        result = search_engine.search(
+            query=query,
+            search_types=["precedent"],
+            max_results=max_results
+        )
+
         return {
             "query": query,
-            "results": results,
-            "total_results": len(results),
+            "results": result.get("results", []),
+            "total_results": result.get("total", 0),
             "search_type": "precedents_only"
         }
-        
+
     except Exception as e:
         logger.error(f"Precedents search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -140,67 +154,65 @@ async def search_constitutional(
     """헌재결정례만 검색"""
     try:
         search_engine = get_search_engine()
-        results = search_engine.search_constitutional_only(query, max_results)
-        
+        result = search_engine.search(
+            query=query,
+            search_types=["decision"],
+            max_results=max_results
+        )
+
         return {
             "query": query,
-            "results": results,
-            "total_results": len(results),
+            "results": result.get("results", []),
+            "total_results": result.get("total", 0),
             "search_type": "constitutional_only"
         }
-        
+
     except Exception as e:
         logger.error(f"Constitutional search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/similar")
 async def get_similar_documents(request: SimilarDocumentsRequest):
-    """유사 문서 검색"""
+    """유사 문서 검색 (현재는 일반 검색으로 대체)"""
     try:
         logger.info(f"Similar documents request for: {request.doc_id}")
-        
+
         search_engine = get_search_engine()
-        results = search_engine.get_similar_documents(
-            doc_id=request.doc_id,
-            doc_type=request.doc_type,
-            k=request.max_results
+        # doc_id를 쿼리로 사용하여 검색
+        result = search_engine.search(
+            query=request.doc_id,
+            search_types=[request.doc_type] if request.doc_type else None,
+            max_results=request.max_results
         )
-        
+
         return {
             "doc_id": request.doc_id,
             "doc_type": request.doc_type,
-            "results": results,
-            "total_results": len(results)
+            "results": result.get("results", []),
+            "total_results": result.get("total", 0)
         }
-        
+
     except Exception as e:
         logger.error(f"Similar documents search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/build-index")
 async def build_index(request: IndexBuildRequest):
-    """벡터 인덱스 구축"""
+    """벡터 인덱스 구축 (lawfirm_v2.db 기반으로 자동 생성됨)"""
     try:
         logger.info(f"Index build request for {len(request.documents)} documents")
-        
-        search_engine = get_search_engine()
-        
-        if request.force_rebuild:
-            # 강제 재구축의 경우 기존 인덱스 삭제 후 재구축
-            # 실제 구현에서는 인덱스 파일 삭제 로직 필요
-            pass
-        
-        success = search_engine.build_index(request.documents)
-        
-        if success:
-            return {
-                "message": "Index built successfully",
-                "document_count": len(request.documents),
-                "success": True
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Index building failed")
-        
+        logger.warning("Index building is handled automatically by lawfirm_v2.db and SemanticSearchEngineV2")
+
+        # HybridSearchEngineV2는 lawfirm_v2.db의 embeddings 테이블에서 자동으로 인덱스를 생성
+        # 별도의 build_index 메서드는 없음
+
+        return {
+            "message": "Index is automatically managed by lawfirm_v2.db. Use data insertion to update index.",
+            "document_count": len(request.documents),
+            "success": True,
+            "note": "lawfirm_v2_faiss.index is automatically generated from lawfirm_v2.db"
+        }
+
     except Exception as e:
         logger.error(f"Index building failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -210,13 +222,19 @@ async def get_search_stats():
     """검색 엔진 통계 정보"""
     try:
         search_engine = get_search_engine()
-        stats = search_engine.get_search_stats()
-        
+        # HybridSearchEngineV2는 직접적인 stats 메서드가 없으므로 구성 정보 반환
+        stats = {
+            "db_path": search_engine.db_path,
+            "model_name": search_engine.model_name,
+            "search_config": search_engine.search_config,
+            "index_file": f"{search_engine.db_path.replace('.db', '_faiss.index')}"
+        }
+
         return {
             "search_engine_stats": stats,
             "success": True
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get search stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -228,16 +246,25 @@ async def test_search_system(
     """검색 시스템 테스트"""
     try:
         logger.info(f"Search system test with {len(test_queries)} queries")
-        
+
         search_engine = get_search_engine()
-        test_results = search_engine.test_search(test_queries)
-        
+        test_results = {}
+
+        for query in test_queries:
+            result = search_engine.search(query=query, max_results=10)
+            test_results[query] = {
+                "total_results": result.get("total", 0),
+                "exact_count": result.get("exact_count", 0),
+                "semantic_count": result.get("semantic_count", 0),
+                "success": "error" not in result
+            }
+
         return {
             "test_results": test_results,
             "total_queries": len(test_queries),
             "success": True
         }
-        
+
     except Exception as e:
         logger.error(f"Search system test failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -249,16 +276,18 @@ async def update_search_config(
     """검색 설정 업데이트"""
     try:
         logger.info("Updating search configuration")
-        
+
         search_engine = get_search_engine()
-        search_engine.update_search_config(config)
-        
+        # search_config 업데이트
+        if isinstance(config, dict):
+            search_engine.search_config.update(config)
+
         return {
             "message": "Search configuration updated",
             "new_config": search_engine.search_config,
             "success": True
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to update search config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -269,15 +298,19 @@ async def health_check():
     """검색 시스템 헬스체크"""
     try:
         search_engine = get_search_engine()
-        stats = search_engine.get_search_stats()
-        
+        # 인덱스 파일 존재 확인
+        from pathlib import Path
+        index_path = Path(search_engine.db_path.replace('.db', '_faiss.index'))
+
         return {
             "status": "healthy",
             "search_engine_available": True,
-            "index_stats": stats.get("semantic_search", {}),
+            "index_file": str(index_path),
+            "index_exists": index_path.exists(),
+            "db_path": search_engine.db_path,
             "success": True
         }
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {

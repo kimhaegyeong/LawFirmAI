@@ -7,14 +7,44 @@ LawFirmAI 프로젝트는 SQLite 데이터베이스를 사용하여 법률 데�
 ## 📊 데이터베이스 구조
 
 ### 주요 테이블
+
+#### 법률 및 판례 데이터
 - `assembly_laws`: 법률 데이터 저장
 - `assembly_articles`: 법률 조문 데이터 저장
 - `precedent_cases`: 판례 사건 데이터 저장
 - `precedent_sections`: 판례 섹션 데이터 저장 (판시사항, 판결요지 등)
 - `precedent_parties`: 판례 당사자 데이터 저장
+
+#### 문서 및 메타데이터
+- `documents`: 법률 문서 저장 (하이브리드 검색용)
+- `law_metadata`: 법령 메타데이터
+- `precedent_metadata`: 판례 메타데이터
+- `constitutional_metadata`: 헌재결정례 메타데이터
+- `interpretation_metadata`: 법령해석례 메타데이터
+- `administrative_rule_metadata`: 행정규칙 메타데이터
+- `local_ordinance_metadata`: 자치법규 메타데이터
+
+#### 처리 및 품질 관리
 - `processed_files`: 파일 처리 이력 추적
-- `fts_laws`: 법률 전체 텍스트 검색 인덱스
-- `fts_articles`: 조문 전체 텍스트 검색 인덱스
+- `duplicate_groups`: 중복 데이터 그룹 관리
+- `quality_reports`: 품질 보고서
+- `migration_history`: 마이그레이션 히스토리
+- `schema_version`: 스키마 버전 관리
+
+#### 대화 및 로깅
+- `chat_history`: 채팅 기록
+- `conversation_sessions`: 대화 세션
+- `conversation_turns`: 대화 턴
+- `legal_entities`: 법률 엔티티
+- `user_profiles`: 사용자 프로필
+- `contextual_memories`: 맥락적 메모리
+- `quality_metrics`: 품질 메트릭
+- `legal_basis_validation_log`: 법적 근거 검증 로그
+- `legal_basis_processing_log`: 법적 근거 처리 로그
+
+#### 전체 텍스트 검색 (FTS5)
+- `fts_assembly_laws`: 법률 전체 텍스트 검색 인덱스
+- `fts_assembly_articles`: 조문 전체 텍스트 검색 인덱스
 - `fts_precedent_cases`: 판례 사건 전체 텍스트 검색 인덱스
 - `fts_precedent_sections`: 판례 섹션 전체 텍스트 검색 인덱스
 
@@ -48,6 +78,19 @@ CREATE TABLE assembly_laws (
     ml_enhanced BOOLEAN DEFAULT FALSE,          -- ML 강화 여부
     parsing_quality_score REAL DEFAULT 0.0,     -- 파싱 품질 점수
     processing_version TEXT DEFAULT '1.0',      -- 처리 버전
+    
+    -- 품질 관리 컬럼들
+    law_name_hash TEXT UNIQUE,                 -- 법률명 해시 (중복 검출용)
+    content_hash TEXT UNIQUE,                  -- 내용 해시
+    quality_score REAL DEFAULT 0.0,            -- 품질 점수
+    duplicate_group_id TEXT,                    -- 중복 그룹 ID
+    is_primary_version BOOLEAN DEFAULT TRUE,     -- 주 버전 여부
+    version_number INTEGER DEFAULT 1,          -- 버전 번호
+    parsing_method TEXT DEFAULT 'legacy',       -- 파싱 방법
+    auto_corrected BOOLEAN DEFAULT FALSE,       -- 자동 수정 여부
+    manual_review_required BOOLEAN DEFAULT FALSE, -- 수동 검토 필요 여부
+    migration_timestamp TEXT,                    -- 마이그레이션 타임스탬프
+    
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -72,7 +115,7 @@ CREATE TABLE assembly_articles (
 );
 ```
 
-### precedent_cases 테이블 (신규)
+### precedent_cases 테이블
 판례 사건의 기본 정보를 저장합니다.
 
 ```sql
@@ -92,7 +135,7 @@ CREATE TABLE precedent_cases (
 );
 ```
 
-### precedent_sections 테이블 (신규)
+### precedent_sections 테이블
 판례의 각 섹션 정보를 저장합니다 (판시사항, 판결요지 등).
 
 ```sql
@@ -109,7 +152,7 @@ CREATE TABLE precedent_sections (
 );
 ```
 
-### processed_files 테이블 (신규)
+### processed_files 테이블
 파일 처리 이력을 추적하여 증분 처리를 지원합니다.
 
 ```sql
@@ -162,23 +205,116 @@ CREATE INDEX idx_precedent_parties_case_id ON precedent_parties(case_id);
 CREATE INDEX idx_precedent_parties_type ON precedent_parties(party_type);
 ```
 
+### 추가 테이블들
+
+#### chat_history 테이블
+채팅 기록을 저장합니다.
+
+```sql
+CREATE TABLE chat_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    user_message TEXT NOT NULL,
+    bot_response TEXT NOT NULL,
+    confidence REAL DEFAULT 0.0,
+    processing_time REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### documents 테이블
+하이브리드 검색을 위한 문서 저장소입니다.
+
+```sql
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY,
+    document_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### duplicate_groups 테이블
+중복 데이터 그룹을 관리합니다.
+
+```sql
+CREATE TABLE duplicate_groups (
+    group_id TEXT PRIMARY KEY,
+    group_type TEXT NOT NULL,
+    primary_law_id TEXT NOT NULL,
+    duplicate_law_ids TEXT NOT NULL,
+    resolution_strategy TEXT NOT NULL,
+    confidence_score REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (primary_law_id) REFERENCES assembly_laws(law_id)
+);
+```
+
+#### quality_reports 테이블
+법률 데이터 품질 보고서를 저장합니다.
+
+```sql
+CREATE TABLE quality_reports (
+    report_id TEXT PRIMARY KEY,
+    law_id TEXT NOT NULL,
+    overall_score REAL NOT NULL,
+    article_count_score REAL NOT NULL,
+    title_extraction_score REAL NOT NULL,
+    article_sequence_score REAL NOT NULL,
+    structure_completeness_score REAL NOT NULL,
+    issues TEXT,
+    suggestions TEXT,
+    validation_timestamp TIMESTAMP NOT NULL,
+    FOREIGN KEY (law_id) REFERENCES assembly_laws(law_id)
+);
+```
+
+#### migration_history 테이블
+데이터베이스 마이그레이션 이력을 추적합니다.
+
+```sql
+CREATE TABLE migration_history (
+    migration_id TEXT PRIMARY KEY,
+    migration_version TEXT NOT NULL,
+    migration_timestamp TIMESTAMP NOT NULL,
+    description TEXT,
+    success BOOLEAN NOT NULL,
+    error_message TEXT,
+    records_affected INTEGER DEFAULT 0
+);
+```
+
+#### schema_version 테이블
+스키마 버전을 관리합니다.
+
+```sql
+CREATE TABLE schema_version (
+    version TEXT PRIMARY KEY,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description TEXT
+);
+```
+
 ### 전체 텍스트 검색 (FTS5) 테이블
 SQLite의 FTS5 확장을 사용한 전체 텍스트 검색:
 
 ```sql
 -- 법률 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_laws USING fts5(
+CREATE VIRTUAL TABLE fts_assembly_laws USING fts5(
     law_id,
     law_name,
     full_text,
     searchable_text,
-    keywords,
     content='assembly_laws',
     content_rowid='rowid'
 );
 
 -- 조문 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_articles USING fts5(
+CREATE VIRTUAL TABLE fts_assembly_articles USING fts5(
     article_id,
     law_id,
     article_title,
@@ -212,7 +348,7 @@ CREATE VIRTUAL TABLE fts_precedent_sections USING fts5(
 
 ### 테이블 생성
 ```python
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 # 데이터베이스 관리자 초기화 (테이블 자동 생성)
 db_manager = DatabaseManager()
@@ -230,7 +366,7 @@ db_manager.mark_file_as_processed(
 )
 
 # 파일 처리 상태 확인
-is_processed = db_manager.is_file_processed("data/raw/assembly/law_only/20251016/file.json")
+is_processed = db_manager.is_file_processed("data/raw/assembly/law_only/example_file.json")
 
 # 처리 통계 조회
 stats = db_manager.get_processing_statistics()
@@ -357,6 +493,3 @@ cp data/lawfirm_backup.db data/lawfirm.db
 - [ ] 분산 처리: 여러 노드 분산 처리
 
 ---
-
-**LawFirmAI 개발팀**  
-*최종 업데이트: 2025-10-16*

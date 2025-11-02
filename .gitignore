@@ -29,6 +29,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
+.venv/
 
 # Environment Variables
 .env
@@ -36,6 +37,8 @@ venv.bak/
 .env.development.local
 .env.test.local
 .env.production.local
+lawfirm_langgraph/.env
+.env.profiles/
 
 # IDE
 .vscode/
@@ -117,6 +120,15 @@ chroma_db/
 # Docker
 .dockerignore
 
+# backup
+.backup/
+
+# Cursor IDE
+.cursor/
+
+# personal data
 data/
 reports/
 results/
+debug/
+test_outputs/

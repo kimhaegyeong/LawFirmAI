@@ -117,7 +117,7 @@ AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립�
 ### 🧪 **tests/** - 테스트
 각종 기능과 모듈의 테스트를 담당하는 스크립트들
 
-- `test_bge_m3_korean.py` - BGE-M3 Korean 테스트
+- `test_ko_sroberta_korean.py` - ko-sroberta Korean 테스트
 - `test_final_vector_embedding_performance.py` - 최종 벡터 임베딩 성능 테스트
 - `test_law_record.py` - 법률 레코드 테스트
 - `test_real_data.py` - 실제 데이터 테스트
@@ -219,7 +219,7 @@ python scripts/database/migrate_database_schema.py
 ### 🧪 **tests/** - 테스트
 다양한 기능의 테스트 스크립트들
 
-- `test_bge_m3_korean.py` - BGE-M3 Korean 모델 테스트
+- `test_ko_sroberta_korean.py` - ko-sroberta Korean 모델 테스트
 - `test_law_record.py` - 법률 레코드 테스트
 - `test_real_data.py` - 실제 데이터 테스트
 - `test_simple_embedding.py` - 간단한 임베딩 테스트

@@ -4,18 +4,19 @@
 법률 질문의 의미를 분석하여 도메인을 분류하는 시스템
 """
 
-import os
 import json
 import logging
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
-from pathlib import Path
+import os
 import re
 from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from .unified_prompt_manager import LegalDomain, ModelType
+import numpy as np
+
 from .question_classifier import QuestionType
+from .unified_prompt_manager import LegalDomain, ModelType
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class DomainScore:
 
 class LegalTermsDatabase:
     """법률 용어 데이터베이스"""
-    
+
     def __init__(self, terms_file: str = "data/legal_terms_database.json"):
         """법률 용어 데이터베이스 초기화"""
         self.terms_file = Path(terms_file)
@@ -51,12 +52,12 @@ class LegalTermsDatabase:
         self.terms_index = {}
         self.synonyms_index = {}
         self.related_terms_index = {}
-        
+
         # 데이터베이스 로드
         self._load_legal_terms_database()
-        
+
         logger.info(f"Legal terms database loaded: {len(self.terms_index)} terms")
-    
+
     def _load_legal_terms_database(self):
         """법률 용어 데이터베이스 로드"""
         try:
@@ -67,11 +68,11 @@ class LegalTermsDatabase:
             else:
                 # 기본 법률 용어 데이터베이스 생성
                 self._create_default_terms_database()
-                
+
         except Exception as e:
             logger.error(f"Error loading legal terms database: {e}")
             self._create_default_terms_database()
-    
+
     def _create_default_terms_database(self):
         """기본 법률 용어 데이터베이스 생성"""
         default_terms = {
@@ -276,22 +277,22 @@ class LegalTermsDatabase:
                 }
             }
         }
-        
+
         # 데이터베이스 저장
         self._save_terms_database(default_terms)
         self._parse_terms_data(default_terms)
-    
+
     def _parse_terms_data(self, data: Dict[str, Any]):
         """용어 데이터 파싱"""
         self.terms_by_domain = {}
         self.terms_index = {}
         self.synonyms_index = {}
         self.related_terms_index = {}
-        
+
         for domain_name, terms in data.items():
             domain = LegalDomain(domain_name)
             self.terms_by_domain[domain] = {}
-            
+
             for term, info in terms.items():
                 legal_term = LegalTerm(
                     term=term,
@@ -301,21 +302,21 @@ class LegalTermsDatabase:
                     related_terms=info["related_terms"],
                     context_keywords=info["context_keywords"]
                 )
-                
+
                 # 도메인별 용어 저장
                 self.terms_by_domain[domain][term] = legal_term
-                
+
                 # 전체 용어 인덱스
                 self.terms_index[term] = legal_term
-                
+
                 # 동의어 인덱스
                 for synonym in info["synonyms"]:
                     self.synonyms_index[synonym] = legal_term
-                
+
                 # 관련 용어 인덱스
                 for related_term in info["related_terms"]:
                     self.related_terms_index[related_term] = legal_term
-    
+
     def _save_terms_database(self, data: Dict[str, Any]):
         """용어 데이터베이스 저장"""
         try:
@@ -324,12 +325,12 @@ class LegalTermsDatabase:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Error saving terms database: {e}")
-    
+
     def get_domain_scores(self, query: str) -> Dict[LegalDomain, DomainScore]:
         """질문의 도메인별 점수 계산"""
         query_lower = query.lower()
         domain_scores = {}
-        
+
         # 법조문 패턴 인식 (우선 처리)
         law_patterns = {
             r'민법\s+제\d+조': LegalDomain.CIVIL_LAW,
@@ -342,7 +343,7 @@ class LegalTermsDatabase:
             r'민사소송법\s+제\d+조': LegalDomain.CIVIL_PROCEDURE,
             r'형사소송법\s+제\d+조': LegalDomain.CRIMINAL_PROCEDURE
         }
-        
+
         # 법조문 패턴 매칭
         for pattern, domain in law_patterns.items():
             if re.search(pattern, query):
@@ -354,18 +355,18 @@ class LegalTermsDatabase:
                         confidence=0.0,
                         reasoning=""
                     )
-                
+
                 match = re.search(pattern, query)
                 matched_text = match.group(0)
                 domain_scores[domain].score += 2.0  # 법조문은 높은 가중치
                 domain_scores[domain].matched_terms.append(matched_text)
                 domain_scores[domain].confidence = 0.9  # 법조문은 높은 신뢰도
                 domain_scores[domain].reasoning = f"법조문 패턴 매칭: '{matched_text}'"
-        
+
         for domain in LegalDomain:
             if domain == LegalDomain.GENERAL:
                 continue
-                
+
             if domain not in domain_scores:
                 domain_scores[domain] = DomainScore(
                     domain=domain,
@@ -374,66 +375,66 @@ class LegalTermsDatabase:
                     confidence=0.0,
                     reasoning="매칭된 용어 없음"
                 )
-            
+
             matched_terms = []
             total_score = 0.0
             reasoning_parts = []
-            
+
             # 도메인별 용어 검사 (기존 점수에 추가)
             if domain in self.terms_by_domain:
                 for term, legal_term in self.terms_by_domain[domain].items():
                     term_score = 0.0
-                    
+
                     # 직접 매칭
                     if term in query_lower:
                         term_score += legal_term.weight
                         matched_terms.append(term)
                         reasoning_parts.append(f"'{term}' 직접 매칭")
-                    
+
                     # 동의어 매칭
                     for synonym in legal_term.synonyms:
                         if synonym in query_lower:
                             term_score += legal_term.weight * 0.8
                             matched_terms.append(synonym)
                             reasoning_parts.append(f"'{synonym}' 동의어 매칭")
-                    
+
                     # 관련 용어 매칭
                     for related_term in legal_term.related_terms:
                         if related_term in query_lower:
                             term_score += legal_term.weight * 0.6
                             matched_terms.append(related_term)
                             reasoning_parts.append(f"'{related_term}' 관련 용어 매칭")
-                    
+
                     # 문맥 키워드 매칭
                     context_matches = sum(1 for keyword in legal_term.context_keywords if keyword in query_lower)
                     if context_matches > 0:
                         term_score += legal_term.weight * 0.4 * (context_matches / len(legal_term.context_keywords))
                         reasoning_parts.append(f"문맥 키워드 {context_matches}개 매칭")
-                    
+
                     total_score += term_score
-            
+
             # 기존 점수에 추가
             domain_scores[domain].score += total_score
             domain_scores[domain].matched_terms.extend(matched_terms)
-            
+
             # 신뢰도 재계산 (법조문 패턴이 있으면 높은 신뢰도 유지)
             if domain_scores[domain].confidence < 0.9:  # 법조문 패턴이 아닌 경우만 재계산
                 confidence = min(1.0, domain_scores[domain].score / 2.0) if domain_scores[domain].score > 0 else 0.0
                 domain_scores[domain].confidence = confidence
-            
+
             # 추론 정보 업데이트
             if reasoning_parts:
                 if domain_scores[domain].reasoning:
                     domain_scores[domain].reasoning += "; " + "; ".join(reasoning_parts)
                 else:
                     domain_scores[domain].reasoning = "; ".join(reasoning_parts)
-        
+
         return domain_scores
 
 
 class LegalContextAnalyzer:
     """법률 문맥 분석기"""
-    
+
     def __init__(self):
         """문맥 분석기 초기화"""
         self.legal_entity_patterns = [
@@ -441,20 +442,20 @@ class LegalContextAnalyzer:
             r'피해자|가해자|원고|피고|원심|피심',
             r'채권자|채무자|매도인|매수인|임대인|임차인'
         ]
-        
+
         self.legal_action_patterns = [
             r'계약체결|계약해지|계약위반|계약이행',
             r'손해배상청구|소송제기|고소|고발',
             r'해고|징계|임금지급|근로계약',
             r'등기신청|소유권이전|매매계약'
         ]
-        
+
         self.temporal_indicators = [
             r'언제|언제부터|언제까지|기간|시효',
             r'과거|현재|미래|이전|이후',
             r'일정|예정|계획|진행|완료'
         ]
-    
+
     def analyze_context(self, query: str) -> Dict[str, Any]:
         """문맥 분석"""
         context = {
@@ -464,7 +465,7 @@ class LegalContextAnalyzer:
             "question_type_indicators": self._extract_question_type_indicators(query)
         }
         return context
-    
+
     def _extract_legal_entities(self, query: str) -> List[str]:
         """법적 주체 추출"""
         entities = []
@@ -472,7 +473,7 @@ class LegalContextAnalyzer:
             matches = re.findall(pattern, query)
             entities.extend(matches)
         return list(set(entities))
-    
+
     def _extract_legal_actions(self, query: str) -> List[str]:
         """법적 행위 추출"""
         actions = []
@@ -480,7 +481,7 @@ class LegalContextAnalyzer:
             matches = re.findall(pattern, query)
             actions.extend(matches)
         return list(set(actions))
-    
+
     def _extract_temporal_indicators(self, query: str) -> List[str]:
         """시간적 지표 추출"""
         indicators = []
@@ -488,11 +489,11 @@ class LegalContextAnalyzer:
             matches = re.findall(pattern, query)
             indicators.extend(matches)
         return list(set(indicators))
-    
+
     def _extract_question_type_indicators(self, query: str) -> List[str]:
         """질문 유형 지표 추출"""
         indicators = []
-        
+
         # 질문 유형별 키워드
         question_keywords = {
             "what": ["무엇", "어떤", "무슨"],
@@ -501,24 +502,24 @@ class LegalContextAnalyzer:
             "why": ["왜", "이유", "원인"],
             "who": ["누구", "누가", "어떤 사람"]
         }
-        
+
         for q_type, keywords in question_keywords.items():
             for keyword in keywords:
                 if keyword in query:
                     indicators.append(q_type)
                     break
-        
+
         return indicators
 
 
 class SemanticDomainClassifier:
     """의미 기반 도메인 분류기"""
-    
+
     def __init__(self):
         """의미 기반 도메인 분류기 초기화"""
         self.terms_database = LegalTermsDatabase()
         self.context_analyzer = LegalContextAnalyzer()
-        
+
         # 도메인별 가중치 (경험적 설정)
         self.domain_weights = {
             LegalDomain.CIVIL_LAW: 1.0,
@@ -532,63 +533,67 @@ class SemanticDomainClassifier:
             LegalDomain.CIVIL_PROCEDURE: 1.0,
             LegalDomain.CRIMINAL_PROCEDURE: 1.0
         }
-        
-        logger.info("Semantic domain classifier initialized")
-    
+
+        try:
+            logger.info("Semantic domain classifier initialized")
+        except Exception:
+            # 로깅 오류를 무시하고 계속 진행
+            pass
+
     def classify_domain(self, query: str, question_type: Optional[QuestionType] = None) -> Tuple[LegalDomain, float, str]:
         """의미 기반 도메인 분류"""
         try:
             # 1. 용어 기반 점수 계산
             domain_scores = self.terms_database.get_domain_scores(query)
-            
+
             # 2. 문맥 분석
             context = self.context_analyzer.analyze_context(query)
-            
+
             # 3. 문맥 가중치 적용
             adjusted_scores = self._apply_context_weights(domain_scores, context)
-            
+
             # 4. 질문 유형 가중치 적용
             if question_type:
                 adjusted_scores = self._apply_question_type_weights(adjusted_scores, question_type)
-            
+
             # 5. 최종 도메인 결정
             final_domain, confidence, reasoning = self._determine_final_domain(adjusted_scores)
-            
+
             return final_domain, confidence, reasoning
-            
+
         except Exception as e:
             logger.error(f"Error in semantic domain classification: {e}")
             return LegalDomain.GENERAL, 0.0, f"분류 오류: {str(e)}"
-    
-    def _apply_context_weights(self, domain_scores: Dict[LegalDomain, DomainScore], 
+
+    def _apply_context_weights(self, domain_scores: Dict[LegalDomain, DomainScore],
                              context: Dict[str, Any]) -> Dict[LegalDomain, DomainScore]:
         """문맥 가중치 적용"""
         adjusted_scores = {}
-        
+
         for domain, score in domain_scores.items():
             if domain == LegalDomain.GENERAL:
                 continue
-                
+
             adjusted_score = score.score
             adjusted_reasoning = score.reasoning
-            
+
             # 법적 행위에 따른 가중치
             if context["legal_actions"]:
                 action_boost = self._calculate_action_boost(domain, context["legal_actions"])
                 adjusted_score += action_boost
                 if action_boost > 0:
                     adjusted_reasoning += f"; 법적 행위 가중치 +{action_boost:.2f}"
-            
+
             # 법적 주체에 따른 가중치
             if context["legal_entities"]:
                 entity_boost = self._calculate_entity_boost(domain, context["legal_entities"])
                 adjusted_score += entity_boost
                 if entity_boost > 0:
                     adjusted_reasoning += f"; 법적 주체 가중치 +{entity_boost:.2f}"
-            
+
             # 신뢰도 재계산
             adjusted_confidence = min(1.0, adjusted_score / 2.0) if adjusted_score > 0 else 0.0
-            
+
             adjusted_scores[domain] = DomainScore(
                 domain=domain,
                 score=adjusted_score,
@@ -596,10 +601,10 @@ class SemanticDomainClassifier:
                 confidence=adjusted_confidence,
                 reasoning=adjusted_reasoning
             )
-        
+
         return adjusted_scores
-    
-    def _apply_question_type_weights(self, domain_scores: Dict[LegalDomain, DomainScore], 
+
+    def _apply_question_type_weights(self, domain_scores: Dict[LegalDomain, DomainScore],
                                    question_type: QuestionType) -> Dict[LegalDomain, DomainScore]:
         """질문 유형 가중치 적용"""
         # 질문 유형별 도메인 선호도
@@ -610,17 +615,17 @@ class SemanticDomainClassifier:
             QuestionType.PROCEDURE_GUIDE: [LegalDomain.CIVIL_PROCEDURE, LegalDomain.CRIMINAL_PROCEDURE],
             QuestionType.TERM_EXPLANATION: [LegalDomain.GENERAL]
         }
-        
+
         preferred_domains = question_type_preferences.get(question_type, [])
-        
+
         for domain, score in domain_scores.items():
             if domain in preferred_domains:
                 # 선호 도메인에 가중치 적용
                 score.score += 0.5
                 score.reasoning += f"; {question_type.value} 질문 유형 가중치 +0.5"
-        
+
         return domain_scores
-    
+
     def _calculate_action_boost(self, domain: LegalDomain, actions: List[str]) -> float:
         """법적 행위에 따른 가중치 계산"""
         action_weights = {
@@ -629,13 +634,13 @@ class SemanticDomainClassifier:
             LegalDomain.LABOR_LAW: ["해고", "징계", "임금지급", "근로계약"],
             LegalDomain.PROPERTY_LAW: ["등기신청", "매매계약", "소유권이전"]
         }
-        
+
         if domain in action_weights:
             matching_actions = [action for action in actions if action in action_weights[domain]]
             return len(matching_actions) * 0.3
-        
+
         return 0.0
-    
+
     def _calculate_entity_boost(self, domain: LegalDomain, entities: List[str]) -> float:
         """법적 주체에 따른 가중치 계산"""
         entity_weights = {
@@ -644,40 +649,69 @@ class SemanticDomainClassifier:
             LegalDomain.LABOR_LAW: ["근로자", "사용자"],
             LegalDomain.COMMERCIAL_LAW: ["회사", "주주", "이사"]
         }
-        
+
         if domain in entity_weights:
             matching_entities = [entity for entity in entities if entity in entity_weights[domain]]
             return len(matching_entities) * 0.2
-        
+
         return 0.0
-    
+
     def _determine_final_domain(self, domain_scores: Dict[LegalDomain, DomainScore]) -> Tuple[LegalDomain, float, str]:
         """최종 도메인 결정"""
         if not domain_scores:
             return LegalDomain.GENERAL, 0.0, "분류 가능한 도메인 없음"
-        
+
         # 점수 기준으로 정렬
         sorted_domains = sorted(domain_scores.items(), key=lambda x: x[1].score, reverse=True)
-        
+
         best_domain, best_score = sorted_domains[0]
-        
+
         # 신뢰도가 낮으면 GENERAL로 분류
         if best_score.confidence < 0.3:
             return LegalDomain.GENERAL, best_score.confidence, f"신뢰도 부족 ({best_score.confidence:.2f}): {best_score.reasoning}"
-        
+
         # 상위 3개 도메인 정보
         top_domains = sorted_domains[:3]
         reasoning = f"최고 점수: {best_domain.value} ({best_score.score:.2f}, 신뢰도: {best_score.confidence:.2f})"
-        
+
         if len(top_domains) > 1:
             reasoning += f" | 2위: {top_domains[1][0].value} ({top_domains[1][1].score:.2f})"
         if len(top_domains) > 2:
             reasoning += f" | 3위: {top_domains[2][0].value} ({top_domains[2][1].score:.2f})"
-        
+
         reasoning += f" | 상세: {best_score.reasoning}"
-        
+
         return best_domain, best_score.confidence, reasoning
 
 
-# 전역 인스턴스
-semantic_domain_classifier = SemanticDomainClassifier()
+# 전역 인스턴스 (안전한 초기화)
+_semantic_domain_classifier = None
+
+def get_semantic_domain_classifier():
+    """전역 SemanticDomainClassifier 인스턴스를 가져오거나 생성"""
+    global _semantic_domain_classifier
+    if _semantic_domain_classifier is None:
+        try:
+            _semantic_domain_classifier = SemanticDomainClassifier()
+        except Exception as e:
+            logger.warning(f"Failed to initialize semantic_domain_classifier: {e}")
+            # 더미 객체 반환 또는 None 반환
+            _semantic_domain_classifier = None
+    return _semantic_domain_classifier
+
+# 하위 호환성을 위한 전역 변수 (지연 초기화)
+def _get_semantic_domain_classifier_global():
+    """하위 호환성을 위한 전역 변수 접근"""
+    return get_semantic_domain_classifier()
+
+# 속성 접근 방식으로 사용 가능하도록 설정
+class _SemanticDomainClassifierProxy:
+    """전역 semantic_domain_classifier에 대한 프록시"""
+    def __getattr__(self, name):
+        instance = get_semantic_domain_classifier()
+        if instance is None:
+            raise RuntimeError("SemanticDomainClassifier is not available")
+        return getattr(instance, name)
+
+# 전역 변수로 프록시 설정 (하위 호환성)
+semantic_domain_classifier = _SemanticDomainClassifierProxy()
