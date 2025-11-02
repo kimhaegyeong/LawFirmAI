@@ -274,7 +274,29 @@ class EnhancedLegalQuestionWorkflow:
 
     def __init__(self, config: LangGraphConfig):
         self.config = config
+
+        # 개선: 로거를 명시적으로 초기화하고 핸들러 보장
         self.logger = logging.getLogger(__name__)
+
+        # 로거 레벨 설정 (명시적으로 설정)
+        self.logger.setLevel(logging.DEBUG)
+
+        # 로거의 propagate 설정 (루트 로거로 전파 보장)
+        self.logger.propagate = True
+
+        # 핸들러가 없으면 추가 (표준 출력 스트림 핸들러)
+        if not self.logger.handlers:
+            import sys
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+
+        # 로거 설정 확인 (디버깅용 - 한 번만 출력)
+        self.logger.debug(f"Logger initialized: name={__name__}, level={self.logger.level}, handlers={len(self.logger.handlers)}")
 
         # 통합 프롬프트 관리자 초기화 (우선)
         self.unified_prompt_manager = UnifiedPromptManager()
@@ -987,19 +1009,8 @@ class EnhancedLegalQuestionWorkflow:
 
     def _format_and_finalize_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """포맷팅 및 최종 준비 (내부 메서드)"""
-        # AnswerFormatterHandler 사용
-        preserved_values = self.answer_formatter_handler.extract_preserved_values(state)
-
-        # 포맷팅 - Phase 1/Phase 2: _set_answer_safely 사용하여 정규화 보장
-        formatted_answer = self.answer_formatter_handler.format_answer_part(state)
-        self._set_answer_safely(state, formatted_answer)
-
-        # 최종 준비
-        self.answer_formatter_handler.prepare_final_response_part(
-            state,
-            preserved_values["query_complexity"],
-            preserved_values["needs_search"]
-        )
+        # AnswerFormatterHandler 사용 - format_and_prepare_final 사용하여 메타 정보 분리 포함
+        state = self.answer_formatter_handler.format_and_prepare_final(state)
 
         # 통계 업데이트
         self.update_statistics(state)
@@ -1092,12 +1103,12 @@ class EnhancedLegalQuestionWorkflow:
     def classify_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
         # 중요: 노드 시작 시 input 그룹 보장
         # LangGraph가 초기 state를 제대로 전달하지 않는 경우 대비
-        print(f"[DEBUG] classify_query: START - State keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+        self.logger.debug(f"classify_query: START - State keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
 
         # input 그룹 확인 및 생성
         if "input" not in state or not isinstance(state.get("input"), dict):
             state["input"] = {}
-            print(f"[DEBUG] classify_query: Created empty input group")
+            self.logger.debug(f"classify_query: Created empty input group")
 
         # query가 없으면 여러 위치에서 찾기
         current_query = state["input"].get("query", "")
@@ -1109,7 +1120,7 @@ class EnhancedLegalQuestionWorkflow:
                 state["input"]["query"] = query_from_top
                 if session_id_from_top:
                     state["input"]["session_id"] = session_id_from_top
-                print(f"[DEBUG] classify_query: Restored query from top-level: length={len(query_from_top)}")
+                self.logger.debug(f"classify_query: Restored query from top-level: length={len(query_from_top)}")
 
         # 디버깅: 초기 state의 query 확인
         query_value = self._get_state_value(state, "query", "")
@@ -1128,7 +1139,7 @@ class EnhancedLegalQuestionWorkflow:
                     state["input"] = {}
                 state["input"]["query"] = ""
         else:
-            print(f"[DEBUG] classify_query: query from _get_state_value: '{query_value[:50]}...'")
+            self.logger.debug(f"classify_query: query from _get_state_value: '{query_value[:50]}...'")
             # query를 찾았으면 input에 저장
             if "input" not in state:
                 state["input"] = {}
@@ -1247,13 +1258,13 @@ class EnhancedLegalQuestionWorkflow:
             if session_id_value:
                 state["input"]["session_id"] = session_id_value
             self.logger.debug(f"classify_query returning with input.query length={len(query_value)}")
-            print(f"[DEBUG] classify_query: Returning state with input.query length={len(query_value)}")
+            self.logger.debug(f"classify_query: Returning state with input.query length={len(query_value)}")
         else:
             # query를 찾을 수 없으면 에러 로그만 남기고 계속 진행
             # (다음 노드나 workflow_service에서 복원할 것으로 기대)
             self.logger.error(f"classify_query returning with EMPTY input.query! State keys: {list(state.keys())}")
-            print(f"[DEBUG] classify_query: ERROR - Returning state with EMPTY input.query! State keys: {list(state.keys())}")
-            print(f"[DEBUG] classify_query: State structure - input={state.get('input')}, has query key={bool(state.get('query'))}")
+            self.logger.error(f"classify_query: ERROR - Returning state with EMPTY input.query! State keys: {list(state.keys())}")
+            self.logger.debug(f"classify_query: State structure - input={state.get('input')}, has query key={bool(state.get('query'))}")
 
         return state
 
@@ -2385,15 +2396,15 @@ class EnhancedLegalQuestionWorkflow:
                 if safe_keywords:
                     enhanced_query = f"{query} {' '.join(safe_keywords)}"
 
-            print(f"[DEBUG] _keyword_search: Searching {len(categories_to_search)} categories with query='{enhanced_query[:50]}...', limit={search_limit}")
+            self.logger.debug(f"_keyword_search: Searching {len(categories_to_search)} categories with query='{enhanced_query[:50]}...', limit={search_limit}")
 
             for category in categories_to_search:
                 # 키워드 검색은 항상 FTS5 검색 수행 (force_fts=True)
-                print(f"[DEBUG] _keyword_search: Searching category={category}")
+                self.logger.debug(f"_keyword_search: Searching category={category}")
                 category_docs = self.data_connector.search_documents(
                     enhanced_query, category, limit=search_limit, force_fts=True
                 )
-                print(f"[DEBUG] _keyword_search: Category {category} returned {len(category_docs)} documents")
+                self.logger.debug(f"_keyword_search: Category {category} returned {len(category_docs)} documents")
 
                 for doc in category_docs:
                     doc['search_type'] = 'keyword'
@@ -2407,7 +2418,7 @@ class EnhancedLegalQuestionWorkflow:
                 keyword_results.extend(category_docs)
                 self.logger.info(f"Found {len(category_docs)} documents in category: {category}")
 
-            print(f"[DEBUG] _keyword_search: Total results={len(keyword_results)}")
+            self.logger.debug(f"_keyword_search: Total results={len(keyword_results)}")
             return keyword_results, len(keyword_results)
         except Exception as e:
             self.logger.warning(f"Keyword search failed: {e}")
@@ -5455,6 +5466,13 @@ class EnhancedLegalQuestionWorkflow:
     @with_state_optimization("process_search_results_combined", enable_reduction=True)
     def process_search_results_combined(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """검색 결과 처리 통합 노드 (6개 노드를 1개로 병합)"""
+        # 개선: print 문을 추가하여 즉시 출력 보장 (로거 설정과 무관)
+        import sys
+        print("🔄 [SEARCH RESULTS] process_search_results_combined 실행 시작", flush=True, file=sys.stdout)
+
+        # 개선 1: 함수 시작 부분에 즉시 로깅 추가 (이중 보장)
+        self.logger.info("🔄 [SEARCH RESULTS] process_search_results_combined 실행 시작")
+
         try:
             start_time = time.time()
 
@@ -5467,6 +5485,11 @@ class EnhancedLegalQuestionWorkflow:
             query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
             search_params = self._get_state_value(state, "search_params", {})
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
+
+            # 개선 1: 입력 검증 로깅 (print + logger)
+            input_msg = f"📥 [SEARCH RESULTS] 입력 데이터 - semantic: {len(semantic_results)}, keyword: {len(keyword_results)}, semantic_count: {semantic_count}, keyword_count: {keyword_count}"
+            print(input_msg, flush=True, file=sys.stdout)
+            self.logger.info(input_msg)
 
             # 1. 품질 평가 (기존 evaluate_search_quality 로직)
             semantic_quality = self._evaluate_semantic_search_quality(
@@ -5544,15 +5567,74 @@ class EnhancedLegalQuestionWorkflow:
             merged_docs = []
             for merged_result in merged_results:
                 if hasattr(merged_result, 'text'):
+                    text_value = merged_result.text
+
+                    # 개선 1.2: text가 비어있으면 다른 속성 시도
+                    if not text_value or len(str(text_value).strip()) == 0:
+                        # content 속성 확인
+                        if hasattr(merged_result, 'content'):
+                            text_value = merged_result.content
+                        # metadata에서 확인
+                        elif hasattr(merged_result, 'metadata') and isinstance(merged_result.metadata, dict):
+                            text_value = (
+                                merged_result.metadata.get('content') or
+                                merged_result.metadata.get('text') or
+                                merged_result.metadata.get('document') or
+                                ''
+                            )
+
+                    # 최종적으로 text_value가 비어있으면 경고 및 로깅
+                    if not text_value or len(str(text_value).strip()) == 0:
+                        source_name = getattr(merged_result, 'source', 'Unknown')
+                        score_value = getattr(merged_result, 'score', 0.0)
+                        warning_msg = f"⚠️ [DEBUG] MergedResult text가 비어있음 - source: {source_name}, score: {score_value:.3f}"
+                        print(warning_msg, flush=True, file=sys.stdout)
+                        self.logger.warning(warning_msg)
+
                     merged_docs.append({
-                        "content": merged_result.text,
-                        "text": merged_result.text,
-                        "relevance_score": merged_result.score,
-                        "source": merged_result.source,
-                        "metadata": merged_result.metadata if hasattr(merged_result, 'metadata') else {}
+                        "content": str(text_value) if text_value else "",
+                        "text": str(text_value) if text_value else "",
+                        "relevance_score": getattr(merged_result, 'score', 0.0),
+                        "source": getattr(merged_result, 'source', 'Unknown'),
+                        "metadata": getattr(merged_result, 'metadata', {}) if hasattr(merged_result, 'metadata') else {}
                     })
                 elif isinstance(merged_result, dict):
-                    merged_docs.append(merged_result)
+                    # 개선 1: dict 형태의 문서도 content/text 필드 보장
+                    doc = merged_result.copy()
+                    # content 또는 text 필드가 없으면 추가
+                    if "content" not in doc and "text" in doc:
+                        doc["content"] = doc["text"]
+                    elif "text" not in doc and "content" in doc:
+                        doc["text"] = doc["content"]
+                    elif "content" not in doc and "text" not in doc:
+                        # content와 text가 모두 없으면 빈 문자열로 설정
+                        doc["content"] = ""
+                        doc["text"] = ""
+                    merged_docs.append(doc)
+
+            # 개선 1: merged_docs 문서 구조 검증 및 로깅
+            doc_structure_stats = {
+                "total": len(merged_docs),
+                "has_content": 0,
+                "has_text": 0,
+                "has_both": 0,
+                "content_lengths": []
+            }
+            for doc in merged_docs[:5]:  # 상위 5개만 검사
+                has_content = bool(doc.get("content", ""))
+                has_text = bool(doc.get("text", ""))
+                content_len = len(doc.get("content", "") or doc.get("text", "") or "")
+                if has_content:
+                    doc_structure_stats["has_content"] += 1
+                if has_text:
+                    doc_structure_stats["has_text"] += 1
+                if has_content and has_text:
+                    doc_structure_stats["has_both"] += 1
+                doc_structure_stats["content_lengths"].append(content_len)
+
+            structure_msg = f"📋 [SEARCH RESULTS] merged_docs 구조 분석 - Total: {doc_structure_stats['total']}, Has content: {doc_structure_stats['has_content']}, Has text: {doc_structure_stats['has_text']}, Has both: {doc_structure_stats['has_both']}, Avg content length: {sum(doc_structure_stats['content_lengths'])/len(doc_structure_stats['content_lengths']) if doc_structure_stats['content_lengths'] else 0:.1f}"
+            print(structure_msg, flush=True, file=sys.stdout)
+            self.logger.info(structure_msg)
 
             # 키워드 가중치 적용 (merge_and_rerank_with_keyword_weights와 동일한 로직)
             # 키워드 중요도 가중치 계산
@@ -5593,20 +5675,77 @@ class EnhancedLegalQuestionWorkflow:
             # Reranking 수행 (점수순 정렬)
             weighted_docs.sort(key=lambda x: x.get("final_weighted_score", x.get("relevance_score", 0.0)), reverse=True)
 
+            # 상세 로깅: 점수 분포 분석 (print + logger)
+            if weighted_docs:
+                scores = [doc.get("final_weighted_score", doc.get("relevance_score", 0.0)) for doc in weighted_docs]
+                min_score = min(scores)
+                max_score = max(scores)
+                avg_score = sum(scores) / len(scores) if scores else 0.0
+                score_dist_msg = f"📊 [SEARCH RESULTS] Score distribution after weighting - Total: {len(weighted_docs)}, Min: {min_score:.3f}, Max: {max_score:.3f}, Avg: {avg_score:.3f}"
+                print(score_dist_msg, flush=True, file=sys.stdout)
+                self.logger.info(score_dist_msg)
+
             # 4. 필터링 및 검증 (기존 filter_and_validate_results 로직)
+            # 개선 1: 필터링 전 문서 구조 확인
+            if weighted_docs:
+                sample_doc = weighted_docs[0]
+                sample_structure = f"Sample doc keys: {list(sample_doc.keys())}, has content: {'content' in sample_doc}, has text: {'text' in sample_doc}, content type: {type(sample_doc.get('content', 'N/A')).__name__}"
+                print(f"🔍 [SEARCH RESULTS] {sample_structure}", flush=True, file=sys.stdout)
+                self.logger.debug(sample_structure)
+
             filtered_docs = []
+            skipped_content = 0
+            skipped_score = 0
+            skipped_content_details = []  # 디버깅용
+
             for doc in weighted_docs:
-                # 빈 문서 제외
-                content = doc.get("content", "") or doc.get("text", "")
-                if not content or len(content.strip()) < 10:
+                # 개선 1: content 추출 로직 개선 - 다양한 필드명 시도
+                content = (
+                    doc.get("content", "") or
+                    doc.get("text", "") or
+                    doc.get("content_text", "") or
+                    doc.get("document", "") or
+                    str(doc.get("metadata", {}).get("content", "")) or
+                    str(doc.get("metadata", {}).get("text", "")) or
+                    ""
+                )
+
+                # content가 문자열이 아니면 문자열로 변환
+                if not isinstance(content, str):
+                    content = str(content) if content else ""
+
+                # 개선 1: 필터링 조건 완화 (10자 → 5자로 낮춤)
+                if not content or len(content.strip()) < 5:  # 10자에서 5자로 낮춤
+                    skipped_content += 1
+                    # 디버깅: 첫 3개만 상세 정보 수집
+                    if skipped_content <= 3:
+                        skipped_content_details.append({
+                            "keys": list(doc.keys()),
+                            "content_type": type(doc.get("content", None)).__name__,
+                            "text_type": type(doc.get("text", None)).__name__,
+                            "content_len": len(str(doc.get("content", ""))),
+                            "text_len": len(str(doc.get("text", "")))
+                        })
                     continue
 
-                # 관련성 점수 확인
+                # 관련성 점수 확인 (Phase 1: 임계값 0.1 → 0.05로 조정)
                 score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
-                if score < 0.1:  # 너무 낮은 점수 제외
+                if score < 0.05:  # 개선: 임계값을 0.05로 낮춤 (더 많은 문서 포함)
+                    skipped_score += 1
                     continue
 
                 filtered_docs.append(doc)
+
+            # 상세 로깅: 필터링 단계별 문서 수 (print + logger)
+            filter_stats_msg = f"📊 [SEARCH RESULTS] Filtering statistics - Merged: {len(merged_docs)}, Weighted: {len(weighted_docs)}, Filtered: {len(filtered_docs)}, Skipped (content): {skipped_content}, Skipped (score): {skipped_score}"
+            print(filter_stats_msg, flush=True, file=sys.stdout)
+            self.logger.info(filter_stats_msg)
+
+            # 개선 1: content 필터링에서 제외된 문서 상세 정보 (디버깅용)
+            if skipped_content > 0 and skipped_content_details:
+                skip_details_msg = f"⚠️ [SEARCH RESULTS] Content 필터링 제외 상세 (상위 {len(skipped_content_details)}개): {skipped_content_details}"
+                print(skip_details_msg, flush=True, file=sys.stdout)
+                self.logger.warning(skip_details_msg)
 
             # 최대 문서 수 제한
             max_docs = self.config.max_retrieved_docs or 20
@@ -5664,9 +5803,94 @@ class EnhancedLegalQuestionWorkflow:
             }
             self._set_state_value(state, "search_metadata", search_metadata)
 
-            # 6. State 저장
+            # 개선 2: final_docs 설정 후 즉시 로깅
+            self.logger.info(
+                f"📊 [SEARCH RESULTS] final_docs 설정 완료 - 개수: {len(final_docs)}"
+            )
+
+            # Phase 3: final_docs가 0개일 때 semantic_results를 직접 변환
+            if not final_docs or len(final_docs) == 0:
+                fallback_warning_msg = f"⚠️ [SEARCH RESULTS] final_docs가 0개입니다. semantic_results에서 변환 시도..."
+                print(fallback_warning_msg, flush=True, file=sys.stdout)
+                self.logger.warning(fallback_warning_msg)
+                if semantic_results and len(semantic_results) > 0:
+                    # semantic_results를 retrieved_docs 형식으로 변환
+                    converted_docs = []
+                    for doc in semantic_results[:10]:  # 최대 10개
+                        if isinstance(doc, dict):
+                            converted_doc = {
+                                "content": doc.get("content", "") or doc.get("text", ""),
+                                "text": doc.get("text", "") or doc.get("content", ""),
+                                "source": doc.get("source", "") or doc.get("title", "Unknown"),
+                                "relevance_score": doc.get("relevance_score", 0.5),
+                                "search_type": "semantic",
+                                "metadata": doc.get("metadata", {})
+                            }
+                            if converted_doc["content"] and len(converted_doc["content"].strip()) >= 10:
+                                converted_docs.append(converted_doc)
+
+                    if converted_docs:
+                        final_docs = converted_docs
+                        fallback_success_msg = f"🔄 [FALLBACK] Converted {len(final_docs)} documents from semantic_results to retrieved_docs (original final_docs count: 0)"
+                        print(fallback_success_msg, flush=True, file=sys.stdout)
+                        self.logger.info(fallback_success_msg)
+                    else:
+                        fallback_error_msg = f"❌ [SEARCH RESULTS] semantic_results에서도 변환 실패 - semantic_results 개수: {len(semantic_results)}"
+                        print(fallback_error_msg, flush=True, file=sys.stdout)
+                        self.logger.error(fallback_error_msg)
+
+            # 개선 2: State 저장 전 검증 (print + logger)
+            save_before_msg = f"💾 [SEARCH RESULTS] State 저장 전 검증 - final_docs 개수: {len(final_docs)}, 타입: {type(final_docs).__name__}"
+            print(save_before_msg, flush=True, file=sys.stdout)
+            self.logger.info(save_before_msg)
+
+            # 6. State 저장 (Phase 2: 저장 경로 보장 - 최상위 + search + common 그룹)
             self._set_state_value(state, "retrieved_docs", final_docs)
             self._set_state_value(state, "merged_documents", final_docs)
+
+            # search 그룹에도 저장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["retrieved_docs"] = final_docs
+            state["search"]["merged_documents"] = final_docs
+
+            # common 그룹에도 저장 (State Reduction 후에도 유지)
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["retrieved_docs"] = final_docs
+            state["common"]["search"]["merged_documents"] = final_docs
+
+            # 개선 2: State 저장 후 검증 (print + logger)
+            saved_retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            saved_search_group = state.get("search", {}).get("retrieved_docs", [])
+            saved_common_group = state.get("common", {}).get("search", {}).get("retrieved_docs", [])
+            save_after_msg = f"✅ [SEARCH RESULTS] State 저장 완료 - 최상위: {len(saved_retrieved_docs)}, search 그룹: {len(saved_search_group)}, common 그룹: {len(saved_common_group)}"
+            print(save_after_msg, flush=True, file=sys.stdout)
+            self.logger.info(save_after_msg)
+
+            # 개선 3.1: 전역 캐시에도 직접 저장 시도 (State Reduction 전에 저장 보장)
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if not _global_search_results_cache:
+                    _global_search_results_cache = {}
+
+                _global_search_results_cache["retrieved_docs"] = final_docs
+                _global_search_results_cache["merged_documents"] = final_docs
+
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["retrieved_docs"] = final_docs
+                _global_search_results_cache["search"]["merged_documents"] = final_docs
+
+                cache_save_msg = f"✅ [SEARCH RESULTS] 전역 캐시에 직접 저장 완료 - 개수: {len(final_docs)}"
+                print(cache_save_msg, flush=True, file=sys.stdout)
+                self.logger.info(cache_save_msg)
+            except Exception as e:
+                cache_error_msg = f"⚠️ [SEARCH RESULTS] 전역 캐시 직접 저장 실패: {e}"
+                print(cache_error_msg, flush=True, file=sys.stdout)
+                self.logger.warning(cache_error_msg)
 
             processing_time = self._update_processing_time(state, start_time)
             self._add_step(
@@ -5675,25 +5899,33 @@ class EnhancedLegalQuestionWorkflow:
                 f"검색 결과 처리 완료: {len(final_docs)}개 문서 (품질 점수: {overall_quality:.2f}, 시간: {processing_time:.3f}s)"
             )
 
+            # 상세 로깅: 최종 결과 (print + logger)
             if len(final_docs) > 0:
-                self.logger.info(
-                    f"✅ [SEARCH RESULTS] Processed {len(final_docs)} documents "
-                    f"(quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
-                )
+                processed_msg = f"✅ [SEARCH RESULTS] Processed {len(final_docs)} documents (quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
+                print(processed_msg, flush=True, file=sys.stdout)
+                self.logger.info(processed_msg)
+                # 최종 문서들의 점수 분포
+                final_scores = [doc.get("final_weighted_score", doc.get("relevance_score", 0.0)) for doc in final_docs]
+                if final_scores:
+                    final_score_msg = f"📊 [SEARCH RESULTS] Final documents score range - Min: {min(final_scores):.3f}, Max: {max(final_scores):.3f}, Avg: {sum(final_scores)/len(final_scores):.3f}"
+                    print(final_score_msg, flush=True, file=sys.stdout)
+                    self.logger.info(final_score_msg)
             else:
-                self.logger.warning(
-                    f"⚠️ [SEARCH RESULTS] No documents available after processing "
-                    f"(quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
-                )
+                no_docs_msg = f"⚠️ [SEARCH RESULTS] No documents available after processing (quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
+                print(no_docs_msg, flush=True, file=sys.stdout)
+                self.logger.warning(no_docs_msg)
 
         except Exception as e:
-            self._handle_error(state, str(e), "검색 결과 처리 중 오류 발생")
-            # 개선: 에러 처리 강화 - 명확한 로깅 및 폴백 전략
+            # 개선 1: 예외 발생 시에도 로깅 보장
+            import traceback
+            error_traceback = traceback.format_exc()
             self.logger.error(
-                f"❌ [SEARCH RESULTS ERROR] Failed to process search results: {str(e)}\n"
+                f"❌ [SEARCH RESULTS ERROR] process_search_results_combined 실행 중 예외 발생: {str(e)}\n"
                 f"   Query: '{query[:50] if 'query' in locals() else 'N/A'}...', "
-                f"Query type: {query_type_str if 'query_type_str' in locals() else 'N/A'}"
+                f"Query type: {query_type_str if 'query_type_str' in locals() else 'N/A'}\n"
+                f"   스택 트레이스:\n{error_traceback}"
             )
+            self._handle_error(state, str(e), "검색 결과 처리 중 오류 발생")
 
             # 폴백: 기존 검색 결과가 있으면 사용 시도
             existing_semantic = self._get_state_value(state, "semantic_results", [])
@@ -5745,17 +5977,17 @@ class EnhancedLegalQuestionWorkflow:
             optimized_queries_raw = get_field(state, "optimized_queries")
             search_params_raw = get_field(state, "search_params")
 
-            print(f"[DEBUG] execute_searches_parallel: START")
-            print(f"[DEBUG]   - optimized_queries (via _get_state_value): {type(optimized_queries).__name__}, exists={bool(optimized_queries)}")
-            print(f"[DEBUG]   - optimized_queries (via get_field): {type(optimized_queries_raw).__name__}, is None={optimized_queries_raw is None}")
-            print(f"[DEBUG]   - search_params (via _get_state_value): {type(search_params).__name__}, exists={bool(search_params)}")
-            print(f"[DEBUG]   - search_params (via get_field): {type(search_params_raw).__name__}, is None={search_params_raw is None}")
+            self.logger.debug(f"execute_searches_parallel: START")
+            self.logger.debug(f"  - optimized_queries (via _get_state_value): {type(optimized_queries).__name__}, exists={bool(optimized_queries)}")
+            self.logger.debug(f"  - optimized_queries (via get_field): {type(optimized_queries_raw).__name__}, is None={optimized_queries_raw is None}")
+            self.logger.debug(f"  - search_params (via _get_state_value): {type(search_params).__name__}, exists={bool(search_params)}")
+            self.logger.debug(f"  - search_params (via get_field): {type(search_params_raw).__name__}, is None={search_params_raw is None}")
 
             # state 구조 확인
             if "search" in state:
-                print(f"[DEBUG]   - state has 'search' key: {type(state['search']).__name__}")
+                self.logger.debug(f"  - state has 'search' key: {type(state['search']).__name__}")
                 if isinstance(state.get("search"), dict):
-                    print(f"[DEBUG]   - search keys: {list(state['search'].keys())}")
+                    self.logger.debug(f"  - search keys: {list(state['search'].keys())}")
 
             # state["search"]에서 직접 읽기 (get_field가 빈 딕셔너리를 반환하는 경우 대비)
             if "search" in state and isinstance(state["search"], dict):
@@ -5763,38 +5995,38 @@ class EnhancedLegalQuestionWorkflow:
                 if direct_optimized and isinstance(direct_optimized, dict) and len(direct_optimized) > 0:
                     optimized_queries = direct_optimized
                     extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    print(f"[DEBUG]   - Using direct state['search']['optimized_queries'], keys: {list(optimized_queries.keys())}")
-                    print(f"[DEBUG]   - semantic_query: '{optimized_queries.get('semantic_query', 'N/A')[:50]}...'")
-                    print(f"[DEBUG]   - keyword_queries: {len(optimized_queries.get('keyword_queries', []))} queries")
+                    self.logger.debug(f"  - Using direct state['search']['optimized_queries'], keys: {list(optimized_queries.keys())}")
+                    self.logger.debug(f"  - semantic_query: '{optimized_queries.get('semantic_query', 'N/A')[:50]}...'")
+                    self.logger.debug(f"  - keyword_queries: {len(optimized_queries.get('keyword_queries', []))} queries")
                 elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
                     optimized_queries = optimized_queries_raw
                     extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    print(f"[DEBUG]   - Using optimized_queries_raw (direct was empty), keys: {list(optimized_queries.keys())}")
+                    self.logger.debug(f"  - Using optimized_queries_raw (direct was empty), keys: {list(optimized_queries.keys())}")
                 else:
                     optimized_queries = {}
                     extracted_keywords = []
-                    print(f"[DEBUG]   - Both direct and raw are empty/None")
+                    self.logger.debug(f"  - Both direct and raw are empty/None")
             elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
                 optimized_queries = optimized_queries_raw
                 extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                print(f"[DEBUG]   - Using optimized_queries_raw (no direct access), keys: {list(optimized_queries.keys())}")
+                self.logger.debug(f"  - Using optimized_queries_raw (no direct access), keys: {list(optimized_queries.keys())}")
             else:
                 optimized_queries = {}
                 extracted_keywords = []
-                print(f"[DEBUG]   - optimized_queries not found anywhere")
+                self.logger.debug(f"  - optimized_queries not found anywhere")
 
             # search_params_raw도 확인
             if search_params_raw is not None and len(search_params_raw) > 0:
                 search_params = search_params_raw
-                print(f"[DEBUG]   - Using search_params_raw, keys: {list(search_params.keys())}")
+                self.logger.debug(f"  - Using search_params_raw, keys: {list(search_params.keys())}")
             elif search_params_raw is not None:
                 # 빈 딕셔너리인 경우 - 직접 state["search"]에서 확인
-                print(f"[DEBUG]   - search_params_raw is empty dict, checking state['search'] directly")
+                self.logger.debug(f"  - search_params_raw is empty dict, checking state['search'] directly")
                 if "search" in state and isinstance(state["search"], dict):
                     direct_params = state["search"].get("search_params")
                     if direct_params and len(direct_params) > 0:
                         search_params = direct_params
-                        print(f"[DEBUG]   - Found in state['search'], keys: {list(search_params.keys())}")
+                        self.logger.debug(f"  - Found in state['search'], keys: {list(search_params.keys())}")
                     else:
                         search_params = {}
                 else:
@@ -5826,13 +6058,13 @@ class EnhancedLegalQuestionWorkflow:
 
             has_keyword_queries = optimized_queries and keyword_queries_value and len(keyword_queries_value) > 0
 
-            print(f"[DEBUG]   - Validation: semantic_query='{semantic_query_value[:50] if semantic_query_value else 'EMPTY'}...', has_semantic_query={has_semantic_query}")
-            print(f"[DEBUG]   - Validation: keyword_queries={len(keyword_queries_value) if keyword_queries_value else 0}, has_keyword_queries={has_keyword_queries}")
-            print(f"[DEBUG]   - Validation: search_params is None={search_params is None}, is empty={search_params == {}}, keys={list(search_params.keys()) if search_params else []}")
+            self.logger.debug(f"  - Validation: semantic_query='{semantic_query_value[:50] if semantic_query_value else 'EMPTY'}...', has_semantic_query={has_semantic_query}")
+            self.logger.debug(f"  - Validation: keyword_queries={len(keyword_queries_value) if keyword_queries_value else 0}, has_keyword_queries={has_keyword_queries}")
+            self.logger.debug(f"  - Validation: search_params is None={search_params is None}, is empty={search_params == {}}, keys={list(search_params.keys()) if search_params else []}")
 
             if optimized_queries_raw is None or search_params_raw is None or not has_semantic_query:
                 self.logger.warning("Optimized queries or search params not found")
-                print(f"[DEBUG] PARALLEL SEARCH SKIP: optimized_queries={optimized_queries is not None}, search_params={search_params is not None}")
+                self.logger.debug(f"PARALLEL SEARCH SKIP: optimized_queries={optimized_queries is not None}, search_params={search_params is not None}")
                 self._set_state_value(state, "semantic_results", [])
                 self._set_state_value(state, "keyword_results", [])
                 self._set_state_value(state, "semantic_count", 0)
@@ -5851,7 +6083,7 @@ class EnhancedLegalQuestionWorkflow:
                 if "input" in state and isinstance(state.get("input"), dict):
                     original_query = state["input"].get("query", "")
 
-            print(f"[DEBUG] PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, original_query={original_query[:50] if original_query else 'N/A'}...")
+            self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, original_query={original_query[:50] if original_query else 'N/A'}...")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 # 의미적 검색 작업 제출 (원본 query 포함)
@@ -5876,18 +6108,18 @@ class EnhancedLegalQuestionWorkflow:
                 # 두 작업이 완료될 때까지 대기
                 try:
                     semantic_results, semantic_count = semantic_future.result(timeout=30)
-                    print(f"[DEBUG] Semantic future completed: {semantic_count} results")
+                    self.logger.debug(f"Semantic future completed: {semantic_count} results")
                 except Exception as e:
                     self.logger.error(f"Semantic search failed: {e}")
-                    print(f"[DEBUG] Semantic search exception: {e}")
+                    self.logger.debug(f"Semantic search exception: {e}")
                     semantic_results, semantic_count = [], 0
 
                 try:
                     keyword_results, keyword_count = keyword_future.result(timeout=30)
-                    print(f"[DEBUG] Keyword future completed: {keyword_count} results")
+                    self.logger.debug(f"Keyword future completed: {keyword_count} results")
                 except Exception as e:
                     self.logger.error(f"Keyword search failed: {e}")
-                    print(f"[DEBUG] Keyword search exception: {e}")
+                    self.logger.debug(f"Keyword search exception: {e}")
                     keyword_results, keyword_count = [], 0
 
             # 결과 저장
@@ -5895,7 +6127,7 @@ class EnhancedLegalQuestionWorkflow:
             from .state_helpers import ensure_state_group
             ensure_state_group(state, "search")
 
-            print(f"[DEBUG] PARALLEL SEARCH: Before save - semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}")
+            self.logger.debug(f"PARALLEL SEARCH: Before save - semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}")
 
             self._set_state_value(state, "semantic_results", semantic_results)
             self._set_state_value(state, "keyword_results", keyword_results)
@@ -5905,15 +6137,15 @@ class EnhancedLegalQuestionWorkflow:
             # 저장 확인 로그
             stored_semantic = self._get_state_value(state, "semantic_results", [])
             stored_keyword = self._get_state_value(state, "keyword_results", [])
-            print(f"[DEBUG] PARALLEL SEARCH: After save - semantic_results={len(stored_semantic)}, keyword_results={len(stored_keyword)}")
+            self.logger.debug(f"PARALLEL SEARCH: After save - semantic_results={len(stored_semantic)}, keyword_results={len(stored_keyword)}")
 
             # state["search"]에서 직접 확인 (디버깅)
             if "search" in state and isinstance(state.get("search"), dict):
                 direct_semantic = state["search"].get("semantic_results", [])
                 direct_keyword = state["search"].get("keyword_results", [])
-                print(f"[DEBUG] PARALLEL SEARCH: Direct state['search'] check - semantic={len(direct_semantic)}, keyword={len(direct_keyword)}")
+                self.logger.debug(f"PARALLEL SEARCH: Direct state['search'] check - semantic={len(direct_semantic)}, keyword={len(direct_keyword)}")
             else:
-                print(f"[DEBUG] PARALLEL SEARCH: state['search'] not found or not dict, state keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+                self.logger.debug(f"PARALLEL SEARCH: state['search'] not found or not dict, state keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
 
             self._save_metadata_safely(state, "_last_executed_node", "execute_searches_parallel")
             self._update_processing_time(state, start_time)
@@ -5925,7 +6157,7 @@ class EnhancedLegalQuestionWorkflow:
                 f"✅ [PARALLEL SEARCH] Completed in {elapsed_time:.3f}s - "
                 f"Semantic: {semantic_count} results, Keyword: {keyword_count} results"
             )
-            print(f"[DEBUG] PARALLEL SEARCH: Semantic={semantic_count}, Keyword={keyword_count}")
+            self.logger.debug(f"PARALLEL SEARCH: Semantic={semantic_count}, Keyword={keyword_count}")
 
             # 검색 결과 상세 정보 로깅
             if semantic_results:
@@ -7432,82 +7664,82 @@ class EnhancedLegalQuestionWorkflow:
             if has_valid_docs:
                 terms_start_time = time.time()
 
-            # 메타데이터 설정 (process_legal_terms 로직)
-            if "metadata" not in state or not isinstance(state.get("metadata"), dict):
-                state["metadata"] = {}
-            state["metadata"] = dict(state["metadata"])
-            state["metadata"]["_last_executed_node"] = "prepare_documents_and_terms"
+                # 메타데이터 설정 (process_legal_terms 로직)
+                if "metadata" not in state or not isinstance(state.get("metadata"), dict):
+                    state["metadata"] = {}
+                state["metadata"] = dict(state["metadata"])
+                state["metadata"]["_last_executed_node"] = "prepare_documents_and_terms"
 
-            if "common" not in state or not isinstance(state.get("common"), dict):
-                state["common"] = {}
-            if "metadata" not in state["common"]:
-                state["common"]["metadata"] = {}
-            state["common"]["metadata"]["_last_executed_node"] = "prepare_documents_and_terms"
-
-            # 기존 재시도 카운터 보존
-            existing_metadata_direct = state.get("metadata", {})
-            existing_metadata_common = state.get("common", {}).get("metadata", {}) if isinstance(state.get("common"), dict) else {}
-            existing_metadata = existing_metadata_direct if isinstance(existing_metadata_direct, dict) else {}
-            if isinstance(existing_metadata_common, dict):
-                existing_metadata = {**existing_metadata, **existing_metadata_common}
-
-            existing_top_level = state.get("retry_count", 0)
-            saved_gen_retry = max(
-                existing_metadata.get("generation_retry_count", 0),
-                existing_top_level
-            )
-            saved_val_retry = existing_metadata.get("validation_retry_count", 0)
-
-            # 법률 용어 추출 및 통합
-            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
-            all_terms = self._extract_terms_from_documents(retrieved_docs)
-            self.logger.info(f"추출된 용어 수: {len(all_terms)}")
-
-            if all_terms:
-                representative_terms = self._integrate_and_process_terms(all_terms)
-                metadata = dict(existing_metadata)
-                metadata["extracted_terms"] = representative_terms
-                metadata["total_terms_extracted"] = len(all_terms)
-                metadata["unique_terms"] = len(representative_terms)
-                # 재시도 카운터 보존
-                metadata["generation_retry_count"] = saved_gen_retry
-                metadata["validation_retry_count"] = saved_val_retry
-                metadata["_last_executed_node"] = "prepare_documents_and_terms"
-                state["metadata"] = metadata
-
-                # common 그룹에도 동기화
-                if "common" not in state:
+                if "common" not in state or not isinstance(state.get("common"), dict):
                     state["common"] = {}
                 if "metadata" not in state["common"]:
                     state["common"]["metadata"] = {}
-                state["common"]["metadata"].update(metadata)
-                state["retry_count"] = saved_gen_retry
+                state["common"]["metadata"]["_last_executed_node"] = "prepare_documents_and_terms"
 
-                self._set_state_value(state, "metadata", metadata)
-                self._add_step(state, "용어 통합 완료", f"용어 통합 완료: {len(representative_terms)}개")
-                self.logger.info(f"통합된 용어 수: {len(representative_terms)}")
-            else:
-                metadata = dict(existing_metadata)
-                metadata["extracted_terms"] = []
-                # 재시도 카운터 보존
-                metadata["generation_retry_count"] = saved_gen_retry
-                metadata["validation_retry_count"] = saved_val_retry
-                metadata["_last_executed_node"] = "prepare_documents_and_terms"
-                state["metadata"] = metadata
+                # 기존 재시도 카운터 보존
+                existing_metadata_direct = state.get("metadata", {})
+                existing_metadata_common = state.get("common", {}).get("metadata", {}) if isinstance(state.get("common"), dict) else {}
+                existing_metadata = existing_metadata_direct if isinstance(existing_metadata_direct, dict) else {}
+                if isinstance(existing_metadata_common, dict):
+                    existing_metadata = {**existing_metadata, **existing_metadata_common}
 
-                # common 그룹에도 동기화
-                if "common" not in state:
-                    state["common"] = {}
-                if "metadata" not in state["common"]:
-                    state["common"]["metadata"] = {}
-                state["common"]["metadata"].update(metadata)
-                state["retry_count"] = saved_gen_retry
+                existing_top_level = state.get("retry_count", 0)
+                saved_gen_retry = max(
+                    existing_metadata.get("generation_retry_count", 0),
+                    existing_top_level
+                )
+                saved_val_retry = existing_metadata.get("validation_retry_count", 0)
 
-                self._set_state_value(state, "metadata", metadata)
-                self._add_step(state, "용어 추출 없음", "용어 추출 없음 (문서 내용 부족)")
+                # 법률 용어 추출 및 통합
+                retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+                all_terms = self._extract_terms_from_documents(retrieved_docs)
+                self.logger.info(f"추출된 용어 수: {len(all_terms)}")
+
+                if all_terms:
+                    representative_terms = self._integrate_and_process_terms(all_terms)
+                    metadata = dict(existing_metadata)
+                    metadata["extracted_terms"] = representative_terms
+                    metadata["total_terms_extracted"] = len(all_terms)
+                    metadata["unique_terms"] = len(representative_terms)
+                    # 재시도 카운터 보존
+                    metadata["generation_retry_count"] = saved_gen_retry
+                    metadata["validation_retry_count"] = saved_val_retry
+                    metadata["_last_executed_node"] = "prepare_documents_and_terms"
+                    state["metadata"] = metadata
+
+                    # common 그룹에도 동기화
+                    if "common" not in state:
+                        state["common"] = {}
+                    if "metadata" not in state["common"]:
+                        state["common"]["metadata"] = {}
+                    state["common"]["metadata"].update(metadata)
+                    state["retry_count"] = saved_gen_retry
+
+                    self._set_state_value(state, "metadata", metadata)
+                    self._add_step(state, "용어 통합 완료", f"용어 통합 완료: {len(representative_terms)}개")
+                    self.logger.info(f"통합된 용어 수: {len(representative_terms)}")
+                else:
+                    metadata = dict(existing_metadata)
+                    metadata["extracted_terms"] = []
+                    # 재시도 카운터 보존
+                    metadata["generation_retry_count"] = saved_gen_retry
+                    metadata["validation_retry_count"] = saved_val_retry
+                    metadata["_last_executed_node"] = "prepare_documents_and_terms"
+                    state["metadata"] = metadata
+
+                    # common 그룹에도 동기화
+                    if "common" not in state:
+                        state["common"] = {}
+                    if "metadata" not in state["common"]:
+                        state["common"]["metadata"] = {}
+                    state["common"]["metadata"].update(metadata)
+                    state["retry_count"] = saved_gen_retry
+
+                    self._set_state_value(state, "metadata", metadata)
+                    self._add_step(state, "용어 추출 없음", "용어 추출 없음 (문서 내용 부족)")
 
                 self._update_processing_time(state, terms_start_time)
-            else:
+            else:  # if has_valid_docs의 else
                 # retrieved_docs가 없거나 유효하지 않을 때: 용어 처리는 생략하되 메타데이터만 설정
                 self.logger.info(
                     f"⏭️ [TERM PROCESSING] Skipping term extraction and processing "

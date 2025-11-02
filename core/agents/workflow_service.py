@@ -162,7 +162,7 @@ class LangGraphWorkflowService:
                 session_id = str(uuid.uuid4())
 
             self.logger.info(f"Processing query: {query[:100]}... (session: {session_id})")
-            print(f"[DEBUG] workflow_service.process_query: query length={len(query)}, query='{query[:50]}...'")
+            self.logger.debug(f"process_query: query length={len(query)}, query='{query[:50]}...'")
 
             # 초기 상태 설정 (flat 구조 사용)
             initial_state = create_initial_legal_state(query, session_id)
@@ -184,14 +184,14 @@ class LangGraphWorkflowService:
 
             # 초기 state 검증
             initial_query = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-            print(f"[DEBUG] workflow_service.process_query: initial_state query length={len(initial_query)}, query='{initial_query[:50] if initial_query else 'EMPTY'}...'")
+            self.logger.debug(f"process_query: initial_state query length={len(initial_query)}, query='{initial_query[:50] if initial_query else 'EMPTY'}...'")
             if not initial_query or not str(initial_query).strip():
                 self.logger.error(f"Initial state query is empty! Input query was: '{query[:50]}...'")
-                print(f"[DEBUG] workflow_service.process_query: ERROR - initial_state query is empty!")
-                print(f"[DEBUG] workflow_service.process_query: initial_state keys: {list(initial_state.keys())}")
-                print(f"[DEBUG] workflow_service.process_query: initial_state['input']: {initial_state.get('input')}")
+                self.logger.debug(f"process_query: ERROR - initial_state query is empty!")
+                self.logger.debug(f"process_query: initial_state keys: {list(initial_state.keys())}")
+                self.logger.debug(f"process_query: initial_state['input']: {initial_state.get('input')}")
             else:
-                print(f"[DEBUG] workflow_service.process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
+                self.logger.debug(f"process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
 
             # 워크플로우 실행 설정 (체크포인트 비활성화)
             config = {}
@@ -218,7 +218,7 @@ class LangGraphWorkflowService:
 
                 # 초기 state 검증: input 그룹과 query 확인
                 initial_query_check = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-                print(f"[DEBUG] workflow_service.astream: initial_state before astream - query='{initial_query_check[:50] if initial_query_check else 'EMPTY'}...', keys={list(initial_state.keys())}")
+                self.logger.debug(f"astream: initial_state before astream - query='{initial_query_check[:50] if initial_query_check else 'EMPTY'}...', keys={list(initial_state.keys())}")
 
                 # 중요: initial_state에 input이 없거나 query가 비어있으면 복원
                 # LangGraph에 전달하기 전에 반드시 query가 있어야 함
@@ -265,7 +265,6 @@ class LangGraphWorkflowService:
                     self.logger.error(f"CRITICAL: _initial_input has no query! This should never happen.")
                 else:
                     self.logger.debug(f"Preserved initial input: query length={len(self._initial_input.get('query', ''))}")
-                    print(f"[DEBUG] workflow_service: Preserved initial_input with query length={len(self._initial_input.get('query', ''))}")
 
                 async for event in self.app.astream(initial_state, enhanced_config):
                     # 각 이벤트는 {node_name: updated_state} 형태
@@ -304,28 +303,40 @@ class LangGraphWorkflowService:
                                     node_query = node_input.get("query", "")
                                 elif isinstance(node_state, dict):
                                     node_query = node_state.get("query", "")
-                                print(f"[DEBUG] workflow_service.astream: event[{node_name}] query='{node_query[:50] if node_query else 'EMPTY'}...', keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                                self.logger.debug(f"astream: event[{node_name}] query='{node_query[:50] if node_query else 'EMPTY'}...', keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
 
-                        # processing_steps 추적 (state reduction으로 손실 방지)
+                        # processing_steps 추적 (state reduction으로 손실 방지, 개선)
                         if isinstance(node_state, dict):
-                            # common 그룹에서 processing_steps 확인
+                            # 1. common 그룹에서 processing_steps 확인
                             node_common = node_state.get("common", {})
                             if isinstance(node_common, dict):
                                 common_steps = node_common.get("processing_steps", [])
                                 if isinstance(common_steps, list) and len(common_steps) > 0:
-                                    # 기존 추적된 steps와 병합 (중복 제거)
                                     for step in common_steps:
                                         if isinstance(step, str) and step not in tracked_processing_steps:
                                             tracked_processing_steps.append(step)
-                                    print(f"[DEBUG] workflow_service: Tracked {len(common_steps)} steps from {node_name} (common group), total: {len(tracked_processing_steps)}")
 
-                            # 최상위 레벨에서도 확인
+                            # 2. 최상위 레벨에서도 확인
                             top_steps = node_state.get("processing_steps", [])
                             if isinstance(top_steps, list) and len(top_steps) > 0:
                                 for step in top_steps:
                                     if isinstance(step, str) and step not in tracked_processing_steps:
                                         tracked_processing_steps.append(step)
-                                print(f"[DEBUG] workflow_service: Tracked {len(top_steps)} steps from {node_name} (top level), total: {len(tracked_processing_steps)}")
+
+                            # 3. metadata에서도 확인 (개선)
+                            metadata = node_state.get("metadata", {})
+                            if isinstance(metadata, dict):
+                                metadata_steps = metadata.get("processing_steps", [])
+                                if isinstance(metadata_steps, list) and len(metadata_steps) > 0:
+                                    for step in metadata_steps:
+                                        if isinstance(step, str) and step not in tracked_processing_steps:
+                                            tracked_processing_steps.append(step)
+
+                            # 4. 노드 실행 정보 추가 (추적 보강)
+                            if node_name and len(node_name) < 50:
+                                node_info = f"노드 실행: {node_name}"
+                                if node_info not in tracked_processing_steps:
+                                    tracked_processing_steps.append(node_info)
 
                         # 최종 결과 업데이트 (각 이벤트는 업데이트된 상태를 반환)
                         # 중요: 모든 노드의 결과에 input 그룹이 있도록 보장
@@ -342,8 +353,8 @@ class LangGraphWorkflowService:
                                 node_query = node_input.get("query", "")
                             elif isinstance(node_state, dict):
                                 node_query = node_state.get("query", "")
-                            print(f"[DEBUG] workflow_service.astream: event[{node_name}] - node_state query='{node_query[:50] if node_query else 'EMPTY'}...'")
-                            print(f"[DEBUG] workflow_service.astream: event[{node_name}] - node_state keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                            self.logger.debug(f"astream: event[{node_name}] - node_state query='{node_query[:50] if node_query else 'EMPTY'}...'")
+                            self.logger.debug(f"astream: event[{node_name}] - node_state keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
 
                             # execute_searches_parallel의 경우 search 그룹 확인 및 캐시
                             # semantic_results를 retrieved_docs로 변환하여 저장
@@ -385,7 +396,7 @@ class LangGraphWorkflowService:
                                         self._search_results_cache["search"] = {}
                                     self._search_results_cache["search"]["retrieved_docs"] = unique_docs
                                     self._search_results_cache["search"]["merged_documents"] = unique_docs
-                                    print(f"[DEBUG] workflow_service.astream: Converted semantic_results to retrieved_docs: {len(unique_docs)} docs")
+                                    self.logger.debug(f"astream: Converted semantic_results to retrieved_docs: {len(unique_docs)} docs")
                                 search_group = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
                                 semantic_count = len(search_group.get("semantic_results", []))
                                 keyword_count = len(search_group.get("keyword_results", []))
@@ -398,7 +409,7 @@ class LangGraphWorkflowService:
                                 if isinstance(top_keyword, list):
                                     keyword_count = max(keyword_count, len(top_keyword))
 
-                                print(f"[DEBUG] workflow_service.astream: event[{node_name}] - search group: semantic_results={semantic_count}, keyword_results={keyword_count}, top_level_semantic={len(top_semantic) if isinstance(top_semantic, list) else 0}")
+                                self.logger.debug(f"astream: event[{node_name}] - search group: semantic_results={semantic_count}, keyword_results={keyword_count}, top_level_semantic={len(top_semantic) if isinstance(top_semantic, list) else 0}")
 
                                 # search 그룹 또는 최상위 레벨에 결과가 있으면 캐시에 저장
                                 if (semantic_count > 0 or keyword_count > 0):
@@ -413,10 +424,10 @@ class LangGraphWorkflowService:
                                             "semantic_count": len(top_semantic) if isinstance(top_semantic, list) else 0,
                                             "keyword_count": len(top_keyword) if isinstance(top_keyword, list) else 0
                                         }
-                                    print(f"[DEBUG] workflow_service.astream: Cached search results - semantic={semantic_count}, keyword={keyword_count}")
+                                    self.logger.debug(f"astream: Cached search results - semantic={semantic_count}, keyword={keyword_count}")
                                 # search 그룹이 없거나 비어있으면 캐시에서 복원 시도
                                 elif self._search_results_cache:
-                                    print(f"[DEBUG] workflow_service.astream: Restoring search results from cache")
+                                    self.logger.debug(f"astream: Restoring search results from cache")
                                     if "search" not in node_state:
                                         node_state["search"] = {}
                                     node_state["search"].update(self._search_results_cache)
@@ -427,7 +438,7 @@ class LangGraphWorkflowService:
                                         node_state["keyword_results"] = self._search_results_cache.get("keyword_results", [])
                                     semantic_restored = len(node_state["search"].get("semantic_results", []))
                                     keyword_restored = len(node_state["search"].get("keyword_results", []))
-                                    print(f"[DEBUG] workflow_service.astream: Restored search results - semantic={semantic_restored}, keyword={keyword_restored}")
+                                    self.logger.debug(f"astream: Restored search results - semantic={semantic_restored}, keyword={keyword_restored}")
 
                         if isinstance(node_state, dict) and self._initial_input:
                             # 중요: node_state.get("input")이 None일 수 있으므로 안전하게 처리
@@ -444,7 +455,7 @@ class LangGraphWorkflowService:
                                     if self._initial_input.get("session_id"):
                                         node_state["input"]["session_id"] = self._initial_input["session_id"]
                                     if node_name == "classify_query":
-                                        print(f"[DEBUG] workflow_service.astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
+                                        self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
 
                             # 모든 노드 결과에 항상 input 그룹 포함 (LangGraph 병합 보장)
                             # 초기 input이 있으면 항상 포함
@@ -491,7 +502,7 @@ class LangGraphWorkflowService:
                                     self._search_results_cache["search"]["retrieved_docs"] = final_retrieved_docs
                                     self._search_results_cache["search"]["merged_documents"] = final_retrieved_docs
 
-                                print(f"[DEBUG] workflow_service.astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}")
+                                self.logger.debug(f"astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}")
 
                         # 중요: execute_searches_parallel 이후 노드들에 대해 캐시된 search 결과 복원
                         # LangGraph reducer가 search 그룹을 제거하는 문제를 우회하기 위해 캐시에서 복원
@@ -507,7 +518,7 @@ class LangGraphWorkflowService:
                                              (isinstance(top_keyword, list) and len(top_keyword) > 0))
 
                                 if not has_results:
-                                    print(f"[DEBUG] workflow_service.astream: Restoring search results for {node_name} from cache")
+                                    self.logger.debug(f"astream: Restoring search results for {node_name} from cache")
                                     if "search" not in node_state:
                                         node_state["search"] = {}
                                     node_state["search"].update(self._search_results_cache)
@@ -522,12 +533,12 @@ class LangGraphWorkflowService:
                                         node_state["keyword_count"] = self._search_results_cache.get("keyword_count", 0)
                                     semantic_restored = len(node_state["search"].get("semantic_results", []))
                                     keyword_restored = len(node_state["search"].get("keyword_results", []))
-                                    print(f"[DEBUG] workflow_service.astream: Restored for {node_name} - semantic={semantic_restored}, keyword={keyword_restored}, top_level_semantic={len(node_state.get('semantic_results', []))}")
+                                    self.logger.debug(f"astream: Restored for {node_name} - semantic={semantic_restored}, keyword={keyword_restored}, top_level_semantic={len(node_state.get('semantic_results', []))}")
 
                         # 중요: merge_and_rerank_with_keyword_weights 또는 process_search_results_combined 이후 retrieved_docs 캐시 업데이트
                         # flat_result 업데이트 전에 캐시 업데이트 (node_state에서 직접 읽기)
                         if node_name in ["merge_and_rerank_with_keyword_weights", "process_search_results_combined"] and isinstance(node_state, dict):
-                            print(f"[DEBUG] workflow_service.astream: Checking merge_and_rerank node_state for retrieved_docs")
+                            self.logger.debug(f"astream: Checking merge_and_rerank node_state for retrieved_docs")
                             # node_state 업데이트 후 다시 읽기
                             search_group_updated = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
                             retrieved_docs_updated = search_group_updated.get("retrieved_docs", [])
@@ -537,7 +548,7 @@ class LangGraphWorkflowService:
                             top_retrieved_docs_updated = node_state.get("retrieved_docs", [])
                             top_merged_docs_updated = node_state.get("merged_documents", [])
 
-                            print(f"[DEBUG] workflow_service.astream: merge_and_rerank - search_group retrieved_docs={len(retrieved_docs_updated) if isinstance(retrieved_docs_updated, list) else 0}, merged_documents={len(merged_documents_updated) if isinstance(merged_documents_updated, list) else 0}, top_retrieved_docs={len(top_retrieved_docs_updated) if isinstance(top_retrieved_docs_updated, list) else 0}, top_merged_docs={len(top_merged_docs_updated) if isinstance(top_merged_docs_updated, list) else 0}")
+                            self.logger.debug(f"astream: merge_and_rerank - search_group retrieved_docs={len(retrieved_docs_updated) if isinstance(retrieved_docs_updated, list) else 0}, merged_documents={len(merged_documents_updated) if isinstance(merged_documents_updated, list) else 0}, top_retrieved_docs={len(top_retrieved_docs_updated) if isinstance(top_retrieved_docs_updated, list) else 0}, top_merged_docs={len(top_merged_docs_updated) if isinstance(top_merged_docs_updated, list) else 0}")
 
                             # retrieved_docs 또는 merged_documents가 있으면 캐시 업데이트
                             final_retrieved_docs = (retrieved_docs_updated if isinstance(retrieved_docs_updated, list) and len(retrieved_docs_updated) > 0 else
@@ -545,7 +556,7 @@ class LangGraphWorkflowService:
                                                    merged_documents_updated if isinstance(merged_documents_updated, list) and len(merged_documents_updated) > 0 else
                                                    top_merged_docs_updated if isinstance(top_merged_docs_updated, list) and len(top_merged_docs_updated) > 0 else [])
 
-                            print(f"[DEBUG] workflow_service.astream: merge_and_rerank - final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}")
+                            self.logger.debug(f"astream: merge_and_rerank - final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}")
 
                             if isinstance(final_retrieved_docs, list) and len(final_retrieved_docs) > 0:
                                 # 캐시 초기화 (없으면 생성)
@@ -565,9 +576,9 @@ class LangGraphWorkflowService:
                                     self._search_results_cache["search"]["retrieved_docs"] = final_retrieved_docs
                                     self._search_results_cache["search"]["merged_documents"] = final_retrieved_docs
 
-                                print(f"[DEBUG] workflow_service.astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}, cache keys={list(self._search_results_cache.keys())}")
+                                self.logger.debug(f"astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}, cache keys={list(self._search_results_cache.keys())}")
                             else:
-                                print(f"[DEBUG] workflow_service.astream: WARNING - merge_and_rerank node_state has no retrieved_docs or merged_documents")
+                                self.logger.warning(f"astream: merge_and_rerank node_state has no retrieved_docs or merged_documents")
 
                         flat_result = node_state
 
@@ -588,19 +599,26 @@ class LangGraphWorkflowService:
                 if flat_result is None:
                     flat_result = initial_state
 
-                # processing_steps를 flat_result에 명시적으로 저장 (state reduction 손실 방지)
-                if tracked_processing_steps and isinstance(flat_result, dict):
-                    # common 그룹에 저장
-                    if "common" not in flat_result:
-                        flat_result["common"] = {}
-                    if not isinstance(flat_result["common"], dict):
-                        flat_result["common"] = {}
-                    flat_result["common"]["processing_steps"] = tracked_processing_steps
-                    # 최상위 레벨에도 저장 (fallback)
-                    flat_result["processing_steps"] = tracked_processing_steps
-                    print(f"[DEBUG] workflow_service: Saved {len(tracked_processing_steps)} tracked processing_steps to flat_result")
-                elif isinstance(flat_result, dict):
-                    print(f"[DEBUG] workflow_service: WARNING - tracked_processing_steps is empty (len={len(tracked_processing_steps) if tracked_processing_steps else 0})")
+                # processing_steps를 flat_result에 명시적으로 저장 (state reduction 손실 방지, 개선)
+                if isinstance(flat_result, dict):
+                    if tracked_processing_steps and len(tracked_processing_steps) > 0:
+                        # common 그룹에 저장
+                        if "common" not in flat_result:
+                            flat_result["common"] = {}
+                        if not isinstance(flat_result["common"], dict):
+                            flat_result["common"] = {}
+                        flat_result["common"]["processing_steps"] = tracked_processing_steps
+                        # 최상위 레벨에도 저장 (fallback)
+                        flat_result["processing_steps"] = tracked_processing_steps
+                    else:
+                        # tracked_processing_steps가 비어있으면 기본값 추가 (개선)
+                        default_steps = ["워크플로우 시작", "워크플로우 실행"]
+                        if "common" not in flat_result:
+                            flat_result["common"] = {}
+                        if not isinstance(flat_result["common"], dict):
+                            flat_result["common"] = {}
+                        flat_result["common"]["processing_steps"] = default_steps
+                        flat_result["processing_steps"] = default_steps
 
                 # 중요: 최종 결과에 search 그룹 보존
                 # LangGraph reducer가 search 그룹을 제거했을 수 있으므로 캐시에서 복원
@@ -616,19 +634,19 @@ class LangGraphWorkflowService:
                             global_cache = None
                     except (ImportError, AttributeError) as e:
                         global_cache = None
-                        print(f"[DEBUG] workflow_service: Failed to import global cache: {e}")
+                        self.logger.debug(f"Failed to import global cache: {e}")
 
-                    print(f"[DEBUG] workflow_service: Final result check - has instance cache={self._search_results_cache is not None}, has global cache={global_cache is not None}")
+                    self.logger.debug(f"Final result check - has instance cache={self._search_results_cache is not None}, has global cache={global_cache is not None}")
                     if global_cache:
-                        print(f"[DEBUG] workflow_service: Global cache keys={list(global_cache.keys()) if isinstance(global_cache, dict) else 'N/A'}")
+                        self.logger.debug(f"Global cache keys={list(global_cache.keys()) if isinstance(global_cache, dict) else 'N/A'}")
                         if isinstance(global_cache, dict):
                             if "search" in global_cache:
                                 search_group_cache = global_cache["search"]
                                 if isinstance(search_group_cache, dict):
-                                    print(f"[DEBUG] workflow_service: Global cache search group has retrieved_docs={len(search_group_cache.get('retrieved_docs', []))}, merged_documents={len(search_group_cache.get('merged_documents', []))}")
+                                    self.logger.debug(f"Global cache search group has retrieved_docs={len(search_group_cache.get('retrieved_docs', []))}, merged_documents={len(search_group_cache.get('merged_documents', []))}")
                             # 최상위 레벨에서도 확인
                             if "retrieved_docs" in global_cache:
-                                print(f"[DEBUG] workflow_service: Global cache top-level has retrieved_docs={len(global_cache.get('retrieved_docs', []))}")
+                                self.logger.debug(f"Global cache top-level has retrieved_docs={len(global_cache.get('retrieved_docs', []))}")
 
                     # 전역 캐시 또는 인스턴스 캐시 사용 (전역 캐시 우선)
                     search_cache = global_cache if global_cache else self._search_results_cache
@@ -636,7 +654,7 @@ class LangGraphWorkflowService:
                     if search_cache:
                         # search 그룹이 없거나 비어있으면 캐시에서 복원
                         if "search" not in flat_result or not isinstance(flat_result.get("search"), dict):
-                            print(f"[DEBUG] workflow_service: Final result has no search group, creating from cache")
+                            self.logger.debug(f"Final result has no search group, creating from cache")
                             flat_result["search"] = {}
 
                         search_group = flat_result["search"]
@@ -645,7 +663,7 @@ class LangGraphWorkflowService:
                                      len(flat_result.get("retrieved_docs", [])) > 0)
 
                         if not has_results:
-                            print(f"[DEBUG] workflow_service: Restoring search group in final result from cache")
+                            self.logger.debug(f"Restoring search group in final result from cache")
                             # 캐시에 search 그룹이 있으면 그걸 사용
                             if "search" in search_cache and isinstance(search_cache["search"], dict):
                                 flat_result["search"].update(search_cache["search"])
@@ -669,16 +687,16 @@ class LangGraphWorkflowService:
 
                             restored_count = len(flat_result["search"].get("retrieved_docs", []))
                             merged_count = len(flat_result["search"].get("merged_documents", []))
-                            print(f"[DEBUG] workflow_service: Restored search group - retrieved_docs={restored_count}, merged_documents={merged_count}, top_level={len(flat_result.get('retrieved_docs', []))}")
+                            self.logger.debug(f"Restored search group - retrieved_docs={restored_count}, merged_documents={merged_count}, top_level={len(flat_result.get('retrieved_docs', []))}")
                         else:
-                            print(f"[DEBUG] workflow_service: Final result already has search results - retrieved_docs={len(search_group.get('retrieved_docs', []))}, top_level={len(flat_result.get('retrieved_docs', []))}")
+                            self.logger.debug(f"Final result already has search results - retrieved_docs={len(search_group.get('retrieved_docs', []))}, top_level={len(flat_result.get('retrieved_docs', []))}")
                     else:
-                        print(f"[DEBUG] workflow_service: WARNING - No search cache available for final result restoration")
+                        self.logger.warning(f"No search cache available for final result restoration")
 
                 # 중요: query_complexity와 needs_search 복원 (Adaptive RAG 정보)
                 # prepare_final_response에서 보존했지만, reducer에 의해 사라질 수 있으므로 재확인
                 if isinstance(flat_result, dict):
-                    print(f"[DEBUG] workflow_service: flat_result keys={list(flat_result.keys())[:20]}")
+                    self.logger.debug(f"flat_result keys={list(flat_result.keys())[:20]}")
 
                     # 모든 가능한 경로에서 확인
                     query_complexity_found = None
@@ -688,32 +706,32 @@ class LangGraphWorkflowService:
                     query_complexity_found = flat_result.get("query_complexity")
                     if "needs_search" in flat_result:
                         needs_search_found = flat_result.get("needs_search", True)
-                    print(f"[DEBUG] workflow_service: [1] 최상위 레벨 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                    self.logger.debug(f"[1] 최상위 레벨 - complexity={query_complexity_found}, needs_search={needs_search_found}")
 
                     # 2. common 그룹 확인
                     if not query_complexity_found:
                         has_common = "common" in flat_result
-                        print(f"[DEBUG] workflow_service: checking common - exists={has_common}")
+                        self.logger.debug(f"checking common - exists={has_common}")
                         if has_common:
                             common_value = flat_result["common"]
-                            print(f"[DEBUG] workflow_service: common type={type(common_value).__name__}")
+                            self.logger.debug(f"common type={type(common_value).__name__}")
                             if isinstance(common_value, dict):
                                 query_complexity_found = common_value.get("query_complexity")
                                 if "needs_search" in common_value:
                                     needs_search_found = common_value.get("needs_search", True)
-                                print(f"[DEBUG] workflow_service: [2] common 그룹 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                                self.logger.debug(f"[2] common 그룹 - complexity={query_complexity_found}, needs_search={needs_search_found}")
                             else:
-                                print(f"[DEBUG] workflow_service: common is not dict: {type(common_value)}")
+                                self.logger.debug(f"common is not dict: {type(common_value)}")
 
                     # 3. metadata 확인 (여러 형태 지원)
                     if not query_complexity_found and "metadata" in flat_result:
                         metadata_value = flat_result["metadata"]
-                        print(f"[DEBUG] workflow_service: checking metadata - type={type(metadata_value).__name__}")
+                        self.logger.debug(f"checking metadata - type={type(metadata_value).__name__}")
                         if isinstance(metadata_value, dict):
                             query_complexity_found = metadata_value.get("query_complexity")
                             if "needs_search" in metadata_value:
                                 needs_search_found = metadata_value.get("needs_search", True)
-                            print(f"[DEBUG] workflow_service: [3] metadata (dict) - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                            self.logger.debug(f"[3] metadata (dict) - complexity={query_complexity_found}, needs_search={needs_search_found}")
                         # metadata가 다른 형태일 수도 있으므로 확인
 
                     # 4. classification 그룹 확인
@@ -723,34 +741,34 @@ class LangGraphWorkflowService:
                             query_complexity_found = classification_value.get("query_complexity")
                             if "needs_search" in classification_value:
                                 needs_search_found = classification_value.get("needs_search", True)
-                            print(f"[DEBUG] workflow_service: [4] classification 그룹 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                            self.logger.debug(f"[4] classification 그룹 - complexity={query_complexity_found}, needs_search={needs_search_found}")
 
                     # 5. Global cache에서 확인 (classify_complexity에서 저장한 값)
                     if not query_complexity_found:
                         try:
                             from core.agents import node_wrappers
                             global_cache = getattr(node_wrappers, '_global_search_results_cache', None)
-                            print(f"[DEBUG] workflow_service: [5] Global cache 확인 - exists={global_cache is not None}, type={type(global_cache).__name__ if global_cache else 'None'}")
+                            self.logger.debug(f"[5] Global cache 확인 - exists={global_cache is not None}, type={type(global_cache).__name__ if global_cache else 'None'}")
                             if global_cache and isinstance(global_cache, dict):
                                 query_complexity_found = global_cache.get("query_complexity")
                                 if "needs_search" in global_cache:
                                     needs_search_found = global_cache.get("needs_search", True)
-                                print(f"[DEBUG] workflow_service: [5] Global cache 내용 - complexity={query_complexity_found}, needs_search={needs_search_found}")
-                                print(f"[DEBUG] workflow_service: [5] Global cache 전체 keys={list(global_cache.keys())[:10]}")
+                                self.logger.debug(f"[5] Global cache 내용 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                                self.logger.debug(f"[5] Global cache 전체 keys={list(global_cache.keys())[:10]}")
                                 if query_complexity_found:
-                                    print(f"[DEBUG] workflow_service: [5] ✅ Global cache에서 찾음 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                                    self.logger.debug(f"[5] ✅ Global cache에서 찾음 - complexity={query_complexity_found}, needs_search={needs_search_found}")
                             elif global_cache is None:
-                                print(f"[DEBUG] workflow_service: [5] Global cache is None")
+                                self.logger.debug(f"[5] Global cache is None")
                             else:
-                                print(f"[DEBUG] workflow_service: [5] Global cache is not dict: {type(global_cache)}")
+                                self.logger.debug(f"[5] Global cache is not dict: {type(global_cache)}")
                         except Exception as e:
-                            print(f"[DEBUG] workflow_service: [5] Global cache 확인 실패: {e}")
+                            self.logger.debug(f"[5] Global cache 확인 실패: {e}")
                             import traceback
-                            print(f"[DEBUG] workflow_service: [5] Exception details: {traceback.format_exc()}")
+                            self.logger.debug(f"[5] Exception details: {traceback.format_exc()}")
 
                     # 6. 전체 state 재귀 검색 (마지막 시도)
                     if not query_complexity_found:
-                        print(f"[DEBUG] workflow_service: [6] 재귀 검색 시작...")
+                        self.logger.debug(f"[6] 재귀 검색 시작...")
                         def find_in_dict(d, depth=0):
                             if depth > 3:  # 최대 깊이 제한
                                 return None, None
@@ -767,7 +785,7 @@ class LangGraphWorkflowService:
                         if found_c:
                             query_complexity_found = found_c
                             needs_search_found = found_n if found_n is not None else True
-                            print(f"[DEBUG] workflow_service: [6] 재귀 검색으로 찾음 - complexity={query_complexity_found}, needs_search={needs_search_found}")
+                            self.logger.debug(f"[6] 재귀 검색으로 찾음 - complexity={query_complexity_found}, needs_search={needs_search_found}")
 
                     # 찾은 값을 최상위 레벨에 명시적으로 저장
                     if query_complexity_found:
@@ -783,9 +801,9 @@ class LangGraphWorkflowService:
                         if isinstance(flat_result["metadata"], dict):
                             flat_result["metadata"]["query_complexity"] = query_complexity_found
                             flat_result["metadata"]["needs_search"] = needs_search_found
-                        print(f"[DEBUG] workflow_service: ✅ query_complexity 복원 완료 - {query_complexity_found}, needs_search={flat_result.get('needs_search')}")
+                        self.logger.debug(f"✅ query_complexity 복원 완료 - {query_complexity_found}, needs_search={flat_result.get('needs_search')}")
                     else:
-                        print(f"[DEBUG] workflow_service: ❌ query_complexity를 찾지 못함 (모든 경로 확인 완료)")
+                        self.logger.debug(f"❌ query_complexity를 찾지 못함 (모든 경로 확인 완료)")
 
                 # 최종 결과에 query가 없으면 보존된 초기 input에서 복원
                 if isinstance(flat_result, dict) and self._initial_input:
@@ -887,7 +905,7 @@ class LangGraphWorkflowService:
                             cached_steps = _global_search_results_cache["processing_steps"]
                             if isinstance(cached_steps, list) and len(cached_steps) > 0:
                                 processing_steps = cached_steps
-                                print(f"[DEBUG] workflow_service: Restored {len(processing_steps)} processing_steps from global cache")
+                                self.logger.debug(f"Restored {len(processing_steps)} processing_steps from global cache")
                     except (ImportError, AttributeError, TypeError):
                         pass
 
@@ -895,7 +913,7 @@ class LangGraphWorkflowService:
                 if (not processing_steps or (isinstance(processing_steps, list) and len(processing_steps) == 0)):
                     if tracked_processing_steps:
                         processing_steps = tracked_processing_steps
-                        print(f"[DEBUG] workflow_service: Using {len(processing_steps)} tracked processing_steps")
+                        self.logger.debug(f"Using {len(processing_steps)} tracked processing_steps")
 
                 if not isinstance(processing_steps, list):
                     processing_steps = []
@@ -975,7 +993,7 @@ class LangGraphWorkflowService:
         if "retrieved_docs" in flat_result:
             docs = flat_result.get("retrieved_docs", [])
             if isinstance(docs, list) and len(docs) > 0:
-                print(f"[DEBUG] workflow_service: Found retrieved_docs in top level: {len(docs)}")
+                self.logger.debug(f"Found retrieved_docs in top level: {len(docs)}")
                 return docs
 
         # 2. search 그룹에서 확인
@@ -983,7 +1001,7 @@ class LangGraphWorkflowService:
             search_group = flat_result["search"]
             docs = search_group.get("retrieved_docs", [])
             if isinstance(docs, list) and len(docs) > 0:
-                print(f"[DEBUG] workflow_service: Found retrieved_docs in search group: {len(docs)}")
+                self.logger.debug(f"Found retrieved_docs in search group: {len(docs)}")
                 return docs
 
         # 3. search.retrieved_docs가 없으면 search.merged_documents 확인
@@ -991,7 +1009,7 @@ class LangGraphWorkflowService:
             search_group = flat_result["search"]
             merged_docs = search_group.get("merged_documents", [])
             if isinstance(merged_docs, list) and len(merged_docs) > 0:
-                print(f"[DEBUG] workflow_service: Found merged_documents in search group (using as retrieved_docs): {len(merged_docs)}")
+                self.logger.debug(f"Found merged_documents in search group (using as retrieved_docs): {len(merged_docs)}")
                 return merged_docs
 
         # 4. global cache에서 확인 (마지막 시도)
@@ -1003,34 +1021,34 @@ class LangGraphWorkflowService:
                     cached_search = _global_search_results_cache["search"]
                     cached_docs = cached_search.get("retrieved_docs", [])
                     if isinstance(cached_docs, list) and len(cached_docs) > 0:
-                        print(f"[DEBUG] workflow_service: Found retrieved_docs in global cache search group: {len(cached_docs)}")
+                        self.logger.debug(f"Found retrieved_docs in global cache search group: {len(cached_docs)}")
                         return cached_docs
                     cached_merged = cached_search.get("merged_documents", [])
                     if isinstance(cached_merged, list) and len(cached_merged) > 0:
-                        print(f"[DEBUG] workflow_service: Found merged_documents in global cache search group: {len(cached_merged)}")
+                        self.logger.debug(f"Found merged_documents in global cache search group: {len(cached_merged)}")
                         return cached_merged
 
                     # semantic_results를 retrieved_docs로 변환 (retrieved_docs가 없는 경우)
                     cached_semantic = cached_search.get("semantic_results", [])
                     if isinstance(cached_semantic, list) and len(cached_semantic) > 0:
-                        print(f"[DEBUG] workflow_service: Converting semantic_results to retrieved_docs: {len(cached_semantic)}")
+                        self.logger.debug(f"Converting semantic_results to retrieved_docs: {len(cached_semantic)}")
                         # semantic_results는 이미 문서 형태이므로 그대로 사용
                         return cached_semantic
 
                 # 최상위 레벨에서 확인
                 cached_docs = _global_search_results_cache.get("retrieved_docs", [])
                 if isinstance(cached_docs, list) and len(cached_docs) > 0:
-                    print(f"[DEBUG] workflow_service: Found retrieved_docs in global cache top level: {len(cached_docs)}")
+                    self.logger.debug(f"Found retrieved_docs in global cache top level: {len(cached_docs)}")
                     return cached_docs
                 cached_merged = _global_search_results_cache.get("merged_documents", [])
                 if isinstance(cached_merged, list) and len(cached_merged) > 0:
-                    print(f"[DEBUG] workflow_service: Found merged_documents in global cache top level: {len(cached_merged)}")
+                    self.logger.debug(f"Found merged_documents in global cache top level: {len(cached_merged)}")
                     return cached_merged
 
                 # semantic_results를 retrieved_docs로 변환 (최상위 레벨)
                 cached_semantic = _global_search_results_cache.get("semantic_results", [])
                 if isinstance(cached_semantic, list) and len(cached_semantic) > 0:
-                    print(f"[DEBUG] workflow_service: Converting semantic_results to retrieved_docs (top level): {len(cached_semantic)}")
+                    self.logger.debug(f"Converting semantic_results to retrieved_docs (top level): {len(cached_semantic)}")
                     return cached_semantic
         except (ImportError, AttributeError, TypeError):
             pass  # global cache를 사용할 수 없으면 무시
@@ -1040,17 +1058,17 @@ class LangGraphWorkflowService:
             search_group = flat_result["search"]
             semantic_results = search_group.get("semantic_results", [])
             if isinstance(semantic_results, list) and len(semantic_results) > 0:
-                print(f"[DEBUG] workflow_service: Converting semantic_results to retrieved_docs from search group: {len(semantic_results)}")
+                self.logger.debug(f"Converting semantic_results to retrieved_docs from search group: {len(semantic_results)}")
                 return semantic_results
 
         # 최상위 레벨의 semantic_results 확인
         if "semantic_results" in flat_result:
             semantic_results = flat_result.get("semantic_results", [])
             if isinstance(semantic_results, list) and len(semantic_results) > 0:
-                print(f"[DEBUG] workflow_service: Converting semantic_results to retrieved_docs from top level: {len(semantic_results)}")
+                self.logger.debug(f"Converting semantic_results to retrieved_docs from top level: {len(semantic_results)}")
                 return semantic_results
 
-        print(f"[DEBUG] workflow_service: No retrieved_docs found - keys={list(flat_result.keys())[:10]}")
+        self.logger.debug(f"No retrieved_docs found - keys={list(flat_result.keys())[:10]}")
         return []
 
     async def resume_session(self, session_id: str, query: str) -> Dict[str, Any]:

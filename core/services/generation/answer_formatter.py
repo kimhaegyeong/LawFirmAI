@@ -172,8 +172,6 @@ class AnswerFormatter:
                 text = first_non_brace[-1] if first_non_brace else text
             # 연속 점/불릿 수축
             text = re.sub(r"(\u2022\s*){2,}", "• ", text)
-            # 잘못된 띄어쓰기(한 글자 사이) 간단 수선: '아 닙니다' → '아닙니다' 등
-            text = re.sub(r"([가-힣])\s+([가-힣])", r"\1\2", text)
             # 과도한 연속 공백 정리
             text = re.sub(r"\s{3,}", "  ", text)
             return text
