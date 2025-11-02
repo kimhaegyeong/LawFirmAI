@@ -23,7 +23,7 @@ from source.services.feedback_system import (
     get_feedback_analyzer,
     get_feedback_collector,
 )
-from source.services.hybrid_search_engine import HybridSearchEngine
+from source.services.hybrid_search_engine_v2 import HybridSearchEngineV2
 from source.services.improved_answer_generator import ImprovedAnswerGenerator
 from source.services.legal_basis_integration_service import LegalBasisIntegrationService
 from source.services.performance_monitoring import (
@@ -116,7 +116,7 @@ class LegalBasisRequest(BaseModel):
 class LegalBasisResponse(BaseModel):
     success: bool
     original_answer: str
-    enhanced_answer: str
+    answer: str
     structured_answer: str
     legal_basis: Dict[str, Any]
     confidence: float
@@ -231,9 +231,10 @@ def setup_routes(app, config: Config):
     # MLEnhancedRAGService 제거됨 - chat_service 사용
     ml_search_service = MLEnhancedSearchService(config, database, vector_store, model_manager)
 
-    # Initialize intelligent chat services
+    # Initialize intelligent chat services (lawfirm_v2_faiss.index 사용)
     question_classifier = QuestionClassifier()
-    hybrid_search_engine = HybridSearchEngine()
+    db_path = config.database_path
+    hybrid_search_engine = HybridSearchEngineV2(db_path=db_path)
     prompt_template_manager = PromptTemplateManager()
     confidence_calculator = ConfidenceCalculator()
     context_builder = ContextBuilder()
@@ -863,7 +864,7 @@ def setup_routes(app, config: Config):
             return LegalBasisResponse(
                 success=True,
                 original_answer=result["original_answer"],
-                enhanced_answer=result["enhanced_answer"],
+                answer=result.get("enhanced_answer", result.get("structured_answer", result["original_answer"])),
                 structured_answer=result["structured_answer"],
                 legal_basis=result["legal_basis"],
                 confidence=result["confidence"],
@@ -877,7 +878,7 @@ def setup_routes(app, config: Config):
             return LegalBasisResponse(
                 success=False,
                 original_answer=request.answer,
-                enhanced_answer=request.answer,
+                answer=request.answer,
                 structured_answer=request.answer,
                 legal_basis={"citations": {}, "validation": {}, "summary": {}},
                 confidence=0.0,
@@ -975,7 +976,7 @@ def setup_routes(app, config: Config):
             return {
                 "success": result["success"],
                 "original_answer": result["original_answer"],
-                "enhanced_answer": result["enhanced_answer"],
+                "answer": result.get("enhanced_answer", result.get("structured_answer", result["original_answer"])),
                 "legal_citations": result.get("legal_citations", {}),
                 "validation": result.get("validation", {}),
                 "confidence": result.get("confidence", 0.0),
