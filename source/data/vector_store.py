@@ -96,6 +96,12 @@ class LegalVectorStore:
         self._model_loaded = False
         self._model_lock = threading.Lock()
 
+        # 모델 계열 플래그 (BGE 계열은 encode 호출 시 옵션이 다름)
+        try:
+            self.is_bge_model = ("bge" in str(self.model_name).lower())
+        except Exception:
+            self.is_bge_model = False
+
         # 인덱스 관련
         self.index = None
         self.document_metadata = []
@@ -251,6 +257,42 @@ class LegalVectorStore:
 
         self._check_memory_usage()
         return self.index
+
+    def reset_store(self, index_path: str = "data/embeddings/legal_vector_index", delete_disk: bool = True) -> None:
+        """벡터 스토어 초기화 및(선택) 디스크 파일 삭제
+
+        Args:
+            index_path: 저장에 사용하는 기본 인덱스 경로(확장자 제외)
+            delete_disk: 디스크의 .faiss / .json 파일을 삭제할지 여부
+        """
+        try:
+            # 메모리 내 상태 초기화
+            with self._index_lock:
+                self.index = None
+                self._index_loaded = False
+                self.document_metadata = []
+                self.document_texts = []
+
+            # 디스크 파일 삭제
+            if delete_disk:
+                try:
+                    path = Path(index_path)
+                    faiss_file = path.with_suffix('.faiss')
+                    json_file = path.with_suffix('.json')
+                    if faiss_file.exists():
+                        faiss_file.unlink()
+                    if json_file.exists():
+                        json_file.unlink()
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete index files: {e}")
+
+            # 빈 인덱스로 재초기화
+            self._initialize_index()
+            self.logger.info("Vector store has been reset (memory cleared and index re-initialized)")
+
+        except Exception as e:
+            self.logger.error(f"Failed to reset vector store: {e}")
+            raise
 
     def generate_embeddings(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         """텍스트 리스트에 대한 임베딩 생성 (배치 처리)"""
