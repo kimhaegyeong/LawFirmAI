@@ -6,9 +6,11 @@
 
 import argparse
 import gc
+import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -101,6 +103,9 @@ class ArticleVectorEmbedder:
             'embedding_errors': []
         }
 
+        # 진행 파일 경로
+        self.progress_file_path = Path("data/embeddings/article_embeddings_progress.json")
+
     def create_article_embeddings(self) -> Dict[str, Any]:
         """메모리 최적화된 벡터 임베딩 생성"""
         self.logger.info("조문별 벡터 임베딩 생성 시작 (메모리 최적화)")
@@ -133,6 +138,13 @@ class ArticleVectorEmbedder:
                 self.logger.info(f"배치 {self.start_batch}부터 {end_batch}까지 처리 (전체)")
 
             self.logger.info(f"배치 크기: {self.batch_size}, 시작 인덱스: {start_index}")
+
+            # 초기 진행 상황 기록
+            self._save_progress(
+                last_completed_batch=self.start_batch - 1,
+                total_batches=total_batches,
+                progress_percent=0.0
+            )
 
             for batch_num in range(self.start_batch, end_batch + 1):
                 current_start_index = (batch_num - 1) * self.batch_size
@@ -169,6 +181,13 @@ class ArticleVectorEmbedder:
 
                 else:
                     self.logger.error(f"❌ 배치 {batch_num} 실패")
+                    # 실패 시점의 진행 상태 저장 후 종료
+                    self._save_progress(
+                        last_completed_batch=batch_num - 1,
+                        total_batches=total_batches,
+                        progress_percent=((batch_num - self.start_batch) / (end_batch - self.start_batch + 1) * 100) if (end_batch - self.start_batch + 1) > 0 else 0.0,
+                        error_message=f"Batch {batch_num} failed"
+                    )
                     break
 
             # 최종 메모리 상태 로깅
@@ -179,6 +198,13 @@ class ArticleVectorEmbedder:
             if memory_saved > 0:
                 self.logger.info(f"메모리 절약: {memory_saved:.2f}MB")
 
+            # 최종 진행 상황 기록
+            self._save_progress(
+                last_completed_batch=min(end_batch, self.start_batch - 1 + (self.stats['processed_articles'] + self.batch_size - 1) // self.batch_size),
+                total_batches=total_batches,
+                progress_percent=100.0 if self.stats['processed_articles'] >= total_count else (self.stats['processed_articles'] / max(total_count, 1) * 100)
+            )
+
             # 통계 출력
             self._print_statistics()
 
@@ -187,6 +213,38 @@ class ArticleVectorEmbedder:
         except Exception as e:
             self.logger.error(f"벡터 임베딩 생성 실패: {e}")
             raise
+
+    def _save_progress(self, last_completed_batch: int, total_batches: int, progress_percent: float, error_message: str | None = None):
+        """현재 진행 상황을 JSON 파일로 저장"""
+        try:
+            # 디렉터리 보장
+            self.progress_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            progress: Dict[str, Any] = {
+                "script": "create_article_embeddings",
+                "start_batch": self.start_batch,
+                "batch_size": self.batch_size,
+                "last_completed_batch": max(last_completed_batch, 0),
+                "total_batches": max(total_batches, 0),
+                "processed_articles": self.stats.get('processed_articles', 0),
+                "total_articles": self.stats.get('total_articles', 0),
+                "progress_percent": round(progress_percent, 2),
+                "updated_at": datetime.now().isoformat()
+            }
+
+            if error_message:
+                progress["last_error"] = error_message
+
+            with open(self.progress_file_path, 'w', encoding='utf-8') as f:
+                json.dump(progress, f, ensure_ascii=False, indent=2)
+
+            # 간략 로깅
+            self.logger.info(
+                f"진행 저장: batch {progress['last_completed_batch']}/{progress['total_batches']} "
+                f"({progress['progress_percent']}%), articles {progress['processed_articles']}/{progress['total_articles']}"
+            )
+        except Exception as e:
+            self.logger.warning(f"진행 상황 저장 실패: {e}")
 
     def _get_total_articles_count(self) -> int:
         """전체 조문 개수 조회 (메모리 절약)"""
@@ -439,6 +497,8 @@ def main():
                        help='GPU 사용 (기본값: False, AMD GPU는 ROCm 지원 필요)')
     parser.add_argument('--use-cpu', action='store_true', default=False,
                        help='CPU 강제 사용 (AMD GPU 사용자 권장)')
+    parser.add_argument('--reset', action='store_true', default=False,
+                       help='시작 전에 벡터 스토어 및 인덱스를 초기화')
 
     args = parser.parse_args()
 
@@ -458,6 +518,19 @@ def main():
         use_gpu=use_gpu,
         max_batches=args.max_batches
     )
+
+    # 선택적 초기화 수행
+    if args.reset:
+        try:
+            # 기본 저장 경로 기준 초기화
+            embedder.vector_store.reset_store(index_path="data/embeddings/legal_vector_index", delete_disk=True)
+            # 진행 파일도 초기화
+            progress_path = Path("data/embeddings/article_embeddings_progress.json")
+            if progress_path.exists():
+                progress_path.unlink()
+            print("초기화 완료: 인덱스 및 진행 파일 삭제 후 재시작")
+        except Exception as e:
+            print(f"초기화 실패: {e}")
     stats = embedder.create_article_embeddings()
 
     print(f"\n🎉 조문별 벡터 임베딩 생성 완료!")
