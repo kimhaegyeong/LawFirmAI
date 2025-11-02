@@ -87,6 +87,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                     "merge_and_rerank_with_keyword_weights",
                     "filter_and_validate_results",
                     "update_search_metadata",
+                    "process_search_results_combined",
                     "prepare_document_context_for_prompt",
                     "generate_answer_enhanced"
                 ]
@@ -574,6 +575,50 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
 
                         print(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}, is_list={isinstance(final_retrieved_docs, list)}, has_length={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 'N/A'}")
 
+                        # 개선 2.1: process_search_results_combined 실행 후 retrieved_docs 전역 캐시 저장 확인
+                        if node_name == "process_search_results_combined":
+                            print(f"[DEBUG] node_wrappers ({node_name}): process_search_results_combined 실행 완료 - result 구조 분석 중...", flush=True)
+
+                            # result 전체 구조 출력
+                            if isinstance(result, dict):
+                                result_keys = list(result.keys())
+                                print(f"[DEBUG] node_wrappers ({node_name}): result keys: {result_keys}", flush=True)
+
+                                # retrieved_docs 찾기 시도 (모든 가능한 경로 확인)
+                                possible_paths = {
+                                    "top_level": result.get("retrieved_docs"),
+                                    "search_group": result.get("search", {}).get("retrieved_docs") if isinstance(result.get("search"), dict) else None,
+                                    "common_group": result.get("common", {}).get("search", {}).get("retrieved_docs") if isinstance(result.get("common"), dict) and isinstance(result.get("common").get("search"), dict) else None,
+                                    "input_group": result.get("input", {}).get("retrieved_docs") if isinstance(result.get("input"), dict) else None,
+                                    "merged_documents_top": result.get("merged_documents"),
+                                    "merged_documents_search": result.get("search", {}).get("merged_documents") if isinstance(result.get("search"), dict) else None,
+                                }
+
+                                found_path = None
+                                found_docs = None
+                                for path_name, docs in possible_paths.items():
+                                    if docs and isinstance(docs, list) and len(docs) > 0:
+                                        found_path = path_name
+                                        found_docs = docs
+                                        print(f"[DEBUG] node_wrappers ({node_name}): ✅ retrieved_docs를 {path_name}에서 찾음 - 개수: {len(docs)}", flush=True)
+                                        break
+
+                                if found_docs:
+                                    final_retrieved_docs = found_docs
+                                else:
+                                    print(f"[DEBUG] node_wrappers ({node_name}): ❌ retrieved_docs를 찾을 수 없음 - 모든 경로 확인 완료", flush=True)
+                                    # 각 경로의 상세 정보 출력
+                                    for path_name, docs in possible_paths.items():
+                                        docs_type = type(docs).__name__
+                                        docs_len = len(docs) if isinstance(docs, list) else 'N/A'
+                                        docs_sample = docs[:1] if isinstance(docs, list) and len(docs) > 0 else None
+                                        print(f"[DEBUG] node_wrappers ({node_name}):   - {path_name}: type={docs_type}, len={docs_len}, sample={docs_sample}", flush=True)
+                            else:
+                                print(f"[DEBUG] node_wrappers ({node_name}): ⚠️ result가 dict가 아님 - type: {type(result).__name__}", flush=True)
+
+                            # final_retrieved_docs 현재 상태 확인
+                            print(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}", flush=True)
+
                         if isinstance(final_retrieved_docs, list) and len(final_retrieved_docs) > 0:
                             # global 선언은 wrapper 함수 시작 부분에 이미 있음
                             # 전역 캐시 초기화 (없으면 생성)
@@ -601,9 +646,15 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 _global_search_results_cache["search"]["retrieved_docs"] = final_retrieved_docs
                                 _global_search_results_cache["search"]["merged_documents"] = final_retrieved_docs
 
-                            print(f"[DEBUG] node_wrappers ({node_name}): Saved retrieved_docs to global cache - count={len(final_retrieved_docs)}, cache has search group={bool(_global_search_results_cache.get('search'))}")
+                            print(f"[DEBUG] node_wrappers ({node_name}): ✅ Saved retrieved_docs to global cache - count={len(final_retrieved_docs)}, cache has search group={bool(_global_search_results_cache.get('search'))}")
+                            # 개선 3: 저장 후 검증
+                            cached_count = len(_global_search_results_cache.get("retrieved_docs", []))
+                            cached_search_count = len(_global_search_results_cache.get("search", {}).get("retrieved_docs", []))
+                            print(f"[DEBUG] node_wrappers ({node_name}): 전역 캐시 검증 - 최상위: {cached_count}, search 그룹: {cached_search_count}")
                         else:
-                            print(f"[DEBUG] node_wrappers ({node_name}): WARNING - result has no retrieved_docs or merged_documents in search group or top level")
+                            print(f"[DEBUG] node_wrappers ({node_name}): ⚠️ WARNING - result has no retrieved_docs or merged_documents in search group or top level")
+                            if node_name == "process_search_results_combined":
+                                print(f"[DEBUG] node_wrappers ({node_name}): ❌ process_search_results_combined에서 retrieved_docs가 저장되지 않았습니다!")
 
                     # execute_searches_parallel의 result 처리 (이전 코드 유지)
                     if node_name == "execute_searches_parallel":

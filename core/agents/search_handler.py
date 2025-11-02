@@ -148,6 +148,23 @@ class SearchHandler:
                     enhanced_query, category, limit=search_limit, force_fts=True
                 )
 
+                # 결과가 없으면 원본 쿼리로도 검색 시도 (폴백)
+                if len(category_docs) == 0 and enhanced_query != query:
+                    self.logger.debug(f"No results with enhanced query, trying original query for {category}")
+                    category_docs = self.data_connector.search_documents(
+                        query, category, limit=search_limit, force_fts=True
+                    )
+
+                # 여전히 결과가 없으면 키워드만 추출하여 검색 시도
+                if len(category_docs) == 0 and extracted_keywords:
+                    safe_keywords = [kw for kw in extracted_keywords[:5] if isinstance(kw, str) and len(kw) > 1]
+                    if safe_keywords:
+                        keyword_only_query = " ".join(safe_keywords)
+                        self.logger.debug(f"No results with full query, trying keywords only: {keyword_only_query}")
+                        category_docs = self.data_connector.search_documents(
+                            keyword_only_query, category, limit=search_limit, force_fts=True
+                        )
+
                 for doc in category_docs:
                     doc['search_type'] = 'keyword'
                     doc['category'] = category

@@ -536,6 +536,32 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         },
         required_state_groups={"input", "search"},
         output_state_groups={"search", "common"}
+    ),
+
+    "process_search_results_combined": NodeIOSpec(
+        node_name="process_search_results_combined",
+        category=NodeCategory.SEARCH,
+        description="검색 결과 처리 통합 노드 (6개 노드를 1개로 병합)",
+        required_input={
+            "semantic_results": "의미적 검색 결과",
+            "keyword_results": "키워드 검색 결과"
+        },
+        optional_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형",
+            "optimized_queries": "최적화된 검색 쿼리",
+            "search_params": "검색 파라미터",
+            "extracted_keywords": "추출된 키워드",
+            "legal_field": "법률 분야"
+        },
+        output={
+            "retrieved_docs": "검색된 문서 (최종 결과)",
+            "merged_documents": "병합된 문서",
+            "search_metadata": "검색 메타데이터",
+            "search_quality_evaluation": "검색 품질 평가 결과"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"search", "common"}  # search와 common 그룹에 저장하여 보존
     )
 }
 

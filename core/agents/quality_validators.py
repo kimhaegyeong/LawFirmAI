@@ -363,6 +363,151 @@ class AnswerValidator:
                 "missing_key_info": []
             }
 
+    @staticmethod
+    def validate_answer_source_verification(
+        answer: str,
+        retrieved_docs: List[Dict[str, Any]],
+        query: str
+    ) -> Dict[str, Any]:
+        """
+        답변의 내용이 검색된 문서에 기반하는지 검증 (Hallucination 방지)
+
+        Args:
+            answer: 검증할 답변 텍스트
+            retrieved_docs: 검색된 문서 목록
+            query: 원본 질의
+
+        Returns:
+            검증 결과 딕셔너리
+            {
+                "is_grounded": bool,
+                "grounding_score": float,
+                "unverified_sections": List[str],
+                "source_coverage": float,
+                "needs_review": bool
+            }
+        """
+        import re
+        from difflib import SequenceMatcher
+
+        if not answer or not retrieved_docs:
+            return {
+                "is_grounded": False,
+                "grounding_score": 0.0,
+                "unverified_sections": [answer] if answer else [],
+                "source_coverage": 0.0,
+                "needs_review": True,
+                "error": "답변 또는 검색 결과가 없습니다."
+            }
+
+        # 1. 검색된 문서에서 모든 텍스트 추출
+        source_texts = []
+        for doc in retrieved_docs:
+            if isinstance(doc, dict):
+                content = (
+                    doc.get("content") or
+                    doc.get("text") or
+                    doc.get("content_text") or
+                    ""
+                )
+                if content and len(content.strip()) > 50:
+                    source_texts.append(content.lower())
+
+        if not source_texts:
+            return {
+                "is_grounded": False,
+                "grounding_score": 0.0,
+                "unverified_sections": [],
+                "source_coverage": 0.0,
+                "needs_review": True,
+                "error": "검색된 문서의 내용이 없습니다."
+            }
+
+        # 2. 답변을 문장 단위로 분리
+        answer_sentences = re.split(r'[.!?。！？]\s+', answer)
+        answer_sentences = [s.strip() for s in answer_sentences if len(s.strip()) > 20]
+
+        # 3. 각 문장이 검색된 문서에 기반하는지 검증
+        verified_sentences = []
+        unverified_sentences = []
+
+        for sentence in answer_sentences:
+            sentence_lower = sentence.lower()
+
+            # 문장의 핵심 키워드 추출 (불용어 제거)
+            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
+            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+
+            if not sentence_words:
+                continue
+
+            # 각 소스 텍스트와 유사도 계산
+            max_similarity = 0.0
+            best_match_source = None
+            matched_keywords_count = 0
+
+            for source_text in source_texts:
+                # 키워드 매칭 점수
+                matched_keywords = sum(1 for word in sentence_words if word in source_text)
+                keyword_score = matched_keywords / len(sentence_words) if sentence_words else 0.0
+
+                # 문장 유사도 (SequenceMatcher 사용)
+                similarity = SequenceMatcher(None, sentence_lower[:100], source_text[:1000]).ratio()
+
+                # 종합 점수 (키워드 매칭 + 유사도)
+                combined_score = (keyword_score * 0.6) + (similarity * 0.4)
+
+                if combined_score > max_similarity:
+                    max_similarity = combined_score
+                    matched_keywords_count = matched_keywords
+                    best_match_source = source_text[:100]  # 디버깅용
+
+            # 검증 기준: 30% 이상 유사하거나 핵심 키워드 50% 이상 매칭
+            keyword_coverage = matched_keywords_count / len(sentence_words) if sentence_words else 0.0
+            if max_similarity >= 0.3 or keyword_coverage >= 0.5:
+                verified_sentences.append({
+                    "sentence": sentence,
+                    "similarity": max_similarity,
+                    "source_preview": best_match_source
+                })
+            else:
+                # 법령 인용이나 일반적인 면책 조항은 제외
+                if not (re.search(r'\[법령:\s*[^\]]+\]', sentence) or
+                       re.search(r'본\s*답변은\s*일반적인', sentence) or
+                       re.search(r'변호사와\s*직접\s*상담', sentence)):
+                    unverified_sentences.append({
+                        "sentence": sentence[:100],
+                        "similarity": max_similarity,
+                        "keywords": sentence_words[:5],
+                        "keyword_coverage": keyword_coverage
+                    })
+
+        # 4. 종합 검증 점수 계산
+        total_sentences = len(answer_sentences)
+        verified_count = len(verified_sentences)
+
+        grounding_score = verified_count / total_sentences if total_sentences > 0 else 0.0
+        source_coverage = len(set([s["source_preview"] for s in verified_sentences if s.get("source_preview")])) / len(source_texts) if source_texts else 0.0
+
+        # 5. 검증 통과 기준: 80% 이상 문장이 검증됨
+        is_grounded = grounding_score >= 0.8
+
+        # 6. 신뢰도 조정 (검증되지 않은 문장이 많으면 신뢰도 감소)
+        confidence_penalty = len(unverified_sentences) * 0.05  # 문장당 5% 감소
+
+        return {
+            "is_grounded": is_grounded,
+            "grounding_score": grounding_score,
+            "verified_sentences": verified_sentences[:5],  # 샘플
+            "unverified_sentences": unverified_sentences,
+            "unverified_count": len(unverified_sentences),
+            "source_coverage": source_coverage,
+            "needs_review": not is_grounded or len(unverified_sentences) > 3,
+            "confidence_penalty": min(confidence_penalty, 0.3),  # 최대 30% 감소
+            "total_sentences": total_sentences,
+            "verified_count": verified_count
+        }
+
 
 class SearchValidator:
     """검색 품질 검증"""
