@@ -36,11 +36,11 @@ class QuestionClassification:
 
 class QuestionClassifier:
     """질문 유형 분류기"""
-    
+
     def __init__(self):
         """질문 분류기 초기화"""
         self.logger = logging.getLogger(__name__)
-        
+
         # 질문 유형별 키워드 패턴
         self.question_patterns = {
             QuestionType.PRECEDENT_SEARCH: {
@@ -58,7 +58,7 @@ class QuestionClassifier:
                 "law_weight": 0.2,
                 "precedent_weight": 0.8
             },
-            
+
             QuestionType.LAW_INQUIRY: {
                 "keywords": [
                     "법률", "조문", "법령", "규정", "법조문", "법률해석", "법적근거",
@@ -74,7 +74,7 @@ class QuestionClassifier:
                 "law_weight": 0.8,
                 "precedent_weight": 0.2
             },
-            
+
             QuestionType.LEGAL_ADVICE: {
                 "keywords": [
                     "조언", "상담", "해결방법", "어떻게", "해야", "방법", "절차",
@@ -90,7 +90,7 @@ class QuestionClassifier:
                 "law_weight": 0.5,
                 "precedent_weight": 0.5
             },
-            
+
             QuestionType.PROCEDURE_GUIDE: {
                 "keywords": [
                     "절차", "신청", "제출", "서류", "기간", "비용", "처리",
@@ -106,7 +106,7 @@ class QuestionClassifier:
                 "law_weight": 0.6,
                 "precedent_weight": 0.4
             },
-            
+
             QuestionType.TERM_EXPLANATION: {
                 "keywords": [
                     "의미", "정의", "뜻", "개념", "용어", "해설", "설명",
@@ -122,7 +122,7 @@ class QuestionClassifier:
                 "law_weight": 0.7,
                 "precedent_weight": 0.3
             },
-            
+
             QuestionType.GENERAL_QUESTION: {
                 "keywords": [
                     "질문", "궁금", "알고", "싶", "문의", "확인", "찾아"
@@ -137,88 +137,82 @@ class QuestionClassifier:
                 "precedent_weight": 0.4
             }
         }
-        
-        # 법률 분야별 키워드
+
+        # 법률 분야별 키워드 (현재 지원 도메인만)
+        # 지원 도메인: 민사법, 형사법, 행정법, 지식재산권법
         self.legal_domains = {
-            "민사": ["계약", "손해배상", "임대차", "상속", "이혼", "부동산", "채권", "채무"],
-            "형사": ["범죄", "형벌", "벌금", "징역", "교통사고", "절도", "사기", "폭행"],
-            "가사": ["이혼", "양육", "위자료", "재산분할", "친권", "양육비"],
-            "노동": ["근로", "임금", "해고", "퇴직금", "근로계약", "노동조합"],
-            "행정": ["허가", "신고", "행정처분", "행정소송", "공무원"],
-            "상사": ["회사", "주식", "법인", "상법", "회사법", "상행위"],
-            "금융": ["은행", "보험", "증권", "금융거래", "대출", "예금"],
-            "지적재산": ["특허", "상표", "저작권", "디자인", "영업비밀"],
-            "세무": ["세금", "소득세", "법인세", "부가가치세", "세무조사"],
-            "환경": ["환경오염", "환경영향평가", "환경법", "대기오염", "수질오염"],
-            "의료": ["의료사고", "의료법", "의사", "병원", "의료진", "의료기관"]
+            "민사": ["계약", "손해배상", "임대차", "상속", "부동산", "채권", "채무", "민법"],
+            "형사": ["범죄", "형벌", "벌금", "징역", "교통사고", "절도", "사기", "폭행", "형법"],
+            "행정": ["허가", "신고", "행정처분", "행정소송", "행정심판", "공무원", "행정법"],
+            "지적재산": ["특허", "상표", "저작권", "디자인", "영업비밀", "지적재산권", "지식재산권"]
         }
-    
+
     def classify_question(self, question: str) -> QuestionClassification:
         """
         질문 분류
-        
+
         Args:
             question: 사용자 질문
-            
+
         Returns:
             QuestionClassification: 분류 결과
         """
         try:
             self.logger.info(f"Classifying question: {question[:50]}...")
-            
+
             # 질문 전처리
             processed_question = self._preprocess_question(question)
-            
+
             # 각 질문 유형별 점수 계산
             scores = {}
             matched_keywords = {}
             matched_patterns = {}
-            
+
             for question_type, config in self.question_patterns.items():
                 score = 0
                 keywords = []
                 patterns = []
-                
+
                 # 키워드 매칭
                 for keyword in config["keywords"]:
                     if keyword in processed_question:
                         score += 1
                         keywords.append(keyword)
-                
+
                 # 패턴 매칭
                 for pattern in config["patterns"]:
                     if re.search(pattern, processed_question):
                         score += 2  # 패턴 매칭은 더 높은 점수
                         patterns.append(pattern)
-                
+
                 scores[question_type] = score
                 matched_keywords[question_type] = keywords
                 matched_patterns[question_type] = patterns
-            
+
             # 최고 점수 질문 유형 선택
             best_type = max(scores, key=scores.get)
             best_score = scores[best_type]
-            
+
             # 신뢰도 계산
             total_possible_score = len(self.question_patterns[best_type]["keywords"]) + len(self.question_patterns[best_type]["patterns"]) * 2
             confidence = min(best_score / total_possible_score, 1.0) if total_possible_score > 0 else 0.0
-            
+
             # 신뢰도가 낮으면 일반 질문으로 분류
             if confidence < 0.3:
                 best_type = QuestionType.GENERAL_QUESTION
                 confidence = 0.5
-            
+
             # 법률/판례 가중치 결정
             config = self.question_patterns[best_type]
             law_weight = config["law_weight"]
             precedent_weight = config["precedent_weight"]
-            
+
             # 법률 분야별 가중치 조정
             domain_weights = self._get_domain_weights(processed_question)
             if domain_weights:
                 law_weight = max(law_weight, domain_weights["law"])
                 precedent_weight = max(precedent_weight, domain_weights["precedent"])
-            
+
             result = QuestionClassification(
                 question_type=best_type,
                 law_weight=law_weight,
@@ -227,12 +221,12 @@ class QuestionClassifier:
                 keywords=matched_keywords[best_type],
                 patterns=matched_patterns[best_type]
             )
-            
+
             self.logger.info(f"Question classified as: {best_type.value} "
                            f"(confidence: {confidence:.2f}, law_weight: {law_weight}, precedent_weight: {precedent_weight})")
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"Error classifying question: {e}")
             # 오류 시 기본 분류 반환
@@ -244,64 +238,64 @@ class QuestionClassifier:
                 keywords=[],
                 patterns=[]
             )
-    
+
     def _preprocess_question(self, question: str) -> str:
         """질문 전처리"""
         try:
             # 소문자 변환
             processed = question.lower()
-            
+
             # 특수문자 제거 (한글, 영문, 숫자, 공백만 유지)
             processed = re.sub(r'[^\w\s가-힣]', ' ', processed)
-            
+
             # 연속된 공백 제거
             processed = re.sub(r'\s+', ' ', processed).strip()
-            
+
             return processed
-            
+
         except Exception as e:
             self.logger.error(f"Error preprocessing question: {e}")
             return question
-    
+
     def _get_domain_weights(self, question: str) -> Optional[Dict[str, float]]:
         """법률 분야별 가중치 계산"""
         try:
             domain_scores = {}
-            
+
             for domain, keywords in self.legal_domains.items():
                 score = 0
                 for keyword in keywords:
                     if keyword in question:
                         score += 1
-                
+
                 if score > 0:
                     domain_scores[domain] = score
-            
+
             if not domain_scores:
                 return None
-            
+
             # 가장 높은 점수의 분야 선택
             best_domain = max(domain_scores, key=domain_scores.get)
             best_score = domain_scores[best_domain]
-            
-            # 분야별 특성에 따른 가중치 조정
-            if best_domain in ["민사", "형사", "가사"]:
-                # 민사/형사/가사는 판례가 중요
+
+            # 분야별 특성에 따른 가중치 조정 (지원 도메인만)
+            if best_domain in ["민사", "형사"]:
+                # 민사/형사는 판례가 중요
                 return {"law": 0.4, "precedent": 0.6}
-            elif best_domain in ["노동", "행정", "상사"]:
-                # 노동/행정/상사는 법률이 중요
+            elif best_domain == "행정":
+                # 행정은 법률이 중요
                 return {"law": 0.7, "precedent": 0.3}
-            elif best_domain in ["금융", "지적재산", "세무"]:
-                # 금융/지적재산/세무는 균형
+            elif best_domain == "지적재산":
+                # 지적재산은 균형
                 return {"law": 0.5, "precedent": 0.5}
             else:
-                # 기타 분야는 기본값
+                # 기본값 (지원되지 않는 도메인은 기본 가중치)
                 return {"law": 0.5, "precedent": 0.5}
-                
+
         except Exception as e:
             self.logger.error(f"Error calculating domain weights: {e}")
             return None
-    
+
     def get_question_type_description(self, question_type: QuestionType) -> str:
         """질문 유형 설명 반환"""
         descriptions = {
@@ -313,7 +307,7 @@ class QuestionClassifier:
             QuestionType.GENERAL_QUESTION: "일반 질문 - 기타 법률 관련 일반적인 질문"
         }
         return descriptions.get(question_type, "알 수 없는 질문 유형")
-    
+
     def get_supported_question_types(self) -> List[Dict[str, Any]]:
         """지원하는 질문 유형 목록 반환"""
         try:
@@ -328,7 +322,7 @@ class QuestionClassifier:
                     "precedent_weight": config["precedent_weight"]
                 })
             return types
-            
+
         except Exception as e:
             self.logger.error(f"Error getting supported question types: {e}")
             return []
@@ -338,7 +332,7 @@ class QuestionClassifier:
 def test_question_classifier():
     """질문 분류기 테스트"""
     classifier = QuestionClassifier()
-    
+
     # 테스트 질문들
     test_questions = [
         "손해배상 관련 판례를 찾아주세요",
@@ -348,15 +342,15 @@ def test_question_classifier():
         "계약 해제 방법을 조언해주세요",
         "법률에 대해 궁금한 것이 있습니다"
     ]
-    
+
     print("=== 질문 분류기 테스트 ===")
-    
+
     for question in test_questions:
         print(f"\n질문: {question}")
-        
+
         try:
             result = classifier.classify_question(question)
-            
+
             print(f"분류 결과:")
             print(f"- 질문 유형: {result.question_type.value}")
             print(f"- 설명: {classifier.get_question_type_description(result.question_type)}")
@@ -365,10 +359,10 @@ def test_question_classifier():
             print(f"- 판례 가중치: {result.precedent_weight}")
             print(f"- 매칭된 키워드: {result.keywords}")
             print(f"- 매칭된 패턴: {result.patterns}")
-            
+
         except Exception as e:
             print(f"분류 실패: {e}")
-    
+
     # 지원하는 질문 유형 목록
     print(f"\n=== 지원하는 질문 유형 ===")
     supported_types = classifier.get_supported_question_types()

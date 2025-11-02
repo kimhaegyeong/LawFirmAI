@@ -105,61 +105,155 @@ class SemanticSearchEngine:
             List[Dict[str, Any]]: 검색 결과
         """
         try:
-            if self.index is None or self.model is None or not self.metadata:
-                self.logger.debug("Vector index or model not available, falling back to keyword search")
-                return self._fallback_keyword_search(query, k)
+            return self._search_hybrid(query, k)
+        except Exception as e:
+            self.logger.error(f"Error in hybrid search: {e}")
+            return self._fallback_keyword_search(query, k)
 
-            # 쿼리 벡터화
-            query_embedding = self.model.encode([query])
-            query_embedding = query_embedding.astype('float32')
+    def _search_hybrid(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """하이브리드(BM25 유사 + 벡터) 검색 파이프라인"""
+        # 쿼리 리라이트
+        rewrites = self._rewrite_query(query)
+        unique_rewrites = list(dict.fromkeys([query] + rewrites))[:5]
 
-            # FAISS 검색 수행
-            scores, indices = self.index.search(query_embedding, k)
+        # 키워드 후보 수집
+        keyword_candidates: List[Dict[str, Any]] = []
+        for q in unique_rewrites:
+            keyword_candidates.extend(self._keyword_rank(q, k=max(20, k)))
+        # 키워드 중복 제거
+        seen = set()
+        dedup_keyword = []
+        for r in keyword_candidates:
+            t = r.get('metadata', {}).get('id') or r.get('text')
+            if t in seen:
+                continue
+            seen.add(t)
+            dedup_keyword.append(r)
 
-            results = []
-            for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-                if idx == -1:  # FAISS에서 -1은 유효하지 않은 인덱스
-                    continue
-
-                if idx < len(self.metadata):
-                    metadata = self.metadata[idx]
-
-                    # 결과 딕셔너리 생성
-                    result = {
-                        'text': metadata.get('text', ''),
+        # 벡터 후보 수집
+        vector_candidates: List[Dict[str, Any]] = []
+        if self.index is not None and self.model is not None and self.metadata:
+            try:
+                query_embedding = self.model.encode([query]).astype('float32')
+                scores, indices = self.index.search(query_embedding, max(20, k))
+                for score, idx in zip(scores[0], indices[0]):
+                    if idx == -1 or idx >= len(self.metadata):
+                        continue
+                    md = self.metadata[idx]
+                    vector_candidates.append({
+                        'text': md.get('text', ''),
                         'similarity': float(score),
                         'score': float(score),
-                        'type': metadata.get('type', 'unknown'),
-                        'source': metadata.get('source', ''),
-                        'metadata': metadata,
+                        'type': md.get('type', 'unknown'),
+                        'source': md.get('source', ''),
+                        'metadata': md,
                         'search_type': 'vector_search'
-                    }
+                    })
+            except Exception as e:
+                self.logger.warning(f"Vector search failed, continuing with keyword only: {e}")
 
-                    # 추가 메타데이터
-                    if 'law_name' in metadata:
-                        result['law_name'] = metadata['law_name']
-                    if 'article_number' in metadata and metadata['article_number']:
-                        result['article_number'] = metadata['article_number']
-                    if 'case_id' in metadata:
-                        result['case_id'] = metadata['case_id']
-                    if 'case_name' in metadata:
-                        result['case_name'] = metadata['case_name']
-                    if 'article_id' in metadata:
-                        result['article_id'] = metadata['article_id']
+        # 병합 및 재랭킹
+        merged = self._merge_and_rerank(dedup_keyword, vector_candidates, k)
 
-                    results.append(result)
+        # 최소 리콜 폴백
+        MIN_RESULTS = max(5, k // 2)
+        if len(merged) < MIN_RESULTS:
+            db = self._database_fallback_search(query, k=MIN_RESULTS)
+            merged = self._merge_and_rerank(merged, db, k)
 
-            # 벡터 검색 결과가 0개인 경우 키워드 검색으로 폴백
-            if len(results) == 0:
-                self.logger.warning(f"Vector search returned 0 results for query '{query}', falling back to keyword search")
-                return self._fallback_keyword_search(query, k)
-
-            self.logger.info(f"Semantic search completed: {len(results)} results for query '{query}'")
-            return results
-
-        except Exception as e:
-            self.logger.error(f"Error in semantic search: {e}")
+        if len(merged) == 0:
             return self._fallback_keyword_search(query, k)
+
+        self.logger.info(f"Hybrid search completed: {len(merged)} results for query '{query}'")
+        return merged[:k]
+
+    def _merge_and_rerank(self, a: List[Dict[str, Any]], b: List[Dict[str, Any]], k: int) -> List[Dict[str, Any]]:
+        """결과 병합 및 재랭킹"""
+        combined = []
+        for r in a:
+            rr = dict(r)
+            rr['hybrid_score'] = 0.4 * float(rr.get('score', 0.0))
+            combined.append(rr)
+        for r in b:
+            rr = dict(r)
+            rr['hybrid_score'] = rr.get('hybrid_score', 0.0) + 0.6 * float(rr.get('score', 0.0))
+            combined.append(rr)
+        # 중복 제거
+        seen = set()
+        dedup = []
+        for r in combined:
+            md = r.get('metadata', {}) or {}
+            key = md.get('article_id') or md.get('case_id') or md.get('id') or r.get('text')
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(r)
+        dedup.sort(key=lambda x: x.get('hybrid_score', 0.0), reverse=True)
+        return dedup[:max(50, k)]
+
+    def _rewrite_query(self, query: str) -> List[str]:
+        """간단한 쿼리 리라이트: 동의어/숫자 변형/법률 용어 정규화"""
+        q = query.strip()
+        rewrites: List[str] = []
+        synonyms = {
+            '손해배상': ['배상', '보상'],
+            '이혼': ['혼인해소', '결혼해소'],
+            '계약 해지': ['계약 종료', '해지'],
+            '조문': ['조항', '법조문'],
+        }
+        for key, vals in synonyms.items():
+            if key in q:
+                for v in vals:
+                    rewrites.append(q.replace(key, v))
+        if '제' in q and '조' in q:
+            rewrites.append(q.replace('제', '제 ').replace('조', ' 조'))
+            rewrites.append(q.replace('제 ', '제').replace(' 조', '조'))
+        if '민법' in q:
+            rewrites.append(q.replace('민법', '대한민국 민법'))
+        return [r for r in rewrites if r and r != q]
+
+    def _keyword_rank(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """간단한 BM25 유사 키워드 랭킹"""
+        try:
+            if not self.metadata:
+                return []
+            q_terms = query.lower().split()
+            N = min(len(self.metadata), 5000)
+            df: Dict[str, int] = {}
+            docs = []
+            for md in self.metadata[:N]:
+                text = (md.get('text') or '').lower()
+                terms = set(text.split())
+                for t in terms:
+                    df[t] = df.get(t, 0) + 1
+                docs.append((text, md))
+            import math
+            scored = []
+            for text, md in docs:
+                if not text:
+                    continue
+                score = 0.0
+                for t in q_terms:
+                    tf = text.count(t)
+                    if tf == 0:
+                        continue
+                    idf = math.log((N + 1) / (df.get(t, 0) + 1))
+                    score += math.sqrt(tf) * idf
+                if score > 0:
+                    scored.append({
+                        'text': md.get('text', ''),
+                        'similarity': float(score),
+                        'score': float(score),
+                        'type': md.get('type', 'unknown'),
+                        'source': md.get('source', ''),
+                        'metadata': md,
+                        'search_type': 'keyword_rank'
+                    })
+            scored.sort(key=lambda x: x['score'], reverse=True)
+            return scored[:k]
+        except Exception as e:
+            self.logger.warning(f"Keyword rank failed: {e}")
+            return []
 
     def _fallback_keyword_search(self, query: str, k: int) -> List[Dict[str, Any]]:
         """키워드 기반 폴백 검색"""
@@ -224,7 +318,12 @@ class SemanticSearchEngine:
 
             # 데이터베이스 경로 확인
             import os
-            db_path = "data/lawfirm.db"
+            import sys
+            # source 모듈 경로 추가
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+            from source.utils.config import Config
+            config = Config()
+            db_path = config.database_path
             if not os.path.exists(db_path):
                 self.logger.error(f"Database not found at {db_path}")
                 raise FileNotFoundError(f"Database file not found at {db_path}")
@@ -235,51 +334,58 @@ class SemanticSearchEngine:
 
                 # 테이블 존재 확인 후 법률 검색
                 try:
+                    # lawfirm_v2.db의 statutes 테이블 사용
                     cursor.execute("""
-                        SELECT law_name, COALESCE(searchable_text, full_text) as content, 'law' as type
-                        FROM assembly_laws
-                        WHERE (COALESCE(searchable_text, '') || ' ' || COALESCE(full_text, '') || ' ' || COALESCE(law_name, '')) LIKE ?
+                        SELECT s.name as law_name, sa.text as content, 'law' as type
+                        FROM statute_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE sa.text LIKE ?
                         LIMIT ?
                     """, (f"%{query}%", k))
 
                     for row in cursor.fetchall():
-                        content = row.get('content', '') or ''
+                        # sqlite3.Row는 .get() 메서드가 없으므로 딕셔너리로 변환하거나 직접 접근
+                        row_dict = dict(row)
+                        content = row_dict.get('content', '') or ''
                         result = {
-                            'text': f"{row.get('law_name', 'Unknown')}: {content[:200]}...",
+                            'text': f"{row_dict.get('law_name', 'Unknown')}: {content[:200]}...",
                             'similarity': 0.6,
                             'score': 0.6,
                             'type': 'law',
-                            'source': row.get('law_name', 'Unknown'),
-                            'metadata': dict(row),
+                            'source': row_dict.get('law_name', 'Unknown'),
+                            'metadata': row_dict,
                             'search_type': 'database_fallback'
                         }
                         results.append(result)
                 except sqlite3.OperationalError as e:
-                    self.logger.warning(f"Could not search assembly_laws table: {e}")
+                    self.logger.warning(f"Could not search statutes table: {e}")
 
-                # 판례 검색
+                # 판례 검색 (lawfirm_v2.db의 cases 테이블 사용)
                 try:
                     cursor.execute("""
-                        SELECT case_name, case_number, COALESCE(searchable_text, full_text, '') as content, 'precedent' as type
-                        FROM precedent_cases
-                        WHERE (COALESCE(searchable_text, '') || ' ' || COALESCE(full_text, '') || ' ' || COALESCE(case_name, '')) LIKE ?
+                        SELECT c.casenames as case_name, c.doc_id as case_number, cp.text as content, 'precedent' as type
+                        FROM case_paragraphs cp
+                        JOIN cases c ON cp.case_id = c.id
+                        WHERE cp.text LIKE ?
                         LIMIT ?
                     """, (f"%{query}%", k))
 
                     for row in cursor.fetchall():
-                        text_content = row.get('content', '') or ''
+                        # sqlite3.Row는 .get() 메서드가 없으므로 딕셔너리로 변환하거나 직접 접근
+                        row_dict = dict(row)
+                        text_content = row_dict.get('content', '') or ''
                         result = {
-                            'text': f"{row.get('case_name', 'Unknown')} ({row.get('case_number', 'N/A')}): {text_content[:200]}...",
+                            'text': f"{row_dict.get('case_name', 'Unknown')} ({row_dict.get('case_number', 'N/A')}): {text_content[:200]}...",
                             'similarity': 0.6,
                             'score': 0.6,
                             'type': 'precedent',
-                            'source': f"{row.get('case_name', 'Unknown')} {row.get('case_number', 'N/A')}",
-                            'metadata': dict(row),
+                            'source': f"{row_dict.get('case_name', 'Unknown')} {row_dict.get('case_number', 'N/A')}",
+                            'metadata': row_dict,
                             'search_type': 'database_fallback'
                         }
                         results.append(result)
                 except sqlite3.OperationalError as e:
-                    self.logger.warning(f"Could not search precedent_cases table: {e}")
+                    self.logger.warning(f"Could not search cases table: {e}")
 
             # 점수순 정렬
             results.sort(key=lambda x: x['score'], reverse=True)

@@ -26,7 +26,12 @@ class SemanticSearchResult:
 
 
 class SemanticSearchEngine:
-    """의미적 검색 엔진"""
+    """
+    의미적 검색 엔진
+
+    DEPRECATED: 이 클래스는 외부 FAISS 인덱스를 사용합니다.
+    새로운 프로젝트는 SemanticSearchEngineV2 (lawfirm_v2.db의 embeddings 테이블 사용)를 사용하세요.
+    """
 
     def __init__(self,
                  model_name: str = "jhgan/ko-sroberta-multitask",
@@ -224,7 +229,7 @@ class SemanticSearchEngine:
 
             # 데이터베이스 경로 확인
             import os
-            db_path = "data/lawfirm.db"
+            db_path = "data/lawfirm_v2.db"
             if not os.path.exists(db_path):
                 self.logger.error(f"Database not found at {db_path}")
                 raise FileNotFoundError(f"Database file not found at {db_path}")

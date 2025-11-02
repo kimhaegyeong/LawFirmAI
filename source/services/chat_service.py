@@ -27,7 +27,7 @@ from .contextual_memory_manager import ContextualMemoryManager
 from .conversation_flow_tracker import ConversationFlowTracker
 from .conversation_quality_monitor import ConversationQualityMonitor
 from .emotion_intent_analyzer import EmotionIntentAnalyzer
-from .hybrid_search_engine import HybridSearchEngine
+from .hybrid_search_engine_v2 import HybridSearchEngineV2
 from .improved_answer_generator import ImprovedAnswerGenerator
 
 # Phase 1: 대화 맥락 강화 모듈
@@ -55,7 +55,7 @@ class ChatService:
         if self.use_langgraph:
             try:
                 from ..utils.langgraph_config import LangGraphConfig
-                from .langgraph.workflow_service import LangGraphWorkflowService
+                from core.agents.workflow_service import LangGraphWorkflowService
 
                 langgraph_config = LangGraphConfig.from_env()
                 self.langgraph_service = LangGraphWorkflowService(langgraph_config)
@@ -67,14 +67,15 @@ class ChatService:
         else:
             self.langgraph_service = None
 
-        # 실제 RAG 컴포넌트 초기화
+        # 실제 RAG 컴포넌트 초기화 (lawfirm_v2_faiss.index 사용)
         self.rag_service = None  # MLEnhancedRAGService 제거됨
         try:
-            # 필요한 컴포넌트들 초기화
-            self.hybrid_search_engine = HybridSearchEngine()
+            # 필요한 컴포넌트들 초기화 - HybridSearchEngineV2는 lawfirm_v2_faiss.index를 사용
+            db_path = self.config.database_path
+            self.hybrid_search_engine = HybridSearchEngineV2(db_path=db_path)
             self.question_classifier = QuestionClassifier()
             self.improved_answer_generator = ImprovedAnswerGenerator()
-            self.logger.info("RAG components initialized successfully")
+            self.logger.info(f"RAG components initialized successfully with {db_path}")
         except Exception as e:
             self.logger.error(f"Failed to initialize RAG components: {e}")
             self.hybrid_search_engine = None
