@@ -124,7 +124,7 @@ chroma_db/
 .backup/
 
 # Cursor IDE
-# .cursor/
+.cursor/
 
 # personal data
 data/
