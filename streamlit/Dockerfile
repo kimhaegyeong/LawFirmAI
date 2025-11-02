@@ -2,7 +2,7 @@
 # Multi-stage build for Streamlit deployment
 
 # Stage 1: Builder
-FROM python:3.9-slim as builder
+FROM python:3.11-slim as builder
 
 # Set working directory
 WORKDIR /app
@@ -19,7 +19,7 @@ COPY streamlit/requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Stage 2: Runtime
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app
