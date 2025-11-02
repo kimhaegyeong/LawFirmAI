@@ -915,9 +915,12 @@ class EnhancedLegalQuestionWorkflow:
 
         except Exception as e:
             self._handle_error(state, str(e), "답변 생성 및 검증 중 오류 발생")
-            # 기본값 설정
+            # Phase 1/Phase 7: 기본값 설정 - _set_answer_safely 사용
             if "answer" not in state or not state.get("answer"):
-                state["answer"] = ""
+                self._set_answer_safely(state, "")
+            elif state.get("answer"):
+                # answer가 있으면 정규화만 수행
+                self._set_answer_safely(state, state["answer"])
             self._set_state_value(state, "legal_validity_check", True)
             self._save_metadata_safely(state, "quality_score", 0.0, save_to_top_level=True)
             self._save_metadata_safely(state, "quality_check_passed", False, save_to_top_level=True)
@@ -926,7 +929,12 @@ class EnhancedLegalQuestionWorkflow:
 
     def _validate_answer_quality_internal(self, state: LegalWorkflowState) -> bool:
         """품질 검증 (내부 메서드)"""
-        answer = self._normalize_answer(self._get_state_value(state, "answer", ""))
+        # Phase 4: 검증 전 answer 정규화 보장
+        answer_raw = self._get_state_value(state, "answer", "")
+        normalized_answer = self._normalize_answer(answer_raw)
+        if answer_raw != normalized_answer or not isinstance(answer_raw, str):
+            self._set_answer_safely(state, normalized_answer)
+        answer = normalized_answer
         errors = self._get_state_value(state, "errors", [])
         sources = self._get_state_value(state, "sources", [])
 
@@ -981,9 +989,9 @@ class EnhancedLegalQuestionWorkflow:
         # AnswerFormatterHandler 사용
         preserved_values = self.answer_formatter_handler.extract_preserved_values(state)
 
-        # 포맷팅
+        # 포맷팅 - Phase 1/Phase 2: _set_answer_safely 사용하여 정규화 보장
         formatted_answer = self.answer_formatter_handler.format_answer_part(state)
-        state["answer"] = formatted_answer
+        self._set_answer_safely(state, formatted_answer)
 
         # 최종 준비
         self.answer_formatter_handler.prepare_final_response_part(
@@ -1028,6 +1036,39 @@ class EnhancedLegalQuestionWorkflow:
     def _normalize_answer(self, answer_raw: Any) -> str:
         """WorkflowUtils.normalize_answer 래퍼"""
         return WorkflowUtils.normalize_answer(answer_raw)
+
+    def _set_answer_safely(self, state: LegalWorkflowState, answer: Any) -> None:
+        """
+        Answer를 안전하게 저장하는 헬퍼 메서드
+
+        - normalize_answer를 자동으로 호출하여 문자열 보장
+        - 타입 검증 및 로깅 추가
+        - 모든 노드에서 일관된 answer 저장 보장
+
+        Args:
+            state: LegalWorkflowState
+            answer: 저장할 answer 값 (str, dict, 또는 다른 타입)
+        """
+        # 타입 확인 및 정규화
+        original_type = type(answer).__name__
+        normalized_answer = self._normalize_answer(answer)
+        final_type = type(normalized_answer).__name__
+
+        # 타입 변환이 발생한 경우 로깅
+        if original_type != final_type or original_type != 'str':
+            self.logger.debug(
+                f"[ANSWER TYPE] Type conversion: {original_type} → {final_type} "
+                f"(length: {len(normalized_answer)})"
+            )
+
+        # answer 저장
+        self._set_state_value(state, "answer", normalized_answer)
+
+        # answer 길이 로깅 (너무 짧은 경우 경고)
+        if len(normalized_answer) < 10:
+            self.logger.warning(
+                f"[ANSWER WARNING] Answer is very short (length: {len(normalized_answer)})"
+            )
 
     # Phase 1 리팩토링: 추론 과정 분리 메서드들은 ReasoningExtractor로 이동됨
     # Phase 8 리팩토링: 유틸리티 메서드들은 WorkflowUtils로 이동됨
@@ -1601,8 +1642,8 @@ class EnhancedLegalQuestionWorkflow:
                     self._set_state_value(state, "needs_search", True)
                     return state
 
-            # 답변 저장 (체인 성공 또는 폴백 성공)
-            self._set_state_value(state, "answer", answer)
+            # 답변 저장 (체인 성공 또는 폴백 성공) - Phase 1: _set_answer_safely 사용
+            self._set_answer_safely(state, answer)
             self._set_state_value(state, "sources", [])  # 검색 없음
 
             processing_time = self._update_processing_time(state, start_time)
@@ -3410,7 +3451,8 @@ class EnhancedLegalQuestionWorkflow:
                 f"   Normalized response repr: {repr(normalized_response[:100])}"
             )
 
-            self._set_state_value(state, "answer", normalized_response)
+            # Phase 1: _set_answer_safely 사용하여 answer 정규화 보장
+            self._set_answer_safely(state, normalized_response)
 
             # 개선 사항 10: 프롬프트-답변 간 연결 정보 추가
             metadata = self._get_state_value(state, "metadata", {})
@@ -3505,7 +3547,9 @@ class EnhancedLegalQuestionWorkflow:
             self.logger.info(f"Enhanced answer generated with UnifiedPromptManager in {processing_time:.2f}s")
         except Exception as e:
             self._handle_error(state, str(e), "개선된 답변 생성 중 오류 발생")
-            self._set_state_value(state, "answer", self.answer_generator.generate_fallback_answer(state))
+            # Phase 1/Phase 7: 폴백 answer 생성 - _set_answer_safely 사용
+            fallback_answer = self.answer_generator.generate_fallback_answer(state)
+            self._set_answer_safely(state, fallback_answer)
         return state
 
     def _get_question_type_and_domain(self, query_type, query: str = "") -> Tuple[QuestionType, Optional[LegalDomain]]:
@@ -5226,7 +5270,8 @@ class EnhancedLegalQuestionWorkflow:
                 self.logger.error("Maximum total retry count reached")
                 if not self._get_state_value(state, "answer", ""):
                     query = self._get_state_value(state, "query", "")
-                    self._set_state_value(state, "answer",
+                    # Phase 1/Phase 7: 에러 메시지 설정 - _set_answer_safely 사용
+                    self._set_answer_safely(state,
                         f"죄송합니다. 질문 '{query}'에 대한 답변을 생성하는데 어려움이 있습니다.")
                 return state
 
@@ -5254,7 +5299,8 @@ class EnhancedLegalQuestionWorkflow:
                 self.logger.error(f"prepare_search_query: query is empty! State keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
                 if "input" in state:
                     self.logger.error(f"prepare_search_query: state['input'] = {state['input']}")
-                self._set_state_value(state, "answer", "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
+                # Phase 1/Phase 7: 에러 메시지 설정 - _set_answer_safely 사용
+                self._set_answer_safely(state, "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
                 return state
 
             # query_type 정규화
