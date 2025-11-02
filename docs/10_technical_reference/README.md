@@ -8,10 +8,6 @@
 
 ## 🔗 관련 섹션
 
-- [03_Data_Processing](../03_data_processing/README.md): 데이터 전처리
+- [02_Data_Processing](../02_data/processing/README.md): 데이터 전처리
 - [05_RAG_System](../05_rag_system/README.md): RAG 시스템 아키텍처
-- [06_Models_Performance](../06_models_performance/README.md): 모델 성능 분석
-
----
-
-**LawFirmAI 개발팀**
+- [04_Models_Performance](../04_models/performance/README.md): 모델 성능 분석

@@ -524,5 +524,5 @@ State 최적화, 캐싱 등을 통해 성능을 향상시킵니다.
 
 - [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)
 - [RAG 아키텍처](../05_rag_system/rag_architecture.md)
-- [LangGraph Node I/O](../10_technical_reference/langgraph_node_io.md)
-- [데이터베이스 스키마](../10_technical_reference/database_schema.md)
+- [LangGraph Node I/O](langgraph_node_io.md)
+- [데이터베이스 스키마](database_schema.md)
