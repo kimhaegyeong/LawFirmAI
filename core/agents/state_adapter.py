@@ -16,6 +16,63 @@ from .node_input_output_spec import validate_node_input
 logger = logging.getLogger(__name__)
 
 
+def _extract_analysis_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Analysis State를 중첩 없이 추출
+
+    Args:
+        state: Flat 또는 Nested 구조의 state
+
+    Returns:
+        AnalysisState 딕셔너리 (중첩 없이)
+    """
+    analysis_data = state.get("analysis")
+
+    # analysis_data가 이미 AnalysisState 딕셔너리인 경우 (nested 구조)
+    if isinstance(analysis_data, dict):
+        # 중첩 구조 확인: {"analysis": {...}, ...} 형태인지 확인
+        if "analysis" in analysis_data and isinstance(analysis_data["analysis"], dict):
+            # 이중 중첩 방지: analysis["analysis"]가 또 딕셔너리면 재귀적으로 평탄화
+            nested = analysis_data["analysis"]
+            if isinstance(nested, dict) and ("analysis" in nested or "legal_references" in nested):
+                # 재귀적으로 평탄화 - 최대 10단계까지
+                current = nested
+                depth = 0
+                max_depth = 10
+
+                while isinstance(current, dict) and "analysis" in current and isinstance(current["analysis"], dict) and depth < max_depth:
+                    current = current["analysis"]
+                    depth += 1
+
+                # 평탄화된 구조 반환
+                return {
+                    "analysis": current.get("analysis") if isinstance(current, dict) else current,
+                    "legal_references": nested.get("legal_references", analysis_data.get("legal_references", state.get("legal_references", []))),
+                    "legal_citations": nested.get("legal_citations") or analysis_data.get("legal_citations") or state.get("legal_citations")
+                }
+            else:
+                # 정상적인 AnalysisState 구조
+                return {
+                    "analysis": analysis_data.get("analysis"),
+                    "legal_references": analysis_data.get("legal_references", []),
+                    "legal_citations": analysis_data.get("legal_citations")
+                }
+        else:
+            # analysis 필드가 없거나 문자열인 경우 - 정상적인 AnalysisState
+            return {
+                "analysis": analysis_data.get("analysis") if "analysis" in analysis_data else analysis_data,
+                "legal_references": analysis_data.get("legal_references", []),
+                "legal_citations": analysis_data.get("legal_citations")
+            }
+    else:
+        # analysis_data가 문자열이거나 None인 경우 (flat 구조)
+        return {
+            "analysis": analysis_data,
+            "legal_references": state.get("legal_references", []),
+            "legal_citations": state.get("legal_citations")
+        }
+
+
 class StateAdapter:
     """
     LegalWorkflowState의 flat 접근을 nested로 자동 변환
@@ -47,6 +104,13 @@ class StateAdapter:
 
         # 이미 nested 구조인지 확인
         if "input" in state and isinstance(state["input"], dict):
+            # input이 있지만 query가 없으면 확인
+            if not state["input"].get("query"):
+                # state의 다른 위치에서 query 찾기
+                query_from_state = state.get("query")
+                if query_from_state:
+                    state["input"]["query"] = query_from_state
+                    self.logger.debug("Restored query in existing input group")
             return state  # type: ignore
 
         # Flat 구조를 nested로 변환
@@ -73,15 +137,11 @@ class StateAdapter:
                 "ai_keyword_expansion": state.get("ai_keyword_expansion"),
                 "retrieved_docs": state.get("retrieved_docs", [])
             },
-            "analysis": {
-                "analysis": state.get("analysis"),
-                "legal_references": state.get("legal_references", []),
-                "legal_citations": state.get("legal_citations")
-            },
+            # Analysis: 중첩 구조 방지 - state.get("analysis")가 이미 AnalysisState 딕셔너리인지 확인
+            "analysis": _extract_analysis_state(state),
             "answer": {
                 "answer": state.get("answer", ""),
                 "sources": state.get("sources", []),
-                "enhanced_answer": state.get("enhanced_answer"),
                 "structure_confidence": state.get("structure_confidence", 0.0)
             },
             "document": {
@@ -212,7 +272,6 @@ class StateAdapter:
             # Answer
             "answer": answer.get("answer", ""),
             "sources": answer.get("sources", []),
-            "enhanced_answer": answer.get("enhanced_answer"),
             "structure_confidence": answer.get("structure_confidence", 0.0),
 
             # Document
@@ -294,10 +353,27 @@ def validate_state_for_node(
 
     # 1. 자동 변환 (필요한 경우)
     converted_state = state
+
+    # 디버깅: 원본 state의 query 확인
+    original_query = state.get("query") or (state.get("input") and isinstance(state.get("input"), dict) and state["input"].get("query"))
+    if node_name == "classify_query":
+        print(f"[DEBUG] state_adapter.validate_state_for_node ({node_name}): original state query='{original_query[:50] if original_query else 'EMPTY'}...'")
+        print(f"[DEBUG] state_adapter.validate_state_for_node ({node_name}): state has input={bool(state.get('input'))}, state keys={list(state.keys())}")
+
     if auto_convert:
         # Nested 구조가 아니면 변환
         if "input" not in state or not isinstance(state.get("input"), dict):
             converted_state = adapt_state(state)
+
+            # 디버깅: 변환 후 query 확인
+            converted_query = converted_state.get("query") or (converted_state.get("input") and isinstance(converted_state.get("input"), dict) and converted_state["input"].get("query"))
+            if node_name == "classify_query":
+                print(f"[DEBUG] state_adapter.validate_state_for_node ({node_name}): after adapt_state query='{converted_query[:50] if converted_query else 'EMPTY'}...'")
+        else:
+            # 이미 nested 구조인 경우
+            nested_query = state.get("input", {}).get("query", "") if isinstance(state.get("input"), dict) else ""
+            if node_name == "classify_query":
+                print(f"[DEBUG] state_adapter.validate_state_for_node ({node_name}): already nested, query='{nested_query[:50] if nested_query else 'EMPTY'}...'")
 
     # 2. Input 유효성 검증
     is_valid, error = validate_node_input(node_name, converted_state)
