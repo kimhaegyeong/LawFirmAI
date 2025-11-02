@@ -8,7 +8,9 @@ Services Module
 try:
     from .chat_service import ChatService
 except ImportError as e:
-    print(f"Warning: Could not import ChatService: {e}")
+    # langgraph 모듈이 없는 경우는 정상 (선택적 기능)
+    if "langgraph" not in str(e).lower():
+        print(f"Warning: Could not import ChatService: {e}")
     ChatService = None
 
 # RAGService removed - use HybridSearchEngine or other search services instead

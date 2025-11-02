@@ -25,18 +25,40 @@ class SafeStreamHandler(logging.StreamHandler):
             # detached buffer 에러나 기타 스트림 에러 무시
             pass
 
-# 로깅 설정 (DEBUG 레벨로 변경하여 상세 로그 확인)
+# 로깅 설정 (INFO 레벨로 변경하여 중요한 정보만 확인)
+# DEBUG 레벨은 너무 많은 로그를 생성하므로 INFO로 조정
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[SafeStreamHandler()],
     force=True  # 기존 설정을 강제로 재설정
 )
 
-# 특정 로거의 레벨을 DEBUG로 설정
-logging.getLogger('core.agents.legal_workflow_enhanced').setLevel(logging.DEBUG)
-logging.getLogger('source.services.semantic_search_engine_v2').setLevel(logging.DEBUG)
-logging.getLogger('core.agents.legal_data_connector_v2').setLevel(logging.DEBUG)
+# 특정 로거의 레벨을 INFO로 설정 (DEBUG는 선택적)
+legal_workflow_logger = logging.getLogger('core.agents.legal_workflow_enhanced')
+legal_workflow_logger.setLevel(logging.INFO)  # DEBUG에서 INFO로 변경
+legal_workflow_logger.propagate = True
+
+# 핸들러가 없으면 추가
+if not legal_workflow_logger.handlers:
+    legal_workflow_logger.addHandler(SafeStreamHandler())
+
+# 다른 로거들도 동일하게 설정 (INFO 레벨)
+semantic_search_logger = logging.getLogger('source.services.semantic_search_engine_v2')
+semantic_search_logger.setLevel(logging.INFO)  # DEBUG에서 INFO로 변경
+semantic_search_logger.propagate = True
+if not semantic_search_logger.handlers:
+    semantic_search_logger.addHandler(SafeStreamHandler())
+
+data_connector_logger = logging.getLogger('core.agents.legal_data_connector_v2')
+data_connector_logger.setLevel(logging.INFO)  # DEBUG에서 INFO로 변경
+data_connector_logger.propagate = True
+if not data_connector_logger.handlers:
+    data_connector_logger.addHandler(SafeStreamHandler())
+
+# workflow_service의 DEBUG 로그는 WARNING 레벨로 조정
+workflow_service_logger = logging.getLogger('core.agents.workflow_service')
+workflow_service_logger.setLevel(logging.WARNING)  # DEBUG 로그 억제
 
 # 로깅 에러를 억제
 logging.raiseExceptions = False
@@ -74,9 +96,13 @@ async def test_langgraph_workflow():
         init_time = time.time() - start_time
         logger.info(f"   ✅ 워크플로우 서비스 초기화 완료 ({init_time:.2f}초)")
 
-        # 테스트 질의 (민사법 관련, 1개)
+        # 테스트 질의 (다양한 법률 분야, 5개)
         test_queries = [
-            "민사법에서 계약 해지 요건은 무엇인가요?"
+            "민사법에서 계약 해지 요건은 무엇인가요?",
+            "형법에서 절도죄의 성립 요건과 처벌은 어떻게 되나요?",
+            "가족법에서 협의이혼과 재판상 이혼의 차이는 무엇인가요?",
+            "노동법에서 근로계약서 작성 시 포함해야 할 필수 사항은 무엇인가요?",
+            "행정법에서 행정처분 취소 청구의 제소기간은 언제까지인가요?"
         ]
 
         logger.info("3. 테스트 질의 실행 중...")
@@ -206,11 +232,72 @@ async def test_langgraph_workflow():
                 print(f"   - 에러 유무: {'있음' if has_errors else '없음'}", flush=True)
 
                 if has_answer:
+                    # 분리된 메타 정보 필드 확인
+                    confidence_info = result.get("confidence_info", "") if isinstance(result, dict) else ""
+                    reference_materials = result.get("reference_materials", "") if isinstance(result, dict) else ""
+                    disclaimer = result.get("disclaimer", "") if isinstance(result, dict) else ""
+
                     logger.info(f"\n📝 답변 미리보기:")
                     # answer가 문자열인지 확인
                     if isinstance(answer, str):
-                        answer_preview = answer[:200]
-                        logger.info(f"   {answer_preview}{'...' if len(answer) > 200 else ''}")
+                        answer_preview = answer[:500]
+                        logger.info(f"   {answer_preview}{'...' if len(answer) > 500 else ''}")
+                        print(f"\n📝 답변 전체 내용 (answer 필드만):", flush=True)
+                        print(f"{'='*80}", flush=True)
+                        print(answer, flush=True)
+                        print(f"{'='*80}\n", flush=True)
+
+                        # 분리된 메타 정보 표시
+                        if confidence_info:
+                            print(f"\n💡 신뢰도 정보 (confidence_info 필드):", flush=True)
+                            print(f"{'='*80}", flush=True)
+                            print(confidence_info, flush=True)
+                            print(f"{'='*80}\n", flush=True)
+
+                        if reference_materials:
+                            print(f"\n📚 참고 자료 (reference_materials 필드):", flush=True)
+                            print(f"{'='*80}", flush=True)
+                            print(reference_materials, flush=True)
+                            print(f"{'='*80}\n", flush=True)
+
+                        if disclaimer:
+                            print(f"\n💼 면책 조항 (disclaimer 필드):", flush=True)
+                            print(f"{'='*80}", flush=True)
+                            print(disclaimer, flush=True)
+                            print(f"{'='*80}\n", flush=True)
+
+                        # 답변을 파일로 저장 (answer 필드만 저장)
+                        import os
+                        output_dir = "test_outputs"
+                        os.makedirs(output_dir, exist_ok=True)
+                        output_file = os.path.join(output_dir, f"answer_{i}_{int(time.time())}.txt")
+                        with open(output_file, 'w', encoding='utf-8') as f:
+                            f.write(f"질의: {query}\n")
+                            f.write(f"{'='*80}\n")
+                            f.write(f"답변 길이: {len(answer)}자\n")
+                            f.write(f"신뢰도: {confidence:.2%}\n")
+                            f.write(f"{'='*80}\n\n")
+                            f.write("=== 답변 내용 (answer 필드) ===\n\n")
+                            f.write(answer)
+
+                            # 분리된 메타 정보도 함께 저장
+                            if confidence_info:
+                                f.write(f"\n\n{'='*80}\n")
+                                f.write("=== 신뢰도 정보 (confidence_info 필드) ===\n\n")
+                                f.write(confidence_info)
+
+                            if reference_materials:
+                                f.write(f"\n\n{'='*80}\n")
+                                f.write("=== 참고 자료 (reference_materials 필드) ===\n\n")
+                                f.write(reference_materials)
+
+                            if disclaimer:
+                                f.write(f"\n\n{'='*80}\n")
+                                f.write("=== 면책 조항 (disclaimer 필드) ===\n\n")
+                                f.write(disclaimer)
+
+                        logger.info(f"   답변이 {output_file}에 저장되었습니다.")
+                        print(f"   답변이 {output_file}에 저장되었습니다.\n", flush=True)
                     else:
                         logger.info(f"   답변 타입: {type(answer).__name__}, 값: {answer}")
 
