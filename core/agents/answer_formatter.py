@@ -511,11 +511,14 @@ class AnswerFormatterHandler:
 
             state["confidence"] = adjusted_confidence
 
-            # 최종 answer를 문자열로 수렴
-            try:
-                state["answer"] = WorkflowUtils.normalize_answer(state.get("answer", ""))
-            except Exception:
-                state["answer"] = str(state.get("answer", ""))
+            # Phase 3: 최종 answer를 문자열로 수렴 - 타입 확인 후 필요시만 정규화
+            current_answer = state.get("answer", "")
+            if not isinstance(current_answer, str):
+                # 이미 포맷팅된 answer는 정규화 불필요, 타입 검증만 수행
+                try:
+                    state["answer"] = WorkflowUtils.normalize_answer(current_answer)
+                except Exception:
+                    state["answer"] = str(current_answer) if current_answer else ""
 
             # sources 추출
             final_sources_list = []
@@ -763,6 +766,10 @@ class AnswerFormatterHandler:
 
             # Part 1: 포맷팅
             formatted_answer = self.format_answer_part(state)
+            # Phase 1/Phase 3: _set_answer_safely는 legal_workflow_enhanced에 있으므로,
+            # 여기서는 정규화만 확인하고 필요시 업데이트 (format_answer_part에서 이미 정규화되었을 수 있음)
+            if not isinstance(formatted_answer, str):
+                formatted_answer = WorkflowUtils.normalize_answer(formatted_answer)
             state["answer"] = formatted_answer
 
             # Part 2: 최종 준비
@@ -790,8 +797,15 @@ class AnswerFormatterHandler:
                 except Exception:
                     pass
 
+            # Phase 5: 에러 처리 통일 - answer 복원 로직 개선
             if not state.get("answer"):
-                state["answer"] = WorkflowUtils.normalize_answer(answer)
+                # answer가 없으면 정규화하여 설정
+                state["answer"] = WorkflowUtils.normalize_answer(answer) if answer else ""
+            elif answer and state.get("answer") != answer:
+                # answer가 있지만 원본과 다르면 정규화만 수행
+                current_answer = state.get("answer")
+                if not isinstance(current_answer, str):
+                    state["answer"] = WorkflowUtils.normalize_answer(current_answer)
 
         return state
 
