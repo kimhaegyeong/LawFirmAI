@@ -66,7 +66,7 @@ class LangGraphConfig:
     langsmith_tracing: bool = True
 
     # RAG 품질 제어 설정
-    similarity_threshold: float = 0.3  # 문서 유사도 임계값
+    similarity_threshold: float = 0.5  # 문서 유사도 임계값 (V2 벡터 검색에 최적화, 0.9는 너무 높아 0.5로 조정)
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
     max_tokens: int = 2000  # 최대 토큰 수
 

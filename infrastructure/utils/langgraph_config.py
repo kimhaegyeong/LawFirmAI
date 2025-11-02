@@ -81,6 +81,10 @@ class LangGraphConfig:
     max_processing_steps: int = 20
     enable_state_pruning: bool = True
 
+    # LLM 기반 복잡도 분류 설정
+    use_llm_for_complexity: bool = True  # LLM 기반 복잡도 분류 활성화
+    complexity_llm_model: str = "fast"  # "fast" | "main" | "disabled"
+
     @classmethod
     def from_env(cls) -> 'LangGraphConfig':
         """환경 변수에서 설정 로드"""
@@ -144,6 +148,10 @@ class LangGraphConfig:
         config.max_conversation_history = int(os.getenv("MAX_CONVERSATION_HISTORY", config.max_conversation_history))
         config.max_processing_steps = int(os.getenv("MAX_PROCESSING_STEPS", config.max_processing_steps))
         config.enable_state_pruning = os.getenv("ENABLE_STATE_PRUNING", "true").lower() == "true"
+
+        # LLM 기반 복잡도 분류 설정
+        config.use_llm_for_complexity = os.getenv("USE_LLM_FOR_COMPLEXITY", "true").lower() == "true"
+        config.complexity_llm_model = os.getenv("COMPLEXITY_LLM_MODEL", "fast")
 
         logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}")
         return config
