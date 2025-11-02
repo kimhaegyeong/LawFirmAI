@@ -30,64 +30,49 @@ class AnswerFormatter:
         """답변 구조화기 초기화"""
         self.logger = logging.getLogger(__name__)
 
-        # 질문 유형별 템플릿
+        # 질문 유형별 템플릿 (개선: 우선순위 섹션 추가)
         self.templates = {
             QuestionType.PRECEDENT_SEARCH: {
                 "title": "## 관련 판례 분석",
                 "sections": ["analysis", "precedents", "laws", "confidence"],
-                "disclaimer": True
+                "disclaimer": True,
+                "priority_sections": ["analysis", "precedents"]
             },
             QuestionType.LAW_INQUIRY: {
                 "title": "## 법률 해설",
                 "sections": ["explanation", "laws", "examples", "confidence"],
-                "disclaimer": True
+                "disclaimer": True,
+                "priority_sections": ["explanation", "laws"]
             },
             QuestionType.LEGAL_ADVICE: {
                 "title": "## 법적 조언",
-                "sections": ["advice", "laws", "precedents", "steps", "warnings", "recommendations", "confidence"],
-                "disclaimer": True
+                "sections": ["advice", "laws", "steps", "warnings", "confidence"],
+                "disclaimer": True,
+                "priority_sections": ["advice", "steps"]
             },
             QuestionType.PROCEDURE_GUIDE: {
                 "title": "## 절차 안내",
-                "sections": ["overview", "steps", "documents", "timeline", "warnings", "recommendations", "confidence"],
-                "disclaimer": True
+                "sections": ["overview", "steps", "documents", "timeline", "warnings", "confidence"],
+                "disclaimer": True,
+                "priority_sections": ["overview", "steps"]
             },
             QuestionType.TERM_EXPLANATION: {
                 "title": "## 용어 해설",
-                "sections": ["definition", "laws", "examples", "related", "confidence"],
-                "disclaimer": True
+                "sections": ["definition", "laws", "examples", "confidence"],
+                "disclaimer": True,
+                "priority_sections": ["definition"]
             },
             QuestionType.GENERAL_QUESTION: {
                 "title": "## 답변",
                 "sections": ["answer", "sources", "confidence"],
-                "disclaimer": True
+                "disclaimer": True,
+                "priority_sections": ["answer"]
             }
         }
 
-        # 이모지 매핑 (강화된 시각적 요소)
-        self.emoji_map = {
-            "analysis": "🔍",
-            "precedents": "📋",
-            "laws": "⚖️",
-            "confidence": "💡",
-            "explanation": "📖",
-            "examples": "💼",
-            "advice": "🎯",
-            "steps": "📝",
-            "overview": "📊",
-            "documents": "📄",
-            "timeline": "⏰",
-            "definition": "📚",
-            "related": "🔗",
-            "answer": "💬",
-            "sources": "📚",
-            # 추가된 구조화 이모지
-            "warnings": "⚠️",
-            "recommendations": "💡",
-            "important": "❗",
-            "checklist": "✅",
-            "caution": "🚨"
-        }
+        # 이모지 매핑 (최소화: 챗봇 친화적)
+        # 이모지는 사용하지 않고 텍스트만 사용 (개선)
+        self.emoji_map = {}  # 모든 이모지 제거
 
     def format_answer(self,
                      raw_answer: str,
@@ -210,24 +195,25 @@ class AnswerFormatter:
                                answer: str,
                                sources: Dict[str, List[Dict[str, Any]]],
                                confidence: ConfidenceInfo) -> Dict[str, str]:
-        """법률 해설 구조화"""
+        """법률 해설 구조화 (개선된 버전 - 빈 섹션 제거)"""
         try:
             sections = {}
 
             # 해설 섹션
             sections["explanation"] = self._clean_and_structure_text(answer)
 
-            # 법률 섹션
+            # 법률 섹션 - 빈 경우 추가하지 않음 (개선)
             laws = sources.get("law_results", [])
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
-            else:
-                sections["laws"] = "관련 법률을 찾을 수 없습니다."
+            # 빈 섹션은 추가하지 않음 (개선: "관련 법률을 찾을 수 없습니다" 제거)
 
-            # 예시 섹션 (간단한 예시 추가)
-            sections["examples"] = self._generate_law_examples(answer, laws)
+            # 예시 섹션 (간단한 예시 추가) - 빈 경우 추가하지 않음
+            examples = self._generate_law_examples(answer, laws)
+            if examples and examples.strip() and examples != "관련 정보를 찾을 수 없습니다.":
+                sections["examples"] = examples
 
-            # 신뢰도 섹션
+            # 신뢰도 섹션 (간소화된 형식)
             sections["confidence"] = self._format_confidence_info(confidence)
 
             return sections
@@ -251,23 +237,23 @@ class AnswerFormatter:
             laws = sources.get("law_results", [])
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
-            else:
-                sections["laws"] = "관련 법률을 찾을 수 없습니다."
 
             # 판례 섹션
             precedents = sources.get("precedent_results", [])
             if precedents:
                 sections["precedents"] = self._format_precedent_sources(precedents)
-            else:
-                sections["precedents"] = "관련 판례를 찾을 수 없습니다."
 
-            # 단계별 가이드 섹션 (강화)
-            sections["steps"] = self._extract_steps_from_answer(answer)
+            # 단계별 가이드 섹션 - 빈 경우 추가하지 않음 (개선)
+            steps = self._extract_steps_from_answer(answer)
+            if steps and steps.strip() and steps != "관련 정보를 찾을 수 없습니다.":
+                sections["steps"] = steps
 
             # 주의사항 및 권장사항 추가
             warnings_recs = self._extract_warnings_and_recommendations(answer)
-            sections["warnings"] = warnings_recs["warnings"]
-            sections["recommendations"] = warnings_recs["recommendations"]
+            if warnings_recs.get("warnings") and warnings_recs["warnings"].strip() and warnings_recs["warnings"] != "관련 정보를 찾을 수 없습니다.":
+                sections["warnings"] = warnings_recs["warnings"]
+            if warnings_recs.get("recommendations") and warnings_recs["recommendations"].strip() and warnings_recs["recommendations"] != "관련 정보를 찾을 수 없습니다.":
+                sections["recommendations"] = warnings_recs["recommendations"]
 
             # 신뢰도 섹션
             sections["confidence"] = self._format_confidence_info(confidence)
@@ -286,22 +272,32 @@ class AnswerFormatter:
         try:
             sections = {}
 
-            # 개요 섹션 (강화)
-            sections["overview"] = self._extract_enhanced_overview(answer)
+            # 개요 섹션 - 빈 경우 추가하지 않음 (개선)
+            overview = self._extract_enhanced_overview(answer)
+            if overview and overview.strip() and overview != "관련 정보를 찾을 수 없습니다.":
+                sections["overview"] = overview
 
-            # 단계별 절차 (강화)
-            sections["steps"] = self._extract_enhanced_steps(answer)
+            # 단계별 절차 - 빈 경우 추가하지 않음 (개선)
+            steps = self._extract_enhanced_steps(answer)
+            if steps and steps.strip() and steps != "관련 정보를 찾을 수 없습니다.":
+                sections["steps"] = steps
 
-            # 필요 서류 (강화)
-            sections["documents"] = self._extract_enhanced_documents(answer)
+            # 필요 서류 - 빈 경우 추가하지 않음 (개선)
+            documents = self._extract_enhanced_documents(answer)
+            if documents and documents.strip() and documents != "관련 정보를 찾을 수 없습니다.":
+                sections["documents"] = documents
 
-            # 처리 기간 (강화)
-            sections["timeline"] = self._extract_enhanced_timeline(answer)
+            # 처리 기간 - 빈 경우 추가하지 않음 (개선)
+            timeline = self._extract_enhanced_timeline(answer)
+            if timeline and timeline.strip() and timeline != "관련 정보를 찾을 수 없습니다.":
+                sections["timeline"] = timeline
 
-            # 주의사항 및 권장사항 추가
+            # 주의사항 및 권장사항 추가 - 빈 경우 추가하지 않음 (개선)
             warnings_recs = self._extract_warnings_and_recommendations(answer)
-            sections["warnings"] = warnings_recs["warnings"]
-            sections["recommendations"] = warnings_recs["recommendations"]
+            if warnings_recs.get("warnings") and warnings_recs["warnings"].strip() and warnings_recs["warnings"] != "관련 정보를 찾을 수 없습니다.":
+                sections["warnings"] = warnings_recs["warnings"]
+            if warnings_recs.get("recommendations") and warnings_recs["recommendations"].strip() and warnings_recs["recommendations"] != "관련 정보를 찾을 수 없습니다.":
+                sections["recommendations"] = warnings_recs["recommendations"]
 
             # 신뢰도 섹션
             sections["confidence"] = self._format_confidence_info(confidence)
@@ -517,27 +513,31 @@ class AnswerFormatter:
                                 answer: str,
                                 sources: Dict[str, List[Dict[str, Any]]],
                                 confidence: ConfidenceInfo) -> Dict[str, str]:
-        """용어 해설 구조화"""
+        """용어 해설 구조화 (개선된 버전 - 빈 섹션 제거)"""
         try:
             sections = {}
 
             # 정의 섹션
-            sections["definition"] = self._extract_definition_from_answer(answer)
+            definition = self._extract_definition_from_answer(answer)
+            if definition and definition.strip():
+                sections["definition"] = definition
 
-            # 관련 법률
+            # 관련 법률 - 빈 경우 추가하지 않음 (개선)
             laws = sources.get("law_results", [])
             if laws:
                 sections["laws"] = self._format_law_sources(laws)
-            else:
-                sections["laws"] = "관련 법률을 찾을 수 없습니다."
 
-            # 예시 섹션
-            sections["examples"] = self._extract_examples_from_answer(answer)
+            # 예시 섹션 - 빈 경우 추가하지 않음 (개선)
+            examples = self._extract_examples_from_answer(answer)
+            if examples and examples.strip() and examples != "관련 정보를 찾을 수 없습니다.":
+                sections["examples"] = examples
 
-            # 관련 용어
-            sections["related"] = self._extract_related_terms_from_answer(answer)
+            # 관련 용어 - 빈 경우 추가하지 않음 (개선)
+            related = self._extract_related_terms_from_answer(answer)
+            if related and related.strip() and related != "관련 정보를 찾을 수 없습니다.":
+                sections["related"] = related
 
-            # 신뢰도 섹션
+            # 신뢰도 섹션 (간소화된 형식)
             sections["confidence"] = self._format_confidence_info(confidence)
 
             return sections
@@ -550,24 +550,23 @@ class AnswerFormatter:
                               answer: str,
                               sources: Dict[str, List[Dict[str, Any]]],
                               confidence: ConfidenceInfo) -> Dict[str, str]:
-        """일반 답변 구조화"""
+        """일반 답변 구조화 (개선된 버전 - 빈 섹션 제거)"""
         try:
             sections = {}
 
             # 답변 섹션
             sections["answer"] = self._clean_and_structure_text(answer)
 
-            # 소스 섹션
+            # 소스 섹션 - 빈 경우 추가하지 않음 (개선)
             all_sources = []
             all_sources.extend(sources.get("law_results", []))
             all_sources.extend(sources.get("precedent_results", []))
 
             if all_sources:
                 sections["sources"] = self._format_general_sources(all_sources)
-            else:
-                sections["sources"] = "관련 정보를 찾을 수 없습니다."
+            # 빈 섹션은 추가하지 않음 (개선: "관련 정보를 찾을 수 없습니다" 제거)
 
-            # 신뢰도 섹션
+            # 신뢰도 섹션 (간소화된 형식으로 추가)
             sections["confidence"] = self._format_confidence_info(confidence)
 
             return sections
@@ -576,11 +575,52 @@ class AnswerFormatter:
             self.logger.error(f"Error formatting general answer: {e}")
             return {"answer": answer}
 
+    def _fix_spacing(self, text: str) -> str:
+        """띄어쓰기 자동 보정"""
+        try:
+            fixed = text
+
+            # 조사 앞 불필요한 띄어쓰기 제거
+            particles = ['은', '는', '이', '가', '을', '를', '에', '에서', '와', '과', '도', '만', '부터', '까지', '께서', '에게', '에게서']
+            for particle in particles:
+                # 조사 앞 띄어쓰기 제거 (예: "사람 은" -> "사람은")
+                fixed = re.sub(rf'\s+({particle})\s+', rf'\1 ', fixed)
+                fixed = re.sub(rf'\s+({particle})', rf'\1', fixed)
+
+            # 어미 앞 불필요한 띄어쓰기 제거
+            endings = ['다', '요', '습니다', '입니다', '있습니다', '없습니다', '합니다', '됩니다']
+            for ending in endings:
+                # 어미 앞 띄어쓰기 제거 (예: "한다 다" -> "한다다" -> "한다"로 정규화)
+                fixed = re.sub(rf'(\w+)\s+({ending})', rf'\1{ending}', fixed)
+
+            # 마침표 뒤 불필요한 띄어쓰기 제거
+            fixed = re.sub(r'\.\s+\.', '.', fixed)
+
+            # 쉼표 뒤 띄어쓰기 보정
+            fixed = re.sub(r',\s*', ', ', fixed)
+
+            # 괄호 내부 띄어쓰기 보정
+            fixed = re.sub(r'\(\s+', '(', fixed)
+            fixed = re.sub(r'\s+\)', ')', fixed)
+
+            # 연속된 공백 제거 (단, 문단 구분은 유지)
+            fixed = re.sub(r'[ \t]+', ' ', fixed)
+            fixed = re.sub(r'\n\s+', '\n', fixed)
+
+            return fixed
+
+        except Exception as e:
+            self.logger.error(f"Error fixing spacing: {e}")
+            return text
+
     def _clean_and_structure_text(self, text: str) -> str:
-        """텍스트 정리 및 구조화"""
+        """텍스트 정리 및 구조화 (개선: 띄어쓰기 보정 추가)"""
         try:
             # 기본 정리
             cleaned = text.strip()
+
+            # 띄어쓰기 보정 (개선)
+            cleaned = self._fix_spacing(cleaned)
 
             # 문단 구분 개선
             cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
@@ -652,35 +692,10 @@ class AnswerFormatter:
             return "법률 정보 포맷팅 오류"
 
     def _format_confidence_info(self, confidence: ConfidenceInfo) -> str:
-        """신뢰도 정보 포맷팅"""
+        """신뢰도 정보 포맷팅 (간소화된 버전)"""
         try:
-            level_emoji = {
-                "very_high": "🟢",
-                "high": "🟢",
-                "medium": "🟡",
-                "low": "🟠",
-                "very_low": "🔴"
-            }.get(confidence.reliability_level, "⚪")
-
-            formatted = f"""
-{level_emoji} **신뢰도: {confidence.confidence:.1%}** ({confidence.reliability_level})
-
-**상세 점수:**"""
-
-            # factors에서 점수 정보 추출
-            if 'similarity_score' in confidence.factors:
-                formatted += f"\n- 검색 결과 유사도: {confidence.factors['similarity_score']:.1%}"
-            if 'matching_score' in confidence.factors:
-                formatted += f"\n- 법률/판례 매칭 정확도: {confidence.factors['matching_score']:.1%}"
-            if 'answer_quality' in confidence.factors:
-                formatted += f"\n- 답변 품질: {confidence.factors['answer_quality']:.1%}"
-
-            # explanation 추가
-            if confidence.explanation:
-                formatted += f"\n\n**설명:** {confidence.explanation}"
-
-            return formatted
-
+            # 간단한 형식으로 변경: "신뢰도: 61.8% (medium)"
+            return f"신뢰도: {confidence.confidence:.1%} ({confidence.reliability_level})"
         except Exception as e:
             self.logger.error(f"Error formatting confidence info: {e}")
             return f"신뢰도: {confidence.confidence:.1%}"
@@ -689,25 +704,78 @@ class AnswerFormatter:
                                 template: Dict[str, Any],
                                 sections: Dict[str, str],
                                 confidence: ConfidenceInfo) -> str:
-        """최종 구조화된 내용 생성"""
+        """최종 구조화된 내용 생성 (개선된 버전 - 빈 섹션 필터링, 제목 중복 방지)"""
         try:
             content_parts = []
 
-            # 제목
-            content_parts.append(template["title"])
+            # 제목 (중복 방지: 템플릿 제목만 사용, 섹션 제목과 중복 방지)
+            template_title = template["title"]
+            # 이미 "## "로 시작하는지 확인하고, 없으면 추가
+            if not template_title.startswith("## "):
+                template_title = f"## {template_title.replace('## ', '').replace('### ', '')}"
+            # 이모지 제거
+            template_title_clean = re.sub(r'[📖⚖️💼💡📚📋⭐📌🔍💬🎯📊📝📄⏰🔗⚠️❗✅🚨]+\s*', '', template_title.replace('## ', '').replace('### ', '')).strip()
+            content_parts.append(f"## {template_title_clean}")
             content_parts.append("")
 
-            # 각 섹션 추가
+            # 각 섹션 추가 (빈 섹션 필터링 강화, 우선순위 적용 - 개선)
+            # confidence 섹션은 마지막에 한 번만 표시하도록 별도 처리
+            confidence_section = None
+            priority_sections = template.get("priority_sections", [])  # 우선 표시 섹션
+
+            # 우선순위 섹션 먼저 처리
+            processed_sections = set()
+            for section_name in priority_sections:
+                if section_name in template["sections"]:
+                    processed_sections.add(section_name)
+                    if section_name == "confidence":
+                        if section_name in sections and sections[section_name]:
+                            confidence_section = sections[section_name]
+                        continue
+
+                    if section_name in sections and sections[section_name]:
+                        section_content = sections[section_name].strip()
+                        if not section_content or section_content == "관련 정보를 찾을 수 없습니다." or section_content == "관련 법률을 찾을 수 없습니다." or section_content == "관련 판례를 찾을 수 없습니다.":
+                            continue
+
+                        section_title = self._get_section_title(section_name)
+                        content_parts.append(f"### {section_title}")
+                        content_parts.append("")
+                        content_parts.append(section_content)
+                        content_parts.append("")
+
+            # 나머지 섹션 처리
             for section_name in template["sections"]:
+                if section_name in processed_sections:
+                    continue
+
+                # confidence 섹션은 나중에 처리
+                if section_name == "confidence":
+                    if section_name in sections and sections[section_name]:
+                        confidence_section = sections[section_name]
+                    continue
+
                 if section_name in sections and sections[section_name]:
-                    emoji = self.emoji_map.get(section_name, "📝")
-                    content_parts.append(f"### {emoji} {self._get_section_title(section_name)}")
+                    section_content = sections[section_name].strip()
+                    # 빈 섹션이거나 "관련 정보를 찾을 수 없습니다" 같은 메시지 제거
+                    if not section_content or section_content == "관련 정보를 찾을 수 없습니다." or section_content == "관련 법률을 찾을 수 없습니다." or section_content == "관련 판례를 찾을 수 없습니다.":
+                        continue
+
+                    # 섹션 제목 (이모지 제거 - 개선)
+                    section_title = self._get_section_title(section_name)
+                    # 이모지는 완전히 제거 (개선: 챗봇 친화적)
+                    content_parts.append(f"### {section_title}")
                     content_parts.append("")
-                    content_parts.append(sections[section_name])
+                    content_parts.append(section_content)
                     content_parts.append("")
 
-            # 면책 조항
-            if template.get("disclaimer", False):
+            # 신뢰도 정보는 마지막에 한 번만 표시 (간소화된 형식)
+            if confidence_section:
+                content_parts.append(confidence_section)
+                content_parts.append("")
+
+            # 면책 조항 (신뢰도가 낮을 때만 표시 - 개선)
+            if template.get("disclaimer", False) and confidence.confidence < 0.5:
                 content_parts.append(self._get_disclaimer())
 
             return "\n".join(content_parts)
@@ -741,11 +809,8 @@ class AnswerFormatter:
         return titles.get(section_name, section_name)
 
     def _get_disclaimer(self) -> str:
-        """면책 조항 반환"""
-        return """---
-💼 **면책 조항**
-본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다.
-구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."""
+        """면책 조항 반환 (간소화된 버전)"""
+        return "※ 본 답변은 일반적인 법률 정보이며, 구체적인 법률 문제는 변호사와 상담하시기 바랍니다."
 
     def _extract_steps_from_answer(self, answer: str) -> str:
         """답변에서 단계별 가이드 추출 (강화된 번호 목록)"""
