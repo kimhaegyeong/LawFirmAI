@@ -5612,6 +5612,43 @@ class EnhancedLegalQuestionWorkflow:
             max_docs = self.config.max_retrieved_docs or 20
             final_docs = filtered_docs[:max_docs]
 
+            # 개선: 검색 결과가 없을 때 명확한 로깅 및 폴백 전략 적용
+            if not final_docs:
+                self.logger.warning(
+                    f"⚠️ [SEARCH RESULTS] No valid documents found after filtering. "
+                    f"Query: '{query[:50]}...', Query type: {query_type_str}, "
+                    f"Total merged: {len(merged_docs)}, Filtered: {len(filtered_docs)}"
+                )
+
+                # 폴백: 낮은 점수라도 문서가 있으면 사용 (최소 1개라도 제공)
+                if weighted_docs:
+                    # 점수 순으로 정렬되어 있으므로, 상위 3개를 선택 (점수가 낮아도)
+                    fallback_docs = []
+                    for doc in weighted_docs[:3]:
+                        content = doc.get("content", "") or doc.get("text", "")
+                        if content and len(content.strip()) >= 10:
+                            # 점수가 낮아도 최소 임계값(0.05) 이상이면 사용
+                            score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                            if score >= 0.05:
+                                fallback_docs.append(doc)
+
+                    if fallback_docs:
+                        final_docs = fallback_docs
+                        self.logger.info(
+                            f"🔄 [FALLBACK] Using {len(final_docs)} lower-scored documents "
+                            f"as fallback (original filtered count: 0)"
+                        )
+                    else:
+                        self.logger.error(
+                            f"❌ [SEARCH RESULTS] No fallback documents available. "
+                            f"All documents were filtered out (content too short or score too low)."
+                        )
+                else:
+                    self.logger.error(
+                        f"❌ [SEARCH RESULTS] No documents available at all. "
+                        f"Search may have failed or returned empty results."
+                    )
+
             # 5. 메타데이터 업데이트 (기존 update_search_metadata 로직)
             search_metadata = {
                 "total_results": len(merged_docs),
@@ -5621,6 +5658,8 @@ class EnhancedLegalQuestionWorkflow:
                 "semantic_count": semantic_count,
                 "keyword_count": keyword_count,
                 "retry_performed": needs_retry,
+                "has_results": len(final_docs) > 0,
+                "used_fallback": len(final_docs) > 0 and len(filtered_docs) == 0,
                 "timestamp": time.time()
             }
             self._set_state_value(state, "search_metadata", search_metadata)
@@ -5636,16 +5675,54 @@ class EnhancedLegalQuestionWorkflow:
                 f"검색 결과 처리 완료: {len(final_docs)}개 문서 (품질 점수: {overall_quality:.2f}, 시간: {processing_time:.3f}s)"
             )
 
-            self.logger.info(
-                f"✅ 검색 결과 처리 완료: {len(final_docs)}개 문서 "
-                f"(품질: {overall_quality:.2f}, 재검색: {needs_retry}, 시간: {processing_time:.3f}s)"
-            )
+            if len(final_docs) > 0:
+                self.logger.info(
+                    f"✅ [SEARCH RESULTS] Processed {len(final_docs)} documents "
+                    f"(quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ [SEARCH RESULTS] No documents available after processing "
+                    f"(quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
+                )
 
         except Exception as e:
             self._handle_error(state, str(e), "검색 결과 처리 중 오류 발생")
-            # 폴백: 기존 검색 결과라도 사용
-            self._set_state_value(state, "retrieved_docs", [])
-            self._set_state_value(state, "merged_documents", [])
+            # 개선: 에러 처리 강화 - 명확한 로깅 및 폴백 전략
+            self.logger.error(
+                f"❌ [SEARCH RESULTS ERROR] Failed to process search results: {str(e)}\n"
+                f"   Query: '{query[:50] if 'query' in locals() else 'N/A'}...', "
+                f"Query type: {query_type_str if 'query_type_str' in locals() else 'N/A'}"
+            )
+
+            # 폴백: 기존 검색 결과가 있으면 사용 시도
+            existing_semantic = self._get_state_value(state, "semantic_results", [])
+            existing_keyword = self._get_state_value(state, "keyword_results", [])
+
+            fallback_docs = []
+            if existing_semantic:
+                for doc in existing_semantic[:5]:  # 최대 5개
+                    if isinstance(doc, dict) and (doc.get("content") or doc.get("text")):
+                        fallback_docs.append(doc)
+            if not fallback_docs and existing_keyword:
+                for doc in existing_keyword[:5]:  # 최대 5개
+                    if isinstance(doc, dict) and (doc.get("content") or doc.get("text")):
+                        fallback_docs.append(doc)
+
+            if fallback_docs:
+                self.logger.info(
+                    f"🔄 [FALLBACK] Using {len(fallback_docs)} documents from original search results "
+                    f"as fallback after processing error"
+                )
+                self._set_state_value(state, "retrieved_docs", fallback_docs)
+                self._set_state_value(state, "merged_documents", fallback_docs)
+            else:
+                # 최종 폴백: 빈 리스트
+                self.logger.warning(
+                    f"⚠️ [FALLBACK] No fallback documents available. Setting empty retrieved_docs."
+                )
+                self._set_state_value(state, "retrieved_docs", [])
+                self._set_state_value(state, "merged_documents", [])
 
         return state
 
