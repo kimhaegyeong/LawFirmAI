@@ -8,6 +8,7 @@ import json
 import logging
 import sqlite3
 import sys
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,6 +16,10 @@ from typing import Any, Dict, List, Optional, Tuple
 # 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+# source 모듈 경로 추가
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+from source.utils.config import Config
 
 from core.data.database import DatabaseManager
 from core.data.vector_store import LegalVectorStore
@@ -43,11 +48,15 @@ class PrecedentSearchEngine:
     """판례 전용 검색 엔진"""
 
     def __init__(self,
-                 db_path: str = "data/lawfirm.db",
+                 db_path: Optional[str] = None,
                  vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
                  vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
         """판례 검색 엔진 초기화"""
         self.logger = logging.getLogger(__name__)
+
+        if db_path is None:
+            config = Config()
+            db_path = config.database_path
 
         # 데이터베이스 연결
         self.db_manager = DatabaseManager(db_path)

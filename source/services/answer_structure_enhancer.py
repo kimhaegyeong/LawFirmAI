@@ -4,13 +4,27 @@
 질문 유형별 맞춤형 답변 구조 템플릿 적용
 """
 
+import logging
 import re
 from datetime import datetime
+from difflib import SequenceMatcher
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+try:
+    from langchain_community.llms import Ollama
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    ChatGoogleGenerativeAI = None
+    Ollama = None
 
 from .legal_basis_validator import LegalBasisValidator
 from .legal_citation_enhancer import LegalCitationEnhancer
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 
 class QuestionType(Enum):
@@ -31,15 +45,48 @@ class QuestionType(Enum):
 class AnswerStructureEnhancer:
     """답변 구조화 향상 시스템"""
 
-    def __init__(self):
-        """초기화"""
+    def __init__(self, llm=None, max_few_shot_examples: int = 2,
+                 enable_few_shot: bool = True, enable_cot: bool = True):
+        """
+        초기화
+
+        Args:
+            llm: LangChain LLM 인스턴스 (없으면 자동 초기화)
+                - Google Gemini 또는 Ollama 지원
+            max_few_shot_examples: Few-Shot 예시 최대 개수 (기본값: 2)
+                - 프롬프트 길이 제한에 따라 조정 가능
+            enable_few_shot: Few-Shot 예시 사용 여부 (기본값: True)
+                - False로 설정 시 예시 섹션 제외
+            enable_cot: Chain-of-Thought 사용 여부 (기본값: True)
+                - False로 설정 시 간단한 Step 1,2,3 가이드 사용
+
+        Raises:
+            FileNotFoundError: Few-Shot 예시 파일을 찾을 수 없는 경우 (경고만 발생)
+
+        Note:
+            Few-Shot 예시는 data/training/few_shot_examples.json 파일에서 로드됩니다.
+            캐싱이 적용되어 여러 번 호출 시 파일 I/O가 발생하지 않습니다.
+        """
+        # 설정 저장
+        self.max_few_shot_examples = max_few_shot_examples
+        self.enable_few_shot = enable_few_shot
+        self.enable_cot = enable_cot
+
         # 하드코딩된 템플릿 로드
         self.structure_templates = self._load_structure_templates()
         self.quality_indicators = self._load_quality_indicators()
 
+        # Few-Shot 예시 로드 (캐싱 적용)
+        self._few_shot_examples_cache = None
+        self.few_shot_examples = self._load_few_shot_examples() if enable_few_shot else {}
+
         # 법적 근거 강화 시스템 초기화
         self.citation_enhancer = LegalCitationEnhancer()
         self.basis_validator = LegalBasisValidator()
+
+        # LLM 초기화 (LLM 기반 구조화를 위해)
+        self.llm = llm or self._initialize_llm()
+        self.use_llm = LLM_AVAILABLE and self.llm is not None
 
     def classify_question_type(self, question: str) -> QuestionType:
         """질문 유형 분류 (개선된 키워드 우선순위)"""
@@ -306,7 +353,7 @@ class AnswerStructureEnhancer:
             return QuestionType.GENERAL_QUESTION
 
         except Exception as e:
-            print(f"Error in classify_question_type: {e}")
+            logger.error(f"Error in classify_question_type: {e}", exc_info=True)
             return QuestionType.GENERAL_QUESTION
 
     def _load_structure_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
@@ -444,9 +491,7 @@ class AnswerStructureEnhancer:
             return templates
 
         except Exception as e:
-            print(f"Failed to load templates: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Failed to load templates: {e}", exc_info=True)
             return self._get_fallback_templates()
 
     def _get_fallback_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
@@ -483,6 +528,104 @@ class AnswerStructureEnhancer:
             }
         }
 
+    def _load_few_shot_examples(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Few-Shot 예시 데이터 로드 (캐싱 적용)
+
+        Returns:
+            Dict[str, List[Dict[str, Any]]]: 질문 유형별 Few-Shot 예시 데이터
+        """
+        # 캐시 확인
+        if hasattr(self, '_few_shot_examples_cache') and self._few_shot_examples_cache is not None:
+            return self._few_shot_examples_cache
+
+        import json
+        import os
+
+        # 파일 경로 설정
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        examples_file = os.path.join(
+            current_dir,
+            '..',
+            '..',
+            'data',
+            'training',
+            'few_shot_examples.json'
+        )
+
+        try:
+            if os.path.exists(examples_file):
+                with open(examples_file, 'r', encoding='utf-8') as f:
+                    examples = json.load(f)
+                    # 캐시에 저장
+                    self._few_shot_examples_cache = examples
+                    logger.debug(f"Few-shot examples loaded and cached: {len(examples)} question types")
+                    return examples
+            else:
+                # 파일이 없으면 빈 딕셔너리 반환
+                logger.warning(f"Few-shot examples file not found: {examples_file}")
+                return {}
+        except Exception as e:
+            # 에러 발생 시 빈 딕셔너리 반환
+            logger.warning(f"Failed to load few-shot examples: {e}", exc_info=True)
+            return {}
+
+    def _get_few_shot_examples(self, question_type: QuestionType, question: str = "") -> List[Dict[str, Any]]:
+        """
+        질문 유형별 Few-Shot 예시 반환 (검증 및 유사도 기반 선택 포함)
+
+        Args:
+            question_type: 질문 유형 (QuestionType enum)
+            question: 질문 텍스트 (유사도 계산용, 선택적)
+                - 제공되면 질문과 가장 유사한 예시를 우선 선택
+                - 제공되지 않으면 순서대로 반환
+
+        Returns:
+            List[Dict[str, Any]]: 질문 유형별 Few-Shot 예시 리스트
+                - 검증 통과한 예시만 포함
+                - 최대 개수: max_few_shot_examples 설정값
+                - 질문이 제공된 경우 유사도 순으로 정렬
+
+        Note:
+            - 검증 실패한 예시는 제외되고 경고 로깅
+            - 유사도는 Jaccard 유사도(단어 기반)로 계산
+        """
+        if not hasattr(self, 'few_shot_examples') or not self.few_shot_examples:
+            return []
+
+        # 질문 유형을 문자열로 변환
+        question_type_str = question_type.value if isinstance(question_type, QuestionType) else str(question_type)
+
+        # 해당 질문 유형의 예시 가져오기
+        examples = self.few_shot_examples.get(question_type_str, [])
+
+        # 검증 통과한 예시만 필터링 (품질 메트릭 포함)
+        valid_examples = []
+        for ex in examples:
+            if hasattr(self, '_validate_few_shot_example') and self._validate_few_shot_example(ex):
+                valid_examples.append(ex)
+            elif not hasattr(self, '_validate_few_shot_example'):
+                # 검증 메서드가 없으면 기본 검증만 수행
+                if all(key in ex for key in ['question', 'original_answer', 'enhanced_answer', 'improvements']):
+                    valid_examples.append(ex)
+
+        # 검증 실패한 예시가 있으면 경고
+        if len(valid_examples) < len(examples):
+            invalid_count = len(examples) - len(valid_examples)
+            logger.warning(f"{question_type_str}: {invalid_count}개 예시가 검증 실패했습니다.")
+
+        # 질문이 제공되고 예시가 여러 개인 경우 유사도 기반 정렬 시도
+        if question and len(valid_examples) > 1:
+            try:
+                if hasattr(self, '_sort_examples_by_similarity'):
+                    valid_examples = self._sort_examples_by_similarity(valid_examples, question)
+            except Exception as e:
+                logger.debug(f"Failed to sort examples by similarity: {e}")
+
+        # 설정된 최대 개수까지만 반환 (프롬프트 길이 제한)
+        max_examples = getattr(self, 'max_few_shot_examples', 2)
+        return valid_examples[:max_examples]
+
     def _load_quality_indicators(self) -> Dict[str, List[str]]:
         """품질 지표 로드"""
         return self._get_fallback_quality_indicators()
@@ -508,50 +651,51 @@ class AnswerStructureEnhancer:
         }
 
     def enhance_answer_structure(self, answer: str, question_type: str,
-                               question: str = "", domain: str = "general") -> Dict[str, Any]:
-        """답변 구조화 향상 (안전한 버전)"""
+                               question: str = "", domain: str = "general",
+                               retrieved_docs: Optional[List[Dict[str, Any]]] = None,
+                               legal_references: Optional[List[str]] = None,
+                               legal_citations: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """답변 구조화 향상 (안전한 버전) - 법적 근거 정보 포함"""
         try:
             # 입력 검증
             if not answer or not isinstance(answer, str):
                 return {"error": "Invalid answer input"}
 
+            # 법적 근거 정보 준비 (None 체크 및 타입 안전성 보장)
+            retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+            legal_references = legal_references if legal_references is not None else []
+            legal_citations = legal_citations if legal_citations is not None else []
+
+            # 타입 검증
+            if not isinstance(retrieved_docs, list):
+                retrieved_docs = []
+            if not isinstance(legal_references, list):
+                legal_references = []
+            if not isinstance(legal_citations, list):
+                legal_citations = []
+
             # 질문 유형 매핑
             mapped_question_type = self._map_question_type(question_type, question)
 
-            # 구조 템플릿 가져오기
-            template = self.structure_templates.get(mapped_question_type,
-                                                  self.structure_templates[QuestionType.GENERAL_QUESTION])
+            # LLM 기반 구조화 시도 (권장)
+            if self.use_llm:
+                try:
+                    return self._enhance_with_llm(
+                        answer, question, mapped_question_type,
+                        retrieved_docs, legal_references, legal_citations
+                    )
+                except Exception as e:
+                    logger.warning(f"LLM 기반 구조화 실패, 템플릿 방식으로 폴백: {e}", exc_info=True)
+                    # 폴백: 템플릿 기반 구조화
 
-            if not template:
-                return {"error": "Template not found"}
-
-            # 현재 답변 분석
-            analysis = self._analyze_current_structure(answer, template)
-
-            # 구조화 개선 제안
-            improvements = self._generate_structure_improvements(analysis, template)
-
-            # 구조화된 답변 생성
-            structured_answer = self._create_structured_answer(answer, template, improvements)
-
-            # 품질 메트릭 계산
-            quality_metrics = self._calculate_quality_metrics(structured_answer)
-
-            return {
-                "original_answer": answer,
-                "structured_answer": structured_answer,
-                "question_type": mapped_question_type.value,
-                "template_used": template.get("title", "Unknown"),
-                "analysis": analysis,
-                "improvements": improvements,
-                "quality_metrics": quality_metrics,
-                "enhancement_timestamp": datetime.now().isoformat()
-            }
+            # 템플릿 기반 구조화 (폴백)
+            return self._enhance_with_template(
+                answer, mapped_question_type, question,
+                retrieved_docs, legal_references, legal_citations
+            )
 
         except Exception as e:
-            print(f"답변 구조화 향상 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"답변 구조화 향상 실패: {e}", exc_info=True)
             return {"error": str(e)}
 
     def _map_question_type(self, question_type: any, question: str) -> QuestionType:
@@ -571,7 +715,7 @@ class AnswerStructureEnhancer:
             return QuestionType.GENERAL_QUESTION
 
         except Exception as e:
-            print(f"Question type mapping failed: {e}")
+            logger.warning(f"Question type mapping failed: {e}", exc_info=True)
             # 폴백: 기존 방식 사용
             return self._map_question_type_fallback(question_type, question)
 
@@ -604,7 +748,1096 @@ class AnswerStructureEnhancer:
         if isinstance(question_type, str):
             return explicit_mapping.get(question_type.lower(), QuestionType.GENERAL_QUESTION)
 
-        return QuestionType.GENERAL_QUESTION
+            return QuestionType.GENERAL_QUESTION
+
+    def _initialize_llm(self):
+        """LLM 초기화"""
+        if not LLM_AVAILABLE:
+            return None
+
+        try:
+            # LangGraphConfig에서 LLM 설정 가져오기
+            # 여러 경로 시도 (상대/절대 경로 모두 지원)
+            try:
+                from source.utils.langgraph_config import LangGraphConfig
+            except ImportError:
+                try:
+                    from ...utils.langgraph_config import LangGraphConfig
+                except ImportError:
+                    # 최종 폴백: sys.path를 이용한 동적 import
+                    import os
+                    import sys
+                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+                    if project_root not in sys.path:
+                        sys.path.insert(0, project_root)
+                    from source.utils.langgraph_config import LangGraphConfig
+
+            config = LangGraphConfig.from_env()
+
+            if config.llm_provider == "google" and ChatGoogleGenerativeAI:
+                try:
+                    llm = ChatGoogleGenerativeAI(
+                        model=config.google_model or "gemini-2.5-flash-lite",
+                        temperature=0.3,
+                        max_output_tokens=4000,
+                        timeout=30,
+                        api_key=config.google_api_key
+                    )
+                    logger.info(f"LLM initialized: Google Gemini ({config.google_model})")
+                    return llm
+                except Exception as e:
+                    logger.error(f"Failed to initialize Google Gemini: {e}", exc_info=True)
+
+            if config.llm_provider == "ollama" and Ollama:
+                try:
+                    llm = Ollama(
+                        model=config.ollama_model or "llama2",
+                        base_url=config.ollama_base_url or "http://localhost:11434",
+                        temperature=0.3,
+                        num_predict=4000,
+                        timeout=30
+                    )
+                    logger.info(f"LLM initialized: Ollama ({config.ollama_model})")
+                    return llm
+                except Exception as e:
+                    logger.error(f"Failed to initialize Ollama: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"LLM initialization error: {e}", exc_info=True)
+
+        return None
+
+    def _enhance_with_llm(
+        self,
+        answer: str,
+        question: str,
+        question_type: QuestionType,
+        retrieved_docs: List[Dict[str, Any]],
+        legal_references: List[str],
+        legal_citations: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """LLM을 활용한 구조화된 답변 생성"""
+
+        # None 체크 및 타입 안전성 보장
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        if not isinstance(retrieved_docs, list):
+            retrieved_docs = []
+        if not isinstance(legal_references, list):
+            legal_references = []
+        if not isinstance(legal_citations, list):
+            legal_citations = []
+
+        # 프롬프트 구성
+        prompt = self._build_llm_enhancement_prompt(
+            answer, question, question_type,
+            retrieved_docs, legal_references, legal_citations
+        )
+
+        # LLM 호출
+        try:
+            response = self.llm.invoke(prompt)
+            # content 속성이 있으면 사용 (ChatModel), 없으면 직접 문자열 변환 (BaseLLM)
+            structured_answer = response.content if hasattr(response, 'content') else str(response)
+        except Exception:
+            # 예외 발생 시 재시도
+            structured_answer = str(self.llm.invoke(prompt))
+
+        # LLM 응답 후처리 - 원본 내용 보존 검증
+        structured_answer = self._post_process_llm_response(
+            structured_answer, answer, question_type
+        )
+
+        # 품질 메트릭 계산
+        quality_metrics = self._calculate_quality_metrics(structured_answer)
+
+        return {
+            "original_answer": answer,
+            "structured_answer": structured_answer,
+            "question_type": question_type.value,
+            "template_used": "LLM 기반 구조화",
+            "method": "llm_based",
+            "analysis": {
+                "has_title": bool(re.search(r'^#+\s+', structured_answer, re.MULTILINE)),
+                "section_count": len(re.findall(r'^###\s+', structured_answer, re.MULTILINE))
+            },
+            "improvements": [],
+            "quality_metrics": quality_metrics,
+            "enhancement_timestamp": datetime.now().isoformat()
+        }
+
+    def _build_llm_enhancement_prompt(
+        self,
+        answer: str,
+        question: str,
+        question_type: QuestionType,
+        retrieved_docs: List[Dict[str, Any]],
+        legal_references: List[str],
+        legal_citations: List[Dict[str, Any]]
+    ) -> str:
+        """LLM 구조화를 위한 프롬프트 구성 (개선된 버전)"""
+
+        # None 체크
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        # 템플릿 가져오기 (구조 가이드용)
+        template = self.structure_templates.get(
+            question_type,
+            self.structure_templates[QuestionType.GENERAL_QUESTION]
+        )
+
+        # 법적 문서 포맷팅
+        legal_docs_text = self._format_docs_for_prompt(retrieved_docs)
+
+        # 원본 답변의 핵심 키워드 추출 (내용 보존 확인용)
+        answer_keywords = set()
+        if answer:
+            keywords = re.findall(r'[\w가-힣]{2,}', answer.lower())
+            # 법률 관련 키워드 우선 추출
+            legal_keywords = [kw for kw in keywords if any(term in kw for term in ['법', '조', '항', '판례', '법원', '판결', '소송', '계약', '권리', '의무'])]
+            answer_keywords.update(legal_keywords[:15])
+            answer_keywords.update(keywords[:30])  # 일반 키워드도 추가
+
+        keywords_preview = ", ".join(list(answer_keywords)[:10]) if answer_keywords else "없음"
+
+        # Few-Shot 예시 섹션 생성
+        few_shot_examples = self._get_few_shot_examples(question_type)
+        few_shot_examples_section = ""
+
+        if few_shot_examples:
+            few_shot_examples_section = "\n## 📚 개선 예시 (Few-Shot Learning)\n\n"
+            for i, example in enumerate(few_shot_examples, 1):
+                few_shot_examples_section += f"""### 예시 {i}
+
+**질문**: {example.get('question', '')}
+
+**원본 답변**:
+```
+{example.get('original_answer', '')}
+```
+
+**개선된 답변**:
+```
+{example.get('enhanced_answer', '')}
+```
+
+**주요 개선 사항**:
+{chr(10).join([f"- {imp}" for imp in example.get('improvements', [])])}
+
+---
+
+"""
+        else:
+            few_shot_examples_section = ""
+
+        # Chain-of-Thought 섹션 생성 (설정에 따라)
+        chain_of_thought_section = ""
+        if getattr(self, 'enable_cot', True):
+            chain_of_thought_section = """## 🧠 추론 과정 작성 (Chain-of-Thought)
+
+다음 단계를 **반드시 먼저 수행**하고 각 단계의 결과를 명시적으로 작성하세요:
+
+### Step 1: 원본 답변 분석 및 정보 추출
+
+**법적 정보 목록 (반드시 작성)**:
+- 법조문 번호: [원본에서 추출한 모든 법조문 번호를 나열]
+- 판례 정보: [원본에서 추출한 모든 판례 정보를 나열]
+- 법적 해설: [원본에서 추출한 법적 해설 내용을 요약]
+- 실무 조언: [원본에서 추출한 실무 조언 내용을 요약]
+- 주의사항: [원본에서 추출한 주의사항을 나열]
+
+**구조 분석**:
+- 현재 섹션: [원본의 현재 구조를 분석 - 제목, 섹션, 목록 등]
+- 논리적 흐름: [원본의 논리적 흐름과 연결성을 분석]
+- 품질 평가: [원본의 품질을 10점 만점으로 평가하고 근거 작성]
+
+**보존 대상 정보 (전체 목록)**:
+[원본의 모든 중요 정보를 상세히 나열 - 법적 정보, 예시, 설명, 맥락 등]
+
+### Step 2: 개선 전략 수립
+
+위 Step 1의 분석 결과를 바탕으로 개선 전략을 명시적으로 작성하세요:
+
+- 보존할 내용: [Step 1에서 추출한 모든 정보 중 보존해야 할 내용의 상세 목록]
+- 개선할 부분: [개선이 필요한 부분의 상세 목록 - 인사말, 반복, 구조, 어투 등]
+- 추가할 내용: [원본에 없지만 추가하면 좋을 내용을 작성, 없으면 "없음"으로 표시]
+
+### Step 3: 개선 실행
+
+위 Step 2에서 수립한 전략에 따라 답변을 개선하세요.
+
+**중요**: Step 1과 Step 2의 추론 과정을 반드시 먼저 작성한 후 Step 3의 최종 답변을 작성하세요.
+
+"""
+        else:
+            chain_of_thought_section = """## 📝 작업 가이드
+
+### Step 1: 원본 답변 분석
+다음 항목을 확인하세요:
+1. **법적 정보**: 법조문 번호 및 내용, 판례 정보, 법적 해설, 실무 조언, 주의사항
+2. **상세 설명**: 구체적 예시, 실무적 의미, 실행 가능한 조언, 설명의 논리적 흐름
+3. **맥락**: 설명의 연결성과 자연스러운 흐름
+
+### Step 2: 품질 향상 (정보 보존하면서)
+1. **인사말 제거**: "안녕하세요!", "궁금하시군요" 등 인사말만 제거
+2. **불필요한 반복 통합**: 정확히 동일한 내용만 통합 (유사하지만 다른 맥락은 보존)
+3. **면책 조항 간소화**: 핵심 내용은 유지하면서 간결하게 정리
+4. **어투 통일**: 자연스럽게 전문적 어조로 통일 (원본 품질 유지)
+
+### Step 3: 구조 개선 (필요시에만)
+- 원본이 이미 잘 구조화되어 있으면 최소한의 수정만 적용
+- 구조가 불명확한 경우에만 섹션 제목 추가
+- 각 섹션은 `### 섹션명` 형식 사용
+- 섹션 제목은 내용을 대표하도록 명확하게 작성
+
+"""
+
+        prompt = f"""당신은 법률 답변 품질 향상 전문가입니다. 주어진 답변의 품질을 향상시키되, 원본의 모든 법적 정보와 상세한 설명을 보존하세요.
+
+## 🎯 핵심 원칙
+
+### 1. 정보 보존 우선 (가장 중요)
+- **모든 법적 정보 정확히 보존**: 법조문 번호 및 내용, 판례 정보, 법적 해설, 실무 조언, 구체적인 예시, 설명의 맥락을 그대로 유지하세요.
+- **상세함 보존**: 원본에 포함된 상세한 설명, 구체적 예시, 실무적 조언, 설명의 논리적 흐름을 모두 포함하세요. 요약하지 마세요.
+- **맥락 보존**: 설명의 논리적 흐름과 연결성을 유지하세요. 원본의 설명력을 손상시키지 마세요.
+
+### 2. 형식 개선 (선택적 - 원본 품질 유지)
+- **인사말 제거**: "안녕하세요!", "궁금하시군요", "제가 설명해 드릴게요" 같은 인사말만 제거하세요.
+- **불필요한 반복 통합**: 정확히 동일한 내용의 반복만 하나로 통합하세요. 유사한 내용이라도 맥락이 다르면 보존하세요.
+- **면책 조항 간소화**: 길고 반복적인 면책 조항은 간단히 통합하되, 핵심 내용은 보존하세요.
+
+### 3. 어투 통일 (자연스럽게)
+- 원본 답변이 이미 전문적이고 명확하면 큰 변경 없이 유지하세요.
+- 친근한 어투("~해요", "~이에요")가 있으면 자연스럽게 전문적 어투("~합니다", "~입니다")로 변환하되, 원본의 명확성과 설명력을 유지하세요.
+- 어투 변환 시에도 원본의 자연스러움과 이해하기 쉬운 표현을 보존하세요.
+
+### 4. 구조화 (가이드라인 - 필요시에만)
+- 원본 답변이 이미 잘 구조화되어 있으면 그 구조를 존중하세요.
+- 구조가 불명확한 경우에만 섹션 제목을 추가하되, 원본의 자연스러운 흐름을 방해하지 마세요.
+- 각 섹션이 독립적이고 완결적인 내용을 가지도록 하세요.
+
+원본의 핵심 키워드 (보존 확인용): {keywords_preview}
+
+{few_shot_examples_section}
+
+{chain_of_thought_section}
+
+## 📝 질문 정보
+
+**질문**: {question}
+**질문 유형**: {question_type.value}
+
+## 📄 원본 답변
+
+{answer}
+
+## 📋 구조 가이드 (참고용 - 원본에 맞게 적용)
+
+**제목**: {template.get('title', '법률 질문 답변')}
+
+**섹션 구성 (참고용)**: 원본 답변이 이미 잘 구조화되어 있으면 이 가이드를 강제로 따르지 않아도 됩니다.
+
+"""
+
+        # 템플릿 섹션 정보 추가 (더 유연하게)
+        sections = template.get('sections', [])
+        priority_order = {'high': 1, 'medium': 2, 'low': 3}
+        sorted_sections = sorted(sections, key=lambda x: priority_order.get(x.get('priority', 'medium'), 2))
+
+        for i, section in enumerate(sorted_sections, 1):
+            priority_marker = {'high': '⭐ 필수', 'medium': '📌 권장', 'low': '📋 선택'}.get(
+                section.get('priority', 'medium'), '📌'
+            )
+            prompt += f"""
+{i}. {priority_marker} **섹션**: `### {section['name']}`
+   - 내용: {section.get('content_guide', '')}
+   - 주의: 원본에 해당 내용이 이미 포함되어 있으면 그대로 유지하세요
+"""
+            if section.get('legal_citations'):
+                prompt += "   - 법적 근거는 설명 문장 바로 다음에 자연스럽게 포함\n"
+
+        # 법적 문서 정보 (있는 경우 - 보완용)
+        if legal_docs_text and legal_docs_text.strip() != "검색된 문서가 없습니다.":
+            prompt += f"""
+
+## 🔍 참고: 검색된 법률 문서 (보완용)
+
+{legal_docs_text}
+
+**사용 규칙**:
+- 원본 답변에 이미 포함된 내용이면 추가하지 마세요
+- 원본에 빠진 중요한 법적 정보가 있을 때만 자연스럽게 통합하세요
+- 문서 인용 시 "**출처**: [문서명]" 형식으로 표시하세요
+"""
+
+        if legal_references:
+            refs_text = "\n".join([f"- {ref}" for ref in legal_references[:8]])
+            prompt += f"""
+
+## ⚖️ 참고 법령 (보완용)
+
+{refs_text}
+
+**사용 규칙**:
+- 원본 답변에 이미 언급된 법령이면 중복하지 마세요
+- 원본에 빠진 중요한 법령이 있을 때만 자연스럽게 추가하세요
+- 예: "이에 대해서는 **민법 제111조**에서 규정하고 있습니다."
+"""
+
+        if legal_citations:
+            citations_text = "\n".join([
+                f"- {cite.get('text', cite.get('citation', str(cite)))}"
+                for cite in legal_citations[:8]
+            ])
+            prompt += f"""
+
+## 📚 참고 법적 인용 (보완용)
+
+{citations_text}
+
+**사용 규칙**:
+- 원본에 이미 포함된 인용이면 추가하지 마세요
+- 중요한 인용이 누락된 경우에만 자연스럽게 추가하세요
+- 판례나 법령 인용 시 정확한 형식으로 표기하세요
+"""
+
+        prompt += """
+
+## ✅ 최종 점검
+
+작성 전에 다음을 확인하세요:
+1. [ ] 원본의 **모든** 법적 정보가 포함되었는가? (가장 중요!)
+2. [ ] 원본의 **상세한 설명과 예시**가 모두 포함되었는가?
+3. [ ] 원본의 **맥락과 논리적 흐름**이 유지되었는가?
+4. [ ] 인사말과 불필요한 반복만 제거되었는가?
+5. [ ] 어투 통일이 자연스럽게 이루어졌는가?
+6. [ ] 구조 개선이 원본의 품질을 향상시키는가?
+
+## 📐 출력 형식 가이드
+
+### 형식 규칙:
+1. **제목**: `## 제목` 형식으로 시작 (원본이 이미 잘 구조화되어 있으면 존중)
+2. **섹션**: 각 섹션은 `### 섹션명` 형식 사용 (표시 문구 사용하지 않음)
+3. **표시 문구 금지**: `[질문 내용 분석:]`, `[관련 법령:]` 같은 대괄호 표시 문구는 사용하지 마세요
+4. **인사말 제거**: "안녕하세요!", "궁금하시군요" 등 인사말만 제거
+5. **어투 변환**: 자연스럽게 전문적 어조로 통일 (원본 품질 유지)
+6. **강조**: 중요한 내용은 `**텍스트**` 형식
+7. **법적 근거**: 설명 문장 바로 다음에 자연스럽게 포함
+8. **리스트**: 필요시 `- 항목` 또는 `1. 항목` 형식
+
+### 변환 예시
+
+#### 원본 (Before)
+```
+안녕하세요! 민법 제111조에 대해 궁금하시군요. 제가 친절하고 자세하게 설명해 드릴게요.
+
+민법 제111조는 격지자 간의 계약에서 의사표시가 상대방에게 도달했을 때 효력이 발생한다는 내용을 담고 있어요.
+여기서 '격지자'란 서로 멀리 떨어져 있어서 즉시 의사소통이 어려운 사람들을 말해요.
+예를 들어, 편지나 이메일로 계약을 주고받는 경우가 이에 해당하죠.
+
+**주요 내용:**
+* **도달주의**: 의사표시를 한 사람이 상대방에게 그 의사표시가 전달되어 상대방이 내용을 알 수 있는 상태가 되었을 때,
+그 의사표시의 효력이 발생한다는 원칙이에요.
+```
+
+#### 향상된 답변 (After) - 상세함 보존
+```markdown
+## 법률 질문 답변
+
+### 관련 법령
+민법 제111조는 격지자 간의 계약에서 의사표시가 상대방에게 도달했을 때 효력이 발생한다는 내용을 규정하고 있습니다.
+
+### 법적 해설
+민법 제111조는 **격지자 간의 계약**에서 의사표시가 상대방에게 도달했을 때 효력이 발생한다는 내용을 담고 있습니다.
+여기서 '격지자'란 서로 멀리 떨어져 있어 즉시 의사소통이 어려운 사람들을 의미하며,
+편지나 이메일로 계약을 주고받는 경우가 이에 해당합니다.
+
+**주요 내용:**
+* **도달주의**: 의사표시를 한 사람이 상대방에게 그 의사표시가 전달되어 상대방이 내용을 알 수 있는 상태가 되었을 때,
+그 의사표시의 효력이 발생한다는 원칙입니다.
+```
+
+## ⚠️ 주의사항
+
+### 절대 하지 말 것:
+- ❌ **법적 정보 누락**: 법조문 번호, 판례 정보, 법적 해설, 상세한 설명을 제거하거나 요약하지 마세요
+- ❌ **법적 정보 변경**: 법률 용어나 전문 용어를 다른 표현으로 바꾸지 마세요
+- ❌ **상세함 손상**: 원본의 구체적 예시, 실무적 의미, 설명의 맥락을 손상시키지 마세요
+- ❌ **내용 추가**: 원본에 없는 새로운 법적 주장을 추가하지 마세요
+- ❌ **맥락 손상**: 설명의 논리적 흐름과 연결성을 손상시키지 마세요
+
+### 권장사항:
+- ✅ 원본 답변이 이미 좋은 품질이면 최소한의 수정만 적용
+- ✅ 정보 보존이 형식 개선보다 우선
+- ✅ 자연스러운 흐름을 유지하면서 개선
+- ✅ 인사말과 정확히 동일한 반복만 제거
+- ✅ 구조화는 필요시에만 적용
+
+## 📤 출력
+
+원본의 모든 법적 정보와 상세 설명을 보존하면서 품질을 향상시킨 답변을 작성하세요.
+설명이나 메타 코멘트 없이 바로 향상된 답변을 시작하세요:
+
+"""
+
+        return prompt
+
+    def _normalize_titles(self, text: str) -> str:
+        """제목 중복 제거 및 정규화"""
+        lines = text.split('\n')
+        normalized_lines = []
+        seen_titles = set()
+
+        for i, line in enumerate(lines):
+            # 제목 라인 감지
+            title_match = re.match(r'^(#{1,6})\s+(.+)', line)
+
+            if title_match:
+                level = len(title_match.group(1))
+                title_text = title_match.group(2).strip()
+
+                # 이모지 제거한 순수 제목 텍스트
+                clean_title = re.sub(r'[📖⚖️💼💡📚📋⭐📌🔍]+\s*', '', title_text).strip()
+
+                # 동일한 레벨의 중복 제목 제거
+                if level == 2:  # ## 제목
+                    if clean_title.lower() in seen_titles:
+                        continue  # 중복 제목 스킵
+                    seen_titles.add(clean_title.lower())
+                    # 이모지가 있으면 제거
+                    if re.search(r'[📖⚖️💼💡📚📋⭐📌🔍]', title_text):
+                        line = f"## {clean_title}"
+
+                elif level == 3:  # ### 제목
+                    # 이모지 제거
+                    if re.search(r'[📖⚖️💼💡📚📋⭐📌🔍]', title_text):
+                        line = f"### {clean_title}"
+
+            normalized_lines.append(line)
+
+        return '\n'.join(normalized_lines)
+
+    def _remove_empty_sections(self, text: str) -> str:
+        """빈 섹션 제거"""
+        lines = text.split('\n')
+        result_lines = []
+        current_section_lines = []
+        current_section_title = ""
+        in_section = False
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # 섹션 시작 감지 (### 또는 ####)
+            section_match = re.match(r'^(#{3,4})\s+(.+)', line)
+
+            if section_match:
+                # 이전 섹션 처리
+                if in_section:
+                    section_content = '\n'.join(current_section_lines)
+                    # 빈 섹션인지 확인
+                    if self._validate_section_content(section_content):
+                        # 유효한 섹션이면 추가
+                        result_lines.append(f"### {current_section_title}")
+                        result_lines.extend(current_section_lines)
+
+                # 새 섹션 시작
+                in_section = True
+                current_section_title = section_match.group(2).strip()
+                current_section_lines = []
+                i += 1
+                continue
+
+            if in_section:
+                current_section_lines.append(line)
+            else:
+                result_lines.append(line)
+
+            i += 1
+
+        # 마지막 섹션 처리
+        if in_section:
+            section_content = '\n'.join(current_section_lines)
+            if self._validate_section_content(section_content):
+                result_lines.append(f"### {current_section_title}")
+                result_lines.extend(current_section_lines)
+
+        return '\n'.join(result_lines)
+
+    def _validate_section_content(self, content: str) -> bool:
+        """섹션 내용이 유효한지 확인"""
+        if not content or not content.strip():
+            return False
+
+        # 빈 내용 패턴 확인
+        empty_patterns = [
+            r'^관련\s*법률을?\s*찾을\s*수\s*없습니다?\.?\s*$',
+            r'^관련\s*법률\s*예시를?\s*찾을\s*수\s*없습니다?\.?\s*$',
+            r'^찾을\s*수\s*없습니다?\.?\s*$',
+            r'^알\s*수\s*없습니다?\.?\s*$',
+            r'^없습니다?\.?\s*$',
+            r'^정보를?\s*찾을\s*수\s*없습니다?\.?\s*$',
+            r'^관련\s*법령을?\s*찾을\s*수\s*없습니다?\.?\s*$',
+        ]
+
+        content_clean = content.strip()
+        for pattern in empty_patterns:
+            if re.match(pattern, content_clean, re.IGNORECASE):
+                return False
+
+        # 너무 짧고 의미 없는 내용 (50자 미만이고 "없습니다"로 끝나는 경우)
+        if len(content_clean) < 50 and re.search(r'없습니다?\.?\s*$', content_clean):
+            return False
+
+        # 최소 길이 체크 (의미 있는 내용은 최소 20자)
+        if len(content_clean) < 20:
+            return False
+
+        return True
+
+    def _remove_quality_metrics(self, text: str) -> str:
+        """품질 지표 및 신뢰도 정보 제거"""
+        lines = text.split('\n')
+        result_lines = []
+        skip_section = False
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # 신뢰도 섹션 시작 감지
+            if re.search(r'신뢰도|품질\s*점수|품질\s*지표|confidence|quality\s*score', line, re.IGNORECASE):
+                # 해당 섹션 전체 제거
+                skip_section = True
+                i += 1
+                continue
+
+            # 신뢰도 패턴이 포함된 라인 제거
+            if re.search(r'🟠.*신뢰도|신뢰도.*\d+%|🟢.*신뢰도|🔴.*신뢰도', line):
+                i += 1
+                continue
+
+            # "신뢰도: XX%" 패턴 제거
+            if re.search(r'신뢰도\s*:\s*\d+\.?\d*%', line):
+                # 라인에서 신뢰도 부분만 제거
+                line = re.sub(r'신뢰도\s*:\s*\d+\.?\d*%[^\n]*', '', line)
+                line = re.sub(r'\(신뢰도[^\)]+\)', '', line)
+
+            # 면책 조항 섹션은 유지하되 신뢰도 정보만 제거
+            if '면책' in line and '조항' in line:
+                skip_section = False
+
+            if skip_section:
+                # 섹션 끝까지 스킵 (다음 ### 또는 ## 만날 때까지)
+                if re.match(r'^#{2,3}\s+', line):
+                    skip_section = False
+                    result_lines.append(line)
+            else:
+                # 신뢰도 숫자만 제거
+                line = re.sub(r'\s*신뢰도\s*:\s*\d+\.?\d*%', '', line)
+                line = re.sub(r'\(신뢰도[^\)]+\)', '', line)
+                result_lines.append(line)
+
+            i += 1
+
+        return '\n'.join(result_lines)
+
+    def _remove_decorative_emojis(self, text: str) -> str:
+        """장식용 이모지 제거 (섹션명 및 본문에서)"""
+        lines = text.split('\n')
+        result_lines = []
+
+        for line in lines:
+            # 제목 라인에서 이모지 제거 (### 제목 형식)
+            title_match = re.match(r'^(#{1,6})\s+(.+)', line)
+            if title_match:
+                level = title_match.group(1)
+                title_text = title_match.group(2)
+
+                # 이모지 제거 (📚는 참고 법령 섹션에만 허용)
+                if '참고 법령' in title_text or '법령 및 판례' in title_text:
+                    # 참고 법령 섹션은 📚만 허용, 나머지 제거
+                    title_text = re.sub(r'[📖⚖️💼💡📋⭐📌🔍]+', '', title_text)
+                    if '📚' not in title_text:
+                        title_text = '📚 ' + title_text.lstrip()
+                else:
+                    # 다른 섹션은 모든 이모지 제거
+                    title_text = re.sub(r'[📖⚖️💼💡📚📋⭐📌🔍]+\s*', '', title_text).strip()
+
+                line = f"{level} {title_text}"
+            else:
+                # 본문에서도 과도한 이모지 제거 (법적 의미 있는 이모지만 유지)
+                # 장식용 이모지 패턴 제거
+                line = re.sub(r'[📖💼💡📋⭐📌]+\s*', '', line)
+
+            result_lines.append(line)
+
+        return '\n'.join(result_lines)
+
+    def _normalize_structure(self, text: str) -> str:
+        """Markdown 구조 정규화"""
+        lines = text.split('\n')
+        result_lines = []
+        last_level = 0
+
+        for i, line in enumerate(lines):
+            title_match = re.match(r'^(#{1,6})\s+(.+)', line)
+
+            if title_match:
+                level = len(title_match.group(1))
+
+                # 계층 구조 검증 및 수정
+                if level > 2 and last_level == 0:
+                    # 첫 제목이 ###이면 ##로 변경
+                    if level == 3:
+                        line = f"## {title_match.group(2)}"
+                        level = 2
+
+                # ## 다음에 바로 #### 오는 경우 ###로 조정
+                if last_level == 2 and level == 4:
+                    line = f"### {title_match.group(2)}"
+                    level = 3
+
+                last_level = level
+
+            result_lines.append(line)
+
+        # 빈 줄 정리 (섹션 사이에 빈 줄 1개만)
+        result = '\n'.join(result_lines)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+
+        return result
+
+    def _post_process_llm_response(
+        self,
+        structured_answer: str,
+        original_answer: str,
+        question_type: QuestionType
+    ) -> str:
+        """LLM 응답 후처리 - 원본 내용 보존 검증 및 개선 (개선된 버전)"""
+
+        if not structured_answer or not original_answer:
+            return structured_answer if structured_answer else original_answer
+
+        try:
+            # 1. 통합 정리 함수 사용
+            structured_answer = self._clean_structured_answer(structured_answer, question_type)
+
+            # 2. 원본의 중요 법률 정보 추출 및 검증
+            original_lower = original_answer.lower()
+            structured_lower = structured_answer.lower()
+
+            # 법조문 패턴 (제X조, 제X항 등)
+            legal_article_patterns = re.findall(r'제\d+조|제\d+항|제\d+호', original_answer)
+            missing_articles = [
+                article for article in legal_article_patterns
+                if article not in structured_lower
+            ]
+
+            # 판례 패턴
+            precedent_patterns = re.findall(
+                r'(대법원|고등법원|지방법원|법원)\s+[\d가-힣]+',
+                original_answer
+            )
+            missing_precedents = [
+                prec for prec in precedent_patterns
+                if prec not in structured_lower
+            ]
+
+            # 3. 누락된 중요 정보가 있으면 경고 (로깅만, 실제 추가는 하지 않음)
+            if missing_articles:
+                logger.warning(f"누락된 법조문: {missing_articles[:5]}")
+            if missing_precedents:
+                logger.warning(f"누락된 판례: {missing_precedents[:3]}")
+
+            # 4. 핵심 키워드 보존률 확인
+            original_keywords = set(re.findall(r'[\w가-힣]{3,}', original_lower))
+            # 법률 관련 키워드 필터링
+            important_keywords = {
+                kw for kw in original_keywords
+                if any(term in kw for term in ['법', '조', '항', '판례', '법원', '판결', '권리', '의무', '계약', '소송'])
+            }
+
+            preserved_keywords = {
+                kw for kw in important_keywords
+                if kw in structured_lower
+            }
+
+            preservation_rate = len(preserved_keywords) / len(important_keywords) if important_keywords else 1.0
+
+            if preservation_rate < 0.7:  # 70% 미만이면 경고
+                logger.warning(f"핵심 키워드 보존률이 낮습니다 ({preservation_rate:.2%})")
+
+            return structured_answer.strip()
+
+        except Exception as e:
+            logger.error(f"Error in post-processing LLM response: {e}", exc_info=True)
+            return structured_answer
+
+    def _clean_structured_answer(self, structured_answer: str, question_type: QuestionType) -> str:
+        """구조화된 답변 최종 정리 (통합 후처리 함수)"""
+        try:
+            # 1. 제목이 없으면 추가
+            if not re.search(r'^##\s+', structured_answer, re.MULTILINE):
+                template = self.structure_templates.get(
+                    question_type,
+                    self.structure_templates[QuestionType.GENERAL_QUESTION]
+                )
+                title = template.get('title', '법률 질문 답변')
+                structured_answer = f"## {title}\n\n{structured_answer}"
+
+            # 2. 불필요한 메타 텍스트 제거
+            meta_patterns = [
+                r'^위의?\s+.*지침에?\s+따라.*?\n',
+                r'^다음과?\s+같이.*?\n',
+                r'^구조화된?\s+답변은?\s+다음과?\s+같습니다?.*?\n',
+            ]
+            for pattern in meta_patterns:
+                structured_answer = re.sub(pattern, '', structured_answer, flags=re.MULTILINE | re.IGNORECASE)
+
+            # 3. 대괄호 패턴 제거 (표시 문구 등)
+            structured_answer = self._remove_bracket_patterns(structured_answer)
+
+            # 4. 친근한 어투 정리
+            structured_answer = self._normalize_tone(structured_answer)
+
+            # 5. 품질 지표 제거
+            structured_answer = self._remove_quality_metrics(structured_answer)
+
+            # 6. 빈 섹션 제거
+            structured_answer = self._remove_empty_sections(structured_answer)
+
+            # 7. 제목 중복 제거 및 정규화
+            structured_answer = self._normalize_titles(structured_answer)
+
+            # 8. 이모지 제거
+            structured_answer = self._remove_decorative_emojis(structured_answer)
+
+            # 9. 구조 정규화
+            structured_answer = self._normalize_structure(structured_answer)
+
+            # 10. 중복 출처 제거
+            structured_answer = self._remove_duplicate_sources(structured_answer)
+
+            # 11. 중복 내용 제거
+            structured_answer = self._remove_duplicate_content(structured_answer)
+
+            # 12. 빈 줄 정리 (3개 이상 연속 빈 줄은 2개로)
+            structured_answer = re.sub(r'\n{3,}', '\n\n', structured_answer)
+
+            return structured_answer.strip()
+
+        except Exception as e:
+            logger.error(f"Error in cleaning structured answer: {e}", exc_info=True)
+            return structured_answer
+
+    def _remove_bracket_patterns(self, text: str) -> str:
+        """대괄호 패턴 제거 (예: [질문 내용 분석:], [관련 법령:])"""
+        try:
+            if not text:
+                return text
+
+            lines = text.split('\n')
+            result_lines = []
+            prev_line_was_section_title = False
+
+            for line in lines:
+                # 섹션 제목 확인
+                is_section_title = bool(re.match(r'^###\s+', line))
+
+                # 섹션 제목 바로 다음 줄에 대괄호 패턴이 있는 경우 제거
+                if prev_line_was_section_title:
+                    # 대괄호 패턴 제거 (예: [질문 내용 분석:], [관련 법령:])
+                    bracket_pattern = re.match(r'^\s*\[[^\]]*:\]\s*$', line)
+                    if bracket_pattern:
+                        # 이 줄을 건너뜀 (줄바꿈은 유지하기 위해 빈 줄 추가하지 않음)
+                        prev_line_was_section_title = False
+                        continue
+
+                # 일반 줄에서 대괄호 패턴 확인
+                bracket_match = re.match(r'^\s*\[[^\]]*:\]\s*$', line)
+                if bracket_match:
+                    # 대괄호 패턴만 있는 줄은 제거
+                    continue
+
+                # 대괄호 패턴이 아닌 모든 줄은 추가
+                result_lines.append(line)
+
+                prev_line_was_section_title = is_section_title
+
+            return '\n'.join(result_lines)
+        except Exception as e:
+            logger.error(f"Error removing bracket patterns: {e}", exc_info=True)
+            return text
+
+    def _normalize_tone(self, text: str) -> str:
+        """친근한 어투를 전문적인 어투로 변환"""
+        try:
+            if not text:
+                return text
+
+            # 친근한 어투 패턴을 전문적 어투로 변환
+            replacements = [
+                # 어미 변환 (줄바꿈 보존)
+                (r'해요\.', '합니다.'),
+                (r'이에요\.', '입니다.'),
+                (r'예요\.', '입니다.'),
+                (r'아요\.', '습니다.'),
+                (r'어요\.', '습니다.'),
+                (r'해요\s+', '합니다 '),  # 공백만 매칭 (줄바꿈 제외)
+                (r'이에요\s+', '입니다 '),
+                (r'예요\s+', '입니다 '),
+                (r'아요\s+', '습니다 '),
+                (r'어요\s+', '습니다 '),
+
+                # 불필요한 어미 변형
+                (r'좋아요\.', '좋습니다.'),
+                (r'좋아요\s+', '좋습니다 '),
+            ]
+
+            result = text
+            for pattern, replacement in replacements:
+                result = re.sub(pattern, replacement, result)
+
+            # 불필요한 대화형 문구 제거 (줄바꿈 보존)
+            # 줄바꿈을 포함하지 않는 패턴 사용
+            lines = result.split('\n')
+            result_lines = []
+
+            for line in lines:
+                # 줄 단위로 처리하여 줄바꿈 보존
+                line_processed = line
+
+                # 줄 끝에 있는 불필요한 문구만 제거 (줄바꿈 보존)
+                line_processed = re.sub(r'궁금하시군요\.?\s*$', '', line_processed)
+                line_processed = re.sub(r'말씀하신\s+', '질문하신 ', line_processed)
+                line_processed = re.sub(r'여기서\s+', '여기서 ', line_processed)
+
+                result_lines.append(line_processed)
+
+            result = '\n'.join(result_lines)
+
+            # 문장 시작 부분의 불필요한 대화형 문구 제거 (줄바꿈 보존)
+            # 줄바꿈을 유지하면서 앞 문구만 제거
+            result = re.sub(r'(^민법\s+제\d+조의\s+내용에\s+대해\s+)궁금하시군요\.?\s*', r'\1', result, flags=re.MULTILINE)
+
+            return result
+        except Exception as e:
+            logger.error(f"Error normalizing tone: {e}", exc_info=True)
+            return text
+
+    def _remove_duplicate_sources(self, text: str) -> str:
+        """중복된 출처 표시 제거 및 출처 통합"""
+        try:
+            if not text:
+                return text
+
+            # 출처 패턴 추출: **출처**: [내용]
+            source_pattern = r'\*\*출처\*\*:\s*([^\n]+)'
+            sources = re.findall(source_pattern, text)
+
+            # 출처가 2개 미만이면 그대로 반환
+            if len(sources) < 2:
+                return text
+
+            # 동일 출처 확인
+            unique_sources = {}
+
+            for match in re.finditer(source_pattern, text):
+                source_text = match.group(1).strip()
+                source_key = source_text.lower()
+
+                if source_key not in unique_sources:
+                    unique_sources[source_key] = {
+                        'text': source_text,
+                        'positions': []
+                    }
+                unique_sources[source_key]['positions'].append((match.start(), match.end()))
+
+            # 동일 출처가 2회 이상 나타나는 경우
+            result = text
+            positions_to_remove = []
+
+            for source_key, source_info in unique_sources.items():
+                positions = source_info['positions']
+                if len(positions) > 1:
+                    # 첫 번째는 유지, 나머지는 제거 대상
+                    for start, end in positions[1:]:
+                        positions_to_remove.append((start, end))
+
+            # 역순으로 제거 (인덱스 변경 방지)
+            for start, end in sorted(positions_to_remove, reverse=True):
+                # 출처 줄 전체를 제거
+                line_start = result.rfind('\n', 0, start) + 1
+                line_end = result.find('\n', end)
+                if line_end == -1:
+                    line_end = len(result)
+
+                # 빈 줄도 함께 제거
+                prev_newline = result.rfind('\n', 0, line_start - 1) + 1 if line_start > 0 else 0
+                next_newline = result.find('\n', line_end)
+
+                # 앞뒤 빈 줄 확인
+                if line_start > 0 and result[prev_newline:line_start].strip() == '':
+                    line_start = prev_newline
+                if next_newline != -1 and result[line_end:next_newline].strip() == '':
+                    line_end = next_newline
+
+                result = result[:line_start] + result[line_end:]
+
+            return result
+        except Exception as e:
+            logger.error(f"Error removing duplicate sources: {e}", exc_info=True)
+            return text
+
+    def _remove_duplicate_content(self, text: str, similarity_threshold: float = 0.8) -> str:
+        """중복 내용 제거 (문단 단위 유사도 검사)"""
+        try:
+            if not text:
+                return text
+
+            # 문단 단위로 분리 (빈 줄로 구분)
+            paragraphs = re.split(r'\n\s*\n', text)
+
+            if len(paragraphs) < 2:
+                return text
+
+            # 유사도 계산 및 중복 제거
+            unique_paragraphs = []
+            seen_paragraphs = []
+
+            for para in paragraphs:
+                if not para or not para.strip():
+                    unique_paragraphs.append(para)
+                    continue
+
+                # 제목이나 섹션 마커는 제외
+                if re.match(r'^#+\s+', para.strip()):
+                    unique_paragraphs.append(para)
+                    continue
+
+                # 섹션 제목을 제외한 순수 내용만 추출
+                para_lines = para.split('\n')
+                para_content_lines = [line for line in para_lines if not re.match(r'^#+\s+', line.strip())]
+                para_content = '\n'.join(para_content_lines).strip()
+
+                if not para_content:
+                    unique_paragraphs.append(para)
+                    continue
+
+                # 기존 문단과 유사도 비교 (섹션 제목 제외한 순수 내용만)
+                is_duplicate = False
+                para_clean = para_content.lower()
+
+                for seen_para in seen_paragraphs:
+                    similarity = SequenceMatcher(None, para_clean, seen_para).ratio()
+                    if similarity >= similarity_threshold:
+                        is_duplicate = True
+                        break
+
+                if not is_duplicate:
+                    unique_paragraphs.append(para)
+                    seen_paragraphs.append(para_clean)
+
+            return '\n\n'.join(unique_paragraphs)
+        except Exception as e:
+            logger.error(f"Error removing duplicate content: {e}", exc_info=True)
+            return text
+
+    def _format_docs_for_prompt(self, retrieved_docs: List[Dict[str, Any]]) -> str:
+        """법률 문서를 프롬프트용으로 포맷팅"""
+        # None 체크
+        if retrieved_docs is None:
+            return "검색된 문서가 없습니다."
+
+        if not retrieved_docs:
+            return "검색된 문서가 없습니다."
+
+        formatted_docs = []
+        for i, doc in enumerate(retrieved_docs[:5], 1):  # 최대 5개
+            if not isinstance(doc, dict):
+                continue
+
+            doc_type = doc.get("type", "문서")
+            source = doc.get("source", doc.get("title", "알 수 없음"))
+            content = doc.get("content", doc.get("text", ""))
+            score = doc.get("relevance_score", doc.get("score", 0.0))
+
+            # 내용 요약 (최대 300자) - None 체크
+            if content is None:
+                content = ""
+            content_preview = content[:300] + "..." if len(content) > 300 else content
+
+            formatted_docs.append(
+                f"{i}. **{doc_type}**: {source}\n"
+                f"   - 관련도: {score:.2f}\n"
+                f"   - 내용: {content_preview}"
+            )
+
+        return "\n\n".join(formatted_docs)
+
+    def _enhance_with_template(
+        self,
+        answer: str,
+        mapped_question_type: QuestionType,
+        question: str,
+        retrieved_docs: List[Dict[str, Any]],
+        legal_references: List[str],
+        legal_citations: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """템플릿 기반 구조화 (폴백)"""
+
+        # None 체크 및 타입 안전성 보장
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        if not isinstance(retrieved_docs, list):
+            retrieved_docs = []
+        if not isinstance(legal_references, list):
+            legal_references = []
+        if not isinstance(legal_citations, list):
+            legal_citations = []
+
+        # 구조 템플릿 가져오기
+        template = self.structure_templates.get(mapped_question_type,
+                                              self.structure_templates[QuestionType.GENERAL_QUESTION])
+
+        if not template:
+            return {"error": "Template not found"}
+
+        # 현재 답변 분석
+        analysis = self._analyze_current_structure(answer, template)
+
+        # 구조화 개선 제안 (법적 근거 정보 포함)
+        improvements = self._generate_structure_improvements(
+            analysis, template, retrieved_docs, legal_references, legal_citations
+        )
+
+        # 구조화된 답변 생성 (법적 근거 정보 포함)
+        structured_answer = self._create_structured_answer(
+            answer, template, improvements, retrieved_docs, legal_references, legal_citations
+        )
+
+        # 품질 메트릭 계산
+        quality_metrics = self._calculate_quality_metrics(structured_answer)
+
+        return {
+            "original_answer": answer,
+            "structured_answer": structured_answer,
+            "question_type": mapped_question_type.value,
+            "template_used": template.get("title", "Unknown"),
+            "method": "template_based",
+            "analysis": analysis,
+            "improvements": improvements,
+            "quality_metrics": quality_metrics,
+            "enhancement_timestamp": datetime.now().isoformat()
+        }
 
     # 사용되지 않는 데이터베이스 기반 메서드들 제거됨
     # 실제 구현에서는 하드코딩된 키워드 매칭 방식 사용
@@ -694,7 +1927,7 @@ class AnswerStructureEnhancer:
                         analysis["missing_sections"].append(section_name)
 
                 except Exception as e:
-                    print(f"Section analysis error for {section.get('name', 'unknown')}: {e}")
+                    logger.warning(f"Section analysis error for {section.get('name', 'unknown')}: {e}", exc_info=True)
                     continue
 
             # 구조 점수 계산
@@ -704,27 +1937,39 @@ class AnswerStructureEnhancer:
             analysis["quality_indicators"] = self._analyze_quality_indicators(answer)
 
         except Exception as e:
-            print(f"Structure analysis error: {e}")
+            logger.error(f"Structure analysis error: {e}", exc_info=True)
             # 기본값 유지
 
         return analysis
 
     def _extract_section_keywords(self, section: Dict[str, Any]) -> List[str]:
         """섹션별 키워드 추출"""
-        keywords = []
+        try:
+            keywords = []
 
-        # 섹션 이름에서 키워드 추출
-        keywords.extend(section["name"].split())
+            # None 체크
+            if section is None or not isinstance(section, dict):
+                return []
 
-        # 템플릿에서 키워드 추출
-        template_text = section.get("template", "")
-        keywords.extend(re.findall(r'[\w가-힣]+', template_text))
+            # 섹션 이름에서 키워드 추출
+            section_name = section.get("name", "")
+            if section_name:
+                keywords.extend(section_name.split())
 
-        # 내용 가이드에서 키워드 추출
-        content_guide = section.get("content_guide", "")
-        keywords.extend(re.findall(r'[\w가-힣]+', content_guide))
+            # 템플릿에서 키워드 추출
+            template_text = section.get("template", "") or ""
+            if template_text:
+                keywords.extend(re.findall(r'[\w가-힣]+', template_text))
 
-        return list(set(keywords))  # 중복 제거
+            # 내용 가이드에서 키워드 추출
+            content_guide = section.get("content_guide", "") or ""
+            if content_guide:
+                keywords.extend(re.findall(r'[\w가-힣]+', content_guide))
+
+            return list(set(keywords))  # 중복 제거
+        except Exception as e:
+            logger.error(f"Error in _extract_section_keywords: {e}", exc_info=True)
+            return []
 
     def _calculate_section_coverage(self, answer: str, keywords: List[str]) -> float:
         """섹션 포함도 계산 (안전한 버전)"""
@@ -738,7 +1983,7 @@ class AnswerStructureEnhancer:
             return matched_keywords / len(keywords)
 
         except Exception as e:
-            print(f"Section coverage calculation error: {e}")
+            logger.error(f"Section coverage calculation error: {e}", exc_info=True)
             return 0.0
 
     def _calculate_structure_score(self, analysis: Dict[str, Any]) -> float:
@@ -767,7 +2012,7 @@ class AnswerStructureEnhancer:
             return min(1.0, score)
 
         except Exception as e:
-            print(f"Structure score calculation error: {e}")
+            logger.error(f"Structure score calculation error: {e}", exc_info=True)
             return 0.0
 
     def _analyze_quality_indicators(self, answer: str) -> Dict[str, float]:
@@ -786,14 +2031,30 @@ class AnswerStructureEnhancer:
             return quality_scores
 
         except Exception as e:
-            print(f"Quality indicators analysis error: {e}")
+            logger.error(f"Quality indicators analysis error: {e}", exc_info=True)
             # 기본값 반환
             return {indicator_type: 0.0 for indicator_type in self.quality_indicators.keys()}
 
     def _generate_structure_improvements(self, analysis: Dict[str, Any],
-                                       template: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """구조화 개선 제안 생성"""
+                                       template: Dict[str, Any],
+                                       retrieved_docs: Optional[List[Dict[str, Any]]] = None,
+                                       legal_references: Optional[List[str]] = None,
+                                       legal_citations: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        """구조화 개선 제안 생성 (법적 근거 정보 포함)"""
         improvements = []
+
+        # None 체크 및 빈 리스트로 변환
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        # 타입 안전성 보장
+        if not isinstance(retrieved_docs, list):
+            retrieved_docs = []
+        if not isinstance(legal_references, list):
+            legal_references = []
+        if not isinstance(legal_citations, list):
+            legal_citations = []
 
         # 제목 추가 제안
         if not analysis["has_title"]:
@@ -803,6 +2064,24 @@ class AnswerStructureEnhancer:
                 "suggestion": f"답변에 제목을 추가하세요: '{template['title']}'",
                 "impact": "높음"
             })
+
+        # 법적 근거 섹션 추가 제안 (근거 정보가 있는 경우)
+        if retrieved_docs or legal_references or legal_citations:
+            has_legal_basis_section = any(
+                section.get("name", "").lower() in ["법적근거", "참고법령", "판례", "legal_basis", "references"]
+                for section in analysis.get("found_sections", [])
+            )
+
+            if not has_legal_basis_section:
+                improvements.append({
+                    "type": "add_legal_basis_section",
+                    "priority": "high",
+                    "suggestion": "법적 근거 및 참고 자료 섹션을 추가하세요",
+                    "impact": "높음",
+                    "legal_docs_count": len(retrieved_docs),
+                    "references_count": len(legal_references),
+                    "citations_count": len(legal_citations)
+                })
 
         # 누락된 섹션 추가 제안
         for missing_section in analysis["missing_sections"]:
@@ -834,9 +2113,24 @@ class AnswerStructureEnhancer:
         return improvements
 
     def _create_structured_answer(self, answer: str, template: Dict[str, Any],
-                                improvements: List[Dict[str, Any]]) -> str:
-        """구조화된 답변 생성"""
+                                improvements: List[Dict[str, Any]],
+                                retrieved_docs: Optional[List[Dict[str, Any]]] = None,
+                                legal_references: Optional[List[str]] = None,
+                                legal_citations: Optional[List[Dict[str, Any]]] = None) -> str:
+        """구조화된 답변 생성 (법적 근거 정보 포함)"""
         structured_parts = []
+
+        # None 체크 및 타입 안전성 보장
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        if not isinstance(retrieved_docs, list):
+            retrieved_docs = []
+        if not isinstance(legal_references, list):
+            legal_references = []
+        if not isinstance(legal_citations, list):
+            legal_citations = []
 
         # 제목 추가
         if not re.search(r'^#+\s+', answer, re.MULTILINE):
@@ -847,49 +2141,221 @@ class AnswerStructureEnhancer:
         current_answer = answer
 
         # 섹션별로 내용 재구성
-        for section in template["sections"]:
-            section_name = section["name"]
-            section_template = section["template"]
+        sections = template.get("sections", [])
+        if not isinstance(sections, list):
+            sections = []
+
+        for section in sections:
+            if not section or not isinstance(section, dict):
+                continue
+
+            section_name = section.get("name", "섹션")
+            section_template = section.get("template", "")
 
             # 해당 섹션과 관련된 내용 추출
             section_content = self._extract_section_content(current_answer, section)
 
-            if section_content:
-                structured_parts.append(f"### {section_name}")
-                structured_parts.append(section_template)
-                structured_parts.append("")
-                structured_parts.append(section_content)
-                structured_parts.append("")
+            # None 체크
+            if section_content is None:
+                section_content = ""
 
-        # 개선 제안 적용
+            # 법적 근거 섹션인 경우 근거 정보 포함
+            is_legal_basis_section = any(
+                keyword in section_name.lower()
+                for keyword in ["법적근거", "참고법령", "판례", "legal_basis", "references", "출처"]
+            )
+
+            if is_legal_basis_section and (retrieved_docs or legal_references or legal_citations):
+                # 법적 근거 정보를 섹션 내용에 추가
+                legal_basis_content = self._format_legal_basis_content(
+                    retrieved_docs, legal_references, legal_citations
+                )
+                if legal_basis_content:
+                    section_content = f"{section_content}\n\n{legal_basis_content}".strip() if section_content else legal_basis_content
+
+            # 빈 섹션 검증 - 내용이 없으면 섹션 생성하지 않음
+            if not self._validate_section_content(section_content):
+                # 필수 섹션(priority: high)도 내용이 없으면 생성하지 않음
+                # (원래는 가이드만 표시했지만, 이제는 완전히 제외)
+                continue
+
+            # 유효한 섹션만 추가
+            structured_parts.append(f"### {section_name}")
+            structured_parts.append(section_template)
+            structured_parts.append("")
+            structured_parts.append(section_content)
+            structured_parts.append("")
+
+            # 개선 제안 적용
+        improvements = improvements if improvements is not None else []
         for improvement in improvements:
-            if improvement["type"] == "add_section":
-                section_name = improvement["section_name"]
-                section_template = improvement["template"]
-                content_guide = improvement["content_guide"]
+            if not improvement or not isinstance(improvement, dict):
+                continue
+
+            if improvement.get("type") == "add_section":
+                section_name = improvement.get("section_name", "섹션")
+                section_template = improvement.get("template", "")
+                content_guide = improvement.get("content_guide", "")
+
+                # 가이드만 있는 빈 섹션은 생성하지 않음
+                if not content_guide or len(content_guide.strip()) < 20:
+                    continue
 
                 structured_parts.append(f"### {section_name}")
                 structured_parts.append(section_template)
                 structured_parts.append("")
                 structured_parts.append(f"*{content_guide}*")
                 structured_parts.append("")
+            elif improvement.get("type") == "add_legal_basis_section":
+                # 법적 근거 섹션 추가
+                legal_basis_content = self._format_legal_basis_content(
+                    retrieved_docs, legal_references, legal_citations
+                )
+                if legal_basis_content:
+                    structured_parts.append("### 참고 법령 및 판례")
+                    structured_parts.append("")
+                    structured_parts.append(legal_basis_content)
+                    structured_parts.append("")
 
         return "\n".join(structured_parts)
 
+    def _filter_relevant_documents(
+        self,
+        retrieved_docs: List[Dict[str, Any]],
+        min_relevance_score: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """관련성 검증 및 필터링"""
+        filtered_docs = []
+
+        for doc in retrieved_docs:
+            if not isinstance(doc, dict):
+                continue
+
+            # 관련도 스코어 확인
+            score = doc.get("relevance_score", doc.get("score", 0.0))
+
+            # 최소 관련도 미만이면 제외
+            if score < min_relevance_score:
+                continue
+
+            # 문서 타입 검증 (빈 타입 제외)
+            doc_type = doc.get("type", "").strip()
+            if not doc_type:
+                continue
+
+            filtered_docs.append(doc)
+
+        # 관련도 순으로 정렬
+        filtered_docs.sort(
+            key=lambda x: x.get("relevance_score", x.get("score", 0.0)),
+            reverse=True
+        )
+
+        return filtered_docs
+
+    def _format_legal_basis_content(
+        self,
+        retrieved_docs: List[Dict[str, Any]],
+        legal_references: List[str],
+        legal_citations: List[Dict[str, Any]]
+    ) -> str:
+        """법적 근거 정보를 포맷팅 (관련성 검증 포함)"""
+        content_parts = []
+
+        # None 체크 및 타입 안전성 보장
+        retrieved_docs = retrieved_docs if retrieved_docs is not None else []
+        legal_references = legal_references if legal_references is not None else []
+        legal_citations = legal_citations if legal_citations is not None else []
+
+        if not isinstance(retrieved_docs, list):
+            retrieved_docs = []
+        if not isinstance(legal_references, list):
+            legal_references = []
+        if not isinstance(legal_citations, list):
+            legal_citations = []
+
+        # 관련성 검증 및 필터링
+        filtered_docs = self._filter_relevant_documents(retrieved_docs, min_relevance_score=0.3)
+
+        # 검색된 문서 정보 (관련성 높은 것만)
+        if filtered_docs:
+            content_parts.append("#### 검색된 법률 문서")
+            for i, doc in enumerate(filtered_docs[:5], 1):  # 최대 5개
+                if not isinstance(doc, dict):
+                    continue
+
+                doc_type = doc.get("type", "문서")
+                source = doc.get("source", doc.get("title", "알 수 없음"))
+                content = doc.get("content", doc.get("text", ""))
+                score = doc.get("relevance_score", doc.get("score", 0.0))
+
+                # 내용 요약 (최대 200자) - None 체크
+                if content is None:
+                    content = ""
+                content_preview = content[:200] + "..." if len(content) > 200 else content
+
+                content_parts.append(f"{i}. **{doc_type}**: {source}")
+                if score > 0:
+                    # 관련도 낮은 경우 표시
+                    if score < 0.5:
+                        content_parts.append(f"   - 관련도: {score:.2f} (참고용)")
+                    else:
+                        content_parts.append(f"   - 관련도: {score:.2f}")
+                content_parts.append(f"   - 내용: {content_preview}")
+                content_parts.append("")
+
+        # 법적 참고 자료
+        if legal_references:
+            content_parts.append("#### 참고 법령")
+            for ref in legal_references:
+                if ref is not None and ref.strip():
+                    content_parts.append(f"- {ref}")
+            content_parts.append("")
+
+        # 법적 인용
+        if legal_citations:
+            content_parts.append("#### 법적 인용")
+            for citation in legal_citations:
+                if citation is not None:
+                    if isinstance(citation, dict):
+                        citation_text = citation.get("text", citation.get("citation", str(citation)))
+                    else:
+                        citation_text = str(citation)
+
+                    if citation_text and citation_text.strip():
+                        content_parts.append(f"- {citation_text}")
+            content_parts.append("")
+
+        return "\n".join(content_parts).strip()
+
     def _extract_section_content(self, answer: str, section: Dict[str, Any]) -> str:
         """섹션별 내용 추출"""
-        # 간단한 키워드 매칭으로 관련 내용 추출
-        section_keywords = self._extract_section_keywords(section)
+        try:
+            # None 체크
+            if answer is None:
+                answer = ""
+            if section is None or not isinstance(section, dict):
+                return ""
 
-        # 문단별로 분리하여 관련 문단 찾기
-        paragraphs = answer.split('\n\n')
-        relevant_paragraphs = []
+            # 간단한 키워드 매칭으로 관련 내용 추출
+            section_keywords = self._extract_section_keywords(section)
 
-        for paragraph in paragraphs:
-            if any(keyword.lower() in paragraph.lower() for keyword in section_keywords):
-                relevant_paragraphs.append(paragraph)
+            # None 체크
+            if section_keywords is None:
+                section_keywords = []
 
-        return '\n\n'.join(relevant_paragraphs) if relevant_paragraphs else ""
+            # 문단별로 분리하여 관련 문단 찾기
+            paragraphs = answer.split('\n\n')
+            relevant_paragraphs = []
+
+            for paragraph in paragraphs:
+                if paragraph and any(keyword.lower() in paragraph.lower() for keyword in section_keywords if keyword):
+                    relevant_paragraphs.append(paragraph)
+
+            return '\n\n'.join(relevant_paragraphs) if relevant_paragraphs else ""
+        except Exception as e:
+            logger.error(f"Error in _extract_section_content: {e}", exc_info=True)
+            return ""
 
     def _calculate_quality_metrics(self, structured_answer: str) -> Dict[str, Any]:
         """품질 메트릭 계산 (안전한 버전)"""
@@ -934,7 +2400,7 @@ class AnswerStructureEnhancer:
             return metrics
 
         except Exception as e:
-            print(f"Quality metrics calculation error: {e}")
+            logger.error(f"Quality metrics calculation error: {e}", exc_info=True)
             return {
                 "structure_score": 0.0,
                 "completeness_score": 0.0,
@@ -973,7 +2439,7 @@ class AnswerStructureEnhancer:
             }
 
         except Exception as e:
-            print(f"Error enhancing answer with legal basis: {e}")
+            logger.error(f"Error enhancing answer with legal basis: {e}", exc_info=True)
             return {
                 "original_answer": answer,
                 "enhanced_answer": answer,
@@ -1047,7 +2513,7 @@ class AnswerStructureEnhancer:
             return structured_answer + legal_basis_section
 
         except Exception as e:
-            print(f"Error adding legal basis section: {e}")
+            logger.error(f"Error adding legal basis section: {e}", exc_info=True)
             return structured_answer
 
     def get_legal_citation_statistics(self, text: str) -> Dict[str, Any]:
@@ -1064,7 +2530,7 @@ class AnswerStructureEnhancer:
             }
 
         except Exception as e:
-            print(f"Error getting citation statistics: {e}")
+            logger.error(f"Error getting citation statistics: {e}", exc_info=True)
             return {
                 "total_citations": 0,
                 "citation_types": {},
@@ -1088,7 +2554,7 @@ class AnswerStructureEnhancer:
             }
 
         except Exception as e:
-            print(f"Error validating legal basis: {e}")
+            logger.error(f"Error validating legal basis: {e}", exc_info=True)
             return {
                 "is_valid": False,
                 "confidence": 0.0,
@@ -1103,9 +2569,12 @@ class AnswerStructureEnhancer:
         try:
             self.structure_templates = self._load_structure_templates()
             self.quality_indicators = self._load_quality_indicators()
-            print("Templates reloaded successfully")
+            # 캐시 무효화
+            if hasattr(self, '_few_shot_examples_cache'):
+                self._few_shot_examples_cache = None
+            logger.info("Templates reloaded successfully")
         except Exception as e:
-            print(f"Failed to reload templates: {e}")
+            logger.error(f"Failed to reload templates: {e}", exc_info=True)
 
     def get_template_info(self, question_type: str) -> Dict[str, Any]:
         """템플릿 정보 조회"""
@@ -1135,7 +2604,7 @@ class AnswerStructureEnhancer:
                     "source": "not_found"
                 }
         except Exception as e:
-            print(f"Failed to get template info: {e}")
+            logger.error(f"Failed to get template info: {e}", exc_info=True)
             return {
                 "question_type": question_type,
                 "title": "Error",
@@ -1168,7 +2637,7 @@ class AnswerStructureEnhancer:
             return structured_answer
 
         except Exception as e:
-            print(f"Error creating structured answer: {e}")
+            logger.error(f"Error creating structured answer: {e}", exc_info=True)
             return answer
 
 

@@ -111,24 +111,28 @@ class AnswerFormatter:
 
             template = self.templates.get(question_type, self.templates[QuestionType.GENERAL_QUESTION])
 
+            # 입력이 문자열이 아닐 수 있으므로 방어적으로 문자열로 변환
+            raw_answer_str = raw_answer if isinstance(raw_answer, str) else str(raw_answer)
+
             # 섹션별 내용 생성
             sections = {}
 
             if question_type == QuestionType.PRECEDENT_SEARCH:
-                sections = self._format_precedent_answer(raw_answer, sources, confidence)
+                sections = self._format_precedent_answer(raw_answer_str, sources, confidence)
             elif question_type == QuestionType.LAW_INQUIRY:
-                sections = self._format_law_explanation(raw_answer, sources, confidence)
+                sections = self._format_law_explanation(raw_answer_str, sources, confidence)
             elif question_type == QuestionType.LEGAL_ADVICE:
-                sections = self._format_legal_advice(raw_answer, sources, confidence)
+                sections = self._format_legal_advice(raw_answer_str, sources, confidence)
             elif question_type == QuestionType.PROCEDURE_GUIDE:
-                sections = self._format_procedure_guide(raw_answer, sources, confidence)
+                sections = self._format_procedure_guide(raw_answer_str, sources, confidence)
             elif question_type == QuestionType.TERM_EXPLANATION:
-                sections = self._format_term_explanation(raw_answer, sources, confidence)
+                sections = self._format_term_explanation(raw_answer_str, sources, confidence)
             else:
-                sections = self._format_general_answer(raw_answer, sources, confidence)
+                sections = self._format_general_answer(raw_answer_str, sources, confidence)
 
             # 최종 구조화된 답변 생성
             formatted_content = self._build_formatted_content(template, sections, confidence)
+            formatted_content = self._sanitize_output(formatted_content)
 
             # 메타데이터 생성
             metadata = {
@@ -153,7 +157,28 @@ class AnswerFormatter:
 
         except Exception as e:
             self.logger.error(f"Error formatting answer: {e}")
-            return self._create_fallback_answer(raw_answer, confidence)
+            return self._create_fallback_answer(raw_answer if isinstance(raw_answer, str) else str(raw_answer), confidence)
+
+    def _sanitize_output(self, text: str) -> str:
+        """출력 텍스트 정규화: 딕셔너리 문자열 노출/과도한 공백/불릿 노이즈 제거"""
+        try:
+            if not isinstance(text, str):
+                text = str(text)
+            # 딕셔너리/리스트가 문자열로 노출되는 패턴 간단 제거
+            if text.strip().startswith("{'") or text.strip().startswith("{\""):
+                # 가능하면 첫 중괄호 블럭을 제거하고 본문만 남김
+                # 안전하게 중괄호를 삭제하지 않고, 첫 줄만 남기는 보수적 처리
+                first_non_brace = re.split(r"\n\n|\n", text, maxsplit=1)
+                text = first_non_brace[-1] if first_non_brace else text
+            # 연속 점/불릿 수축
+            text = re.sub(r"(\u2022\s*){2,}", "• ", text)
+            # 잘못된 띄어쓰기(한 글자 사이) 간단 수선: '아 닙니다' → '아닙니다' 등
+            text = re.sub(r"([가-힣])\s+([가-힣])", r"\1\2", text)
+            # 과도한 연속 공백 정리
+            text = re.sub(r"\s{3,}", "  ", text)
+            return text
+        except Exception:
+            return text if isinstance(text, str) else str(text)
 
     def _format_precedent_answer(self,
                                 answer: str,
@@ -562,6 +587,8 @@ class AnswerFormatter:
     def _clean_and_structure_text(self, text: str) -> str:
         """텍스트 정리 및 구조화"""
         try:
+            if not isinstance(text, str):
+                text = str(text)
             # 기본 정리
             cleaned = text.strip()
 
@@ -578,7 +605,7 @@ class AnswerFormatter:
 
         except Exception as e:
             self.logger.error(f"Error cleaning text: {e}")
-            return text
+            return text if isinstance(text, str) else str(text)
 
     def _format_precedent_sources(self, precedents: List[Dict[str, Any]]) -> str:
         """판례 소스 포맷팅"""
@@ -686,7 +713,8 @@ class AnswerFormatter:
                     emoji = self.emoji_map.get(section_name, "📝")
                     content_parts.append(f"### {emoji} {self._get_section_title(section_name)}")
                     content_parts.append("")
-                    content_parts.append(sections[section_name])
+                    section_content = sections[section_name]
+                    content_parts.append(section_content if isinstance(section_content, str) else str(section_content))
                     content_parts.append("")
 
             # 면책 조항
@@ -952,6 +980,15 @@ class AnswerFormatter:
                     case_name = source.get('case_name', '')
                     case_number = source.get('case_number', '')
                     formatted.append(f"{i}. 판례: {case_name} ({case_number})")
+                elif source_type == 'sql':
+                    sql_text = source.get('sql', '')
+                    rec_cnt = source.get('records', 0)
+                    rec_ids = source.get('record_ids', [])
+                    if isinstance(rec_ids, list) and len(rec_ids) > 0:
+                        ids_text = ", ".join([str(x) for x in rec_ids[:5]])
+                        formatted.append(f"{i}. SQL: {sql_text} (records={rec_cnt}, ids=[{ids_text}]…)")
+                    else:
+                        formatted.append(f"{i}. SQL: {sql_text} (records={rec_cnt})")
                 else:
                     formatted.append(f"{i}. {source.get('title', '정보')}")
 
