@@ -397,8 +397,8 @@ print(result["answer"])
 
 ## 📚 추가 리소스
 
-- [API 문서](../08_api_documentation/API_Documentation.md)
-- [프로젝트 개요](../01_project_overview/project_overview.md)
+- [API 문서](../07_api/API_Documentation.md)
+- [프로젝트 개요](../01_getting_started/project_overview.md)
 - [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)
 - [RAG 시스템 아키텍처](../05_rag_system/rag_architecture.md)
 - [Core Modules 가이드](../10_technical_reference/core_modules_guide.md)
