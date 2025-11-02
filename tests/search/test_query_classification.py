@@ -3,16 +3,21 @@
 """
 질의 분류 테스트 스크립트
 실제 법률 질의를 대상으로 데이터베이스 기반 질문 유형 매핑 시스템 테스트
+classify_question_type 메서드 테스트 포함
 """
 
 import os
 import sys
+import time
 from typing import Any, Dict, List, Tuple
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from source.services.answer_structure_enhancer import AnswerStructureEnhancer
+from source.services.answer_structure_enhancer import (
+    AnswerStructureEnhancer,
+    QuestionType,
+)
 from source.services.database_keyword_manager import DatabaseKeywordManager
 
 
@@ -449,9 +454,147 @@ def test_performance_with_real_queries():
     print(f"   처리량: {len(queries)/total_time:.1f}질의/초")
 
 
+def test_classify_question_type():
+    """classify_question_type 메서드 테스트"""
+    print("\n" + "=" * 80)
+    print("classify_question_type 메서드 테스트")
+    print("=" * 80)
+
+    enhancer = AnswerStructureEnhancer()
+
+    # 테스트 케이스들
+    test_cases = [
+        # 법률 문의 테스트
+        ("민법 제123조의 내용이 무엇인가요?", QuestionType.LAW_INQUIRY),
+        ("형법 제250조 처벌 기준은?", QuestionType.LAW_INQUIRY),
+        ("근로기준법 제15조 의미는?", QuestionType.LAW_INQUIRY),
+        ("상법 제123조 해석해주세요", QuestionType.LAW_INQUIRY),
+        ("헌법 제10조 내용은?", QuestionType.LAW_INQUIRY),
+        ("특허법 제25조 규정은?", QuestionType.LAW_INQUIRY),
+
+        # 판례 검색 테스트
+        ("대법원 판례를 찾아주세요", QuestionType.PRECEDENT_SEARCH),
+        ("관련 판례가 있나요?", QuestionType.PRECEDENT_SEARCH),
+        ("고등법원 판결을 알려주세요", QuestionType.PRECEDENT_SEARCH),
+        ("지방법원 판례 검색", QuestionType.PRECEDENT_SEARCH),
+
+        # 계약서 검토 테스트
+        ("계약서를 검토해주세요", QuestionType.CONTRACT_REVIEW),
+        ("이 계약 조항이 불리한가요?", QuestionType.CONTRACT_REVIEW),
+        ("계약서 수정이 필요한가요?", QuestionType.CONTRACT_REVIEW),
+
+        # 이혼 절차 테스트
+        ("이혼 절차를 알려주세요", QuestionType.DIVORCE_PROCEDURE),
+        ("협의이혼 방법은?", QuestionType.DIVORCE_PROCEDURE),
+    ]
+
+    print(f"\n{len(test_cases)}개의 테스트 케이스 실행 중...\n")
+
+    passed = 0
+    failed = 0
+
+    for i, (question, expected_type) in enumerate(test_cases, 1):
+        try:
+            result_type = enhancer.classify_question_type(question)
+            is_correct = result_type == expected_type
+            status = "✅" if is_correct else "❌"
+
+            print(f"{i:2d}. {status} 질문: '{question}'")
+            print(f"    예상: {expected_type.value}")
+            print(f"    결과: {result_type.value}")
+            print()
+
+            if is_correct:
+                passed += 1
+            else:
+                failed += 1
+
+        except Exception as e:
+            print(f"{i:2d}. ❌ 오류: '{question}'")
+            print(f"    오류 메시지: {e}")
+            print()
+            failed += 1
+
+    print(f"\n📊 결과: {passed}개 통과, {failed}개 실패")
+
+
+def test_edge_cases_classification():
+    """엣지 케이스 테스트"""
+    print("\n" + "=" * 80)
+    print("엣지 케이스 테스트")
+    print("=" * 80)
+
+    enhancer = AnswerStructureEnhancer()
+
+    edge_cases = [
+        ("", QuestionType.GENERAL_QUESTION),  # 빈 문자열
+        ("   ", QuestionType.GENERAL_QUESTION),  # 공백만
+        ("민법", QuestionType.GENERAL_QUESTION),  # 단어만
+        ("제123조", QuestionType.LAW_INQUIRY),  # 조문만
+        ("123조", QuestionType.GENERAL_QUESTION),  # 숫자+조문
+        ("민법 제", QuestionType.GENERAL_QUESTION),  # 불완전한 조문
+        ("제조", QuestionType.GENERAL_QUESTION),  # 잘못된 조문
+        ("민법 제123조 제456항", QuestionType.LAW_INQUIRY),  # 복합 조문
+        ("민법과 형법", QuestionType.LAW_INQUIRY),  # 여러 법령
+        ("판례와 계약서", QuestionType.PRECEDENT_SEARCH),  # 여러 키워드 (우선순위)
+    ]
+
+    print(f"\n엣지 케이스 {len(edge_cases)}개 테스트 중...\n")
+
+    for i, (question, expected_type) in enumerate(edge_cases, 1):
+        try:
+            result_type = enhancer.classify_question_type(question)
+            is_correct = result_type == expected_type
+            status = "✅" if is_correct else "❌"
+
+            print(f"{i:2d}. {status} 질문: '{question}'")
+            print(f"    예상: {expected_type.value}")
+            print(f"    결과: {result_type.value}")
+            print()
+
+        except Exception as e:
+            print(f"{i:2d}. ❌ 오류: '{question}'")
+            print(f"    오류 메시지: {e}")
+            print()
+
+
+def test_classify_performance():
+    """classify_question_type 성능 테스트"""
+    print("\n" + "=" * 80)
+    print("classify_question_type 성능 테스트")
+    print("=" * 80)
+
+    enhancer = AnswerStructureEnhancer()
+
+    # 성능 테스트용 질문들
+    test_questions = [
+        "민법 제123조의 내용이 무엇인가요?",
+        "대법원 판례를 찾아주세요",
+        "계약서를 검토해주세요",
+        "이혼 절차를 알려주세요",
+    ] * 10  # 40개 질문
+
+    print(f"\n{len(test_questions)}개 질문으로 성능 테스트 실행...")
+
+    start_time = time.time()
+    for question in test_questions:
+        enhancer.classify_question_type(question)
+    end_time = time.time()
+
+    total_time = end_time - start_time
+    avg_time = (total_time / len(test_questions)) * 1000  # ms로 변환
+
+    print(f"\n📈 성능 결과:")
+    print(f"   전체 처리 시간: {total_time:.3f}초")
+    print(f"   평균 처리 시간: {avg_time:.2f}ms/질문")
+    print(f"   처리량: {len(test_questions)/total_time:.1f}질문/초")
+
+
 def main():
     """메인 테스트 함수"""
+    print("=" * 80)
     print("법률 질의 분류 시스템 종합 테스트")
+    print("=" * 80)
 
     try:
         # 1. 실제 질의 분류 테스트

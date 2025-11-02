@@ -180,12 +180,12 @@ LangGraph 워크플로우 및 State 관리 시스템을 테스트하는 파일�
 
 | 파일 | 목적 | 테스트 내용 |
 |------|------|-------------|
-| `test_query_classification.py` | 질문 분류 테스트 | 질문 유형 분류 기능 검증 |
+| `test_query_classification.py` | 질문 분류 테스트 (통합) | 질문 유형 분류 기능 검증, classify_question_type 메서드 테스트 포함 |
 | `test_query_system.py` | 쿼리 시스템 테스트 | 쿼리 처리 시스템 검증 |
-| `test_classify_question_type.py` | 질문 유형 분류 테스트 | 질문 유형 자동 분류 검증 |
-| `test_hybrid_search_simple.py` | 하이브리드 검색 간단 테스트 | 하이브리드 검색 기본 기능 |
+| `test_hybrid_search.py` | 하이브리드 검색 단위 테스트 | 하이브리드 검색 기본 기능 |
 | `test_hybrid_search_integration.py` | 하이브리드 검색 통합 테스트 | 하이브리드 검색 통합 검증 |
 | `test_rag_integration.py` | RAG(Retrieval-Augmented Generation) 통합 테스트 | RAG 시스템 통합 검증 |
+| `test_sql_router_*.py` | SQL 라우터 테스트 | SQL 라우터 보안 및 동작 검증 |
 
 ---
 
@@ -531,27 +531,29 @@ pytest tests/ -v --pdb
    - 시스템 변경사항 반영
    - 새로운 컴포넌트 통합 검증
 
-## 삭제된 파일 목록
-
-다음 파일들은 레거시 코드 또는 일시적 디버깅 목적으로 삭제되었습니다.
-
-| 파일 | 삭제 이유 | 대체 파일 |
-|------|----------|-----------|
-| `test_enhanced_langgraph_workflow.py` | 레거시 경로 사용 (`source/services/langgraph/`) | `test_langgraph.py` |
-| `test_workflow_enhanced_refactored.py` | 리팩토링 완료 후 중복 | `test_langgraph.py` |
-| `test_structure_fix.py` | 일시적 디버깅 파일 (수정 완료) | N/A |
-
 ## 테스트 파일 통계
 
-- **전체 테스트 파일 수**: 40개
-  - **LangGraph 관련**: 12개 (`tests/langgraph/`)
+- **전체 테스트 파일 수**: 약 47개 (2025-01 정리 기준)
+  - **LangGraph 관련**: 약 21개 (`tests/langgraph/`)
+    - 기본 워크플로우: `test_langgraph.py`, `test_langgraph_with_logging.py`, `test_langgraph_multi_turn.py`
+    - 최적화: `test_optimized_workflow.py` (통합됨)
+    - 노드 통합: `test_node_integration.py` (통합됨)
+    - State 시스템: `test_all_state_systems.py`, `test_core_state_systems.py`, `test_state_*.py`
+    - 모니터링: `test_monitoring_switch_basic.py`, `test_with_monitoring_switch.py`, `test_profile_loading.py`
+    - 기타: `test_all_scenarios.py`, `test_*.py`
   - **Phase 테스트**: 3개 (`tests/phase/`)
   - **통합 시스템**: 2개 (`tests/integration/`)
-  - **검색 시스템**: 6개 (`tests/search/`)
-  - **법률 시스템**: 4개 (`tests/legal/`)
-  - **모니터링**: 3개 (`tests/monitoring/`)
+  - **검색 시스템**: 약 8개 (`tests/search/`)
+    - 질의 분류: `test_query_classification.py` (통합됨 - classify_question_type 포함)
+    - 하이브리드 검색: `test_hybrid_search.py`, `test_hybrid_search_integration.py`
+    - SQL 라우터: `test_sql_router_*.py`
+    - RAG: `test_rag_integration.py`
+    - 기타: `test_query_system.py`
+  - **법률 시스템**: 3개 (`tests/legal/`)
+  - **모니터링**: 7개 (`tests/monitoring/`)
   - **품질/성능**: 7개 (`tests/quality_performance/`)
-  - **AKLS**: 3개 (`tests/akls/`)
+  - **단위 테스트**: 2개 (`tests/unit/`)
+  - **서비스**: 1개 (`tests/services/`)
 
 ## 관련 문서
 
@@ -560,7 +562,17 @@ pytest tests/ -v --pdb
 
 ## 업데이트 이력
 
-- **2025-01**: 테스트 구조 재구성 및 문서화
+- **2025-01**: 테스트 파일 정리 및 통합
+  - 중복 테스트 파일 통합
+    - `test_optimized_workflow_simple.py` → `test_optimized_workflow.py`에 통합
+    - `test_node_integration_simple.py` → `test_node_integration.py`에 통합
+    - `test_classify_question_type.py` → `test_query_classification.py`에 통합
+    - `test_hybrid_search_simple.py` 삭제 (통합 버전 유지)
+    - `test_moderate_query.py` 삭제 (중복)
+  - 불필요한 파일 제거 및 코드 중복 제거
+  - README 업데이트 및 통계 갱신
+
+- **2025-01 (이전)**: 테스트 구조 재구성 및 문서화
   - 레거시 테스트 파일 삭제
   - 루트 레벨 테스트 파일을 카테고리별 디렉토리로 이동
   - 31개 파일을 7개 디렉토리로 재구성

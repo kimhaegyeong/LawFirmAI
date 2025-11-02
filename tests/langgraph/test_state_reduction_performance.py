@@ -74,7 +74,6 @@ def create_test_state() -> dict:
         "legal_citations": [{"law": "민법", "article": "제1조"}],
         "answer": "계약서 작성 시 주요 주의사항은 다음과 같습니다...",
         "sources": ["doc_1", "doc_2"],
-        "enhanced_answer": "계약서 작성 시 주요 주의사항은 다음과 같습니다...",
         "structure_confidence": 0.95,
         "document_type": None,
         "document_analysis": None,
