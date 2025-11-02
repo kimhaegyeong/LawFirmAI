@@ -366,6 +366,49 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         output_state_groups={"answer", "common"}
     ),
 
+    "generate_and_validate_answer": NodeIOSpec(
+        node_name="generate_and_validate_answer",
+        category=NodeCategory.GENERATION,
+        description="통합된 답변 생성, 검증, 포맷팅 및 최종 준비",
+        required_input={
+            "query": "사용자 질문",
+            "retrieved_docs": "검색된 문서"
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "legal_field": "법률 분야",
+            "legal_references": "법령 참조"
+        },
+        output={
+            "answer": "생성 및 검증된 답변",
+            "confidence": "신뢰도 점수",
+            "quality_check_passed": "품질 검증 통과 여부",
+            "legal_validity_check": "법령 검증"
+        },
+        required_state_groups={"input", "search"},  # Phase 6: answer 보존을 위해 입력에서 answer 그룹은 선택적
+        output_state_groups={"answer", "validation", "control", "common"}  # Phase 6: answer 그룹 필수 출력
+    ),
+
+    "direct_answer": NodeIOSpec(
+        node_name="direct_answer",
+        category=NodeCategory.GENERATION,
+        description="간단한 질문 - 검색 없이 LLM만 사용하여 답변 생성",
+        required_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형"
+        },
+        optional_input={
+            "legal_field": "법률 분야"
+        },
+        output={
+            "answer": "직접 생성된 답변",
+            "confidence": "신뢰도 점수",
+            "sources": "소스 목록 (빈 목록)"
+        },
+        required_state_groups={"input", "classification"},  # Phase 6: answer 보존을 위해 입력에서 answer 그룹은 선택적
+        output_state_groups={"answer", "common"}  # Phase 6: answer 그룹 필수 출력
+    ),
+
     "execute_searches_parallel": NodeIOSpec(
         node_name="execute_searches_parallel",
         category=NodeCategory.SEARCH,
