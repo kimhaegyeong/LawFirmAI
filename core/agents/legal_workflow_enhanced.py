@@ -7333,10 +7333,12 @@ class EnhancedLegalQuestionWorkflow:
             legal_field = self._get_state_value(state, "legal_field", "")
 
             # retrieved_docs 검증
+            has_valid_docs = False
             if not retrieved_docs:
                 self.logger.warning(
                     f"⚠️ [PREPARE CONTEXT] No retrieved_docs to prepare for prompt. "
-                    f"Query: '{query[:50]}...', Query type: {query_type_str}"
+                    f"Query: '{query[:50]}...', Query type: {query_type_str}. "
+                    f"Skipping document context preparation and term extraction."
                 )
                 self._set_state_value(state, "prompt_optimized_context", {
                     "prompt_optimized_text": "",
@@ -7346,7 +7348,8 @@ class EnhancedLegalQuestionWorkflow:
                 })
             elif not isinstance(retrieved_docs, list):
                 self.logger.error(
-                    f"⚠️ [PREPARE CONTEXT] retrieved_docs is not a list: {type(retrieved_docs).__name__}"
+                    f"⚠️ [PREPARE CONTEXT] retrieved_docs is not a list: {type(retrieved_docs).__name__}. "
+                    f"Skipping document context preparation and term extraction."
                 )
                 self._set_state_value(state, "prompt_optimized_context", {
                     "prompt_optimized_text": "",
@@ -7418,13 +7421,16 @@ class EnhancedLegalQuestionWorkflow:
                         f"{context_length} chars, "
                         f"input docs: {len(retrieved_docs)}"
                     )
+                    has_valid_docs = True
 
             self._save_metadata_safely(state, "_last_executed_node", "prepare_documents_and_terms")
             self._update_processing_time(state, context_start_time)
             self._add_step(state, "문서 컨텍스트 준비", "프롬프트 최적화 컨텍스트 준비 완료")
 
             # ========== Part 2: process_legal_terms 로직 ==========
-            terms_start_time = time.time()
+            # 개선: retrieved_docs가 없거나 유효하지 않으면 용어 처리 생략
+            if has_valid_docs:
+                terms_start_time = time.time()
 
             # 메타데이터 설정 (process_legal_terms 로직)
             if "metadata" not in state or not isinstance(state.get("metadata"), dict):
@@ -7500,7 +7506,45 @@ class EnhancedLegalQuestionWorkflow:
                 self._set_state_value(state, "metadata", metadata)
                 self._add_step(state, "용어 추출 없음", "용어 추출 없음 (문서 내용 부족)")
 
-            self._update_processing_time(state, terms_start_time)
+                self._update_processing_time(state, terms_start_time)
+            else:
+                # retrieved_docs가 없거나 유효하지 않을 때: 용어 처리는 생략하되 메타데이터만 설정
+                self.logger.info(
+                    f"⏭️ [TERM PROCESSING] Skipping term extraction and processing "
+                    f"(no valid retrieved_docs available)"
+                )
+
+                # 메타데이터 기본 설정 (재시도 카운터 보존)
+                if "metadata" not in state or not isinstance(state.get("metadata"), dict):
+                    state["metadata"] = {}
+                existing_metadata = dict(state["metadata"])
+
+                existing_top_level = state.get("retry_count", 0)
+                saved_gen_retry = max(
+                    existing_metadata.get("generation_retry_count", 0),
+                    existing_top_level
+                )
+                saved_val_retry = existing_metadata.get("validation_retry_count", 0)
+
+                metadata = dict(existing_metadata)
+                metadata["extracted_terms"] = []
+                metadata["total_terms_extracted"] = 0
+                metadata["unique_terms"] = 0
+                metadata["generation_retry_count"] = saved_gen_retry
+                metadata["validation_retry_count"] = saved_val_retry
+                metadata["_last_executed_node"] = "prepare_documents_and_terms"
+                state["metadata"] = metadata
+
+                # common 그룹에도 동기화
+                if "common" not in state:
+                    state["common"] = {}
+                if "metadata" not in state["common"]:
+                    state["common"]["metadata"] = {}
+                state["common"]["metadata"].update(metadata)
+                state["retry_count"] = saved_gen_retry
+
+                self._set_state_value(state, "metadata", metadata)
+                self._add_step(state, "용어 처리 생략", "문서 없음으로 인한 용어 처리 생략")
 
         except Exception as e:
             self._handle_error(state, str(e), "문서 준비 및 용어 처리 중 오류 발생")
