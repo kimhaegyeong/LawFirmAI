@@ -46,12 +46,30 @@ class ClassificationState(TypedDict):
 # ============================================
 # 3. Search State - 검색 관련 데이터
 # ============================================
-class SearchState(TypedDict):
-    """검색 결과 - retrieved_docs는 pruned됨"""
+class SearchState(TypedDict, total=False):
+    """검색 결과 - retrieved_docs는 pruned됨
+
+    total=False로 설정하여 모든 필드가 Optional이 되도록 함
+    이렇게 하면 semantic_results, keyword_results 등이 추가되어도
+    LangGraph의 TypedDict 병합에서 손실되지 않음
+
+    중요: LangGraph는 TypedDict의 필드만 병합하므로, 모든 검색 관련 필드를 명시적으로 정의해야 함
+    """
     search_query: str
     extracted_keywords: List[str]
     ai_keyword_expansion: Optional[Dict[str, Any]]
     retrieved_docs: List[Dict[str, Any]]  # 최대 10개, 각 500자 이하
+    # 중요: 검색 과정에서 사용되는 필드들 (total=False로 Optional)
+    # LangGraph reducer가 이 필드들을 보존하도록 명시적으로 정의
+    optimized_queries: Optional[Dict[str, Any]]
+    search_params: Optional[Dict[str, Any]]
+    semantic_results: Optional[List[Dict[str, Any]]]  # 의미적 검색 결과
+    keyword_results: Optional[List[Dict[str, Any]]]  # 키워드 검색 결과
+    semantic_count: Optional[int]
+    keyword_count: Optional[int]
+    merged_documents: Optional[List[Dict[str, Any]]]  # 병합된 문서
+    keyword_weights: Optional[Dict[str, Any]]  # 키워드별 가중치
+    prompt_optimized_context: Optional[Dict[str, Any]]  # 프롬프트 최적화 컨텍스트
 
 
 # ============================================
@@ -71,7 +89,6 @@ class AnswerState(TypedDict):
     """답변 및 소스"""
     answer: str
     sources: List[str]
-    enhanced_answer: Optional[str]
     structure_confidence: float
 
 
@@ -188,14 +205,23 @@ def create_default_classification() -> ClassificationState:
     )
 
 
-def create_default_search(initial_query: str) -> SearchState:
-    """기본 Search State 생성"""
-    return SearchState(
-        search_query=initial_query,
-        extracted_keywords=[],
-        ai_keyword_expansion=None,
-        retrieved_docs=[]
-    )
+def create_default_search(initial_query: str) -> Dict[str, Any]:
+    """기본 Search State 생성 (확장 가능한 딕셔너리로 반환)"""
+    return {
+        "search_query": initial_query,
+        "extracted_keywords": [],
+        "ai_keyword_expansion": None,
+        "retrieved_docs": [],
+        "optimized_queries": {},
+        "search_params": {},
+        "semantic_results": [],
+        "keyword_results": [],
+        "semantic_count": 0,
+        "keyword_count": 0,
+        "merged_documents": [],
+        "keyword_weights": {},
+        "prompt_optimized_context": {}
+    }
 
 
 def create_default_analysis() -> AnalysisState:
@@ -212,7 +238,6 @@ def create_default_answer() -> AnswerState:
     return AnswerState(
         answer="",
         sources=[],
-        enhanced_answer=None,
         structure_confidence=0.0
     )
 

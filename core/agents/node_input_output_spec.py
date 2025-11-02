@@ -81,7 +81,6 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "query": "사용자 질문",
         },
         optional_input={
-            "conversation_history": "대화 이력",
             "legal_field": "법률 분야 힌트"
         },
         output={
@@ -110,7 +109,7 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "urgency_reasoning": "긴급도 평가 근거",
             "emergency_type": "긴급 상황 유형"
         },
-        required_state_groups={"input", "classification"},
+        required_state_groups={"input"},
         output_state_groups={"classification"}
     ),
 
@@ -122,7 +121,7 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "query": "사용자 질문"
         },
         optional_input={
-            "conversation_history": "대화 이력"
+            # 대화 이력은 내부 어댑터가 보존하므로 노드의 선택 입력에서 제외
         },
         output={
             "is_multi_turn": "멀티턴 여부",
@@ -130,7 +129,7 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "conversation_history": "대화 이력",
             "conversation_context": "대화 컨텍스트"
         },
-        required_state_groups={"input", "classification"},
+        required_state_groups={"input"},
         output_state_groups={"multi_turn"}
     ),
 
@@ -196,24 +195,25 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         output_state_groups={"search"}
     ),
 
-    "retrieve_documents": NodeIOSpec(
-        node_name="retrieve_documents",
+    "prepare_search_query": NodeIOSpec(
+        node_name="prepare_search_query",
         category=NodeCategory.SEARCH,
-        description="문서 검색 (하이브리드: 벡터 + 키워드)",
+        description="검색 쿼리 준비 및 최적화",
         required_input={
             "query": "사용자 질문",
-            "search_query": "검색 쿼리"
+            "query_type": "질문 유형"
         },
         optional_input={
-            "query_type": "질문 유형",
-            "extracted_keywords": "키워드",
-            "legal_field": "법률 분야"
+            "legal_field": "법률 분야",
+            "extracted_keywords": "추출된 키워드",
+            "search_query": "기존 검색 쿼리"
         },
         output={
-            "retrieved_docs": "검색된 문서 리스트",
-            "metadata.search": "검색 메타데이터"
+            "optimized_queries": "최적화된 검색 쿼리",
+            "search_params": "검색 파라미터",
+            "search_cache_hit": "캐시 히트 여부"
         },
-        required_state_groups={"input", "search", "classification"},
+        required_state_groups={"input", "classification"},  # query가 필요하므로 input 그룹 필수
         output_state_groups={"search"}
     ),
 
@@ -237,6 +237,26 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         output_state_groups={"analysis"}
     ),
 
+    "prepare_document_context_for_prompt": NodeIOSpec(
+        node_name="prepare_document_context_for_prompt",
+        category=NodeCategory.ENHANCEMENT,
+        description="프롬프트용 문서 컨텍스트 준비",
+        required_input={
+            "query": "사용자 질문",
+            "retrieved_docs": "검색된 문서"
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "extracted_keywords": "추출된 키워드",
+            "legal_field": "법률 분야"
+        },
+        output={
+            "prompt_optimized_context": "프롬프트 최적화된 문서 컨텍스트"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"search", "common"}  # common에도 포함하여 보존
+    ),
+
     "generate_answer_enhanced": NodeIOSpec(
         node_name="generate_answer_enhanced",
         category=NodeCategory.GENERATION,
@@ -249,17 +269,17 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "query_type": "질문 유형",
             "legal_field": "법률 분야",
             "analysis": "법률 분석",
-            "legal_references": "법령 참조"
+            "legal_references": "법령 참조",
+            "prompt_optimized_context": "프롬프트 최적화된 문서 컨텍스트"
         },
         output={
             "answer": "생성된 답변",
-            "enhanced_answer": "향상된 답변",
             "confidence": "신뢰도 점수",
             "legal_references": "법령 참조",
             "legal_citations": "법령 인용"
         },
-        required_state_groups={"input", "search", "classification", "analysis"},
-        output_state_groups={"answer", "analysis"}
+        required_state_groups={"input", "search"},  # 최소 의존성만 필수
+        output_state_groups={"answer", "analysis", "common"}  # common 출력 그룹에 포함
     ),
 
     "validate_answer_quality": NodeIOSpec(
@@ -281,8 +301,8 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "legal_validity_check": "법령 검증",
             "legal_basis_validation": "법적 근거 검증"
         },
-        required_state_groups={"input", "answer", "search"},
-        output_state_groups={"validation", "control"}
+        required_state_groups={"input", "answer"},  # 최소 의존성만 필수
+        output_state_groups={"validation", "control", "common"}  # common 출력 그룹에 포함
     ),
 
     "enhance_answer_structure": NodeIOSpec(
@@ -300,10 +320,9 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         },
         output={
             "answer": "구조화된 답변",
-            "enhanced_answer": "향상된 답변",
             "structure_confidence": "구조화 신뢰도"
         },
-        required_state_groups={"input", "answer", "validation"},
+        required_state_groups={"answer", "classification"},
         output_state_groups={"answer"}
     ),
 
@@ -343,8 +362,137 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
             "sources": "최종 소스",
             "confidence": "최종 신뢰도"
         },
-        required_state_groups={"answer", "validation", "control"},
+        required_state_groups={"answer"},
         output_state_groups={"answer", "common"}
+    ),
+
+    "execute_searches_parallel": NodeIOSpec(
+        node_name="execute_searches_parallel",
+        category=NodeCategory.SEARCH,
+        description="의미적 검색과 키워드 검색을 병렬로 실행",
+        required_input={
+            "query": "사용자 질문",
+            "optimized_queries": "최적화된 검색 쿼리",
+            "search_params": "검색 파라미터"
+        },
+        optional_input={
+            "query_type": "질문 유형",
+            "legal_field": "법률 분야",
+            "extracted_keywords": "추출된 키워드"
+        },
+        output={
+            "semantic_results": "의미적 검색 결과",
+            "keyword_results": "키워드 검색 결과",
+            "semantic_count": "의미적 검색 결과 수",
+            "keyword_count": "키워드 검색 결과 수"
+        },
+        required_state_groups={"input", "search"},  # search 그룹 필요
+        output_state_groups={"search"}  # search 그룹에 저장
+    ),
+
+    "evaluate_search_quality": NodeIOSpec(
+        node_name="evaluate_search_quality",
+        category=NodeCategory.SEARCH,
+        description="검색 결과 품질 평가",
+        required_input={
+            "semantic_results": "의미적 검색 결과",
+            "keyword_results": "키워드 검색 결과"
+        },
+        optional_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형",
+            "search_params": "검색 파라미터"
+        },
+        output={
+            "search_quality_evaluation": "검색 품질 평가 결과"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"search", "common"}
+    ),
+
+    "conditional_retry_search": NodeIOSpec(
+        node_name="conditional_retry_search",
+        category=NodeCategory.SEARCH,
+        description="검색 품질에 따른 조건부 재검색",
+        required_input={
+            "search_quality_evaluation": "검색 품질 평가 결과",
+            "semantic_results": "의미적 검색 결과",
+            "keyword_results": "키워드 검색 결과"
+        },
+        optional_input={
+            "query": "사용자 질문",
+            "optimized_queries": "최적화된 검색 쿼리"
+        },
+        output={
+            "semantic_results": "재검색된 의미적 결과",
+            "keyword_results": "재검색된 키워드 결과"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"search"}
+    ),
+
+    "merge_and_rerank_with_keyword_weights": NodeIOSpec(
+        node_name="merge_and_rerank_with_keyword_weights",
+        category=NodeCategory.SEARCH,
+        description="키워드별 가중치를 적용한 결과 병합 및 Reranking",
+        required_input={
+            "semantic_results": "의미적 검색 결과",
+            "keyword_results": "키워드 검색 결과"
+        },
+        optional_input={
+            "query": "사용자 질문",
+            "optimized_queries": "최적화된 검색 쿼리",
+            "search_params": "검색 파라미터",
+            "extracted_keywords": "추출된 키워드",
+            "legal_field": "법률 분야"
+        },
+        output={
+            "merged_documents": "병합 및 Reranking된 문서",
+            "keyword_weights": "키워드별 가중치",
+            "retrieved_docs": "검색된 문서 (최종 결과)"
+        },
+        required_state_groups={"input", "search"},  # search 그룹 필요 (semantic_results, keyword_results 포함)
+        output_state_groups={"search"}  # search 그룹에 저장
+    ),
+
+    "filter_and_validate_results": NodeIOSpec(
+        node_name="filter_and_validate_results",
+        category=NodeCategory.SEARCH,
+        description="검색 결과 필터링 및 품질 검증",
+        required_input={
+            "merged_documents": "병합된 문서"
+        },
+        optional_input={
+            "query": "사용자 질문",
+            "query_type": "질문 유형",
+            "legal_field": "법률 분야",
+            "search_params": "검색 파라미터",
+            "retrieved_docs": "기존 검색된 문서"
+        },
+        output={
+            "retrieved_docs": "필터링된 검색 문서"
+        },
+        required_state_groups={"input", "search"},  # search 그룹 필요
+        output_state_groups={"search"}
+    ),
+
+    "update_search_metadata": NodeIOSpec(
+        node_name="update_search_metadata",
+        category=NodeCategory.SEARCH,
+        description="검색 메타데이터 업데이트",
+        required_input={
+            "retrieved_docs": "검색된 문서"
+        },
+        optional_input={
+            "semantic_count": "의미적 검색 결과 수",
+            "keyword_count": "키워드 검색 결과 수",
+            "optimized_queries": "최적화된 검색 쿼리"
+        },
+        output={
+            "search_metadata": "업데이트된 검색 메타데이터"
+        },
+        required_state_groups={"input", "search"},
+        output_state_groups={"search", "common"}
     )
 }
 
