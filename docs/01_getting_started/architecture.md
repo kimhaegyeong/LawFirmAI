@@ -2,7 +2,7 @@
 
 ## 개요
 
-LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비스로 구성되어 있으며, LangGraph 워크플로우 기반의 지능형 대화 시스템을 지원합니다.
+LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 모듈화된 서비스로 구성되어 있으며, LangGraph 워크플로우 기반의 지능형 대화 시스템을 지원합니다.
 
 ## 아키텍처 개요
 
@@ -10,25 +10,29 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    애플리케이션 레이어                        │
-│  ├── apps/streamlit/ (Streamlit 웹 인터페이스)              │
-│  └── apps/api/ (FastAPI 서버)                                │
-├─────────────────────────────────────────────────────────────┤
 │                    LangGraph 워크플로우                      │
-│  ├── core/agents/workflow_service.py                         │
-│  ├── core/agents/legal_workflow_enhanced.py                  │
-│  └── core/agents/state_definitions.py                        │
+│  ├── lawfirm_langgraph/core/agents/workflow_service.py     │
+│  ├── lawfirm_langgraph/core/agents/legal_workflow_enhanced.py│
+│  └── lawfirm_langgraph/core/agents/state_definitions.py    │
 ├─────────────────────────────────────────────────────────────┤
 │                    핵심 서비스 레이어                        │
-│  ├── core/services/search/  │  ├── core/services/generation/ │
-│  │   ├── hybrid_search_engine.py │  │   ├── answer_generator.py │
-│  │   ├── semantic_search_engine.py│  │   └── context_builder.py  │
-│  │   ├── exact_search_engine.py    │  └── core/services/enhancement/ │
-│  │   └── question_classifier.py    │       └── confidence_calculator.py │
+│  ├── lawfirm_langgraph/core/services/                      │
+│  │   ├── hybrid_search_engine.py          (하이브리드 검색) │
+│  │   ├── semantic_search_engine.py        (의미적 검색)    │
+│  │   ├── exact_search_engine.py           (정확 매칭)      │
+│  │   ├── question_classifier.py          (질문 분류)      │
+│  │   ├── answer_generator.py             (답변 생성)      │
+│  │   ├── context_builder.py              (컨텍스트 구축)   │
+│  │   └── confidence_calculator.py        (신뢰도 계산)    │
 ├─────────────────────────────────────────────────────────────┤
 │                    데이터 레이어                            │
-│  ├── core/data/database.py         │  ├── core/data/vector_store.py │
-│  └── core/data/conversation_store.py                        │
+│  ├── lawfirm_langgraph/core/data/database.py               │
+│  ├── lawfirm_langgraph/core/data/vector_store.py          │
+│  └── lawfirm_langgraph/core/data/conversation_store.py    │
+├─────────────────────────────────────────────────────────────┤
+│                    AI 모델 레이어                            │
+│  ├── lawfirm_langgraph/core/services/gemini_client.py     │
+│  └── lawfirm_langgraph/core/models/sentence_bert.py        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -36,20 +40,17 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 | 모듈 | 책임 | 주요 컴포넌트 |
 |------|------|-------------|
-| **core/agents/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced |
-| **core/services/search/** | 법률 문서 검색 | hybrid_search, semantic_search, exact_search |
-| **core/services/generation/** | 답변 생성 | answer_generator, context_builder |
-| **core/services/enhancement/** | 품질 개선 | confidence_calculator |
-| **core/data/** | 데이터 관리 | database, vector_store, conversation_store |
-| **core/models/** | AI 모델 관리 | model_manager, sentence_bert, gemini_client |
-| **apps/streamlit/** | 웹 UI | Streamlit 인터페이스 |
-| **apps/api/** | API 서버 | FastAPI 엔드포인트 |
+| **lawfirm_langgraph/core/agents/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced |
+| **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | hybrid_search, semantic_search, answer_generator |
+| **lawfirm_langgraph/core/data/** | 데이터 관리 | database, vector_store, conversation_store |
+| **lawfirm_langgraph/core/models/** | AI 모델 관리 | sentence_bert |
+| **lawfirm_langgraph/config/** | 설정 관리 | langgraph_config, app_config |
 
 ## 핵심 서비스
 
 ### 1. LangGraph 워크플로우 서비스
 
-**파일**: `source/agents/workflow_service.py`
+**파일**: `lawfirm_langgraph/core/agents/workflow_service.py`
 
 **역할**: LangGraph 기반 법률 질문 처리 워크플로우 관리
 
@@ -57,20 +58,21 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 - 질문 처리 워크플로우 실행
 - 상태 관리 및 최적화
 - 세션 관리
+- Agentic AI 모드 지원
 
 **사용 예시**:
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
-result = await workflow.process_query("질문", "session_id")
+result = await workflow.process_query_async("질문", "session_id")
 ```
 
 ### 2. 하이브리드 검색 엔진
 
-**파일**: `source/services/search/hybrid_search_engine.py`
+**파일**: `lawfirm_langgraph/core/services/hybrid_search_engine.py`
 
 **역할**: 의미적 검색 + 정확 매칭 통합
 
@@ -81,7 +83,7 @@ result = await workflow.process_query("질문", "session_id")
 
 **사용 예시**:
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("계약 해지", question_type="law_inquiry")
@@ -89,7 +91,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 3. 의미적 검색 엔진
 
-**파일**: `source/services/search/semantic_search_engine.py`
+**파일**: `lawfirm_langgraph/core/services/semantic_search_engine.py`
 
 **역할**: FAISS 벡터 기반 의미적 유사도 검색
 
@@ -100,7 +102,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 4. 정확한 매칭 검색 엔진
 
-**파일**: `source/services/search/exact_search_engine.py`
+**파일**: `lawfirm_langgraph/core/services/exact_search_engine.py`
 
 **역할**: 키워드 기반 정확한 매칭 검색
 
@@ -111,7 +113,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 5. 질문 분류기
 
-**파일**: `source/services/search/question_classifier.py`
+**파일**: `lawfirm_langgraph/core/services/question_classifier.py`
 
 **역할**: 질문 유형 분류 및 처리 전략 결정
 
@@ -123,7 +125,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 6. 답변 생성기
 
-**파일**: `source/services/generation/answer_generator.py`
+**파일**: `lawfirm_langgraph/core/services/answer_generator.py`
 
 **역할**: 검색 결과를 바탕으로 답변 생성
 
@@ -134,7 +136,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 **사용 예시**:
 ```python
-from source.services.generation import AnswerGenerator
+from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
 generator = AnswerGenerator()
 answer = generator.generate(query, context)
@@ -142,7 +144,7 @@ answer = generator.generate(query, context)
 
 ### 7. 컨텍스트 빌더
 
-**파일**: `source/services/generation/context_builder.py`
+**파일**: `lawfirm_langgraph/core/services/context_builder.py`
 
 **역할**: 검색 결과를 바탕으로 답변 생성에 필요한 컨텍스트 구성
 
@@ -153,7 +155,7 @@ answer = generator.generate(query, context)
 
 ### 8. 신뢰도 계산기
 
-**파일**: `source/services/enhancement/confidence_calculator.py`
+**파일**: `lawfirm_langgraph/core/services/confidence_calculator.py`
 
 **역할**: 답변의 신뢰도 계산
 
@@ -166,7 +168,7 @@ answer = generator.generate(query, context)
 
 ### 1. 데이터베이스 관리자
 
-**파일**: `source/data/database.py`
+**파일**: `lawfirm_langgraph/core/data/database.py`
 
 **기능**:
 - SQLite 데이터베이스 관리
@@ -181,7 +183,7 @@ answer = generator.generate(query, context)
 
 ### 2. 벡터 스토어
 
-**파일**: `source/data/vector_store.py`
+**파일**: `lawfirm_langgraph/core/data/vector_store.py`
 
 **기능**:
 - FAISS 벡터 인덱스 관리
@@ -190,7 +192,7 @@ answer = generator.generate(query, context)
 
 ### 3. 대화 저장소
 
-**파일**: `source/data/conversation_store.py`
+**파일**: `lawfirm_langgraph/core/data/conversation_store.py`
 
 **기능**:
 - 대화 데이터 저장
@@ -199,26 +201,17 @@ answer = generator.generate(query, context)
 
 ## AI 모델 레이어
 
-### 1. 모델 관리자
+### 1. Sentence BERT
 
-**파일**: `source/models/model_manager.py`
-
-**기능**:
-- 모델 로딩 및 관리
-- 지연 로딩
-- 메모리 최적화
-
-### 2. Sentence BERT
-
-**파일**: `source/models/sentence_bert.py`
+**파일**: `lawfirm_langgraph/core/models/sentence_bert.py`
 
 **기능**:
 - 텍스트 임베딩 생성
 - 유사도 계산
 
-### 3. Gemini 클라이언트
+### 2. Gemini 클라이언트
 
-**파일**: `source/models/gemini_client.py`
+**파일**: `lawfirm_langgraph/core/services/gemini_client.py`
 
 **기능**:
 - Google Gemini API 통신
@@ -230,23 +223,23 @@ answer = generator.generate(query, context)
 ### 1. 쿼리 처리 흐름
 
 ```
-User Input (apps/streamlit 또는 apps/api)
+User Input
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/core/agents/workflow_service.py
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── classify_query (질문 분류)
     ├── assess_urgency (긴급도 평가)
     ├── resolve_multi_turn (멀티턴 처리)
     ├── search_documents (문서 검색)
-    │   ├── core/services/search/hybrid_search_engine.py
-    │   ├── core/services/search/semantic_search_engine.py
-    │   └── core/services/search/exact_search_engine.py
+    │   ├── lawfirm_langgraph/core/services/hybrid_search_engine.py
+    │   ├── lawfirm_langgraph/core/services/semantic_search_engine.py
+    │   └── lawfirm_langgraph/core/services/exact_search_engine.py
     ├── generate_answer (답변 생성)
-    │   ├── core/services/generation/answer_generator.py
-    │   └── core/services/generation/context_builder.py
+    │   ├── lawfirm_langgraph/core/services/answer_generator.py
+    │   └── lawfirm_langgraph/core/services/context_builder.py
     └── calculate_confidence (신뢰도 계산)
-        └── core/services/enhancement/confidence_calculator.py
+        └── lawfirm_langgraph/core/services/confidence_calculator.py
     ↓
 User Output
 ```
@@ -256,13 +249,13 @@ User Output
 ```
 Query
     ↓
-core/services/search/question_classifier.py (질문 분류)
+lawfirm_langgraph/core/services/question_classifier.py (질문 분류)
     ↓
-core/services/search/hybrid_search_engine.py (하이브리드 검색)
-    ├── core/services/search/semantic_search_engine.py (의미적 검색)
-    └── core/services/search/exact_search_engine.py (정확 매칭)
+lawfirm_langgraph/core/services/hybrid_search_engine.py (하이브리드 검색)
+    ├── lawfirm_langgraph/core/services/semantic_search_engine.py (의미적 검색)
+    └── lawfirm_langgraph/core/services/exact_search_engine.py (정확 매칭)
     ↓
-core/services/search/result_merger.py (결과 병합)
+lawfirm_langgraph/core/services/result_merger.py (결과 병합)
     ↓
 Results
 ```
@@ -273,8 +266,8 @@ Results
 
 ```python
 # 직접 호출
-from source.services.search import HybridSearchEngine
-from source.services.generation import AnswerGenerator
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
 search_engine = HybridSearchEngine()
 answer_generator = AnswerGenerator()
@@ -287,11 +280,13 @@ answer = answer_generator.generate("계약 해지", results)
 
 ```python
 import asyncio
-from source.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 async def process_query_async(query: str, session_id: str):
-    workflow = LangGraphWorkflowService()
-    result = await workflow.process_query(query, session_id)
+    config = LangGraphConfig.from_env()
+    workflow = LangGraphWorkflowService(config)
+    result = await workflow.process_query_async(query, session_id)
     return result
 ```
 
@@ -336,7 +331,7 @@ class WorkflowService:
 ### 3. 설정 관리
 
 ```python
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
@@ -347,7 +342,7 @@ workflow = LangGraphWorkflowService(config)
 ### 1. 메모리 최적화
 
 ```python
-from source.agents.performance_optimizer import PerformanceOptimizer
+from lawfirm_langgraph.core.agents.optimizers.performance_optimizer import PerformanceOptimizer
 
 optimizer = PerformanceOptimizer()
 optimizer.optimize_memory()
@@ -428,10 +423,11 @@ class TestHybridSearchEngine:
 
 ```python
 class TestWorkflowIntegration:
-    def test_end_to_end(self):
+    async def test_end_to_end(self):
         """전체 워크플로우 테스트"""
-        workflow = LangGraphWorkflowService()
-        result = await workflow.process_query("계약 해지 조건은?", "session_123")
+        config = LangGraphConfig.from_env()
+        workflow = LangGraphWorkflowService(config)
+        result = await workflow.process_query_async("계약 해지 조건은?", "session_123")
         assert result is not None
         assert "answer" in result
 ```
@@ -442,12 +438,13 @@ class TestWorkflowIntegration:
 import time
 
 class TestPerformance:
-    def test_response_time(self):
+    async def test_response_time(self):
         """응답 시간 테스트"""
-        workflow = LangGraphWorkflowService()
+        config = LangGraphConfig.from_env()
+        workflow = LangGraphWorkflowService(config)
         
         start_time = time.time()
-        result = await workflow.process_query("테스트 질문", "session_123")
+        result = await workflow.process_query_async("테스트 질문", "session_123")
         end_time = time.time()
         
         response_time = end_time - start_time
@@ -456,31 +453,15 @@ class TestPerformance:
 
 ## 배포 고려사항
 
-### 1. 컨테이너화
-
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY core/ ./source/
-COPY apps/ ./apps/
-COPY infrastructure/ ./infrastructure/
-
-CMD ["python", "apps/streamlit/app.py"]
-```
-
-### 2. 환경별 설정
+### 1. 환경별 설정
 
 ```python
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
 ```
 
-### 3. 모니터링
+### 2. 모니터링
 
 ```python
 class HealthChecker:
@@ -492,3 +473,9 @@ class HealthChecker:
             "models": "healthy" if self._check_models() else "unhealthy"
         }
 ```
+
+## 📖 관련 문서
+
+- [프로젝트 구조](project_structure.md)
+- [프로젝트 개요](project_overview.md)
+- [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)

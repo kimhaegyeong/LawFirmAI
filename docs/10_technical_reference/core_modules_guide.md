@@ -2,22 +2,20 @@
 
 ## 개요
 
-`source/` 모듈은 LawFirmAI 프로젝트의 핵심 비즈니스 로직을 담당합니다. 이 문서는 `source/` 모듈의 각 컴포넌트의 역할과 사용법을 설명합니다.
+`lawfirm_langgraph/core/` 모듈은 LawFirmAI 프로젝트의 핵심 비즈니스 로직을 담당합니다. 이 문서는 `lawfirm_langgraph/core/` 모듈의 각 컴포넌트의 역할과 사용법을 설명합니다.
 
 ## 디렉토리 구조
 
 ```
-core/
+lawfirm_langgraph/core/
 ├── agents/          # LangGraph 워크플로우 에이전트
 ├── services/        # 비즈니스 서비스
-│   ├── search/      # 검색 서비스
-│   ├── generation/  # 답변 생성
-│   └── enhancement/ # 품질 개선
 ├── data/            # 데이터 레이어
-└── models/          # AI 모델
+├── models/          # AI 모델
+└── utils/           # 유틸리티
 ```
 
-## 1. Agents 모듈 (`source/agents/`)
+## 1. Agents 모듈 (`lawfirm_langgraph/core/agents/`)
 
 ### 1.1 LangGraph 워크플로우
 
@@ -29,8 +27,8 @@ core/
 
 **사용 예시**:
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
 
 # 설정 초기화
 config = LangGraphConfig.from_env()
@@ -39,7 +37,7 @@ config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
 
 # 질문 처리
-result = await workflow.process_query("계약 해지 조건은?", "session_id")
+result = await workflow.process_query_async("계약 해지 조건은?", "session_id")
 ```
 
 #### legal_workflow_enhanced.py
@@ -128,7 +126,7 @@ result = await workflow.process_query("계약 해지 조건은?", "session_id")
 
 **사용 예시**:
 ```python
-from source.agents.node_wrappers import with_state_optimization
+from lawfirm_langgraph.core.agents.node_wrappers import with_state_optimization
 
 @with_state_optimization("classify_query")
 def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
@@ -211,9 +209,9 @@ def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
 - 워크플로우 재개
 - 이력 관리
 
-## 2. Services 모듈 (`source/services/`)
+## 2. Services 모듈 (`lawfirm_langgraph/core/services/`)
 
-### 2.1 검색 서비스 (`source/services/search/`)
+### 2.1 검색 서비스
 
 #### hybrid_search_engine.py
 **역할**: 하이브리드 검색 엔진 (의미적 + 정확한 매칭)
@@ -223,7 +221,7 @@ def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
 
 **사용 예시**:
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("민법 제543조", question_type="law_inquiry")
@@ -237,7 +235,7 @@ results = engine.search("민법 제543조", question_type="law_inquiry")
 
 **사용 예시**:
 ```python
-from source.services.search import SemanticSearchEngine
+from lawfirm_langgraph.core.services.semantic_search_engine import SemanticSearchEngine
 
 engine = SemanticSearchEngine()
 results = engine.search("계약 해지", k=5)
@@ -251,7 +249,7 @@ results = engine.search("계약 해지", k=5)
 
 **사용 예시**:
 ```python
-from source.services.search import ExactSearchEngine
+from lawfirm_langgraph.core.services.exact_search_engine import ExactSearchEngine
 
 engine = ExactSearchEngine()
 results = engine.search("민법 제543조", k=5)
@@ -277,7 +275,7 @@ results = engine.search("민법 제543조", k=5)
 - `ResultMerger`: 결과 병합기
 - `ResultRanker`: 결과 재순위화
 
-### 2.2 답변 생성 서비스 (`source/services/generation/`)
+### 2.2 답변 생성 서비스
 
 #### answer_generator.py
 **역할**: LLM 기반 답변 생성
@@ -287,7 +285,7 @@ results = engine.search("민법 제543조", k=5)
 
 **사용 예시**:
 ```python
-from source.services.generation import AnswerGenerator
+from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
 generator = AnswerGenerator()
 answer = generator.generate(query, context)
@@ -310,7 +308,7 @@ answer = generator.generate(query, context)
 - 법령 인용 형식화
 - 목록/표 구조화
 
-### 2.3 품질 개선 서비스 (`source/services/enhancement/`)
+### 2.3 품질 개선 서비스
 
 #### confidence_calculator.py
 **역할**: 답변 신뢰도 계산
@@ -318,7 +316,7 @@ answer = generator.generate(query, context)
 **주요 클래스**:
 - `ConfidenceCalculator`: 신뢰도 계산기
 
-## 3. Data 모듈 (`source/data/`)
+## 3. Data 모듈 (`lawfirm_langgraph/core/data/`)
 
 ### 3.1 데이터베이스
 
@@ -335,7 +333,7 @@ answer = generator.generate(query, context)
 
 **사용 예시**:
 ```python
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.data.database import DatabaseManager
 
 db = DatabaseManager()
 results = db.execute_query("SELECT * FROM assembly_laws LIMIT 10")
@@ -356,7 +354,7 @@ results = db.execute_query("SELECT * FROM assembly_laws LIMIT 10")
 
 **사용 예시**:
 ```python
-from source.data.vector_store import VectorStore
+from lawfirm_langgraph.core.data.vector_store import VectorStore
 
 vector_store = VectorStore("ko-sroberta-multitask")
 results = vector_store.similarity_search("계약 해지", k=5)
@@ -393,7 +391,7 @@ results = vector_store.similarity_search("계약 해지", k=5)
 - 조문번호 표준화
 - 약어 확장
 
-## 4. Models 모듈 (`source/models/`)
+## 4. Models 모듈 (`lawfirm_langgraph/core/models/`)
 
 ### 4.1 AI 모델
 
@@ -409,7 +407,7 @@ results = vector_store.similarity_search("계약 해지", k=5)
 
 **사용 예시**:
 ```python
-from source.models.sentence_bert import SentenceBERT
+from lawfirm_langgraph.core.models.sentence_bert import SentenceBERT
 
 model = SentenceBERT("ko-sroberta-multitask")
 embedding = model.encode("계약 해지 조건")
@@ -418,22 +416,18 @@ embedding = model.encode("계약 해지 조건")
 #### gemini_client.py
 **역할**: Google Gemini API 클라이언트
 
+**위치**: `lawfirm_langgraph/core/services/gemini_client.py`
+
 **주요 클래스**:
 - `GeminiClient`: Gemini 클라이언트
-
-#### model_manager.py
-**역할**: AI 모델 통합 관리
-
-**주요 클래스**:
-- `ModelManager`: 모델 관리자
 
 ## 사용 예시
 
 ### 전체 워크플로우 실행
 
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
 
 # 1. 설정 초기화
 config = LangGraphConfig.from_env()
@@ -442,7 +436,7 @@ config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
 
 # 3. 질문 처리
-result = await workflow.process_query(
+result = await workflow.process_query_async(
     query="계약 해지 조건은?",
     session_id="session_123"
 )
@@ -456,7 +450,7 @@ print(f"소스: {result.get('sources', [])}")
 ### 검색 엔진 직접 사용
 
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 
 # 하이브리드 검색 엔진 초기화
 search_engine = HybridSearchEngine()
@@ -477,7 +471,7 @@ for result in results:
 ### 데이터베이스 직접 사용
 
 ```python
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.data.database import DatabaseManager
 
 # 데이터베이스 관리자 초기화
 db = DatabaseManager()
