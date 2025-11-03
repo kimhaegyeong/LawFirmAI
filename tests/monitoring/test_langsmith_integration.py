@@ -17,6 +17,10 @@ from typing import Any, Dict, List, Optional
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
 # 환경변수 파일 로드 확인 (langgraph_config.py에서 이미 처리됨)
 try:
     from dotenv import load_dotenv
@@ -67,10 +71,10 @@ else:
     print("✓ 모든 필수 패키지가 설치되어 있습니다.\n")
 
 # LangGraph 관련 import (환경변수 로드 후)
-from core.agents.workflow_service import (
+from lawfirm_langgraph.langgraph_core.services.workflow_service import (
     LangGraphWorkflowService,  # noqa: E402
 )
-from source.utils.langgraph_config import LangGraphConfig  # noqa: E402
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig  # noqa: E402
 
 # 테스트 환경 설정
 os.environ["USE_LANGGRAPH"] = "true"

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 LawFirmAI 스트레스 테스트
 대량 데이터 처리 및 동시성 테스트
@@ -26,7 +26,7 @@ from source.services.integrated_session_manager import IntegratedSessionManager
 from source.services.contextual_memory_manager import ContextualMemoryManager
 from source.services.conversation_quality_monitor import ConversationQualityMonitor
 from source.utils.performance_optimizer import PerformanceMonitor, MemoryOptimizer, CacheManager
-from source.data.conversation_store import ConversationStore
+from core.data.conversation_store import ConversationStore
 
 
 class TestStressSystem(unittest.TestCase):

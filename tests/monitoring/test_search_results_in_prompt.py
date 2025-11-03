@@ -12,7 +12,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 

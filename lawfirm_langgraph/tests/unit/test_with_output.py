@@ -75,8 +75,8 @@ with open(output_file, 'w', encoding='utf-8') as f:
             raise
 
         try:
-            from source.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-            from source.services.workflow_service import LangGraphWorkflowService
+            from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+            from langgraph_core.services.workflow_service import LangGraphWorkflowService
             print("  ✓ 워크플로우 모듈")
         except Exception as e:
             print(f"  ✗ 워크플로우 모듈: {e}")

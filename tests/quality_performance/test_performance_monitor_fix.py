@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 PerformanceMonitor log_request 오류 테스트
 """
@@ -51,7 +51,7 @@ def test_chat_service_integration():
     print("\n=== ChatService 통합 테스트 ===")
     
     try:
-        from source.utils.config import Config
+        from core.utils.config import Config
         from source.services.chat_service import ChatService
         import asyncio
         

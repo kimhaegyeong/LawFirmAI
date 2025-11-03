@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Phase 2: 개인화 및 지능형 분석 기능 테스트 스크립트
 - UserProfileManager
@@ -18,14 +18,14 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.conversation_store import ConversationStore
+from core.data.conversation_store import ConversationStore
 from source.services.conversation_flow_tracker import ConversationFlowTracker
-from source.services.conversation_manager import (
+from lawfirm_langgraph.langgraph_core.services.conversation_manager import (
     ConversationContext,
     ConversationManager,
     ConversationTurn,
 )
-from source.services.emotion_intent_analyzer import (
+from lawfirm_langgraph.langgraph_core.services.emotion_intent_analyzer import (
     EmotionIntentAnalyzer,
     EmotionType,
     IntentType,

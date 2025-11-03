@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 데이터베이스 기반 키워드 관리 시스템 테스트
@@ -11,8 +11,8 @@ from typing import Any, Dict, List
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from source.services.answer_structure_enhancer import AnswerStructureEnhancer
-from source.services.database_keyword_manager import DatabaseKeywordManager
+from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import AnswerStructureEnhancer
+from core.services.search.database_keyword_manager import DatabaseKeywordManager
 
 
 def test_database_keyword_manager():

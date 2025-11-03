@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Phase 3: 장기 기억 및 품질 모니터링 기능 테스트 스크립트
 - ContextualMemoryManager
@@ -17,13 +17,13 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.conversation_store import ConversationStore
+from core.data.conversation_store import ConversationStore
 from source.services.contextual_memory_manager import (
     ContextualMemoryManager,
     MemoryItem,
     MemoryType,
 )
-from source.services.conversation_manager import (
+from lawfirm_langgraph.langgraph_core.services.conversation_manager import (
     ConversationContext,
     ConversationManager,
     ConversationTurn,

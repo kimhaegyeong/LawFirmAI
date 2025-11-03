@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 데이터베이스 검색 및 검색 결과 전달 분석
@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 from core.services.search.semantic_search_engine import SemanticSearchEngine
 from core.services.search.keyword_search_engine import KeywordSearchEngine
 

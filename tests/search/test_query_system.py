@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 LawFirmAI 질의 답변 시스템 테스트 스크립트
 Gradio 실행 전에 시스템이 정상적으로 동작하는지 확인
@@ -44,7 +44,7 @@ class QuerySystemTester:
             os.environ.setdefault('GEMINI_ENABLED', 'false')
 
             # Config 초기화
-            from source.utils.config import Config
+            from core.utils.config import Config
             self.config = Config()
 
             # ChatService 초기화

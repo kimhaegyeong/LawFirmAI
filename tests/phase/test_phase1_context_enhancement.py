@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Phase 1 단위 및 통합 테스트
 ConversationStore 확장, IntegratedSessionManager, MultiTurnQuestionHandler, ContextCompressor 테스트
@@ -16,11 +16,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.conversation_store import ConversationStore
+from core.data.conversation_store import ConversationStore
 from source.services.integrated_session_manager import IntegratedSessionManager
-from source.services.multi_turn_handler import MultiTurnQuestionHandler
+from lawfirm_langgraph.langgraph_core.services.multi_turn_handler import MultiTurnQuestionHandler
 from source.services.context_compressor import ContextCompressor
-from source.services.conversation_manager import ConversationContext, ConversationTurn
+from lawfirm_langgraph.langgraph_core.services.conversation_manager import ConversationContext, ConversationTurn
 
 
 class TestConversationStoreExtensions(unittest.TestCase):

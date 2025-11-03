@@ -14,11 +14,11 @@ from typing import Any, Dict, List, Tuple
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from source.services.answer_structure_enhancer import (
+from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import (
     AnswerStructureEnhancer,
     QuestionType,
 )
-from source.services.database_keyword_manager import DatabaseKeywordManager
+from core.services.search.database_keyword_manager import DatabaseKeywordManager
 
 
 def get_real_world_queries() -> List[Dict[str, Any]]:

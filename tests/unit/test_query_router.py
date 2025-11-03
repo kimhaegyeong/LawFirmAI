@@ -1,4 +1,4 @@
-from source.services.query_router import route_query
+from core.services.search.sql_router import route_query
 
 
 def test_route_article_pattern():

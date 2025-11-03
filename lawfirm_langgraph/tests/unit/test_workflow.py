@@ -28,13 +28,18 @@ def test_imports():
 
         # 설정 모듈
         print("  - 설정 모듈...")
-        from config.langgraph_config import LangGraphConfig
+        # config는 lawfirm_langgraph/config에 있음
+        import sys
+        from pathlib import Path
+        lawfirm_root = Path(__file__).parent.parent.parent.resolve()
+        sys.path.insert(0, str(lawfirm_root))
+        from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         print("    ✓ Config 모듈 로드 성공")
 
         # 워크플로우 모듈
         print("  - 워크플로우 모듈...")
-        from source.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-        from source.services.workflow_service import LangGraphWorkflowService
+        from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from langgraph_core.services.workflow_service import LangGraphWorkflowService
         print("    ✓ 워크플로우 모듈 로드 성공")
 
         # Graph export
@@ -56,7 +61,12 @@ def test_config_loading():
     print("=" * 60)
 
     try:
-        from config.langgraph_config import LangGraphConfig
+        # config는 lawfirm_langgraph/config에 있음
+        import sys
+        from pathlib import Path
+        lawfirm_root = Path(__file__).parent.parent.parent.resolve()
+        sys.path.insert(0, str(lawfirm_root))
+        from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
         print("  - 환경 변수에서 설정 로드...")
         config = LangGraphConfig.from_env()

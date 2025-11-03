@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 LawFirmAI 종합 시스템 테스트
 모든 컴포넌트의 통합 테스트 및 성능 테스트
@@ -20,16 +20,16 @@ sys.path.append(str(project_root))
 
 from source.services.chat_service import ChatService
 from source.services.integrated_session_manager import IntegratedSessionManager
-from source.services.multi_turn_handler import MultiTurnQuestionHandler
+from lawfirm_langgraph.langgraph_core.services.multi_turn_handler import MultiTurnQuestionHandler
 from source.services.context_compressor import ContextCompressor
 from source.services.user_profile_manager import UserProfileManager
-from source.services.emotion_intent_analyzer import EmotionIntentAnalyzer
+from lawfirm_langgraph.langgraph_core.services.emotion_intent_analyzer import EmotionIntentAnalyzer
 from source.services.conversation_flow_tracker import ConversationFlowTracker
 from source.services.contextual_memory_manager import ContextualMemoryManager
 from source.services.conversation_quality_monitor import ConversationQualityMonitor
 from source.utils.performance_optimizer import PerformanceMonitor, MemoryOptimizer, CacheManager
-from source.data.conversation_store import ConversationStore
-from source.services.conversation_manager import ConversationManager, ConversationContext, ConversationTurn
+from core.data.conversation_store import ConversationStore
+from lawfirm_langgraph.langgraph_core.services.conversation_manager import ConversationManager, ConversationContext, ConversationTurn
 
 
 class TestComprehensiveSystem(unittest.TestCase):

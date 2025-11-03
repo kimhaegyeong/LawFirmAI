@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 데이터베이스 기반 템플릿 시스템 + classify_question_type 통합 테스트
@@ -10,7 +10,7 @@ import sys
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from source.services.answer_structure_enhancer import (
+from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import (
     AnswerStructureEnhancer,
     QuestionType,
 )

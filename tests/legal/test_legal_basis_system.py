@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 법적 근거 제시 시스템 종합 테스트
 """
@@ -20,12 +20,12 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message
 logger = logging.getLogger(__name__)
 
 # 서비스 임포트
-from source.services.answer_structure_enhancer import (
+from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import (
     AnswerStructureEnhancer,
     QuestionType,
 )
 from source.services.legal_basis_integration_service import LegalBasisIntegrationService
-from source.services.legal_basis_validator import LegalBasisValidator
+from lawfirm_langgraph.langgraph_core.services.legal_basis_validator import LegalBasisValidator
 from source.services.legal_citation_enhancer import LegalCitationEnhancer
 
 

@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 
 def _router():
-    from source.services.sql_router import SQLRouter
+    from core.services.search.sql_router import SQLRouter
     return SQLRouter(db_path="data/lawfirm.db")
 
 

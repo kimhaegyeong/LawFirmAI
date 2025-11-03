@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 LawFirmAI 성능 벤치마크 테스트
 응답 시간, 처리량, 리소스 사용량 측정
@@ -22,10 +22,10 @@ sys.path.append(str(project_root))
 
 from source.services.chat_service import ChatService
 from source.services.integrated_session_manager import IntegratedSessionManager
-from source.services.multi_turn_handler import MultiTurnQuestionHandler
+from lawfirm_langgraph.langgraph_core.services.multi_turn_handler import MultiTurnQuestionHandler
 from source.services.context_compressor import ContextCompressor
 from source.services.user_profile_manager import UserProfileManager
-from source.services.emotion_intent_analyzer import EmotionIntentAnalyzer
+from lawfirm_langgraph.langgraph_core.services.emotion_intent_analyzer import EmotionIntentAnalyzer
 from source.services.conversation_flow_tracker import ConversationFlowTracker
 from source.services.contextual_memory_manager import ContextualMemoryManager
 from source.services.conversation_quality_monitor import ConversationQualityMonitor

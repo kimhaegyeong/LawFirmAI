@@ -13,12 +13,16 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
 # 테스트 환경 설정
 os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 
-from core.agents.workflow_service import LangGraphWorkflowService
-from source.utils.langgraph_config import LangGraphConfig
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 
 async def test_workflow_execution():

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Langfuse 통합 테스트
 개선된 LangGraph 워크플로우를 Langfuse로 모니터링하는 테스트
@@ -19,7 +19,7 @@ os.environ["LANGGRAPH_ENABLED"] = "true"
 os.environ["LANGGRAPH_CHECKPOINT_STORAGE"] = "memory"  # 빠른 테스트를 위해 메모리 사용
 
 from core.agents.workflow_service import LangGraphWorkflowService
-from source.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 
 class LangfuseIntegrationTest:

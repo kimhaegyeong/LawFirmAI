@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 답변 품질 향상 시스템 테스트
@@ -15,7 +15,7 @@ project_root = os.path.join(os.path.dirname(__file__), '..', '..')
 sys.path.insert(0, project_root)
 
 from source.services.answer_quality_enhancer import AnswerQualityEnhancer
-from source.services.answer_structure_enhancer import AnswerStructureEnhancer
+from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import AnswerStructureEnhancer
 from source.services.context_quality_enhancer import ContextQualityEnhancer
 from source.services.keyword_coverage_enhancer import KeywordCoverageEnhancer
 from source.services.legal_term_validator import LegalTermValidator

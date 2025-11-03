@@ -12,9 +12,14 @@ def test_imports():
     print("Testing imports...")
 
     try:
+        # lawfirm_langgraph 경로 추가
+        lawfirm_langgraph_root = Path(__file__).parent.parent
+        sys.path.insert(0, str(lawfirm_langgraph_root))
+
         # 상위 프로젝트 경로 추가
-        project_root = Path(__file__).parent.parent
-        sys.path.insert(0, str(project_root))
+        project_root = Path(__file__).parent.parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
 
         # Graph import 테스트
         print("  - Testing graph import...")
@@ -29,8 +34,8 @@ def test_imports():
 
         # Source services import 테스트
         print("  - Testing source services import...")
-        from source.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-        from source.services.workflow_service import LangGraphWorkflowService
+        from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from langgraph_core.services.workflow_service import LangGraphWorkflowService
         print("    ✓ Source services imports successful")
 
         return True

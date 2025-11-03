@@ -31,21 +31,22 @@ sys.path.append(str(project_root))
 
 # Import RAG components
 try:
-    from source.services.chat_service import ChatService
-    from source.services.hybrid_search_engine import HybridSearchEngine
-    from source.services.improved_answer_generator import (
+    # Note: ChatService and ImprovedAnswerGenerator may need relocation
+    # from source.services.chat_service import ChatService
+    from core.services.search.hybrid_search_engine import HybridSearchEngine
+    # from source.services.improved_answer_generator import (
         AnswerResult,
         ImprovedAnswerGenerator,
     )
-    from source.services.question_classifier import (
+    from core.services.search.question_classifier import (
         QuestionClassification,
         QuestionClassifier,
         QuestionType,
     )
     # RAGService removed - use HybridSearchEngine instead
     RAGService = None
-    from source.utils.config import Config
-    from source.utils.logger import get_logger
+    from core.utils.config import Config
+    from core.utils.logger import get_logger
     RAG_MODULES_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: RAG modules not available: {e}")

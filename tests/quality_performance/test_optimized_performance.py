@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 성능 최적화 테스트 스크립트
 최적화 전후 성능 비교 및 벤치마크
@@ -40,7 +40,7 @@ class PerformanceTester:
             os.environ.setdefault('GEMINI_ENABLED', 'false')
 
             # Config 초기화
-            from source.utils.config import Config
+            from core.utils.config import Config
             self.config = Config()
 
             # 최적화된 ChatService 초기화

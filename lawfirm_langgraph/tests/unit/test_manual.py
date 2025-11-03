@@ -35,8 +35,8 @@ def test_imports():
     import langgraph
     from config.langgraph_config import LangGraphConfig
     from graph import graph, app, create_graph, create_app
-    from source.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-    from source.services.workflow_service import LangGraphWorkflowService
+    from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+    from langgraph_core.services.workflow_service import LangGraphWorkflowService
     print(f"  LangGraph 버전: {getattr(langgraph, '__version__', 'N/A')}")
     return True
 
