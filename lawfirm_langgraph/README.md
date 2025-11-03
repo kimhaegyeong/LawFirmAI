@@ -25,10 +25,13 @@ lawfirm_langgraph/
 │   ├── tools/          # Agentic AI Tools
 │   └── models/         # 모델 관련
 ├── tests/              # 테스트 파일
-│   ├── test_migration_complete.py
-│   ├── test_basic_functionality.py
-│   ├── test_full_workflow.py
-│   └── run_all_tests.py
+│   ├── __init__.py
+│   ├── conftest.py              # pytest 설정 및 픽스처
+│   ├── test_config.py           # LangGraphConfig 테스트
+│   ├── test_workflow_service.py  # LangGraphWorkflowService 테스트
+│   ├── test_workflow_nodes.py   # 워크플로우 노드 테스트
+│   ├── test_integration.py      # 통합 테스트
+│   └── run_all_tests.py         # 전체 테스트 실행 스크립트
 └── docs/               # 문서
     ├── TEST_RESULTS.md
     └── NEXT_STEPS.md
@@ -74,24 +77,51 @@ asyncio.run(main())
 
 ## 테스트
 
+### 테스트 환경 설정
+
+```bash
+# pytest 및 테스트 의존성 설치
+pip install pytest pytest-asyncio pytest-cov pytest-mock
+```
+
 ### 전체 테스트 실행
 
 ```bash
+# 방법 1: run_all_tests.py 스크립트 사용
 cd lawfirm_langgraph/tests
 python run_all_tests.py
+
+# 방법 2: pytest 직접 실행
+pytest lawfirm_langgraph/tests/ -v
 ```
 
 ### 개별 테스트 실행
 
 ```bash
-# 마이그레이션 검증
-python lawfirm_langgraph/tests/test_migration_complete.py
+# 설정 테스트
+pytest lawfirm_langgraph/tests/test_config.py -v
 
-# 기본 기능 테스트
-python lawfirm_langgraph/tests/test_basic_functionality.py
+# 워크플로우 서비스 테스트
+pytest lawfirm_langgraph/tests/test_workflow_service.py -v
 
-# 전체 워크플로우 테스트
-python lawfirm_langgraph/tests/test_full_workflow.py
+# 워크플로우 노드 테스트
+pytest lawfirm_langgraph/tests/test_workflow_nodes.py -v
+
+# 통합 테스트
+pytest lawfirm_langgraph/tests/test_integration.py -v
+
+# 특정 테스트 파일 실행 (스크립트 사용)
+python lawfirm_langgraph/tests/run_all_tests.py config
+```
+
+### 테스트 커버리지
+
+```bash
+# 커버리지 리포트 생성 (pytest-cov 필요)
+pytest lawfirm_langgraph/tests/ --cov=lawfirm_langgraph --cov-report=html
+
+# HTML 리포트 확인
+# htmlcov/index.html 파일을 브라우저에서 열기
 ```
 
 ## Agentic 모드
