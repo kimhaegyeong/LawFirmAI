@@ -39,7 +39,7 @@ from parsers import (
     ArticleParser,
     MetadataExtractor,
     TextNormalizer
-    # SearchableTextGenerator 제거됨
+    # SearchableTextGenerator ?�거??
 )
 from parsers.improved_article_parser import ImprovedArticleParser
 from ml_enhanced_parser import MLEnhancedArticleParser
@@ -65,8 +65,8 @@ except ImportError as e:
 
 # Setup logging
 def setup_logging():
-    """로깅 설정"""
-    # logs 디렉토리 생성
+    """로깅 ?�정"""
+    # logs ?�렉?�리 ?�성
     log_dir = Path('logs')
     log_dir.mkdir(exist_ok=True)
     
@@ -164,10 +164,10 @@ def is_file_already_processed(input_file: Path, output_dir: Path) -> bool:
 
 class ProcessingManager:
     """
-    전처리 상태를 관리하는 클래스
-    - 데이터베이스 기반으로 처리 상태 추적
-    - 체크섬을 사용한 파일 변경 감지
-    - 재시작 기능 지원
+    ?�처�??�태�?관리하???�래??
+    - ?�이?�베?�스 기반?�로 처리 ?�태 추적
+    - 체크?�을 ?�용???�일 변�?감�?
+    - ?�시??기능 지??
     """
     
     def __init__(self, output_dir: Path):
@@ -176,7 +176,7 @@ class ProcessingManager:
         self.init_db()
     
     def init_db(self):
-        """데이터베이스 초기화"""
+        """?�이?�베?�스 초기??""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -210,7 +210,7 @@ class ProcessingManager:
         logger.info(f"Processing status database initialized: {self.db_path}")
     
     def calculate_checksum(self, file_path: Path) -> str:
-        """파일 체크섬 계산 (MD5)"""
+        """?�일 체크??계산 (MD5)"""
         hash_md5 = hashlib.md5()
         try:
             with open(file_path, "rb") as f:
@@ -223,9 +223,9 @@ class ProcessingManager:
     
     def is_processed(self, input_file: Path) -> bool:
         """
-        파일이 이미 처리되었는지 확인
-        - 데이터베이스에서 상태 확인
-        - 체크섬으로 파일 변경 감지
+        ?�일???��? 처리?�었?��? ?�인
+        - ?�이?�베?�스?�서 ?�태 ?�인
+        - 체크?�으�??�일 변�?감�?
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -243,29 +243,29 @@ class ProcessingManager:
         
         status, db_checksum, db_size = result
         
-        # 파일이 존재하지 않으면 재처리
+        # ?�일??존재?��? ?�으�??�처�?
         if not input_file.exists():
             logger.warning(f"Input file not found: {input_file}")
             return False
         
-        # 파일 크기가 변경되었으면 재처리
+        # ?�일 ?�기가 변경되?�으�??�처�?
         current_size = input_file.stat().st_size
         if db_size != current_size:
             logger.info(f"File size changed for {input_file.name}: {db_size} -> {current_size}, reprocessing")
             return False
         
-        # 체크섬이 변경되었으면 재처리
+        # 체크?�이 변경되?�으�??�처�?
         current_checksum = self.calculate_checksum(input_file)
         if db_checksum != current_checksum:
             logger.info(f"File checksum changed for {input_file.name}, reprocessing")
             return False
         
-        # 상태가 'completed'인 경우만 처리 완료로 간주
+        # ?�태가 'completed'??경우�?처리 ?�료�?간주
         if status == 'completed':
             logger.info(f"File {input_file.name} already processed successfully")
             return True
         
-        # 실패 상태인 경우 재처리
+        # ?�패 ?�태??경우 ?�처�?
         if status == 'failed':
             logger.info(f"File {input_file.name} previously failed, will retry")
             return False
@@ -273,7 +273,7 @@ class ProcessingManager:
         return False
     
     def mark_processing(self, input_file: Path):
-        """파일 처리 시작 표시"""
+        """?�일 처리 ?�작 ?�시"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -293,7 +293,7 @@ class ProcessingManager:
         conn.close()
     
     def mark_completed(self, input_file: Path, laws_processed: int, processing_time: float):
-        """파일 처리 완료 표시"""
+        """?�일 처리 ?�료 ?�시"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -315,7 +315,7 @@ class ProcessingManager:
         conn.close()
     
     def mark_failed(self, input_file: Path, error_message: str):
-        """파일 처리 실패 표시"""
+        """?�일 처리 ?�패 ?�시"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -337,7 +337,7 @@ class ProcessingManager:
         conn.close()
     
     def get_summary(self) -> Dict[str, Any]:
-        """처리 상태 요약 정보 반환"""
+        """처리 ?�태 ?�약 ?�보 반환"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -373,7 +373,7 @@ class ProcessingManager:
         return summary
     
     def get_failed_files(self) -> List[Dict[str, Any]]:
-        """실패한 파일 목록 반환"""
+        """?�패???�일 목록 반환"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -391,7 +391,7 @@ class ProcessingManager:
         return results
     
     def reset_failed(self):
-        """실패한 파일들을 재처리할 수 있도록 상태 초기화"""
+        """?�패???�일?�을 ?�처리할 ???�도�??�태 초기??""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -420,7 +420,7 @@ def simple_memory_monitor():
         if memory_mb > 1500:  # 1.5GB threshold (lowered for better memory management)
             logger.warning(f"High memory usage: {memory_mb:.1f}MB - forcing cleanup")
             simple_garbage_collection()
-            gc.collect()  # 강제 가비지 컬렉션
+            gc.collect()  # 강제 가비�? 컬렉??
             
         if memory_mb > 2000:  # 2GB threshold (lowered for better memory management)
             logger.error(f"Critical memory usage: {memory_mb:.1f}MB")
@@ -479,7 +479,7 @@ class LawPreprocessor:
         
         self.metadata_extractor = MetadataExtractor()
         self.text_normalizer = TextNormalizer()
-        # self.searchable_text_generator = SearchableTextGenerator()  # 제거됨
+        # self.searchable_text_generator = SearchableTextGenerator()  # ?�거??
         
         # Memory management
         self.max_memory_mb = max_memory_mb
@@ -759,9 +759,9 @@ class LawPreprocessor:
             if self.enable_legal_analysis:
                 legal_analysis = self.comprehensive_analyzer.analyze_law_comprehensively(law_data)
             
-            # Combine all processed data (최적화된 구조로 수정)
+            # Combine all processed data (최적?�된 구조�??�정)
             processed_law = {
-                # Basic identification (필수 필드만)
+                # Basic identification (?�수 ?�드�?
                 'law_id': law_id,
                 'law_name': law_data.get('law_name', ''),
                 'law_type': law_data.get('law_type', ''),
@@ -772,7 +772,7 @@ class LawPreprocessor:
                 'amendment_type': law_data.get('amendment_type', ''),
                 'ministry': law_data.get('ministry', ''),
                 
-                # Parsed content (압축된 구조)
+                # Parsed content (?�축??구조)
                 'articles': articles,
                 
                 # Quality information
@@ -794,8 +794,8 @@ class LawPreprocessor:
             logger.error(f"Error processing single law: {e}")
             return None
     
-    # _generate_compressed_search_text 메서드 제거됨 - 더 이상 사용하지 않음
-    # _compress_legal_text 메서드 제거됨 - 더 이상 사용하지 않음
+    # _generate_compressed_search_text 메서???�거??- ???�상 ?�용?��? ?�음
+    # _compress_legal_text 메서???�거??- ???�상 ?�용?��? ?�음
     
     def _clean_law_content(self, content: str) -> str:
         """
@@ -881,8 +881,8 @@ class LawPreprocessor:
         
         return content
     
-    # _calculate_enhanced_data_quality 메서드 제거됨 - 사용되지 않음
-    # _calculate_metadata_completeness 메서드 제거됨 - 사용되지 않음
+    # _calculate_enhanced_data_quality 메서???�거??- ?�용?��? ?�음
+    # _calculate_metadata_completeness 메서???�거??- ?�용?��? ?�음
     
     def _get_output_file_path(self, input_file: Path, output_dir: Path) -> Path:
         """
@@ -942,7 +942,7 @@ class LawPreprocessor:
             filename = f"{safe_name}_{law_id}.json"
             output_file = output_dir / filename
             
-            # Save individual law (압축된 형식)
+            # Save individual law (?�축???�식)
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(processed_law, f, ensure_ascii=False, separators=(',', ':'))
             

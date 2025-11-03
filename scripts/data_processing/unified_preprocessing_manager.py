@@ -3,12 +3,12 @@
 """
 Unified Preprocessing Manager
 
-모든 전처리 작업을 통합 관리하는 매니저 클래스입니다.
-- 법령 전처리
-- 판례 전처리
-- 품질 검증
-- 벡터 임베딩
-- 데이터베이스 저장
+모든 ?�처�??�업???�합 관리하??매니?� ?�래?�입?�다.
+- 법령 ?�처�?
+- ?��? ?�처�?
+- ?�질 검�?
+- 벡터 ?�베??
+- ?�이?�베?�스 ?�??
 """
 
 import os
@@ -21,7 +21,7 @@ from typing import List, Dict, Any, Optional, Union
 import argparse
 from dataclasses import dataclass
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -33,7 +33,7 @@ from scripts.data_processing.auto_data_detector import AutoDataDetector
 
 @dataclass
 class PreprocessingTask:
-    """전처리 작업 데이터 클래스"""
+    """?�처�??�업 ?�이???�래??""
     task_id: str
     data_type: str  # 'law' or 'precedent'
     input_path: Path
@@ -52,25 +52,25 @@ class PreprocessingTask:
 
 
 class UnifiedPreprocessingManager:
-    """통합 전처리 매니저"""
+    """?�합 ?�처�?매니?�"""
     
     def __init__(self, 
                  config: ProcessingConfig = None,
                  checkpoint_dir: str = "data/checkpoints",
                  db_path: str = "data/lawfirm.db"):
         """
-        전처리 매니저 초기화
+        ?�처�?매니?� 초기??
         
         Args:
-            config: 처리 설정
-            checkpoint_dir: 체크포인트 디렉토리
-            db_path: 데이터베이스 경로
+            config: 처리 ?�정
+            checkpoint_dir: 체크?�인???�렉?�리
+            db_path: ?�이?�베?�스 경로
         """
         self.config = config or ProcessingConfig()
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
-        # 컴포넌트 초기화
+        # 컴포?�트 초기??
         self.db_manager = DatabaseManager(db_path)
         self.checkpoint_manager = CheckpointManager(str(self.checkpoint_dir))
         self.pipeline = EnhancedPreprocessingPipeline(
@@ -80,10 +80,10 @@ class UnifiedPreprocessingManager:
         )
         self.data_detector = AutoDataDetector("data/raw/assembly", self.db_manager)
         
-        # 로깅 설정
+        # 로깅 ?�정
         self.logger = logging.getLogger(__name__)
         
-        # 작업 큐
+        # ?�업 ??
         self.task_queue: List[PreprocessingTask] = []
         self.completed_tasks: List[PreprocessingTask] = []
         self.failed_tasks: List[PreprocessingTask] = []
@@ -93,7 +93,7 @@ class UnifiedPreprocessingManager:
                                output_path: Union[str, Path],
                                category: str = None,
                                priority: int = 1) -> str:
-        """법령 전처리 작업 추가"""
+        """법령 ?�처�??�업 추�?"""
         task_id = f"law_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.task_queue)}"
         
         task = PreprocessingTask(
@@ -114,7 +114,7 @@ class UnifiedPreprocessingManager:
                                      output_path: Union[str, Path],
                                      category: str = None,
                                      priority: int = 1) -> str:
-        """판례 전처리 작업 추가"""
+        """?��? ?�처�??�업 추�?"""
         task_id = f"precedent_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.task_queue)}"
         
         task = PreprocessingTask(
@@ -133,20 +133,20 @@ class UnifiedPreprocessingManager:
     def auto_detect_and_add_tasks(self, 
                                  base_path: str = "data/raw/assembly",
                                  output_base_path: str = "data/processed/assembly") -> List[str]:
-        """자동으로 데이터를 감지하고 작업 추가"""
+        """?�동?�로 ?�이?��? 감�??�고 ?�업 추�?"""
         self.logger.info("Auto-detecting data and adding tasks...")
         
-        # 데이터 감지
+        # ?�이??감�?
         detected_data = self.data_detector.detect_new_data_sources(str(self.data_detector.raw_data_base_path))
         
         task_ids = []
         
-        # 감지된 데이터를 작업으로 변환
+        # 감�????�이?��? ?�업?�로 변??
         for data_type, files in detected_data.items():
             if not files:
                 continue
             
-            # 출력 경로 설정
+            # 출력 경로 ?�정
             if data_type.startswith('precedent_'):
                 category = data_type.replace('precedent_', '')
                 output_path = Path(output_base_path) / 'precedent' / category
@@ -155,16 +155,16 @@ class UnifiedPreprocessingManager:
             
             output_path.mkdir(parents=True, exist_ok=True)
             
-            # 작업 추가
+            # ?�업 추�?
             if data_type.startswith('precedent_'):
                 task_id = self.add_precedent_processing_task(
-                    input_path=files[0].parent,  # 디렉토리 경로
+                    input_path=files[0].parent,  # ?�렉?�리 경로
                     output_path=output_path,
                     category=category
                 )
             else:
                 task_id = self.add_law_processing_task(
-                    input_path=files[0].parent,  # 디렉토리 경로
+                    input_path=files[0].parent,  # ?�렉?�리 경로
                     output_path=output_path
                 )
             
@@ -174,11 +174,11 @@ class UnifiedPreprocessingManager:
         return task_ids
     
     def process_next_task(self) -> bool:
-        """다음 작업 처리"""
+        """?�음 ?�업 처리"""
         if not self.task_queue:
             return False
         
-        # 우선순위별로 정렬
+        # ?�선?�위별로 ?�렬
         self.task_queue.sort(key=lambda x: x.priority)
         task = self.task_queue.pop(0)
         
@@ -187,7 +187,7 @@ class UnifiedPreprocessingManager:
         task.started_at = datetime.now()
         
         try:
-            # 입력 파일 수집
+            # ?�력 ?�일 ?�집
             if task.input_path.is_file():
                 input_files = [task.input_path]
             else:
@@ -196,10 +196,10 @@ class UnifiedPreprocessingManager:
             if not input_files:
                 raise ValueError(f"No JSON files found in {task.input_path}")
             
-            # 출력 디렉토리 생성
+            # 출력 ?�렉?�리 ?�성
             task.output_path.mkdir(parents=True, exist_ok=True)
             
-            # 전처리 실행
+            # ?�처�??�행
             if task.data_type == 'law':
                 result = self.pipeline.process_law_files(input_files, task.output_path)
             else:
@@ -228,7 +228,7 @@ class UnifiedPreprocessingManager:
             return True
     
     def process_all_tasks(self) -> Dict[str, Any]:
-        """모든 작업 처리"""
+        """모든 ?�업 처리"""
         self.logger.info(f"Processing {len(self.task_queue)} tasks...")
         
         start_time = datetime.now()
@@ -244,7 +244,7 @@ class UnifiedPreprocessingManager:
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
         
-        # 결과 요약
+        # 결과 ?�약
         summary = {
             'total_tasks': processed_count,
             'completed_tasks': len(self.completed_tasks),
@@ -258,8 +258,8 @@ class UnifiedPreprocessingManager:
         return summary
     
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """작업 상태 조회"""
-        # 대기 중인 작업에서 찾기
+        """?�업 ?�태 조회"""
+        # ?��?중인 ?�업?�서 찾기
         for task in self.task_queue:
             if task.task_id == task_id:
                 return {
@@ -272,7 +272,7 @@ class UnifiedPreprocessingManager:
                     'error_message': task.error_message
                 }
         
-        # 완료된 작업에서 찾기
+        # ?�료???�업?�서 찾기
         for task in self.completed_tasks + self.failed_tasks:
             if task.task_id == task_id:
                 return {
@@ -288,7 +288,7 @@ class UnifiedPreprocessingManager:
         return None
     
     def get_all_tasks_status(self) -> Dict[str, Any]:
-        """모든 작업 상태 조회"""
+        """모든 ?�업 ?�태 조회"""
         return {
             'pending_tasks': len(self.task_queue),
             'completed_tasks': len(self.completed_tasks),
@@ -321,7 +321,7 @@ class UnifiedPreprocessingManager:
         }
     
     def save_checkpoint(self, checkpoint_file: str = None):
-        """체크포인트 저장"""
+        """체크?�인???�??""
         if checkpoint_file is None:
             checkpoint_file = self.checkpoint_dir / f"preprocessing_checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
@@ -387,11 +387,11 @@ class UnifiedPreprocessingManager:
         return checkpoint_file
     
     def load_checkpoint(self, checkpoint_file: str):
-        """체크포인트 로드"""
+        """체크?�인??로드"""
         with open(checkpoint_file, 'r', encoding='utf-8') as f:
             checkpoint_data = json.load(f)
         
-        # 설정 복원
+        # ?�정 복원
         config_data = checkpoint_data.get('config', {})
         self.config = ProcessingConfig(
             max_workers=config_data.get('max_workers', 4),
@@ -401,10 +401,10 @@ class UnifiedPreprocessingManager:
             enable_duplicate_detection=config_data.get('enable_duplicate_detection', True)
         )
         
-        # 작업 복원
+        # ?�업 복원
         tasks_data = checkpoint_data.get('tasks', {})
         
-        # 대기 중인 작업
+        # ?��?중인 ?�업
         self.task_queue = []
         for task_data in tasks_data.get('pending', []):
             task = PreprocessingTask(
@@ -419,7 +419,7 @@ class UnifiedPreprocessingManager:
             )
             self.task_queue.append(task)
         
-        # 완료된 작업
+        # ?�료???�업
         self.completed_tasks = []
         for task_data in tasks_data.get('completed', []):
             task = PreprocessingTask(
@@ -437,7 +437,7 @@ class UnifiedPreprocessingManager:
             )
             self.completed_tasks.append(task)
         
-        # 실패한 작업
+        # ?�패???�업
         self.failed_tasks = []
         for task_data in tasks_data.get('failed', []):
             task = PreprocessingTask(
@@ -460,7 +460,7 @@ class UnifiedPreprocessingManager:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description='Unified Preprocessing Manager')
     parser.add_argument('--mode', choices=['auto', 'manual', 'status', 'resume'], required=True, help='Operation mode')
     parser.add_argument('--input', help='Input path (for manual mode)')
@@ -474,24 +474,24 @@ def main():
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 설정 생성
+    # ?�정 ?�성
     config = ProcessingConfig(
         max_workers=args.max_workers,
         batch_size=args.batch_size,
         max_memory_gb=args.max_memory_gb
     )
     
-    # 매니저 초기화
+    # 매니?� 초기??
     manager = UnifiedPreprocessingManager(config=config)
     
     if args.mode == 'auto':
-        # 자동 감지 및 처리
+        # ?�동 감�? �?처리
         task_ids = manager.auto_detect_and_add_tasks()
         print(f"Added {len(task_ids)} tasks from auto-detection")
         
@@ -500,7 +500,7 @@ def main():
             print(f"Processing complete: {summary}")
     
     elif args.mode == 'manual':
-        # 수동 작업 추가 및 처리
+        # ?�동 ?�업 추�? �?처리
         if not all([args.input, args.output, args.data_type]):
             print("Error: --input, --output, and --data-type are required for manual mode")
             return
@@ -520,12 +520,12 @@ def main():
         print(f"Processing complete: {summary}")
     
     elif args.mode == 'status':
-        # 상태 조회
+        # ?�태 조회
         status = manager.get_all_tasks_status()
         print(json.dumps(status, indent=2, ensure_ascii=False))
     
     elif args.mode == 'resume':
-        # 체크포인트에서 복원
+        # 체크?�인?�에??복원
         if not args.checkpoint:
             print("Error: --checkpoint is required for resume mode")
             return

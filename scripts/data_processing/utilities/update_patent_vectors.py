@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-특허 판례 벡터 임베딩 업데이트
+?�허 ?��? 벡터 ?�베???�데?�트
 """
 
 import sys
@@ -12,19 +12,19 @@ from pathlib import Path
 from tqdm import tqdm
 
 def main():
-    # 벡터 스토어 초기화
+    # 벡터 ?�토??초기??
     vector_store = LegalVectorStore(
         model_name='jhgan/ko-sroberta-multitask',
         dimension=768,
         index_type='flat'
     )
 
-    # 기존 인덱스 로드
+    # 기존 ?�덱??로드
     vector_store.load_index('data/embeddings/ml_enhanced_ko_sroberta_precedents')
 
     print(f'Current index size: {vector_store.index.ntotal}')
 
-    # 전처리된 특허 판례 파일 처리
+    # ?�처리된 ?�허 ?��? ?�일 처리
     patent_dir = Path('data/processed/assembly/precedent/patent')
     files = list(patent_dir.rglob('*_processed.json'))
 
@@ -40,7 +40,7 @@ def main():
             if isinstance(data, dict) and 'items' in data:
                 items = data['items']
                 
-                # 벡터 임베딩에 추가할 문서 준비
+                # 벡터 ?�베?�에 추�???문서 준�?
                 texts = []
                 metadatas = []
                 for item in items:
@@ -61,7 +61,7 @@ def main():
                     metadatas.append(metadata)
                 
                 if texts:
-                    # 벡터 임베딩에 추가
+                    # 벡터 ?�베?�에 추�?
                     success = vector_store.add_documents(texts, metadatas)
                     if success:
                         total_added += len(texts)
@@ -70,7 +70,7 @@ def main():
             print(f"Error processing {file_path}: {e}")
             continue
     
-    # 인덱스 저장
+    # ?�덱???�??
     vector_store.save_index('data/embeddings/ml_enhanced_ko_sroberta_precedents')
     
     print(f'Final index size: {vector_store.index.ntotal}')

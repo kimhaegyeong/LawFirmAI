@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Prompt Chaining 간단 테스트 (pytest 없이)
-Phase 6, 7 구현 테스트
+Prompt Chaining 간단 ?�스??(pytest ?�이)
+Phase 6, 7 구현 ?�스??
 """
 
 import sys
 import os
 from unittest.mock import Mock, MagicMock
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def test_chain_executor():
-    """PromptChainExecutor 기본 테스트"""
+    """PromptChainExecutor 기본 ?�스??""
     try:
-        from core.agents.prompt_chain_executor import PromptChainExecutor
+        from source.agents.prompt_chain_executor import PromptChainExecutor
 
         # LLM 모킹
         llm = Mock()
@@ -25,7 +25,7 @@ def test_chain_executor():
 
         executor = PromptChainExecutor(llm, logger)
 
-        # 간단한 체인 정의
+        # 간단??체인 ?�의
         chain_steps = [
             {
                 "name": "test_step",
@@ -45,23 +45,23 @@ def test_chain_executor():
             validate_final_output=True
         )
 
-        print(f"✅ Chain execution test passed")
+        print(f"??Chain execution test passed")
         print(f"   Success: {result['success']}")
         print(f"   Steps executed: {len(result['steps_executed'])}")
         print(f"   Validation: {result.get('validation_results', {}).get('is_valid', False)}")
         return True
 
     except Exception as e:
-        print(f"❌ Chain execution test failed: {e}")
+        print(f"??Chain execution test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def test_chain_validation():
-    """체인 검증 테스트"""
+    """체인 검�??�스??""
     try:
-        from core.agents.prompt_chain_executor import PromptChainExecutor
+        from source.agents.prompt_chain_executor import PromptChainExecutor
 
         llm = Mock()
         llm.invoke = Mock(return_value=MagicMock(content='Valid output'))
@@ -69,7 +69,7 @@ def test_chain_validation():
         logger = Mock()
         executor = PromptChainExecutor(llm, logger)
 
-        # None 출력 테스트 (검증 실패)
+        # None 출력 ?�스??(검�??�패)
         validation = executor._validate_final_output(
             final_output=None,
             chain_steps=[],
@@ -78,9 +78,9 @@ def test_chain_validation():
 
         assert validation["is_valid"] is False
         assert validation["quality_score"] == 0.0
-        print(f"✅ Chain validation test passed (None output)")
+        print(f"??Chain validation test passed (None output)")
 
-        # 유효한 출력 테스트
+        # ?�효??출력 ?�스??
         validation = executor._validate_final_output(
             final_output="Valid output string",
             chain_steps=[],
@@ -89,11 +89,11 @@ def test_chain_validation():
 
         assert validation["is_valid"] is True
         assert validation["quality_score"] > 0.5
-        print(f"✅ Chain validation test passed (Valid output)")
+        print(f"??Chain validation test passed (Valid output)")
         return True
 
     except Exception as e:
-        print(f"❌ Chain validation test failed: {e}")
+        print(f"??Chain validation test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -101,30 +101,30 @@ def test_chain_validation():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Prompt Chaining 테스트 시작")
+    print("Prompt Chaining ?�스???�작")
     print("=" * 60)
 
     results = []
 
-    # 테스트 1: Chain Executor
-    print("\n[테스트 1] Chain Executor 테스트")
+    # ?�스??1: Chain Executor
+    print("\n[?�스??1] Chain Executor ?�스??)
     results.append(test_chain_executor())
 
-    # 테스트 2: Chain Validation
-    print("\n[테스트 2] Chain Validation 테스트")
+    # ?�스??2: Chain Validation
+    print("\n[?�스??2] Chain Validation ?�스??)
     results.append(test_chain_validation())
 
-    # 결과 요약
+    # 결과 ?�약
     print("\n" + "=" * 60)
-    print("테스트 결과 요약")
+    print("?�스??결과 ?�약")
     print("=" * 60)
-    print(f"총 테스트: {len(results)}")
-    print(f"성공: {sum(results)}")
-    print(f"실패: {len(results) - sum(results)}")
+    print(f"�??�스?? {len(results)}")
+    print(f"?�공: {sum(results)}")
+    print(f"?�패: {len(results) - sum(results)}")
 
     if all(results):
-        print("\n✅ 모든 테스트 통과!")
+        print("\n??모든 ?�스???�과!")
         sys.exit(0)
     else:
-        print("\n❌ 일부 테스트 실패")
+        print("\n???��? ?�스???�패")
         sys.exit(1)

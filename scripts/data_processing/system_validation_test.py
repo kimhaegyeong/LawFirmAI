@@ -3,11 +3,11 @@
 """
 System Validation Test
 
-전체 시스템의 기능을 테스트하고 검증하는 스크립트입니다.
-- 데이터베이스 연결 테스트
-- RAG 시스템 테스트
-- Gradio 앱 테스트
-- 성능 테스트
+?�체 ?�스?�의 기능???�스?�하�?검증하???�크립트?�니??
+- ?�이?�베?�스 ?�결 ?�스??
+- RAG ?�스???�스??
+- Gradio ???�스??
+- ?�능 ?�스??
 """
 
 import json
@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -31,27 +31,27 @@ from source.services.question_classifier import QuestionClassifier
 
 
 class SystemValidator:
-    """시스템 검증 클래스"""
+    """?�스??검�??�래??""
 
     def __init__(self, db_path: str = "data/lawfirm.db"):
-        """검증기 초기화"""
+        """검증기 초기??""
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         self.test_results = {}
 
-        # 로깅 설정
+        # 로깅 ?�정
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
     def run_all_tests(self) -> Dict[str, Any]:
-        """모든 테스트 실행"""
+        """모든 ?�스???�행"""
         self.logger.info("Starting system validation tests...")
 
         start_time = time.time()
 
-        # 테스트 실행
+        # ?�스???�행
         tests = [
             ("database_connection", self.test_database_connection),
             ("database_data", self.test_database_data),
@@ -70,9 +70,9 @@ class SystemValidator:
                     'result': result,
                     'timestamp': datetime.now().isoformat()
                 }
-                self.logger.info(f"✓ {test_name} test passed")
+                self.logger.info(f"??{test_name} test passed")
             except Exception as e:
-                self.logger.error(f"✗ {test_name} test failed: {e}")
+                self.logger.error(f"??{test_name} test failed: {e}")
                 self.test_results[test_name] = {
                     'status': 'failed',
                     'error': str(e),
@@ -82,7 +82,7 @@ class SystemValidator:
         end_time = time.time()
         total_time = end_time - start_time
 
-        # 전체 결과 요약
+        # ?�체 결과 ?�약
         passed_tests = sum(1 for r in self.test_results.values() if r['status'] == 'passed')
         failed_tests = sum(1 for r in self.test_results.values() if r['status'] == 'failed')
 
@@ -99,11 +99,11 @@ class SystemValidator:
         return summary
 
     def test_database_connection(self) -> Dict[str, Any]:
-        """데이터베이스 연결 테스트"""
+        """?�이?�베?�스 ?�결 ?�스??""
         try:
             db_manager = DatabaseManager(self.db_path)
 
-            # 연결 테스트
+            # ?�결 ?�스??
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT 1")
@@ -118,11 +118,11 @@ class SystemValidator:
             raise Exception(f"Database connection failed: {e}")
 
     def test_database_data(self) -> Dict[str, Any]:
-        """데이터베이스 데이터 테스트"""
+        """?�이?�베?�스 ?�이???�스??""
         try:
             db_manager = DatabaseManager(self.db_path)
 
-            # 테이블별 레코드 수 확인
+            # ?�이블별 ?�코?????�인
             tables = ['laws', 'precedent_cases', 'processed_files']
             table_counts = {}
 
@@ -133,7 +133,7 @@ class SystemValidator:
                     count = cursor.fetchone()[0]
                     table_counts[table] = count
 
-            # 판례 카테고리별 통계
+            # ?��? 카테고리�??�계
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -154,10 +154,10 @@ class SystemValidator:
             raise Exception(f"Database data test failed: {e}")
 
     def test_rag_system(self) -> Dict[str, Any]:
-        """RAG 시스템 테스트"""
+        """RAG ?�스???�스??""
         try:
-            # RAG 서비스 초기화 (간단한 테스트)
-            # 실제 초기화는 복잡하므로 기본적인 테스트만 수행
+            # RAG ?�비??초기??(간단???�스??
+            # ?�제 초기?�는 복잡?��?�?기본?�인 ?�스?�만 ?�행
             return {
                 'rag_components': 'available',
                 'vector_store': 'available',
@@ -168,10 +168,10 @@ class SystemValidator:
             raise Exception(f"RAG system test failed: {e}")
 
     def test_chat_service(self) -> Dict[str, Any]:
-        """채팅 서비스 테스트"""
+        """채팅 ?�비???�스??""
         try:
-            # ChatService 초기화 테스트 (config 없이)
-            # 실제 초기화는 복잡하므로 기본적인 테스트만 수행
+            # ChatService 초기???�스??(config ?�이)
+            # ?�제 초기?�는 복잡?��?�?기본?�인 ?�스?�만 ?�행
             return {
                 'chat_service_available': True,
                 'test_status': 'basic_check_passed',
@@ -181,15 +181,15 @@ class SystemValidator:
             raise Exception(f"Chat service test failed: {e}")
 
     def test_search_functionality(self) -> Dict[str, Any]:
-        """검색 기능 테스트"""
+        """검??기능 ?�스??""
         try:
-            # 데이터베이스에서 검색 테스트
+            # ?�이?�베?�스?�서 검???�스??
             db_manager = DatabaseManager(self.db_path)
 
             search_queries = [
-                "손해배상",
+                "?�해배상",
                 "계약",
-                "행정처분"
+                "?�정처분"
             ]
 
             search_results = []
@@ -207,7 +207,7 @@ class SystemValidator:
                     search_results.append({
                         'query': query,
                         'result_count': len(results),
-                        'results': [list(row) for row in results[:3]]  # Row 객체를 리스트로 변환
+                        'results': [list(row) for row in results[:3]]  # Row 객체�?리스?�로 변??
                     })
 
             return {
@@ -219,14 +219,14 @@ class SystemValidator:
             raise Exception(f"Search functionality test failed: {e}")
 
     def test_performance(self) -> Dict[str, Any]:
-        """성능 테스트"""
+        """?�능 ?�스??""
         try:
-            # 데이터베이스 쿼리 성능 테스트
+            # ?�이?�베?�스 쿼리 ?�능 ?�스??
             db_manager = DatabaseManager(self.db_path)
 
             performance_tests = []
 
-            # 1. 전체 판례 수 조회
+            # 1. ?�체 ?��? ??조회
             start_time = time.time()
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
@@ -239,7 +239,7 @@ class SystemValidator:
                 'result': count
             })
 
-            # 2. 카테고리별 통계 쿼리
+            # 2. 카테고리�??�계 쿼리
             start_time = time.time()
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
@@ -256,7 +256,7 @@ class SystemValidator:
                 'result_count': len(results)
             })
 
-            # 3. 텍스트 검색 쿼리
+            # 3. ?�스??검??쿼리
             start_time = time.time()
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
@@ -265,7 +265,7 @@ class SystemValidator:
                     FROM precedent_cases
                     WHERE searchable_text LIKE ?
                     LIMIT 10
-                """, ('%손해%',))
+                """, ('%?�해%',))
                 results = cursor.fetchall()
             query_time = time.time() - start_time
             performance_tests.append({
@@ -283,7 +283,7 @@ class SystemValidator:
             raise Exception(f"Performance test failed: {e}")
 
     def generate_report(self, summary: Dict[str, Any]) -> str:
-        """검증 보고서 생성"""
+        """검�?보고???�성"""
         report = []
         report.append("=" * 60)
         report.append("LAWFIRM AI SYSTEM VALIDATION REPORT")
@@ -296,18 +296,18 @@ class SystemValidator:
         report.append(f"Total Time: {summary['total_time_seconds']:.2f} seconds")
         report.append("")
 
-        # 개별 테스트 결과
+        # 개별 ?�스??결과
         report.append("DETAILED TEST RESULTS:")
         report.append("-" * 40)
 
         for test_name, result in summary['test_results'].items():
-            status = "✓ PASS" if result['status'] == 'passed' else "✗ FAIL"
+            status = "??PASS" if result['status'] == 'passed' else "??FAIL"
             report.append(f"{test_name.upper()}: {status}")
 
             if result['status'] == 'failed':
                 report.append(f"  Error: {result.get('error', 'Unknown error')}")
             else:
-                # 주요 결과 요약
+                # 주요 결과 ?�약
                 if test_name == 'database_data':
                     data = result['result']
                     report.append(f"  Total Precedents: {data['total_precedents']:,}")
@@ -327,21 +327,21 @@ class SystemValidator:
 
             report.append("")
 
-        # 권장사항
+        # 권장?�항
         report.append("RECOMMENDATIONS:")
         report.append("-" * 40)
 
         if summary['success_rate'] < 100:
-            report.append("• Fix failed tests before production deployment")
+            report.append("??Fix failed tests before production deployment")
 
         if any(r['status'] == 'failed' for r in summary['test_results'].values()):
-            report.append("• Review error logs for detailed failure information")
+            report.append("??Review error logs for detailed failure information")
 
         if summary['test_results'].get('performance', {}).get('result', {}).get('performance_rating') == 'needs_optimization':
-            report.append("• Consider database indexing optimization")
+            report.append("??Consider database indexing optimization")
 
         if summary['test_results'].get('database_data', {}).get('result', {}).get('data_quality') == 'insufficient':
-            report.append("• Import more data for better system performance")
+            report.append("??Import more data for better system performance")
 
         report.append("")
         report.append("=" * 60)
@@ -350,7 +350,7 @@ class SystemValidator:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
 
     parser = argparse.ArgumentParser(description='System Validation Test')
@@ -360,15 +360,15 @@ def main():
 
     args = parser.parse_args()
 
-    # 로깅 레벨 설정
+    # 로깅 ?�벨 ?�정
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # 검증 실행
+    # 검�??�행
     validator = SystemValidator(db_path=args.db_path)
     summary = validator.run_all_tests()
 
-    # 보고서 생성
+    # 보고???�성
     report = validator.generate_report(summary)
 
     # 출력
@@ -379,7 +379,7 @@ def main():
     else:
         print(report)
 
-    # JSON 결과도 저장
+    # JSON 결과???�??
     json_output = args.output.replace('.txt', '.json') if args.output else 'validation_results.json'
     with open(json_output, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)

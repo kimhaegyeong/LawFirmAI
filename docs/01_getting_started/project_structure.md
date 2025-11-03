@@ -1,4 +1,4 @@
-# 📁 LawFirmAI 프로젝트 구조
+﻿# 📁 LawFirmAI 프로젝트 구조
 
 ## 개요
 
@@ -8,10 +8,9 @@ LawFirmAI는 명확한 계층 구조로 구성된 법률 AI 시스템입니다.
 
 ```
 LawFirmAI/
-├── core/                    # 핵심 비즈니스 로직
+├── source/                   # 핵심 비즈니스 로직 (agents, services, models, data)
 ├── apps/                     # 애플리케이션 레이어
 ├── infrastructure/           # 인프라 및 유틸리티
-├── source/                   # 레거시 모듈 (호환성 유지)
 ├── scripts/                  # 실행 스크립트
 ├── data/                     # 데이터 파일
 ├── tests/                    # 테스트 코드
@@ -19,13 +18,13 @@ LawFirmAI/
 └── monitoring/               # 모니터링 시스템
 ```
 
-## 📦 Core 모듈
+## 📦 Source 모듈
 
-### core/agents/ - LangGraph 에이전트
+### source/agents/ - LangGraph 에이전트
 **역할**: AI 워크플로우 관리
 
 ```
-core/agents/
+source/agents/
 ├── workflow_service.py              # 워크플로우 서비스 (메인)
 ├── legal_workflow_enhanced.py       # 법률 워크플로우
 ├── state_definitions.py             # 상태 정의
@@ -42,7 +41,7 @@ core/agents/
 
 **사용 예시**:
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
@@ -50,11 +49,11 @@ workflow = LangGraphWorkflowService(config)
 result = await workflow.process_query("질문", "session_id")
 ```
 
-### core/services/search/ - 검색 서비스
+### source/services/ - 검색 서비스
 **역할**: 법률 문서 검색
 
 ```
-core/services/search/
+source/services/
 ├── hybrid_search_engine.py          # 하이브리드 검색
 ├── exact_search_engine.py           # 정확한 매칭
 ├── semantic_search_engine.py        # 의미적 검색
@@ -65,17 +64,17 @@ core/services/search/
 
 **사용 예시**:
 ```python
-from core.services.search import HybridSearchEngine
+from source.services.search import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("계약 해지", question_type="law_inquiry")
 ```
 
-### core/services/generation/ - 답변 생성
-**역할**: 답변 생성 및 포맷팅
+### source/services/ - 답변 생성
+**역할**: 답변 생성 및 포맷팅 (source/services에 통합됨)
 
 ```
-core/services/generation/
+source/services/
 ├── answer_generator.py             # 답변 생성
 ├── improved_answer_generator.py   # 개선된 답변 생성
 ├── context_builder.py              # 컨텍스트 구축
@@ -84,35 +83,35 @@ core/services/generation/
 
 **사용 예시**:
 ```python
-from core.services.generation import AnswerGenerator
+from source.services.generation import AnswerGenerator
 
 generator = AnswerGenerator()
 answer = generator.generate(query, context)
 ```
 
-### core/services/enhancement/ - 품질 개선
-**역할**: 답변 품질 향상
+### source/services/ - 품질 개선
+**역할**: 답변 품질 향상 (source/services에 통합됨)
 
 ```
-core/services/enhancement/
+source/services/
 └── confidence_calculator.py       # 신뢰도 계산
 ```
 
-### core/models/ - AI 모델
+### source/models/ - AI 모델
 **역할**: AI 모델 관리
 
 ```
-core/models/
+source/models/
 ├── model_manager.py                # 모델 관리자
 ├── sentence_bert.py                # Sentence BERT
 └── gemini_client.py                # Gemini 클라이언트
 ```
 
-### core/data/ - 데이터 레이어
+### source/data/ - 데이터 레이어
 **역할**: 데이터 관리
 
 ```
-core/data/
+source/data/
 ├── database.py                     # SQLite 데이터베이스
 ├── vector_store.py                 # FAISS 벡터 스토어
 ├── data_processor.py               # 데이터 처리
@@ -202,22 +201,22 @@ sys.path.insert(0, str(project_root))
 
 ### Core 모듈 Import
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
-from core.services.search import HybridSearchEngine
-from core.services.generation import AnswerGenerator
+from source.agents.workflow_service import LangGraphWorkflowService
+from source.services.search import HybridSearchEngine
+from source.services.generation import AnswerGenerator
 from infrastructure.utils.langgraph_config import LangGraphConfig
 ```
 
 ## 📚 확장 가이드
 
 ### 새 검색 엔진 추가
-1. `core/services/search/new_engine.py` 생성
-2. `core/services/search/__init__.py` 업데이트
+1. `source/services/search/new_engine.py` 생성
+2. `source/services/search/__init__.py` 업데이트
 3. 테스트 작성
 
 ### 새 답변 생성기 추가
-1. `core/services/generation/new_generator.py` 생성
-2. `core/services/generation/__init__.py` 업데이트
+1. `source/services/generation/new_generator.py` 생성
+2. `source/services/generation/__init__.py` 업데이트
 3. 테스트 작성
 
 ### 새 애플리케이션 추가
@@ -230,14 +229,14 @@ from infrastructure.utils.langgraph_config import LangGraphConfig
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `core/agents/` | 워크플로우 관리 | services, models |
-| `core/services/search/` | 검색 로직 | data |
-| `core/services/generation/` | 답변 생성 | search, models |
-| `core/services/enhancement/` | 품질 개선 | generation |
-| `core/models/` | AI 모델 | - |
-| `core/data/` | 데이터 관리 | - |
-| `apps/streamlit/` | 웹 UI | core/agents |
-| `apps/api/` | API 서버 | core/agents |
+| `source/agents/` | 워크플로우 관리 | services, models |
+| `source/services/search/` | 검색 로직 | data |
+| `source/services/generation/` | 답변 생성 | search, models |
+| `source/services/enhancement/` | 품질 개선 | generation |
+| `source/models/` | AI 모델 | - |
+| `source/data/` | 데이터 관리 | - |
+| `apps/streamlit/` | 웹 UI | source/agents |
+| `apps/api/` | API 서버 | source/agents |
 | `infrastructure/` | 인프라 | - |
 | `source/` | 레거시 모듈 | (호환성 유지) |
 
@@ -246,10 +245,10 @@ from infrastructure.utils.langgraph_config import LangGraphConfig
 ### 1. 기능 추가
 ```bash
 # 새 서비스 추가
-vim core/services/{domain}/new_service.py
+vim source/services/new_service.py
 
 # __init__.py 업데이트
-vim core/services/{domain}/__init__.py
+vim source/services/__init__.py
 
 # 테스트 작성
 vim tests/test_new_service.py
@@ -301,7 +300,7 @@ import torch
 from fastapi import FastAPI
 
 # 프로젝트 모듈
-from core.agents import LangGraphWorkflowService
+from source.agents import LangGraphWorkflowService
 ```
 
 ### 3. Docstring

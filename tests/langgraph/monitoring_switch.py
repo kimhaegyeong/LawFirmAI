@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-모니터링 전환 유틸리티
-LangSmith와 Langfuse를 번갈아가며 사용할 수 있도록 하는 유틸리티
+모니?�링 ?�환 ?�틸리티
+LangSmith?� Langfuse�?번갈?��?�??�용?????�도�??�는 ?�틸리티
 """
 
 import logging
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class MonitoringMode(Enum):
-    """모니터링 모드"""
+    """모니?�링 모드"""
     LANGSMITH = "langsmith"
     LANGFUSE = "langfuse"
     BOTH = "both"
@@ -23,7 +23,7 @@ class MonitoringMode(Enum):
 
     @classmethod
     def from_string(cls, value: str) -> 'MonitoringMode':
-        """문자열에서 MonitoringMode 생성"""
+        """문자?�에??MonitoringMode ?�성"""
         value_lower = value.lower()
         for mode in cls:
             if mode.value == value_lower:
@@ -32,7 +32,7 @@ class MonitoringMode(Enum):
 
 
 class MonitoringSwitch:
-    """모니터링 도구 전환 유틸리티"""
+    """모니?�링 ?�구 ?�환 ?�틸리티"""
 
     @staticmethod
     @contextmanager
@@ -46,21 +46,21 @@ class MonitoringSwitch:
         langfuse_enabled: Optional[bool] = None
     ):
         """
-        모니터링 모드 설정 (컨텍스트 매니저)
+        모니?�링 모드 ?�정 (컨텍?�트 매니?�)
 
         Args:
-            mode: 모니터링 모드
-            langsmith_api_key: LangSmith API 키 (None이면 환경변수에서 읽음)
-            langsmith_project: LangSmith 프로젝트명
+            mode: 모니?�링 모드
+            langsmith_api_key: LangSmith API ??(None?�면 ?�경변?�에???�음)
+            langsmith_project: LangSmith ?�로?�트�?
             langfuse_secret_key: Langfuse Secret Key
             langfuse_public_key: Langfuse Public Key
             langfuse_host: Langfuse Host
-            langfuse_enabled: Langfuse 활성화 여부
+            langfuse_enabled: Langfuse ?�성???��?
 
         Yields:
-            Dict: 설정된 환경변수 정보
+            Dict: ?�정???�경변???�보
         """
-        # 원본 환경변수 백업
+        # ?�본 ?�경변??백업
         original_env = {}
         env_keys_to_backup = [
             "LANGCHAIN_TRACING_V2",
@@ -79,7 +79,7 @@ class MonitoringSwitch:
             original_env[key] = os.environ.get(key)
 
         try:
-            # 모드별 환경변수 설정
+            # 모드�??�경변???�정
             env_settings = {}
 
             if mode == MonitoringMode.LANGSMITH:
@@ -126,29 +126,29 @@ class MonitoringSwitch:
                     "LANGFUSE_ENABLED": "false"
                 }
 
-            # 환경변수 설정
+            # ?�경변???�정
             for key, value in env_settings.items():
                 os.environ[key] = value
 
-            # 기존 값이 없었던 경우 삭제를 위해 별도 처리
+            # 기존 값이 ?�었??경우 ??���??�해 별도 처리
             keys_to_remove = []
             for key in env_keys_to_backup:
                 if key not in env_settings and os.environ.get(key):
-                    # 설정에서 제외된 키는 None으로 설정 (이전 값 유지)
+                    # ?�정?�서 ?�외???�는 None?�로 ?�정 (?�전 �??��?)
                     if key in ["LANGCHAIN_TRACING_V2", "LANGFUSE_ENABLED"]:
-                        # 이 키들은 명시적으로 false로 설정됨
+                        # ???�들?� 명시?�으�?false�??�정??
                         pass
                     else:
-                        # 다른 키들은 제거
+                        # ?�른 ?�들?� ?�거
                         keys_to_remove.append(key)
 
-            # 불필요한 키 제거
+            # 불필?�한 ???�거
             for key in keys_to_remove:
                 if key in os.environ:
                     del os.environ[key]
 
-            logger.info(f"모니터링 모드 설정: {mode.value}")
-            logger.debug(f"환경변수 설정: {env_settings}")
+            logger.info(f"모니?�링 모드 ?�정: {mode.value}")
+            logger.debug(f"?�경변???�정: {env_settings}")
 
             yield {
                 "mode": mode.value,
@@ -158,18 +158,18 @@ class MonitoringSwitch:
             }
 
         finally:
-            # 환경변수 복원
+            # ?�경변??복원
             for key in env_keys_to_backup:
                 if original_env[key] is not None:
                     os.environ[key] = original_env[key]
                 elif key in os.environ:
                     del os.environ[key]
 
-            logger.debug("환경변수 복원 완료")
+            logger.debug("?�경변??복원 ?�료")
 
     @staticmethod
     def get_current_mode() -> MonitoringMode:
-        """현재 설정된 모니터링 모드 반환"""
+        """?�재 ?�정??모니?�링 모드 반환"""
         langsmith_enabled = (
             os.environ.get("LANGCHAIN_TRACING_V2", "false").lower() in ["true", "1", "yes"]
             and bool(os.environ.get("LANGCHAIN_API_KEY") or os.environ.get("LANGSMITH_API_KEY"))
@@ -188,14 +188,14 @@ class MonitoringSwitch:
     @staticmethod
     def verify_mode(service: Any, expected_mode: MonitoringMode) -> Dict[str, Any]:
         """
-        서비스의 모니터링 모드 검증
+        ?�비?�의 모니?�링 모드 검�?
 
         Args:
-            service: LangGraphWorkflowService 인스턴스
-            expected_mode: 예상되는 모니터링 모드
+            service: LangGraphWorkflowService ?�스?�스
+            expected_mode: ?�상?�는 모니?�링 모드
 
         Returns:
-            Dict: 검증 결과
+            Dict: 검�?결과
         """
         current_env_mode = MonitoringSwitch.get_current_mode()
         result = {
@@ -206,46 +206,46 @@ class MonitoringSwitch:
             "warnings": []
         }
 
-        # Langfuse 클라이언트 확인
+        # Langfuse ?�라?�언???�인
         if hasattr(service, 'langfuse_client_service') and service.langfuse_client_service:
             if hasattr(service.langfuse_client_service, 'enabled'):
                 result["service_langfuse_enabled"] = service.langfuse_client_service.enabled
 
-        # 모드별 검증
+        # 모드�?검�?
         if expected_mode == MonitoringMode.LANGSMITH:
             if not result["matches"]:
-                result["warnings"].append("LangSmith 환경변수가 제대로 설정되지 않았습니다")
+                result["warnings"].append("LangSmith ?�경변?��? ?��?�??�정?��? ?�았?�니??)
 
         elif expected_mode == MonitoringMode.LANGFUSE:
             if not result["service_langfuse_enabled"]:
-                result["warnings"].append("Langfuse 클라이언트가 활성화되지 않았습니다")
+                result["warnings"].append("Langfuse ?�라?�언?��? ?�성?�되지 ?�았?�니??)
             if current_env_mode != MonitoringMode.LANGFUSE:
-                result["warnings"].append("환경변수 설정이 Langfuse 모드와 일치하지 않습니다")
+                result["warnings"].append("?�경변???�정??Langfuse 모드?� ?�치?��? ?�습?�다")
 
         elif expected_mode == MonitoringMode.BOTH:
             if not result["matches"]:
-                result["warnings"].append("환경변수가 both 모드와 일치하지 않습니다")
+                result["warnings"].append("?�경변?��? both 모드?� ?�치?��? ?�습?�다")
             if not result["service_langfuse_enabled"]:
-                result["warnings"].append("Langfuse 클라이언트가 활성화되지 않았습니다")
+                result["warnings"].append("Langfuse ?�라?�언?��? ?�성?�되지 ?�았?�니??)
 
         return result
 
     @staticmethod
     def load_profile(profile_name: str) -> Dict[str, str]:
         """
-        환경변수 프로필 파일 로드
+        ?�경변???�로???�일 로드
 
         Args:
-            profile_name: 프로필 이름 (예: 'langsmith', 'langfuse')
+            profile_name: ?�로???�름 (?? 'langsmith', 'langfuse')
 
         Returns:
-            Dict: 환경변수 딕셔너리
+            Dict: ?�경변???�셔?�리
         """
         project_root = Path(__file__).parent.parent.parent
         profile_path = project_root / ".env.profiles" / f"{profile_name}.env"
 
         if not profile_path.exists():
-            logger.warning(f"프로필 파일을 찾을 수 없습니다: {profile_path}")
+            logger.warning(f"?�로???�일??찾을 ???�습?�다: {profile_path}")
             return {}
 
         env_vars = {}
@@ -261,5 +261,5 @@ class MonitoringSwitch:
                     value = value.strip().strip('"').strip("'")
                     env_vars[key] = value
 
-        logger.info(f"프로필 로드 완료: {profile_name} ({len(env_vars)}개 환경변수)")
+        logger.info(f"?�로??로드 ?�료: {profile_name} ({len(env_vars)}�??�경변??")
         return env_vars

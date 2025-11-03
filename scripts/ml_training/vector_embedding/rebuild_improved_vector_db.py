@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-개선된 벡터 데이터베이스 재구축 스크립트
+개선??벡터 ?�이?�베?�스 ?�구�??�크립트
 """
 
 import os
@@ -11,7 +11,7 @@ import numpy as np
 import time
 from pathlib import Path
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 sys.path.append(str(Path(__file__).parent.parent))
 
 try:
@@ -22,10 +22,10 @@ except ImportError as e:
     sys.exit(1)
 
 def rebuild_improved_vector_database():
-    """개선된 벡터 데이터베이스 재구축"""
+    """개선??벡터 ?�이?�베?�스 ?�구�?""
     print("Rebuilding improved vector database...")
     
-    # 개선된 메타데이터 로드
+    # 개선??메�??�이??로드
     with open('data/embeddings/metadata_improved.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
@@ -35,11 +35,11 @@ def rebuild_improved_vector_database():
     print("Loading Sentence-BERT model...")
     model = SentenceTransformer("jhgan/ko-sroberta-multitask")
     
-    # 텍스트 추출
+    # ?�스??추출
     texts = [doc['text'] for doc in data]
     print(f"Generating embeddings for {len(texts)} documents...")
     
-    # 배치 단위로 임베딩 생성
+    # 배치 ?�위�??�베???�성
     batch_size = 100
     all_embeddings = []
     
@@ -49,33 +49,33 @@ def rebuild_improved_vector_database():
         all_embeddings.append(batch_embeddings)
         print(f"Batch {i//batch_size + 1}/{(len(texts)-1)//batch_size + 1} completed")
     
-    # 모든 임베딩 결합
+    # 모든 ?�베??결합
     embeddings = np.vstack(all_embeddings)
     print(f"Total embeddings generated: {embeddings.shape}")
     
-    # FAISS 인덱스 생성
+    # FAISS ?�덱???�성
     print("Creating FAISS index...")
     dimension = embeddings.shape[1]
     faiss_index = faiss.IndexFlatL2(dimension)
     faiss_index.add(embeddings.astype('float32'))
     
-    # 파일 저장
+    # ?�일 ?�??
     print("Saving files...")
     
-    # FAISS 인덱스 저장
+    # FAISS ?�덱???�??
     faiss.write_index(faiss_index, "data/embeddings/faiss_index_improved.bin")
     print("FAISS index saved: data/embeddings/faiss_index_improved.bin")
     
-    # 임베딩 저장
+    # ?�베???�??
     np.save("data/embeddings/embeddings_improved.npy", embeddings)
     print("Embeddings saved: data/embeddings/embeddings_improved.npy")
     
-    # 메타데이터 저장
+    # 메�??�이???�??
     with open("data/embeddings/metadata_improved.json", 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print("Metadata saved: data/embeddings/metadata_improved.json")
     
-    # 구축 보고서 생성
+    # 구축 보고???�성
     build_report = {
         'build_time': time.strftime('%Y-%m-%d %H:%M:%S'),
         'total_documents': len(data),
@@ -99,17 +99,17 @@ def rebuild_improved_vector_database():
     return faiss_index, embeddings, data
 
 def test_improved_search():
-    """개선된 검색 테스트"""
+    """개선??검???�스??""
     print("\nTesting improved search...")
     
-    # 개선된 데이터 로드
+    # 개선???�이??로드
     faiss_index = faiss.read_index("data/embeddings/faiss_index_improved.bin")
     with open('data/embeddings/metadata_improved.json', 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     
     model = SentenceTransformer("jhgan/ko-sroberta-multitask")
     
-    # 테스트 쿼리
+    # ?�스??쿼리
     test_queries = [
         "Supreme Court Decision",
         "District Court Decision", 
@@ -122,10 +122,10 @@ def test_improved_search():
     for query in test_queries:
         start_time = time.time()
         
-        # 쿼리 임베딩 생성
+        # 쿼리 ?�베???�성
         query_embedding = model.encode([query])
         
-        # FAISS 검색
+        # FAISS 검??
         distances, indices = faiss_index.search(query_embedding.astype('float32'), 3)
         
         search_time = time.time() - start_time
@@ -143,10 +143,10 @@ def main():
     print("Improved Vector Database Rebuild")
     print("=" * 50)
     
-    # 1. 개선된 벡터 데이터베이스 재구축
+    # 1. 개선??벡터 ?�이?�베?�스 ?�구�?
     faiss_index, embeddings, data = rebuild_improved_vector_database()
     
-    # 2. 개선된 검색 테스트
+    # 2. 개선??검???�스??
     test_improved_search()
     
     print("\n" + "=" * 50)

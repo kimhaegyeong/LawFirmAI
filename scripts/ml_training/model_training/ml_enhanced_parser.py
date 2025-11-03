@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ML 강화 조문 파서
-훈련된 머신러닝 모델을 사용하여 조문 경계를 더 정확하게 식별
+ML 강화 조문 ?�서
+?�련??머신?�닝 모델???�용?�여 조문 경계�????�확?�게 ?�별
 """
 
 import re
@@ -16,7 +16,7 @@ import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
 from datetime import datetime
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
+# Windows 콘솔?�서 UTF-8 ?�코???�정
 if os.name == 'nt':  # Windows
     import codecs
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
@@ -42,14 +42,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class MLEnhancedArticleParser:
-    """ML 모델이 강화된 조문 파서"""
+    """ML 모델??강화??조문 ?�서"""
     
     def __init__(self, ml_model_path: str = "models/article_classifier.pkl"):
         """
-        초기화
+        초기??
         
         Args:
-            ml_model_path: 훈련된 ML 모델 경로
+            ml_model_path: ?�련??ML 모델 경로
         """
         # Initialize base parser if available
         self.base_parser = None
@@ -64,7 +64,7 @@ class MLEnhancedArticleParser:
         self.ml_model = None
         self.vectorizer = None
         self.feature_names = None
-        self.ml_threshold = 0.4  # ML 예측 임계값 (0.5 → 0.4로 낮춤, 더 나은 recall)
+        self.ml_threshold = 0.4  # ML ?�측 ?�계�?(0.5 ??0.4�???��, ???��? recall)
         
         # Quality validation
         self.quality_validator = None
@@ -91,8 +91,8 @@ class MLEnhancedArticleParser:
             self.ml_model = None
     
     def _extract_ml_features(self, content: str, position: int, article_number: str, has_title: bool) -> np.ndarray:
-        """ML 모델을 위한 특성 추출"""
-        # 수치형 특성 추출
+        """ML 모델???�한 ?�성 추출"""
+        # ?�치???�성 추출
         context_before = content[max(0, position - 200):position]
         context_after = content[position:min(len(content), position + 200)]
         
@@ -103,7 +103,7 @@ class MLEnhancedArticleParser:
             1 if re.search(r'[.!?]\s*$', context_before) else 0,  # has_sentence_end
             1 if self._has_reference_pattern(context_before) else 0,  # has_reference_pattern
             int(re.search(r'\d+', article_number).group()) if re.search(r'\d+', article_number) else 0,  # article_number
-            1 if '부칙' in article_number else 0,  # is_supplementary
+            1 if '부�? in article_number else 0,  # is_supplementary
             len(context_before),  # context_before_length
             len(context_after),  # context_after_length
             1 if has_title else 0,  # has_title
@@ -115,10 +115,10 @@ class MLEnhancedArticleParser:
             self._calculate_reference_density(context_before)  # reference_density
         ]
         
-        # 텍스트 특성
+        # ?�스???�성
         context_text = f"{article_number} {self._extract_title_from_context(context_after)}"
         
-        # TF-IDF 변환
+        # TF-IDF 변??
         if self.vectorizer:
             text_features = self.vectorizer.transform([context_text]).toarray()[0]
             features.extend(text_features)
@@ -126,13 +126,13 @@ class MLEnhancedArticleParser:
         return np.array(features)
     
     def _has_reference_pattern(self, context: str) -> bool:
-        """조문 참조 패턴 확인"""
+        """조문 참조 ?�턴 ?�인"""
         reference_patterns = [
-            r'제\d+조에\s*따라',
-            r'제\d+조제\d+항',
-            r'제\d+조의\d+',
-            r'제\d+조.*?에\s*의하여',
-            r'제\d+조.*?에\s*따라',
+            r'??d+조에\s*?�라',
+            r'??d+조제\d+??,
+            r'??d+조의\d+',
+            r'??d+�?*???s*?�하??,
+            r'??d+�?*???s*?�라',
         ]
         
         for pattern in reference_patterns:
@@ -141,47 +141,47 @@ class MLEnhancedArticleParser:
         return False
     
     def _count_legal_terms(self, text: str) -> int:
-        """법률 용어 개수 계산"""
+        """법률 ?�어 개수 계산"""
         legal_terms = [
-            '법률', '법령', '규정', '조항', '항', '호', '목',
-            '시행', '공포', '개정', '폐지', '제정'
+            '법률', '법령', '규정', '조항', '??, '??, '�?,
+            '?�행', '공포', '개정', '?��?', '?�정'
         ]
         return sum(1 for term in legal_terms if term in text)
     
     def _get_article_length(self, content: str, position: int) -> int:
         """조문 길이 계산"""
-        next_article_match = re.search(r'제\d+조', content[position + 1:])
+        next_article_match = re.search(r'??d+�?, content[position + 1:])
         if next_article_match:
             return next_article_match.start()
         else:
             return len(content) - position
     
     def _calculate_reference_density(self, context: str) -> float:
-        """조문 참조 밀도 계산"""
-        article_refs = len(re.findall(r'제\d+조', context))
+        """조문 참조 밀??계산"""
+        article_refs = len(re.findall(r'??d+�?, context))
         return article_refs / max(len(context), 1) * 1000
     
     def _extract_title_from_context(self, context: str) -> str:
-        """문맥에서 제목 추출"""
-        title_match = re.search(r'제\d+조\s*\(([^)]+)\)', context)
+        """문맥?�서 ?�목 추출"""
+        title_match = re.search(r'??d+�?s*\(([^)]+)\)', context)
         return title_match.group(1) if title_match else ""
     
     def _ml_predict_article_boundary(self, content: str, position: int, article_number: str, has_title: bool) -> float:
-        """ML 모델을 사용한 조문 경계 예측"""
+        """ML 모델???�용??조문 경계 ?�측"""
         if not self.ml_model:
-            return 0.5  # 모델이 없으면 중립값 반환
+            return 0.5  # 모델???�으�?중립�?반환
         
         try:
             features = self._extract_ml_features(content, position, article_number, has_title)
             
-            # 특성 벡터를 올바른 형태로 변환
+            # ?�성 벡터�??�바�??�태�?변??
             if len(features) != len(self.feature_names):
                 logger.warning(f"Feature dimension mismatch: {len(features)} vs {len(self.feature_names)}")
                 return 0.5
             
-            # 예측 확률 계산
+            # ?�측 ?�률 계산
             prediction_proba = self.ml_model.predict_proba([features])[0]
-            return prediction_proba[1]  # Real article 확률
+            return prediction_proba[1]  # Real article ?�률
             
         except Exception as e:
             logger.warning(f"ML prediction failed: {e}")
@@ -189,13 +189,13 @@ class MLEnhancedArticleParser:
     
     def _parse_articles_from_text(self, content: str) -> List[Dict[str, Any]]:
         """
-        ML 강화된 조문 파싱
-        기존 규칙 기반 방법과 ML 모델을 결합하여 더 정확한 조문 경계 식별
+        ML 강화??조문 ?�싱
+        기존 규칙 기반 방법�?ML 모델??결합?�여 ???�확??조문 경계 ?�별
         """
         articles = []
         
-        # 조문 패턴으로 모든 후보 찾기 (제2조의13 형태도 올바르게 인식, \xa0 등 공백 허용)
-        article_pattern = re.compile(r'제(\d+)조(?:\s*의\s*(\d+))?(?:\s*\(([^)]+)\))?')
+        # 조문 ?�턴?�로 모든 ?�보 찾기 (??조의13 ?�태???�바르게 ?�식, \xa0 ??공백 ?�용)
+        article_pattern = re.compile(r'??\d+)�??:\s*??s*(\d+))?(?:\s*\(([^)]+)\))?')
         matches = list(article_pattern.finditer(content))
         
         if not matches:
@@ -203,58 +203,58 @@ class MLEnhancedArticleParser:
         
         logger.info(f"Found {len(matches)} potential article boundaries")
         
-        # ML 모델을 사용한 필터링
+        # ML 모델???�용???�터�?
         valid_matches = []
         
         for i, match in enumerate(matches):
-            # 조문 번호 조합 (제2조의13 형태 처리)
+            # 조문 번호 조합 (??조의13 ?�태 처리)
             article_num = match.group(1)
             article_sub = match.group(2) if match.group(2) else ""
-            article_number = f"제{article_num}조" if not article_sub else f"제{article_num}조의{article_sub}"
+            article_number = f"??article_num}�? if not article_sub else f"??article_num}조의{article_sub}"
             article_title = match.group(3) if match.group(3) else ""
             position = match.start()
             
-            # ML 예측
+            # ML ?�측
             ml_score = self._ml_predict_article_boundary(content, position, article_number, bool(article_title))
             
-            # 하이브리드 점수 계산 (규칙 기반 + ML)
+            # ?�이브리???�수 계산 (규칙 기반 + ML)
             rule_score = self._calculate_rule_based_score(content, match, valid_matches)
             
-            # 가중 평균 점수 (ML 50%, 규칙 50%)
+            # 가�??�균 ?�수 (ML 50%, 규칙 50%)
             hybrid_score = 0.5 * ml_score + 0.5 * rule_score
             
             logger.debug(f"Article {article_number}: ML={ml_score:.3f}, Rule={rule_score:.3f}, Hybrid={hybrid_score:.3f}")
             
-            # 임계값 이상이면 유효한 조문으로 판단
+            # ?�계�??�상?�면 ?�효??조문?�로 ?�단
             if hybrid_score >= self.ml_threshold:
                 valid_matches.append(match)
-                logger.debug(f"✓ Accepted {article_number} (score: {hybrid_score:.3f})")
+                logger.debug(f"??Accepted {article_number} (score: {hybrid_score:.3f})")
             else:
-                logger.debug(f"✗ Rejected {article_number} (score: {hybrid_score:.3f})")
+                logger.debug(f"??Rejected {article_number} (score: {hybrid_score:.3f})")
         
-        logger.info(f"ML filtering: {len(matches)} → {len(valid_matches)} articles")
+        logger.info(f"ML filtering: {len(matches)} ??{len(valid_matches)} articles")
         
-        # 유효한 조문들 처리
+        # ?�효??조문??처리
         for i, match in enumerate(valid_matches):
-            # 조문 번호 조합 (제2조의13 형태 처리)
+            # 조문 번호 조합 (??조의13 ?�태 처리)
             article_num = match.group(1)
             article_sub = match.group(2) if match.group(2) else ""
-            article_number = f"제{article_num}조" if not article_sub else f"제{article_num}조의{article_sub}"
+            article_number = f"??article_num}�? if not article_sub else f"??article_num}조의{article_sub}"
             article_title = match.group(3) if match.group(3) else ""
             
-            # 조문 내용 추출
+            # 조문 ?�용 추출
             if i + 1 < len(valid_matches):
                 next_match = valid_matches[i + 1]
                 article_content = content[match.start():next_match.start()].strip()
             else:
                 article_content = content[match.start():].strip()
             
-            # 조문 헤더 제거
+            # 조문 ?�더 ?�거
             article_header = match.group(0)
             if article_content.startswith(article_header):
                 article_content = article_content[len(article_header):].strip()
             
-            # 조문 파싱
+            # 조문 ?�싱
             parsed_article = self._parse_single_article(
                 article_number, article_title, article_content
             )
@@ -265,46 +265,46 @@ class MLEnhancedArticleParser:
         return articles
     
     def _calculate_rule_based_score(self, content: str, match, valid_matches: List) -> float:
-        """규칙 기반 점수 계산 (기존 ImprovedArticleParser의 로직 활용)"""
+        """규칙 기반 ?�수 계산 (기존 ImprovedArticleParser??로직 ?�용)"""
         score = 0.0
         
         article_start = match.start()
         article_number = int(match.group(1)) if match.group(1).isdigit() else 0
         
-        # 위치 기반 점수
+        # ?�치 기반 ?�수
         if self._is_at_article_boundary(content, article_start):
             score += 0.2
         
-        # 문맥 기반 점수
+        # 문맥 기반 ?�수
         context_score = self._analyze_context(content, article_start, str(article_number))
         score += context_score * 0.3
         
-        # 순서 기반 점수
+        # ?�서 기반 ?�수
         if self._follows_article_sequence(article_number, valid_matches):
             score += 0.2
         
-        # 길이 기반 점수
+        # 길이 기반 ?�수
         if self._has_reasonable_length(content, match):
             score += 0.1
         
-        # 조문 제목 유무 점수
+        # 조문 ?�목 ?�무 ?�수
         if match.group(2):
             score += 0.1
         
-        # 조문 내용 품질 점수
+        # 조문 ?�용 ?�질 ?�수
         content_quality = self._assess_content_quality(content, match)
         score += content_quality * 0.1
         
         return max(0.0, min(1.0, score))
     
     def _separate_main_and_supplementary(self, content: str) -> Tuple[str, str]:
-        """본칙과 부칙을 분리"""
-        # 부칙 시작 패턴들
+        """본칙�?부칙을 분리"""
+        # 부�??�작 ?�턴??
         supplementary_patterns = [
-            r'부칙\s*<[^>]*>펼치기접기\s*(.*?)$',
-            r'부칙\s*<[^>]*>\s*(.*?)$',
-            r'부칙\s*펼치기접기\s*(.*?)$',
-            r'부칙\s*(.*?)$'
+            r'부�?s*<[^>]*>?�치기접�?s*(.*?)$',
+            r'부�?s*<[^>]*>\s*(.*?)$',
+            r'부�?s*?�치기접�?s*(.*?)$',
+            r'부�?s*(.*?)$'
         ]
         
         for pattern in supplementary_patterns:
@@ -317,22 +317,22 @@ class MLEnhancedArticleParser:
         return content, ""
     
     def _parse_supplementary_articles(self, supplementary_content: str) -> List[Dict[str, Any]]:
-        """부칙 조문 파싱"""
+        """부�?조문 ?�싱"""
         articles = []
         
         if not supplementary_content.strip():
             return articles
         
-        # 부칙 조문 패턴 (제1조(시행일) 형태)
-        article_pattern = r'제(\d+)조\s*\(([^)]*)\)\s*(.*?)(?=제\d+조\s*\(|$)'
+        # 부�?조문 ?�턴 (??�??�행?? ?�태)
+        article_pattern = r'??\d+)�?s*\(([^)]*)\)\s*(.*?)(?=??d+�?s*\(|$)'
         matches = re.finditer(article_pattern, supplementary_content, re.DOTALL)
         
         for match in matches:
-            article_number = f"부칙제{match.group(1)}조"
+            article_number = f"부칙제{match.group(1)}�?
             article_title = match.group(2).strip()
             article_content = match.group(3).strip()
             
-            # 내용 정리
+            # ?�용 ?�리
             article_content = self._clean_content(article_content)
             
             if article_content:
@@ -347,12 +347,12 @@ class MLEnhancedArticleParser:
                     'is_supplementary': True
                 })
         
-        # 조문이 없는 단순 부칙 처리
+        # 조문???�는 ?�순 부�?처리
         if not articles and supplementary_content.strip():
-            # 시행일만 있는 경우
-            if re.search(r'시행한다', supplementary_content):
+            # ?�행?�만 ?�는 경우
+            if re.search(r'?�행?�다', supplementary_content):
                 articles.append({
-                    'article_number': '부칙',
+                    'article_number': '부�?,
                     'article_title': '',
                     'article_content': supplementary_content.strip(),
                     'sub_articles': [],
@@ -366,19 +366,19 @@ class MLEnhancedArticleParser:
 
     def _basic_parse_law(self, law_content: str) -> Dict[str, Any]:
         """
-        기본 파싱 (parsers 모듈이 없을 때 사용)
+        기본 ?�싱 (parsers 모듈???�을 ???�용)
         
         Args:
-            law_content: 법률 문서 내용
+            law_content: 법률 문서 ?�용
             
         Returns:
-            Dict[str, Any]: 기본 파싱 결과
+            Dict[str, Any]: 기본 ?�싱 결과
         """
-        # 간단한 정규식 기반 파싱
+        # 간단???�규??기반 ?�싱
         articles = []
         
-        # 조문 패턴 찾기
-        article_pattern = r'제(\d+)조\s*\([^)]*\)\s*([^\n]+(?:\n(?!제\d+조)[^\n]*)*)'
+        # 조문 ?�턴 찾기
+        article_pattern = r'??\d+)�?s*\([^)]*\)\s*([^\n]+(?:\n(?!??d+�?[^\n]*)*)'
         matches = re.findall(article_pattern, law_content, re.MULTILINE)
         
         for match in matches:
@@ -388,43 +388,43 @@ class MLEnhancedArticleParser:
             articles.append({
                 'article_number': article_number,
                 'content': content,
-                'title': f"제{article_number}조"
+                'title': f"??article_number}�?
             })
         
         return {
             'articles': articles,
             'parsing_method': 'basic_regex',
             'parsing_timestamp': datetime.now().isoformat(),
-            'quality_score': 0.5,  # 기본 점수
+            'quality_score': 0.5,  # 기본 ?�수
             'auto_corrected': False,
             'manual_review_required': True
         }
     
     def parse_law_document(self, law_content: str) -> Dict[str, Any]:
         """
-        법률 문서 파싱 (ML 강화 버전 + 부칙 파싱)
+        법률 문서 ?�싱 (ML 강화 버전 + 부�??�싱)
         
         Args:
-            law_content: 법률 문서 내용
+            law_content: 법률 문서 ?�용
             
         Returns:
-            Dict[str, Any]: 파싱 결과
+            Dict[str, Any]: ?�싱 결과
         """
         logger.info("Starting ML-enhanced law document parsing with supplementary parsing")
         
-        # 기본 전처리
+        # 기본 ?�처�?
         cleaned_content = self._clean_content(law_content)
         
-        # 본칙과 부칙 분리
+        # 본칙�?부�?분리
         main_content, supplementary_content = self._separate_main_and_supplementary(cleaned_content)
         
-        # 본칙 조문 파싱
+        # 본칙 조문 ?�싱
         main_articles = self._parse_articles_from_text(main_content)
         
-        # 부칙 조문 파싱
+        # 부�?조문 ?�싱
         supplementary_articles = self._parse_supplementary_articles(supplementary_content)
         
-        # 모든 조문 합치기
+        # 모든 조문 ?�치�?
         all_articles = main_articles + supplementary_articles
         
         result = {
@@ -577,18 +577,18 @@ class MLEnhancedArticleParser:
         
         for missing_number in missing_numbers:
             # Look for article pattern in content
-            pattern = rf'제\s*{missing_number}\s*조[^제]*?(?=제\s*\d+\s*조|$)'
+            pattern = rf'??s*{missing_number}\s*�?^??*?(?=??s*\d+\s*�?$)'
             match = re.search(pattern, content, re.DOTALL)
             
             if match:
                 article_text = match.group(0).strip()
                 
                 # Extract title if present
-                title_match = re.search(r'제\s*\d+\s*조\s*\(([^)]+)\)', article_text)
-                title = title_match.group(1) if title_match else f"제{missing_number}조"
+                title_match = re.search(r'??s*\d+\s*�?s*\(([^)]+)\)', article_text)
+                title = title_match.group(1) if title_match else f"??missing_number}�?
                 
                 recovered_article = {
-                    'article_number': f'제{missing_number}조',
+                    'article_number': f'??missing_number}�?,
                     'article_title': title,
                     'content': article_text,
                     'text': article_text,
@@ -663,22 +663,22 @@ class MLEnhancedArticleParser:
 
 
 def main():
-    """테스트 함수"""
-    # 테스트용 법률 내용
+    """?�스???�수"""
+    # ?�스?�용 법률 ?�용
     test_content = """
-    제1조(목적) 이 법은 공공기관의 소방안전관리에 관한 사항을 규정함을 목적으로 한다.
+    ??�?목적) ??법�? 공공기�????�방?�전관리에 관???�항??규정?�을 목적?�로 ?�다.
     
-    제2조(적용 범위) 이 법은 다음 각 호의 어느 하나에 해당하는 공공기관에 적용한다.
-    1. 국가기관
-    2. 지방자치단체
-    3. 공공기관의 운영에 관한 법률 제4조에 따른 공공기관
+    ??�??�용 범위) ??법�? ?�음 �??�의 ?�느 ?�나???�당?�는 공공기�????�용?�다.
+    1. �??기�?
+    2. 지방자치단�?
+    3. 공공기�????�영??관??법률 ??조에 ?�른 공공기�?
     
-    제3조(기관장의 책임) 제2조에 따른 공공기관의 장은 소방안전관리에 대한 책임을 진다.
+    ??�?기�??�의 책임) ??조에 ?�른 공공기�????��? ?�방?�전관리에 ?�??책임??진다.
     
-    부칙제1조(시행일) 이 법은 공포한 날부터 시행한다.
+    부칙제1�??�행?? ??법�? 공포???��????�행?�다.
     """
     
-    # ML 강화 파서 테스트
+    # ML 강화 ?�서 ?�스??
     parser = MLEnhancedArticleParser()
     result = parser.parse_law_document(test_content)
     

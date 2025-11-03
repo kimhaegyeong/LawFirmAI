@@ -1,9 +1,9 @@
 import re
 from typing import Dict, List, Optional, Tuple
 
-ARTICLE_HEADER_RE = re.compile(r"^제\s*(\d+)\s*조")
-CLAUSE_RE = re.compile(r"^\s*(\d+)\s*\.")  # '1.' 형태 항 번호가 있는 경우 보조
-ITEM_RE = re.compile(r"^\s*(?:제\s*)?(\d+)\s*호")
+ARTICLE_HEADER_RE = re.compile(r"^??s*(\d+)\s*�?)
+CLAUSE_RE = re.compile(r"^\s*(\d+)\s*\.")  # '1.' ?�태 ??번호가 ?�는 경우 보조
+ITEM_RE = re.compile(r"^\s*(?:??s*)?(\d+)\s*??)
 
 
 def _normalize_text(text: str) -> str:
@@ -41,14 +41,14 @@ def explode_article_to_hierarchy(article_heading: str, article_body: str) -> Lis
     m = ARTICLE_HEADER_RE.match(article_heading)
     article_no = m.group(1) if m else None
 
-    # Split by line; detect subunits heuristically (항/호 표기 다양성 고려)
+    # Split by line; detect subunits heuristically (?????�기 ?�양??고려)
     lines = [ln for ln in article_body.splitlines() if ln.strip()]
 
-    # First attempt: detect '제n항' boundaries
+    # First attempt: detect '?�n?? boundaries
     clause_splits: List[Tuple[Optional[str], List[str]]] = []
     buffer: List[str] = []
     current_clause: Optional[str] = None
-    CLAUSE_HEADER_RE = re.compile(r"^제\s*(\d+)\s*항")
+    CLAUSE_HEADER_RE = re.compile(r"^??s*(\d+)\s*??)
     for ln in lines:
         m2 = CLAUSE_HEADER_RE.match(ln)
         if m2:
@@ -71,7 +71,7 @@ def explode_article_to_hierarchy(article_heading: str, article_body: str) -> Lis
 
     results: List[Dict[str, Optional[str]]] = []
     for clause_no, clause_lines in clause_splits:
-        # Try to explode into items (호)
+        # Try to explode into items (??
         items: List[Tuple[Optional[str], List[str]]] = []
         buf2: List[str] = []
         current_item: Optional[str] = None

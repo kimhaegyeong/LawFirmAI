@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-LangGraph 동작 테스트 스크립트 (파일 로깅 포함)
-리팩토링 후 LangGraph가 정상적으로 동작하는지 확인하고 상세 로그 저장
+LangGraph ?�작 ?�스???�크립트 (?�일 로깅 ?�함)
+리팩?�링 ??LangGraph가 ?�상?�으�??�작?�는지 ?�인?�고 ?�세 로그 ?�??
 """
 
 import asyncio
@@ -11,15 +11,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 로그 디렉토리 생성
+# 로그 ?�렉?�리 ?�성
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
 
-# 파일 로거 설정
+# ?�일 로거 ?�정
 log_file = log_dir / f"test_langgraph_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 file_handler = logging.FileHandler(log_file, encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
@@ -29,13 +29,13 @@ file_formatter = logging.Formatter(
 )
 file_handler.setFormatter(file_formatter)
 
-# 콘솔 핸들러 설정
+# 콘솔 ?�들???�정
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_formatter = logging.Formatter('%(levelname)s - %(message)s')
 console_handler.setFormatter(console_formatter)
 
-# 루트 로거 설정
+# 루트 로거 ?�정
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
 root_logger.addHandler(file_handler)
@@ -43,9 +43,9 @@ root_logger.addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
 
-# Windows 비동기 환경에서 로깅 버퍼 에러 방지
+# Windows 비동�??�경?�서 로깅 버퍼 ?�러 방�?
 class SafeStreamHandler(logging.StreamHandler):
-    """안전한 스트림 핸들러 - detached 버퍼 에러 방지"""
+    """?�전???�트�??�들??- detached 버퍼 ?�러 방�?"""
     def emit(self, record):
         try:
             super().emit(record)
@@ -56,45 +56,45 @@ logging.raiseExceptions = False
 
 
 async def test_langgraph_workflow_with_logging():
-    """LangGraph 워크플로우 테스트 (상세 로깅 포함)"""
+    """LangGraph ?�크?�로???�스??(?�세 로깅 ?�함)"""
     try:
-        # Import 경로 확인 및 조정
-        # core/agents/workflow_service.py를 사용하도록 변경
-        from core.agents.workflow_service import LangGraphWorkflowService
+        # Import 경로 ?�인 �?조정
+        # core/agents/workflow_service.py�??�용?�도�?변�?
+        from source.agents.workflow_service import LangGraphWorkflowService
         from infrastructure.utils.langgraph_config import LangGraphConfig
 
         logger.info("=" * 80)
-        logger.info("LangGraph 워크플로우 테스트 시작 (파일 로깅 포함)")
+        logger.info("LangGraph ?�크?�로???�스???�작 (?�일 로깅 ?�함)")
         logger.info("=" * 80)
-        logger.info(f"로그 파일: {log_file}")
+        logger.info(f"로그 ?�일: {log_file}")
 
-        # 설정 로드
-        logger.info("1. LangGraph 설정 로드 중...")
+        # ?�정 로드
+        logger.info("1. LangGraph ?�정 로드 �?..")
         config = LangGraphConfig.from_env()
-        logger.info(f"   ✅ LangGraph 설정 로드 완료 (enabled={config.langgraph_enabled})")
+        logger.info(f"   ??LangGraph ?�정 로드 ?�료 (enabled={config.langgraph_enabled})")
 
-        # 워크플로우 서비스 초기화 (파일 로깅 활성화)
-        logger.info("2. 워크플로우 서비스 초기화 중...")
+        # ?�크?�로???�비??초기??(?�일 로깅 ?�성??
+        logger.info("2. ?�크?�로???�비??초기??�?..")
         start_time = time.time()
         workflow_service = LangGraphWorkflowService(config, enable_file_logging=True)
         init_time = time.time() - start_time
-        logger.info(f"   ✅ 워크플로우 서비스 초기화 완료 ({init_time:.2f}초)")
+        logger.info(f"   ???�크?�로???�비??초기???�료 ({init_time:.2f}�?")
 
-        # 테스트 질의 (민사법 관련, 1개)
+        # ?�스??질의 (민사�?관?? 1�?
         test_queries = [
-            "민사법에서 계약 해지 요건은 무엇인가요?"
+            "민사법에??계약 ?��? ?�건?� 무엇?��???"
         ]
 
-        logger.info("3. 테스트 질의 실행 중...")
+        logger.info("3. ?�스??질의 ?�행 �?..")
 
         results = []
         for i, query in enumerate(test_queries, 1):
             logger.info(f"\n{'='*80}")
-            logger.info(f"테스트 질의 {i}/{len(test_queries)}: {query}")
+            logger.info(f"?�스??질의 {i}/{len(test_queries)}: {query}")
             logger.info(f"{'='*80}")
 
             try:
-                # 세션 ID 생성
+                # ?�션 ID ?�성
                 session_id = f"test_session_{int(time.time())}_{i}"
 
                 # 질의 처리
@@ -102,10 +102,10 @@ async def test_langgraph_workflow_with_logging():
                 result = await workflow_service.process_query(query, session_id, enable_checkpoint=False)
                 processing_time = time.time() - start_time
 
-                # 결과 검증
+                # 결과 검�?
                 answer = result.get("answer", "") if isinstance(result, dict) else ""
 
-                # 중첩 딕셔너리에서 문자열 추출
+                # 중첩 ?�셔?�리?�서 문자??추출
                 if isinstance(answer, dict):
                     depth = 0
                     max_depth = 20
@@ -126,7 +126,7 @@ async def test_langgraph_workflow_with_logging():
                 answer = str(answer) if not isinstance(answer, str) else answer
                 has_answer = bool(answer) and len(answer) > 0
 
-                # Sources 확인
+                # Sources ?�인
                 sources = result.get("sources", []) if isinstance(result, dict) else []
                 retrieved_docs = result.get("retrieved_docs", []) if isinstance(result, dict) else []
 
@@ -138,49 +138,49 @@ async def test_langgraph_workflow_with_logging():
                 errors = result.get("errors", []) if isinstance(result, dict) else []
                 has_errors = len(errors) > 0 if isinstance(errors, list) else False
 
-                # 성공 여부 판정
+                # ?�공 ?��? ?�정
                 is_success = has_answer and not has_errors
-                result_status = "✅ 성공" if is_success else "❌ 실패"
+                result_status = "???�공" if is_success else "???�패"
 
                 # 결과 출력
-                logger.info(f"\n{result_status} 답변 생성 완료 (처리 시간: {processing_time:.2f}초)")
-                logger.info(f"   - 답변 유무: {'있음' if has_answer else '없음'}")
+                logger.info(f"\n{result_status} ?��? ?�성 ?�료 (처리 ?�간: {processing_time:.2f}�?")
+                logger.info(f"   - ?��? ?�무: {'?�음' if has_answer else '?�음'}")
                 answer_length = len(answer) if isinstance(answer, str) else 0
-                logger.info(f"   - 답변 길이: {answer_length}자")
-                logger.info(f"   - 소스 유무: {'있음' if has_sources else '없음'} ({sources_count}개)")
-                logger.info(f"   - 검색된 문서: {retrieved_docs_count}개")
-                logger.info(f"   - 신뢰도: {confidence:.2%}")
-                logger.info(f"   - 에러 유무: {'있음' if has_errors else '없음'}")
+                logger.info(f"   - ?��? 길이: {answer_length}??)
+                logger.info(f"   - ?�스 ?�무: {'?�음' if has_sources else '?�음'} ({sources_count}�?")
+                logger.info(f"   - 검?�된 문서: {retrieved_docs_count}�?)
+                logger.info(f"   - ?�뢰?? {confidence:.2%}")
+                logger.info(f"   - ?�러 ?�무: {'?�음' if has_errors else '?�음'}")
 
-                # 로그 파일 경로 표시
+                # 로그 ?�일 경로 ?�시
                 log_file_path = result.get("log_file", "")
                 if log_file_path:
-                    logger.info(f"   - 상세 로그: {log_file_path}")
+                    logger.info(f"   - ?�세 로그: {log_file_path}")
 
-                # stdout에도 출력
-                print(f"\n{result_status} 질의 {i}/{len(test_queries)}: {query} (처리 시간: {processing_time:.2f}초)", flush=True)
-                print(f"   - 답변 유무: {'있음' if has_answer else '없음'}", flush=True)
-                print(f"   - 답변 길이: {answer_length}자", flush=True)
-                print(f"   - 소스 유무: {'있음' if has_sources else '없음'} ({sources_count}개)", flush=True)
-                print(f"   - 검색된 문서: {retrieved_docs_count}개", flush=True)
-                print(f"   - 신뢰도: {confidence:.2%}", flush=True)
-                print(f"   - 에러 유무: {'있음' if has_errors else '없음'}", flush=True)
+                # stdout?�도 출력
+                print(f"\n{result_status} 질의 {i}/{len(test_queries)}: {query} (처리 ?�간: {processing_time:.2f}�?", flush=True)
+                print(f"   - ?��? ?�무: {'?�음' if has_answer else '?�음'}", flush=True)
+                print(f"   - ?��? 길이: {answer_length}??, flush=True)
+                print(f"   - ?�스 ?�무: {'?�음' if has_sources else '?�음'} ({sources_count}�?", flush=True)
+                print(f"   - 검?�된 문서: {retrieved_docs_count}�?, flush=True)
+                print(f"   - ?�뢰?? {confidence:.2%}", flush=True)
+                print(f"   - ?�러 ?�무: {'?�음' if has_errors else '?�음'}", flush=True)
                 if log_file_path:
-                    print(f"   - 상세 로그: {log_file_path}", flush=True)
+                    print(f"   - ?�세 로그: {log_file_path}", flush=True)
 
                 if has_answer:
-                    logger.info(f"\n📝 답변 미리보기:")
+                    logger.info(f"\n?�� ?��? 미리보기:")
                     if isinstance(answer, str):
                         answer_preview = answer[:200]
                         logger.info(f"   {answer_preview}{'...' if len(answer) > 200 else ''}")
 
                 if has_errors:
-                    logger.warning(f"\n⚠️ 에러 목록:")
+                    logger.warning(f"\n?�️ ?�러 목록:")
                     error_list = errors if isinstance(errors, list) else []
                     for error in error_list[:5]:
                         logger.warning(f"   - {error}")
 
-                # 결과 저장
+                # 결과 ?�??
                 test_result = {
                     "query": query,
                     "success": is_success,
@@ -201,10 +201,10 @@ async def test_langgraph_workflow_with_logging():
                 import traceback
                 error_traceback = traceback.format_exc()
 
-                logger.error(f"\n❌ 테스트 질의 실패: {query}")
-                logger.error(f"오류 유형: {type(e).__name__}")
-                logger.error(f"오류 메시지: {str(e)}")
-                logger.error(f"상세 스택 트레이스:\n{error_traceback}")
+                logger.error(f"\n???�스??질의 ?�패: {query}")
+                logger.error(f"?�류 ?�형: {type(e).__name__}")
+                logger.error(f"?�류 메시지: {str(e)}")
+                logger.error(f"?�세 ?�택 ?�레?�스:\n{error_traceback}")
 
                 results.append({
                     "query": query,
@@ -214,9 +214,9 @@ async def test_langgraph_workflow_with_logging():
                     "traceback": error_traceback
                 })
 
-        # 최종 결과 요약
+        # 최종 결과 ?�약
         logger.info(f"\n{'='*80}")
-        logger.info("테스트 결과 요약")
+        logger.info("?�스??결과 ?�약")
         logger.info(f"{'='*80}")
 
         total_queries = len(results)
@@ -225,22 +225,22 @@ async def test_langgraph_workflow_with_logging():
         avg_time = sum(r.get("processing_time", 0) for r in results) / total_queries if total_queries > 0 else 0
         avg_confidence = sum(r.get("confidence", 0) for r in results) / total_queries if total_queries > 0 else 0
 
-        logger.info(f"   총 질의 수: {total_queries}")
-        logger.info(f"   성공한 질의: {successful_queries}")
-        logger.info(f"   실패한 질의: {failed_queries}")
-        logger.info(f"   평균 처리 시간: {avg_time:.2f}초")
-        logger.info(f"   평균 신뢰도: {avg_confidence:.2%}")
-        logger.info(f"\n   상세 로그 파일: {log_file}")
+        logger.info(f"   �?질의 ?? {total_queries}")
+        logger.info(f"   ?�공??질의: {successful_queries}")
+        logger.info(f"   ?�패??질의: {failed_queries}")
+        logger.info(f"   ?�균 처리 ?�간: {avg_time:.2f}�?)
+        logger.info(f"   ?�균 ?�뢰?? {avg_confidence:.2%}")
+        logger.info(f"\n   ?�세 로그 ?�일: {log_file}")
 
         print(f"\n{'='*80}", flush=True)
-        print("테스트 결과 요약", flush=True)
+        print("?�스??결과 ?�약", flush=True)
         print(f"{'='*80}", flush=True)
-        print(f"   총 질의 수: {total_queries}", flush=True)
-        print(f"   성공한 질의: {successful_queries}", flush=True)
-        print(f"   실패한 질의: {failed_queries}", flush=True)
-        print(f"   평균 처리 시간: {avg_time:.2f}초", flush=True)
-        print(f"   평균 신뢰도: {avg_confidence:.2%}", flush=True)
-        print(f"\n   상세 로그 파일: {log_file}", flush=True)
+        print(f"   �?질의 ?? {total_queries}", flush=True)
+        print(f"   ?�공??질의: {successful_queries}", flush=True)
+        print(f"   ?�패??질의: {failed_queries}", flush=True)
+        print(f"   ?�균 처리 ?�간: {avg_time:.2f}�?, flush=True)
+        print(f"   ?�균 ?�뢰?? {avg_confidence:.2%}", flush=True)
+        print(f"\n   ?�세 로그 ?�일: {log_file}", flush=True)
 
         return successful_queries == total_queries
 
@@ -249,31 +249,31 @@ async def test_langgraph_workflow_with_logging():
         error_traceback = traceback.format_exc()
 
         logger.error(f"{'='*80}")
-        logger.error("테스트 실행 중 치명적 오류 발생")
+        logger.error("?�스???�행 �?치명???�류 발생")
         logger.error(f"{'='*80}")
-        logger.error(f"오류 유형: {type(e).__name__}")
-        logger.error(f"오류 메시지: {str(e)}")
-        logger.error(f"상세 스택 트레이스:\n{error_traceback}")
+        logger.error(f"?�류 ?�형: {type(e).__name__}")
+        logger.error(f"?�류 메시지: {str(e)}")
+        logger.error(f"?�세 ?�택 ?�레?�스:\n{error_traceback}")
 
         return False
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     try:
         result = asyncio.run(test_langgraph_workflow_with_logging())
 
         print(f"\n{'='*80}")
-        print(f"최종 테스트 결과: {'✅ 성공' if result else '❌ 실패'}")
+        print(f"최종 ?�스??결과: {'???�공' if result else '???�패'}")
         print(f"{'='*80}\n")
 
         sys.exit(0 if result else 1)
 
     except KeyboardInterrupt:
-        logger.info("\n테스트가 사용자에 의해 중단되었습니다.")
+        logger.info("\n?�스?��? ?�용?�에 ?�해 중단?�었?�니??")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"테스트 실행 중 치명적 오류: {e}")
+        logger.error(f"?�스???�행 �?치명???�류: {e}")
         import traceback
         logger.error(traceback.format_exc())
         sys.exit(1)

@@ -1,6 +1,6 @@
 """
-법률 모델 평가 스크립트
-훈련된 법률 모델의 성능을 종합적으로 평가
+법률 모델 ?��? ?�크립트
+?�련??법률 모델???�능??종합?�으�??��?
 """
 
 import argparse
@@ -13,13 +13,13 @@ from datetime import datetime
 from typing import Dict, Any, List
 import torch
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 from source.models.legal_finetuner import LegalModelFineTuner, LegalModelEvaluator
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class LegalModelEvaluationPipeline:
-    """법률 모델 평가 파이프라인"""
+    """법률 모델 ?��? ?�이?�라??""
     
     def __init__(self, model_path: str, test_data_path: str):
         self.model_path = model_path
@@ -40,13 +40,13 @@ class LegalModelEvaluationPipeline:
         self.fine_tuner = None
         self.evaluator = None
         
-        # 로그 디렉토리 생성
+        # 로그 ?�렉?�리 ?�성
         Path("logs").mkdir(exist_ok=True)
         
         logger.info(f"LegalModelEvaluationPipeline initialized for model: {model_path}")
     
     def load_test_data(self) -> List[Dict[str, Any]]:
-        """테스트 데이터 로드"""
+        """?�스???�이??로드"""
         logger.info(f"Loading test data from {self.test_data_path}")
         
         try:
@@ -65,10 +65,10 @@ class LegalModelEvaluationPipeline:
         logger.info(f"Loading model from {self.model_path}")
         
         try:
-            # 기본 모델 초기화
+            # 기본 모델 초기??
             self.fine_tuner = LegalModelFineTuner(device="cpu")
             
-            # 훈련된 LoRA 어댑터 로드
+            # ?�련??LoRA ?�댑??로드
             self.fine_tuner.load_model(self.model_path)
             
             logger.info("Model loaded successfully")
@@ -78,20 +78,20 @@ class LegalModelEvaluationPipeline:
             raise
     
     def evaluate_model(self, test_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """모델 종합 평가"""
+        """모델 종합 ?��?"""
         logger.info("Starting comprehensive model evaluation...")
         
         try:
-            # 평가기 초기화
+            # ?��?�?초기??
             self.evaluator = LegalModelEvaluator(self.fine_tuner.model, self.fine_tuner.tokenizer)
             
-            # 기본 성능 평가
+            # 기본 ?�능 ?��?
             basic_results = self.evaluator.evaluate_legal_qa(test_data)
             
-            # 상세 평가 수행
+            # ?�세 ?��? ?�행
             detailed_results = self._detailed_evaluation(test_data)
             
-            # 결과 통합
+            # 결과 ?�합
             evaluation_results = {
                 "basic_metrics": basic_results,
                 "detailed_metrics": detailed_results,
@@ -111,7 +111,7 @@ class LegalModelEvaluationPipeline:
             raise
     
     def _detailed_evaluation(self, test_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """상세 평가 수행"""
+        """?�세 ?��? ?�행"""
         logger.info("Performing detailed evaluation...")
         
         detailed_results = {
@@ -121,7 +121,7 @@ class LegalModelEvaluationPipeline:
             "sample_analysis": []
         }
         
-        # 질문 유형별 평가
+        # 질문 ?�형�??��?
         question_types = {}
         law_domains = {}
         
@@ -133,13 +133,13 @@ class LegalModelEvaluationPipeline:
                 question_types[q_type] = []
             question_types[q_type].append(sample)
             
-            # 법령 도메인 분류
+            # 법령 ?�메??분류
             law_domain = self._classify_law_domain(source)
             if law_domain not in law_domains:
                 law_domains[law_domain] = []
             law_domains[law_domain].append(sample)
         
-        # 질문 유형별 성능 평가
+        # 질문 ?�형�??�능 ?��?
         for q_type, samples in question_types.items():
             if len(samples) > 0:
                 type_results = self.evaluator.evaluate_legal_qa(samples)
@@ -148,7 +148,7 @@ class LegalModelEvaluationPipeline:
                     "metrics": type_results
                 }
         
-        # 법령 도메인별 성능 평가
+        # 법령 ?�메?�별 ?�능 ?��?
         for domain, samples in law_domains.items():
             if len(samples) > 0:
                 domain_results = self.evaluator.evaluate_legal_qa(samples)
@@ -157,45 +157,45 @@ class LegalModelEvaluationPipeline:
                     "metrics": domain_results
                 }
         
-        # 응답 품질 분석
+        # ?�답 ?�질 분석
         detailed_results["response_quality"] = self._analyze_response_quality(test_data)
         
-        # 샘플 분석 (처음 5개)
+        # ?�플 분석 (처음 5�?
         detailed_results["sample_analysis"] = self._analyze_samples(test_data[:5])
         
         return detailed_results
     
     def _classify_law_domain(self, source: str) -> str:
-        """법령 도메인 분류"""
+        """법령 ?�메??분류"""
         source_lower = source.lower()
         
         if "민법" in source_lower:
             return "민법"
-        elif "형법" in source_lower:
-            return "형법"
-        elif "상법" in source_lower:
-            return "상법"
-        elif "민사소송법" in source_lower:
-            return "민사소송법"
-        elif "형사소송법" in source_lower:
-            return "형사소송법"
-        elif "노동법" in source_lower:
-            return "노동법"
-        elif "부동산법" in source_lower:
-            return "부동산법"
-        elif "대법원" in source_lower or "판례" in source_lower:
-            return "판례"
-        elif "헌재" in source_lower:
-            return "헌재"
-        elif "법제처" in source_lower or "해석" in source_lower:
-            return "법령해석"
-        elif "행정규칙" in source_lower:
-            return "행정규칙"
+        elif "?�법" in source_lower:
+            return "?�법"
+        elif "?�법" in source_lower:
+            return "?�법"
+        elif "민사?�송�? in source_lower:
+            return "민사?�송�?
+        elif "?�사?�송�? in source_lower:
+            return "?�사?�송�?
+        elif "?�동�? in source_lower:
+            return "?�동�?
+        elif "부?�산�? in source_lower:
+            return "부?�산�?
+        elif "?�법원" in source_lower or "?��?" in source_lower:
+            return "?��?"
+        elif "?�재" in source_lower:
+            return "?�재"
+        elif "법제�? in source_lower or "?�석" in source_lower:
+            return "법령?�석"
+        elif "?�정규칙" in source_lower:
+            return "?�정규칙"
         else:
-            return "기타"
+            return "기�?"
     
     def _analyze_response_quality(self, test_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """응답 품질 분석"""
+        """?�답 ?�질 분석"""
         logger.info("Analyzing response quality...")
         
         quality_metrics = {
@@ -209,13 +209,13 @@ class LegalModelEvaluationPipeline:
         keyword_coverage_scores = []
         legal_term_scores = []
         
-        # 법률 전문 용어 목록
+        # 법률 ?�문 ?�어 목록
         legal_terms = [
-            "법률", "조항", "규정", "판례", "법원", "재판", "소송", "계약", "손해", "배상",
-            "책임", "권리", "의무", "위반", "민법", "형법", "상법", "행정법", "헌법"
+            "법률", "조항", "규정", "?��?", "법원", "?�판", "?�송", "계약", "?�해", "배상",
+            "책임", "권리", "?�무", "?�반", "민법", "?�법", "?�법", "?�정�?, "?�법"
         ]
         
-        for sample in test_data[:20]:  # 처음 20개 샘플만 분석
+        for sample in test_data[:20]:  # 처음 20�??�플�?분석
             try:
                 question = sample.get("question", "")
                 ground_truth = sample.get("answer", "")
@@ -223,20 +223,20 @@ class LegalModelEvaluationPipeline:
                 if not question or not ground_truth:
                     continue
                 
-                # 응답 생성
-                prompt = f"<|startoftext|>질문: {question}\n답변:"
+                # ?�답 ?�성
+                prompt = f"<|startoftext|>질문: {question}\n?��?:"
                 predicted = self.fine_tuner.generate_response(prompt, max_length=200)
                 
-                # 응답 길이 분석
+                # ?�답 길이 분석
                 response_lengths.append(len(predicted.split()))
                 
-                # 키워드 커버리지 분석
+                # ?�워??커버리�? 분석
                 question_words = set(question.lower().split())
                 response_words = set(predicted.lower().split())
                 coverage = len(question_words.intersection(response_words)) / len(question_words) if question_words else 0
                 keyword_coverage_scores.append(coverage)
                 
-                # 법률 용어 사용 분석
+                # 법률 ?�어 ?�용 분석
                 legal_term_count = sum(1 for term in legal_terms if term in predicted.lower())
                 legal_term_scores.append(legal_term_count / len(predicted.split()) if predicted.split() else 0)
                 
@@ -261,7 +261,7 @@ class LegalModelEvaluationPipeline:
         return quality_metrics
     
     def _analyze_samples(self, samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """샘플 분석"""
+        """?�플 분석"""
         logger.info("Analyzing sample responses...")
         
         sample_analysis = []
@@ -274,11 +274,11 @@ class LegalModelEvaluationPipeline:
                 if not question or not ground_truth:
                     continue
                 
-                # 응답 생성
-                prompt = f"<|startoftext|>질문: {question}\n답변:"
+                # ?�답 ?�성
+                prompt = f"<|startoftext|>질문: {question}\n?��?:"
                 predicted = self.fine_tuner.generate_response(prompt, max_length=200)
                 
-                # 유사도 계산
+                # ?�사??계산
                 similarity = self.evaluator._calculate_semantic_similarity(predicted, ground_truth)
                 bleu_score = self.evaluator._calculate_bleu(predicted, ground_truth)
                 rouge_score = self.evaluator._calculate_rouge(predicted, ground_truth)
@@ -304,16 +304,16 @@ class LegalModelEvaluationPipeline:
         return sample_analysis
     
     def generate_evaluation_report(self, evaluation_results: Dict[str, Any]) -> str:
-        """평가 보고서 생성"""
+        """?��? 보고???�성"""
         logger.info("Generating evaluation report...")
         
         try:
-            # 보고서 저장
+            # 보고???�??
             report_path = Path(self.model_path) / "evaluation_report.json"
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(evaluation_results, f, ensure_ascii=False, indent=4)
             
-            # 요약 보고서 생성
+            # ?�약 보고???�성
             summary_report = self._generate_summary_report(evaluation_results)
             summary_path = Path(self.model_path) / "evaluation_summary.txt"
             with open(summary_path, "w", encoding="utf-8") as f:
@@ -329,79 +329,79 @@ class LegalModelEvaluationPipeline:
             raise
     
     def _generate_summary_report(self, evaluation_results: Dict[str, Any]) -> str:
-        """요약 보고서 생성"""
+        """?�약 보고???�성"""
         basic_metrics = evaluation_results["basic_metrics"]
         detailed_metrics = evaluation_results["detailed_metrics"]
         
         report = f"""
-법률 모델 평가 보고서
+법률 모델 ?��? 보고??
 ====================
 
-평가 정보:
+?��? ?�보:
 - 모델 경로: {evaluation_results['evaluation_info']['model_path']}
-- 테스트 데이터: {evaluation_results['evaluation_info']['test_data_path']}
-- 평가 시간: {evaluation_results['evaluation_info']['evaluation_time']}
-- 총 테스트 샘플: {evaluation_results['evaluation_info']['total_test_samples']}개
+- ?�스???�이?? {evaluation_results['evaluation_info']['test_data_path']}
+- ?��? ?�간: {evaluation_results['evaluation_info']['evaluation_time']}
+- �??�스???�플: {evaluation_results['evaluation_info']['total_test_samples']}�?
 
-기본 성능 지표:
-- 정확도: {basic_metrics.get('accuracy', 0.0):.3f}
-- BLEU 점수: {basic_metrics.get('bleu_score', 0.0):.3f}
-- ROUGE 점수: {basic_metrics.get('rouge_score', 0.0):.3f}
-- 법률 관련성: {basic_metrics.get('legal_relevance', 0.0):.3f}
+기본 ?�능 지??
+- ?�확?? {basic_metrics.get('accuracy', 0.0):.3f}
+- BLEU ?�수: {basic_metrics.get('bleu_score', 0.0):.3f}
+- ROUGE ?�수: {basic_metrics.get('rouge_score', 0.0):.3f}
+- 법률 관?�성: {basic_metrics.get('legal_relevance', 0.0):.3f}
 
-질문 유형별 성능:
+질문 ?�형�??�능:
 """
         
         for q_type, results in detailed_metrics["by_question_type"].items():
             metrics = results["metrics"]
-            report += f"- {q_type}: 정확도 {metrics.get('accuracy', 0.0):.3f}, BLEU {metrics.get('bleu_score', 0.0):.3f} ({results['sample_count']}개 샘플)\n"
+            report += f"- {q_type}: ?�확??{metrics.get('accuracy', 0.0):.3f}, BLEU {metrics.get('bleu_score', 0.0):.3f} ({results['sample_count']}�??�플)\n"
         
-        report += "\n법령 도메인별 성능:\n"
+        report += "\n법령 ?�메?�별 ?�능:\n"
         for domain, results in detailed_metrics["by_law_domain"].items():
             metrics = results["metrics"]
-            report += f"- {domain}: 정확도 {metrics.get('accuracy', 0.0):.3f}, BLEU {metrics.get('bleu_score', 0.0):.3f} ({results['sample_count']}개 샘플)\n"
+            report += f"- {domain}: ?�확??{metrics.get('accuracy', 0.0):.3f}, BLEU {metrics.get('bleu_score', 0.0):.3f} ({results['sample_count']}�??�플)\n"
         
         response_quality = detailed_metrics["response_quality"]
         report += f"""
-응답 품질 분석:
-- 평균 응답 길이: {response_quality.get('average_response_length', 0.0):.1f} 단어
-- 키워드 커버리지: {response_quality.get('keyword_coverage', 0.0):.3f}
-- 법률 용어 사용률: {response_quality.get('legal_term_usage', 0.0):.3f}
+?�답 ?�질 분석:
+- ?�균 ?�답 길이: {response_quality.get('average_response_length', 0.0):.1f} ?�어
+- ?�워??커버리�?: {response_quality.get('keyword_coverage', 0.0):.3f}
+- 법률 ?�어 ?�용�? {response_quality.get('legal_term_usage', 0.0):.3f}
 
-샘플 분석 (상위 5개):
+?�플 분석 (?�위 5�?:
 """
         
         for sample in detailed_metrics["sample_analysis"]:
             report += f"""
-샘플 {sample['sample_id']}:
+?�플 {sample['sample_id']}:
 질문: {sample['question'][:100]}...
-정답: {sample['ground_truth'][:100]}...
-예측: {sample['predicted'][:100]}...
-점수: 유사도 {sample['metrics']['similarity']:.3f}, BLEU {sample['metrics']['bleu_score']:.3f}, 법률관련성 {sample['metrics']['legal_relevance']:.3f}
+?�답: {sample['ground_truth'][:100]}...
+?�측: {sample['predicted'][:100]}...
+?�수: ?�사??{sample['metrics']['similarity']:.3f}, BLEU {sample['metrics']['bleu_score']:.3f}, 법률관?�성 {sample['metrics']['legal_relevance']:.3f}
 """
         
         return report
     
     def run_evaluation_pipeline(self):
-        """평가 파이프라인 실행"""
+        """?��? ?�이?�라???�행"""
         logger.info("Starting legal model evaluation pipeline...")
         
         try:
-            # 1. 테스트 데이터 로드
+            # 1. ?�스???�이??로드
             test_data = self.load_test_data()
             
             # 2. 모델 로드
             self.load_model()
             
-            # 3. 모델 평가
+            # 3. 모델 ?��?
             evaluation_results = self.evaluate_model(test_data)
             
-            # 4. 평가 보고서 생성
+            # 4. ?��? 보고???�성
             summary_report = self.generate_evaluation_report(evaluation_results)
             
-            # 콘솔에 요약 출력
+            # 콘솔???�약 출력
             print("\n" + "="*60)
-            print("📊 법률 모델 평가 완료!")
+            print("?�� 법률 모델 ?��? ?�료!")
             print("="*60)
             print(summary_report)
             print("="*60)
@@ -414,15 +414,15 @@ class LegalModelEvaluationPipeline:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description="법률 모델 평가")
-    parser.add_argument("--model", type=str, required=True, help="평가할 모델 경로")
-    parser.add_argument("--test-data", type=str, default="data/training/test_split.json", help="테스트 데이터 경로")
-    parser.add_argument("--output", type=str, help="출력 디렉토리 (기본값: 모델 경로)")
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description="법률 모델 ?��?")
+    parser.add_argument("--model", type=str, required=True, help="?��???모델 경로")
+    parser.add_argument("--test-data", type=str, default="data/training/test_split.json", help="?�스???�이??경로")
+    parser.add_argument("--output", type=str, help="출력 ?�렉?�리 (기본�? 모델 경로)")
     
     args = parser.parse_args()
     
-    # 출력 디렉토리 설정
+    # 출력 ?�렉?�리 ?�정
     if args.output:
         output_dir = args.output
     else:
@@ -431,7 +431,7 @@ def main():
     logger.info(f"Starting legal model evaluation for model: {args.model}")
     
     try:
-        # 평가 파이프라인 실행
+        # ?��? ?�이?�라???�행
         pipeline = LegalModelEvaluationPipeline(args.model, args.test_data)
         pipeline.run_evaluation_pipeline()
         

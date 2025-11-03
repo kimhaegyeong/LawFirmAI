@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-벡터 임베딩 직접 테스트
+벡터 ?�베??직접 ?�스??
 """
 
 import sys
@@ -10,97 +10,97 @@ import json
 import faiss
 import numpy as np
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 def test_direct_faiss():
-    """FAISS 인덱스 직접 테스트"""
-    print("FAISS 인덱스 직접 테스트...")
+    """FAISS ?�덱??직접 ?�스??""
+    print("FAISS ?�덱??직접 ?�스??..")
     
     try:
-        # FAISS 인덱스 직접 로드
+        # FAISS ?�덱??직접 로드
         faiss_file = Path("data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss")
         json_file = Path("data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json")
         
         if not faiss_file.exists():
-            print(f"FAISS 파일이 존재하지 않습니다: {faiss_file}")
+            print(f"FAISS ?�일??존재?��? ?�습?�다: {faiss_file}")
             return False
         
         if not json_file.exists():
-            print(f"JSON 파일이 존재하지 않습니다: {json_file}")
+            print(f"JSON ?�일??존재?��? ?�습?�다: {json_file}")
             return False
         
-        # FAISS 인덱스 로드
+        # FAISS ?�덱??로드
         index = faiss.read_index(str(faiss_file))
-        print(f"FAISS 인덱스 로드 성공")
-        print(f"   - 인덱스 크기: {index.ntotal:,}")
+        print(f"FAISS ?�덱??로드 ?�공")
+        print(f"   - ?�덱???�기: {index.ntotal:,}")
         print(f"   - 벡터 차원: {index.d}")
         
-        # 메타데이터 로드
+        # 메�??�이??로드
         with open(json_file, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
-        print(f"메타데이터 로드 성공")
-        print(f"   - 모델명: {metadata.get('model_name', 'Unknown')}")
+        print(f"메�??�이??로드 ?�공")
+        print(f"   - 모델�? {metadata.get('model_name', 'Unknown')}")
         print(f"   - 차원: {metadata.get('dimension', 0)}")
-        print(f"   - 문서 수: {metadata.get('document_count', 0):,}")
-        print(f"   - 생성일: {metadata.get('created_at', 'Unknown')}")
+        print(f"   - 문서 ?? {metadata.get('document_count', 0):,}")
+        print(f"   - ?�성?? {metadata.get('created_at', 'Unknown')}")
         
-        # 문서 메타데이터 확인
+        # 문서 메�??�이???�인
         doc_metadata = metadata.get('document_metadata', [])
-        print(f"   - 메타데이터 항목 수: {len(doc_metadata):,}")
+        print(f"   - 메�??�이????�� ?? {len(doc_metadata):,}")
         
         if len(doc_metadata) > 0:
             sample_metadata = doc_metadata[0]
-            print(f"   - 샘플 메타데이터:")
+            print(f"   - ?�플 메�??�이??")
             for key, value in sample_metadata.items():
                 if isinstance(value, str) and len(value) > 50:
                     value = value[:50] + "..."
                 print(f"     {key}: {value}")
         
-        # 간단한 검색 테스트 (랜덤 벡터)
+        # 간단??검???�스??(?�덤 벡터)
         if index.ntotal > 0:
-            print(f"\n검색 테스트...")
+            print(f"\n검???�스??..")
             
-            # 랜덤 쿼리 벡터 생성
+            # ?�덤 쿼리 벡터 ?�성
             query_vector = np.random.random((1, index.d)).astype('float32')
             faiss.normalize_L2(query_vector)
             
-            # 검색 실행
+            # 검???�행
             scores, indices = index.search(query_vector, 5)
             
-            print(f"   - 검색 결과 수: {len(indices[0])}")
-            print(f"   - 최고 점수: {scores[0][0]:.3f}")
-            print(f"   - 검색된 인덱스: {indices[0][:3]}")
+            print(f"   - 검??결과 ?? {len(indices[0])}")
+            print(f"   - 최고 ?�수: {scores[0][0]:.3f}")
+            print(f"   - 검?�된 ?�덱?? {indices[0][:3]}")
             
-            # 메타데이터와 매칭
+            # 메�??�이?��? 매칭
             for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
                 if idx < len(doc_metadata):
                     doc_info = doc_metadata[idx]
-                    print(f"   {i+1}. 점수: {score:.3f}, 법률명: {doc_info.get('law_name', 'Unknown')}")
+                    print(f"   {i+1}. ?�수: {score:.3f}, 법률�? {doc_info.get('law_name', 'Unknown')}")
         
         return True
         
     except Exception as e:
-        print(f"FAISS 직접 테스트 실패: {e}")
+        print(f"FAISS 직접 ?�스???�패: {e}")
         return False
 
 def main():
-    """메인 테스트 함수"""
-    print("FAISS 인덱스 직접 테스트")
+    """메인 ?�스???�수"""
+    print("FAISS ?�덱??직접 ?�스??)
     print("=" * 40)
     
     success = test_direct_faiss()
     
     print("\n" + "=" * 40)
     if success:
-        print("FAISS 인덱스 테스트 성공!")
-        print("벡터 임베딩이 정상적으로 생성되었습니다.")
-        print("FAISS 인덱스와 메타데이터가 올바르게 저장되었습니다.")
+        print("FAISS ?�덱???�스???�공!")
+        print("벡터 ?�베?�이 ?�상?�으�??�성?�었?�니??")
+        print("FAISS ?�덱?��? 메�??�이?��? ?�바르게 ?�?�되?�습?�다.")
     else:
-        print("FAISS 인덱스 테스트 실패")
-        print("추가 점검이 필요합니다.")
+        print("FAISS ?�덱???�스???�패")
+        print("추�? ?��????�요?�니??")
     
     return success
 

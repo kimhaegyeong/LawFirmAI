@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-기존 파일의 law_content 업데이트 스크립트
+기존 ?�일??law_content ?�데?�트 ?�크립트
 
-이 스크립트는 원본 파일의 laws.law_content만 HTML에서 추출한 내용으로 업데이트합니다.
+???�크립트???�본 ?�일??laws.law_content�?HTML?�서 추출???�용?�로 ?�데?�트?�니??
 """
 
 import json
@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from scripts.test_improved_html_parser import ImprovedLawHTMLParser
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,26 +31,26 @@ logger = logging.getLogger(__name__)
 
 
 class LawContentUpdater:
-    """법령 내용 업데이트 클래스"""
+    """법령 ?�용 ?�데?�트 ?�래??""
     
     def __init__(self):
-        """초기화"""
+        """초기??""
         self.html_parser = ImprovedLawHTMLParser()
     
     def update_law_content(self, file_path: Path) -> Dict[str, Any]:
         """
-        기존 파일의 law_content 업데이트
+        기존 ?�일??law_content ?�데?�트
         
         Args:
-            file_path (Path): 업데이트할 파일 경로
+            file_path (Path): ?�데?�트???�일 경로
             
         Returns:
-            Dict[str, Any]: 업데이트 결과
+            Dict[str, Any]: ?�데?�트 결과
         """
         try:
-            logger.info(f"법령 내용 업데이트 시작: {file_path}")
+            logger.info(f"법령 ?�용 ?�데?�트 ?�작: {file_path}")
             
-            # 원본 데이터 로드
+            # ?�본 ?�이??로드
             with open(file_path, 'r', encoding='utf-8') as f:
                 original_data = json.load(f)
             
@@ -61,51 +61,51 @@ class LawContentUpdater:
                 'errors': []
             }
             
-            # 각 법령의 law_content 업데이트
+            # �?법령??law_content ?�데?�트
             for i, law_data in enumerate(original_data.get('laws', [])):
                 try:
                     law_name = law_data.get('law_name', 'Unknown')
-                    logger.info(f"법령 {i+1}/{update_stats['total_laws']} 업데이트 중: {law_name}")
+                    logger.info(f"법령 {i+1}/{update_stats['total_laws']} ?�데?�트 �? {law_name}")
                     
-                    # HTML에서 추출한 내용으로 law_content 업데이트
+                    # HTML?�서 추출???�용?�로 law_content ?�데?�트
                     updated_content = self._extract_content_from_html(law_data.get('content_html', ''))
                     
                     if updated_content:
-                        # 원본 law_content 백업
+                        # ?�본 law_content 백업
                         original_content = law_data.get('law_content', '')
                         
-                        # law_content 업데이트
+                        # law_content ?�데?�트
                         original_data['laws'][i]['law_content'] = updated_content
                         
-                        # 업데이트 정보 추가
+                        # ?�데?�트 ?�보 추�?
                         original_data['laws'][i]['content_updated_at'] = datetime.now().isoformat()
                         original_data['laws'][i]['original_content_length'] = len(original_content)
                         original_data['laws'][i]['updated_content_length'] = len(updated_content)
                         original_data['laws'][i]['content_improvement_ratio'] = len(updated_content) / len(original_content) if original_content else 0
                         
                         update_stats['successful_updates'] += 1
-                        logger.info(f"법령 '{law_name}' 업데이트 완료: {len(original_content)} -> {len(updated_content)} 문자")
+                        logger.info(f"법령 '{law_name}' ?�데?�트 ?�료: {len(original_content)} -> {len(updated_content)} 문자")
                     else:
                         update_stats['failed_updates'] += 1
-                        logger.warning(f"법령 '{law_name}' 업데이트 실패: HTML 내용 없음")
+                        logger.warning(f"법령 '{law_name}' ?�데?�트 ?�패: HTML ?�용 ?�음")
                         
                 except Exception as e:
-                    error_msg = f"법령 {i+1} 업데이트 중 오류: {str(e)}"
+                    error_msg = f"법령 {i+1} ?�데?�트 �??�류: {str(e)}"
                     logger.error(error_msg)
                     update_stats['errors'].append(error_msg)
                     update_stats['failed_updates'] += 1
             
-            # 파일 메타데이터 업데이트
+            # ?�일 메�??�이???�데?�트
             original_data['content_updated_at'] = datetime.now().isoformat()
             original_data['content_update_version'] = '1.0'
             original_data['update_stats'] = update_stats
             
-            # 업데이트된 데이터 저장 (원본 파일 덮어쓰기)
+            # ?�데?�트???�이???�??(?�본 ?�일 ??��?�기)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(original_data, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"파일 업데이트 완료: {file_path}")
-            logger.info(f"업데이트 통계: {update_stats}")
+            logger.info(f"?�일 ?�데?�트 ?�료: {file_path}")
+            logger.info(f"?�데?�트 ?�계: {update_stats}")
             
             return {
                 'success': True,
@@ -114,7 +114,7 @@ class LawContentUpdater:
             }
             
         except Exception as e:
-            error_msg = f"파일 업데이트 중 오류: {str(e)}"
+            error_msg = f"?�일 ?�데?�트 �??�류: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -123,29 +123,29 @@ class LawContentUpdater:
     
     def _extract_content_from_html(self, html_content: str) -> str:
         """
-        HTML에서 법령 내용 추출
+        HTML?�서 법령 ?�용 추출
         
         Args:
-            html_content (str): HTML 내용
+            html_content (str): HTML ?�용
             
         Returns:
-            str: 추출된 법령 내용
+            str: 추출??법령 ?�용
         """
         try:
             if not html_content:
                 return ""
             
-            # HTML 파싱
+            # HTML ?�싱
             parsed_html = self.html_parser.parse_html(html_content)
             
-            # 조문들을 정리된 형태로 결합
+            # 조문?�을 ?�리???�태�?결합
             articles = parsed_html.get('articles', [])
             
             if not articles:
-                # 조문이 없으면 깨끗한 텍스트 반환
+                # 조문???�으�?깨끗???�스??반환
                 return parsed_html.get('clean_text', '')
             
-            # 조문들을 하나의 텍스트로 결합
+            # 조문?�을 ?�나???�스?�로 결합
             content_parts = []
             
             for article in articles:
@@ -158,34 +158,34 @@ class LawContentUpdater:
             return '\n\n'.join(content_parts)
             
         except Exception as e:
-            logger.error(f"HTML에서 내용 추출 중 오류: {e}")
+            logger.error(f"HTML?�서 ?�용 추출 �??�류: {e}")
             return ""
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     try:
-        # 파일 경로 설정
+        # ?�일 경로 ?�정
         file_path = Path("data/raw/assembly/law/20251010/law_page_001_181503.json")
         
-        # 파일 존재 확인
+        # ?�일 존재 ?�인
         if not file_path.exists():
-            logger.error(f"파일이 존재하지 않음: {file_path}")
+            logger.error(f"?�일??존재?��? ?�음: {file_path}")
             return
         
-        # 업데이트 실행
+        # ?�데?�트 ?�행
         updater = LawContentUpdater()
         result = updater.update_law_content(file_path)
         
         if result['success']:
-            logger.info("법령 내용 업데이트 완료!")
-            logger.info(f"파일: {result['file_path']}")
-            logger.info(f"업데이트 통계: {result['update_stats']}")
+            logger.info("법령 ?�용 ?�데?�트 ?�료!")
+            logger.info(f"?�일: {result['file_path']}")
+            logger.info(f"?�데?�트 ?�계: {result['update_stats']}")
         else:
-            logger.error(f"업데이트 실패: {result['error']}")
+            logger.error(f"?�데?�트 ?�패: {result['error']}")
             
     except Exception as e:
-        logger.error(f"메인 함수 실행 중 오류: {str(e)}")
+        logger.error(f"메인 ?�수 ?�행 �??�류: {str(e)}")
 
 
 if __name__ == "__main__":

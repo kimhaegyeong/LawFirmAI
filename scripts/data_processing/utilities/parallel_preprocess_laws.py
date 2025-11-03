@@ -97,7 +97,7 @@ class ParallelLawPreprocessor:
             
         self.html_parser = LawHTMLParser()
         
-        # ML 강화 파서 사용 (모델이 있으면)
+        # ML 강화 ?�서 ?�용 (모델???�으�?
         ml_model_path = "models/article_classifier.pkl"
         if Path(ml_model_path).exists():
             self.article_parser = MLEnhancedArticleParser(ml_model_path=ml_model_path)
@@ -288,16 +288,16 @@ class ParallelLawPreprocessor:
                     
                     if result['errors']:
                         failed_files += 1
-                        logger.error(f"❌ {file_path.name}: {len(result['errors'])} errors")
+                        logger.error(f"??{file_path.name}: {len(result['errors'])} errors")
                     else:
                         successful_files += 1
-                        logger.info(f"✅ {file_path.name}: {result['processed_laws']}/{result['total_laws']} laws")
+                        logger.info(f"??{file_path.name}: {result['processed_laws']}/{result['total_laws']} laws")
                     
                     total_laws += result['total_laws']
                     processed_laws += result['processed_laws']
                     
                 except Exception as e:
-                    logger.error(f"❌ {file_path.name}: Exception - {str(e)}")
+                    logger.error(f"??{file_path.name}: Exception - {str(e)}")
                     failed_files += 1
         
         # Calculate final statistics

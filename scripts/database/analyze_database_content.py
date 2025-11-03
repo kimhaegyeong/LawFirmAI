@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-데이터베이스 내용 분석 스크립트
+?�이?�베?�스 ?�용 분석 ?�크립트
 
-SQLite 데이터베이스의 내용을 분석하여 어떤 데이터가 있는지 확인합니다.
+SQLite ?�이?�베?�스???�용??분석?�여 ?�떤 ?�이?��? ?�는지 ?�인?�니??
 """
 
 import sys
@@ -14,26 +14,26 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 sys.path.append(str(Path(__file__).parent.parent))
 
-# 직접 DatabaseManager 클래스 정의 (import 오류 방지)
+# 직접 DatabaseManager ?�래???�의 (import ?�류 방�?)
 import sqlite3
 from contextlib import contextmanager
 from typing import List, Dict, Any
 
 class DatabaseManager:
-    """데이터베이스 관리 클래스"""
+    """?�이?�베?�스 관�??�래??""
     
     def __init__(self, db_path: str = "data/lawfirm.db"):
-        """데이터베이스 관리자 초기화"""
+        """?�이?�베?�스 관리자 초기??""
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"DatabaseManager initialized with path: {self.db_path}")
     
     @contextmanager
     def get_connection(self):
-        """데이터베이스 연결 컨텍스트 매니저"""
+        """?�이?�베?�스 ?�결 컨텍?�트 매니?�"""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         try:
@@ -46,13 +46,13 @@ class DatabaseManager:
             conn.close()
     
     def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
-        """쿼리 실행"""
+        """쿼리 ?�행"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -65,10 +65,10 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseAnalyzer:
-    """데이터베이스 분석 클래스"""
+    """?�이?�베?�스 분석 ?�래??""
     
     def __init__(self, db_path: str = "data/lawfirm.db"):
-        """데이터베이스 분석기 초기화"""
+        """?�이?�베?�스 분석�?초기??""
         self.db_path = Path(db_path)
         self.db_manager = DatabaseManager(str(self.db_path))
         self.analysis_result = {}
@@ -76,8 +76,8 @@ class DatabaseAnalyzer:
         logger.info(f"DatabaseAnalyzer initialized with path: {self.db_path}")
     
     def analyze_database_content(self) -> Dict[str, Any]:
-        """데이터베이스 내용 분석"""
-        logger.info("데이터베이스 내용 분석 시작...")
+        """?�이?�베?�스 ?�용 분석"""
+        logger.info("?�이?�베?�스 ?�용 분석 ?�작...")
         
         analysis = {
             "database_path": str(self.db_path),
@@ -91,35 +91,35 @@ class DatabaseAnalyzer:
         }
         
         try:
-            # 1. 테이블별 데이터 수 확인
+            # 1. ?�이블별 ?�이?????�인
             analysis["table_counts"] = self._analyze_table_counts()
             
-            # 2. 문서 타입별 분석
+            # 2. 문서 ?�?�별 분석
             analysis["document_types"] = self._analyze_document_types()
             
-            # 3. 메타데이터 분석
+            # 3. 메�??�이??분석
             analysis["metadata_analysis"] = self._analyze_metadata()
             
-            # 4. 콘텐츠 샘플 추출
+            # 4. 콘텐�??�플 추출
             analysis["content_samples"] = self._extract_content_samples()
             
-            # 5. 전체 문서 수 계산
+            # 5. ?�체 문서 ??계산
             analysis["total_documents"] = sum(analysis["table_counts"].values())
             
-            # 6. 분석 요약 생성
+            # 6. 분석 ?�약 ?�성
             analysis["analysis_summary"] = self._generate_analysis_summary(analysis)
             
-            logger.info(f"데이터베이스 분석 완료: 총 {analysis['total_documents']}개 문서")
+            logger.info(f"?�이?�베?�스 분석 ?�료: �?{analysis['total_documents']}�?문서")
             
         except Exception as e:
-            logger.error(f"데이터베이스 분석 중 오류: {e}")
+            logger.error(f"?�이?�베?�스 분석 �??�류: {e}")
             analysis["error"] = str(e)
         
         self.analysis_result = analysis
         return analysis
     
     def _analyze_table_counts(self) -> Dict[str, int]:
-        """테이블별 데이터 수 분석"""
+        """?�이블별 ?�이????분석"""
         table_counts = {}
         
         tables = [
@@ -134,19 +134,19 @@ class DatabaseAnalyzer:
                 count_query = f"SELECT COUNT(*) FROM {table}"
                 result = self.db_manager.execute_query(count_query)
                 table_counts[table] = result[0][0] if result else 0
-                logger.info(f"{table} 테이블: {table_counts[table]}개 레코드")
+                logger.info(f"{table} ?�이�? {table_counts[table]}�??�코??)
             except Exception as e:
-                logger.warning(f"{table} 테이블 분석 실패: {e}")
+                logger.warning(f"{table} ?�이�?분석 ?�패: {e}")
                 table_counts[table] = 0
         
         return table_counts
     
     def _analyze_document_types(self) -> Dict[str, Any]:
-        """문서 타입별 분석"""
+        """문서 ?�?�별 분석"""
         document_types = {}
         
         try:
-            # 문서 타입별 개수 조회
+            # 문서 ?�?�별 개수 조회
             type_query = """
                 SELECT document_type, COUNT(*) as count
                 FROM documents 
@@ -159,9 +159,9 @@ class DatabaseAnalyzer:
                 count = row["count"]
                 document_types[doc_type] = {
                     "count": count,
-                    "percentage": 0  # 나중에 계산
+                    "percentage": 0  # ?�중??계산
                 }
-                logger.info(f"{doc_type} 문서: {count}개")
+                logger.info(f"{doc_type} 문서: {count}�?)
             
             # 비율 계산
             total = sum(doc_type["count"] for doc_type in document_types.values())
@@ -170,16 +170,16 @@ class DatabaseAnalyzer:
                     doc_type["percentage"] = round((doc_type["count"] / total) * 100, 2)
             
         except Exception as e:
-            logger.warning(f"문서 타입 분석 실패: {e}")
+            logger.warning(f"문서 ?�??분석 ?�패: {e}")
         
         return document_types
     
     def _analyze_metadata(self) -> Dict[str, Any]:
-        """메타데이터 분석"""
+        """메�??�이??분석"""
         metadata_analysis = {}
         
         try:
-            # 법령 메타데이터 분석
+            # 법령 메�??�이??분석
             law_query = """
                 SELECT law_name, COUNT(*) as count
                 FROM law_metadata 
@@ -191,7 +191,7 @@ class DatabaseAnalyzer:
             law_results = self.db_manager.execute_query(law_query)
             metadata_analysis["top_laws"] = [dict(row) for row in law_results]
             
-            # 판례 메타데이터 분석
+            # ?��? 메�??�이??분석
             precedent_query = """
                 SELECT court_name, COUNT(*) as count
                 FROM precedent_metadata 
@@ -204,16 +204,16 @@ class DatabaseAnalyzer:
             metadata_analysis["top_courts"] = [dict(row) for row in precedent_results]
             
         except Exception as e:
-            logger.warning(f"메타데이터 분석 실패: {e}")
+            logger.warning(f"메�??�이??분석 ?�패: {e}")
         
         return metadata_analysis
     
     def _extract_content_samples(self) -> Dict[str, List[str]]:
-        """콘텐츠 샘플 추출"""
+        """콘텐�??�플 추출"""
         content_samples = {}
         
         try:
-            # 각 문서 타입별 샘플 추출
+            # �?문서 ?�?�별 ?�플 추출
             sample_query = """
                 SELECT document_type, title, content
                 FROM documents 
@@ -234,12 +234,12 @@ class DatabaseAnalyzer:
                 })
             
         except Exception as e:
-            logger.warning(f"콘텐츠 샘플 추출 실패: {e}")
+            logger.warning(f"콘텐�??�플 추출 ?�패: {e}")
         
         return content_samples
     
     def _generate_analysis_summary(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """분석 요약 생성"""
+        """분석 ?�약 ?�성"""
         summary = {
             "has_data": analysis["total_documents"] > 0,
             "primary_data_types": [],
@@ -248,13 +248,13 @@ class DatabaseAnalyzer:
         }
         
         if analysis["total_documents"] > 0:
-            # 주요 데이터 타입 식별
+            # 주요 ?�이???�???�별
             doc_types = analysis["document_types"]
             if doc_types:
                 sorted_types = sorted(doc_types.items(), key=lambda x: x[1]["count"], reverse=True)
                 summary["primary_data_types"] = [doc_type for doc_type, _ in sorted_types[:3]]
             
-            # 추천 접근법 결정
+            # 추천 ?�근�?결정
             if "law" in doc_types and doc_types["law"]["count"] > 0:
                 summary["recommended_approach"] = "law_and_precedent_focused"
             elif "precedent" in doc_types and doc_types["precedent"]["count"] > 0:
@@ -262,30 +262,30 @@ class DatabaseAnalyzer:
             else:
                 summary["recommended_approach"] = "mixed_approach"
             
-            # 예상 Q&A 생성 가능 수
-            summary["estimated_qa_potential"] = analysis["total_documents"] * 2  # 문서당 평균 2개 Q&A
+            # ?�상 Q&A ?�성 가????
+            summary["estimated_qa_potential"] = analysis["total_documents"] * 2  # 문서???�균 2�?Q&A
         
         else:
             summary["recommended_approach"] = "template_based_generation"
-            summary["estimated_qa_potential"] = 200  # 템플릿 기반 생성 가능 수
+            summary["estimated_qa_potential"] = 200  # ?�플�?기반 ?�성 가????
         
         return summary
     
     def save_analysis_report(self, output_path: str = "logs/database_analysis_report.json"):
-        """분석 보고서 저장"""
+        """분석 보고???�??""
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(self.analysis_result, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"분석 보고서 저장 완료: {output_file}")
+        logger.info(f"분석 보고???�???�료: {output_file}")
         return str(output_file)
     
     def print_summary(self):
-        """분석 결과 요약 출력"""
+        """분석 결과 ?�약 출력"""
         if not self.analysis_result:
-            logger.warning("분석 결과가 없습니다.")
+            logger.warning("분석 결과가 ?�습?�다.")
             return
         
         summary = self.analysis_result.get("analysis_summary", {})
@@ -293,48 +293,48 @@ class DatabaseAnalyzer:
         doc_types = self.analysis_result.get("document_types", {})
         
         print("\n" + "="*60)
-        print("📊 데이터베이스 분석 결과 요약")
+        print("?�� ?�이?�베?�스 분석 결과 ?�약")
         print("="*60)
         
-        print(f"📁 데이터베이스 경로: {self.analysis_result.get('database_path', 'N/A')}")
-        print(f"📅 분석 시간: {self.analysis_result.get('analysis_timestamp', 'N/A')}")
-        print(f"📄 총 문서 수: {self.analysis_result.get('total_documents', 0)}개")
+        print(f"?�� ?�이?�베?�스 경로: {self.analysis_result.get('database_path', 'N/A')}")
+        print(f"?�� 분석 ?�간: {self.analysis_result.get('analysis_timestamp', 'N/A')}")
+        print(f"?�� �?문서 ?? {self.analysis_result.get('total_documents', 0)}�?)
         
-        print("\n📋 테이블별 데이터 수:")
+        print("\n?�� ?�이블별 ?�이????")
         for table, count in table_counts.items():
-            print(f"  - {table}: {count}개")
+            print(f"  - {table}: {count}�?)
         
-        print("\n📚 문서 타입별 분포:")
+        print("\n?�� 문서 ?�?�별 분포:")
         for doc_type, info in doc_types.items():
-            print(f"  - {doc_type}: {info['count']}개 ({info['percentage']}%)")
+            print(f"  - {doc_type}: {info['count']}�?({info['percentage']}%)")
         
-        print(f"\n🎯 추천 접근법: {summary.get('recommended_approach', 'N/A')}")
-        print(f"🔢 예상 Q&A 생성 가능 수: {summary.get('estimated_qa_potential', 0)}개")
+        print(f"\n?�� 추천 ?�근�? {summary.get('recommended_approach', 'N/A')}")
+        print(f"?�� ?�상 Q&A ?�성 가???? {summary.get('estimated_qa_potential', 0)}�?)
         
         if summary.get("primary_data_types"):
-            print(f"⭐ 주요 데이터 타입: {', '.join(summary['primary_data_types'])}")
+            print(f"�?주요 ?�이???�?? {', '.join(summary['primary_data_types'])}")
         
         print("="*60)
 
 
 def main():
-    """메인 실행 함수"""
-    logger.info("데이터베이스 분석 시작...")
+    """메인 ?�행 ?�수"""
+    logger.info("?�이?�베?�스 분석 ?�작...")
     
-    # 데이터베이스 분석기 초기화
+    # ?�이?�베?�스 분석�?초기??
     analyzer = DatabaseAnalyzer()
     
-    # 데이터베이스 내용 분석
+    # ?�이?�베?�스 ?�용 분석
     analysis_result = analyzer.analyze_database_content()
     
-    # 분석 보고서 저장
+    # 분석 보고???�??
     report_path = analyzer.save_analysis_report()
     
-    # 분석 결과 요약 출력
+    # 분석 결과 ?�약 출력
     analyzer.print_summary()
     
-    logger.info("데이터베이스 분석 완료!")
-    logger.info(f"상세 보고서: {report_path}")
+    logger.info("?�이?�베?�스 분석 ?�료!")
+    logger.info(f"?�세 보고?? {report_path}")
     
     return analysis_result
 

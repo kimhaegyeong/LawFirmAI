@@ -1,4 +1,4 @@
-# API 문서 (API Documentation)
+﻿# API 문서 (API Documentation)
 
 이 섹션은 LawFirmAI API 문서 및 외부 API 통합 가이드를 포함합니다.
 

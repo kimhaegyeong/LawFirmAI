@@ -555,13 +555,13 @@ if __name__ == "__main__":
             {
                 'law_name': '민법',
                 'quality_score': 0.8,
-                'articles': [{'article_number': '1', 'content': '민사 기본법'}],
+                'articles': [{'article_number': '1', 'content': '민사 기본�?}],
                 'processing_timestamp': '2025-01-01T00:00:00'
             },
             {
                 'law_name': '민법',
                 'quality_score': 0.6,
-                'articles': [{'article_number': '1', 'content': '민사 기본법'}],
+                'articles': [{'article_number': '1', 'content': '민사 기본�?}],
                 'processing_timestamp': '2025-01-02T00:00:00'
             }
         ]

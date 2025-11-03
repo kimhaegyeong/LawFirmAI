@@ -18,34 +18,34 @@ class ImprovedArticleParser:
     
     def __init__(self):
         """Initialize the improved parser with enhanced patterns"""
-        # Article patterns (조)
-        self.article_pattern = re.compile(r'제(\d+)조\s*\(([^)]+)\)')
-        self.article_pattern_no_title = re.compile(r'제(\d+)조')
+        # Article patterns (�?
+        self.article_pattern = re.compile(r'??\d+)�?s*\(([^)]+)\)')
+        self.article_pattern_no_title = re.compile(r'??\d+)�?)
         
-        # Paragraph patterns (항) - Korean legal format
+        # Paragraph patterns (?? - Korean legal format
         self.paragraph_patterns = {
-            'circle_numbers': re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]'),
-            'numbered': re.compile(r'(\d+)\s*항'),
-            'numbered_alt': re.compile(r'제(\d+)\s*항')
+            'circle_numbers': re.compile(r'[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]'),
+            'numbered': re.compile(r'(\d+)\s*??),
+            'numbered_alt': re.compile(r'??\d+)\s*??)
         }
         
-        # Sub-paragraph patterns (호) - Korean legal format
+        # Sub-paragraph patterns (?? - Korean legal format
         self.subparagraph_patterns = {
             'numbered': re.compile(r'(\d+)\s*\.'),
-            'numbered_alt': re.compile(r'제(\d+)\s*호')
+            'numbered_alt': re.compile(r'??\d+)\s*??)
         }
         
-        # Item patterns (목) - Korean legal format
+        # Item patterns (�? - Korean legal format
         self.item_patterns = {
-            'lettered': re.compile(r'([가-힣])\s*\.'),
-            'lettered_alt': re.compile(r'제([가-힣])\s*목')
+            'lettered': re.compile(r'([가-??)\s*\.'),
+            'lettered_alt': re.compile(r'??[가-??)\s*�?)
         }
         
         # Supplementary provisions patterns
         self.supplementary_patterns = {
-            'supplementary_start': re.compile(r'부칙\s*<([^>]+)>'),
-            'supplementary_article': re.compile(r'제(\d+)조\s*\(([^)]+)\)'),
-            'enforcement_date': re.compile(r'이\s*(?:규칙|영|법)\s*은\s*([^부터]+부터)?\s*시행한다'),
+            'supplementary_start': re.compile(r'부�?s*<([^>]+)>'),
+            'supplementary_article': re.compile(r'??\d+)�?s*\(([^)]+)\)'),
+            'enforcement_date': re.compile(r'??s*(?:규칙|??�?\s*?�\s*([^부??+부???\s*?�행?�다'),
             'amendment_info': re.compile(r'<([^>]+)>')
         }
         
@@ -158,7 +158,7 @@ class ImprovedArticleParser:
             Tuple[str, str]: (main_content, supplementary_content)
         """
         # Find supplementary provisions start
-        supplementary_match = re.search(r'부칙', content)
+        supplementary_match = re.search(r'부�?, content)
         
         if supplementary_match:
             main_content = content[:supplementary_match.start()].strip()
@@ -183,7 +183,7 @@ class ImprovedArticleParser:
         
         # First, identify article boundaries BEFORE cleaning control characters
         # This preserves the natural structure of the law text
-        article_pattern = re.compile(r'제(\d+(?:의\d+)?)조(?:\s*\(([^)]+)\))?')
+        article_pattern = re.compile(r'??\d+(?:??d+)?)�??:\s*\(([^)]+)\))?')
         
         # Find all article positions in the original content
         matches = list(article_pattern.finditer(content))
@@ -202,7 +202,7 @@ class ImprovedArticleParser:
         
         # Process valid matches
         for i, match in enumerate(valid_matches):
-            article_number = f"제{match.group(1)}조"
+            article_number = f"??match.group(1)}�?
             article_title = match.group(2) if match.group(2) else ""
             
             # Find the end of this article
@@ -235,19 +235,19 @@ class ImprovedArticleParser:
             article_start = match.start()
             article_number = int(match.group(1)) if match.group(1).isdigit() else 0
             
-            # 1. 위치 기반 필터링
+            # 1. ?�치 기반 ?�터�?
             if not self._is_at_article_boundary(content, article_start):
                 continue
                 
-            # 2. 문맥 기반 필터링
+            # 2. 문맥 기반 ?�터�?
             if not self._has_proper_context(content, article_start):
                 continue
                 
-            # 3. 순서 기반 필터링
+            # 3. ?�서 기반 ?�터�?
             if not self._follows_article_sequence(article_number, valid_matches):
                 continue
                 
-            # 4. 길이 기반 필터링
+            # 4. 길이 기반 ?�터�?
             if not self._has_reasonable_length(content, match):
                 continue
                 
@@ -256,24 +256,24 @@ class ImprovedArticleParser:
         return valid_matches
     
     def _is_at_article_boundary(self, content: str, position: int) -> bool:
-        """조문 경계에 위치하는지 확인"""
+        """조문 경계???�치?�는지 ?�인"""
         
         if position == 0:
             return True
             
-        # 이전 문자 확인
+        # ?�전 문자 ?�인
         prev_char = content[position - 1]
         
-        # 조문 경계 패턴 (완화된 버전)
+        # 조문 경계 ?�턴 (?�화??버전)
         boundary_patterns = [
-            '\n',           # 줄바꿈 후
-            '.',            # 마침표 후
-            '>',            # 개정 표시 후
-            ']',            # 각주 후
-            ' ',            # 공백 후 (완화)
+            '\n',           # 줄바�???
+            '.',            # 마침????
+            '>',            # 개정 ?�시 ??
+            ']',            # 각주 ??
+            ' ',            # 공백 ??(?�화)
         ]
         
-        # 추가: 마침표와 공백 조합도 허용
+        # 추�?: 마침?��? 공백 조합???�용
         if prev_char == ' ' and position > 1:
             prev_prev_char = content[position - 2]
             if prev_prev_char in '.>]':
@@ -282,66 +282,66 @@ class ImprovedArticleParser:
         return prev_char in boundary_patterns
     
     def _has_proper_context(self, content: str, position: int) -> bool:
-        """적절한 문맥을 가지고 있는지 확인 (완화된 버전)"""
+        """?�절??문맥??가지�??�는지 ?�인 (?�화??버전)"""
         
         context_start = max(0, position - 100)  # 문맥 범위 축소
         context = content[context_start:position]
         
-        # 문장 끝 패턴 확인
+        # 문장 ???�턴 ?�인
         sentence_endings = re.findall(r'[.!?]\s*$', context)
         
-        # 조문 참조 패턴 확인 (더 엄격한 패턴만)
+        # 조문 참조 ?�턴 ?�인 (???�격???�턴�?
         strict_reference_patterns = [
-            r'제\d+조에\s*따라.*?제\d+조',  # 연속된 조문 참조
-            r'제\d+조제\d+항.*?제\d+조',    # 항 번호와 조문 참조
+            r'??d+조에\s*?�라.*???d+�?,  # ?�속??조문 참조
+            r'??d+조제\d+??*???d+�?,    # ??번호?� 조문 참조
         ]
         
         for pattern in strict_reference_patterns:
             if re.search(pattern, context):
                 return False
         
-        # 문장 끝이 있거나 첫 번째 조문이면 허용
+        # 문장 ?�이 ?�거??�?번째 조문?�면 ?�용
         return len(sentence_endings) > 0 or position < 200
     
     def _follows_article_sequence(self, article_number: int, valid_matches: List) -> bool:
-        """조문 번호 순서를 따르는지 확인 (완화된 버전)"""
+        """조문 번호 ?�서�??�르?��? ?�인 (?�화??버전)"""
         
         if not valid_matches:
-            return True  # 첫 번째 조문은 항상 유효
+            return True  # �?번째 조문?� ??�� ?�효
         
-        # 마지막 유효한 조문 번호 확인
+        # 마�?�??�효??조문 번호 ?�인
         last_match = valid_matches[-1]
         last_number = int(last_match.group(1)) if last_match.group(1).isdigit() else 0
         
-        # 순서 검증 규칙 (완화)
+        # ?�서 검�?규칙 (?�화)
         if article_number == last_number + 1:
-            return True  # 연속된 번호
-        elif article_number > last_number + 5:  # 임계값 완화
-            return True  # 큰 점프 (부칙 등)
-        elif article_number == 1 and last_number > 5:  # 임계값 완화
-            return True  # 부칙에서 다시 제1조
-        elif article_number <= last_number + 3:  # 작은 점프도 허용
+            return True  # ?�속??번호
+        elif article_number > last_number + 5:  # ?�계�??�화
+            return True  # ???�프 (부�???
+        elif article_number == 1 and last_number > 5:  # ?�계�??�화
+            return True  # 부칙에???�시 ??�?
+        elif article_number <= last_number + 3:  # ?��? ?�프???�용
             return True
         else:
-            return False  # 순서에 맞지 않음
+            return False  # ?�서??맞�? ?�음
     
     def _has_reasonable_length(self, content: str, match) -> bool:
-        """조문이 합리적인 길이를 가지는지 확인"""
+        """조문???�리?�인 길이�?가지?��? ?�인"""
         
         article_start = match.start()
         article_end = match.end()
         
-        # 조문 헤더 길이 확인
+        # 조문 ?�더 길이 ?�인
         header_length = article_end - article_start
         
-        # 너무 짧거나 긴 헤더는 제외
+        # ?�무 짧거??�??�더???�외
         if header_length < 5 or header_length > 50:
             return False
         
         return True
     
     def _context_based_filtering(self, content: str, matches: List) -> List:
-        """문맥 기반 필터링으로 조문 참조와 실제 조문 구분"""
+        """문맥 기반 ?�터링으�?조문 참조?� ?�제 조문 구분"""
         valid_matches = []
         
         for i, match in enumerate(matches):
@@ -351,39 +351,39 @@ class ImprovedArticleParser:
             # 문맥 분석
             context_score = self._analyze_context(content, article_start, article_number)
             
-            # 점수가 임계값 이상이면 유효한 조문으로 판단 (조정된 임계값)
+            # ?�수가 ?�계�??�상?�면 ?�효??조문?�로 ?�단 (조정???�계�?
             if context_score >= 0.6:
                 valid_matches.append(match)
         
         return valid_matches
     
     def _analyze_context(self, content: str, position: int, article_number: str) -> float:
-        """조문의 문맥을 분석하여 실제 조문인지 점수로 판단"""
+        """조문??문맥??분석?�여 ?�제 조문?��? ?�수�??�단"""
         score = 0.0
         
-        # 1. 이전 문맥 분석
+        # 1. ?�전 문맥 분석
         context_before = content[max(0, position - 150):position]
         
-        # 2. 이후 문맥 분석
+        # 2. ?�후 문맥 분석
         context_after = content[position:min(len(content), position + 100)]
         
-        # 3. 문장 끝 패턴 확인 (가중치: 0.4)
+        # 3. 문장 ???�턴 ?�인 (가중치: 0.4)
         sentence_endings = re.findall(r'[.!?]\s*$', context_before)
         if sentence_endings:
             score += 0.4
         
-        # 4. 조문 제목 패턴 확인 (가중치: 0.3)
-        title_pattern = r'제\d+조\s*\([^)]+\)'
+        # 4. 조문 ?�목 ?�턴 ?�인 (가중치: 0.3)
+        title_pattern = r'??d+�?s*\([^)]+\)'
         if re.search(title_pattern, context_after):
             score += 0.3
         
-        # 5. 조문 참조 패턴 확인 (가중치: -0.5)
+        # 5. 조문 참조 ?�턴 ?�인 (가중치: -0.5)
         reference_patterns = [
-            r'제\d+조에\s*따라',
-            r'제\d+조제\d+항',
-            r'제\d+조의\d+',
-            r'제\d+조.*?에\s*의하여',
-            r'제\d+조.*?에\s*따라',
+            r'??d+조에\s*?�라',
+            r'??d+조제\d+??,
+            r'??d+조의\d+',
+            r'??d+�?*???s*?�하??,
+            r'??d+�?*???s*?�라',
         ]
         
         for pattern in reference_patterns:
@@ -391,31 +391,31 @@ class ImprovedArticleParser:
                 score -= 0.5
                 break
         
-        # 6. 위치 기반 점수 (가중치: 0.2)
-        if position < 200:  # 문서 시작 부분
+        # 6. ?�치 기반 ?�수 (가중치: 0.2)
+        if position < 200:  # 문서 ?�작 부�?
             score += 0.2
-        elif position > len(content) * 0.8:  # 문서 끝 부분 (부칙)
+        elif position > len(content) * 0.8:  # 문서 ??부�?(부�?
             score += 0.1
         
-        # 7. 조문 내용 길이 확인 (가중치: 0.1)
+        # 7. 조문 ?�용 길이 ?�인 (가중치: 0.1)
         next_article_pos = self._find_next_article_position(content, position)
         if next_article_pos:
             article_length = next_article_pos - position
-            if 50 <= article_length <= 2000:  # 합리적인 조문 길이
+            if 50 <= article_length <= 2000:  # ?�리?�인 조문 길이
                 score += 0.1
         
-        return max(0.0, min(1.0, score))  # 0-1 범위로 제한
+        return max(0.0, min(1.0, score))  # 0-1 범위�??�한
     
     def _find_next_article_position(self, content: str, current_pos: int) -> int:
-        """다음 조문의 위치를 찾기"""
+        """?�음 조문???�치�?찾기"""
         remaining_content = content[current_pos + 1:]
-        next_match = re.search(r'제\d+조', remaining_content)
+        next_match = re.search(r'??d+�?, remaining_content)
         if next_match:
             return current_pos + 1 + next_match.start()
         return None
     
     def _sequence_validation(self, matches: List) -> List:
-        """조문 번호 순서를 검증하여 논리적 순서 확인"""
+        """조문 번호 ?�서�?검증하???�리???�서 ?�인"""
         if not matches:
             return matches
         
@@ -425,12 +425,12 @@ class ImprovedArticleParser:
         for i, match in enumerate(matches):
             article_number = int(match.group(1)) if match.group(1).isdigit() else 0
             
-            # 순서 검증 로직
+            # ?�서 검�?로직
             if self._is_valid_sequence(article_number, expected_number, valid_matches):
                 valid_matches.append(match)
                 expected_number = article_number + 1
             else:
-                # 순서에 맞지 않는 경우, 특별한 경우인지 확인
+                # ?�서??맞�? ?�는 경우, ?�별??경우?��? ?�인
                 if self._is_special_case(article_number, valid_matches):
                     valid_matches.append(match)
                     expected_number = article_number + 1
@@ -438,56 +438,56 @@ class ImprovedArticleParser:
         return valid_matches
     
     def _is_valid_sequence(self, current_number: int, expected_number: int, valid_matches: List) -> bool:
-        """현재 조문 번호가 예상 순서에 맞는지 확인"""
+        """?�재 조문 번호가 ?�상 ?�서??맞는지 ?�인"""
         
-        # 첫 번째 조문
+        # �?번째 조문
         if not valid_matches:
             return current_number == 1
         
-        # 연속된 번호
+        # ?�속??번호
         if current_number == expected_number:
             return True
         
-        # 작은 점프 (1-3 범위)
+        # ?��? ?�프 (1-3 범위)
         if 1 <= current_number - expected_number <= 3:
             return True
         
-        # 큰 점프 (부칙 등)
+        # ???�프 (부�???
         if current_number - expected_number > 10:
             return True
         
-        # 부칙에서 다시 제1조
+        # 부칙에???�시 ??�?
         if current_number == 1 and expected_number > 10:
             return True
         
         return False
     
     def _is_special_case(self, article_number: int, valid_matches: List) -> bool:
-        """특별한 경우인지 확인 (예: 부칙, 삭제된 조문 등)"""
+        """?�별??경우?��? ?�인 (?? 부�? ??��??조문 ??"""
         
         if not valid_matches:
             return False
         
-        # 마지막 유효한 조문 번호 확인
+        # 마�?�??�효??조문 번호 ?�인
         last_match = valid_matches[-1]
         last_number = int(last_match.group(1)) if last_match.group(1).isdigit() else 0
         
-        # 부칙 패턴 확인
+        # 부�??�턴 ?�인
         if article_number == 1 and last_number > 10:
             return True
         
-        # 큰 점프 (부칙 등)
+        # ???�프 (부�???
         if article_number - last_number > 10:
             return True
         
-        # 조문의2, 조문의3 등
-        if '의' in str(article_number):
+        # 조문??, 조문?? ??
+        if '?? in str(article_number):
             return True
         
         return False
     
     def _hybrid_final_validation(self, content: str, matches: List) -> List:
-        """하이브리드 최종 검증 - 모든 방법을 통합한 최종 필터링"""
+        """?�이브리??최종 검�?- 모든 방법???�합??최종 ?�터�?""
         if not matches:
             return matches
         
@@ -497,59 +497,59 @@ class ImprovedArticleParser:
             article_start = match.start()
             article_number = int(match.group(1)) if match.group(1).isdigit() else 0
             
-            # 종합 점수 계산
+            # 종합 ?�수 계산
             total_score = self._calculate_comprehensive_score(content, match, valid_matches)
             
-            # 임계값 이상이면 유효한 조문으로 판단 (조정된 임계값)
-            if total_score >= 0.7:  # 조정된 임계값
+            # ?�계�??�상?�면 ?�효??조문?�로 ?�단 (조정???�계�?
+            if total_score >= 0.7:  # 조정???�계�?
                 valid_matches.append(match)
         
         return valid_matches
     
     def _calculate_comprehensive_score(self, content: str, match, valid_matches: List) -> float:
-        """종합 점수 계산 - 모든 검증 방법의 점수를 종합"""
+        """종합 ?�수 계산 - 모든 검�?방법???�수�?종합"""
         score = 0.0
         
         article_start = match.start()
         article_number = int(match.group(1)) if match.group(1).isdigit() else 0
         
-        # 1. 위치 기반 점수 (가중치: 0.2)
+        # 1. ?�치 기반 ?�수 (가중치: 0.2)
         if self._is_at_article_boundary(content, article_start):
             score += 0.2
         
-        # 2. 문맥 기반 점수 (가중치: 0.3)
+        # 2. 문맥 기반 ?�수 (가중치: 0.3)
         context_score = self._analyze_context(content, article_start, str(article_number))
         score += context_score * 0.3
         
-        # 3. 순서 기반 점수 (가중치: 0.2)
+        # 3. ?�서 기반 ?�수 (가중치: 0.2)
         if self._follows_article_sequence(article_number, valid_matches):
             score += 0.2
         
-        # 4. 길이 기반 점수 (가중치: 0.1)
+        # 4. 길이 기반 ?�수 (가중치: 0.1)
         if self._has_reasonable_length(content, match):
             score += 0.1
         
-        # 5. 조문 제목 유무 점수 (가중치: 0.1)
-        if match.group(2):  # 제목이 있으면
+        # 5. 조문 ?�목 ?�무 ?�수 (가중치: 0.1)
+        if match.group(2):  # ?�목???�으�?
             score += 0.1
         
-        # 6. 조문 내용 품질 점수 (가중치: 0.1)
+        # 6. 조문 ?�용 ?�질 ?�수 (가중치: 0.1)
         content_quality = self._assess_content_quality(content, match)
         score += content_quality * 0.1
         
         return max(0.0, min(1.0, score))
     
     def _assess_content_quality(self, content: str, match) -> float:
-        """조문 내용의 품질을 평가"""
+        """조문 ?�용???�질???��?"""
         article_start = match.start()
         article_end = match.end()
         
-        # 다음 조문까지의 내용 길이 확인
+        # ?�음 조문까�????�용 길이 ?�인
         next_article_pos = self._find_next_article_position(content, article_start)
         if next_article_pos:
             article_length = next_article_pos - article_start
             
-            # 합리적인 조문 길이 (100-1500자)
+            # ?�리?�인 조문 길이 (100-1500??
             if 100 <= article_length <= 1500:
                 return 1.0
             elif 50 <= article_length < 100 or 1500 < article_length <= 2000:
@@ -557,7 +557,7 @@ class ImprovedArticleParser:
             else:
                 return 0.0
         
-        return 0.5  # 다음 조문을 찾을 수 없는 경우
+        return 0.5  # ?�음 조문??찾을 ???�는 경우
     
     def _parse_supplementary_provisions(self, supplementary_content: str) -> List[Dict[str, Any]]:
         """
@@ -579,7 +579,7 @@ class ImprovedArticleParser:
         
         for i, match in enumerate(article_matches):
             # Use sequential numbering for supplementary articles to avoid conflicts
-            article_number = f"부칙제{i+1}조"
+            article_number = f"부칙제{i+1}�?
             article_title = match.group(2)
             
             # Find the end of this article
@@ -605,7 +605,7 @@ class ImprovedArticleParser:
         Parse a single article with proper structure analysis
         
         Args:
-            article_number (str): Article number (e.g., "제1조")
+            article_number (str): Article number (e.g., "??�?)
             article_title (str): Article title
             article_content (str): Article content
             is_supplementary (bool): Whether this is a supplementary provision
@@ -655,10 +655,10 @@ class ImprovedArticleParser:
         sub_articles = []
         
         # Enhanced pattern to catch paragraphs that start immediately after article title
-        # This handles cases like "제3조의2 ① 내용..." where paragraph starts right after article title
-        enhanced_paragraph_pattern = re.compile(r'([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])\s*([^①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]*)')
+        # This handles cases like "??조의2 ???�용..." where paragraph starts right after article title
+        enhanced_paragraph_pattern = re.compile(r'([?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳])\s*([^?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]*)')
         
-        # Parse paragraphs (항) - circle numbers with enhanced pattern
+        # Parse paragraphs (?? - circle numbers with enhanced pattern
         paragraph_matches = list(enhanced_paragraph_pattern.finditer(content))
         
         for i, match in enumerate(paragraph_matches):
@@ -678,7 +678,7 @@ class ImprovedArticleParser:
             sub_paragraphs = self._parse_sub_paragraphs(paragraph_content)
             
             sub_articles.append({
-                'type': '항',
+                'type': '??,
                 'number': paragraph_num,
                 'content': paragraph_content,
                 'position': start_pos,
@@ -693,7 +693,7 @@ class ImprovedArticleParser:
     
     def _parse_sub_paragraphs(self, paragraph_content: str) -> List[Dict[str, Any]]:
         """
-        Parse sub-paragraphs (호) within a paragraph
+        Parse sub-paragraphs (?? within a paragraph
         
         Args:
             paragraph_content (str): Paragraph content
@@ -722,7 +722,7 @@ class ImprovedArticleParser:
             items = self._parse_items(sub_paragraph_content)
             
             sub_paragraphs.append({
-                'type': '호',
+                'type': '??,
                 'number': sub_paragraph_num,
                 'content': sub_paragraph_content,
                 'position': start_pos,
@@ -733,7 +733,7 @@ class ImprovedArticleParser:
     
     def _parse_items(self, sub_paragraph_content: str) -> List[Dict[str, Any]]:
         """
-        Parse items (목) within a sub-paragraph
+        Parse items (�? within a sub-paragraph
         
         Args:
             sub_paragraph_content (str): Sub-paragraph content
@@ -743,7 +743,7 @@ class ImprovedArticleParser:
         """
         items = []
         
-        # Look for lettered items (가., 나., 다., etc.)
+        # Look for lettered items (가., ??, ??, etc.)
         lettered_matches = list(self.item_patterns['lettered'].finditer(sub_paragraph_content))
         
         for i, match in enumerate(lettered_matches):
@@ -759,7 +759,7 @@ class ImprovedArticleParser:
             item_content = sub_paragraph_content[start_pos:end_pos].strip()
             
             items.append({
-                'type': '목',
+                'type': '�?,
                 'number': item_letter,
                 'content': item_content,
                 'position': start_pos
@@ -795,7 +795,7 @@ class ImprovedArticleParser:
             item_content = content[start_pos:end_pos].strip()
             
             items.append({
-                'type': '호',
+                'type': '??,
                 'number': item_num,
                 'content': item_content,
                 'position': start_pos
@@ -806,10 +806,10 @@ class ImprovedArticleParser:
     def _get_circle_number_value(self, circle_char: str) -> str:
         """Convert circle number character to numeric value"""
         circle_to_number = {
-            '①': '1', '②': '2', '③': '3', '④': '4', '⑤': '5',
-            '⑥': '6', '⑦': '7', '⑧': '8', '⑨': '9', '⑩': '10',
-            '⑪': '11', '⑫': '12', '⑬': '13', '⑭': '14', '⑮': '15',
-            '⑯': '16', '⑰': '17', '⑱': '18', '⑲': '19', '⑳': '20'
+            '??: '1', '??: '2', '??: '3', '??: '4', '??: '5',
+            '??: '6', '??: '7', '??: '8', '??: '9', '??: '10',
+            '??: '11', '??: '12', '??: '13', '??: '14', '??: '15',
+            '??: '16', '??: '17', '??: '18', '??: '19', '??: '20'
         }
         return circle_to_number.get(circle_char, '1')
     
@@ -825,12 +825,12 @@ class ImprovedArticleParser:
         """
         references = []
         
-        # Pattern for law references (「법률명」)
-        law_pattern = re.compile(r'「([^」]+)」')
+        # Pattern for law references (?�법률명??
+        law_pattern = re.compile(r'??[^??+)??)
         matches = law_pattern.findall(content)
         
         for match in matches:
-            if '법' in match or '규칙' in match or '령' in match:
+            if '�? in match or '규칙' in match or '?? in match:
                 references.append(match)
         
         return list(set(references))  # Remove duplicates

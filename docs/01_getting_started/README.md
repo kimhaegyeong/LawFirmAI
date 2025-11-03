@@ -1,4 +1,4 @@
-# 시작하기 (Getting Started)
+﻿# 시작하기 (Getting Started)
 
 이 섹션은 LawFirmAI 프로젝트를 시작하는 데 필요한 정보를 제공합니다.
 

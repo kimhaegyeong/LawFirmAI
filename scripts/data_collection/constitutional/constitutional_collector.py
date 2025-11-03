@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-헌재결정례 수집기 클래스
+?�재결정례 ?�집�??�래??
 
-국가법령정보센터 LAW OPEN API를 사용하여 헌재결정례를 수집합니다.
-- 최근 5년간 헌재결정례 1,000건 수집
-- 헌법재판소 결정례의 상세 내용 수집
-- 결정유형별 분류 (위헌, 합헌, 각하, 기각 등)
-- 향상된 에러 처리, 성능 최적화, 모니터링 기능
+�??법령?�보?�터 LAW OPEN API�??�용?�여 ?�재결정례�??�집?�니??
+- 최근 5?�간 ?�재결정례 1,000�??�집
+- ?�법?�판??결정례???�세 ?�용 ?�집
+- 결정?�형�?분류 (?�헌, ?�헌, 각하, 기각 ??
+- ?�상???�러 처리, ?�능 최적?? 모니?�링 기능
 """
 
 import os
@@ -20,96 +20,96 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from source.data.law_open_api_client import LawOpenAPIClient, LawOpenAPIConfig
 
-# 헌법 관련 검색 키워드 (우선순위별)
+# ?�법 관??검???�워??(?�선?�위�?
 CONSTITUTIONAL_KEYWORDS = [
-    # 최고 우선순위 (각 100건)
-    "헌법소원", "위헌법률심판", "탄핵심판", "권한쟁의심판", "정당해산심판",
+    # 최고 ?�선?�위 (�?100�?
+    "?�법?�원", "?�헌법률?�판", "?�핵?�판", "권한?�의?�판", "?�당?�산?�판",
     
-    # 고우선순위 (각 50건)
-    "생명권", "신체의 자유", "사생활의 자유", "양심의 자유", "종교의 자유",
-    "언론의 자유", "출판의 자유", "집회의 자유", "결사의 자유", "재산권",
-    "직업선택의 자유", "거주이전의 자유", "참정권", "교육을 받을 권리",
-    "근로의 권리", "환경권", "보건권", "주거권", "문화를 향유할 권리",
+    # 고우?�순??(�?50�?
+    "?�명�?, "?�체???�유", "?�생?�의 ?�유", "?�심???�유", "종교???�유",
+    "?�론???�유", "출판???�유", "집회???�유", "결사???�유", "?�산�?,
+    "직업?�택???�유", "거주?�전???�유", "참정�?, "교육??받을 권리",
+    "근로??권리", "?�경�?, "보건�?, "주거�?, "문화�??�유??권리",
     
-    # 중우선순위 (각 30건)
-    "학문의 자유", "예술의 자유", "생존권", "근로3권", "복지를 받을 권리",
-    "법률에 의하지 아니하고는 처벌받지 아니할 권리", "무죄추정의 원칙",
-    "진술거부권", "변호인의 조력을 받을 권리", "신속한 재판을 받을 권리",
-    "공개재판을 받을 권리", "국회", "정부", "법원", "헌법재판소",
-    "선거관리위원회", "감사원", "대통령", "국무총리", "국무위원",
-    "국회의원", "대법원장", "헌법재판소장", "권리구제형 헌법소원",
-    "규범통제형 헌법소원", "헌법재판소의 관할", "기본권 제한", "법률유보",
-    "과잉금지의 원칙", "본질적 내용 침해 금지", "비례의 원칙",
-    "명확성의 원칙", "적정성의 원칙", "국가의 의무", "기본권 보장 의무",
-    "최소한의 생활 보장", "교육제도 확립", "근로조건의 기준", "환경보전",
-    "문화진흥", "복지증진"
+    # 중우?�순??(�?30�?
+    "?�문???�유", "?�술???�유", "?�존�?, "근로3�?, "복�?�?받을 권리",
+    "법률???�하지 ?�니?�고??처벌받�? ?�니??권리", "무죄추정???�칙",
+    "진술거�?�?, "변?�인??조력??받을 권리", "?�속???�판??받을 권리",
+    "공개?�판??받을 권리", "�?��", "?��?", "법원", "?�법?�판??,
+    "?�거관리위?�회", "감사??, "?�?�령", "�?��총리", "�?��?�원",
+    "�?��?�원", "?�법원??, "?�법?�판?�장", "권리구제???�법?�원",
+    "규범?�제???�법?�원", "?�법?�판?�의 관??, "기본�??�한", "법률?�보",
+    "과잉금�????�칙", "본질???�용 침해 금�?", "비�????�칙",
+    "명확?�의 ?�칙", "?�정?�의 ?�칙", "�?????�무", "기본�?보장 ?�무",
+    "최소?�의 ?�활 보장", "교육?�도 ?�립", "근로조건??기�?", "?�경보전",
+    "문화진흥", "복�?증진"
 ]
 
-# 결정유형 분류 키워드
+# 결정?�형 분류 ?�워??
 DECISION_TYPE_KEYWORDS = {
-    "위헌": ["위헌", "위헌결정", "헌법에 위반"],
-    "합헌": ["합헌", "합헌결정", "헌법에 합치"],
-    "각하": ["각하", "각하결정", "각하판결"],
-    "기각": ["기각", "기각결정", "기각판결"],
-    "인용": ["인용", "인용결정", "인용판결"],
-    "일부인용": ["일부인용", "일부인용결정"],
-    "일부기각": ["일부기각", "일부기각결정"]
+    "?�헌": ["?�헌", "?�헌결정", "?�법???�반"],
+    "?�헌": ["?�헌", "?�헌결정", "?�법???�치"],
+    "각하": ["각하", "각하결정", "각하?�결"],
+    "기각": ["기각", "기각결정", "기각?�결"],
+    "?�용": ["?�용", "?�용결정", "?�용?�결"],
+    "?��??�용": ["?��??�용", "?��??�용결정"],
+    "?��?기각": ["?��?기각", "?��?기각결정"]
 }
 
-# 키워드별 우선순위 및 목표 건수
+# ?�워?�별 ?�선?�위 �?목표 건수
 KEYWORD_PRIORITIES = {
-    # 최고 우선순위 (100건)
-    "헌법소원": 100, "위헌법률심판": 100, "탄핵심판": 100, 
-    "권한쟁의심판": 100, "정당해산심판": 100,
+    # 최고 ?�선?�위 (100�?
+    "?�법?�원": 100, "?�헌법률?�판": 100, "?�핵?�판": 100, 
+    "권한?�의?�판": 100, "?�당?�산?�판": 100,
     
-    # 고우선순위 (50건)
-    "생명권": 50, "신체의 자유": 50, "사생활의 자유": 50, "양심의 자유": 50,
-    "종교의 자유": 50, "언론의 자유": 50, "출판의 자유": 50, "집회의 자유": 50,
-    "결사의 자유": 50, "재산권": 50, "직업선택의 자유": 50, "거주이전의 자유": 50,
-    "참정권": 50, "교육을 받을 권리": 50, "근로의 권리": 50, "환경권": 50,
-    "보건권": 50, "주거권": 50, "문화를 향유할 권리": 50,
+    # 고우?�순??(50�?
+    "?�명�?: 50, "?�체???�유": 50, "?�생?�의 ?�유": 50, "?�심???�유": 50,
+    "종교???�유": 50, "?�론???�유": 50, "출판???�유": 50, "집회???�유": 50,
+    "결사???�유": 50, "?�산�?: 50, "직업?�택???�유": 50, "거주?�전???�유": 50,
+    "참정�?: 50, "교육??받을 권리": 50, "근로??권리": 50, "?�경�?: 50,
+    "보건�?: 50, "주거�?: 50, "문화�??�유??권리": 50,
     
-    # 중우선순위 (30건)
-    "학문의 자유": 30, "예술의 자유": 30, "생존권": 30, "근로3권": 30,
-    "복지를 받을 권리": 30, "법률에 의하지 아니하고는 처벌받지 아니할 권리": 30,
-    "무죄추정의 원칙": 30, "진술거부권": 30, "변호인의 조력을 받을 권리": 30,
-    "신속한 재판을 받을 권리": 30, "공개재판을 받을 권리": 30,
-    "국회": 30, "정부": 30, "법원": 30, "헌법재판소": 30,
-    "선거관리위원회": 30, "감사원": 30, "대통령": 30, "국무총리": 30,
-    "국무위원": 30, "국회의원": 30, "대법원장": 30, "헌법재판소장": 30,
-    "권리구제형 헌법소원": 30, "규범통제형 헌법소원": 30, "헌법재판소의 관할": 30,
-    "기본권 제한": 30, "법률유보": 30, "과잉금지의 원칙": 30,
-    "본질적 내용 침해 금지": 30, "비례의 원칙": 30, "명확성의 원칙": 30,
-    "적정성의 원칙": 30, "국가의 의무": 30, "기본권 보장 의무": 30,
-    "최소한의 생활 보장": 30, "교육제도 확립": 30, "근로조건의 기준": 30,
-    "환경보전": 30, "문화진흥": 30, "복지증진": 30
+    # 중우?�순??(30�?
+    "?�문???�유": 30, "?�술???�유": 30, "?�존�?: 30, "근로3�?: 30,
+    "복�?�?받을 권리": 30, "법률???�하지 ?�니?�고??처벌받�? ?�니??권리": 30,
+    "무죄추정???�칙": 30, "진술거�?�?: 30, "변?�인??조력??받을 권리": 30,
+    "?�속???�판??받을 권리": 30, "공개?�판??받을 권리": 30,
+    "�?��": 30, "?��?": 30, "법원": 30, "?�법?�판??: 30,
+    "?�거관리위?�회": 30, "감사??: 30, "?�?�령": 30, "�?��총리": 30,
+    "�?��?�원": 30, "�?��?�원": 30, "?�법원??: 30, "?�법?�판?�장": 30,
+    "권리구제???�법?�원": 30, "규범?�제???�법?�원": 30, "?�법?�판?�의 관??: 30,
+    "기본�??�한": 30, "법률?�보": 30, "과잉금�????�칙": 30,
+    "본질???�용 침해 금�?": 30, "비�????�칙": 30, "명확?�의 ?�칙": 30,
+    "?�정?�의 ?�칙": 30, "�?????�무": 30, "기본�?보장 ?�무": 30,
+    "최소?�의 ?�활 보장": 30, "교육?�도 ?�립": 30, "근로조건??기�?": 30,
+    "?�경보전": 30, "문화진흥": 30, "복�?증진": 30
 }
 
-# 기본 목표 건수 (우선순위가 없는 키워드)
+# 기본 목표 건수 (?�선?�위가 ?�는 ?�워??
 DEFAULT_TARGET_COUNT = 15
 
 
 class ConstitutionalDecisionCollector:
-    """헌재결정례 수집 클래스"""
+    """?�재결정례 ?�집 ?�래??""
     
     def __init__(self, config: LawOpenAPIConfig):
         self.client = LawOpenAPIClient(config)
         self.output_dir = Path("data/raw/constitutional_decisions")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 수집 상태 관리
-        self.collected_decisions = set()  # 중복 방지
+        # ?�집 ?�태 관�?
+        self.collected_decisions = set()  # 중복 방�?
         self.detailed_decisions = []
         self.current_batch = []
-        self.batch_size = 50  # 배치 크기
+        self.batch_size = 50  # 배치 ?�기
         
-        # 통계 정보
+        # ?�계 ?�보
         self.stats = {
             'start_time': datetime.now().isoformat(),
             'end_time': None,
@@ -125,7 +125,7 @@ class ConstitutionalDecisionCollector:
             'last_keyword_processed': None
         }
         
-        # Graceful shutdown 관련 변수
+        # Graceful shutdown 관??변??
         self.shutdown_requested = False
         self.checkpoint_file = None
         self.resume_info = {
@@ -134,42 +134,42 @@ class ConstitutionalDecisionCollector:
             'can_resume': False
         }
         
-        # 시그널 핸들러 등록
+        # ?�그???�들???�록
         self._setup_signal_handlers()
         
-        # 종료 시 정리 작업 등록
+        # 종료 ???�리 ?�업 ?�록
         atexit.register(self._cleanup_on_exit)
     
     def _setup_signal_handlers(self):
-        """시그널 핸들러 설정"""
+        """?�그???�들???�정"""
         def signal_handler(signum, frame):
             logger = logging.getLogger(__name__)
-            logger.info(f"시그널 {signum} 수신. Graceful shutdown 시작...")
+            logger.info(f"?�그??{signum} ?�신. Graceful shutdown ?�작...")
             self.shutdown_requested = True
         
         signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-        signal.signal(signal.SIGTERM, signal_handler)  # 종료 신호
+        signal.signal(signal.SIGTERM, signal_handler)  # 종료 ?�호
     
     def _cleanup_on_exit(self):
-        """프로그램 종료 시 정리 작업"""
+        """?�로그램 종료 ???�리 ?�업"""
         if self.detailed_decisions or self.current_batch:
             logger = logging.getLogger(__name__)
-            logger.info("수집된 데이터를 저장 중...")
+            logger.info("?�집???�이?��? ?�??�?..")
             self._save_checkpoint()
-            logger.info(f"총 {len(self.detailed_decisions)}건의 데이터가 저장되었습니다.")
+            logger.info(f"�?{len(self.detailed_decisions)}건의 ?�이?��? ?�?�되?�습?�다.")
     
     def _save_checkpoint(self):
-        """체크포인트 저장"""
+        """체크?�인???�??""
         if not self.checkpoint_file:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             self.checkpoint_file = self.output_dir / f"collection_checkpoint_{timestamp}.json"
         
-        # 현재 배치를 상세 데이터에 추가
+        # ?�재 배치�??�세 ?�이?�에 추�?
         if self.current_batch:
             self.detailed_decisions.extend(self.current_batch)
             self.current_batch = []
         
-        # 진행률 계산
+        # 진행�?계산
         if self.stats['total_keywords'] > 0:
             self.resume_info['progress_percentage'] = (
                 self.stats['keywords_processed'] / self.stats['total_keywords'] * 100
@@ -191,25 +191,25 @@ class ConstitutionalDecisionCollector:
             with open(self.checkpoint_file, 'w', encoding='utf-8') as f:
                 json.dump(checkpoint_data, f, ensure_ascii=False, indent=2)
             logger = logging.getLogger(__name__)
-            logger.debug(f"체크포인트 저장: {self.checkpoint_file}")
+            logger.debug(f"체크?�인???�?? {self.checkpoint_file}")
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"체크포인트 저장 실패: {e}")
+            logger.error(f"체크?�인???�???�패: {e}")
     
     def _load_checkpoint(self):
-        """체크포인트 로드"""
+        """체크?�인??로드"""
         checkpoint_files = list(self.output_dir.glob("collection_checkpoint_*.json"))
         if not checkpoint_files:
             return False
         
-        # 가장 최근 체크포인트 파일 로드
+        # 가??최근 체크?�인???�일 로드
         latest_checkpoint = max(checkpoint_files, key=lambda x: x.stat().st_mtime)
         
         try:
             with open(latest_checkpoint, 'r', encoding='utf-8') as f:
                 checkpoint_data = json.load(f)
             
-            # 상태 복원
+            # ?�태 복원
             self.stats = checkpoint_data.get('stats', self.stats)
             self.resume_info = checkpoint_data.get('resume_info', self.resume_info)
             self.detailed_decisions = checkpoint_data.get('detailed_decisions', [])
@@ -217,203 +217,203 @@ class ConstitutionalDecisionCollector:
             self.checkpoint_file = latest_checkpoint
             
             logger = logging.getLogger(__name__)
-            logger.info(f"체크포인트 로드 완료: {len(self.detailed_decisions)}건의 상세 데이터 복원")
+            logger.info(f"체크?�인??로드 ?�료: {len(self.detailed_decisions)}건의 ?�세 ?�이??복원")
             return True
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"체크포인트 로드 실패: {e}")
+            logger.error(f"체크?�인??로드 ?�패: {e}")
             return False
     
     def _check_shutdown(self):
-        """종료 요청 확인"""
+        """종료 ?�청 ?�인"""
         if self.shutdown_requested:
             logger = logging.getLogger(__name__)
-            logger.info("종료 요청이 감지되었습니다. 현재 작업을 완료한 후 종료합니다.")
+            logger.info("종료 ?�청??감�??�었?�니?? ?�재 ?�업???�료????종료?�니??")
             return True
         return False
     
     def collect_decisions_by_keyword(self, keyword: str, max_count: int = 50) -> List[Dict[str, Any]]:
-        """키워드로 헌재결정례 검색 및 수집"""
+        """?�워?�로 ?�재결정례 검??�??�집"""
         logger = logging.getLogger(__name__)
-        logger.info(f"키워드 '{keyword}'로 헌재결정례 검색 시작 (목표: {max_count}건)...")
+        logger.info(f"?�워??'{keyword}'�??�재결정례 검???�작 (목표: {max_count}�?...")
         
         decisions = []
         page = 1
         
         while len(decisions) < max_count:
-            # 종료 요청 확인
+            # 종료 ?�청 ?�인
             if self._check_shutdown():
                 break
                 
             try:
-                # 페이지별 진행률 표시
+                # ?�이지�?진행�??�시
                 page_progress = (page - 1) * 20
-                logger.info(f"📄 페이지 {page} 요청 중... (현재 수집: {len(decisions)}/{max_count}건, 진행률: {len(decisions)/max_count*100:.1f}%)")
+                logger.info(f"?�� ?�이지 {page} ?�청 �?.. (?�재 ?�집: {len(decisions)}/{max_count}�? 진행�? {len(decisions)/max_count*100:.1f}%)")
                 
-                # query가 있는 경우에만 검색, 없으면 전체 목록 조회 (선고일자 내림차순)
+                # query가 ?�는 경우?�만 검?? ?�으�??�체 목록 조회 (?�고?�자 ?�림차순)
                 if keyword and keyword.strip():
-                    logger.debug(f"🔍 키워드 '{keyword}'로 검색 요청 (선고일자 내림차순)")
+                    logger.debug(f"?�� ?�워??'{keyword}'�?검???�청 (?�고?�자 ?�림차순)")
                     results = self.client.get_constitutional_list(
                         query=keyword,
-                        display=20,  # 작은 배치 크기로 시작
+                        display=20,  # ?��? 배치 ?�기�??�작
                         page=page,
-                        search=1  # 선고일자 내림차순 정렬 (최신순)
+                        search=1  # ?�고?�자 ?�림차순 ?�렬 (최신??
                     )
                 else:
-                    logger.debug("📋 전체 목록 조회 요청 (선고일자 내림차순)")
+                    logger.debug("?�� ?�체 목록 조회 ?�청 (?�고?�자 ?�림차순)")
                     results = self.client.get_constitutional_list(
-                        display=20,  # 작은 배치 크기로 시작
+                        display=20,  # ?��? 배치 ?�기�??�작
                         page=page,
-                        search=1  # 선고일자 내림차순 정렬 (최신순)
+                        search=1  # ?�고?�자 ?�림차순 ?�렬 (최신??
                     )
                 
-                logger.info(f"📊 API 응답 결과: {len(results) if results else 0}건")
+                logger.info(f"?�� API ?�답 결과: {len(results) if results else 0}�?)
                 
                 if not results:
-                    logger.info("더 이상 결과가 없어서 검색을 중단합니다.")
+                    logger.info("???�상 결과가 ?�어??검?�을 중단?�니??")
                     break
                 
                 new_decisions = 0
                 for result in results:
-                    # 종료 요청 확인
+                    # 종료 ?�청 ?�인
                     if self._check_shutdown():
                         break
                         
-                    # 헌재결정례 ID 확인 (API 응답 구조에 따라)
-                    decision_id = result.get('헌재결정례일련번호') or result.get('ID') or result.get('id')
+                    # ?�재결정례 ID ?�인 (API ?�답 구조???�라)
+                    decision_id = result.get('?�재결정례?�련번호') or result.get('ID') or result.get('id')
                     if decision_id and decision_id not in self.collected_decisions:
                         decisions.append(result)
                         self.collected_decisions.add(decision_id)
                         self.stats['collected_count'] += 1
                         new_decisions += 1
                         
-                        logger.info(f"✅ 새로운 헌재결정례 수집: {result.get('사건명', 'Unknown')} (ID: {decision_id})")
-                        logger.info(f"   📈 현재 진행률: {len(decisions)}/{max_count}건 ({len(decisions)/max_count*100:.1f}%)")
+                        logger.info(f"???�로???�재결정례 ?�집: {result.get('?�건�?, 'Unknown')} (ID: {decision_id})")
+                        logger.info(f"   ?�� ?�재 진행�? {len(decisions)}/{max_count}�?({len(decisions)/max_count*100:.1f}%)")
                         
                         if len(decisions) >= max_count:
-                            logger.info(f"🎯 목표 수량 {max_count}건에 도달했습니다!")
+                            logger.info(f"?�� 목표 ?�량 {max_count}건에 ?�달?�습?�다!")
                             break
                     else:
                         self.stats['duplicate_count'] += 1
-                        logger.debug(f"중복된 헌재결정례 건너뛰기: {decision_id}")
+                        logger.debug(f"중복???�재결정례 건너?�기: {decision_id}")
                 
-                logger.info(f"📄 페이지 {page} 완료: {new_decisions}건의 새로운 결정례 수집")
-                logger.info(f"   📊 누적 수집: {len(decisions)}/{max_count}건 ({len(decisions)/max_count*100:.1f}%)")
+                logger.info(f"?�� ?�이지 {page} ?�료: {new_decisions}건의 ?�로??결정례 ?�집")
+                logger.info(f"   ?�� ?�적 ?�집: {len(decisions)}/{max_count}�?({len(decisions)/max_count*100:.1f}%)")
                 
                 page += 1
                 self.stats['api_requests_made'] += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 검색 중 오류: {e}")
+                logger.error(f"?�워??'{keyword}' 검??�??�류: {e}")
                 self.stats['api_errors'] += 1
                 break
         
-        logger.info(f"키워드 '{keyword}'로 총 {len(decisions)}건 수집 완료")
+        logger.info(f"?�워??'{keyword}'�?�?{len(decisions)}�??�집 ?�료")
         return decisions
     
     def collect_decisions_by_date_range(self, start_date: str, end_date: str, max_count: int = 1000) -> List[Dict[str, Any]]:
-        """날짜 범위로 헌재결정례 검색 및 수집"""
+        """?�짜 범위�??�재결정례 검??�??�집"""
         logger = logging.getLogger(__name__)
-        logger.info(f"📅 날짜 범위 {start_date} ~ {end_date}로 헌재결정례 검색 시작 (목표: {max_count:,}건)...")
+        logger.info(f"?�� ?�짜 범위 {start_date} ~ {end_date}�??�재결정례 검???�작 (목표: {max_count:,}�?...")
         
         decisions = []
         page = 1
-        total_pages_estimated = max_count // 100 + 1  # 대략적인 페이지 수 추정
+        total_pages_estimated = max_count // 100 + 1  # ?�?�적???�이지 ??추정
         
         while len(decisions) < max_count:
-            # 종료 요청 확인
+            # 종료 ?�청 ?�인
             if self._check_shutdown():
                 break
                 
             try:
-                # 페이지별 진행률 표시
+                # ?�이지�?진행�??�시
                 progress = (page - 1) / total_pages_estimated * 100 if total_pages_estimated > 0 else 0
-                logger.info(f"📄 페이지 {page} 요청 중... (현재 수집: {len(decisions):,}/{max_count:,}건, 진행률: {len(decisions)/max_count*100:.1f}%)")
+                logger.info(f"?�� ?�이지 {page} ?�청 �?.. (?�재 ?�집: {len(decisions):,}/{max_count:,}�? 진행�? {len(decisions)/max_count*100:.1f}%)")
                 
                 results = self.client.get_constitutional_list(
                     display=100,
                     page=page,
                     from_date=start_date,
                     to_date=end_date,
-                    search=1  # 사건명 검색
+                    search=1  # ?�건�?검??
                 )
                 
-                logger.info(f"📊 API 응답 결과: {len(results) if results else 0}건")
+                logger.info(f"?�� API ?�답 결과: {len(results) if results else 0}�?)
                 
                 if not results:
-                    logger.info("더 이상 결과가 없어서 검색을 중단합니다.")
+                    logger.info("???�상 결과가 ?�어??검?�을 중단?�니??")
                     break
                 
                 new_decisions = 0
                 for result in results:
-                    # 종료 요청 확인
+                    # 종료 ?�청 ?�인
                     if self._check_shutdown():
                         break
                         
-                    # 헌재결정례 ID 확인 (API 응답 구조에 따라)
-                    decision_id = result.get('헌재결정례일련번호') or result.get('ID') or result.get('id')
+                    # ?�재결정례 ID ?�인 (API ?�답 구조???�라)
+                    decision_id = result.get('?�재결정례?�련번호') or result.get('ID') or result.get('id')
                     if decision_id and decision_id not in self.collected_decisions:
                         decisions.append(result)
                         self.collected_decisions.add(decision_id)
                         self.stats['collected_count'] += 1
                         new_decisions += 1
                         
-                        # 5건마다 수집 현황 표시 (더 자주)
+                        # 5건마???�집 ?�황 ?�시 (???�주)
                         if len(decisions) % 5 == 0:
-                            logger.info(f"✅ {len(decisions):,}건 수집 완료 (진행률: {len(decisions)/max_count*100:.1f}%)")
+                            logger.info(f"??{len(decisions):,}�??�집 ?�료 (진행�? {len(decisions)/max_count*100:.1f}%)")
                         
                         if len(decisions) >= max_count:
-                            logger.info(f"🎯 목표 수량 {max_count:,}건에 도달했습니다!")
+                            logger.info(f"?�� 목표 ?�량 {max_count:,}건에 ?�달?�습?�다!")
                             break
                     else:
                         self.stats['duplicate_count'] += 1
                 
-                logger.info(f"📄 페이지 {page} 완료: {new_decisions}건의 새로운 결정례 수집")
-                logger.info(f"   📊 누적 수집: {len(decisions):,}/{max_count:,}건 ({len(decisions)/max_count*100:.1f}%)")
-                logger.info(f"   ⏱️  예상 남은 페이지: {max(0, (max_count - len(decisions)) // 100)}페이지")
+                logger.info(f"?�� ?�이지 {page} ?�료: {new_decisions}건의 ?�로??결정례 ?�집")
+                logger.info(f"   ?�� ?�적 ?�집: {len(decisions):,}/{max_count:,}�?({len(decisions)/max_count*100:.1f}%)")
+                logger.info(f"   ?�️  ?�상 ?��? ?�이지: {max(0, (max_count - len(decisions)) // 100)}?�이지")
                 
                 page += 1
                 self.stats['api_requests_made'] += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"날짜 범위 검색 중 오류: {e}")
+                logger.error(f"?�짜 범위 검??�??�류: {e}")
                 self.stats['api_errors'] += 1
                 break
         
         logger.info("=" * 60)
-        logger.info(f"📅 날짜 범위 수집 완료!")
-        logger.info(f"📊 최종 수집 결과: {len(decisions):,}건")
-        logger.info(f"📄 처리된 페이지: {page-1}페이지")
-        logger.info(f"🌐 API 요청 수: {self.stats['api_requests_made']:,}회")
-        logger.info(f"❌ 중복 제외: {self.stats['duplicate_count']:,}건")
+        logger.info(f"?�� ?�짜 범위 ?�집 ?�료!")
+        logger.info(f"?�� 최종 ?�집 결과: {len(decisions):,}�?)
+        logger.info(f"?�� 처리???�이지: {page-1}?�이지")
+        logger.info(f"?�� API ?�청 ?? {self.stats['api_requests_made']:,}??)
+        logger.info(f"??중복 ?�외: {self.stats['duplicate_count']:,}�?)
         logger.info("=" * 60)
         return decisions
     
     def collect_decision_details(self, decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """헌재결정례 상세 정보 수집"""
-        # 헌재결정례 ID 확인 (API 응답 구조에 따라)
-        decision_id = decision.get('헌재결정례일련번호') or decision.get('ID') or decision.get('id')
+        """?�재결정례 ?�세 ?�보 ?�집"""
+        # ?�재결정례 ID ?�인 (API ?�답 구조???�라)
+        decision_id = decision.get('?�재결정례?�련번호') or decision.get('ID') or decision.get('id')
         if not decision_id:
             logger = logging.getLogger(__name__)
-            logger.warning(f"헌재결정례 ID를 찾을 수 없습니다: {decision}")
+            logger.warning(f"?�재결정례 ID�?찾을 ???�습?�다: {decision}")
             return None
         
         try:
             detail = self.client.get_constitutional_detail(constitutional_id=decision_id)
             if detail:
-                # 기본 정보와 상세 정보 결합
+                # 기본 ?�보?� ?�세 ?�보 결합
                 combined_data = {
                     'basic_info': decision,
                     'detail_info': detail,
@@ -422,41 +422,41 @@ class ConstitutionalDecisionCollector:
                 return combined_data
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"헌재결정례 {decision_id} 상세 정보 수집 실패: {e}")
+            logger.error(f"?�재결정례 {decision_id} ?�세 ?�보 ?�집 ?�패: {e}")
             self.stats['api_errors'] += 1
         
         return None
     
     def classify_decision_type(self, decision: Dict[str, Any]) -> str:
-        """헌재결정례 유형 분류"""
-        case_name = decision.get('사건명', '').lower()
-        decision_text = decision.get('판시사항', '') + ' ' + decision.get('판결요지', '')
+        """?�재결정례 ?�형 분류"""
+        case_name = decision.get('?�건�?, '').lower()
+        decision_text = decision.get('?�시?�항', '') + ' ' + decision.get('?�결?��?', '')
         decision_text = decision_text.lower()
         
-        # 결정유형별 키워드 매칭
+        # 결정?�형�??�워??매칭
         for decision_type, keywords in DECISION_TYPE_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in case_name or keyword in decision_text:
                     return decision_type
         
         # 기본권별 분류
-        if any(keyword in case_name for keyword in ["생명권", "신체의 자유"]):
-            return "기본권_생명신체"
-        elif any(keyword in case_name for keyword in ["사생활", "양심", "종교"]):
-            return "기본권_사생활"
-        elif any(keyword in case_name for keyword in ["언론", "출판", "집회", "결사"]):
-            return "기본권_표현"
-        elif any(keyword in case_name for keyword in ["재산권", "직업선택"]):
-            return "기본권_경제"
-        elif any(keyword in case_name for keyword in ["교육", "근로", "환경"]):
-            return "기본권_사회"
-        elif any(keyword in case_name for keyword in ["헌법소원", "위헌법률"]):
-            return "헌법재판"
+        if any(keyword in case_name for keyword in ["?�명�?, "?�체???�유"]):
+            return "기본�??�명?�체"
+        elif any(keyword in case_name for keyword in ["?�생??, "?�심", "종교"]):
+            return "기본�??�생??
+        elif any(keyword in case_name for keyword in ["?�론", "출판", "집회", "결사"]):
+            return "기본�??�현"
+        elif any(keyword in case_name for keyword in ["?�산�?, "직업?�택"]):
+            return "기본�?경제"
+        elif any(keyword in case_name for keyword in ["교육", "근로", "?�경"]):
+            return "기본�??�회"
+        elif any(keyword in case_name for keyword in ["?�법?�원", "?�헌법률"]):
+            return "?�법?�판"
         else:
-            return "기타"
+            return "기�?"
     
     def save_batch_data(self, batch_data: List[Dict[str, Any]], category: str):
-        """배치 데이터를 파일로 저장"""
+        """배치 ?�이?��? ?�일�??�??""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"batch_{category}_{timestamp}.json"
         filepath = self.output_dir / filename
@@ -475,63 +475,63 @@ class ConstitutionalDecisionCollector:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(batch_info, f, ensure_ascii=False, indent=2)
             logger = logging.getLogger(__name__)
-            logger.debug(f"배치 데이터 저장: {filepath}")
+            logger.debug(f"배치 ?�이???�?? {filepath}")
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"배치 데이터 저장 실패: {e}")
+            logger.error(f"배치 ?�이???�???�패: {e}")
     
     def collect_all_decisions(self, target_count: int = 1000, resume: bool = True, keyword_mode: bool = True):
-        """모든 헌재결정례 수집"""
+        """모든 ?�재결정례 ?�집"""
         logger = logging.getLogger(__name__)
         logger.info("=" * 60)
-        logger.info(f"🚀 헌재결정례 수집 시작!")
-        logger.info(f"🎯 목표 수량: {target_count:,}건")
+        logger.info(f"?? ?�재결정례 ?�집 ?�작!")
+        logger.info(f"?�� 목표 ?�량: {target_count:,}�?)
         if keyword_mode:
-            logger.info(f"📝 검색 방식: 키워드 기반 ({len(CONSTITUTIONAL_KEYWORDS)}개 키워드)")
+            logger.info(f"?�� 검??방식: ?�워??기반 ({len(CONSTITUTIONAL_KEYWORDS)}�??�워??")
         else:
-            logger.info(f"📝 검색 방식: 전체 데이터 수집 (키워드 무관)")
-        logger.info(f"⏰ 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"?�� 검??방식: ?�체 ?�이???�집 (?�워??무�?)")
+        logger.info(f"???�작 ?�간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
         
         self.stats['target_count'] = target_count
         
-        # 기존 체크포인트 복원
+        # 기존 체크?�인??복원
         if resume:
             if self._load_checkpoint():
-                logger.info(f"기존 진행 상황 복원: {len(self.detailed_decisions)}건")
+                logger.info(f"기존 진행 ?�황 복원: {len(self.detailed_decisions)}�?)
                 self.resume_info['can_resume'] = True
         
         all_decisions = []
         
         if keyword_mode:
-            # 1. 우선순위 키워드별 검색
-            logger.info(f"총 {len(CONSTITUTIONAL_KEYWORDS)}개 키워드로 검색 시작")
+            # 1. ?�선?�위 ?�워?�별 검??
+            logger.info(f"�?{len(CONSTITUTIONAL_KEYWORDS)}�??�워?�로 검???�작")
             
             for i, keyword in enumerate(CONSTITUTIONAL_KEYWORDS):
-                # 이전에 완료된 키워드는 건너뛰기
+                # ?�전???�료???�워?�는 건너?�기
                 if resume and i < self.stats['keywords_processed']:
-                    logger.info(f"키워드 '{keyword}' 건너뛰기 (이미 처리됨)")
+                    logger.info(f"?�워??'{keyword}' 건너?�기 (?��? 처리??")
                     continue
                     
                 if len(all_decisions) >= target_count:
-                    logger.info(f"목표 수량 {target_count}건에 도달하여 키워드 검색을 중단합니다.")
+                    logger.info(f"목표 ?�량 {target_count}건에 ?�달?�여 ?�워??검?�을 중단?�니??")
                     break
                 
-                # 종료 요청 확인
+                # 종료 ?�청 ?�인
                 if self._check_shutdown():
                     break
                     
                 try:
-                    # 키워드별 목표 건수 설정
+                    # ?�워?�별 목표 건수 ?�정
                     max_count = KEYWORD_PRIORITIES.get(keyword, DEFAULT_TARGET_COUNT)
                     max_count = min(max_count, target_count - len(all_decisions))
                     
-                    # 진행률 계산
+                    # 진행�?계산
                     progress = (i + 1) / len(CONSTITUTIONAL_KEYWORDS) * 100
                     remaining_keywords = len(CONSTITUTIONAL_KEYWORDS) - i - 1
                     
-                    logger.info(f"📊 진행률: {progress:.1f}% ({i+1}/{len(CONSTITUTIONAL_KEYWORDS)}) - 키워드 '{keyword}' 처리 시작")
-                    logger.info(f"🎯 목표: {max_count}건, 우선순위: {KEYWORD_PRIORITIES.get(keyword, '기본')}, 남은 키워드: {remaining_keywords}개")
+                    logger.info(f"?�� 진행�? {progress:.1f}% ({i+1}/{len(CONSTITUTIONAL_KEYWORDS)}) - ?�워??'{keyword}' 처리 ?�작")
+                    logger.info(f"?�� 목표: {max_count}�? ?�선?�위: {KEYWORD_PRIORITIES.get(keyword, '기본')}, ?��? ?�워?? {remaining_keywords}�?)
                     
                     decisions = self.collect_decisions_by_keyword(keyword, max_count)
                     all_decisions.extend(decisions)
@@ -539,43 +539,43 @@ class ConstitutionalDecisionCollector:
                     self.stats['keywords_processed'] += 1
                     self.stats['last_keyword_processed'] = keyword
                     
-                    # 상세한 완료 정보
+                    # ?�세???�료 ?�보
                     completion_rate = len(all_decisions) / target_count * 100 if target_count > 0 else 0
-                    logger.info(f"✅ 키워드 '{keyword}' 완료!")
-                    logger.info(f"   📈 수집: {len(decisions)}건 | 누적: {len(all_decisions)}건 | 목표 대비: {completion_rate:.1f}%")
-                    logger.info(f"   ⏱️  남은 키워드: {remaining_keywords}개")
+                    logger.info(f"???�워??'{keyword}' ?�료!")
+                    logger.info(f"   ?�� ?�집: {len(decisions)}�?| ?�적: {len(all_decisions)}�?| 목표 ?��? {completion_rate:.1f}%")
+                    logger.info(f"   ?�️  ?��? ?�워?? {remaining_keywords}�?)
                     
-                    # 진행 상황 저장 (10개 키워드마다)
+                    # 진행 ?�황 ?�??(10�??�워?�마??
                     if self.stats['keywords_processed'] % 10 == 0:
-                        logger.info("진행 상황을 체크포인트에 저장합니다.")
+                        logger.info("진행 ?�황??체크?�인?�에 ?�?�합?�다.")
                         self._save_checkpoint()
                     
-                    # API 요청 제한 확인
+                    # API ?�청 ?�한 ?�인
                     stats = self.client.get_request_stats()
                     if stats['remaining_requests'] < 100:
-                        logger.warning("API 요청 한도가 부족합니다.")
+                        logger.warning("API ?�청 ?�도가 부족합?�다.")
                         break
                         
                 except Exception as e:
-                    logger.error(f"키워드 '{keyword}' 검색 실패: {e}")
+                    logger.error(f"?�워??'{keyword}' 검???�패: {e}")
                     self.stats['api_errors'] += 1
                     continue
         else:
-            # 키워드 없이 전체 데이터 수집
-            logger.info("🔍 키워드 없이 전체 헌재결정례 수집 시작")
-            logger.info(f"📅 수집 기간: 최근 5년 (2020년 ~ 현재)")
-            logger.info(f"🎯 목표 수량: {target_count:,}건")
+            # ?�워???�이 ?�체 ?�이???�집
+            logger.info("?�� ?�워???�이 ?�체 ?�재결정례 ?�집 ?�작")
+            logger.info(f"?�� ?�집 기간: 최근 5??(2020??~ ?�재)")
+            logger.info(f"?�� 목표 ?�량: {target_count:,}�?)
             
-            # 최근 5년간 데이터 수집
+            # 최근 5?�간 ?�이???�집
             end_date = datetime.now().strftime('%Y%m%d')
             start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y%m%d')
             
-            logger.info(f"📊 수집 기간: {start_date} ~ {end_date}")
+            logger.info(f"?�� ?�집 기간: {start_date} ~ {end_date}")
             all_decisions = self.collect_decisions_by_date_range(
                 start_date, end_date, target_count
             )
         
-        # 2. 날짜 범위별 검색 (최근 5년) - 키워드 모드에서만
+        # 2. ?�짜 범위�?검??(최근 5?? - ?�워??모드?�서�?
         if keyword_mode and len(all_decisions) < target_count and not self._check_shutdown():
             end_date = datetime.now().strftime('%Y%m%d')
             start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y%m%d')
@@ -587,113 +587,113 @@ class ConstitutionalDecisionCollector:
             all_decisions.extend(date_decisions)
         
         logger.info("=" * 60)
-        logger.info(f"📋 1단계 완료: 총 {len(all_decisions)}건의 헌재결정례 목록 수집 완료")
+        logger.info(f"?�� 1?�계 ?�료: �?{len(all_decisions)}건의 ?�재결정례 목록 ?�집 ?�료")
         logger.info("=" * 60)
         
-        # 3. 각 헌재결정례의 상세 정보 수집
-        logger.info(f"🔍 2단계 시작: 상세 정보 수집 ({len(all_decisions)}건)")
+        # 3. �??�재결정례???�세 ?�보 ?�집
+        logger.info(f"?�� 2?�계 ?�작: ?�세 ?�보 ?�집 ({len(all_decisions)}�?")
         for i, decision in enumerate(all_decisions):
             if i >= target_count:
                 break
             
-            # 종료 요청 확인
+            # 종료 ?�청 ?�인
             if self._check_shutdown():
                 break
                 
             try:
                 detail = self.collect_decision_details(decision)
                 if detail:
-                    # 결정유형 분류
+                    # 결정?�형 분류
                     decision_type = self.classify_decision_type(decision)
                     detail['decision_type'] = decision_type
                     
                     self.current_batch.append(detail)
                     
-                    # 배치 크기에 도달하면 저장
+                    # 배치 ?�기???�달?�면 ?�??
                     if len(self.current_batch) >= self.batch_size:
                         self.save_batch_data(self.current_batch, f"constitutional_decisions_{i//self.batch_size}")
                         self.detailed_decisions.extend(self.current_batch)
                         self.current_batch = []
                 
-                # 진행률 로그 및 체크포인트 저장
-                if (i + 1) % 50 == 0:  # 50건마다 체크포인트 저장
+                # 진행�?로그 �?체크?�인???�??
+                if (i + 1) % 50 == 0:  # 50건마??체크?�인???�??
                     progress = (i + 1) / len(all_decisions) * 100
-                    logger.info(f"📊 상세 정보 수집 진행률: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
+                    logger.info(f"?�� ?�세 ?�보 ?�집 진행�? {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
                     self._save_checkpoint()
-                elif (i + 1) % 10 == 0:  # 10건마다 간단한 진행률 표시
+                elif (i + 1) % 10 == 0:  # 10건마??간단??진행�??�시
                     progress = (i + 1) / len(all_decisions) * 100
-                    logger.info(f"⏳ 상세 정보 수집 진행률: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
-                elif (i + 1) % 5 == 0:  # 5건마다 간단한 진행률 표시 (키워드 없이 수집 시)
+                    logger.info(f"???�세 ?�보 ?�집 진행�? {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
+                elif (i + 1) % 5 == 0:  # 5건마??간단??진행�??�시 (?�워???�이 ?�집 ??
                     progress = (i + 1) / len(all_decisions) * 100
-                    logger.info(f"🔍 상세 정보 수집: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
-                elif (i + 1) % 2 == 0:  # 2건마다 간단한 진행률 표시 (매우 자주)
+                    logger.info(f"?�� ?�세 ?�보 ?�집: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
+                elif (i + 1) % 2 == 0:  # 2건마??간단??진행�??�시 (매우 ?�주)
                     progress = (i + 1) / len(all_decisions) * 100
-                    logger.info(f"⚡ 상세 정보 수집: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
+                    logger.info(f"???�세 ?�보 ?�집: {i + 1:,}/{len(all_decisions):,} ({progress:.1f}%)")
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"헌재결정례 {i} 상세 정보 수집 실패: {e}")
+                logger.error(f"?�재결정례 {i} ?�세 ?�보 ?�집 ?�패: {e}")
                 self.stats['failed_count'] += 1
                 continue
         
-        # 마지막 배치 저장
+        # 마�?�?배치 ?�??
         if self.current_batch:
             self.save_batch_data(self.current_batch, f"constitutional_decisions_final")
             self.detailed_decisions.extend(self.current_batch)
             self.current_batch = []
         
-        # 종료 요청이 있었는지 확인
+        # 종료 ?�청???�었?��? ?�인
         if self._check_shutdown():
             logger.info("=" * 60)
-            logger.info("⚠️ 사용자 요청에 의해 수집이 중단되었습니다.")
-            logger.info(f"📊 현재까지 {len(self.detailed_decisions)}건의 상세 데이터가 수집되었습니다.")
+            logger.info("?�️ ?�용???�청???�해 ?�집??중단?�었?�니??")
+            logger.info(f"?�� ?�재까�? {len(self.detailed_decisions)}건의 ?�세 ?�이?��? ?�집?�었?�니??")
             logger.info("=" * 60)
             self.stats['status'] = 'interrupted'
         else:
             logger.info("=" * 60)
-            logger.info("🎉 헌재결정례 수집이 성공적으로 완료되었습니다!")
-            logger.info(f"📊 최종 수집 결과: {len(self.detailed_decisions)}건")
-            logger.info(f"⏰ 완료 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info("?�� ?�재결정례 ?�집???�공?�으�??�료?�었?�니??")
+            logger.info(f"?�� 최종 ?�집 결과: {len(self.detailed_decisions)}�?)
+            logger.info(f"???�료 ?�간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("=" * 60)
             self.stats['status'] = 'completed'
         
-        # 최종 통계 업데이트
+        # 최종 ?�계 ?�데?�트
         self.stats['end_time'] = datetime.now().isoformat()
         self.stats['collected_count'] = len(self.detailed_decisions)
         
-        # 4. 수집 결과 요약 생성
+        # 4. ?�집 결과 ?�약 ?�성
         self.generate_collection_summary()
         
-        # 완료 후 체크포인트 파일 정리
+        # ?�료 ??체크?�인???�일 ?�리
         self._cleanup_checkpoint_files()
     
     def _cleanup_checkpoint_files(self):
-        """체크포인트 파일 정리"""
+        """체크?�인???�일 ?�리"""
         try:
             if self.checkpoint_file and self.checkpoint_file.exists():
-                # 완료된 경우에만 체크포인트 파일 삭제
+                # ?�료??경우?�만 체크?�인???�일 ??��
                 if self.stats['status'] == 'completed':
                     self.checkpoint_file.unlink()
                     logger = logging.getLogger(__name__)
-                    logger.debug("완료 후 체크포인트 파일 삭제")
+                    logger.debug("?�료 ??체크?�인???�일 ??��")
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"체크포인트 파일 정리 실패: {e}")
+            logger.error(f"체크?�인???�일 ?�리 ?�패: {e}")
     
     def reset_collection(self):
-        """수집 상태 초기화"""
+        """?�집 ?�태 초기??""
         try:
-            # 체크포인트 파일들 삭제
+            # 체크?�인???�일????��
             checkpoint_files = list(self.output_dir.glob("collection_checkpoint_*.json"))
             for file_path in checkpoint_files:
                 file_path.unlink()
             
-            # 상태 초기화
+            # ?�태 초기??
             self.detailed_decisions = []
             self.current_batch = []
             self.collected_decisions = set()
@@ -718,13 +718,13 @@ class ConstitutionalDecisionCollector:
             }
             
             logger = logging.getLogger(__name__)
-            logger.info("수집 상태가 초기화되었습니다.")
+            logger.info("?�집 ?�태가 초기?�되?�습?�다.")
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"수집 상태 초기화 실패: {e}")
+            logger.error(f"?�집 ?�태 초기???�패: {e}")
     
     def get_collection_status(self):
-        """현재 수집 상태 반환"""
+        """?�재 ?�집 ?�태 반환"""
         return {
             'stats': self.stats,
             'resume_info': self.resume_info,
@@ -733,12 +733,12 @@ class ConstitutionalDecisionCollector:
         }
     
     def generate_collection_summary(self):
-        """수집 결과 요약 생성"""
-        # 결정유형별 통계
+        """?�집 결과 ?�약 ?�성"""
+        # 결정?�형�??�계
         decision_type_stats = {}
         
         for decision in self.detailed_decisions:
-            decision_type = decision.get('decision_type', '기타')
+            decision_type = decision.get('decision_type', '기�?')
             decision_type_stats[decision_type] = decision_type_stats.get(decision_type, 0) + 1
         
         summary = {
@@ -754,7 +754,7 @@ class ConstitutionalDecisionCollector:
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
             logger = logging.getLogger(__name__)
-            logger.info(f"수집 결과 요약 저장: {summary_file}")
+            logger.info(f"?�집 결과 ?�약 ?�?? {summary_file}")
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"수집 결과 요약 저장 실패: {e}")
+            logger.error(f"?�집 결과 ?�약 ?�???�패: {e}")

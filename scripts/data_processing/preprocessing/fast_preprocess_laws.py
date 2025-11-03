@@ -144,12 +144,12 @@ class FastLawPreprocessor:
             end_time = datetime.now()
             file_stats['processing_time'] = (end_time - start_time).total_seconds()
             
-            logger.info(f"[Worker] âœ… {input_file.name}: {file_stats['processed_laws']}/{file_stats['total_laws']} laws in {file_stats['processing_time']:.2f}s")
+            logger.info(f"[Worker] ??{input_file.name}: {file_stats['processed_laws']}/{file_stats['total_laws']} laws in {file_stats['processing_time']:.2f}s")
             
             return file_stats
             
         except Exception as e:
-            logger.error(f"[Worker] âŒ {input_file.name}: {str(e)}")
+            logger.error(f"[Worker] ??{input_file.name}: {str(e)}")
             return file_stats
     
     def preprocess_directory(self, input_dir: Path, output_dir: Path, max_workers: int = None) -> Dict[str, Any]:
@@ -170,10 +170,10 @@ class FastLawPreprocessor:
             if memory_gb < 8:
                 max_workers = min(max_workers, 6)
         
-        logger.info(f"ðŸš€ FAST PREPROCESSING STARTED")
-        logger.info(f"ðŸ“ Files: {len(json_files)}")
-        logger.info(f"âš¡ Workers: {max_workers}")
-        logger.info(f"ðŸ“¦ Batch size: {self.batch_size}")
+        logger.info(f"?? FAST PREPROCESSING STARTED")
+        logger.info(f"?“ Files: {len(json_files)}")
+        logger.info(f"??Workers: {max_workers}")
+        logger.info(f"?“¦ Batch size: {self.batch_size}")
         
         # Create output directory
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -211,7 +211,7 @@ class FastLawPreprocessor:
                     processed_laws += result['processed_laws']
                     
                 except Exception as e:
-                    logger.error(f"âŒ {file_path.name}: {str(e)}")
+                    logger.error(f"??{file_path.name}: {str(e)}")
         
         # Calculate statistics
         end_time = datetime.now()
@@ -235,17 +235,17 @@ class FastLawPreprocessor:
         
         # Print results
         logger.info("=" * 60)
-        logger.info("ðŸš€ FAST PREPROCESSING COMPLETED")
+        logger.info("?? FAST PREPROCESSING COMPLETED")
         logger.info("=" * 60)
-        logger.info(f"ðŸ“ Total files: {summary['total_files']}")
-        logger.info(f"âœ… Successful: {summary['successful_files']}")
-        logger.info(f"ðŸ“Š Success rate: {summary['success_rate']:.1f}%")
-        logger.info(f"ðŸ“œ Total laws: {summary['total_laws']}")
-        logger.info(f"âš¡ Processed laws: {summary['processed_laws']}")
-        logger.info(f"â±ï¸  Total time: {summary['total_time']:.2f} seconds")
-        logger.info(f"ðŸš€ Processing rate: {summary['processing_rate']:.2f} laws/second")
-        logger.info(f"ðŸ‘¥ Workers used: {summary['workers_used']}")
-        logger.info(f"ðŸ“¦ Batch size: {summary['batch_size']}")
+        logger.info(f"?“ Total files: {summary['total_files']}")
+        logger.info(f"??Successful: {summary['successful_files']}")
+        logger.info(f"?“Š Success rate: {summary['success_rate']:.1f}%")
+        logger.info(f"?“œ Total laws: {summary['total_laws']}")
+        logger.info(f"??Processed laws: {summary['processed_laws']}")
+        logger.info(f"?±ï¸  Total time: {summary['total_time']:.2f} seconds")
+        logger.info(f"?? Processing rate: {summary['processing_rate']:.2f} laws/second")
+        logger.info(f"?‘¥ Workers used: {summary['workers_used']}")
+        logger.info(f"?“¦ Batch size: {summary['batch_size']}")
         
         return summary
 
@@ -278,9 +278,9 @@ def main():
         logger.error(f"Input directory does not exist: {input_dir}")
         return
     
-    logger.info(f"ðŸš€ Starting FAST preprocessing")
-    logger.info(f"ðŸ“ Input: {input_dir}")
-    logger.info(f"ðŸ“ Output: {output_dir}")
+    logger.info(f"?? Starting FAST preprocessing")
+    logger.info(f"?“ Input: {input_dir}")
+    logger.info(f"?“ Output: {output_dir}")
     
     # Create fast preprocessor
     preprocessor = FastLawPreprocessor(batch_size=args.batch_size)
@@ -293,17 +293,17 @@ def main():
         )
         
         if summary['success']:
-            logger.info("ðŸŽ‰ Fast preprocessing completed successfully!")
+            logger.info("?Ž‰ Fast preprocessing completed successfully!")
             return 0
         else:
-            logger.error("âŒ Fast preprocessing failed!")
+            logger.error("??Fast preprocessing failed!")
             return 1
             
     except KeyboardInterrupt:
-        logger.info("âš ï¸ Processing interrupted by user")
+        logger.info("? ï¸ Processing interrupted by user")
         return 1
     except Exception as e:
-        logger.error(f"ðŸ’¥ Unexpected error: {str(e)}")
+        logger.error(f"?’¥ Unexpected error: {str(e)}")
         return 1
 
 

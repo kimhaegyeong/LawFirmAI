@@ -1,4 +1,4 @@
-# RAG 시스템 (RAG System)
+﻿# RAG 시스템 (RAG System)
 
 이 섹션은 LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) 시스템 아키텍처와 구현에 대한 문서를 포함합니다.
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-행정심판례 수집 스크립트
+?�정?�판례 ?�집 ?�크립트
 
-국가법령정보센터 LAW OPEN API를 사용하여 행정심판례를 수집합니다.
-- 최근 3년간 행정심판례 1,000건 수집
-- 심판 유형별 분류 및 메타데이터 정제
+�??법령?�보?�터 LAW OPEN API�??�용?�여 ?�정?�판례�??�집?�니??
+- 최근 3?�간 ?�정?�판례 1,000�??�집
+- ?�판 ?�형�?분류 �?메�??�이???�제
 """
 
 import os
@@ -16,13 +16,13 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from source.data.law_open_api_client import LawOpenAPIClient, LawOpenAPIConfig
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,79 +33,79 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 행정심판 관련 검색 키워드
+# ?�정?�판 관??검???�워??
 ADMINISTRATIVE_APPEAL_KEYWORDS = [
-    # 행정처분 관련
-    "행정처분", "허가", "인가", "신고", "신청", "이의신청", "취소처분", "정지처분",
-    "과태료", "과징금", "부과처분", "징계처분", "면허취소", "허가취소",
+    # ?�정처분 관??
+    "?�정처분", "?��?", "?��?", "?�고", "?�청", "?�의?�청", "취소처분", "?��?처분",
+    "과태�?, "과징�?, "부과처�?, "징계처분", "면허취소", "?��?취소",
     
-    # 국세 관련
-    "국세", "지방세", "세무조사", "가산세", "가산금", "체납처분", "압류처분",
-    "세무서", "국세청", "지방세청", "세무조정", "세무심사",
+    # �?�� 관??
+    "�?��", "지방세", "?�무조사", "가?�세", "가?�금", "체납처분", "?�류처분",
+    "?�무??, "�?���?, "지방세�?, "?�무조정", "?�무?�사",
     
-    # 건축 관련
-    "건축허가", "건축신고", "건축법", "건축물", "건축계획", "건축심의",
-    "용도변경", "증축", "개축", "재건축", "철거명령",
+    # 건축 관??
+    "건축?��?", "건축?�고", "건축�?, "건축�?, "건축계획", "건축?�의",
+    "?�도변�?, "증축", "개축", "?�건�?, "철거명령",
     
-    # 환경 관련
-    "환경영향평가", "환경오염", "대기오염", "수질오염", "소음진동", "악취",
-    "폐기물", "폐기물처리", "환경영향평가서", "환경영향평가심의",
+    # ?�경 관??
+    "?�경?�향?��?", "?�경?�염", "?�기오??, "?�질?�염", "?�음진동", "?�취",
+    "?�기�?, "?�기물처�?, "?�경?�향?��???, "?�경?�향?��??�의",
     
-    # 도시계획 관련
-    "도시계획", "도시계획시설", "도시계획사업", "도시계획변경", "도시계획결정",
-    "개발행위허가", "개발행위신고", "개발제한구역", "도시계획구역",
+    # ?�시계획 관??
+    "?�시계획", "?�시계획?�설", "?�시계획?�업", "?�시계획변�?, "?�시계획결정",
+    "개발?�위?��?", "개발?�위?�고", "개발?�한구역", "?�시계획구역",
     
-    # 교통 관련
-    "교통", "교통영향평가", "교통계획", "교통시설", "도로", "교량", "터널",
-    "교통사고", "교통위반", "교통정리", "교통신호",
+    # 교통 관??
+    "교통", "교통?�향?��?", "교통계획", "교통?�설", "?�로", "교량", "?�널",
+    "교통?�고", "교통?�반", "교통?�리", "교통?�호",
     
-    # 보건복지 관련
-    "보건", "복지", "의료", "의료기관", "의료기기", "의료인", "의료법",
-    "사회보장", "국민연금", "건강보험", "산업재해보상보험",
+    # 보건복�? 관??
+    "보건", "복�?", "?�료", "?�료기�?", "?�료기기", "?�료??, "?�료�?,
+    "?�회보장", "�???�금", "건강보험", "?�업?�해보상보험",
     
-    # 교육 관련
-    "교육", "학교", "교육기관", "교육법", "교육과정", "교육시설", "교육시설기준",
-    "사립학교", "사립학교법", "교육감", "교육위원회",
+    # 교육 관??
+    "교육", "?�교", "교육기�?", "교육�?, "교육과정", "교육?�설", "교육?�설기�?",
+    "?�립?�교", "?�립?�교�?, "교육�?, "교육?�원??,
     
-    # 노동 관련
-    "노동", "고용", "근로", "근로기준법", "산업안전보건법", "산업재해",
-    "노동조합", "단체교섭", "파업", "파견근로", "기간제근로",
+    # ?�동 관??
+    "?�동", "고용", "근로", "근로기�?�?, "?�업?�전보건�?, "?�업?�해",
+    "?�동조합", "?�체교섭", "?�업", "?�견근로", "기간?�근�?,
     
-    # 금융 관련
-    "금융", "금융감독", "금융기관", "금융상품", "금융거래", "금융투자",
-    "은행", "보험", "증권", "자본시장", "금융투자업법"
+    # 금융 관??
+    "금융", "금융감독", "금융기�?", "금융?�품", "금융거래", "금융?�자",
+    "?�??, "보험", "증권", "?�본?�장", "금융?�자?�법"
 ]
 
-# 심판 유형별 분류 키워드
+# ?�판 ?�형�?분류 ?�워??
 APPEAL_TYPE_KEYWORDS = {
-    "허가인가": ["허가", "인가", "면허", "등록", "신고"],
-    "처분취소": ["처분", "취소", "정지", "철회", "무효"],
-    "부과처분": ["부과", "과태료", "과징금", "가산세", "가산금"],
-    "징계처분": ["징계", "해임", "파면", "정직", "감봉"],
-    "세무처분": ["국세", "지방세", "세무조사", "체납처분", "압류"],
-    "건축처분": ["건축", "건축허가", "건축신고", "용도변경", "철거명령"],
-    "환경처분": ["환경", "환경영향평가", "환경오염", "폐기물", "소음진동"],
-    "도시계획": ["도시계획", "개발행위", "개발제한구역", "도시계획시설"],
-    "교통처분": ["교통", "교통영향평가", "교통사고", "교통위반", "교통정리"],
-    "보건복지": ["보건", "복지", "의료", "사회보장", "국민연금"],
-    "교육처분": ["교육", "학교", "교육기관", "사립학교", "교육법"],
-    "노동처분": ["노동", "고용", "근로", "산업재해", "노동조합"],
-    "금융처분": ["금융", "금융감독", "금융기관", "금융상품", "금융거래"]
+    "?��??��?": ["?��?", "?��?", "면허", "?�록", "?�고"],
+    "처분취소": ["처분", "취소", "?��?", "철회", "무효"],
+    "부과처�?: ["부�?, "과태�?, "과징�?, "가?�세", "가?�금"],
+    "징계처분": ["징계", "?�임", "?�면", "?�직", "감봉"],
+    "?�무처분": ["�?��", "지방세", "?�무조사", "체납처분", "?�류"],
+    "건축처분": ["건축", "건축?��?", "건축?�고", "?�도변�?, "철거명령"],
+    "?�경처분": ["?�경", "?�경?�향?��?", "?�경?�염", "?�기�?, "?�음진동"],
+    "?�시계획": ["?�시계획", "개발?�위", "개발?�한구역", "?�시계획?�설"],
+    "교통처분": ["교통", "교통?�향?��?", "교통?�고", "교통?�반", "교통?�리"],
+    "보건복�?": ["보건", "복�?", "?�료", "?�회보장", "�???�금"],
+    "교육처분": ["교육", "?�교", "교육기�?", "?�립?�교", "교육�?],
+    "?�동처분": ["?�동", "고용", "근로", "?�업?�해", "?�동조합"],
+    "금융처분": ["금융", "금융감독", "금융기�?", "금융?�품", "금융거래"]
 }
 
 
 class AdministrativeAppealCollector:
-    """행정심판례 수집 클래스"""
+    """?�정?�판례 ?�집 ?�래??""
     
     def __init__(self, config: LawOpenAPIConfig):
         self.client = LawOpenAPIClient(config)
         self.output_dir = Path("data/raw/administrative_appeals")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.collected_appeals = set()  # 중복 방지
+        self.collected_appeals = set()  # 중복 방�?
         
     def collect_appeals_by_keyword(self, keyword: str, max_count: int = 50) -> List[Dict[str, Any]]:
-        """키워드로 행정심판례 검색 및 수집"""
-        logger.info(f"키워드 '{keyword}'로 행정심판례 검색 시작...")
+        """?�워?�로 ?�정?�판례 검??�??�집"""
+        logger.info(f"?�워??'{keyword}'�??�정?�판례 검???�작...")
         
         appeals = []
         page = 1
@@ -122,7 +122,7 @@ class AdministrativeAppealCollector:
                     break
                 
                 for result in results:
-                    appeal_id = result.get('판례일련번호')
+                    appeal_id = result.get('?��??�련번호')
                     if appeal_id and appeal_id not in self.collected_appeals:
                         appeals.append(result)
                         self.collected_appeals.add(appeal_id)
@@ -132,22 +132,22 @@ class AdministrativeAppealCollector:
                 
                 page += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 검색 중 오류: {e}")
+                logger.error(f"?�워??'{keyword}' 검??�??�류: {e}")
                 break
         
-        logger.info(f"키워드 '{keyword}'로 {len(appeals)}건 수집")
+        logger.info(f"?�워??'{keyword}'�?{len(appeals)}�??�집")
         return appeals
     
     def collect_appeals_by_date_range(self, start_date: str, end_date: str, max_count: int = 1000) -> List[Dict[str, Any]]:
-        """날짜 범위로 행정심판례 검색 및 수집"""
-        logger.info(f"날짜 범위 {start_date} ~ {end_date}로 행정심판례 검색 시작...")
+        """?�짜 범위�??�정?�판례 검??�??�집"""
+        logger.info(f"?�짜 범위 {start_date} ~ {end_date}�??�정?�판례 검???�작...")
         
         appeals = []
         page = 1
@@ -165,7 +165,7 @@ class AdministrativeAppealCollector:
                     break
                 
                 for result in results:
-                    appeal_id = result.get('판례일련번호')
+                    appeal_id = result.get('?��??�련번호')
                     if appeal_id and appeal_id not in self.collected_appeals:
                         appeals.append(result)
                         self.collected_appeals.add(appeal_id)
@@ -175,29 +175,29 @@ class AdministrativeAppealCollector:
                 
                 page += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"날짜 범위 검색 중 오류: {e}")
+                logger.error(f"?�짜 범위 검??�??�류: {e}")
                 break
         
-        logger.info(f"날짜 범위로 {len(appeals)}건 수집")
+        logger.info(f"?�짜 범위�?{len(appeals)}�??�집")
         return appeals
     
     def collect_appeal_details(self, appeal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """행정심판례 상세 정보 수집"""
-        appeal_id = appeal.get('판례일련번호')
+        """?�정?�판례 ?�세 ?�보 ?�집"""
+        appeal_id = appeal.get('?��??�련번호')
         if not appeal_id:
             return None
         
         try:
             detail = self.client.get_administrative_appeal_detail(appeal_id=appeal_id)
             if detail:
-                # 기본 정보와 상세 정보 결합
+                # 기본 ?�보?� ?�세 ?�보 결합
                 combined_data = {
                     'basic_info': appeal,
                     'detail_info': detail,
@@ -205,42 +205,42 @@ class AdministrativeAppealCollector:
                 }
                 return combined_data
         except Exception as e:
-            logger.error(f"행정심판례 {appeal_id} 상세 정보 수집 실패: {e}")
+            logger.error(f"?�정?�판례 {appeal_id} ?�세 ?�보 ?�집 ?�패: {e}")
         
         return None
     
     def classify_appeal_type(self, appeal: Dict[str, Any]) -> str:
-        """행정심판례 유형 분류"""
-        case_name = appeal.get('사건명', '').lower()
-        case_content = appeal.get('판시사항', '') + ' ' + appeal.get('판결요지', '')
+        """?�정?�판례 ?�형 분류"""
+        case_name = appeal.get('?�건�?, '').lower()
+        case_content = appeal.get('?�시?�항', '') + ' ' + appeal.get('?�결?��?', '')
         case_content = case_content.lower()
         
-        # 심판 유형별 키워드 매칭
+        # ?�판 ?�형�??�워??매칭
         for appeal_type, keywords in APPEAL_TYPE_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in case_name or keyword in case_content:
                     return appeal_type
         
-        return "기타"
+        return "기�?"
     
     def save_appeal_data(self, appeal_data: Dict[str, Any], filename: str):
-        """행정심판례 데이터를 파일로 저장"""
+        """?�정?�판례 ?�이?��? ?�일�??�??""
         filepath = self.output_dir / filename
         
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(appeal_data, f, ensure_ascii=False, indent=2)
-            logger.debug(f"행정심판례 데이터 저장: {filepath}")
+            logger.debug(f"?�정?�판례 ?�이???�?? {filepath}")
         except Exception as e:
-            logger.error(f"행정심판례 데이터 저장 실패: {e}")
+            logger.error(f"?�정?�판례 ?�이???�???�패: {e}")
     
     def collect_all_appeals(self, target_count: int = 1000):
-        """모든 행정심판례 수집"""
-        logger.info(f"행정심판례 수집 시작 (목표: {target_count}건)...")
+        """모든 ?�정?�판례 ?�집"""
+        logger.info(f"?�정?�판례 ?�집 ?�작 (목표: {target_count}�?...")
         
         all_appeals = []
         
-        # 1. 키워드별 검색 (각 키워드당 최대 30건)
+        # 1. ?�워?�별 검??(�??�워?�당 최�? 30�?
         max_per_keyword = min(30, target_count // len(ADMINISTRATIVE_APPEAL_KEYWORDS))
         
         for i, keyword in enumerate(ADMINISTRATIVE_APPEAL_KEYWORDS):
@@ -250,19 +250,19 @@ class AdministrativeAppealCollector:
             try:
                 appeals = self.collect_appeals_by_keyword(keyword, max_per_keyword)
                 all_appeals.extend(appeals)
-                logger.info(f"키워드 '{keyword}' 완료. 누적: {len(all_appeals)}건")
+                logger.info(f"?�워??'{keyword}' ?�료. ?�적: {len(all_appeals)}�?)
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 100:
-                    logger.warning("API 요청 한도가 부족합니다.")
+                    logger.warning("API ?�청 ?�도가 부족합?�다.")
                     break
                     
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 검색 실패: {e}")
+                logger.error(f"?�워??'{keyword}' 검???�패: {e}")
                 continue
         
-        # 2. 날짜 범위별 검색 (최근 3년)
+        # 2. ?�짜 범위�?검??(최근 3??
         if len(all_appeals) < target_count:
             end_date = datetime.now().strftime('%Y%m%d')
             start_date = (datetime.now() - timedelta(days=3*365)).strftime('%Y%m%d')
@@ -273,9 +273,9 @@ class AdministrativeAppealCollector:
             )
             all_appeals.extend(date_appeals)
         
-        logger.info(f"총 {len(all_appeals)}건의 행정심판례 목록 수집 완료")
+        logger.info(f"�?{len(all_appeals)}건의 ?�정?�판례 목록 ?�집 ?�료")
         
-        # 3. 각 행정심판례의 상세 정보 수집
+        # 3. �??�정?�판례???�세 ?�보 ?�집
         detailed_appeals = []
         for i, appeal in enumerate(all_appeals):
             if i >= target_count:
@@ -284,43 +284,43 @@ class AdministrativeAppealCollector:
             try:
                 detail = self.collect_appeal_details(appeal)
                 if detail:
-                    # 심판 유형 분류
+                    # ?�판 ?�형 분류
                     appeal_type = self.classify_appeal_type(appeal)
                     detail['appeal_type'] = appeal_type
                     
                     detailed_appeals.append(detail)
                     
-                    # 개별 파일로 저장
-                    appeal_id = appeal.get('판례일련번호', f'unknown_{i}')
+                    # 개별 ?�일�??�??
+                    appeal_id = appeal.get('?��??�련번호', f'unknown_{i}')
                     filename = f"administrative_appeal_{appeal_id}_{datetime.now().strftime('%Y%m%d')}.json"
                     self.save_appeal_data(detail, filename)
                 
-                # 진행률 로그
+                # 진행�?로그
                 if (i + 1) % 100 == 0:
-                    logger.info(f"상세 정보 수집 진행률: {i + 1}/{len(all_appeals)}")
+                    logger.info(f"?�세 ?�보 ?�집 진행�? {i + 1}/{len(all_appeals)}")
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"행정심판례 {i} 상세 정보 수집 실패: {e}")
+                logger.error(f"?�정?�판례 {i} ?�세 ?�보 ?�집 ?�패: {e}")
                 continue
         
-        logger.info(f"행정심판례 상세 정보 수집 완료: {len(detailed_appeals)}건")
+        logger.info(f"?�정?�판례 ?�세 ?�보 ?�집 ?�료: {len(detailed_appeals)}�?)
         
-        # 수집 결과 요약 생성
+        # ?�집 결과 ?�약 ?�성
         self.generate_collection_summary(detailed_appeals)
     
     def generate_collection_summary(self, appeals: List[Dict[str, Any]]):
-        """수집 결과 요약 생성"""
-        # 심판 유형별 통계
+        """?�집 결과 ?�약 ?�성"""
+        # ?�판 ?�형�??�계
         appeal_type_stats = {}
         
         for appeal in appeals:
-            appeal_type = appeal.get('appeal_type', '기타')
+            appeal_type = appeal.get('appeal_type', '기�?')
             appeal_type_stats[appeal_type] = appeal_type_stats.get(appeal_type, 0) + 1
         
         summary = {
@@ -334,28 +334,28 @@ class AdministrativeAppealCollector:
         try:
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
-            logger.info(f"수집 결과 요약 저장: {summary_file}")
+            logger.info(f"?�집 결과 ?�약 ?�?? {summary_file}")
         except Exception as e:
-            logger.error(f"수집 결과 요약 저장 실패: {e}")
+            logger.error(f"?�집 결과 ?�약 ?�???�패: {e}")
 
 
 def main():
-    """메인 함수"""
-    # 환경변수 확인
+    """메인 ?�수"""
+    # ?�경변???�인
     oc = os.getenv("LAW_OPEN_API_OC")
     if not oc:
-        logger.error("LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
-        logger.info("사용법: LAW_OPEN_API_OC=your_email_id python collect_administrative_appeals.py")
+        logger.error("LAW_OPEN_API_OC ?�경변?��? ?�정?��? ?�았?�니??")
+        logger.info("?�용�? LAW_OPEN_API_OC=your_email_id python collect_administrative_appeals.py")
         return
     
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
-    # API 설정
+    # API ?�정
     config = LawOpenAPIConfig(oc=oc)
     
-    # 행정심판례 수집 실행
+    # ?�정?�판례 ?�집 ?�행
     collector = AdministrativeAppealCollector(config)
     collector.collect_all_appeals(target_count=1000)
 

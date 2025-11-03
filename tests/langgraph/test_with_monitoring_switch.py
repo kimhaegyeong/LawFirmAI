@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-LangGraph 모니터링 전환 테스트
-LangSmith와 Langfuse를 번갈아가며 사용하는 통합 테스트
+LangGraph 모니?�링 ?�환 ?�스??
+LangSmith?� Langfuse�?번갈?��?�??�용?�는 ?�합 ?�스??
 """
 
 import asyncio
@@ -10,11 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# .env 파일 로드
+# .env ?�일 로드
 try:
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=str(project_root / ".env"))
@@ -23,41 +23,41 @@ except ImportError:
 
 from tests.langgraph.monitoring_switch import MonitoringMode, MonitoringSwitch
 
-# WorkflowFactory는 선택적으로 import
+# WorkflowFactory???�택?�으�?import
 try:
     from tests.langgraph.fixtures.workflow_factory import WorkflowFactory
     WORKFLOW_FACTORY_AVAILABLE = True
 except ImportError as e:
     WORKFLOW_FACTORY_AVAILABLE = False
-    print(f"⚠ WorkflowFactory를 사용할 수 없습니다: {e}")
-    print("  langgraph 패키지가 설치되지 않았습니다.")
-    print("  워크플로우 테스트를 건너뜁니다.")
+    print(f"??WorkflowFactory�??�용?????�습?�다: {e}")
+    print("  langgraph ?�키지가 ?�치?��? ?�았?�니??")
+    print("  ?�크?�로???�스?��? 건너?�니??")
 
 
 class MonitoringSwitchTest:
-    """모니터링 전환 테스트 클래스"""
+    """모니?�링 ?�환 ?�스???�래??""
 
     def __init__(self):
         self.test_results: Dict[str, Dict[str, Any]] = {}
         self.test_queries = [
-            "계약서 작성 시 주의사항은 무엇인가요?",
-            "판례 검색을 도와주세요",
-            "법령 해설이 필요합니다"
+            "계약???�성 ??주의?�항?� 무엇?��???",
+            "?��? 검?�을 ?��?주세??,
+            "법령 ?�설???�요?�니??
         ]
 
     async def test_single_mode(self, mode: MonitoringMode, query: str) -> Dict[str, Any]:
         """
-        단일 모니터링 모드로 테스트 실행
+        ?�일 모니?�링 모드�??�스???�행
 
         Args:
-            mode: 모니터링 모드
-            query: 테스트 쿼리
+            mode: 모니?�링 모드
+            query: ?�스??쿼리
 
         Returns:
-            Dict: 테스트 결과
+            Dict: ?�스??결과
         """
         print(f"\n{'='*80}")
-        print(f"테스트 모드: {mode.value}")
+        print(f"?�스??모드: {mode.value}")
         print(f"쿼리: {query}")
         print(f"{'='*80}")
 
@@ -71,26 +71,26 @@ class MonitoringSwitchTest:
         }
 
         try:
-            # 모니터링 모드 설정
+            # 모니?�링 모드 ?�정
             with MonitoringSwitch.set_mode(mode):
-                # 워크플로우 서비스 생성
+                # ?�크?�로???�비???�성
                 if not WORKFLOW_FACTORY_AVAILABLE or not WorkflowFactory.is_available():
-                    result["error"] = "WorkflowFactory를 사용할 수 없습니다. langgraph 패키지를 설치하세요."
+                    result["error"] = "WorkflowFactory�??�용?????�습?�다. langgraph ?�키지�??�치?�세??"
                     result["success"] = False
-                    print(f"⚠ {result['error']}")
+                    print(f"??{result['error']}")
                     return result
 
                 service = WorkflowFactory.get_workflow(mode, force_recreate=True)
 
-                # 검증
+                # 검�?
                 verification = MonitoringSwitch.verify_mode(service, mode)
                 result["verification"] = verification
 
                 if verification.get("warnings"):
-                    print(f"⚠ 경고: {', '.join(verification['warnings'])}")
+                    print(f"??경고: {', '.join(verification['warnings'])}")
 
-                # 쿼리 실행
-                print(f"\n쿼리 실행 중...")
+                # 쿼리 ?�행
+                print(f"\n쿼리 ?�행 �?..")
                 response = await service.process_query(
                     query=query,
                     session_id=f"test_{mode.value}_{hash(query) % 10000}"
@@ -99,14 +99,14 @@ class MonitoringSwitchTest:
                 result["response"] = response
                 result["success"] = True
 
-                print(f"✅ 테스트 성공")
+                print(f"???�스???�공")
                 if response.get("answer"):
-                    print(f"답변 길이: {len(response.get('answer', ''))} 문자")
+                    print(f"?��? 길이: {len(response.get('answer', ''))} 문자")
 
         except Exception as e:
             result["error"] = str(e)
             result["success"] = False
-            print(f"❌ 테스트 실패: {e}")
+            print(f"???�스???�패: {e}")
             import traceback
             traceback.print_exc()
 
@@ -114,18 +114,18 @@ class MonitoringSwitchTest:
 
     async def test_switch_between_modes(self) -> Dict[str, List[Dict[str, Any]]]:
         """
-        여러 모니터링 모드 간 전환 테스트
+        ?�러 모니?�링 모드 �??�환 ?�스??
 
         Returns:
-            Dict: 각 모드별 테스트 결과
+            Dict: �?모드�??�스??결과
         """
         print("\n" + "="*80)
-        print("모니터링 모드 전환 테스트 시작")
+        print("모니?�링 모드 ?�환 ?�스???�작")
         print("="*80)
 
         results_by_mode: Dict[str, List[Dict[str, Any]]] = {}
 
-        # 테스트할 모드 목록
+        # ?�스?�할 모드 목록
         test_modes = [
             MonitoringMode.LANGSMITH,
             MonitoringMode.LANGFUSE,
@@ -137,17 +137,17 @@ class MonitoringSwitchTest:
             mode_results = []
 
             print(f"\n{'='*80}")
-            print(f"모니터링 모드: {mode.value.upper()}")
+            print(f"모니?�링 모드: {mode.value.upper()}")
             print(f"{'='*80}")
 
-            # 각 쿼리로 테스트
-            for query in self.test_queries[:1]:  # 첫 번째 쿼리만 빠른 테스트
+            # �?쿼리�??�스??
+            for query in self.test_queries[:1]:  # �?번째 쿼리�?빠른 ?�스??
                 result = await self.test_single_mode(mode, query)
                 mode_results.append(result)
 
             results_by_mode[mode.value] = mode_results
 
-            # 캐시 정리 (다음 모드를 위해)
+            # 캐시 ?�리 (?�음 모드�??�해)
             if WORKFLOW_FACTORY_AVAILABLE and WorkflowFactory.is_available():
                 WorkflowFactory.clear_cache(mode)
 
@@ -155,16 +155,16 @@ class MonitoringSwitchTest:
 
     async def test_sequential_switch(self, query: str) -> List[Dict[str, Any]]:
         """
-        순차적으로 모드를 전환하며 동일 쿼리 테스트
+        ?�차?�으�?모드�??�환?�며 ?�일 쿼리 ?�스??
 
         Args:
-            query: 테스트 쿼리
+            query: ?�스??쿼리
 
         Returns:
-            List: 각 모드별 테스트 결과
+            List: �?모드�??�스??결과
         """
         print(f"\n{'='*80}")
-        print("순차 모드 전환 테스트")
+        print("?�차 모드 ?�환 ?�스??)
         print(f"쿼리: {query}")
         print(f"{'='*80}")
 
@@ -175,16 +175,16 @@ class MonitoringSwitchTest:
             result = await self.test_single_mode(mode, query)
             results.append(result)
 
-            # 캐시 정리
+            # 캐시 ?�리
             if WORKFLOW_FACTORY_AVAILABLE and WorkflowFactory.is_available():
                 WorkflowFactory.clear_cache(mode)
 
         return results
 
     def print_results_summary(self, results: Dict[str, List[Dict[str, Any]]]):
-        """테스트 결과 요약 출력"""
+        """?�스??결과 ?�약 출력"""
         print("\n" + "="*80)
-        print("테스트 결과 요약")
+        print("?�스??결과 ?�약")
         print("="*80)
 
         for mode, mode_results in results.items():
@@ -192,37 +192,37 @@ class MonitoringSwitchTest:
             total_count = len(mode_results)
 
             print(f"\n{mode.upper()}:")
-            print(f"  성공: {success_count}/{total_count}")
+            print(f"  ?�공: {success_count}/{total_count}")
 
             for i, result in enumerate(mode_results, 1):
-                status = "✅" if result.get("success") else "❌"
-                print(f"  {status} 테스트 {i}: {result.get('query', 'N/A')[:50]}...")
+                status = "?? if result.get("success") else "??
+                print(f"  {status} ?�스??{i}: {result.get('query', 'N/A')[:50]}...")
                 if result.get("error"):
-                    print(f"     오류: {result['error']}")
+                    print(f"     ?�류: {result['error']}")
                 if result.get("verification", {}).get("warnings"):
                     for warning in result["verification"]["warnings"]:
-                        print(f"     ⚠ {warning}")
+                        print(f"     ??{warning}")
 
 
 async def main():
-    """메인 테스트 실행"""
+    """메인 ?�스???�행"""
     test_runner = MonitoringSwitchTest()
 
     print("\n" + "="*80)
-    print("LangGraph 모니터링 전환 테스트")
+    print("LangGraph 모니?�링 ?�환 ?�스??)
     print("="*80)
 
-    # 현재 환경변수 확인
+    # ?�재 ?�경변???�인
     current_mode = MonitoringSwitch.get_current_mode()
-    print(f"\n현재 모니터링 모드: {current_mode.value}")
+    print(f"\n?�재 모니?�링 모드: {current_mode.value}")
 
-    # 모드 전환 테스트 실행
+    # 모드 ?�환 ?�스???�행
     results = await test_runner.test_switch_between_modes()
 
-    # 결과 요약
+    # 결과 ?�약
     test_runner.print_results_summary(results)
 
-    # 성공률 계산
+    # ?�공�?계산
     total_tests = sum(len(mode_results) for mode_results in results.values())
     total_success = sum(
         sum(1 for r in mode_results if r.get("success"))
@@ -230,32 +230,32 @@ async def main():
     )
 
     print(f"\n{'='*80}")
-    print(f"전체 성공률: {total_success}/{total_tests} ({total_success/total_tests*100:.1f}%)")
+    print(f"?�체 ?�공�? {total_success}/{total_tests} ({total_success/total_tests*100:.1f}%)")
     print(f"{'='*80}\n")
 
     return results
 
 
 if __name__ == "__main__":
-    # 명령줄 인자 처리
+    # 명령�??�자 처리
     if len(sys.argv) > 1:
         mode_str = sys.argv[1].lower()
         try:
             mode = MonitoringMode.from_string(mode_str)
 
-            # 단일 모드 테스트
+            # ?�일 모드 ?�스??
             async def test_single():
                 test_runner = MonitoringSwitchTest()
                 query = test_runner.test_queries[0]
                 result = await test_runner.test_single_mode(mode, query)
-                print(f"\n테스트 완료: {result.get('success', False)}")
+                print(f"\n?�스???�료: {result.get('success', False)}")
                 return result
 
             asyncio.run(test_single())
         except ValueError:
-            print(f"알 수 없는 모니터링 모드: {mode_str}")
-            print(f"사용 가능한 모드: {[m.value for m in MonitoringMode]}")
+            print(f"?????�는 모니?�링 모드: {mode_str}")
+            print(f"?�용 가?�한 모드: {[m.value for m in MonitoringMode]}")
             sys.exit(1)
     else:
-        # 전체 테스트 실행
+        # ?�체 ?�스???�행
         asyncio.run(main())

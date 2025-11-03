@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-증분 판례 벡터 임베딩 생성기
+증분 ?��? 벡터 ?�베???�성�?
 
-새로 전처리된 판례 데이터로부터 증분 벡터 임베딩을 생성하는 시스템입니다.
-기존 FAISS 인덱스를 업데이트하여 새로운 판례 데이터를 추가합니다.
+?�로 ?�처리된 ?��? ?�이?�로부??증분 벡터 ?�베?�을 ?�성?�는 ?�스?�입?�다.
+기존 FAISS ?�덱?��? ?�데?�트?�여 ?�로???��? ?�이?��? 추�??�니??
 """
 
 import logging
@@ -17,7 +17,7 @@ from datetime import datetime
 import argparse
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -29,21 +29,21 @@ logger = logging.getLogger(__name__)
 
 
 class IncrementalPrecedentVectorBuilder:
-    """증분 판례 벡터 임베딩 생성기"""
+    """증분 ?��? 벡터 ?�베???�성�?""
     
     def __init__(self, model_name: str = "jhgan/ko-sroberta-multitask", 
                  dimension: int = 768, index_type: str = "flat",
                  processed_data_base_path: str = "data/processed/assembly",
                  embedding_output_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents"):
         """
-        증분 판례 벡터 빌더 초기화
+        증분 ?��? 벡터 빌더 초기??
         
         Args:
-            model_name: 사용할 Sentence-BERT 모델명
+            model_name: ?�용??Sentence-BERT 모델�?
             dimension: 벡터 차원
-            index_type: FAISS 인덱스 타입
-            processed_data_base_path: 전처리된 데이터가 저장된 기본 디렉토리
-            embedding_output_path: 임베딩 및 FAISS 인덱스 저장 경로
+            index_type: FAISS ?�덱???�??
+            processed_data_base_path: ?�처리된 ?�이?��? ?�?�된 기본 ?�렉?�리
+            embedding_output_path: ?�베??�?FAISS ?�덱???�??경로
         """
         self.model_name = model_name
         self.dimension = dimension
@@ -60,7 +60,7 @@ class IncrementalPrecedentVectorBuilder:
         self.db_manager = DatabaseManager()
         self.auto_detector = AutoDataDetector()
         
-        # 기존 FAISS 인덱스 로드 시도
+        # 기존 FAISS ?�덱??로드 ?�도
         self.vector_store.load_index(self.embedding_output_path)
         
         self.stats = {
@@ -79,30 +79,30 @@ class IncrementalPrecedentVectorBuilder:
 
     def build_incremental_embeddings(self, category: str = "civil", batch_size: int = 100) -> Dict[str, Any]:
         """
-        새로 전처리된 판례 데이터로부터 증분 벡터 임베딩 생성
+        ?�로 ?�처리된 ?��? ?�이?�로부??증분 벡터 ?�베???�성
         
         Args:
-            category: 임베딩할 특정 카테고리 (civil, criminal, family)
-            batch_size: 임베딩 배치 처리 크기
+            category: ?�베?�할 ?�정 카테고리 (civil, criminal, family)
+            batch_size: ?�베??배치 처리 ?�기
             
         Returns:
-            Dict[str, Any]: 처리 결과 통계
+            Dict[str, Any]: 처리 결과 ?�계
         """
         logger.info(f"Starting incremental precedent vector embedding for category: {category}")
         start_time = datetime.now()
         
-        # 데이터 타입 결정
+        # ?�이???�??결정
         data_type = f"precedent_{category}"
         
-        # 데이터베이스에서 'completed' 상태의 전처리된 파일 목록 가져오기
+        # ?�이?�베?�스?�서 'completed' ?�태???�처리된 ?�일 목록 가?�오�?
         processed_files_info = self.db_manager.get_processed_files_by_type(data_type, status="completed")
         
         files_to_embed = []
         for file_info in processed_files_info:
             processed_file_path = Path(file_info['file_path'])
             
-            # 원본 raw 파일 경로를 기반으로 ml_enhanced_*.json 파일 경로 추론
-            # 예: data/raw/assembly/precedent/20251016/civil/precedent_civil_page_001_...json
+            # ?�본 raw ?�일 경로�?기반?�로 ml_enhanced_*.json ?�일 경로 추론
+            # ?? data/raw/assembly/precedent/20251016/civil/precedent_civil_page_001_...json
             # -> data/processed/assembly/precedent/civil/20251016/ml_enhanced_precedent_civil_page_001_...json
             relative_path = processed_file_path.relative_to(self.auto_detector.raw_data_base_path / "precedent")
             ml_enhanced_file_name = f"ml_enhanced_{processed_file_path.stem}.json"
@@ -112,7 +112,7 @@ class IncrementalPrecedentVectorBuilder:
                 logger.warning(f"ML enhanced file not found for {processed_file_path}. Skipping.")
                 continue
             
-            # 이미 임베딩된 파일인지 확인
+            # ?��? ?�베?�된 ?�일?��? ?�인
             file_status = self.db_manager.get_file_processing_status(str(processed_file_path))
             if file_status and file_status['processing_status'] == 'embedded':
                 self.stats['skipped_already_embedded'] += 1
@@ -137,7 +137,7 @@ class IncrementalPrecedentVectorBuilder:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     file_data = json.load(f)
                 
-                # LegalVectorStore의 add_documents 메서드에 맞는 형식으로 변환
+                # LegalVectorStore??add_documents 메서?�에 맞는 ?�식?�로 변??
                 cases_data = file_data.get('cases', [file_data]) if isinstance(file_data, dict) else file_data
                 
                 for case_data in cases_data:
@@ -145,7 +145,7 @@ class IncrementalPrecedentVectorBuilder:
                     case_name = case_data.get('case_name')
                     category = case_data.get('category')
                     
-                    # 케이스 전체 텍스트를 청크로 추가
+                    # 케?�스 ?�체 ?�스?��? �?���?추�?
                     full_text = case_data.get('full_text', '')
                     if full_text:
                         chunk_id = f"{case_id}_full"
@@ -159,7 +159,7 @@ class IncrementalPrecedentVectorBuilder:
                         all_documents_to_add.append((chunk_id, full_text, metadata))
                         self.stats['total_chunks_added'] += 1
                     
-                    # 섹션별로 청크 추가
+                    # ?�션별로 �?�� 추�?
                     sections = case_data.get('sections', [])
                     for section in sections:
                         if section.get('has_content') and section.get('section_content'):
@@ -177,7 +177,7 @@ class IncrementalPrecedentVectorBuilder:
                             all_documents_to_add.append((section_id, content, metadata))
                             self.stats['total_chunks_added'] += 1
                 
-                # 원본 raw 파일 경로를 'embedded' 상태로 업데이트
+                # ?�본 raw ?�일 경로�?'embedded' ?�태�??�데?�트
                 original_raw_file_path = self._get_original_raw_file_path(file_path)
                 if original_raw_file_path:
                     self.db_manager.update_file_processing_status(original_raw_file_path, "embedded")
@@ -195,11 +195,11 @@ class IncrementalPrecedentVectorBuilder:
         if all_documents_to_add:
             logger.info(f"Adding {len(all_documents_to_add)} precedent document chunks to vector store...")
             
-            # 배치 처리로 문서 추가
+            # 배치 처리�?문서 추�?
             texts = [doc[1] for doc in all_documents_to_add]  # content
             metadatas = [doc[2] for doc in all_documents_to_add]  # metadata
             
-            # 배치 크기로 나누어 처리
+            # 배치 ?�기�??�누??처리
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i + batch_size]
                 batch_metadatas = metadatas[i:i + batch_size]
@@ -218,8 +218,8 @@ class IncrementalPrecedentVectorBuilder:
         return self.stats
 
     def _get_original_raw_file_path(self, ml_enhanced_file_path: Path) -> Optional[str]:
-        """ML enhanced 파일 경로로부터 원본 raw 파일 경로를 추론"""
-        # 예: data/processed/assembly/precedent/civil/20251016/ml_enhanced_precedent_civil_page_001_...json
+        """ML enhanced ?�일 경로로�????�본 raw ?�일 경로�?추론"""
+        # ?? data/processed/assembly/precedent/civil/20251016/ml_enhanced_precedent_civil_page_001_...json
         # -> data/raw/assembly/precedent/20251016/civil/precedent_civil_page_001_...json
         try:
             relative_path_from_processed = ml_enhanced_file_path.relative_to(self.processed_data_base_path)
@@ -242,26 +242,26 @@ class IncrementalPrecedentVectorBuilder:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description="증분 판례 벡터 임베딩 생성기")
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description="증분 ?��? 벡터 ?�베???�성�?)
     parser.add_argument('--category', default='civil', 
                         choices=['civil', 'criminal', 'family', 'tax', 'administrative', 'patent'],
-                        help='처리할 판례 카테고리')
+                        help='처리???��? 카테고리')
     parser.add_argument('--batch-size', type=int, default=100,
-                        help='배치 처리 크기')
+                        help='배치 처리 ?�기')
     parser.add_argument('--model-name', default='jhgan/ko-sroberta-multitask',
-                        help='사용할 Sentence-BERT 모델명')
+                        help='?�용??Sentence-BERT 모델�?)
     parser.add_argument('--dimension', type=int, default=768,
                         help='벡터 차원')
     parser.add_argument('--index-type', default='flat',
                         choices=['flat', 'ivf', 'hnsw'],
-                        help='FAISS 인덱스 타입')
+                        help='FAISS ?�덱???�??)
     parser.add_argument('--verbose', '-v', action='store_true',
-                        help='상세 로그 출력')
+                        help='?�세 로그 출력')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -269,14 +269,14 @@ def main():
     )
     
     try:
-        # 증분 판례 벡터 빌더 초기화
+        # 증분 ?��? 벡터 빌더 초기??
         builder = IncrementalPrecedentVectorBuilder(
             model_name=args.model_name,
             dimension=args.dimension,
             index_type=args.index_type
         )
         
-        # 증분 벡터 임베딩 생성
+        # 증분 벡터 ?�베???�성
         stats = builder.build_incremental_embeddings(
             category=args.category,
             batch_size=args.batch_size

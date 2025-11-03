@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-UnifiedPromptManager 통합 테스트
-langgraph 워크플로우에서 UnifiedPromptManager 통합 검증
+UnifiedPromptManager ?�합 ?�스??
+langgraph ?�크?�로?�에??UnifiedPromptManager ?�합 검�?
 """
 
 import asyncio
@@ -14,22 +14,22 @@ try:
     PYTEST_AVAILABLE = True
 except ImportError:
     PYTEST_AVAILABLE = False
-    # pytest가 없으면 unittest로 대체
+    # pytest가 ?�으�?unittest�??��?
     import unittest
     pytest = unittest
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 테스트 환경 설정
+# ?�스???�경 ?�정
 os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 
-from core.agents.legal_workflow_enhanced import (
+from source.agents.legal_workflow_enhanced import (
     EnhancedLegalQuestionWorkflow,
 )
-from core.agents.state_definitions import create_initial_legal_state
+from source.agents.state_definitions import create_initial_legal_state
 from source.services.question_classifier import QuestionType
 from source.services.unified_prompt_manager import (
     LegalDomain,
@@ -40,12 +40,12 @@ from source.utils.langgraph_config import LangGraphConfig
 
 
 class TestUnifiedPromptIntegration:
-    """UnifiedPromptManager 통합 테스트 (pytest용)"""
+    """UnifiedPromptManager ?�합 ?�스??(pytest??"""
 
     def __init__(self):
-        """pytest fixture 없이 실행 가능하도록 초기화"""
+        """pytest fixture ?�이 ?�행 가?�하?�록 초기??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             self.config = LangGraphConfig.from_env()
             self.workflow = EnhancedLegalQuestionWorkflow(self.config)
             self.unified_manager = UnifiedPromptManager()
@@ -53,85 +53,85 @@ class TestUnifiedPromptIntegration:
     if PYTEST_AVAILABLE:
         @pytest.fixture
         def config(self):
-            """LangGraph 설정 생성"""
+            """LangGraph ?�정 ?�성"""
             return LangGraphConfig.from_env()
 
         @pytest.fixture
         def workflow(self, config):
-            """워크플로우 인스턴스 생성"""
+            """?�크?�로???�스?�스 ?�성"""
             return EnhancedLegalQuestionWorkflow(config)
 
         @pytest.fixture
         def unified_manager(self):
-            """UnifiedPromptManager 인스턴스 생성"""
+            """UnifiedPromptManager ?�스?�스 ?�성"""
             return UnifiedPromptManager()
 
     def test_unified_prompt_manager_initialized(self, workflow=None):
-        """UnifiedPromptManager가 워크플로우에 초기화되었는지 확인"""
+        """UnifiedPromptManager가 ?�크?�로?�에 초기?�되?�는지 ?�인"""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
         if workflow is None:
-            return  # 워크플로우를 초기화할 수 없음
+            return  # ?�크?�로?��? 초기?�할 ???�음
         assert hasattr(workflow, 'unified_prompt_manager')
         assert workflow.unified_prompt_manager is not None
-        print("✅ UnifiedPromptManager가 워크플로우에 정상적으로 초기화되었습니다.")
+        print("??UnifiedPromptManager가 ?�크?�로?�에 ?�상?�으�?초기?�되?�습?�다.")
 
     def test_prompt_manager_type(self, workflow=None):
-        """UnifiedPromptManager 타입 확인"""
+        """UnifiedPromptManager ?�???�인"""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
         if workflow is None:
-            return  # 워크플로우를 초기화할 수 없음
+            return  # ?�크?�로?��? 초기?�할 ???�음
         assert isinstance(workflow.unified_prompt_manager, UnifiedPromptManager)
-        print("✅ UnifiedPromptManager 타입이 올바릅니다.")
+        print("??UnifiedPromptManager ?�?�이 ?�바릅니??")
 
     def test_get_optimized_prompt(self, unified_manager=None):
-        """get_optimized_prompt 메서드 테스트"""
+        """get_optimized_prompt 메서???�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
-        query = "이혼 절차에 대해 알려주세요"
+            return  # UnifiedPromptManager�?초기?�할 ???�음
+        query = "?�혼 ?�차???�???�려주세??
 
         prompt = unified_manager.get_optimized_prompt(
             query=query,
             question_type=QuestionType.LEGAL_ADVICE,
             domain=LegalDomain.FAMILY_LAW,
-            context={"context": "테스트 컨텍스트"},
+            context={"context": "?�스??컨텍?�트"},
             model_type=ModelType.GEMINI
         )
 
         assert prompt is not None
         assert isinstance(prompt, str)
         assert len(prompt) > 0
-        assert "이혼" in query
-        print("✅ get_optimized_prompt가 정상적으로 작동합니다.")
-        print(f"   생성된 프롬프트 길이: {len(prompt)}자")
+        assert "?�혼" in query
+        print("??get_optimized_prompt가 ?�상?�으�??�동?�니??")
+        print(f"   ?�성???�롬?�트 길이: {len(prompt)}??)
 
     def test_prompt_with_different_domains(self, unified_manager=None):
-        """다양한 도메인별 프롬프트 테스트"""
+        """?�양???�메?�별 ?�롬?�트 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
+            return  # UnifiedPromptManager�?초기?�할 ???�음
         test_cases = [
-            (LegalDomain.CIVIL_LAW, QuestionType.LEGAL_ADVICE, "계약서 작성 방법"),
-            (LegalDomain.CRIMINAL_LAW, QuestionType.LEGAL_ADVICE, "절도죄의 처벌"),
-            (LegalDomain.FAMILY_LAW, QuestionType.LEGAL_ADVICE, "이혼 절차"),
-            (LegalDomain.LABOR_LAW, QuestionType.LEGAL_ADVICE, "해고 제한 조건"),
-            (LegalDomain.GENERAL, QuestionType.GENERAL_QUESTION, "법률 용어 해설"),
+            (LegalDomain.CIVIL_LAW, QuestionType.LEGAL_ADVICE, "계약???�성 방법"),
+            (LegalDomain.CRIMINAL_LAW, QuestionType.LEGAL_ADVICE, "?�도죄의 처벌"),
+            (LegalDomain.FAMILY_LAW, QuestionType.LEGAL_ADVICE, "?�혼 ?�차"),
+            (LegalDomain.LABOR_LAW, QuestionType.LEGAL_ADVICE, "?�고 ?�한 조건"),
+            (LegalDomain.GENERAL, QuestionType.GENERAL_QUESTION, "법률 ?�어 ?�설"),
         ]
 
         for domain, question_type, query in test_cases:
@@ -145,24 +145,24 @@ class TestUnifiedPromptIntegration:
 
             assert prompt is not None
             assert len(prompt) > 0
-            print(f"✅ {domain.value} 도메인 프롬프트 생성 성공 ({len(prompt)}자)")
+            print(f"??{domain.value} ?�메???�롬?�트 ?�성 ?�공 ({len(prompt)}??")
 
     def test_prompt_with_different_models(self, unified_manager=None):
-        """다양한 모델 타입별 프롬프트 테스트"""
+        """?�양??모델 ?�?�별 ?�롬?�트 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
+            return  # UnifiedPromptManager�?초기?�할 ???�음
         test_cases = [
             (ModelType.GEMINI, "Gemini"),
             (ModelType.OLLAMA, "Ollama"),
             (ModelType.OPENAI, "OpenAI"),
         ]
 
-        query = "민법 제750조에 대해 알려주세요"
+        query = "민법 ??50조에 ?�???�려주세??
 
         for model_type, model_name in test_cases:
             prompt = unified_manager.get_optimized_prompt(
@@ -175,87 +175,87 @@ class TestUnifiedPromptIntegration:
 
             assert prompt is not None
             assert len(prompt) > 0
-            print(f"✅ {model_name} 모델 타입 프롬프트 생성 성공 ({len(prompt)}자)")
+            print(f"??{model_name} 모델 ?�???�롬?�트 ?�성 ?�공 ({len(prompt)}??")
 
     def test_enhanced_workflow_generate_answer(self, workflow=None):
-        """generate_answer_enhanced에서 UnifiedPromptManager 사용 확인"""
+        """generate_answer_enhanced?�서 UnifiedPromptManager ?�용 ?�인"""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
         if workflow is None:
-            return  # 워크플로우를 초기화할 수 없음
-        # 초기 상태 생성
-        state = create_initial_legal_state("이혼 절차에 대해 알려주세요", "test-session")
+            return  # ?�크?�로?��? 초기?�할 ???�음
+        # 초기 ?�태 ?�성
+        state = create_initial_legal_state("?�혼 ?�차???�???�려주세??, "test-session")
         state["query_type"] = "family_law"
         state["retrieved_docs"] = [
-            {"content": "이혼 절차는 협의이혼과 재판상 이혼이 있습니다.", "source": "test"}
+            {"content": "?�혼 ?�차???�의?�혼�??�판???�혼???�습?�다.", "source": "test"}
         ]
 
-        # generate_answer_enhanced 호출
+        # generate_answer_enhanced ?�출
         result = workflow.generate_answer_enhanced(state)
 
         assert "answer" in result
         assert "processing_steps" in result
         assert "UnifiedPromptManager" in " ".join(result.get("processing_steps", []))
-        print("✅ generate_answer_enhanced가 UnifiedPromptManager를 사용합니다.")
+        print("??generate_answer_enhanced가 UnifiedPromptManager�??�용?�니??")
 
     def test_prompt_optimization_features(self, unified_manager=None):
-        """프롬프트 최적화 기능 테스트"""
+        """?�롬?�트 최적??기능 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
-        query = "손해배상 청구 방법"
+            return  # UnifiedPromptManager�?초기?�할 ???�음
+        query = "?�해배상 �?�� 방법"
 
-        # Legal Advice 타입
+        # Legal Advice ?�??
         advice_prompt = unified_manager.get_optimized_prompt(
             query=query,
             question_type=QuestionType.LEGAL_ADVICE,
             domain=LegalDomain.CIVIL_LAW,
-            context={"context": "민법 제750조 불법행위"},
+            context={"context": "민법 ??50�?불법?�위"},
             model_type=ModelType.GEMINI
         )
 
-        # Procedure Guide 타입
+        # Procedure Guide ?�??
         procedure_prompt = unified_manager.get_optimized_prompt(
             query=query,
             question_type=QuestionType.PROCEDURE_GUIDE,
             domain=LegalDomain.CIVIL_PROCEDURE,
-            context={"context": "민사소송법"},
+            context={"context": "민사?�송�?},
             model_type=ModelType.GEMINI
         )
 
-        # 두 프롬프트가 다른지 확인
+        # ???�롬?�트가 ?�른지 ?�인
         assert advice_prompt != procedure_prompt
         assert len(advice_prompt) > 0
         assert len(procedure_prompt) > 0
 
-        print(f"✅ Legal Advice 프롬프트: {len(advice_prompt)}자")
-        print(f"✅ Procedure Guide 프롬프트: {len(procedure_prompt)}자")
-        print("✅ 프롬프트가 질문 유형에 따라 최적화됩니다.")
+        print(f"??Legal Advice ?�롬?�트: {len(advice_prompt)}??)
+        print(f"??Procedure Guide ?�롬?�트: {len(procedure_prompt)}??)
+        print("???�롬?�트가 질문 ?�형???�라 최적?�됩?�다.")
 
     def test_prompt_with_context(self, unified_manager=None):
-        """컨텍스트가 포함된 프롬프트 테스트"""
+        """컨텍?�트가 ?�함???�롬?�트 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
+            return  # UnifiedPromptManager�?초기?�할 ???�음
         context = {
-            "context": "민법 제750조는 불법행위로 인한 손해배상청구권을 규정합니다.",
-            "legal_references": ["민법 제750조"],
+            "context": "민법 ??50조는 불법?�위�??�한 ?�해배상�?��권을 규정?�니??",
+            "legal_references": ["민법 ??50�?],
             "query_type": "civil_law"
         }
 
         prompt = unified_manager.get_optimized_prompt(
-            query="불법행위의 성립요건은?",
+            query="불법?�위???�립?�건?�?",
             question_type=QuestionType.LEGAL_ADVICE,
             domain=LegalDomain.CIVIL_LAW,
             context=context,
@@ -263,32 +263,32 @@ class TestUnifiedPromptIntegration:
         )
 
         assert prompt is not None
-        assert "민법 제750조" in prompt or "불법행위" in prompt.lower()
-        print("✅ 컨텍스트가 프롬프트에 정상적으로 포함됩니다.")
+        assert "민법 ??50�? in prompt or "불법?�위" in prompt.lower()
+        print("??컨텍?�트가 ?�롬?�트???�상?�으�??�함?�니??")
 
     def test_workflow_complete_flow(self, workflow=None):
-        """전체 워크플로우 엔드-to-엔드 테스트"""
+        """?�체 ?�크?�로???�드-to-?�드 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
         if workflow is None:
-            return  # 워크플로우를 초기화할 수 없음
+            return  # ?�크?�로?��? 초기?�할 ???�음
         test_queries = [
-            ("이혼 절차에 대해 알려주세요", "family_law"),
-            ("계약서 작성 방법을 알려주세요", "contract_review"),
-            ("해고 제한 조건은?", "labor_law"),
+            ("?�혼 ?�차???�???�려주세??, "family_law"),
+            ("계약???�성 방법???�려주세??, "contract_review"),
+            ("?�고 ?�한 조건?�?", "labor_law"),
         ]
 
         for query, expected_type in test_queries:
             state = create_initial_legal_state(query, f"session-{query[:5]}")
             state["query_type"] = expected_type
             state["retrieved_docs"] = [
-                {"content": "관련 법률 정보", "source": "test"}
+                {"content": "관??법률 ?�보", "source": "test"}
             ]
 
-            # 전체 워크플로우 실행
+            # ?�체 ?�크?�로???�행
             state = workflow.classify_query(state)
             state = workflow.retrieve_documents(state)
             state = workflow.generate_answer_enhanced(state)
@@ -297,18 +297,18 @@ class TestUnifiedPromptIntegration:
             assert "answer" in state
             assert len(state["answer"]) > 0
             assert "processing_steps" in state
-            print(f"✅ '{query}' 처리 완료")
+            print(f"??'{query}' 처리 ?�료")
 
     def test_error_handling(self, unified_manager=None):
-        """에러 처리 테스트"""
+        """?�러 처리 ?�스??""
         if not PYTEST_AVAILABLE:
-            # pytest 없이 직접 실행
+            # pytest ?�이 직접 ?�행
             if not hasattr(self, 'unified_manager'):
                 self.__init__()
             unified_manager = self.unified_manager
         if unified_manager is None:
-            return  # UnifiedPromptManager를 초기화할 수 없음
-        # 잘못된 파라미터
+            return  # UnifiedPromptManager�?초기?�할 ???�음
+        # ?�못???�라미터
         try:
             prompt = unified_manager.get_optimized_prompt(
                 query="",
@@ -317,120 +317,120 @@ class TestUnifiedPromptIntegration:
                 context={},
                 model_type=ModelType.GEMINI
             )
-            # 빈 쿼리는 폴백 처리가 되어야 함
+            # �?쿼리???�백 처리가 ?�어????
             assert isinstance(prompt, str)
-            print("✅ 빈 쿼리 처리 완료")
+            print("??�?쿼리 처리 ?�료")
         except Exception as e:
-            print(f"⚠️ 에러 발생 (예상 가능): {e}")
+            print(f"?�️ ?�러 발생 (?�상 가??: {e}")
 
 
 def run_integration_tests():
-    """통합 테스트 실행"""
+    """?�합 ?�스???�행"""
     print("\n" + "="*80)
-    print("UnifiedPromptManager 통합 테스트 시작")
+    print("UnifiedPromptManager ?�합 ?�스???�작")
     print("="*80 + "\n")
 
-    # 테스트 인스턴스 생성
+    # ?�스???�스?�스 ?�성
     config = LangGraphConfig.from_env()
     workflow = EnhancedLegalQuestionWorkflow(config)
     unified_manager = UnifiedPromptManager()
 
     test_results = []
 
-    # 테스트 1: UnifiedPromptManager 초기화 확인
-    print("📋 테스트 1: UnifiedPromptManager 초기화 확인")
+    # ?�스??1: UnifiedPromptManager 초기???�인
+    print("?�� ?�스??1: UnifiedPromptManager 초기???�인")
     try:
         assert hasattr(workflow, 'unified_prompt_manager')
         assert workflow.unified_prompt_manager is not None
-        print("   ✅ UnifiedPromptManager가 워크플로우에 정상적으로 초기화되었습니다.")
+        print("   ??UnifiedPromptManager가 ?�크?�로?�에 ?�상?�으�?초기?�되?�습?�다.")
         test_results.append(True)
     except Exception as e:
-        print(f"   ❌ 초기화 실패: {e}")
+        print(f"   ??초기???�패: {e}")
         test_results.append(False)
 
-    # 테스트 2: get_optimized_prompt 기본 동작
-    print("\n📋 테스트 2: get_optimized_prompt 기본 동작")
+    # ?�스??2: get_optimized_prompt 기본 ?�작
+    print("\n?�� ?�스??2: get_optimized_prompt 기본 ?�작")
     try:
         prompt = unified_manager.get_optimized_prompt(
-            query="이혼 절차에 대해 알려주세요",
+            query="?�혼 ?�차???�???�려주세??,
             question_type=QuestionType.LEGAL_ADVICE,
             domain=LegalDomain.FAMILY_LAW,
-            context={"context": "테스트"},
+            context={"context": "?�스??},
             model_type=ModelType.GEMINI
         )
         assert prompt and len(prompt) > 0
-        print(f"   ✅ 프롬프트 생성 성공 ({len(prompt)}자)")
+        print(f"   ???�롬?�트 ?�성 ?�공 ({len(prompt)}??")
         test_results.append(True)
     except Exception as e:
-        print(f"   ❌ 프롬프트 생성 실패: {e}")
+        print(f"   ???�롬?�트 ?�성 ?�패: {e}")
         test_results.append(False)
 
-    # 테스트 3: 다양한 도메인 테스트
-    print("\n📋 테스트 3: 다양한 도메인 테스트")
+    # ?�스??3: ?�양???�메???�스??
+    print("\n?�� ?�스??3: ?�양???�메???�스??)
     domains = [
-        (LegalDomain.CIVIL_LAW, "민사법"),
-        (LegalDomain.CRIMINAL_LAW, "형사법"),
+        (LegalDomain.CIVIL_LAW, "민사�?),
+        (LegalDomain.CRIMINAL_LAW, "?�사�?),
         (LegalDomain.FAMILY_LAW, "가족법"),
-        (LegalDomain.LABOR_LAW, "노동법"),
+        (LegalDomain.LABOR_LAW, "?�동�?),
     ]
 
     for domain, name in domains:
         try:
             prompt = unified_manager.get_optimized_prompt(
-                query="테스트 질문",
+                query="?�스??질문",
                 question_type=QuestionType.LEGAL_ADVICE,
                 domain=domain,
                 context={},
                 model_type=ModelType.GEMINI
             )
             assert len(prompt) > 0
-            print(f"   ✅ {name}: 프롬프트 생성 성공")
+            print(f"   ??{name}: ?�롬?�트 ?�성 ?�공")
             test_results.append(True)
         except Exception as e:
-            print(f"   ❌ {name}: 프롬프트 생성 실패 - {e}")
+            print(f"   ??{name}: ?�롬?�트 ?�성 ?�패 - {e}")
             test_results.append(False)
 
-    # 테스트 4: 전체 워크플로우 테스트
-    print("\n📋 테스트 4: 전체 워크플로우 테스트")
+    # ?�스??4: ?�체 ?�크?�로???�스??
+    print("\n?�� ?�스??4: ?�체 ?�크?�로???�스??)
     try:
-        state = create_initial_legal_state("이혼 절차에 대해 알려주세요", "test-session")
+        state = create_initial_legal_state("?�혼 ?�차???�???�려주세??, "test-session")
         state["query_type"] = "family_law"
-        state["retrieved_docs"] = [{"content": "테스트 문서", "source": "test"}]
+        state["retrieved_docs"] = [{"content": "?�스??문서", "source": "test"}]
 
         result = workflow.generate_answer_enhanced(state)
         assert "answer" in result
-        print(f"   ✅ 워크플로우 처리 완료 (답변 길이: {len(result.get('answer', ''))})")
+        print(f"   ???�크?�로??처리 ?�료 (?��? 길이: {len(result.get('answer', ''))})")
         test_results.append(True)
     except Exception as e:
-        print(f"   ❌ 워크플로우 처리 실패: {e}")
+        print(f"   ???�크?�로??처리 ?�패: {e}")
         test_results.append(False)
 
-    # 결과 요약
+    # 결과 ?�약
     print("\n" + "="*80)
-    print("테스트 결과 요약")
+    print("?�스??결과 ?�약")
     print("="*80)
     passed = sum(test_results)
     total = len(test_results)
-    print(f"\n✅ 통과: {passed}/{total}")
-    print(f"❌ 실패: {total - passed}/{total}")
+    print(f"\n???�과: {passed}/{total}")
+    print(f"???�패: {total - passed}/{total}")
     print("="*80 + "\n")
 
     return all(test_results)
 
 
 if __name__ == "__main__":
-    # 통합 테스트 실행 (pytest 없이도 실행 가능)
+    # ?�합 ?�스???�행 (pytest ?�이???�행 가??
     success = run_integration_tests()
 
     if success:
-        print("✅ 모든 통합 테스트가 성공적으로 완료되었습니다!")
+        print("??모든 ?�합 ?�스?��? ?�공?�으�??�료?�었?�니??")
     else:
-        print("⚠️ 일부 테스트가 실패했습니다. 로그를 확인해주세요.")
+        print("?�️ ?��? ?�스?��? ?�패?�습?�다. 로그�??�인?�주?�요.")
 
-    # pytest 테스트 실행 (선택적, pytest가 설치된 경우만)
+    # pytest ?�스???�행 (?�택?? pytest가 ?�치??경우�?
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--pytest" and PYTEST_AVAILABLE:
-        print("\nPytest를 사용한 단위 테스트 실행...")
+        print("\nPytest�??�용???�위 ?�스???�행...")
         pytest.main([__file__, "-v"])
     elif len(sys.argv) > 1 and sys.argv[1] == "--pytest" and not PYTEST_AVAILABLE:
-        print("⚠️ pytest가 설치되지 않아 pytest 테스트를 실행할 수 없습니다.")
+        print("?�️ pytest가 ?�치?��? ?�아 pytest ?�스?��? ?�행?????�습?�다.")

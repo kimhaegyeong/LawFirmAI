@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Assembly Logger
-로깅 설정 모듈
+로깅 ?�정 모듈
 
-구조화된 로깅을 제공합니다.
-- 파일 및 콘솔 출력
-- JSON 구조화 로그
-- 로그 레벨 설정
-- 로그 회전
+구조?�된 로깅???�공?�니??
+- ?�일 �?콘솔 출력
+- JSON 구조??로그
+- 로그 ?�벨 ?�정
+- 로그 ?�전
 """
 
 import logging
@@ -20,7 +20,7 @@ from typing import Optional
 
 
 class JSONFormatter(logging.Formatter):
-    """JSON 형태의 로그 포맷터"""
+    """JSON ?�태??로그 ?�맷??""
     
     def format(self, record):
         log_data = {
@@ -33,11 +33,11 @@ class JSONFormatter(logging.Formatter):
             'line': record.lineno
         }
         
-        # 예외 정보 추가
+        # ?�외 ?�보 추�?
         if record.exc_info:
             log_data['exception'] = self.formatException(record.exc_info)
         
-        # 추가 필드 추가
+        # 추�? ?�드 추�?
         if hasattr(record, 'extra_fields'):
             log_data.update(record.extra_fields)
         
@@ -45,24 +45,24 @@ class JSONFormatter(logging.Formatter):
 
 
 class ColoredFormatter(logging.Formatter):
-    """컬러가 적용된 콘솔 포맷터"""
+    """컬러가 ?�용??콘솔 ?�맷??""
     
-    # ANSI 색상 코드
+    # ANSI ?�상 코드
     COLORS = {
-        'DEBUG': '\033[36m',    # 청록색
-        'INFO': '\033[32m',     # 녹색
-        'WARNING': '\033[33m',  # 노란색
-        'ERROR': '\033[31m',    # 빨간색
-        'CRITICAL': '\033[35m', # 자주색
+        'DEBUG': '\033[36m',    # �?��??
+        'INFO': '\033[32m',     # ?�색
+        'WARNING': '\033[33m',  # ?��???
+        'ERROR': '\033[31m',    # 빨간??
+        'CRITICAL': '\033[35m', # ?�주??
         'RESET': '\033[0m'      # 리셋
     }
     
     def format(self, record):
-        # 색상 적용
+        # ?�상 ?�용
         color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
         reset = self.COLORS['RESET']
         
-        # 포맷 문자열에 색상 추가
+        # ?�맷 문자?�에 ?�상 추�?
         colored_format = f"{color}%(asctime)s - %(name)s - %(levelname)s - %(message)s{reset}"
         
         formatter = logging.Formatter(colored_format)
@@ -80,34 +80,34 @@ def setup_logging(
     backup_count: int = 5
 ) -> logging.Logger:
     """
-    로깅 설정
+    로깅 ?�정
     
     Args:
-        log_name: 로거 이름
-        log_level: 로그 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        log_dir: 로그 파일 저장 디렉토리
-        console_output: 콘솔 출력 여부
-        file_output: 파일 출력 여부
-        json_format: JSON 형태 로그 여부
-        max_file_size: 로그 파일 최대 크기 (바이트)
-        backup_count: 백업 파일 개수
+        log_name: 로거 ?�름
+        log_level: 로그 ?�벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_dir: 로그 ?�일 ?�???�렉?�리
+        console_output: 콘솔 출력 ?��?
+        file_output: ?�일 출력 ?��?
+        json_format: JSON ?�태 로그 ?��?
+        max_file_size: 로그 ?�일 최�? ?�기 (바이??
+        backup_count: 백업 ?�일 개수
     
     Returns:
-        logging.Logger: 설정된 로거
+        logging.Logger: ?�정??로거
     """
     
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
     
-    # 로거 생성
+    # 로거 ?�성
     logger = logging.getLogger(log_name)
     logger.setLevel(getattr(logging, log_level.upper()))
     
-    # 기존 핸들러 제거 (중복 방지)
+    # 기존 ?�들???�거 (중복 방�?)
     logger.handlers.clear()
     
-    # 콘솔 핸들러
+    # 콘솔 ?�들??
     if console_output:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(getattr(logging, log_level.upper()))
@@ -120,9 +120,9 @@ def setup_logging(
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
     
-    # 파일 핸들러
+    # ?�일 ?�들??
     if file_output:
-        # 일반 텍스트 로그 파일
+        # ?�반 ?�스??로그 ?�일
         log_file = log_path / f"{log_name}_{datetime.now().strftime('%Y%m%d')}.log"
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
@@ -142,7 +142,7 @@ def setup_logging(
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
         
-        # JSON 로그 파일 (선택적)
+        # JSON 로그 ?�일 (?�택??
         if json_format:
             json_log_file = log_path / f"{log_name}_{datetime.now().strftime('%Y%m%d')}.json"
             json_handler = logging.handlers.RotatingFileHandler(
@@ -155,18 +155,18 @@ def setup_logging(
             json_handler.setFormatter(JSONFormatter())
             logger.addHandler(json_handler)
     
-    # 로그 설정 완료 메시지 (간단히)
-    print(f"✅ Logging configured: {log_name} ({log_level})")
+    # 로그 ?�정 ?�료 메시지 (간단??
+    print(f"??Logging configured: {log_name} ({log_level})")
     
     return logger
 
 
 def get_logger(name: str) -> logging.Logger:
     """
-    기존 로거 가져오기
+    기존 로거 가?�오�?
     
     Args:
-        name: 로거 이름
+        name: 로거 ?�름
     
     Returns:
         logging.Logger: 로거
@@ -176,41 +176,41 @@ def get_logger(name: str) -> logging.Logger:
 
 def log_with_extra(logger: logging.Logger, level: str, message: str, **kwargs):
     """
-    추가 필드와 함께 로그 기록
+    추�? ?�드?� ?�께 로그 기록
     
     Args:
         logger: 로거
-        level: 로그 레벨
+        level: 로그 ?�벨
         message: 로그 메시지
-        **kwargs: 추가 필드
+        **kwargs: 추�? ?�드
     """
     extra_fields = kwargs
     getattr(logger, level.lower())(message, extra={'extra_fields': extra_fields})
 
 
-# 편의 함수들
+# ?�의 ?�수??
 def log_progress(logger: logging.Logger, current: int, total: int, item_name: str = "items"):
-    """진행률 로그"""
+    """진행�?로그"""
     percentage = (current / total) * 100 if total > 0 else 0
-    logger.info(f"📊 Progress: {current}/{total} {item_name} ({percentage:.1f}%)")
+    logger.info(f"?�� Progress: {current}/{total} {item_name} ({percentage:.1f}%)")
 
 
 def log_memory_usage(logger: logging.Logger, memory_mb: float, limit_mb: float):
-    """메모리 사용량 로그"""
+    """메모�??�용??로그"""
     percentage = (memory_mb / limit_mb) * 100 if limit_mb > 0 else 0
-    status = "⚠️" if percentage > 80 else "✅"
+    status = "?�️" if percentage > 80 else "??
     logger.info(f"{status} Memory: {memory_mb:.1f}MB / {limit_mb}MB ({percentage:.1f}%)")
 
 
 def log_collection_stats(logger: logging.Logger, collected: int, failed: int, total: int):
-    """수집 통계 로그"""
+    """?�집 ?�계 로그"""
     success_rate = (collected / total) * 100 if total > 0 else 0
-    logger.info(f"📈 Collection stats: {collected} collected, {failed} failed, {success_rate:.1f}% success rate")
+    logger.info(f"?�� Collection stats: {collected} collected, {failed} failed, {success_rate:.1f}% success rate")
 
 
 def log_checkpoint_info(logger: logging.Logger, checkpoint_data: dict):
-    """체크포인트 정보 로그"""
-    logger.info(f"💾 Checkpoint info:")
+    """체크?�인???�보 로그"""
+    logger.info(f"?�� Checkpoint info:")
     logger.info(f"   Data type: {checkpoint_data.get('data_type', 'unknown')}")
     logger.info(f"   Category: {checkpoint_data.get('category', 'None')}")
     logger.info(f"   Page: {checkpoint_data.get('current_page', 0)}/{checkpoint_data.get('total_pages', 0)}")

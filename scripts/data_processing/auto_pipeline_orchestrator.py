@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-통합 자동화 파이프라인 오케스트레이터
+?�합 ?�동???�이?�라???��??�트?�이??
 
-데이터 감지부터 벡터 임베딩까지 전체 파이프라인을 자동화하는 시스템입니다.
-각 단계별로 진행 상황을 추적하고 체크포인트를 관리합니다.
+?�이??감�?부??벡터 ?�베?�까지 ?�체 ?�이?�라?�을 ?�동?�하???�스?�입?�다.
+�??�계별로 진행 ?�황??추적?�고 체크?�인?��? 관리합?�다.
 """
 
 import os
@@ -18,7 +18,7 @@ import argparse
 from dataclasses import dataclass
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -45,7 +45,7 @@ except ImportError as e:
 
 @dataclass
 class PipelineResult:
-    """파이프라인 실행 결과 데이터 클래스"""
+    """?�이?�라???�행 결과 ?�이???�래??""
     success: bool
     total_files_detected: int
     files_processed: int
@@ -60,29 +60,29 @@ class PipelineResult:
 
 
 class AutoPipelineOrchestrator:
-    """자동화 파이프라인 오케스트레이터"""
+    """?�동???�이?�라???��??�트?�이??""
     
     def __init__(self, 
                  config: Dict[str, Any] = None,
                  checkpoint_dir: str = "data/checkpoints",
                  db_path: str = "data/lawfirm.db"):
         """
-        파이프라인 오케스트레이터 초기화
+        ?�이?�라???��??�트?�이??초기??
         
         Args:
-            config: 파이프라인 설정
-            checkpoint_dir: 체크포인트 디렉토리
-            db_path: 데이터베이스 경로
+            config: ?�이?�라???�정
+            checkpoint_dir: 체크?�인???�렉?�리
+            db_path: ?�이?�베?�스 경로
         """
         self.config = config or self._get_default_config()
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
-        # 컴포넌트 초기화
+        # 컴포?�트 초기??
         self.db_manager = DatabaseManager(db_path)
         self.checkpoint_manager = CheckpointManager(str(self.checkpoint_dir))
         
-        # 각 단계별 컴포넌트
+        # �??�계�?컴포?�트
         self.data_detector = AutoDataDetector("data/raw/assembly", self.db_manager)
         self.preprocessor = IncrementalPreprocessor(
             checkpoint_manager=self.checkpoint_manager,
@@ -107,7 +107,7 @@ class AutoPipelineOrchestrator:
         self.db_importer = AssemblyLawImporter(db_path)
         self.precedent_db_importer = PrecedentDataImporter(db_path)
         
-        # 품질 관리 컴포넌트 초기화
+        # ?�질 관�?컴포?�트 초기??
         if QUALITY_MODULES_AVAILABLE:
             self.quality_validator = DataQualityValidator()
             self.data_cleaner = AutomatedDataCleaner(db_path, self.config.get('quality', {}))
@@ -117,10 +117,10 @@ class AutoPipelineOrchestrator:
             self.data_cleaner = None
             self.quality_monitor = None
         
-        # 로깅 설정
+        # 로깅 ?�정
         self.logger = logging.getLogger(__name__)
         
-        # 파이프라인 상태
+        # ?�이?�라???�태
         self.pipeline_state = {
             'current_stage': None,
             'start_time': None,
@@ -138,15 +138,15 @@ class AutoPipelineOrchestrator:
                          auto_detect: bool = True,
                          specific_path: str = None) -> PipelineResult:
         """
-        전체 자동화 파이프라인 실행
+        ?�체 ?�동???�이?�라???�행
         
         Args:
-            data_source: 데이터 소스 유형
-            auto_detect: 자동 감지 여부
-            specific_path: 특정 경로 지정
+            data_source: ?�이???�스 ?�형
+            auto_detect: ?�동 감�? ?��?
+            specific_path: ?�정 경로 지??
         
         Returns:
-            PipelineResult: 파이프라인 실행 결과
+            PipelineResult: ?�이?�라???�행 결과
         """
         self.pipeline_state['start_time'] = datetime.now()
         self.logger.info(f"Starting auto pipeline for data source: {data_source}")
@@ -155,7 +155,7 @@ class AutoPipelineOrchestrator:
         error_messages = []
         
         try:
-            # Step 1: 데이터 감지
+            # Step 1: ?�이??감�?
             self.pipeline_state['current_stage'] = 'detection'
             self.logger.info("Step 1: Detecting new data sources...")
             
@@ -195,7 +195,7 @@ class AutoPipelineOrchestrator:
                     error_messages=[]
                 )
             
-            # Step 2: 증분 전처리
+            # Step 2: 증분 ?�처�?
             self.pipeline_state['current_stage'] = 'preprocessing'
             self.logger.info("Step 2: Incremental preprocessing...")
             
@@ -215,7 +215,7 @@ class AutoPipelineOrchestrator:
                     error_messages=error_messages
                 )
             
-            # Step 3: 품질 검증 및 개선
+            # Step 3: ?�질 검�?�?개선
             self.pipeline_state['current_stage'] = 'quality_validation'
             self.logger.info("Step 3: Quality validation and improvement...")
             
@@ -224,10 +224,10 @@ class AutoPipelineOrchestrator:
             
             if not quality_results['success']:
                 error_messages.extend(quality_results['errors'])
-                # 품질 검증 실패는 경고로 처리하고 계속 진행
+                # ?�질 검�??�패??경고�?처리?�고 계속 진행
                 self.logger.warning(f"Quality validation failed: {quality_results['errors']}")
             
-            # Step 4: 증분 벡터 임베딩
+            # Step 4: 증분 벡터 ?�베??
             self.pipeline_state['current_stage'] = 'vectorization'
             self.logger.info("Step 4: Incremental vector embedding...")
             
@@ -247,7 +247,7 @@ class AutoPipelineOrchestrator:
                     error_messages=error_messages
                 )
             
-            # Step 5: DB 증분 임포트
+            # Step 5: DB 증분 ?�포??
             self.pipeline_state['current_stage'] = 'import'
             self.logger.info("Step 5: Incremental database import...")
             
@@ -257,14 +257,14 @@ class AutoPipelineOrchestrator:
             if not import_results['success']:
                 error_messages.extend(import_results['errors'])
             
-            # Step 6: 최종 통계 생성
+            # Step 6: 최종 ?�계 ?�성
             self.pipeline_state['current_stage'] = 'finalization'
             self.logger.info("Step 6: Generating final statistics...")
             
             final_stats = self._generate_final_statistics()
             stage_results['finalization'] = final_stats
             
-            # 파이프라인 완료
+            # ?�이?�라???�료
             self.pipeline_state['end_time'] = datetime.now()
             processing_time = (
                 self.pipeline_state['end_time'] - self.pipeline_state['start_time']
@@ -316,15 +316,15 @@ class AutoPipelineOrchestrator:
                               auto_detect: bool = True,
                               specific_path: str = None) -> PipelineResult:
         """
-        판례 데이터 자동화 파이프라인 실행
+        ?��? ?�이???�동???�이?�라???�행
         
         Args:
-            category: 판례 카테고리 (civil, criminal, family)
-            auto_detect: 자동 감지 여부
-            specific_path: 특정 경로 지정
+            category: ?��? 카테고리 (civil, criminal, family)
+            auto_detect: ?�동 감�? ?��?
+            specific_path: ?�정 경로 지??
         
         Returns:
-            PipelineResult: 파이프라인 실행 결과
+            PipelineResult: ?�이?�라???�행 결과
         """
         self.pipeline_state['start_time'] = datetime.now()
         self.logger.info(f"Starting precedent pipeline for category: {category}")
@@ -333,7 +333,7 @@ class AutoPipelineOrchestrator:
         error_messages = []
         
         try:
-            # Step 1: 판례 데이터 감지
+            # Step 1: ?��? ?�이??감�?
             self.pipeline_state['current_stage'] = 'detection'
             self.logger.info("Step 1: Detecting new precedent data sources...")
             
@@ -373,7 +373,7 @@ class AutoPipelineOrchestrator:
                     error_messages=[]
                 )
             
-            # Step 2: 판례 전처리
+            # Step 2: ?��? ?�처�?
             self.pipeline_state['current_stage'] = 'preprocessing'
             self.logger.info("Step 2: Precedent preprocessing...")
             
@@ -383,7 +383,7 @@ class AutoPipelineOrchestrator:
             if preprocessing_results['failed_to_process'] > 0:
                 error_messages.extend(preprocessing_results['errors'])
             
-            # Step 3: 판례 벡터 임베딩
+            # Step 3: ?��? 벡터 ?�베??
             self.pipeline_state['current_stage'] = 'vectorization'
             self.logger.info("Step 3: Precedent vector embedding...")
             
@@ -393,7 +393,7 @@ class AutoPipelineOrchestrator:
             if vectorization_results['failed_embedding_files'] > 0:
                 error_messages.extend(vectorization_results['errors'])
             
-            # Step 4: 판례 DB 증분 임포트
+            # Step 4: ?��? DB 증분 ?�포??
             self.pipeline_state['current_stage'] = 'import'
             self.logger.info("Step 4: Precedent database import...")
             
@@ -403,14 +403,14 @@ class AutoPipelineOrchestrator:
             if not import_results['success']:
                 error_messages.extend(import_results['errors'])
             
-            # Step 5: 최종 통계 생성
+            # Step 5: 최종 ?�계 ?�성
             self.pipeline_state['current_stage'] = 'finalization'
             self.logger.info("Step 5: Generating final statistics...")
             
             final_stats = self._generate_final_statistics()
             stage_results['finalization'] = final_stats
             
-            # 파이프라인 완료
+            # ?�이?�라???�료
             self.pipeline_state['end_time'] = datetime.now()
             processing_time = (
                 self.pipeline_state['end_time'] - self.pipeline_state['start_time']
@@ -449,7 +449,7 @@ class AutoPipelineOrchestrator:
             )
     
     def _detect_new_data_sources(self, data_source: str) -> Dict[str, List[Path]]:
-        """새로운 데이터 소스 감지"""
+        """?�로???�이???�스 감�?"""
         try:
             base_path = self.config['data_sources'][data_source]['raw_path']
             detected_files = self.data_detector.detect_new_data_sources(base_path, data_source)
@@ -462,14 +462,14 @@ class AutoPipelineOrchestrator:
             return {}
     
     def _detect_specific_path(self, specific_path: str, data_source: str) -> Dict[str, List[Path]]:
-        """특정 경로에서 데이터 감지"""
+        """?�정 경로?�서 ?�이??감�?"""
         try:
             path_obj = Path(specific_path)
             if not path_obj.exists():
                 self.logger.error(f"Specified path does not exist: {specific_path}")
                 return {}
             
-            # 특정 경로의 파일들을 감지된 파일로 처리
+            # ?�정 경로???�일?�을 감�????�일�?처리
             files = list(path_obj.glob("*.json"))
             detected_files = {data_source: files}
             
@@ -481,13 +481,13 @@ class AutoPipelineOrchestrator:
             return {}
     
     def _run_preprocessing_stage(self, detected_files: Dict[str, List[Path]]) -> Dict[str, Any]:
-        """전처리 단계 실행"""
+        """?�처�??�계 ?�행"""
         try:
             all_processed_files = []
             total_records = 0
             errors = []
             
-            # 데이터 유형별로 처리
+            # ?�이???�형별로 처리
             for data_type, files in detected_files.items():
                 if not files:
                     continue
@@ -524,7 +524,7 @@ class AutoPipelineOrchestrator:
             }
     
     def _run_quality_validation_stage(self, processed_files: List[Path]) -> Dict[str, Any]:
-        """품질 검증 및 개선 단계 실행"""
+        """?�질 검�?�?개선 ?�계 ?�행"""
         try:
             if not QUALITY_MODULES_AVAILABLE or not self.quality_validator:
                 self.logger.warning("Quality modules not available, skipping quality validation")
@@ -561,19 +561,19 @@ class AutoPipelineOrchestrator:
             duplicates_resolved = 0
             errors = []
             
-            # 각 처리된 파일에 대해 품질 검증 수행
+            # �?처리???�일???�???�질 검�??�행
             for file_path in processed_files:
                 try:
-                    # JSON 파일에서 법률 데이터 로드
+                    # JSON ?�일?�서 법률 ?�이??로드
                     with open(file_path, 'r', encoding='utf-8') as f:
                         law_data = json.load(f)
                     
-                    # 품질 점수 계산
+                    # ?�질 ?�수 계산
                     quality_score = self.quality_validator.calculate_quality_score(law_data)
                     quality_metrics['total_files_validated'] += 1
                     quality_metrics['average_quality_score'] += quality_score
                     
-                    # 품질 등급 분류
+                    # ?�질 ?�급 분류
                     if quality_score >= 0.8:
                         quality_metrics['high_quality_files'] += 1
                     elif quality_score >= 0.6:
@@ -582,12 +582,12 @@ class AutoPipelineOrchestrator:
                         quality_metrics['low_quality_files'] += 1
                         quality_metrics['files_requiring_improvement'] += 1
                     
-                    # 품질 점수를 법률 데이터에 추가
+                    # ?�질 ?�수�?법률 ?�이?�에 추�?
                     law_data['quality_score'] = quality_score
                     law_data['quality_validated'] = True
                     law_data['quality_validation_timestamp'] = datetime.now().isoformat()
                     
-                    # 개선된 데이터를 파일에 저장
+                    # 개선???�이?��? ?�일???�??
                     with open(file_path, 'w', encoding='utf-8') as f:
                         json.dump(law_data, f, ensure_ascii=False, indent=2)
                     
@@ -598,14 +598,14 @@ class AutoPipelineOrchestrator:
                     self.logger.error(error_msg)
                     errors.append(error_msg)
             
-            # 평균 품질 점수 계산
+            # ?�균 ?�질 ?�수 계산
             if quality_metrics['total_files_validated'] > 0:
                 quality_metrics['average_quality_score'] /= quality_metrics['total_files_validated']
             
-            # 중복 검사 및 해결 (간단한 파일 기반 검사)
+            # 중복 검??�??�결 (간단???�일 기반 검??
             if self.data_cleaner:
                 try:
-                    # 일일 정리 작업 실행 (중복 해결 포함)
+                    # ?�일 ?�리 ?�업 ?�행 (중복 ?�결 ?�함)
                     cleaning_report = self.data_cleaner.run_daily_cleaning()
                     duplicates_resolved = cleaning_report.duplicates_resolved
                     self.logger.info(f"Resolved {duplicates_resolved} duplicates during quality validation")
@@ -636,7 +636,7 @@ class AutoPipelineOrchestrator:
             }
     
     def _run_vectorization_stage(self, processed_files: List[Path]) -> Dict[str, Any]:
-        """벡터화 단계 실행"""
+        """벡터???�계 ?�행"""
         try:
             if not processed_files:
                 self.logger.info("No files to vectorize")
@@ -646,7 +646,7 @@ class AutoPipelineOrchestrator:
                     'errors': []
                 }
             
-            # 기존 인덱스 로드
+            # 기존 ?�덱??로드
             existing_index_path = self.config['vectorization']['existing_index_path']
             if not self.vector_builder.load_existing_index(existing_index_path):
                 self.logger.error(f"Failed to load existing index from: {existing_index_path}")
@@ -656,12 +656,12 @@ class AutoPipelineOrchestrator:
                     'errors': [f"Failed to load existing index from: {existing_index_path}"]
                 }
             
-            # 새로운 문서 추가
+            # ?�로??문서 추�?
             self.logger.info(f"Adding {len(processed_files)} processed files to vector index...")
             result = self.vector_builder.add_new_documents(processed_files)
             
             if result.success:
-                # 업데이트된 인덱스 저장
+                # ?�데?�트???�덱???�??
                 output_path = self.config['vectorization']['output_path']
                 if self.vector_builder.save_updated_index(output_path):
                     self.logger.info(f"Successfully added {result.new_vectors} vectors")
@@ -693,7 +693,7 @@ class AutoPipelineOrchestrator:
             }
     
     def _run_import_stage(self, processed_files: List[Path]) -> Dict[str, Any]:
-        """DB 임포트 단계 실행"""
+        """DB ?�포???�계 ?�행"""
         try:
             if not processed_files:
                 self.logger.info("No files to import")
@@ -708,7 +708,7 @@ class AutoPipelineOrchestrator:
             total_skipped = 0
             errors = []
             
-            # 파일별로 증분 임포트
+            # ?�일별로 증분 ?�포??
             for file_path in tqdm(processed_files, desc="Importing to database"):
                 try:
                     result = self.db_importer.import_file(file_path, incremental=True)
@@ -748,9 +748,9 @@ class AutoPipelineOrchestrator:
             }
     
     def _run_precedent_import_stage(self, category: str) -> Dict[str, Any]:
-        """판례 DB 임포트 단계 실행"""
+        """?��? DB ?�포???�계 ?�행"""
         try:
-            # 전처리된 판례 파일들이 있는 디렉토리 찾기
+            # ?�처리된 ?��? ?�일?�이 ?�는 ?�렉?�리 찾기
             processed_dir = Path(f"data/processed/assembly/precedent/{category}")
             
             if not processed_dir.exists():
@@ -761,7 +761,7 @@ class AutoPipelineOrchestrator:
                     'errors': []
                 }
             
-            # 날짜별 디렉토리에서 파일들 찾기
+            # ?�짜�??�렉?�리?�서 ?�일??찾기
             total_imported = 0
             total_updated = 0
             total_skipped = 0
@@ -771,7 +771,7 @@ class AutoPipelineOrchestrator:
                 if not date_dir.is_dir():
                     continue
                 
-                # 해당 날짜 디렉토리의 모든 JSON 파일 임포트
+                # ?�당 ?�짜 ?�렉?�리??모든 JSON ?�일 ?�포??
                 json_files = list(date_dir.glob("ml_enhanced_*.json"))
                 
                 for file_path in json_files:
@@ -813,12 +813,12 @@ class AutoPipelineOrchestrator:
             }
     
     def _generate_final_statistics(self) -> Dict[str, Any]:
-        """최종 통계 생성"""
+        """최종 ?�계 ?�성"""
         try:
-            # 데이터베이스 통계
+            # ?�이?�베?�스 ?�계
             db_stats = self.db_manager.get_processing_statistics()
             
-            # 처리된 파일 통계
+            # 처리???�일 ?�계
             processed_files_stats = self.db_manager.get_processed_files_by_type('law_only')
             
             return {
@@ -836,7 +836,7 @@ class AutoPipelineOrchestrator:
             }
     
     def _get_default_config(self) -> Dict[str, Any]:
-        """기본 설정 반환"""
+        """기본 ?�정 반환"""
         return {
             'data_sources': {
                 'law_only': {
@@ -913,7 +913,7 @@ class AutoPipelineOrchestrator:
         }
     
     def save_pipeline_report(self, result: PipelineResult, output_path: str = None):
-        """파이프라인 실행 리포트 저장"""
+        """?�이?�라???�행 리포???�??""
         try:
             if not output_path:
                 output_path = f"reports/pipeline_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -921,7 +921,7 @@ class AutoPipelineOrchestrator:
             report_path = Path(output_path)
             report_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # datetime 객체를 문자열로 변환하는 함수
+            # datetime 객체�?문자?�로 변?�하???�수
             def convert_datetime(obj):
                 if isinstance(obj, datetime):
                     return obj.isoformat()
@@ -961,29 +961,29 @@ class AutoPipelineOrchestrator:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description='자동화 파이프라인 오케스트레이터')
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description='?�동???�이?�라???��??�트?�이??)
     parser.add_argument('--data-source', default='law_only',
                        choices=['law_only', 'precedents', 'constitutional', 'precedent_civil', 'precedent_criminal', 'precedent_family', 'precedent_tax', 'precedent_administrative', 'precedent_patent'],
-                       help='데이터 소스 유형')
+                       help='?�이???�스 ?�형')
     parser.add_argument('--category', default='civil',
                        choices=['civil', 'criminal', 'family', 'tax', 'administrative', 'patent'],
-                       help='판례 카테고리 (precedent 데이터 소스 사용 시)')
+                       help='?��? 카테고리 (precedent ?�이???�스 ?�용 ??')
     parser.add_argument('--auto-detect', action='store_true',
-                       help='자동 데이터 감지 활성화')
-    parser.add_argument('--data-path', help='특정 데이터 경로 지정')
-    parser.add_argument('--config', help='설정 파일 경로')
+                       help='?�동 ?�이??감�? ?�성??)
+    parser.add_argument('--data-path', help='?�정 ?�이??경로 지??)
+    parser.add_argument('--config', help='?�정 ?�일 경로')
     parser.add_argument('--checkpoint-dir', default='data/checkpoints',
-                       help='체크포인트 디렉토리')
+                       help='체크?�인???�렉?�리')
     parser.add_argument('--db-path', default='data/lawfirm.db',
-                       help='데이터베이스 경로')
-    parser.add_argument('--output-report', help='리포트 출력 경로')
+                       help='?�이?�베?�스 경로')
+    parser.add_argument('--output-report', help='리포??출력 경로')
     parser.add_argument('--verbose', '-v', action='store_true',
-                       help='상세 로그 출력')
+                       help='?�세 로그 출력')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -991,22 +991,22 @@ def main():
     )
     
     try:
-        # 설정 로드
+        # ?�정 로드
         config = None
         if args.config:
             with open(args.config, 'r', encoding='utf-8') as f:
                 config = json.load(f)
         
-        # 파이프라인 오케스트레이터 초기화
+        # ?�이?�라???��??�트?�이??초기??
         orchestrator = AutoPipelineOrchestrator(
             config=config,
             checkpoint_dir=args.checkpoint_dir,
             db_path=args.db_path
         )
         
-        # 파이프라인 실행
+        # ?�이?�라???�행
         if args.data_source.startswith('precedent_'):
-            # 판례 파이프라인 실행
+            # ?��? ?�이?�라???�행
             category = args.data_source.split('_')[1]  # precedent_civil -> civil
             result = orchestrator.run_precedent_pipeline(
                 category=category,
@@ -1014,14 +1014,14 @@ def main():
                 specific_path=args.data_path
             )
         else:
-            # 법률 파이프라인 실행
+            # 법률 ?�이?�라???�행
             result = orchestrator.run_auto_pipeline(
                 data_source=args.data_source,
                 auto_detect=args.auto_detect,
                 specific_path=args.data_path
             )
         
-        # 리포트 저장
+        # 리포???�??
         orchestrator.save_pipeline_report(result, args.output_report)
         
         # 결과 출력

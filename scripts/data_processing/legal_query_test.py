@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-법률 질의 테스트 시스템
-확장된 키워드 매핑 시스템을 실제 법률 질문으로 테스트합니다.
+법률 질의 ?�스???�스??
+?�장???�워??매핑 ?�스?�을 ?�제 법률 질문?�로 ?�스?�합?�다.
 """
 
 import sys
@@ -12,15 +12,15 @@ import logging
 from typing import Dict, List, Any
 from datetime import datetime
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-# core/agents를 사용하도록 변경
-from core.agents.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
-from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from core.agents.workflow_service import LangGraphWorkflowService
+# core/agents�??�용?�도�?변�?
+from source.agents.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
+from source.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+from source.agents.workflow_service import LangGraphWorkflowService
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -32,13 +32,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class LegalQueryTester:
-    """법률 질의 테스트기"""
+    """법률 질의 ?�스?�기"""
 
     def __init__(self):
         self.test_queries = self._initialize_test_queries()
         self.output_dir = "data/extracted_terms/query_test"
 
-        # 테스트 결과 저장
+        # ?�스??결과 ?�??
         self.test_results = {
             "keyword_mapping_tests": {},
             "workflow_tests": {},
@@ -47,73 +47,73 @@ class LegalQueryTester:
         }
 
     def _initialize_test_queries(self) -> List[Dict[str, str]]:
-        """테스트 질의 초기화"""
+        """?�스??질의 초기??""
         return [
             {
-                "question": "계약서에서 위약금 조항이 너무 높게 설정되어 있는데, 법적으로 문제가 될까요?",
+                "question": "계약?�에???�약�?조항???�무 ?�게 ?�정?�어 ?�는?? 법적?�로 문제가 ?�까??",
                 "query_type": "contract_review",
-                "domain": "민사법",
-                "expected_keywords": ["계약서", "위약금", "조항", "법적", "문제", "민법", "계약법", "손해배상"]
+                "domain": "민사�?,
+                "expected_keywords": ["계약??, "?�약�?, "조항", "법적", "문제", "민법", "계약�?, "?�해배상"]
             },
             {
-                "question": "교통사고로 인한 손해배상 청구 시 필요한 증거자료는 무엇인가요?",
+                "question": "교통?�고�??�한 ?�해배상 �?�� ???�요??증거?�료??무엇?��???",
                 "query_type": "damage_compensation",
-                "domain": "민사법",
-                "expected_keywords": ["교통사고", "손해배상", "청구", "증거자료", "불법행위", "과실", "인과관계"]
+                "domain": "민사�?,
+                "expected_keywords": ["교통?�고", "?�해배상", "�?��", "증거?�료", "불법?�위", "과실", "?�과관�?]
             },
             {
-                "question": "이혼 소송에서 자녀 양육권을 결정하는 기준은 무엇인가요?",
+                "question": "?�혼 ?�송?�서 ?��? ?�육권을 결정?�는 기�??� 무엇?��???",
                 "query_type": "divorce_proceedings",
                 "domain": "가족법",
-                "expected_keywords": ["이혼", "소송", "자녀", "양육권", "결정", "기준", "가정법원", "가족법"]
+                "expected_keywords": ["?�혼", "?�송", "?��?", "?�육�?, "결정", "기�?", "가?�법??, "가족법"]
             },
             {
-                "question": "부동산 매매 계약 시 등기 이전 절차와 필요한 서류는 무엇인가요?",
+                "question": "부?�산 매매 계약 ???�기 ?�전 ?�차?� ?�요???�류??무엇?��???",
                 "query_type": "real_estate_transaction",
-                "domain": "부동산법",
-                "expected_keywords": ["부동산", "매매", "계약", "등기", "이전", "절차", "서류", "등기부등본"]
+                "domain": "부?�산�?,
+                "expected_keywords": ["부?�산", "매매", "계약", "?�기", "?�전", "?�차", "?�류", "?�기부?�본"]
             },
             {
-                "question": "특허 출원 시 발명의 신규성과 진보성을 어떻게 입증해야 하나요?",
+                "question": "?�허 출원 ??발명???�규?�과 진보?�을 ?�떻�??�증?�야 ?�나??",
                 "query_type": "patent_application",
-                "domain": "특허법",
-                "expected_keywords": ["특허", "출원", "발명", "신규성", "진보성", "입증", "특허청", "특허법"]
+                "domain": "?�허�?,
+                "expected_keywords": ["?�허", "출원", "발명", "?�규??, "진보??, "?�증", "?�허�?, "?�허�?]
             },
             {
-                "question": "근로자가 부당해고를 당했을 때 구제 절차는 어떻게 되나요?",
+                "question": "근로?��? 부?�해고�? ?�했????구제 ?�차???�떻�??�나??",
                 "query_type": "employment_termination",
-                "domain": "노동법",
-                "expected_keywords": ["근로자", "부당해고", "구제", "절차", "노동위원회", "근로기준법", "해고"]
+                "domain": "?�동�?,
+                "expected_keywords": ["근로??, "부?�해�?, "구제", "?�차", "?�동?�원??, "근로기�?�?, "?�고"]
             },
             {
-                "question": "주식회사 설립 시 필요한 자본금과 등기 절차는 무엇인가요?",
+                "question": "주식?�사 ?�립 ???�요???�본금과 ?�기 ?�차??무엇?��???",
                 "query_type": "company_establishment",
-                "domain": "상사법",
-                "expected_keywords": ["주식회사", "설립", "자본금", "등기", "절차", "상법", "회사법", "주주"]
+                "domain": "?�사�?,
+                "expected_keywords": ["주식?�사", "?�립", "?�본�?, "?�기", "?�차", "?�법", "?�사�?, "주주"]
             },
             {
-                "question": "형사 사건에서 변호사 선임권과 변호사 비용은 어떻게 되나요?",
+                "question": "?�사 ?�건?�서 변?�사 ?�임권과 변?�사 비용?� ?�떻�??�나??",
                 "query_type": "criminal_defense",
-                "domain": "형사법",
-                "expected_keywords": ["형사", "사건", "변호사", "선임권", "비용", "피고", "형사소송법", "국선변호"]
+                "domain": "?�사�?,
+                "expected_keywords": ["?�사", "?�건", "변?�사", "?�임�?, "비용", "?�고", "?�사?�송�?, "�?��변??]
             },
             {
-                "question": "행정처분에 대한 이의신청과 행정소송의 차이점은 무엇인가요?",
+                "question": "?�정처분???�???�의?�청�??�정?�송??차이?��? 무엇?��???",
                 "query_type": "administrative_appeal",
-                "domain": "행정법",
-                "expected_keywords": ["행정처분", "이의신청", "행정소송", "차이점", "행정법", "허가", "승인"]
+                "domain": "?�정�?,
+                "expected_keywords": ["?�정처분", "?�의?�청", "?�정?�송", "차이??, "?�정�?, "?��?", "?�인"]
             },
             {
-                "question": "상속 포기와 한정승인 중 어떤 것을 선택해야 할까요?",
+                "question": "?�속 ?�기?� ?�정?�인 �??�떤 것을 ?�택?�야 ?�까??",
                 "query_type": "inheritance_renunciation",
                 "domain": "가족법",
-                "expected_keywords": ["상속", "포기", "한정승인", "선택", "상속인", "상속분", "상속법"]
+                "expected_keywords": ["?�속", "?�기", "?�정?�인", "?�택", "?�속??, "?�속�?, "?�속�?]
             }
         ]
 
     def test_keyword_mapping(self) -> Dict[str, Any]:
-        """키워드 매핑 테스트"""
-        logger.info("키워드 매핑 테스트 시작")
+        """?�워??매핑 ?�스??""
+        logger.info("?�워??매핑 ?�스???�작")
 
         enhanced_mapper = EnhancedKeywordMapper()
         results = {}
@@ -123,16 +123,16 @@ class LegalQueryTester:
             query_type = query["query_type"]
             expected_keywords = query["expected_keywords"]
 
-            logger.info(f"테스트 {i+1}/{len(self.test_queries)}: {query_type}")
+            logger.info(f"?�스??{i+1}/{len(self.test_queries)}: {query_type}")
 
             start_time = time.time()
 
-            # 종합적인 키워드 매핑
+            # 종합?�인 ?�워??매핑
             comprehensive_result = enhanced_mapper.get_comprehensive_keyword_mapping(question, query_type)
 
             end_time = time.time()
 
-            # 예상 키워드와의 매칭률 계산
+            # ?�상 ?�워?��???매칭�?계산
             all_keywords = comprehensive_result.get("all_keywords", [])
             matched_keywords = [kw for kw in expected_keywords if kw in all_keywords]
             match_rate = len(matched_keywords) / len(expected_keywords) if expected_keywords else 0
@@ -147,29 +147,29 @@ class LegalQueryTester:
                 "comprehensive_result": comprehensive_result
             }
 
-        logger.info("키워드 매핑 테스트 완료")
+        logger.info("?�워??매핑 ?�스???�료")
         return results
 
     def test_workflow_integration(self) -> Dict[str, Any]:
-        """워크플로우 통합 테스트"""
-        logger.info("워크플로우 통합 테스트 시작")
+        """?�크?�로???�합 ?�스??""
+        logger.info("?�크?�로???�합 ?�스???�작")
 
         try:
-            # 워크플로우 서비스 초기화
+            # ?�크?�로???�비??초기??
             workflow_service = LangGraphWorkflowService()
 
             results = {}
 
-            for i, query in enumerate(self.test_queries[:3]):  # 처음 3개만 테스트 (시간 절약)
+            for i, query in enumerate(self.test_queries[:3]):  # 처음 3개만 ?�스??(?�간 ?�약)
                 question = query["question"]
                 query_type = query["query_type"]
 
-                logger.info(f"워크플로우 테스트 {i+1}/3: {query_type}")
+                logger.info(f"?�크?�로???�스??{i+1}/3: {query_type}")
 
                 start_time = time.time()
 
                 try:
-                    # 워크플로우 실행
+                    # ?�크?�로???�행
                     response = workflow_service.process_question(question, query_type)
 
                     end_time = time.time()
@@ -182,23 +182,23 @@ class LegalQueryTester:
                     }
 
                 except Exception as e:
-                    logger.error(f"워크플로우 실행 오류 ({query_type}): {e}")
+                    logger.error(f"?�크?�로???�행 ?�류 ({query_type}): {e}")
                     results[query_type] = {
                         "question": question,
                         "error": str(e),
                         "success": False
                     }
 
-            logger.info("워크플로우 통합 테스트 완료")
+            logger.info("?�크?�로???�합 ?�스???�료")
             return results
 
         except Exception as e:
-            logger.error(f"워크플로우 서비스 초기화 오류: {e}")
+            logger.error(f"?�크?�로???�비??초기???�류: {e}")
             return {"error": str(e)}
 
     def analyze_keyword_quality(self, mapping_results: Dict[str, Any]) -> Dict[str, Any]:
-        """키워드 품질 분석"""
-        logger.info("키워드 품질 분석 시작")
+        """?�워???�질 분석"""
+        logger.info("?�워???�질 분석 ?�작")
 
         quality_metrics = {
             "overall_match_rate": 0,
@@ -215,13 +215,13 @@ class LegalQueryTester:
             match_rate = result["match_rate"]
             total_match_rate += match_rate
 
-            # 도메인별 커버리지
-            domain = next((q["domain"] for q in self.test_queries if q["query_type"] == query_type), "기타")
+            # ?�메?�별 커버리�?
+            domain = next((q["domain"] for q in self.test_queries if q["query_type"] == query_type), "기�?")
             if domain not in quality_metrics["domain_coverage"]:
                 quality_metrics["domain_coverage"][domain] = []
             quality_metrics["domain_coverage"][domain].append(match_rate)
 
-            # 키워드 다양성
+            # ?�워???�양??
             extracted_count = len(result["extracted_keywords"])
             expected_count = len(result["expected_keywords"])
             diversity_ratio = extracted_count / expected_count if expected_count > 0 else 0
@@ -232,37 +232,37 @@ class LegalQueryTester:
                 "diversity_ratio": diversity_ratio
             }
 
-            # 처리 효율성
+            # 처리 ?�율??
             quality_metrics["processing_efficiency"][query_type] = {
                 "processing_time": result["processing_time"],
                 "keywords_per_second": extracted_count / result["processing_time"] if result["processing_time"] > 0 else 0
             }
 
-        # 전체 매칭률
+        # ?�체 매칭�?
         quality_metrics["overall_match_rate"] = total_match_rate / total_queries
 
-        # 도메인별 평균 매칭률
+        # ?�메?�별 ?�균 매칭�?
         for domain, rates in quality_metrics["domain_coverage"].items():
             quality_metrics["domain_coverage"][domain] = sum(rates) / len(rates)
 
-        # 개선 권장사항 생성
+        # 개선 권장?�항 ?�성
         if quality_metrics["overall_match_rate"] < 0.5:
-            quality_metrics["recommendations"].append("전체 키워드 매칭률이 낮습니다. 키워드 매핑 전략을 재검토하세요.")
+            quality_metrics["recommendations"].append("?�체 ?�워??매칭률이 ??��?�다. ?�워??매핑 ?�략???��??�하?�요.")
 
         if quality_metrics["overall_match_rate"] > 0.8:
-            quality_metrics["recommendations"].append("키워드 매칭률이 우수합니다. 현재 설정을 유지하세요.")
+            quality_metrics["recommendations"].append("?�워??매칭률이 ?�수?�니?? ?�재 ?�정???��??�세??")
 
-        # 도메인별 권장사항
+        # ?�메?�별 권장?�항
         for domain, rate in quality_metrics["domain_coverage"].items():
             if rate < 0.4:
-                quality_metrics["recommendations"].append(f"{domain} 도메인의 키워드 매칭률이 낮습니다. 해당 도메인 용어를 확장하세요.")
+                quality_metrics["recommendations"].append(f"{domain} ?�메?�의 ?�워??매칭률이 ??��?�다. ?�당 ?�메???�어�??�장?�세??")
 
-        logger.info("키워드 품질 분석 완료")
+        logger.info("?�워???�질 분석 ?�료")
         return quality_metrics
 
     def generate_test_report(self, mapping_results: Dict[str, Any], workflow_results: Dict[str, Any], quality_metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """테스트 보고서 생성"""
-        logger.info("테스트 보고서 생성 중")
+        """?�스??보고???�성"""
+        logger.info("?�스??보고???�성 �?)
 
         report = {
             "test_summary": {
@@ -282,72 +282,72 @@ class LegalQueryTester:
             "recommendations": quality_metrics["recommendations"]
         }
 
-        logger.info("테스트 보고서 생성 완료")
+        logger.info("?�스??보고???�성 ?�료")
         return report
 
     def save_test_results(self, test_report: Dict[str, Any]):
-        """테스트 결과 저장"""
+        """?�스??결과 ?�??""
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # 테스트 보고서 저장
+        # ?�스??보고???�??
         report_file = os.path.join(self.output_dir, "query_test_report.json")
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(test_report, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"테스트 결과 저장 완료: {self.output_dir}")
+        logger.info(f"?�스??결과 ?�???�료: {self.output_dir}")
 
     def run_query_test(self):
-        """질의 테스트 실행"""
-        logger.info("법률 질의 테스트 시작")
+        """질의 ?�스???�행"""
+        logger.info("법률 질의 ?�스???�작")
 
         try:
-            # 키워드 매핑 테스트
+            # ?�워??매핑 ?�스??
             mapping_results = self.test_keyword_mapping()
 
-            # 워크플로우 통합 테스트
+            # ?�크?�로???�합 ?�스??
             workflow_results = self.test_workflow_integration()
 
-            # 키워드 품질 분석
+            # ?�워???�질 분석
             quality_metrics = self.analyze_keyword_quality(mapping_results)
 
-            # 테스트 보고서 생성
+            # ?�스??보고???�성
             test_report = self.generate_test_report(mapping_results, workflow_results, quality_metrics)
 
-            # 결과 저장
+            # 결과 ?�??
             self.save_test_results(test_report)
 
-            logger.info("법률 질의 테스트 완료")
+            logger.info("법률 질의 ?�스???�료")
 
-            # 결과 요약 출력
-            print(f"\n=== 법률 질의 테스트 결과 요약 ===")
-            print(f"총 테스트 질의 수: {test_report['test_summary']['total_queries']}")
-            print(f"성공적인 키워드 매핑: {test_report['test_summary']['successful_mappings']}")
-            print(f"성공적인 워크플로우: {test_report['test_summary']['successful_workflows']}")
-            print(f"평균 키워드 매칭률: {test_report['keyword_mapping_results']['average_match_rate']:.3f}")
+            # 결과 ?�약 출력
+            print(f"\n=== 법률 질의 ?�스??결과 ?�약 ===")
+            print(f"�??�스??질의 ?? {test_report['test_summary']['total_queries']}")
+            print(f"?�공?�인 ?�워??매핑: {test_report['test_summary']['successful_mappings']}")
+            print(f"?�공?�인 ?�크?�로?? {test_report['test_summary']['successful_workflows']}")
+            print(f"?�균 ?�워??매칭�? {test_report['keyword_mapping_results']['average_match_rate']:.3f}")
 
-            print(f"\n=== 도메인별 성능 ===")
+            print(f"\n=== ?�메?�별 ?�능 ===")
             for domain, rate in test_report['keyword_mapping_results']['domain_performance'].items():
                 print(f"{domain}: {rate:.3f}")
 
-            print(f"\n=== 개선 권장사항 ===")
+            print(f"\n=== 개선 권장?�항 ===")
             for i, recommendation in enumerate(test_report['recommendations'], 1):
                 print(f"{i}. {recommendation}")
 
-            # 상세 결과 예시 출력
-            print(f"\n=== 상세 결과 예시 (첫 번째 질의) ===")
+            # ?�세 결과 ?�시 출력
+            print(f"\n=== ?�세 결과 ?�시 (�?번째 질의) ===")
             first_query = list(mapping_results.values())[0]
             print(f"질문: {first_query['question']}")
-            print(f"예상 키워드: {first_query['expected_keywords']}")
-            print(f"추출된 키워드: {first_query['extracted_keywords'][:10]}...")  # 처음 10개만
-            print(f"매칭된 키워드: {first_query['matched_keywords']}")
-            print(f"매칭률: {first_query['match_rate']:.3f}")
+            print(f"?�상 ?�워?? {first_query['expected_keywords']}")
+            print(f"추출???�워?? {first_query['extracted_keywords'][:10]}...")  # 처음 10개만
+            print(f"매칭???�워?? {first_query['matched_keywords']}")
+            print(f"매칭�? {first_query['match_rate']:.3f}")
 
         except Exception as e:
-            logger.error(f"질의 테스트 중 오류 발생: {e}")
+            logger.error(f"질의 ?�스??�??�류 발생: {e}")
             raise
 
 def main():
-    """메인 실행 함수"""
+    """메인 ?�행 ?�수"""
     tester = LegalQueryTester()
     tester.run_query_test()
 

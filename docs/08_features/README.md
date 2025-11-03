@@ -1,4 +1,4 @@
-# 기능 (Features)
+﻿# 기능 (Features)
 
 이 섹션은 LawFirmAI의 특정 기능 개발 계획 및 가이드를 포함합니다.
 

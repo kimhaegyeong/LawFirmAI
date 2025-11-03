@@ -18,11 +18,11 @@ class LawHTMLParser:
     
     def __init__(self):
         """Initialize the HTML parser"""
-        self.article_pattern = re.compile(r'제(\d+)조')
+        self.article_pattern = re.compile(r'??\d+)�?)
         self.sub_article_patterns = {
-            '항': re.compile(r'제(\d+)항'),
-            '호': re.compile(r'제(\d+)호'),
-            '목': re.compile(r'^([가-힣])\.\s+(.+?)(?=\n[가-힣]\.|\n\d+\.|\n[①②③④⑤⑥⑦⑧⑨⑩]|$)', re.MULTILINE | re.DOTALL)
+            '??: re.compile(r'??\d+)??),
+            '??: re.compile(r'??\d+)??),
+            '�?: re.compile(r'^([가-??)\.\s+(.+?)(?=\n[가-??\.|\n\d+\.|\n[?�②?�④?�⑥?�⑧?�⑩]|$)', re.MULTILINE | re.DOTALL)
         }
     
     def parse_html(self, html_content: str) -> Dict[str, Any]:
@@ -140,7 +140,7 @@ class LawHTMLParser:
         # This is a simplified approach - in practice, you'd analyze the specific structure
         
         # Find all elements that might contain articles
-        potential_articles = soup.find_all(['div', 'p', 'section'], string=re.compile(r'제\d+조'))
+        potential_articles = soup.find_all(['div', 'p', 'section'], string=re.compile(r'??d+�?))
         
         for element in potential_articles:
             text = element.get_text(strip=True)
@@ -221,9 +221,9 @@ class LawHTMLParser:
         
         # Remove elements with specific text content
         unwanted_texts = [
-            '조문버튼', '선택체크', '펼치기', '접기', '선택',
-            '조문연혁', '조문판례', '조문해설', '조문선례',
-            '시행예정', '소개', '버튼', 'javascript:', 'onclick',
+            '조문버튼', '?�택체크', '?�치�?, '?�기', '?�택',
+            '조문?�혁', '조문?��?', '조문?�설', '조문?��?',
+            '?�행?�정', '?�개', '버튼', 'javascript:', 'onclick',
             'href="#', 'href="javascript:', 'class="btn', 'class="button'
         ]
         
@@ -286,11 +286,11 @@ class LawHTMLParser:
         # Remove unwanted text patterns
         unwanted_patterns = [
             r'조문버튼\s*',
-            r'선택체크\s*',
-            r'펼치기\s*',
-            r'접기\s*',
-            r'선택\s*',
-            r'소개\s*',
+            r'?�택체크\s*',
+            r'?�치�?s*',
+            r'?�기\s*',
+            r'?�택\s*',
+            r'?�개\s*',
             r'버튼\s*',
             r'javascript:\s*',
             r'onclick\s*',
@@ -340,7 +340,7 @@ class LawHTMLParser:
             # Extract article number and title
             article_match = self.article_pattern.search(article_text)
             if article_match:
-                article_number = f"제{article_match.group(1)}조"
+                article_number = f"??article_match.group(1)}�?
                 article_title = article_match.group(2) if len(article_match.groups()) > 1 else ""
                 
                 # Extract content
@@ -371,11 +371,11 @@ class LawHTMLParser:
         sub_articles = []
         
         # Find sub-article elements using article patterns
-        article_pattern = re.compile(r'제(\d+)조')
+        article_pattern = re.compile(r'??\d+)�?)
         matches = article_pattern.findall(element.get_text())
         for match in matches:
             sub_articles.append({
-                'type': '조',
+                'type': '�?,
                 'number': match,
                 'content': ''  # Content extraction can be enhanced
             })
@@ -408,7 +408,7 @@ class LawHTMLParser:
     
     def _extract_articles(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """
-        Extract individual articles (제1조, 제2조 etc) from HTML
+        Extract individual articles (??�? ??�?etc) from HTML
         
         Args:
             soup (BeautifulSoup): Parsed HTML soup object
@@ -440,7 +440,7 @@ class LawHTMLParser:
                 sub_articles = self._extract_sub_articles(main_content)
                 
                 articles.append({
-                    'article_number': f'제{article_number}조',
+                    'article_number': f'??article_number}�?,
                     'article_title': article_title,
                     'article_content': main_content,
                     'sub_articles': sub_articles
@@ -450,7 +450,7 @@ class LawHTMLParser:
     
     def _extract_sub_articles(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract sub-articles (항, 호, 목) from article content
+        Extract sub-articles (?? ?? �? from article content
         
         Args:
             content (str): Article content text
@@ -460,25 +460,25 @@ class LawHTMLParser:
         """
         sub_articles = []
         
-        # Extract 항 (paragraphs)
-        for match in self.sub_article_patterns['항'].finditer(content):
+        # Extract ??(paragraphs)
+        for match in self.sub_article_patterns['??].finditer(content):
             sub_articles.append({
-                'type': '항',
+                'type': '??,
                 'number': int(match.group(1)),
                 'content': self._extract_sub_content(content, match.start())
             })
         
-        # Extract 호 (sub-paragraphs)
-        for match in self.sub_article_patterns['호'].finditer(content):
+        # Extract ??(sub-paragraphs)
+        for match in self.sub_article_patterns['??].finditer(content):
             sub_articles.append({
-                'type': '호',
+                'type': '??,
                 'number': int(match.group(1)),
                 'content': self._extract_sub_content(content, match.start())
             })
         
-        # Extract 목 (items) with sequence validation
+        # Extract �?(items) with sequence validation
         mok_items = []
-        for match in self.sub_article_patterns['목'].finditer(content):
+        for match in self.sub_article_patterns['�?].finditer(content):
             mok_letter = match.group(1)
             mok_content = match.group(2).strip()
             
@@ -486,21 +486,21 @@ class LawHTMLParser:
             mok_number = ord(mok_letter) - ord('가') + 1
             
             mok_items.append({
-                'type': '목',
+                'type': '�?,
                 'number': mok_number,
                 'letter': mok_letter,
                 'content': mok_content,
                 'position': match.start()
             })
         
-        # Sequence validation: check if starts with 가., 나., 다. in proper order
+        # Sequence validation: check if starts with 가., ??, ?? in proper order
         if mok_items:
             # Sort by position
             mok_items.sort(key=lambda x: x['position'])
             
             # Sequence validation
             letters = [item['letter'] for item in mok_items]
-            expected_sequence = ['가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하']
+            expected_sequence = ['가', '??, '??, '??, '�?, '�?, '??, '??, '??, '�?, '�?, '?�', '??, '??]
             
             # Must start with 가.
             if letters[0] == '가':
@@ -514,7 +514,7 @@ class LawHTMLParser:
                 # Must have at least 2 items
                 if is_proper_sequence and len(mok_items) >= 2:
                     sub_articles.extend(mok_items)
-                # Otherwise reject all 목 items
+                # Otherwise reject all �?items
         
         return sub_articles
     
@@ -588,10 +588,10 @@ class LawHTMLParser:
         
         # Pattern for legal references
         reference_patterns = [
-            r'「([^」]+)」',  # Quoted law names
-            r'같은 법',      # Same law reference
-            r'동법',         # Same law reference (alternative)
-            r'이 법',        # This law reference
+            r'??[^??+)??,  # Quoted law names
+            r'같�? �?,      # Same law reference
+            r'?�법',         # Same law reference (alternative)
+            r'??�?,        # This law reference
         ]
         
         for pattern in reference_patterns:

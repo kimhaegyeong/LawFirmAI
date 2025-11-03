@@ -1,4 +1,4 @@
-# LawFirmAI 데이터 수집 가이드
+﻿# LawFirmAI 데이터 수집 가이드
 
 ## 개요
 

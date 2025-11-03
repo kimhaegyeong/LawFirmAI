@@ -14,7 +14,7 @@ def check_specific_file():
     # Find a file with articles
     target_file = None
     for f in files:
-        if '1963년도국가공무원연금법' in f:
+        if '1963?�도�??공무?�연금법' in f:
             target_file = f
             break
     

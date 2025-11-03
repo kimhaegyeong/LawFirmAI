@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-법률 데이터 압축 유틸리티 모듈
-수집 및 전처리 과정에서 데이터를 즉시 압축하는 기능 제공
+법률 ?�이???�축 ?�틸리티 모듈
+?�집 �??�처�?과정?�서 ?�이?��? 즉시 ?�축?�는 기능 ?�공
 """
 
 import json
@@ -9,26 +9,26 @@ import re
 from typing import Dict, Any, List
 
 def compress_legal_text(text: str) -> str:
-    """법률 텍스트 압축"""
+    """법률 ?�스???�축"""
     if not text:
         return ""
     
-    # 불필요한 공백 제거
+    # 불필?�한 공백 ?�거
     text = re.sub(r'\s+', ' ', text)
     
-    # 반복되는 법률 용어 축약
+    # 반복?�는 법률 ?�어 축약
     replacements = {
-        '이 법에 따르면': '이 법에 따라',
-        '다음 각 호의 어느 하나에 해당하는': '다음에 해당하는',
-        '특별시장·광역시장·특별자치시장·도지사': '시·도지사',
-        '특별자치도지사': '특별자치도지사',
-        '중앙행정기관의 장': '중앙행정기관장',
-        '지방자치단체의 장': '지방자치단체장',
-        '국가 또는 지방자치단체': '국가·지방자치단체',
-        '이하 "시·도지사"라 한다': '이하 시·도지사라 함',
-        '이하 "특례시"라 한다': '이하 특례시라 함',
-        '이하 "등록비영리민간단체"라 한다': '이하 등록비영리민간단체라 함',
-        '이하 "공익사업"이라 한다': '이하 공익사업이라 함'
+        '??법에 ?�르�?: '??법에 ?�라',
+        '?�음 �??�의 ?�느 ?�나???�당?�는': '?�음???�당?�는',
+        '?�별?�장·광역?�장·?�별?�치?�장·?��???: '?�·도지??,
+        '?�별?�치?��???: '?�별?�치?��???,
+        '중앙?�정기�?????: '중앙?�정기�???,
+        '지방자치단체의 ??: '지방자치단체장',
+        '�?? ?�는 지방자치단�?: '�??·지방자치단�?,
+        '?�하 "?�·도지?????�다': '?�하 ?�·도지?�라 ??,
+        '?�하 "?��??????�다': '?�하 ?��??�라 ??,
+        '?�하 "?�록비영리�?간단�????�다': '?�하 ?�록비영리�?간단체라 ??,
+        '?�하 "공익?�업"?�라 ?�다': '?�하 공익?�업?�라 ??
     }
     
     for old, new in replacements.items():
@@ -36,11 +36,11 @@ def compress_legal_text(text: str) -> str:
     
     return text.strip()
 
-# generate_compressed_search_text 함수 제거됨 - 더 이상 사용하지 않음
+# generate_compressed_search_text ?�수 ?�거??- ???�상 ?�용?��? ?�음
 
 def compress_law_data(data: Dict[str, Any]) -> Dict[str, Any]:
-    """개별 법률 데이터 압축"""
-    # 필수 필드만 유지
+    """개별 법률 ?�이???�축"""
+    # ?�수 ?�드�??��?
     compressed = {
         'law_id': data.get('law_id'),
         'law_name': data.get('law_name'),
@@ -54,12 +54,12 @@ def compress_law_data(data: Dict[str, Any]) -> Dict[str, Any]:
         'articles': data.get('articles', [])
     }
     
-    # articles 내부 텍스트도 압축
+    # articles ?��? ?�스?�도 ?�축
     for article in compressed['articles']:
         if 'article_content' in article:
             article['article_content'] = compress_legal_text(article['article_content'])
         
-        # sub_articles도 압축
+        # sub_articles???�축
         for sub_article in article.get('sub_articles', []):
             if 'content' in sub_article:
                 sub_article['content'] = compress_legal_text(sub_article['content'])
@@ -67,18 +67,18 @@ def compress_law_data(data: Dict[str, Any]) -> Dict[str, Any]:
     return compressed
 
 def save_compressed_law_data(data: Dict[str, Any], file_path: str) -> int:
-    """압축된 법률 데이터를 파일에 저장하고 파일 크기 반환"""
+    """?�축??법률 ?�이?��? ?�일???�?�하�??�일 ?�기 반환"""
     compressed_data = compress_law_data(data)
     
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(compressed_data, f, ensure_ascii=False, separators=(',', ':'))
     
-    # 파일 크기 반환
+    # ?�일 ?�기 반환
     import os
     return os.path.getsize(file_path)
 
 def compress_and_save_page_data(page_data: Dict[str, Any], file_path: str) -> int:
-    """페이지 데이터를 압축하여 저장"""
+    """?�이지 ?�이?��? ?�축?�여 ?�??""
     compressed_page_data = {
         'page_number': page_data.get('page_number'),
         'total_pages': page_data.get('total_pages'),
@@ -87,7 +87,7 @@ def compress_and_save_page_data(page_data: Dict[str, Any], file_path: str) -> in
         'laws': []
     }
     
-    # 각 법률 데이터 압축
+    # �?법률 ?�이???�축
     for law in page_data.get('laws', []):
         compressed_law = compress_law_data(law)
         compressed_page_data['laws'].append(compressed_law)
@@ -95,6 +95,6 @@ def compress_and_save_page_data(page_data: Dict[str, Any], file_path: str) -> in
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(compressed_page_data, f, ensure_ascii=False, separators=(',', ':'))
     
-    # 파일 크기 반환
+    # ?�일 ?�기 반환
     import os
     return os.path.getsize(file_path)

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-법률 용어 수집 관련 모듈
+법률 ?�어 ?�집 관??모듈
 
-국가법령정보센터 OpenAPI를 활용한 법률 용어 수집 및 관리
+�??법령?�보?�터 OpenAPI�??�용??법률 ?�어 ?�집 �?관�?
 """
 
 from .term_collector import LegalTermCollector

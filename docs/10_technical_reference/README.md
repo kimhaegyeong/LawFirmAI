@@ -1,4 +1,4 @@
-# 기술 참조 (Technical Reference)
+﻿# 기술 참조 (Technical Reference)
 
 이 섹션은 LawFirmAI 프로젝트의 기술적 참조 자료를 포함합니다.
 

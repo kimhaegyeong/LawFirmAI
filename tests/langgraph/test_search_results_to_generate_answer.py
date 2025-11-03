@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-검색 결과가 generate_answer_enhanced까지 잘 전달되는지 테스트
+검??결과가 generate_answer_enhanced까�? ???�달?�는지 ?�스??
 """
 
 import asyncio
@@ -9,13 +9,13 @@ import sys
 import time
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 로깅 설정 (안전한 핸들러 사용)
+# 로깅 ?�정 (?�전???�들???�용)
 class SafeStreamHandler(logging.StreamHandler):
-    """안전한 스트림 핸들러 - detached 버퍼 에러 방지"""
+    """?�전???�트�??�들??- detached 버퍼 ?�러 방�?"""
     def emit(self, record):
         try:
             super().emit(record)
@@ -29,59 +29,59 @@ logging.basicConfig(
     force=True
 )
 
-# 로깅 예외 비활성화
+# 로깅 ?�외 비활?�화
 logging.raiseExceptions = False
 
 logger = logging.getLogger(__name__)
 
 
 async def test_search_results_to_generate_answer():
-    """검색 결과가 generate_answer_enhanced까지 전달되는지 테스트"""
+    """검??결과가 generate_answer_enhanced까�? ?�달?�는지 ?�스??""
     try:
-        from core.agents.workflow_service import LangGraphWorkflowService
+        from source.agents.workflow_service import LangGraphWorkflowService
         from infrastructure.utils.langgraph_config import LangGraphConfig
 
         logger.info("=" * 80)
-        logger.info("검색 결과 전달 테스트 시작")
+        logger.info("검??결과 ?�달 ?�스???�작")
         logger.info("=" * 80)
 
-        # 설정 로드
-        logger.info("1. LangGraph 설정 로드 중...")
+        # ?�정 로드
+        logger.info("1. LangGraph ?�정 로드 �?..")
         config = LangGraphConfig.from_env()
-        logger.info(f"   ✅ LangGraph 설정 로드 완료")
+        logger.info(f"   ??LangGraph ?�정 로드 ?�료")
 
-        # 워크플로우 서비스 초기화
-        logger.info("2. 워크플로우 서비스 초기화 중...")
+        # ?�크?�로???�비??초기??
+        logger.info("2. ?�크?�로???�비??초기??�?..")
         workflow_service = LangGraphWorkflowService(config)
-        logger.info(f"   ✅ 워크플로우 서비스 초기화 완료")
+        logger.info(f"   ???�크?�로???�비??초기???�료")
 
-        # 테스트 질의 (검색 결과가 확실히 나올 것으로 예상되는 질의)
+        # ?�스??질의 (검??결과가 ?�실???�올 것으�??�상?�는 질의)
         test_queries = [
-            "계약 해지 요건",
-            "손해배상 책임",
-            "민법 제543조"
+            "계약 ?��? ?�건",
+            "?�해배상 책임",
+            "민법 ??43�?
         ]
 
-        logger.info("3. 검색 결과 전달 테스트 시작...")
+        logger.info("3. 검??결과 ?�달 ?�스???�작...")
 
         for i, query in enumerate(test_queries, 1):
             logger.info(f"\n{'='*80}")
-            logger.info(f"테스트 {i}/{len(test_queries)}: {query}")
+            logger.info(f"?�스??{i}/{len(test_queries)}: {query}")
             logger.info(f"{'='*80}")
 
             try:
-                # 세션 ID 생성
+                # ?�션 ID ?�성
                 session_id = f"test_search_{int(time.time())}_{i}"
 
-                # 질의 처리 (검색 단계까지 실행)
-                logger.info(f"질의 처리 시작: {query}")
+                # 질의 처리 (검???�계까�? ?�행)
+                logger.info(f"질의 처리 ?�작: {query}")
                 start_time = time.time()
 
-                # 전체 워크플로우 실행하고 검색 결과 전달 확인
-                logger.info("🔄 전체 워크플로우 실행 중...")
+                # ?�체 ?�크?�로???�행?�고 검??결과 ?�달 ?�인
+                logger.info("?�� ?�체 ?�크?�로???�행 �?..")
                 result = await workflow_service.process_query(query, session_id, enable_checkpoint=False)
 
-                # 결과에서 검색 관련 정보 추출
+                # 결과?�서 검??관???�보 추출
                 retrieved_docs = result.get("retrieved_docs", [])
                 metadata = result.get("metadata", {})
                 search_meta = metadata.get("search", {}) if isinstance(metadata, dict) else {}
@@ -90,13 +90,13 @@ async def test_search_results_to_generate_answer():
                 keyword_count = search_meta.get("keyword_results_count", 0)
                 final_count = search_meta.get("final_count", len(retrieved_docs))
 
-                logger.info(f"\n📊 검색 결과:")
-                logger.info(f"   ✅ 의미적 검색: {semantic_count}개")
-                logger.info(f"   ✅ 키워드 검색: {keyword_count}개")
-                logger.info(f"   ✅ 최종 통합 검색 결과: {final_count}개")
+                logger.info(f"\n?�� 검??결과:")
+                logger.info(f"   ???��???검?? {semantic_count}�?)
+                logger.info(f"   ???�워??검?? {keyword_count}�?)
+                logger.info(f"   ??최종 ?�합 검??결과: {final_count}�?)
 
                 if final_count > 0:
-                    logger.info(f"   📄 첫 번째 문서 샘플:")
+                    logger.info(f"   ?�� �?번째 문서 ?�플:")
                     first_doc = retrieved_docs[0] if isinstance(retrieved_docs, list) and len(retrieved_docs) > 0 else {}
                     if isinstance(first_doc, dict):
                         logger.info(f"      - Type: {first_doc.get('type', 'unknown')}")
@@ -104,19 +104,19 @@ async def test_search_results_to_generate_answer():
                         content = first_doc.get('content', '') or first_doc.get('text', '')
                         logger.info(f"      - Content preview: {str(content)[:100]}...")
                 else:
-                    logger.warning("   ⚠️ 검색 결과가 없습니다!")
+                    logger.warning("   ?�️ 검??결과가 ?�습?�다!")
 
-                # 답변 확인
+                # ?��? ?�인
                 answer = result.get("answer", "")
-                logger.info(f"\n✍️ generate_answer_enhanced 결과:")
-                logger.info(f"   ✅ 답변 생성 완료")
-                logger.info(f"   📊 답변에서 받은 검색 결과: {len(retrieved_docs)}개")
+                logger.info(f"\n?�️ generate_answer_enhanced 결과:")
+                logger.info(f"   ???��? ?�성 ?�료")
+                logger.info(f"   ?�� ?��??�서 받�? 검??결과: {len(retrieved_docs)}�?)
 
                 if answer:
                     answer_preview = answer[:200] if len(answer) > 200 else answer
-                    logger.info(f"   📝 생성된 답변 미리보기: {answer_preview}...")
+                    logger.info(f"   ?�� ?�성???��? 미리보기: {answer_preview}...")
 
-                    # 검색 결과의 내용이 답변에 포함되었는지 간단히 확인
+                    # 검??결과???�용???��????�함?�었?��? 간단???�인
                     doc_mentioned = False
                     if isinstance(retrieved_docs, list) and len(retrieved_docs) > 0:
                         for doc in retrieved_docs[:3]:
@@ -124,44 +124,44 @@ async def test_search_results_to_generate_answer():
                                 source = doc.get("source", "")
                                 if source and len(str(source)) > 10 and str(source)[:20] in answer:
                                     doc_mentioned = True
-                                    logger.info(f"   ✅ 검색 결과가 답변에 포함됨: {str(source)[:50]}")
+                                    logger.info(f"   ??검??결과가 ?��????�함?? {str(source)[:50]}")
                                     break
 
                     if not doc_mentioned and len(retrieved_docs) > 0:
-                        logger.warning("   ⚠️ 검색 결과가 답변에 명시적으로 포함되지 않았을 수 있음")
+                        logger.warning("   ?�️ 검??결과가 ?��???명시?�으�??�함?��? ?�았?????�음")
                 else:
-                    logger.warning("   ⚠️ 생성된 답변이 없습니다!")
+                    logger.warning("   ?�️ ?�성???��????�습?�다!")
 
-                logger.info(f"\n📊 검색 메타데이터:")
-                logger.info(f"   - 의미적 검색: {semantic_count}개")
-                logger.info(f"   - 키워드 검색: {keyword_count}개")
-                logger.info(f"   - 최종 결과: {final_count}개")
-                logger.info(f"   - 검색 시간: {search_meta.get('search_time', 0):.3f}초")
+                logger.info(f"\n?�� 검??메�??�이??")
+                logger.info(f"   - ?��???검?? {semantic_count}�?)
+                logger.info(f"   - ?�워??검?? {keyword_count}�?)
+                logger.info(f"   - 최종 결과: {final_count}�?)
+                logger.info(f"   - 검???�간: {search_meta.get('search_time', 0):.3f}�?)
 
                 processing_time = time.time() - start_time
-                logger.info(f"\n✅ 테스트 {i} 완료 (총 {processing_time:.2f}초)")
+                logger.info(f"\n???�스??{i} ?�료 (�?{processing_time:.2f}�?")
 
-                # 검증
-                assert final_count > 0, f"검색 결과가 없습니다! (semantic: {semantic_count}, keyword: {keyword_count})"
-                assert len(retrieved_docs) > 0, f"검색 결과가 retrieved_docs에 없습니다!"
-                assert answer is not None and len(str(answer)) > 0, "답변이 생성되지 않았습니다!"
+                # 검�?
+                assert final_count > 0, f"검??결과가 ?�습?�다! (semantic: {semantic_count}, keyword: {keyword_count})"
+                assert len(retrieved_docs) > 0, f"검??결과가 retrieved_docs???�습?�다!"
+                assert answer is not None and len(str(answer)) > 0, "?��????�성?��? ?�았?�니??"
 
-                # 검색 결과가 generate_answer_enhanced까지 전달되었는지 확인
-                assert retrieved_docs is not None, "retrieved_docs가 None입니다!"
-                assert isinstance(retrieved_docs, list), f"retrieved_docs가 리스트가 아닙니다: {type(retrieved_docs)}"
+                # 검??결과가 generate_answer_enhanced까�? ?�달?�었?��? ?�인
+                assert retrieved_docs is not None, "retrieved_docs가 None?�니??"
+                assert isinstance(retrieved_docs, list), f"retrieved_docs가 리스?��? ?�닙?�다: {type(retrieved_docs)}"
 
-                logger.info(f"   ✅ 모든 검증 통과!")
+                logger.info(f"   ??모든 검�??�과!")
 
             except Exception as e:
-                logger.error(f"테스트 {i} 실패: {e}", exc_info=True)
+                logger.error(f"?�스??{i} ?�패: {e}", exc_info=True)
                 continue
 
         logger.info("\n" + "=" * 80)
-        logger.info("검색 결과 전달 테스트 완료")
+        logger.info("검??결과 ?�달 ?�스???�료")
         logger.info("=" * 80)
 
     except Exception as e:
-        logger.error(f"테스트 실행 실패: {e}", exc_info=True)
+        logger.error(f"?�스???�행 ?�패: {e}", exc_info=True)
         raise
 
 

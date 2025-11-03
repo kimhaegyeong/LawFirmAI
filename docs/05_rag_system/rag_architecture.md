@@ -1,4 +1,4 @@
-# LawFirmAI RAG 시스템 가이드
+﻿# LawFirmAI RAG 시스템 가이드
 
 ## 개요
 
@@ -49,7 +49,7 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 ### 핵심 컴포넌트
 
 #### 1. LangGraph Workflow Service
-**파일**: `core/agents/workflow_service.py`
+**파일**: `source/agents/workflow_service.py`
 
 - **역할**: LangGraph 기반 법률 질문 처리 워크플로우 오케스트레이션
 - **주요 기능**:
@@ -58,7 +58,7 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
   - 세션 관리
 
 #### 2. 검색 엔진
-**파일**: `core/services/search/`
+**파일**: `source/services/search/`
 
 - **HybridSearchEngine**: 하이브리드 검색 (의미적 + 정확 매칭)
 - **SemanticSearchEngine**: FAISS 벡터 기반 의미적 검색
@@ -66,14 +66,14 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 - **QuestionClassifier**: 질문 유형 분류
 
 #### 3. 답변 생성 서비스
-**파일**: `core/services/generation/`
+**파일**: `source/services/generation/`
 
 - **AnswerGenerator**: LLM 기반 답변 생성
 - **ContextBuilder**: 검색 결과 기반 컨텍스트 구축
 - **AnswerFormatter**: 답변 포맷팅
 
 #### 4. 데이터 레이어
-**파일**: `core/data/`
+**파일**: `source/data/`
 
 - **VectorStore**: FAISS 벡터 스토어 관리
 - **Database**: SQLite 데이터베이스 관리
@@ -318,10 +318,10 @@ logging.basicConfig(
 ### 검색 엔진 구성
 
 #### 1. 의미적 검색 엔진
-**파일**: `core/services/search/semantic_search_engine.py`
+**파일**: `source/services/search/semantic_search_engine.py`
 
 ```python
-from core.services.search import SemanticSearchEngine
+from source.services.search import SemanticSearchEngine
 
 engine = SemanticSearchEngine()
 results = engine.search("계약 해지", k=5)
@@ -332,10 +332,10 @@ results = engine.search("계약 해지", k=5)
 - Sentence-BERT 모델을 사용한 의미적 유사도 계산
 
 #### 2. 정확 매칭 검색 엔진
-**파일**: `core/services/search/exact_search_engine.py`
+**파일**: `source/services/search/exact_search_engine.py`
 
 ```python
-from core.services.search import ExactSearchEngine
+from source.services.search import ExactSearchEngine
 
 engine = ExactSearchEngine()
 results = engine.search("민법 제543조", k=5)
@@ -346,10 +346,10 @@ results = engine.search("민법 제543조", k=5)
 - 법령명, 조문번호 등 정확한 매칭
 
 #### 3. 하이브리드 검색 엔진
-**파일**: `core/services/search/hybrid_search_engine.py`
+**파일**: `source/services/search/hybrid_search_engine.py`
 
 ```python
-from core.services.search import HybridSearchEngine
+from source.services.search import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("계약 해지", question_type="law_inquiry")
@@ -365,7 +365,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 ### 워크플로우 서비스
 
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화
@@ -392,7 +392,7 @@ print(f"소스: {result.get('sources', [])}")
 ### 1. 기본 RAG 쿼리
 
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화
@@ -410,7 +410,7 @@ print(f"참조 문서: {len(result.get('sources', []))}개")
 ### 2. 하이브리드 검색
 
 ```python
-from core.services.search import HybridSearchEngine
+from source.services.search import HybridSearchEngine
 
 # 검색 엔진 초기화
 search_engine = HybridSearchEngine()
@@ -427,7 +427,7 @@ for result in results:
 ### 3. 벡터 저장소 관리
 
 ```python
-from core.data.vector_store import VectorStore
+from source.data.vector_store import VectorStore
 
 # 벡터 저장소 초기화
 vector_store = VectorStore("ko-sroberta-multitask")

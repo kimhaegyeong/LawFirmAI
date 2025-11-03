@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-판례 데이터 DB 임포터
+?��? ?�이??DB ?�포??
 
-전처리된 판례 데이터를 SQLite 데이터베이스에 임포트하는 스크립트입니다.
-증분 모드를 지원하여 기존 데이터와 중복을 방지합니다.
+?�처리된 ?��? ?�이?��? SQLite ?�이?�베?�스???�포?�하???�크립트?�니??
+증분 모드�?지?�하??기존 ?�이?��? 중복??방�??�니??
 """
 
 import os
@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -26,14 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 class PrecedentDataImporter:
-    """판례 데이터 임포터 클래스"""
+    """?��? ?�이???�포???�래??""
     
     def __init__(self, db_path: str = "data/lawfirm.db"):
         """
-        판례 데이터 임포터 초기화
+        ?��? ?�이???�포??초기??
         
         Args:
-            db_path: 데이터베이스 파일 경로
+            db_path: ?�이?�베?�스 ?�일 경로
         """
         self.db_manager = DatabaseManager(db_path)
         self.import_stats = {
@@ -50,14 +50,14 @@ class PrecedentDataImporter:
     
     def import_file(self, file_path: Path, incremental: bool = False) -> Dict[str, Any]:
         """
-        단일 전처리된 판례 파일 임포트
+        ?�일 ?�처리된 ?��? ?�일 ?�포??
         
         Args:
-            file_path: 임포트할 파일 경로
-            incremental: 증분 모드 여부
+            file_path: ?�포?�할 ?�일 경로
+            incremental: 증분 모드 ?��?
             
         Returns:
-            Dict[str, Any]: 임포트 결과
+            Dict[str, Any]: ?�포??결과
         """
         try:
             logger.info(f"Importing file: {file_path} (incremental: {incremental})")
@@ -65,7 +65,7 @@ class PrecedentDataImporter:
             with open(file_path, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
             
-            # 판례 데이터 구조 처리
+            # ?��? ?�이??구조 처리
             if isinstance(file_data, dict) and 'cases' in file_data:
                 processed_cases = file_data['cases']
             elif isinstance(file_data, list):
@@ -132,14 +132,14 @@ class PrecedentDataImporter:
     
     def import_directory(self, directory_path: Path, incremental: bool = False) -> Dict[str, Any]:
         """
-        디렉토리 내 모든 전처리된 판례 파일 임포트
+        ?�렉?�리 ??모든 ?�처리된 ?��? ?�일 ?�포??
         
         Args:
-            directory_path: 임포트할 디렉토리 경로
-            incremental: 증분 모드 여부
+            directory_path: ?�포?�할 ?�렉?�리 경로
+            incremental: 증분 모드 ?��?
             
         Returns:
-            Dict[str, Any]: 임포트 결과 요약
+            Dict[str, Any]: ?�포??결과 ?�약
         """
         logger.info(f"Importing directory: {directory_path} (incremental: {incremental})")
         
@@ -148,7 +148,7 @@ class PrecedentDataImporter:
             logger.error(error_msg)
             return {'error': error_msg}
         
-        # JSON 파일 찾기
+        # JSON ?�일 찾기
         json_files = list(directory_path.glob("*.json"))
         
         if not json_files:
@@ -162,7 +162,7 @@ class PrecedentDataImporter:
             result = self.import_file(file_path, incremental)
             file_results.append(result)
         
-        # 결과 요약 생성
+        # 결과 ?�약 ?�성
         summary = self._generate_import_summary(file_results)
         
         return {
@@ -174,13 +174,13 @@ class PrecedentDataImporter:
     
     def _import_single_case(self, case_data: Dict[str, Any]) -> bool:
         """
-        단일 판례 케이스 임포트
+        ?�일 ?��? 케?�스 ?�포??
         
         Args:
-            case_data: 판례 케이스 데이터
+            case_data: ?��? 케?�스 ?�이??
             
         Returns:
-            bool: 임포트 성공 여부
+            bool: ?�포???�공 ?��?
         """
         try:
             case_id = case_data.get('case_id')
@@ -188,20 +188,20 @@ class PrecedentDataImporter:
                 logger.error("Case ID is missing")
                 return False
             
-            # 케이스 기본 정보 저장
+            # 케?�스 기본 ?�보 ?�??
             self._insert_case(case_data)
             
-            # 섹션 정보 저장
+            # ?�션 ?�보 ?�??
             sections = case_data.get('sections', [])
             for section in sections:
                 self._insert_section(case_id, section)
             
-            # 당사자 정보 저장
+            # ?�사???�보 ?�??
             parties = case_data.get('parties', [])
             for party in parties:
                 self._insert_party(case_id, party)
             
-            # FTS 인덱스 업데이트
+            # FTS ?�덱???�데?�트
             self._update_fts_indices(case_id, case_data)
             
             return True
@@ -212,44 +212,44 @@ class PrecedentDataImporter:
     
     def _import_single_case_incremental(self, case_data: Dict[str, Any]) -> Dict[str, str]:
         """
-        증분 모드로 단일 판례 케이스 임포트
+        증분 모드�??�일 ?��? 케?�스 ?�포??
         
         Args:
-            case_data: 판례 케이스 데이터
+            case_data: ?��? 케?�스 ?�이??
             
         Returns:
-            Dict[str, str]: 임포트 결과 (action: inserted/updated/skipped/failed)
+            Dict[str, str]: ?�포??결과 (action: inserted/updated/skipped/failed)
         """
         try:
             case_id = case_data.get('case_id')
             if not case_id:
                 return {'action': 'failed', 'reason': 'Case ID is missing'}
             
-            # 기존 케이스 확인
+            # 기존 케?�스 ?�인
             existing_case = self._check_existing_case(case_id)
             
             if existing_case:
-                # 업데이트 필요성 확인
+                # ?�데?�트 ?�요???�인
                 if self._check_if_update_needed(existing_case, case_data):
                     self._update_existing_case(case_id, case_data)
                     return {'action': 'updated', 'reason': 'Case updated'}
                 else:
                     return {'action': 'skipped', 'reason': 'No changes needed'}
             else:
-                # 새 케이스 삽입
+                # ??케?�스 ?�입
                 self._insert_case(case_data)
                 
-                # 섹션 정보 저장
+                # ?�션 ?�보 ?�??
                 sections = case_data.get('sections', [])
                 for section in sections:
                     self._insert_section(case_id, section)
                 
-                # 당사자 정보 저장
+                # ?�사???�보 ?�??
                 parties = case_data.get('parties', [])
                 for party in parties:
                     self._insert_party(case_id, party)
                 
-                # FTS 인덱스 업데이트
+                # FTS ?�덱???�데?�트
                 self._update_fts_indices(case_id, case_data)
                 
                 return {'action': 'inserted', 'reason': 'New case inserted'}
@@ -259,7 +259,7 @@ class PrecedentDataImporter:
             return {'action': 'failed', 'reason': str(e)}
     
     def _insert_case(self, case_data: Dict[str, Any]):
-        """케이스 기본 정보 삽입"""
+        """케?�스 기본 ?�보 ?�입"""
         query = """
             INSERT OR REPLACE INTO precedent_cases 
             (case_id, category, case_name, case_number, decision_date, field, court, 
@@ -285,7 +285,7 @@ class PrecedentDataImporter:
             conn.commit()
     
     def _insert_section(self, case_id: str, section_data: Dict[str, Any]):
-        """섹션 정보 삽입"""
+        """?�션 ?�보 ?�입"""
         section_id = f"{case_id}_{section_data.get('section_type')}"
         
         query = """
@@ -310,7 +310,7 @@ class PrecedentDataImporter:
             conn.commit()
     
     def _insert_party(self, case_id: str, party_data: Dict[str, Any]):
-        """당사자 정보 삽입"""
+        """?�사???�보 ?�입"""
         query = """
             INSERT INTO precedent_parties 
             (case_id, party_type, party_type_korean, party_content, party_length)
@@ -330,29 +330,29 @@ class PrecedentDataImporter:
             conn.commit()
     
     def _check_existing_case(self, case_id: str) -> Optional[Dict[str, Any]]:
-        """기존 케이스 확인"""
+        """기존 케?�스 ?�인"""
         query = "SELECT * FROM precedent_cases WHERE case_id = ?"
         results = self.db_manager.execute_query(query, (case_id,))
         return results[0] if results else None
     
     def _check_if_update_needed(self, existing_case: Dict[str, Any], new_case_data: Dict[str, Any]) -> bool:
-        """업데이트 필요성 확인"""
-        # 간단한 해시 비교로 변경 여부 확인
+        """?�데?�트 ?�요???�인"""
+        # 간단???�시 비교�?변�??��? ?�인
         existing_hash = hash(str(existing_case.get('full_text', '')))
         new_hash = hash(str(new_case_data.get('full_text', '')))
         
         return existing_hash != new_hash
     
     def _update_existing_case(self, case_id: str, case_data: Dict[str, Any]):
-        """기존 케이스 업데이트"""
-        # 기존 섹션과 당사자 정보 삭제
+        """기존 케?�스 ?�데?�트"""
+        # 기존 ?�션�??�사???�보 ??��
         self._delete_case_sections(case_id)
         self._delete_case_parties(case_id)
         
-        # 케이스 정보 업데이트
+        # 케?�스 ?�보 ?�데?�트
         self._insert_case(case_data)
         
-        # 섹션과 당사자 정보 재삽입
+        # ?�션�??�사???�보 ?�삽??
         sections = case_data.get('sections', [])
         for section in sections:
             self._insert_section(case_id, section)
@@ -361,23 +361,23 @@ class PrecedentDataImporter:
         for party in parties:
             self._insert_party(case_id, party)
         
-        # FTS 인덱스 업데이트
+        # FTS ?�덱???�데?�트
         self._update_fts_indices(case_id, case_data)
     
     def _delete_case_sections(self, case_id: str):
-        """케이스의 섹션 정보 삭제"""
+        """케?�스???�션 ?�보 ??��"""
         query = "DELETE FROM precedent_sections WHERE case_id = ?"
         self.db_manager.execute_update(query, (case_id,))
     
     def _delete_case_parties(self, case_id: str):
-        """케이스의 당사자 정보 삭제"""
+        """케?�스???�사???�보 ??��"""
         query = "DELETE FROM precedent_parties WHERE case_id = ?"
         self.db_manager.execute_update(query, (case_id,))
     
     def _update_fts_indices(self, case_id: str, case_data: Dict[str, Any]):
-        """FTS 인덱스 업데이트"""
+        """FTS ?�덱???�데?�트"""
         try:
-            # FTS 케이스 테이블 업데이트
+            # FTS 케?�스 ?�이�??�데?�트
             fts_query = """
                 INSERT OR REPLACE INTO fts_precedent_cases 
                 (case_id, case_name, case_number, full_text, searchable_text)
@@ -396,7 +396,7 @@ class PrecedentDataImporter:
                 cursor.execute(fts_query, fts_params)
                 conn.commit()
             
-            # FTS 섹션 테이블 업데이트
+            # FTS ?�션 ?�이�??�데?�트
             sections = case_data.get('sections', [])
             for section in sections:
                 section_id = f"{case_id}_{section.get('section_type')}"
@@ -420,7 +420,7 @@ class PrecedentDataImporter:
             logger.error(f"Error updating FTS indices: {e}")
     
     def _generate_import_summary(self, file_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """임포트 결과 요약 생성"""
+        """?�포??결과 ?�약 ?�성"""
         total_cases = sum(r.get('total_cases', 0) for r in file_results)
         imported_cases = sum(r.get('imported_cases', 0) for r in file_results)
         updated_cases = sum(r.get('updated_cases', 0) for r in file_results)
@@ -438,16 +438,16 @@ class PrecedentDataImporter:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description="판례 데이터 DB 임포터")
-    parser.add_argument('--input', required=True, help='입력 파일 또는 디렉토리 경로')
-    parser.add_argument('--db-path', default='data/lawfirm.db', help='데이터베이스 파일 경로')
-    parser.add_argument('--incremental', action='store_true', help='증분 모드 활성화')
-    parser.add_argument('--verbose', '-v', action='store_true', help='상세 로그 출력')
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description="?��? ?�이??DB ?�포??)
+    parser.add_argument('--input', required=True, help='?�력 ?�일 ?�는 ?�렉?�리 경로')
+    parser.add_argument('--db-path', default='data/lawfirm.db', help='?�이?�베?�스 ?�일 경로')
+    parser.add_argument('--incremental', action='store_true', help='증분 모드 ?�성??)
+    parser.add_argument('--verbose', '-v', action='store_true', help='?�세 로그 출력')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -455,17 +455,17 @@ def main():
     )
     
     try:
-        # 임포터 초기화
+        # ?�포??초기??
         importer = PrecedentDataImporter(args.db_path)
         
         input_path = Path(args.input)
         
         if input_path.is_file():
-            # 단일 파일 임포트
+            # ?�일 ?�일 ?�포??
             result = importer.import_file(input_path, args.incremental)
             logger.info(f"File import completed: {result}")
         elif input_path.is_dir():
-            # 디렉토리 임포트
+            # ?�렉?�리 ?�포??
             result = importer.import_directory(input_path, args.incremental)
             
             # 결과 출력
@@ -481,7 +481,7 @@ def main():
             logger.error(f"Input path does not exist: {input_path}")
             return False
         
-        # 전체 통계 출력
+        # ?�체 ?�계 출력
         stats = importer.import_stats
         logger.info("Overall Import Statistics:")
         logger.info(f"  Total files processed: {stats['total_files_processed']}")

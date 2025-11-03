@@ -1,4 +1,4 @@
-# LawFirmAI 데이터베이스 스키마
+﻿# LawFirmAI 데이터베이스 스키마
 
 ## 개요
 
@@ -348,7 +348,7 @@ CREATE VIRTUAL TABLE fts_precedent_sections USING fts5(
 
 ### 테이블 생성
 ```python
-from core.data.database import DatabaseManager
+from source.data.database import DatabaseManager
 
 # 데이터베이스 관리자 초기화 (테이블 자동 생성)
 db_manager = DatabaseManager()

@@ -1,4 +1,4 @@
-# 국가법령정보 공동활용 LAW OPEN DATA
+﻿# 국가법령정보 공동활용 LAW OPEN DATA
 
 - 요청 URL : https://www.law.go.kr/DRF/lawSearch.do?target=sfc
 

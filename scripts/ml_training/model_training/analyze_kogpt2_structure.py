@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KoGPT-2 모델 구조 분석 및 올바른 LoRA target modules 찾기
-LawFirmAI 프로젝트 - TASK 3.1 훈련 환경 구성
+KoGPT-2 모델 구조 분석 �??�바�?LoRA target modules 찾기
+LawFirmAI ?�로?�트 - TASK 3.1 ?�련 ?�경 구성
 """
 
 import torch
@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import logging
 
 def setup_logging():
-    """로깅 설정"""
+    """로깅 ?�정"""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
@@ -33,13 +33,13 @@ def analyze_model_structure(model_name: str = "skt/kogpt2-base-v2"):
         logger.info(f"Analyzing model structure: {model_name}")
         logger.info(f"Model type: {type(model).__name__}")
         
-        # 모델의 모든 레이어 이름 출력
+        # 모델??모든 ?�이???�름 출력
         logger.info("\n=== Model Layer Names ===")
         for name, module in model.named_modules():
-            if len(name) > 0:  # 루트 모듈 제외
+            if len(name) > 0:  # 루트 모듈 ?�외
                 logger.info(f"{name}: {type(module).__name__}")
         
-        # Transformer 블록의 attention 레이어 찾기
+        # Transformer 블록??attention ?�이??찾기
         logger.info("\n=== Looking for Attention Layers ===")
         attention_layers = []
         
@@ -48,7 +48,7 @@ def analyze_model_structure(model_name: str = "skt/kogpt2-base-v2"):
                 logger.info(f"Found attention layer: {name} - {type(module).__name__}")
                 attention_layers.append(name)
         
-        # Linear 레이어 찾기 (LoRA 적용 대상)
+        # Linear ?�이??찾기 (LoRA ?�용 ?�??
         logger.info("\n=== Looking for Linear Layers ===")
         linear_layers = []
         
@@ -57,7 +57,7 @@ def analyze_model_structure(model_name: str = "skt/kogpt2-base-v2"):
                 logger.info(f"Found Linear layer: {name} - {module}")
                 linear_layers.append(name)
         
-        # GPT-2 스타일의 attention 레이어 찾기
+        # GPT-2 ?��??�의 attention ?�이??찾기
         logger.info("\n=== Looking for GPT-2 Style Attention Layers ===")
         gpt2_attention_layers = []
         
@@ -66,7 +66,7 @@ def analyze_model_structure(model_name: str = "skt/kogpt2-base-v2"):
                 logger.info(f"Found GPT-2 style layer: {name} - {module}")
                 gpt2_attention_layers.append(name)
         
-        # 모델의 첫 번째 transformer 블록 분석
+        # 모델??�?번째 transformer 블록 분석
         logger.info("\n=== First Transformer Block Analysis ===")
         if hasattr(model, 'transformer'):
             transformer = model.transformer
@@ -92,7 +92,7 @@ def analyze_model_structure(model_name: str = "skt/kogpt2-base-v2"):
         return {"error": str(e)}
 
 def find_optimal_lora_targets(model_name: str = "skt/kogpt2-base-v2"):
-    """최적의 LoRA target modules 찾기"""
+    """최적??LoRA target modules 찾기"""
     logger = setup_logging()
     
     try:
@@ -105,18 +105,18 @@ def find_optimal_lora_targets(model_name: str = "skt/kogpt2-base-v2"):
         
         logger.info(f"Finding optimal LoRA targets for: {model_name}")
         
-        # 일반적인 GPT-2 스타일 target modules 시도
+        # ?�반?�인 GPT-2 ?��???target modules ?�도
         common_targets = [
-            ["c_attn", "c_proj"],  # GPT-2 스타일
-            ["q_proj", "k_proj", "v_proj", "o_proj"],  # LLaMA 스타일
-            ["query", "key", "value", "dense"],  # BERT 스타일
-            ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj"],  # 전체 경로
+            ["c_attn", "c_proj"],  # GPT-2 ?��???
+            ["q_proj", "k_proj", "v_proj", "o_proj"],  # LLaMA ?��???
+            ["query", "key", "value", "dense"],  # BERT ?��???
+            ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj"],  # ?�체 경로
         ]
         
         for targets in common_targets:
             logger.info(f"\nTrying targets: {targets}")
             
-            # 각 target이 모델에 존재하는지 확인
+            # �?target??모델??존재?�는지 ?�인
             found_targets = []
             for target in targets:
                 for name, module in model.named_modules():
@@ -126,27 +126,27 @@ def find_optimal_lora_targets(model_name: str = "skt/kogpt2-base-v2"):
                         break
             
             if found_targets:
-                logger.info(f"✅ Found {len(found_targets)} matching targets: {found_targets}")
+                logger.info(f"??Found {len(found_targets)} matching targets: {found_targets}")
                 return found_targets
             else:
-                logger.info(f"❌ No matching targets found for: {targets}")
+                logger.info(f"??No matching targets found for: {targets}")
         
-        # 모든 Linear 레이어 중에서 attention 관련 찾기
+        # 모든 Linear ?�이??중에??attention 관??찾기
         logger.info("\n=== Searching for Attention-related Linear Layers ===")
         attention_linear_layers = []
         
         for name, module in model.named_modules():
             if isinstance(module, torch.nn.Linear):
-                # attention 관련 키워드가 포함된 레이어 찾기
+                # attention 관???�워?��? ?�함???�이??찾기
                 if any(keyword in name.lower() for keyword in ['attn', 'attention', 'query', 'key', 'value', 'proj']):
                     attention_linear_layers.append(name)
                     logger.info(f"Attention-related Linear layer: {name}")
         
         if attention_linear_layers:
-            logger.info(f"✅ Found {len(attention_linear_layers)} attention-related Linear layers")
-            return attention_linear_layers[:4]  # 최대 4개 반환
+            logger.info(f"??Found {len(attention_linear_layers)} attention-related Linear layers")
+            return attention_linear_layers[:4]  # 최�? 4�?반환
         
-        # 모든 Linear 레이어 반환 (최후의 수단)
+        # 모든 Linear ?�이??반환 (최후???�단)
         logger.info("\n=== Fallback: All Linear Layers ===")
         all_linear_layers = []
         for name, module in model.named_modules():
@@ -154,20 +154,20 @@ def find_optimal_lora_targets(model_name: str = "skt/kogpt2-base-v2"):
                 all_linear_layers.append(name)
         
         logger.info(f"Found {len(all_linear_layers)} total Linear layers")
-        return all_linear_layers[:8]  # 최대 8개 반환
+        return all_linear_layers[:8]  # 최�? 8�?반환
         
     except Exception as e:
         logger.error(f"Target finding failed: {e}")
         return []
 
 def test_lora_with_correct_targets(model_name: str = "skt/kogpt2-base-v2"):
-    """올바른 target modules로 LoRA 테스트"""
+    """?�바�?target modules�?LoRA ?�스??""
     logger = setup_logging()
     
     try:
         from peft import LoraConfig, get_peft_model, TaskType
         
-        # 최적의 target modules 찾기
+        # 최적??target modules 찾기
         target_modules = find_optimal_lora_targets(model_name)
         
         if not target_modules:
@@ -183,7 +183,7 @@ def test_lora_with_correct_targets(model_name: str = "skt/kogpt2-base-v2"):
             device_map="cpu"
         )
         
-        # LoRA 설정
+        # LoRA ?�정
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=16,
@@ -192,12 +192,12 @@ def test_lora_with_correct_targets(model_name: str = "skt/kogpt2-base-v2"):
             target_modules=target_modules
         )
         
-        # LoRA 모델 생성
+        # LoRA 모델 ?�성
         peft_model = get_peft_model(model, lora_config)
         
-        logger.info("✅ LoRA model created successfully!")
+        logger.info("??LoRA model created successfully!")
         
-        # 파라미터 수 확인
+        # ?�라미터 ???�인
         trainable_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in peft_model.parameters())
         
@@ -218,7 +218,7 @@ def test_lora_with_correct_targets(model_name: str = "skt/kogpt2-base-v2"):
         return {"status": "error", "error": str(e)}
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
     
     parser = argparse.ArgumentParser(description="KoGPT-2 Model Structure Analysis")
@@ -230,17 +230,17 @@ def main():
     logger = setup_logging()
     
     if args.test_lora:
-        # LoRA 테스트 실행
+        # LoRA ?�스???�행
         logger.info("Testing LoRA with correct target modules...")
         result = test_lora_with_correct_targets(args.model)
         
         if result["status"] == "success":
-            print(f"\n✅ LoRA configuration successful!")
+            print(f"\n??LoRA configuration successful!")
             print(f"Target modules: {result['target_modules']}")
             print(f"Trainable parameters: {result['trainable_params']:,}")
             print(f"Trainable ratio: {result['trainable_ratio']:.2%}")
         else:
-            print(f"\n❌ LoRA configuration failed: {result['error']}")
+            print(f"\n??LoRA configuration failed: {result['error']}")
     else:
         # 모델 구조 분석
         logger.info("Analyzing model structure...")
@@ -255,7 +255,7 @@ def main():
             if result['gpt2_style_layers']:
                 print(f"\nRecommended target modules: {result['gpt2_style_layers']}")
         else:
-            print(f"\n❌ Analysis failed: {result['error']}")
+            print(f"\n??Analysis failed: {result['error']}")
 
 if __name__ == "__main__":
     main()

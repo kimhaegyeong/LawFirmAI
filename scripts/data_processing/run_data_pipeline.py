@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-통합 데이터 파이프라인 실행 스크립트
+?�합 ?�이???�이?�라???�행 ?�크립트
 
-데이터 수집과 벡터DB 구축을 통합하여 실행할 수 있는 스크립트입니다.
---mode 인자를 통해 collect, build, full 모드를 선택할 수 있습니다.
+?�이???�집�?벡터DB 구축???�합?�여 ?�행?????�는 ?�크립트?�니??
+--mode ?�자�??�해 collect, build, full 모드�??�택?????�습?�다.
 
-사용법:
+?�용�?
     python scripts/run_data_pipeline.py --mode full --oc your_email_id
     python scripts/run_data_pipeline.py --mode collect --oc your_email_id
     python scripts/run_data_pipeline.py --mode build
@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
@@ -31,15 +31,15 @@ logger = get_logger(__name__)
 
 
 class DataPipeline:
-    """통합 데이터 파이프라인 클래스"""
+    """?�합 ?�이???�이?�라???�래??""
     
     def __init__(self, oc: str = None):
-        """초기화"""
+        """초기??""
         self.oc = oc
         self.collector = DataCollector(oc) if oc else None
         self.builder = VectorDBBuilder()
         
-        # 파이프라인 통계
+        # ?�이?�라???�계
         self.pipeline_stats = {
             'start_time': datetime.now().isoformat(),
             'mode': None,
@@ -50,7 +50,7 @@ class DataPipeline:
         }
     
     def run_collect_mode(self) -> bool:
-        """데이터 수집 모드 실행"""
+        """?�이???�집 모드 ?�행"""
         try:
             logger.info("Starting data collection mode...")
             self.pipeline_stats['mode'] = 'collect'
@@ -75,7 +75,7 @@ class DataPipeline:
             return False
     
     def run_build_mode(self) -> bool:
-        """벡터DB 구축 모드 실행"""
+        """벡터DB 구축 모드 ?�행"""
         try:
             logger.info("Starting vector DB build mode...")
             self.pipeline_stats['mode'] = 'build'
@@ -96,7 +96,7 @@ class DataPipeline:
             return False
     
     def run_full_mode(self) -> bool:
-        """전체 파이프라인 실행 (수집 + 구축)"""
+        """?�체 ?�이?�라???�행 (?�집 + 구축)"""
         try:
             logger.info("Starting full data pipeline...")
             self.pipeline_stats['mode'] = 'full'
@@ -105,7 +105,7 @@ class DataPipeline:
                 logger.error("OC parameter is required for full mode")
                 return False
             
-            # 1. 데이터 수집
+            # 1. ?�이???�집
             logger.info("Step 1: Data collection...")
             collect_success = self.collector.collect_all_data()
             self.pipeline_stats['collect_success'] = collect_success
@@ -123,7 +123,7 @@ class DataPipeline:
                 logger.error("Vector DB build failed")
                 return False
             
-            # 3. 최종 통계 생성
+            # 3. 최종 ?�계 ?�성
             self._generate_pipeline_report()
             
             logger.info("Full data pipeline completed successfully!")
@@ -135,7 +135,7 @@ class DataPipeline:
             return False
     
     def run_specific_collect(self, data_type: str, query: str = None, display: int = 100) -> bool:
-        """특정 데이터 타입 수집"""
+        """?�정 ?�이???�???�집"""
         try:
             logger.info(f"Starting {data_type} data collection...")
             self.pipeline_stats['mode'] = f'collect_{data_type}'
@@ -148,15 +148,15 @@ class DataPipeline:
             if data_type == "laws":
                 success = self.collector.collect_laws(query=query or "민법", display=display)
             elif data_type == "precedents":
-                success = self.collector.collect_precedents(query=query or "계약 해지", display=display)
+                success = self.collector.collect_precedents(query=query or "계약 ?��?", display=display)
             elif data_type == "constitutional":
-                success = self.collector.collect_constitutional_decisions(query=query or "헌법", display=display)
+                success = self.collector.collect_constitutional_decisions(query=query or "?�법", display=display)
             elif data_type == "interpretations":
-                success = self.collector.collect_legal_interpretations(query=query or "법령해석", display=display)
+                success = self.collector.collect_legal_interpretations(query=query or "법령?�석", display=display)
             elif data_type == "administrative":
-                success = self.collector.collect_administrative_rules(query=query or "행정규칙", display=display)
+                success = self.collector.collect_administrative_rules(query=query or "?�정규칙", display=display)
             elif data_type == "local":
-                success = self.collector.collect_local_ordinances(query=query or "자치법규", display=display)
+                success = self.collector.collect_local_ordinances(query=query or "?�치법규", display=display)
             else:
                 logger.error(f"Unknown data type: {data_type}")
                 return False
@@ -176,12 +176,12 @@ class DataPipeline:
             return False
     
     def run_specific_build(self, data_type: str) -> bool:
-        """특정 데이터 타입 벡터DB 구축"""
+        """?�정 ?�이???�??벡터DB 구축"""
         try:
             logger.info(f"Starting {data_type} vector DB build...")
             self.pipeline_stats['mode'] = f'build_{data_type}'
             
-            # 데이터 타입 매핑
+            # ?�이???�??매핑
             type_mapping = {
                 "laws": "laws",
                 "precedents": "precedents",
@@ -212,7 +212,7 @@ class DataPipeline:
             return False
     
     def run_multiple_types_collect(self, data_types: list, query: str = None, display: int = 100) -> bool:
-        """여러 데이터 타입 수집"""
+        """?�러 ?�이???�???�집"""
         try:
             logger.info(f"Starting collection for multiple data types: {', '.join(data_types)}")
             self.pipeline_stats['mode'] = f'collect_multiple_{"_".join(data_types)}'
@@ -223,14 +223,14 @@ class DataPipeline:
             for data_type in data_types:
                 logger.info(f"Collecting {data_type} data...")
                 
-                # 기본 쿼리 설정
+                # 기본 쿼리 ?�정
                 default_queries = {
                     "laws": "민법",
-                    "precedents": "계약 해지",
-                    "constitutional": "헌법",
-                    "interpretations": "법령해석",
-                    "administrative": "행정규칙",
-                    "local": "자치법규"
+                    "precedents": "계약 ?��?",
+                    "constitutional": "?�법",
+                    "interpretations": "법령?�석",
+                    "administrative": "?�정규칙",
+                    "local": "?�치법규"
                 }
                 
                 search_query = query or default_queries.get(data_type, data_type)
@@ -241,7 +241,7 @@ class DataPipeline:
                 else:
                     logger.error(f"{data_type} collection failed!")
             
-            # 최종 통계 생성
+            # 최종 ?�계 ?�성
             self._generate_pipeline_report()
             
             logger.info(f"Multiple types collection completed: {success_count}/{total_types} types successful")
@@ -253,7 +253,7 @@ class DataPipeline:
             return False
     
     def _generate_pipeline_report(self):
-        """파이프라인 보고서 생성"""
+        """?�이?�라??보고???�성"""
         try:
             self.pipeline_stats['end_time'] = datetime.now().isoformat()
             self.pipeline_stats['total_duration'] = (
@@ -261,14 +261,14 @@ class DataPipeline:
                 datetime.fromisoformat(self.pipeline_stats['start_time'])
             ).total_seconds()
             
-            # 수집 통계 추가
+            # ?�집 ?�계 추�?
             if self.collector:
                 self.pipeline_stats['collect_stats'] = self.collector.collection_stats
             
-            # 구축 통계 추가
+            # 구축 ?�계 추�?
             self.pipeline_stats['build_stats'] = self.builder.build_stats
             
-            # 보고서 저장
+            # 보고???�??
             report_file = Path("data/pipeline_report.json")
             report_file.parent.mkdir(exist_ok=True)
             
@@ -283,7 +283,7 @@ class DataPipeline:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description="LawFirmAI Data Pipeline")
     parser.add_argument("--mode", type=str, 
                         choices=["collect", "build", "full", "laws", "precedents", "constitutional", "interpretations", "administrative", "local", "all_types"], 
@@ -297,18 +297,18 @@ def main():
     
     args = parser.parse_args()
     
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
-    # OC 파라미터 검증
+    # OC ?�라미터 검�?
     if args.mode in ["collect", "full", "laws", "precedents", "constitutional", "interpretations", "administrative", "local", "all_types"]:
         if not args.oc:
             logger.error("OC parameter is required for data collection modes")
             logger.info("Usage: python scripts/run_data_pipeline.py --mode collect --oc your_email_id")
             return
     
-    # 파이프라인 실행
+    # ?�이?�라???�행
     pipeline = DataPipeline(args.oc)
     
     success = False
@@ -319,14 +319,14 @@ def main():
     elif args.mode == "full":
         success = pipeline.run_full_mode()
     elif args.mode == "all_types":
-        # 지정된 타입들만 수집
+        # 지?�된 ?�?�들�??�집
         if not args.types:
             logger.error("--types parameter is required when using --mode all_types")
             logger.info("Example: python scripts/run_data_pipeline.py --mode all_types --oc your_email_id --types laws precedents")
             return
         success = pipeline.run_multiple_types_collect(args.types, args.query, args.display)
     elif args.mode in ["laws", "precedents", "constitutional", "interpretations", "administrative", "local"]:
-        # 데이터 타입별 수집
+        # ?�이???�?�별 ?�집
         success = pipeline.run_specific_collect(args.mode, args.query, args.display)
     else:
         logger.error(f"Unknown mode: {args.mode}")

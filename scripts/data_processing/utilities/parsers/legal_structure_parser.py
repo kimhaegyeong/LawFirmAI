@@ -14,31 +14,31 @@ logger = logging.getLogger(__name__)
 
 
 class LegalStructureParser:
-    """법률 구조 분석기"""
+    """법률 구조 분석�?""
     
     def __init__(self):
         """Initialize structure parser with Korean legal structure patterns"""
         self.structure_patterns = {
-            'articles': re.compile(r'제(\d+)조\s*\(([^)]+)\)'),
-            'paragraphs': re.compile(r'제(\d+)항'),
-            'subparagraphs': re.compile(r'제(\d+)호'),
-            'items': re.compile(r'제(\d+)목'),
+            'articles': re.compile(r'??\d+)�?s*\(([^)]+)\)'),
+            'paragraphs': re.compile(r'??\d+)??),
+            'subparagraphs': re.compile(r'??\d+)??),
+            'items': re.compile(r'??\d+)�?),
             'numbered_items': re.compile(r'(\d+)\.'),
-            'lettered_items': re.compile(r'([가-힣])\.'),
-            'enforcement_clause': re.compile(r'\[시행\s+([^\]]+)\]'),
+            'lettered_items': re.compile(r'([가-??)\.'),
+            'enforcement_clause': re.compile(r'\[?�행\s+([^\]]+)\]'),
             'amendment_clause': re.compile(r'<개정\s+([^>]+)>'),
-            'supplementary_provisions': re.compile(r'부칙\s*<([^>]+)>'),
-            'purpose_clause': re.compile(r'제1조\s*\(목적\)'),
-            'definition_clause': re.compile(r'제2조\s*\(정의\)'),
-            'scope_clause': re.compile(r'제3조\s*\(적용범위\)')
+            'supplementary_provisions': re.compile(r'부�?s*<([^>]+)>'),
+            'purpose_clause': re.compile(r'??�?s*\(목적\)'),
+            'definition_clause': re.compile(r'??�?s*\(?�의\)'),
+            'scope_clause': re.compile(r'??�?s*\(?�용범위\)')
         }
         
-        # 특별한 구조 패턴들
+        # ?�별??구조 ?�턴??
         self.special_patterns = {
-            'penalty_clause': re.compile(r'제\d+조\s*\(벌칙\)'),
-            'transitional_clause': re.compile(r'제\d+조\s*\(경과조치\)'),
-            'delegation_clause': re.compile(r'제\d+조\s*\(위임\)'),
-            'enforcement_clause': re.compile(r'제\d+조\s*\(시행\)')
+            'penalty_clause': re.compile(r'??d+�?s*\(벌칙\)'),
+            'transitional_clause': re.compile(r'??d+�?s*\(경과조치\)'),
+            'delegation_clause': re.compile(r'??d+�?s*\(?�임\)'),
+            'enforcement_clause': re.compile(r'??d+�?s*\(?�행\)')
         }
     
     def parse_legal_structure(self, law_content: str) -> Dict[str, Any]:
@@ -72,7 +72,7 @@ class LegalStructureParser:
             structure_info['articles'] = articles
             structure_info['total_articles'] = len(articles)
             
-            # 항, 호, 목 분석
+            # ?? ?? �?분석
             total_paragraphs = 0
             total_subparagraphs = 0
             total_items = 0
@@ -99,22 +99,22 @@ class LegalStructureParser:
             structure_info['total_subparagraphs'] = total_subparagraphs
             structure_info['total_items'] = total_items
             
-            # 시행 조항 분석
+            # ?�행 조항 분석
             structure_info['enforcement_info'] = self._parse_enforcement_clause(law_content)
             
-            # 개정 이력 분석
+            # 개정 ?�력 분석
             structure_info['amendment_history'] = self._parse_amendment_history(law_content)
             
-            # 부칙 분석
+            # 부�?분석
             structure_info['supplementary_provisions'] = self._parse_supplementary_provisions(law_content)
             
-            # 특별 조항 분석
+            # ?�별 조항 분석
             structure_info['special_clauses'] = self._parse_special_clauses(law_content)
             
-            # 구조 복잡도 계산
+            # 구조 복잡??계산
             structure_info['structure_complexity'] = self._calculate_complexity(structure_info)
             
-            # 구조 유형 결정
+            # 구조 ?�형 결정
             structure_info['structure_type'] = self._determine_structure_type(structure_info)
             
             return structure_info
@@ -128,7 +128,7 @@ class LegalStructureParser:
             }
     
     def _parse_articles(self, content: str) -> List[Dict[str, Any]]:
-        """조문 파싱"""
+        """조문 ?�싱"""
         articles = []
         article_matches = self.structure_patterns['articles'].findall(content)
         
@@ -136,14 +136,14 @@ class LegalStructureParser:
             article_num = match[0]
             article_title = match[1]
             
-            # 조문 내용 추출
-            article_pattern = f'제{article_num}조\\s*\\([^)]+\\)'
+            # 조문 ?�용 추출
+            article_pattern = f'??article_num}�?\s*\\([^)]+\\)'
             article_match = re.search(article_pattern, content)
             
             if article_match:
                 start_pos = article_match.end()
-                # 다음 조문까지의 내용 추출
-                next_article_pattern = f'제{int(article_num)+1}조'
+                # ?�음 조문까�????�용 추출
+                next_article_pattern = f'??int(article_num)+1}�?
                 next_match = re.search(next_article_pattern, content)
                 
                 if next_match:
@@ -153,7 +153,7 @@ class LegalStructureParser:
                 
                 article_content = content[start_pos:end_pos].strip()
                 
-                # 조문 유형 분석
+                # 조문 ?�형 분석
                 article_type = self._analyze_article_type(article_title, article_content)
                 
                 # Safe parsing with error handling
@@ -161,7 +161,7 @@ class LegalStructureParser:
                     paragraphs = self._parse_paragraphs(article_content) if article_content else []
                     
                     articles.append({
-                        'article_number': f'제{article_num}조',
+                        'article_number': f'??article_num}�?,
                         'article_title': article_title,
                         'content': article_content,  # Use 'content' key for consistency
                         'article_type': article_type,
@@ -171,7 +171,7 @@ class LegalStructureParser:
                     logger.warning(f"Error parsing article {article_num}: {e}")
                     # Add minimal article info
                     articles.append({
-                        'article_number': f'제{article_num}조',
+                        'article_number': f'??article_num}�?,
                         'article_title': article_title,
                         'content': article_content,
                         'article_type': 'unknown',
@@ -181,19 +181,19 @@ class LegalStructureParser:
         return articles
     
     def _parse_paragraphs(self, content: str) -> List[Dict[str, Any]]:
-        """항 파싱"""
+        """???�싱"""
         paragraphs = []
         paragraph_matches = self.structure_patterns['paragraphs'].findall(content)
         
         for match in paragraph_matches:
             para_num = match
-            paragraph_pattern = f'제{para_num}항'
+            paragraph_pattern = f'??para_num}??
             para_match = re.search(paragraph_pattern, content)
             
             if para_match:
                 start_pos = para_match.end()
-                # 다음 항까지의 내용 추출
-                next_para_pattern = f'제{int(para_num)+1}항'
+                # ?�음 ??��지???�용 추출
+                next_para_pattern = f'??int(para_num)+1}??
                 next_match = re.search(next_para_pattern, content)
                 
                 if next_match:
@@ -208,14 +208,14 @@ class LegalStructureParser:
                     subparagraphs = self._parse_subparagraphs(paragraph_content) if paragraph_content else []
                     
                     paragraphs.append({
-                        'paragraph_number': f'제{para_num}항',
+                        'paragraph_number': f'??para_num}??,
                         'content': paragraph_content,  # Use 'content' key for consistency
                         'subparagraphs': subparagraphs
                     })
                 except Exception as e:
                     logger.warning(f"Error parsing paragraph {para_num}: {e}")
                     paragraphs.append({
-                        'paragraph_number': f'제{para_num}항',
+                        'paragraph_number': f'??para_num}??,
                         'content': paragraph_content,
                         'subparagraphs': []
                     })
@@ -223,19 +223,19 @@ class LegalStructureParser:
         return paragraphs
     
     def _parse_subparagraphs(self, content: str) -> List[Dict[str, Any]]:
-        """호 파싱"""
+        """???�싱"""
         subparagraphs = []
         subpara_matches = self.structure_patterns['subparagraphs'].findall(content)
         
         for match in subpara_matches:
             subpara_num = match
-            subpara_pattern = f'제{subpara_num}호'
+            subpara_pattern = f'??subpara_num}??
             subpara_match = re.search(subpara_pattern, content)
             
             if subpara_match:
                 start_pos = subpara_match.end()
-                # 다음 호까지의 내용 추출
-                next_subpara_pattern = f'제{int(subpara_num)+1}호'
+                # ?�음 ?�까지???�용 추출
+                next_subpara_pattern = f'??int(subpara_num)+1}??
                 next_match = re.search(next_subpara_pattern, content)
                 
                 if next_match:
@@ -250,14 +250,14 @@ class LegalStructureParser:
                     items = self._parse_items(subpara_content) if subpara_content else []
                     
                     subparagraphs.append({
-                        'subparagraph_number': f'제{subpara_num}호',
+                        'subparagraph_number': f'??subpara_num}??,
                         'content': subpara_content,  # Use 'content' key for consistency
                         'items': items
                     })
                 except Exception as e:
                     logger.warning(f"Error parsing subparagraph {subpara_num}: {e}")
                     subparagraphs.append({
-                        'subparagraph_number': f'제{subpara_num}호',
+                        'subparagraph_number': f'??subpara_num}??,
                         'content': subpara_content,
                         'items': []
                     })
@@ -265,10 +265,10 @@ class LegalStructureParser:
         return subparagraphs
     
     def _parse_items(self, content: str) -> List[Dict[str, Any]]:
-        """목 파싱"""
+        """�??�싱"""
         items = []
         
-        # 숫자 목 (1., 2., 3.)
+        # ?�자 �?(1., 2., 3.)
         numbered_matches = self.structure_patterns['numbered_items'].findall(content)
         for match in numbered_matches:
             item_num = match
@@ -277,7 +277,7 @@ class LegalStructureParser:
             
             if item_match:
                 start_pos = item_match.end()
-                # 다음 목까지의 내용 추출
+                # ?�음 목까지???�용 추출
                 next_item_pattern = f'{int(item_num)+1}\\.'
                 next_match = re.search(next_item_pattern, content)
                 
@@ -294,7 +294,7 @@ class LegalStructureParser:
                     'item_type': 'numbered'
                 })
         
-        # 문자 목 (가., 나., 다.)
+        # 문자 �?(가., ??, ??)
         lettered_matches = self.structure_patterns['lettered_items'].findall(content)
         for match in lettered_matches:
             item_letter = match
@@ -303,7 +303,7 @@ class LegalStructureParser:
             
             if item_match:
                 start_pos = item_match.end()
-                # 다음 목까지의 내용 추출
+                # ?�음 목까지???�용 추출
                 next_item_pattern = f'{chr(ord(item_letter)+1)}\\.'
                 next_match = re.search(next_item_pattern, content)
                 
@@ -325,14 +325,14 @@ class LegalStructureParser:
         return items
     
     def _parse_enforcement_clause(self, content: str) -> Dict[str, Any]:
-        """시행 조항 파싱"""
+        """?�행 조항 ?�싱"""
         enforcement_match = self.structure_patterns['enforcement_clause'].search(content)
         
         if enforcement_match:
             enforcement_text = enforcement_match.group(1)
             return {
                 'enforcement_date': enforcement_text,
-                'enforcement_text': f'[시행 {enforcement_text}]',
+                'enforcement_text': f'[?�행 {enforcement_text}]',
                 'parsed_date': self._parse_date(enforcement_text),
                 'enforcement_type': 'standard'
             }
@@ -340,7 +340,7 @@ class LegalStructureParser:
         return {}
     
     def _parse_amendment_history(self, content: str) -> List[Dict[str, Any]]:
-        """개정 이력 파싱"""
+        """개정 ?�력 ?�싱"""
         amendments = []
         amendment_matches = self.structure_patterns['amendment_clause'].findall(content)
         
@@ -356,14 +356,14 @@ class LegalStructureParser:
         return amendments
     
     def _parse_supplementary_provisions(self, content: str) -> List[Dict[str, Any]]:
-        """부칙 파싱"""
+        """부�??�싱"""
         provisions = []
         provision_matches = self.structure_patterns['supplementary_provisions'].findall(content)
         
         for match in provision_matches:
             provision_text = match
             provisions.append({
-                'provision_text': f'부칙 <{provision_text}>',
+                'provision_text': f'부�?<{provision_text}>',
                 'provision_info': provision_text,
                 'provision_type': self._classify_provision_type(provision_text)
             })
@@ -371,7 +371,7 @@ class LegalStructureParser:
         return provisions
     
     def _parse_special_clauses(self, content: str) -> List[Dict[str, Any]]:
-        """특별 조항 파싱"""
+        """?�별 조항 ?�싱"""
         special_clauses = []
         
         for clause_type, pattern in self.special_patterns.items():
@@ -386,61 +386,61 @@ class LegalStructureParser:
         return special_clauses
     
     def _analyze_article_type(self, title: str, content: str) -> str:
-        """조문 유형 분석"""
+        """조문 ?�형 분석"""
         title_lower = title.lower()
         
         if '목적' in title:
             return 'purpose'
-        elif '정의' in title:
+        elif '?�의' in title:
             return 'definition'
-        elif '적용범위' in title:
+        elif '?�용범위' in title:
             return 'scope'
         elif '벌칙' in title:
             return 'penalty'
         elif '경과조치' in title:
             return 'transitional'
-        elif '위임' in title:
+        elif '?�임' in title:
             return 'delegation'
-        elif '시행' in title:
+        elif '?�행' in title:
             return 'enforcement'
         else:
             return 'general'
     
     def _classify_amendment_type(self, amendment_text: str) -> str:
-        """개정 유형 분류"""
-        if '일부개정' in amendment_text:
+        """개정 ?�형 분류"""
+        if '?��?개정' in amendment_text:
             return 'partial_amendment'
-        elif '전부개정' in amendment_text:
+        elif '?��?개정' in amendment_text:
             return 'full_amendment'
-        elif '신설' in amendment_text:
+        elif '?�설' in amendment_text:
             return 'new_establishment'
-        elif '폐지' in amendment_text:
+        elif '?��?' in amendment_text:
             return 'abolition'
         else:
             return 'unknown'
     
     def _classify_provision_type(self, provision_text: str) -> str:
-        """부칙 유형 분류"""
-        if '시행' in provision_text:
+        """부�??�형 분류"""
+        if '?�행' in provision_text:
             return 'enforcement'
         elif '경과' in provision_text:
             return 'transitional'
-        elif '위임' in provision_text:
+        elif '?�임' in provision_text:
             return 'delegation'
         else:
             return 'general'
     
     def _extract_clause_number(self, clause_text: str) -> str:
         """조항 번호 추출"""
-        number_match = re.search(r'제(\d+)조', clause_text)
+        number_match = re.search(r'??\d+)�?, clause_text)
         return number_match.group(1) if number_match else ''
     
     def _parse_date(self, date_text: str) -> Optional[str]:
-        """날짜 파싱"""
-        # 다양한 날짜 형식 지원
+        """?�짜 ?�싱"""
+        # ?�양???�짜 ?�식 지??
         date_patterns = [
-            r'(\d{4})\.(\d{1,2})\.(\d{1,2})\.?',  # 2025.1.1. 또는 2025.1.1
-            r'(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일',  # 2025년 1월 1일
+            r'(\d{4})\.(\d{1,2})\.(\d{1,2})\.?',  # 2025.1.1. ?�는 2025.1.1
+            r'(\d{4})??s*(\d{1,2})??s*(\d{1,2})??,  # 2025??1??1??
             r'(\d{4})-(\d{2})-(\d{2})',  # 2025-01-01
         ]
         
@@ -453,7 +453,7 @@ class LegalStructureParser:
         return None
     
     def _calculate_complexity(self, structure_info: Dict[str, Any]) -> float:
-        """구조 복잡도 계산"""
+        """구조 복잡??계산"""
         total_elements = (
             structure_info['total_articles'] +
             structure_info['total_paragraphs'] +
@@ -461,7 +461,7 @@ class LegalStructureParser:
             structure_info['total_items']
         )
         
-        # 복잡도 점수 (0-1)
+        # 복잡???�수 (0-1)
         if total_elements == 0:
             return 0.0
         elif total_elements < 20:
@@ -476,7 +476,7 @@ class LegalStructureParser:
             return 1.0
     
     def _determine_structure_type(self, structure_info: Dict[str, Any]) -> str:
-        """구조 유형 결정"""
+        """구조 ?�형 결정"""
         total_articles = structure_info['total_articles']
         total_paragraphs = structure_info['total_paragraphs']
         total_subparagraphs = structure_info['total_subparagraphs']
@@ -497,7 +497,7 @@ class LegalStructureParser:
                 return 'comprehensive'
     
     def get_structure_statistics(self, structure_info: Dict[str, Any]) -> Dict[str, Any]:
-        """구조 통계 생성"""
+        """구조 ?�계 ?�성"""
         return {
             'total_elements': (
                 structure_info['total_articles'] +

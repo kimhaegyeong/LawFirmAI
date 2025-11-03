@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-행정 및 특허 판례 데이터 임포트 스크립트
+?�정 �??�허 ?��? ?�이???�포???�크립트
 """
 
 import os
@@ -13,25 +13,25 @@ from pathlib import Path
 from typing import List, Dict, Any
 import argparse
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-# 현재 디렉토리를 Python 경로에 추가
+# ?�재 ?�렉?�리�?Python 경로??추�?
 current_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(current_dir))
 
 try:
     from source.data.database import DatabaseManager
 except ImportError:
-    # 직접 import 시도
+    # 직접 import ?�도
     sys.path.append('source')
     from data.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 def import_precedent_data(input_dir: str, category: str, incremental: bool = True):
-    """판례 데이터를 데이터베이스에 임포트"""
+    """?��? ?�이?��? ?�이?�베?�스???�포??""
     
     input_path = Path(input_dir)
     if not input_path.exists():
@@ -40,7 +40,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     
     db_manager = DatabaseManager()
     
-    # 처리된 파일 추적
+    # 처리???�일 추적
     processed_files = set()
     if incremental:
         try:
@@ -58,7 +58,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     
     logger.info(f"Starting import of {category} precedents from {input_dir}")
     
-    # JSON 파일 처리
+    # JSON ?�일 처리
     for file_path in input_path.glob('*.json'):
         if 'precedent_' not in file_path.name or 'summary' in file_path.name:
             continue
@@ -80,7 +80,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
             cases_imported = 0
             for item in data['items']:
                 try:
-                    # 판례 데이터 추출
+                    # ?��? ?�이??추출
                     case_data = {
                         'case_id': item.get('case_number', ''),
                         'case_name': item.get('case_name', ''),
@@ -95,7 +95,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                         'collected_at': item.get('collected_at', '')
                     }
                     
-                    # 데이터베이스에 삽입
+                    # ?�이?�베?�스???�입
                     with db_manager.get_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute("""
@@ -118,11 +118,11 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                         
                         case_id = cursor.lastrowid
                         
-                        # 구조화된 내용에서 조항 정보 추출
+                        # 구조?�된 ?�용?�서 조항 ?�보 추출
                         if item.get('structured_content'):
                             structured = item['structured_content']
                             if isinstance(structured, dict):
-                                # 판례 조항 처리
+                                # ?��? 조항 처리
                                 if 'sections' in structured:
                                     for section in structured['sections']:
                                         cursor.execute("""
@@ -137,7 +137,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                                             section.get('type', '')
                                         ))
                                 
-                                # 당사자 정보 처리
+                                # ?�사???�보 처리
                                 if 'parties' in structured:
                                     for party in structured['parties']:
                                         cursor.execute("""
@@ -158,7 +158,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                     logger.error(f"Error processing case in {file_path.name}: {e}")
                     continue
             
-            # 처리된 파일 기록
+            # 처리???�일 기록
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -176,7 +176,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
             logger.error(f"Error processing file {file_path.name}: {e}")
             failed_files += 1
             
-            # 실패한 파일 기록
+            # ?�패???�일 기록
             try:
                 with db_manager.get_connection() as conn:
                     cursor = conn.cursor()
@@ -198,15 +198,15 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     }
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description='행정 및 특허 판례 데이터 임포트')
-    parser.add_argument('--input', required=True, help='입력 디렉토리')
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description='?�정 �??�허 ?��? ?�이???�포??)
+    parser.add_argument('--input', required=True, help='?�력 ?�렉?�리')
     parser.add_argument('--category', required=True, choices=['administrative', 'patent'], help='카테고리')
-    parser.add_argument('--incremental', action='store_true', help='증분 임포트')
+    parser.add_argument('--incremental', action='store_true', help='증분 ?�포??)
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'

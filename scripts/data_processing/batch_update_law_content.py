@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-모든 law JSON 파일들의 law_content 일괄 업데이트 스크립트
+모든 law JSON ?�일?�의 law_content ?�괄 ?�데?�트 ?�크립트
 
-이 스크립트는 data/raw/assembly/law 폴더의 모든 law로 시작하는 JSON 파일들의
-law_content를 HTML에서 추출한 내용으로 업데이트합니다.
+???�크립트??data/raw/assembly/law ?�더??모든 law�??�작?�는 JSON ?�일?�의
+law_content�?HTML?�서 추출???�용?�로 ?�데?�트?�니??
 """
 
 import json
@@ -16,13 +16,13 @@ from datetime import datetime
 import concurrent.futures
 from threading import Lock
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from scripts.test_improved_html_parser import ImprovedLawHTMLParser
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 전역 통계를 위한 락
+# ?�역 ?�계�??�한 ??
 stats_lock = Lock()
 global_stats = {
     'total_files': 0,
@@ -47,35 +47,35 @@ global_stats = {
 
 
 class BatchLawContentUpdater:
-    """법령 내용 일괄 업데이트 클래스"""
+    """법령 ?�용 ?�괄 ?�데?�트 ?�래??""
     
     def __init__(self, max_workers: int = 4):
-        """초기화"""
+        """초기??""
         self.html_parser = ImprovedLawHTMLParser()
         self.max_workers = max_workers
     
     def update_all_law_files(self, law_dir: Path) -> Dict[str, Any]:
         """
-        모든 law 파일 업데이트
+        모든 law ?�일 ?�데?�트
         
         Args:
-            law_dir (Path): law 폴더 경로
+            law_dir (Path): law ?�더 경로
             
         Returns:
-            Dict[str, Any]: 업데이트 결과
+            Dict[str, Any]: ?�데?�트 결과
         """
         try:
-            logger.info(f"법령 파일 일괄 업데이트 시작: {law_dir}")
+            logger.info(f"법령 ?�일 ?�괄 ?�데?�트 ?�작: {law_dir}")
             
-            # 모든 law 파일 찾기
+            # 모든 law ?�일 찾기
             law_files = self._find_all_law_files(law_dir)
             
-            logger.info(f"총 {len(law_files)}개 파일 발견")
+            logger.info(f"�?{len(law_files)}�??�일 발견")
             
-            # 파일별로 업데이트 실행
+            # ?�일별로 ?�데?�트 ?�행
             results = []
             
-            # 병렬 처리로 업데이트
+            # 병렬 처리�??�데?�트
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 future_to_file = {
                     executor.submit(self._update_single_file, file_path): file_path 
@@ -89,12 +89,12 @@ class BatchLawContentUpdater:
                         results.append(result)
                         
                         if result['success']:
-                            logger.info(f"✅ {file_path.name}: {result['stats']['successful_laws']}/{result['stats']['total_laws']} 법령 업데이트 완료")
+                            logger.info(f"??{file_path.name}: {result['stats']['successful_laws']}/{result['stats']['total_laws']} 법령 ?�데?�트 ?�료")
                         else:
-                            logger.error(f"❌ {file_path.name}: {result['error']}")
+                            logger.error(f"??{file_path.name}: {result['error']}")
                             
                     except Exception as e:
-                        error_msg = f"파일 {file_path.name} 처리 중 예외: {str(e)}"
+                        error_msg = f"?�일 {file_path.name} 처리 �??�외: {str(e)}"
                         logger.error(error_msg)
                         results.append({
                             'success': False,
@@ -102,11 +102,11 @@ class BatchLawContentUpdater:
                             'error': error_msg
                         })
             
-            # 전체 통계 계산
+            # ?�체 ?�계 계산
             final_stats = self._calculate_final_stats(results)
             
-            logger.info("법령 파일 일괄 업데이트 완료!")
-            logger.info(f"전체 통계: {final_stats}")
+            logger.info("법령 ?�일 ?�괄 ?�데?�트 ?�료!")
+            logger.info(f"?�체 ?�계: {final_stats}")
             
             return {
                 'success': True,
@@ -115,7 +115,7 @@ class BatchLawContentUpdater:
             }
             
         except Exception as e:
-            error_msg = f"일괄 업데이트 중 오류: {str(e)}"
+            error_msg = f"?�괄 ?�데?�트 �??�류: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -123,10 +123,10 @@ class BatchLawContentUpdater:
             }
     
     def _find_all_law_files(self, law_dir: Path) -> List[Path]:
-        """모든 law 파일 찾기"""
+        """모든 law ?�일 찾기"""
         law_files = []
         
-        # 각 날짜 폴더에서 law로 시작하는 JSON 파일 찾기
+        # �??�짜 ?�더?�서 law�??�작?�는 JSON ?�일 찾기
         for date_folder in law_dir.iterdir():
             if date_folder.is_dir():
                 for file_path in date_folder.iterdir():
@@ -138,11 +138,11 @@ class BatchLawContentUpdater:
         return sorted(law_files)
     
     def _update_single_file(self, file_path: Path) -> Dict[str, Any]:
-        """단일 파일 업데이트"""
+        """?�일 ?�일 ?�데?�트"""
         try:
-            logger.info(f"파일 업데이트 시작: {file_path.name}")
+            logger.info(f"?�일 ?�데?�트 ?�작: {file_path.name}")
             
-            # 원본 데이터 로드
+            # ?�본 ?�이??로드
             with open(file_path, 'r', encoding='utf-8') as f:
                 original_data = json.load(f)
             
@@ -153,22 +153,22 @@ class BatchLawContentUpdater:
                 'errors': []
             }
             
-            # 각 법령의 law_content 업데이트
+            # �?법령??law_content ?�데?�트
             for i, law_data in enumerate(original_data.get('laws', [])):
                 try:
                     law_name = law_data.get('law_name', 'Unknown')
                     
-                    # HTML에서 추출한 내용으로 law_content 업데이트
+                    # HTML?�서 추출???�용?�로 law_content ?�데?�트
                     updated_content = self._extract_content_from_html(law_data.get('content_html', ''))
                     
                     if updated_content:
-                        # 원본 law_content 백업
+                        # ?�본 law_content 백업
                         original_content = law_data.get('law_content', '')
                         
-                        # law_content 업데이트
+                        # law_content ?�데?�트
                         original_data['laws'][i]['law_content'] = updated_content
                         
-                        # 업데이트 정보 추가
+                        # ?�데?�트 ?�보 추�?
                         original_data['laws'][i]['content_updated_at'] = datetime.now().isoformat()
                         original_data['laws'][i]['original_content_length'] = len(original_content)
                         original_data['laws'][i]['updated_content_length'] = len(updated_content)
@@ -177,24 +177,24 @@ class BatchLawContentUpdater:
                         file_stats['successful_laws'] += 1
                     else:
                         file_stats['failed_laws'] += 1
-                        logger.warning(f"법령 '{law_name}' 업데이트 실패: HTML 내용 없음")
+                        logger.warning(f"법령 '{law_name}' ?�데?�트 ?�패: HTML ?�용 ?�음")
                         
                 except Exception as e:
-                    error_msg = f"법령 {i+1} 업데이트 중 오류: {str(e)}"
+                    error_msg = f"법령 {i+1} ?�데?�트 �??�류: {str(e)}"
                     logger.error(error_msg)
                     file_stats['errors'].append(error_msg)
                     file_stats['failed_laws'] += 1
             
-            # 파일 메타데이터 업데이트
+            # ?�일 메�??�이???�데?�트
             original_data['content_updated_at'] = datetime.now().isoformat()
             original_data['content_update_version'] = '1.0'
             original_data['update_stats'] = file_stats
             
-            # 업데이트된 데이터 저장 (원본 파일 덮어쓰기)
+            # ?�데?�트???�이???�??(?�본 ?�일 ??��?�기)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(original_data, f, ensure_ascii=False, indent=2)
             
-            # 전역 통계 업데이트
+            # ?�역 ?�계 ?�데?�트
             with stats_lock:
                 global_stats['total_files'] += 1
                 global_stats['total_laws'] += file_stats['total_laws']
@@ -214,7 +214,7 @@ class BatchLawContentUpdater:
             }
             
         except Exception as e:
-            error_msg = f"파일 업데이트 중 오류: {str(e)}"
+            error_msg = f"?�일 ?�데?�트 �??�류: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -223,22 +223,22 @@ class BatchLawContentUpdater:
             }
     
     def _extract_content_from_html(self, html_content: str) -> str:
-        """HTML에서 법령 내용 추출"""
+        """HTML?�서 법령 ?�용 추출"""
         try:
             if not html_content:
                 return ""
             
-            # HTML 파싱
+            # HTML ?�싱
             parsed_html = self.html_parser.parse_html(html_content)
             
-            # 조문들을 정리된 형태로 결합
+            # 조문?�을 ?�리???�태�?결합
             articles = parsed_html.get('articles', [])
             
             if not articles:
-                # 조문이 없으면 깨끗한 텍스트 반환
+                # 조문???�으�?깨끗???�스??반환
                 return parsed_html.get('clean_text', '')
             
-            # 조문들을 하나의 텍스트로 결합
+            # 조문?�을 ?�나???�스?�로 결합
             content_parts = []
             
             for article in articles:
@@ -251,11 +251,11 @@ class BatchLawContentUpdater:
             return '\n\n'.join(content_parts)
             
         except Exception as e:
-            logger.error(f"HTML에서 내용 추출 중 오류: {e}")
+            logger.error(f"HTML?�서 ?�용 추출 �??�류: {e}")
             return ""
     
     def _calculate_final_stats(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """최종 통계 계산"""
+        """최종 ?�계 계산"""
         successful_files = sum(1 for r in results if r['success'])
         failed_files = len(results) - successful_files
         
@@ -273,36 +273,36 @@ class BatchLawContentUpdater:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     try:
-        # law 폴더 경로 설정
+        # law ?�더 경로 ?�정
         law_dir = Path("data/raw/assembly/law")
         
-        # 폴더 존재 확인
+        # ?�더 존재 ?�인
         if not law_dir.exists():
-            logger.error(f"폴더가 존재하지 않음: {law_dir}")
+            logger.error(f"?�더가 존재?��? ?�음: {law_dir}")
             return
         
-        # 일괄 업데이트 실행
+        # ?�괄 ?�데?�트 ?�행
         updater = BatchLawContentUpdater(max_workers=4)
         result = updater.update_all_law_files(law_dir)
         
         if result['success']:
-            logger.info("법령 파일 일괄 업데이트 완료!")
-            logger.info(f"최종 통계: {result['final_stats']}")
+            logger.info("법령 ?�일 ?�괄 ?�데?�트 ?�료!")
+            logger.info(f"최종 ?�계: {result['final_stats']}")
             
-            # 결과를 파일로 저장
+            # 결과�??�일�??�??
             result_file = Path("logs/batch_update_results.json")
             result_file.parent.mkdir(parents=True, exist_ok=True)
             with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"결과 파일 저장: {result_file}")
+            logger.info(f"결과 ?�일 ?�?? {result_file}")
         else:
-            logger.error(f"일괄 업데이트 실패: {result['error']}")
+            logger.error(f"?�괄 ?�데?�트 ?�패: {result['error']}")
             
     except Exception as e:
-        logger.error(f"메인 함수 실행 중 오류: {str(e)}")
+        logger.error(f"메인 ?�수 ?�행 �??�류: {str(e)}")
 
 
 if __name__ == "__main__":

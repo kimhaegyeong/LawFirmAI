@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-검색 성능 최적화 스크립트
+검???�능 최적???�크립트
 """
 
 import sys
@@ -12,39 +12,39 @@ import json
 from pathlib import Path
 
 def analyze_search_performance():
-    """검색 성능 분석"""
-    print("=== 검색 성능 분석 ===")
+    """검???�능 분석"""
+    print("=== 검???�능 분석 ===")
     
-    # 벡터 스토어 초기화
+    # 벡터 ?�토??초기??
     vector_store = LegalVectorStore(
         model_name='jhgan/ko-sroberta-multitask',
         dimension=768,
         index_type='flat'
     )
     
-    # 인덱스 로드
+    # ?�덱??로드
     if not vector_store.load_index('data/embeddings/ml_enhanced_ko_sroberta_precedents'):
-        print("벡터 인덱스 로드 실패")
+        print("벡터 ?�덱??로드 ?�패")
         return
     
-    print(f"벡터 인덱스 크기: {vector_store.index.ntotal:,}")
+    print(f"벡터 ?�덱???�기: {vector_store.index.ntotal:,}")
     
-    # 다양한 검색 시나리오 테스트
+    # ?�양??검???�나리오 ?�스??
     test_scenarios = [
         {
-            'name': '단일 키워드',
-            'queries': ['손해배상', '계약', '특허', '이혼', '형사']
+            'name': '?�일 ?�워??,
+            'queries': ['?�해배상', '계약', '?�허', '?�혼', '?�사']
         },
         {
-            'name': '복합 키워드',
-            'queries': ['손해배상 청구', '계약 해지', '특허 침해', '이혼 소송', '형사 처벌']
+            'name': '복합 ?�워??,
+            'queries': ['?�해배상 �?��', '계약 ?��?', '?�허 침해', '?�혼 ?�송', '?�사 처벌']
         },
         {
-            'name': '긴 문장',
+            'name': '�?문장',
             'queries': [
-                '손해배상 청구 요건과 손해의 범위',
-                '계약 해지 시 손해배상 책임',
-                '특허 침해 시 법적 효과와 구제방법'
+                '?�해배상 �?�� ?�건�??�해??범위',
+                '계약 ?��? ???�해배상 책임',
+                '?�허 침해 ??법적 ?�과?� 구제방법'
             ]
         }
     ]
@@ -52,11 +52,11 @@ def analyze_search_performance():
     results = {}
     
     for scenario in test_scenarios:
-        print(f"\n--- {scenario['name']} 테스트 ---")
+        print(f"\n--- {scenario['name']} ?�스??---")
         scenario_results = []
         
         for query in scenario['queries']:
-            # 검색 시간 측정
+            # 검???�간 측정
             start_time = time.time()
             search_results = vector_store.search(query, top_k=10)
             search_time = time.time() - start_time
@@ -68,7 +68,7 @@ def analyze_search_performance():
                 max_score = max(scores)
                 min_score = min(scores)
                 
-                print(f"  '{query}': {search_time:.3f}초, 점수 범위: {min_score:.3f}-{max_score:.3f}, 평균: {avg_score:.3f}")
+                print(f"  '{query}': {search_time:.3f}�? ?�수 범위: {min_score:.3f}-{max_score:.3f}, ?�균: {avg_score:.3f}")
                 
                 scenario_results.append({
                     'query': query,
@@ -79,7 +79,7 @@ def analyze_search_performance():
                     'min_score': min_score
                 })
             else:
-                print(f"  '{query}': {search_time:.3f}초, 결과 없음")
+                print(f"  '{query}': {search_time:.3f}�? 결과 ?�음")
                 scenario_results.append({
                     'query': query,
                     'search_time': search_time,
@@ -89,12 +89,12 @@ def analyze_search_performance():
                     'min_score': 0
                 })
         
-        # 시나리오별 평균 성능
+        # ?�나리오�??�균 ?�능
         avg_time = sum(r['search_time'] for r in scenario_results) / len(scenario_results)
         avg_score = sum(r['avg_score'] for r in scenario_results) / len(scenario_results)
         
-        print(f"  평균 검색 시간: {avg_time:.3f}초")
-        print(f"  평균 점수: {avg_score:.3f}")
+        print(f"  ?�균 검???�간: {avg_time:.3f}�?)
+        print(f"  ?�균 ?�수: {avg_score:.3f}")
         
         results[scenario['name']] = {
             'queries': scenario_results,
@@ -105,10 +105,10 @@ def analyze_search_performance():
     return results
 
 def optimize_vector_index():
-    """벡터 인덱스 최적화"""
-    print("\n=== 벡터 인덱스 최적화 ===")
+    """벡터 ?�덱??최적??""
+    print("\n=== 벡터 ?�덱??최적??===")
     
-    # 현재 인덱스 정보
+    # ?�재 ?�덱???�보
     vector_store = LegalVectorStore(
         model_name='jhgan/ko-sroberta-multitask',
         dimension=768,
@@ -116,36 +116,36 @@ def optimize_vector_index():
     )
     
     if not vector_store.load_index('data/embeddings/ml_enhanced_ko_sroberta_precedents'):
-        print("벡터 인덱스 로드 실패")
+        print("벡터 ?�덱??로드 ?�패")
         return
     
     stats = vector_store.get_stats()
-    print(f"현재 인덱스 정보:")
+    print(f"?�재 ?�덱???�보:")
     for key, value in stats.items():
         print(f"  {key}: {value}")
     
-    # 메모리 사용량 확인
+    # 메모�??�용???�인
     memory_usage = vector_store.get_memory_usage()
-    print(f"\n메모리 사용량:")
+    print(f"\n메모�??�용??")
     for key, value in memory_usage.items():
         print(f"  {key}: {value}")
     
-    # 인덱스 최적화 제안
-    print(f"\n최적화 제안:")
+    # ?�덱??최적???�안
+    print(f"\n최적???�안:")
     
     if stats['documents_count'] > 10000:
-        print("  - 대용량 데이터: IVF 인덱스 사용 고려")
-        print("  - 양자화(Quantization) 활성화 고려")
+        print("  - ?�?�량 ?�이?? IVF ?�덱???�용 고려")
+        print("  - ?�자??Quantization) ?�성??고려")
     
     if memory_usage.get('total_memory_mb', 0) > 1000:
-        print("  - 메모리 사용량이 높음: 지연 로딩 활성화 고려")
+        print("  - 메모�??�용?�이 ?�음: 지??로딩 ?�성??고려")
     
-    print("  - 정기적인 인덱스 재구성 권장")
-    print("  - 검색 결과 캐싱 구현 고려")
+    print("  - ?�기?�인 ?�덱???�구??권장")
+    print("  - 검??결과 캐싱 구현 고려")
 
 def create_optimized_search_config():
-    """최적화된 검색 설정 생성"""
-    print("\n=== 최적화된 검색 설정 생성 ===")
+    """최적?�된 검???�정 ?�성"""
+    print("\n=== 최적?�된 검???�정 ?�성 ===")
     
     config = {
         "search_optimization": {
@@ -176,32 +176,32 @@ def create_optimized_search_config():
         }
     }
     
-    # 설정 파일 저장
+    # ?�정 ?�일 ?�??
     with open('optimized_search_config.json', 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     
-    print("최적화된 검색 설정이 'optimized_search_config.json'에 저장되었습니다.")
+    print("최적?�된 검???�정??'optimized_search_config.json'???�?�되?�습?�다.")
 
 def main():
-    """메인 함수"""
-    print("LawFirmAI 검색 성능 최적화")
+    """메인 ?�수"""
+    print("LawFirmAI 검???�능 최적??)
     print("=" * 50)
     
-    # 1. 검색 성능 분석
+    # 1. 검???�능 분석
     performance_results = analyze_search_performance()
     
-    # 2. 벡터 인덱스 최적화
+    # 2. 벡터 ?�덱??최적??
     optimize_vector_index()
     
-    # 3. 최적화된 설정 생성
+    # 3. 최적?�된 ?�정 ?�성
     create_optimized_search_config()
     
-    # 결과 저장
+    # 결과 ?�??
     with open('search_optimization_results.json', 'w', encoding='utf-8') as f:
         json.dump(performance_results, f, ensure_ascii=False, indent=2)
     
-    print(f"\n최적화 결과가 'search_optimization_results.json'에 저장되었습니다.")
-    print("\n=== 최적화 완료 ===")
+    print(f"\n최적??결과가 'search_optimization_results.json'???�?�되?�습?�다.")
+    print("\n=== 최적???�료 ===")
 
 if __name__ == "__main__":
     main()

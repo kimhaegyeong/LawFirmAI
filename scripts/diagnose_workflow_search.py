@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-워크플로우 검색 진단 스크립트
-LangGraph 워크플로우 실행 후 검색 관련 문제 진단
+?�크?�로??검??진단 ?�크립트
+LangGraph ?�크?�로???�행 ??검??관??문제 진단
 """
 
 import asyncio
@@ -12,15 +12,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# core/agents/workflow_service.py를 사용하도록 변경
-from core.agents.workflow_service import LangGraphWorkflowService
+# core/agents/workflow_service.py�??�용?�도�?변�?
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_search_results(result: Dict[str, Any]) -> Dict[str, Any]:
-    """검색 결과 분석"""
+    """검??결과 분석"""
     analysis = {
         "has_answer": bool(result.get("answer", "")),
         "answer_length": len(result.get("answer", "")),
@@ -56,7 +56,7 @@ def analyze_search_results(result: Dict[str, Any]) -> Dict[str, Any]:
         doc_sources = {}
         doc_scores = []
 
-        for doc in docs[:10]:  # 상위 10개만 분석
+        for doc in docs[:10]:  # ?�위 10개만 분석
             doc_type = doc.get("type", doc.get("doc_type", "unknown"))
             doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
 
@@ -78,23 +78,23 @@ def analyze_search_results(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def diagnose_workflow_search(query: str):
-    """워크플로우 검색 진단"""
+    """?�크?�로??검??진단"""
     print("=" * 80)
-    print("워크플로우 검색 진단")
+    print("?�크?�로??검??진단")
     print("=" * 80)
     print(f"\n진단 쿼리: {query}")
-    print(f"시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"?�작 ?�간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     try:
-        # 설정 로드
+        # ?�정 로드
         config = LangGraphConfig.from_env()
 
-        # 워크플로우 서비스 초기화
-        logger.info("워크플로우 서비스 초기화 중...")
+        # ?�크?�로???�비??초기??
+        logger.info("?�크?�로???�비??초기??�?..")
         workflow_service = LangGraphWorkflowService(config)
 
         # 쿼리 처리
-        logger.info(f"쿼리 처리 시작: {query}")
+        logger.info(f"쿼리 처리 ?�작: {query}")
         session_id = f"diagnosis_{int(datetime.now().timestamp())}"
 
         result = await workflow_service.process_query(
@@ -111,41 +111,41 @@ async def diagnose_workflow_search(query: str):
         print("진단 결과")
         print("=" * 80)
 
-        print(f"\n[답변]")
-        print(f"  - 생성 여부: {'✅ 있음' if analysis['has_answer'] else '❌ 없음'}")
-        print(f"  - 길이: {analysis['answer_length']}자")
-        print(f"  - 신뢰도: {analysis['confidence']:.2%}")
+        print(f"\n[?��?]")
+        print(f"  - ?�성 ?��?: {'???�음' if analysis['has_answer'] else '???�음'}")
+        print(f"  - 길이: {analysis['answer_length']}??)
+        print(f"  - ?�뢰?? {analysis['confidence']:.2%}")
 
-        print(f"\n[검색 결과]")
-        print(f"  - retrieved_docs: {'✅ 있음' if analysis['has_retrieved_docs'] else '❌ 없음'} ({analysis['retrieved_docs_count']}개)")
-        print(f"  - sources: {'✅ 있음' if analysis['has_sources'] else '❌ 없음'} ({analysis['sources_count']}개)")
+        print(f"\n[검??결과]")
+        print(f"  - retrieved_docs: {'???�음' if analysis['has_retrieved_docs'] else '???�음'} ({analysis['retrieved_docs_count']}�?")
+        print(f"  - sources: {'???�음' if analysis['has_sources'] else '???�음'} ({analysis['sources_count']}�?")
 
         if analysis['has_retrieved_docs']:
-            print(f"\n  [문서 타입 분포]")
+            print(f"\n  [문서 ?�??분포]")
             for doc_type, count in analysis.get('doc_types', {}).items():
-                print(f"    - {doc_type}: {count}개")
+                print(f"    - {doc_type}: {count}�?)
 
-            print(f"\n  [문서 소스 분포]")
+            print(f"\n  [문서 ?�스 분포]")
             for source, count in list(analysis.get('doc_sources', {}).items())[:5]:
-                print(f"    - {source}: {count}개")
+                print(f"    - {source}: {count}�?)
 
             if 'avg_score' in analysis:
-                print(f"\n  [점수 통계]")
-                print(f"    - 평균: {analysis['avg_score']:.3f}")
+                print(f"\n  [?�수 ?�계]")
+                print(f"    - ?�균: {analysis['avg_score']:.3f}")
                 print(f"    - 최소: {analysis['min_score']:.3f}")
-                print(f"    - 최대: {analysis['max_score']:.3f}")
+                print(f"    - 최�?: {analysis['max_score']:.3f}")
 
         if analysis['has_sources']:
             print(f"\n  [Sources 목록]")
             for i, source in enumerate(analysis['sources_list'][:10], 1):
                 print(f"    {i}. {source}")
 
-        print(f"\n[처리 정보]")
-        print(f"  - 처리 시간: {analysis['processing_time']:.2f}초")
-        print(f"  - 에러 여부: {'⚠️ 있음' if analysis['has_errors'] else '✅ 없음'}")
+        print(f"\n[처리 ?�보]")
+        print(f"  - 처리 ?�간: {analysis['processing_time']:.2f}�?)
+        print(f"  - ?�러 ?��?: {'?�️ ?�음' if analysis['has_errors'] else '???�음'}")
 
         if analysis['has_errors']:
-            print(f"\n  [에러 목록]")
+            print(f"\n  [?�러 목록]")
             for error in analysis['errors']:
                 print(f"    - {error}")
 
@@ -158,69 +158,69 @@ async def diagnose_workflow_search(query: str):
         recommendations = []
 
         if not analysis['has_retrieved_docs']:
-            issues.append("❌ 검색 결과가 없습니다 (retrieved_docs가 비어있음)")
-            recommendations.append("  → 검색 쿼리 확인 필요")
-            recommendations.append("  → 검색 컴포넌트 직접 테스트 필요")
-            recommendations.append("  → 임계값 필터링 확인 필요")
+            issues.append("??검??결과가 ?�습?�다 (retrieved_docs가 비어?�음)")
+            recommendations.append("  ??검??쿼리 ?�인 ?�요")
+            recommendations.append("  ??검??컴포?�트 직접 ?�스???�요")
+            recommendations.append("  ???�계�??�터�??�인 ?�요")
 
         if not analysis['has_sources'] and analysis['has_retrieved_docs']:
-            issues.append("⚠️ Sources가 추출되지 않았습니다")
-            recommendations.append("  → retrieved_docs의 source 필드 확인 필요")
-            recommendations.append("  → prepare_final_response의 sources 추출 로직 확인 필요")
+            issues.append("?�️ Sources가 추출?��? ?�았?�니??)
+            recommendations.append("  ??retrieved_docs??source ?�드 ?�인 ?�요")
+            recommendations.append("  ??prepare_final_response??sources 추출 로직 ?�인 ?�요")
 
         if analysis['has_retrieved_docs'] and 'avg_score' in analysis:
             if analysis['avg_score'] < 0.3:
-                issues.append("⚠️ 검색 결과의 평균 점수가 낮습니다 (0.3 미만)")
-                recommendations.append("  → 검색 쿼리 최적화 필요")
-                recommendations.append("  → 임계값 조정 검토 필요")
+                issues.append("?�️ 검??결과???�균 ?�수가 ??��?�다 (0.3 미만)")
+                recommendations.append("  ??검??쿼리 최적???�요")
+                recommendations.append("  ???�계�?조정 검???�요")
 
         if not analysis['has_answer']:
-            issues.append("❌ 답변이 생성되지 않았습니다")
-            recommendations.append("  → 검색 결과 부족 가능성")
-            recommendations.append("  → LLM 호출 실패 가능성")
+            issues.append("???��????�성?��? ?�았?�니??)
+            recommendations.append("  ??검??결과 부�?가?�성")
+            recommendations.append("  ??LLM ?�출 ?�패 가?�성")
 
         if issues:
-            print("\n발견된 문제:")
+            print("\n발견??문제:")
             for issue in issues:
                 print(f"  {issue}")
 
             if recommendations:
                 print("\n권장 조치:")
-                for rec in set(recommendations):  # 중복 제거
+                for rec in set(recommendations):  # 중복 ?�거
                     print(f"  {rec}")
         else:
-            print("\n✅ 특별한 문제가 발견되지 않았습니다.")
+            print("\n???�별??문제가 발견?��? ?�았?�니??")
 
         print("\n" + "=" * 80)
-        print("진단 완료")
-        print(f"로그 파일: logs/workflow_diagnosis_*.log")
+        print("진단 ?�료")
+        print(f"로그 ?�일: logs/workflow_diagnosis_*.log")
         print("=" * 80)
 
         return result, analysis
 
     except Exception as e:
-        logger.error(f"진단 중 오류 발생: {e}")
+        logger.error(f"진단 �??�류 발생: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        print(f"\n❌ 진단 실패: {e}")
+        print(f"\n??진단 ?�패: {e}")
         return None, None
 
 
 def main():
-    """메인 함수"""
-    # 테스트 쿼리
-    test_query = "민사법에서 계약 해지 요건은 무엇인가요?"
+    """메인 ?�수"""
+    # ?�스??쿼리
+    test_query = "민사법에??계약 ?��? ?�건?� 무엇?��???"
 
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # 비동기 실행
+    # 비동�??�행
     result, analysis = asyncio.run(diagnose_workflow_search(test_query))
 
     if result and analysis:
-        print(f"\n✅ 진단이 완료되었습니다.")
-        print(f"상세 로그는 logs/ 디렉토리를 확인하세요.")
+        print(f"\n??진단???�료?�었?�니??")
+        print(f"?�세 로그??logs/ ?�렉?�리�??�인?�세??")
 
 
 if __name__ == "__main__":

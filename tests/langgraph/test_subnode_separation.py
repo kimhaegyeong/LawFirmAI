@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-서브노드 분리 테스트 (expand_keywords + prepare_search_query)
+?�브?�드 분리 ?�스??(expand_keywords + prepare_search_query)
 """
 import asyncio
 import logging
@@ -14,27 +14,27 @@ sys.path.insert(0, str(project_root))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 
 async def test_expand_keywords_node():
-    """expand_keywords 노드 테스트"""
+    """expand_keywords ?�드 ?�스??""
     print("\n" + "=" * 80)
-    print("테스트 1: expand_keywords 노드 동작 확인")
+    print("?�스??1: expand_keywords ?�드 ?�작 ?�인")
     print("=" * 80)
     
     config = LangGraphConfig.from_env()
     workflow_service = LangGraphWorkflowService(config)
     
-    query = "계약 해지 요건"
+    query = "계약 ?��? ?�건"
     print(f"\n질문: {query}")
     
     start = time.time()
     result = await workflow_service.process_query(query, "test_session_expand_keywords")
     elapsed = time.time() - start
     
-    # processing_steps 확인
+    # processing_steps ?�인
     processing_steps = result.get("processing_steps", [])
     step_texts = []
     for step in processing_steps:
@@ -45,54 +45,54 @@ async def test_expand_keywords_node():
         else:
             step_texts.append(str(step))
     
-    # expand_keywords 노드 실행 확인 (더 넓은 범위로 검색)
+    # expand_keywords ?�드 ?�행 ?�인 (???��? 범위�?검??
     has_keyword_expansion = any(
-        "키워드 확장" in step or 
-        "키워드" in step and "확장" in step or
+        "?�워???�장" in step or 
+        "?�워?? in step and "?�장" in step or
         "expand_keywords" in step.lower()
         for step in step_texts
     )
     
-    # extracted_keywords 확인
+    # extracted_keywords ?�인
     extracted_keywords = result.get("extracted_keywords", [])
     
     print(f"\n[결과]")
-    print(f"  시간: {elapsed:.2f}초")
-    print(f"  키워드 확장 단계 포함: {has_keyword_expansion}")
-    print(f"  추출된 키워드 수: {len(extracted_keywords)}개")
-    print(f"  처리 단계 수: {len(processing_steps)}개")
+    print(f"  ?�간: {elapsed:.2f}�?)
+    print(f"  ?�워???�장 ?�계 ?�함: {has_keyword_expansion}")
+    print(f"  추출???�워???? {len(extracted_keywords)}�?)
+    print(f"  처리 ?�계 ?? {len(processing_steps)}�?)
     
     if extracted_keywords:
-        print(f"  키워드 예시: {extracted_keywords[:5]}")
+        print(f"  ?�워???�시: {extracted_keywords[:5]}")
     
     success = has_keyword_expansion and len(extracted_keywords) > 0
     
     if success:
-        print("  ✅ [PASS] expand_keywords 노드 정상 작동")
+        print("  ??[PASS] expand_keywords ?�드 ?�상 ?�동")
     else:
-        print("  ❌ [FAIL] expand_keywords 노드 확인 실패")
-        print(f"        키워드 확장 포함: {has_keyword_expansion}, 키워드 수: {len(extracted_keywords)}")
+        print("  ??[FAIL] expand_keywords ?�드 ?�인 ?�패")
+        print(f"        ?�워???�장 ?�함: {has_keyword_expansion}, ?�워???? {len(extracted_keywords)}")
     
     return success
 
 
 async def test_prepare_search_query_node():
-    """prepare_search_query 노드 테스트"""
+    """prepare_search_query ?�드 ?�스??""
     print("\n" + "=" * 80)
-    print("테스트 2: prepare_search_query 노드 동작 확인")
+    print("?�스??2: prepare_search_query ?�드 ?�작 ?�인")
     print("=" * 80)
     
     config = LangGraphConfig.from_env()
     workflow_service = LangGraphWorkflowService(config)
     
-    query = "민법 제111조의 내용을 알려주세요"
+    query = "민법 ??11조의 ?�용???�려주세??
     print(f"\n질문: {query}")
     
     start = time.time()
     result = await workflow_service.process_query(query, "test_session_prepare_query")
     elapsed = time.time() - start
     
-    # processing_steps 확인
+    # processing_steps ?�인
     processing_steps = result.get("processing_steps", [])
     step_texts = []
     for step in processing_steps:
@@ -103,66 +103,66 @@ async def test_prepare_search_query_node():
         else:
             step_texts.append(str(step))
     
-    # prepare_search_query 노드 실행 확인 (더 넓은 범위로 검색)
+    # prepare_search_query ?�드 ?�행 ?�인 (???��? 범위�?검??
     has_search_query_prep = any(
-        "검색 쿼리 준비" in step or 
-        "쿼리 준비" in step or
+        "검??쿼리 준�? in step or 
+        "쿼리 준�? in step or
         "search_query" in step.lower() or
-        "최적화된 쿼리" in step
+        "최적?�된 쿼리" in step
         for step in step_texts
     )
     
-    # optimized_queries 확인
+    # optimized_queries ?�인
     optimized_queries = result.get("optimized_queries", {})
     search_query = result.get("search_query", "")
     search_params = result.get("search_params", {})
     
     print(f"\n[결과]")
-    print(f"  시간: {elapsed:.2f}초")
-    print(f"  검색 쿼리 준비 단계 포함: {has_search_query_prep}")
-    print(f"  최적화된 쿼리 생성: {bool(optimized_queries)}")
-    print(f"  검색 쿼리: {search_query[:50] if search_query else 'N/A'}...")
-    print(f"  검색 파라미터: {bool(search_params)}")
-    print(f"  처리 단계 수: {len(processing_steps)}개")
+    print(f"  ?�간: {elapsed:.2f}�?)
+    print(f"  검??쿼리 준�??�계 ?�함: {has_search_query_prep}")
+    print(f"  최적?�된 쿼리 ?�성: {bool(optimized_queries)}")
+    print(f"  검??쿼리: {search_query[:50] if search_query else 'N/A'}...")
+    print(f"  검???�라미터: {bool(search_params)}")
+    print(f"  처리 ?�계 ?? {len(processing_steps)}�?)
     
     if optimized_queries:
         semantic_query = optimized_queries.get("semantic_query", "")
-        print(f"  의미적 쿼리: {semantic_query[:50] if semantic_query else 'N/A'}...")
+        print(f"  ?��???쿼리: {semantic_query[:50] if semantic_query else 'N/A'}...")
     
     success = has_search_query_prep and bool(optimized_queries) and bool(search_params)
     
     if success:
-        print("  ✅ [PASS] prepare_search_query 노드 정상 작동")
+        print("  ??[PASS] prepare_search_query ?�드 ?�상 ?�동")
     else:
-        print("  ❌ [FAIL] prepare_search_query 노드 확인 실패")
-        print(f"        쿼리 준비 포함: {has_search_query_prep}, "
-              f"최적화된 쿼리: {bool(optimized_queries)}, "
-              f"검색 파라미터: {bool(search_params)}")
+        print("  ??[FAIL] prepare_search_query ?�드 ?�인 ?�패")
+        print(f"        쿼리 준�??�함: {has_search_query_prep}, "
+              f"최적?�된 쿼리: {bool(optimized_queries)}, "
+              f"검???�라미터: {bool(search_params)}")
     
     return success
 
 
 async def test_unified_classification():
-    """통합 LLM 분류 테스트"""
+    """?�합 LLM 분류 ?�스??""
     print("\n" + "=" * 80)
-    print("테스트 3: 통합 LLM 분류 (질문 유형 + 복잡도) 동작 확인")
+    print("?�스??3: ?�합 LLM 분류 (질문 ?�형 + 복잡?? ?�작 ?�인")
     print("=" * 80)
     
     config = LangGraphConfig.from_env()
     workflow_service = LangGraphWorkflowService(config)
     
     test_cases = [
-        ("안녕하세요", "simple"),
-        ("민법 제111조", "moderate"),
-        ("계약 해지와 해제의 차이", "complex"),
+        ("?�녕?�세??, "simple"),
+        ("민법 ??11�?, "moderate"),
+        ("계약 ?��??� ?�제??차이", "complex"),
     ]
     
     passed = 0
     failed = 0
     
     for query, expected_complexity in test_cases:
-        print(f"\n📝 질문: {query}")
-        print(f"  예상 복잡도: {expected_complexity}")
+        print(f"\n?�� 질문: {query}")
+        print(f"  ?�상 복잡?? {expected_complexity}")
         
         try:
             start = time.time()
@@ -173,45 +173,45 @@ async def test_unified_classification():
             needs_search = result.get("needs_search", True)
             query_type = result.get("query_type", "unknown")
             
-            print(f"  실제 복잡도: {actual_complexity}")
-            print(f"  질문 유형: {query_type}")
-            print(f"  검색 필요: {needs_search}")
-            print(f"  응답 시간: {elapsed:.2f}초")
+            print(f"  ?�제 복잡?? {actual_complexity}")
+            print(f"  질문 ?�형: {query_type}")
+            print(f"  검???�요: {needs_search}")
+            print(f"  ?�답 ?�간: {elapsed:.2f}�?)
             
-            # 복잡도 일치 확인
+            # 복잡???�치 ?�인
             if actual_complexity == expected_complexity:
-                print("  ✅ [PASS] 복잡도 일치")
+                print("  ??[PASS] 복잡???�치")
                 passed += 1
             else:
-                print(f"  ⚠️  복잡도 불일치 (예상: {expected_complexity}, 실제: {actual_complexity})")
+                print(f"  ?�️  복잡??불일�?(?�상: {expected_complexity}, ?�제: {actual_complexity})")
                 failed += 1
             
         except Exception as e:
-            print(f"  ❌ 오류 발생: {e}")
-            logger.exception(f"테스트 실패: {query}")
+            print(f"  ???�류 발생: {e}")
+            logger.exception(f"?�스???�패: {query}")
             failed += 1
     
-    print(f"\n📊 결과: {passed}개 통과, {failed}개 실패")
+    print(f"\n?�� 결과: {passed}�??�과, {failed}�??�패")
     return failed == 0
 
 
 async def test_subnode_sequence():
-    """서브노드 순차 실행 테스트"""
+    """?�브?�드 ?�차 ?�행 ?�스??""
     print("\n" + "=" * 80)
-    print("테스트 4: 서브노드 순차 실행 확인 (expand_keywords → prepare_search_query)")
+    print("?�스??4: ?�브?�드 ?�차 ?�행 ?�인 (expand_keywords ??prepare_search_query)")
     print("=" * 80)
     
     config = LangGraphConfig.from_env()
     workflow_service = LangGraphWorkflowService(config)
     
-    query = "계약 해지 요건과 절차"
+    query = "계약 ?��? ?�건�??�차"
     print(f"\n질문: {query}")
     
     start = time.time()
     result = await workflow_service.process_query(query, "test_session_sequence")
     elapsed = time.time() - start
     
-    # processing_steps 확인
+    # processing_steps ?�인
     processing_steps = result.get("processing_steps", [])
     step_texts = []
     for step in processing_steps:
@@ -222,32 +222,32 @@ async def test_subnode_sequence():
         else:
             step_texts.append(str(step))
     
-    # 단계 순서 확인 (더 넓은 범위로 검색)
+    # ?�계 ?�서 ?�인 (???��? 범위�?검??
     keyword_expansion_idx = -1
     search_query_prep_idx = -1
     
     for i, step in enumerate(step_texts):
         step_lower = step.lower()
-        if "키워드" in step and ("확장" in step or "expansion" in step_lower):
+        if "?�워?? in step and ("?�장" in step or "expansion" in step_lower):
             keyword_expansion_idx = i
-        if ("검색 쿼리" in step or "쿼리 준비" in step or 
-            "search_query" in step_lower or "최적화된 쿼리" in step):
+        if ("검??쿼리" in step or "쿼리 준�? in step or 
+            "search_query" in step_lower or "최적?�된 쿼리" in step):
             search_query_prep_idx = i
     
     print(f"\n[결과]")
-    print(f"  시간: {elapsed:.2f}초")
-    print(f"  키워드 확장 단계 인덱스: {keyword_expansion_idx}")
-    print(f"  검색 쿼리 준비 단계 인덱스: {search_query_prep_idx}")
-    print(f"  총 처리 단계 수: {len(processing_steps)}개")
+    print(f"  ?�간: {elapsed:.2f}�?)
+    print(f"  ?�워???�장 ?�계 ?�덱?? {keyword_expansion_idx}")
+    print(f"  검??쿼리 준�??�계 ?�덱?? {search_query_prep_idx}")
+    print(f"  �?처리 ?�계 ?? {len(processing_steps)}�?)
     
-    # 순서 확인: 키워드 확장이 검색 쿼리 준비보다 먼저 실행되어야 함
+    # ?�서 ?�인: ?�워???�장??검??쿼리 준비보??먼�? ?�행?�어????
     correct_sequence = (
         keyword_expansion_idx >= 0 and 
         search_query_prep_idx >= 0 and 
         keyword_expansion_idx < search_query_prep_idx
     )
     
-    # 결과 확인
+    # 결과 ?�인
     extracted_keywords = result.get("extracted_keywords", [])
     optimized_queries = result.get("optimized_queries", {})
     search_query = result.get("search_query", "")
@@ -255,42 +255,42 @@ async def test_subnode_sequence():
     has_keywords = len(extracted_keywords) > 0
     has_optimized = bool(optimized_queries) and bool(search_query)
     
-    print(f"  키워드 확장 결과: {has_keywords} (키워드 {len(extracted_keywords)}개)")
-    print(f"  쿼리 최적화 결과: {has_optimized}")
+    print(f"  ?�워???�장 결과: {has_keywords} (?�워??{len(extracted_keywords)}�?")
+    print(f"  쿼리 최적??결과: {has_optimized}")
     
     success = correct_sequence and has_keywords and has_optimized
     
     if success:
-        print("  ✅ [PASS] 서브노드 순차 실행 정상")
+        print("  ??[PASS] ?�브?�드 ?�차 ?�행 ?�상")
     else:
-        print("  ❌ [FAIL] 서브노드 순차 실행 확인 실패")
-        print(f"        올바른 순서: {correct_sequence}, "
-              f"키워드 있음: {has_keywords}, "
-              f"최적화됨: {has_optimized}")
+        print("  ??[FAIL] ?�브?�드 ?�차 ?�행 ?�인 ?�패")
+        print(f"        ?�바�??�서: {correct_sequence}, "
+              f"?�워???�음: {has_keywords}, "
+              f"최적?�됨: {has_optimized}")
     
     return success
 
 
 async def test_end_to_end_workflow():
-    """전체 워크플로우 엔드-투-엔드 테스트"""
+    """?�체 ?�크?�로???�드-???�드 ?�스??""
     print("\n" + "=" * 80)
-    print("테스트 5: 전체 워크플로우 엔드-투-엔드 테스트")
+    print("?�스??5: ?�체 ?�크?�로???�드-???�드 ?�스??)
     print("=" * 80)
     
     config = LangGraphConfig.from_env()
     workflow_service = LangGraphWorkflowService(config)
     
     test_queries = [
-        "안녕하세요",
-        "민법 제111조의 내용을 알려주세요",
-        "계약 해지와 해제의 차이는 무엇인가요?",
+        "?�녕?�세??,
+        "민법 ??11조의 ?�용???�려주세??,
+        "계약 ?��??� ?�제??차이??무엇?��???",
     ]
     
     passed = 0
     failed = 0
     
     for query in test_queries:
-        print(f"\n📝 질문: {query}")
+        print(f"\n?�� 질문: {query}")
         
         try:
             start = time.time()
@@ -303,100 +303,100 @@ async def test_end_to_end_workflow():
             extracted_keywords = result.get("extracted_keywords", [])
             optimized_queries = result.get("optimized_queries", {})
             
-            print(f"  ⏱️  응답 시간: {elapsed:.2f}초")
-            print(f"  📊 복잡도: {query_complexity}")
-            print(f"  🔍 검색 필요: {needs_search}")
-            print(f"  📝 답변 길이: {len(answer)}자")
-            print(f"  🔑 키워드 수: {len(extracted_keywords)}개")
-            print(f"  🔍 최적화된 쿼리: {bool(optimized_queries)}")
+            print(f"  ?�️  ?�답 ?�간: {elapsed:.2f}�?)
+            print(f"  ?�� 복잡?? {query_complexity}")
+            print(f"  ?�� 검???�요: {needs_search}")
+            print(f"  ?�� ?��? 길이: {len(answer)}??)
+            print(f"  ?�� ?�워???? {len(extracted_keywords)}�?)
+            print(f"  ?�� 최적?�된 쿼리: {bool(optimized_queries)}")
             
-            # 기본 검증
+            # 기본 검�?
             has_answer = len(answer) > 0
             has_complexity = query_complexity != "unknown"
             
             if has_answer and has_complexity:
-                print("  ✅ [PASS] 전체 워크플로우 정상 작동")
+                print("  ??[PASS] ?�체 ?�크?�로???�상 ?�동")
                 passed += 1
             else:
-                print("  ❌ [FAIL] 전체 워크플로우 검증 실패")
+                print("  ??[FAIL] ?�체 ?�크?�로??검�??�패")
                 failed += 1
                 
         except Exception as e:
-            print(f"  ❌ 오류 발생: {e}")
-            logger.exception(f"테스트 실패: {query}")
+            print(f"  ???�류 발생: {e}")
+            logger.exception(f"?�스???�패: {query}")
             failed += 1
     
-    print(f"\n📊 결과: {passed}개 통과, {failed}개 실패")
+    print(f"\n?�� 결과: {passed}�??�과, {failed}�??�패")
     return failed == 0
 
 
 async def main():
-    """모든 테스트 실행"""
+    """모든 ?�스???�행"""
     print("=" * 80)
-    print("서브노드 분리 및 통합 LLM 분류 테스트")
+    print("?�브?�드 분리 �??�합 LLM 분류 ?�스??)
     print("=" * 80)
     
     results = {}
     
-    # 테스트 1: expand_keywords 노드
+    # ?�스??1: expand_keywords ?�드
     try:
         results["expand_keywords"] = await test_expand_keywords_node()
     except Exception as e:
-        print(f"❌ expand_keywords 테스트 오류: {e}")
-        logger.exception("expand_keywords 테스트 실패")
+        print(f"??expand_keywords ?�스???�류: {e}")
+        logger.exception("expand_keywords ?�스???�패")
         results["expand_keywords"] = False
     
-    # 테스트 2: prepare_search_query 노드
+    # ?�스??2: prepare_search_query ?�드
     try:
         results["prepare_search_query"] = await test_prepare_search_query_node()
     except Exception as e:
-        print(f"❌ prepare_search_query 테스트 오류: {e}")
-        logger.exception("prepare_search_query 테스트 실패")
+        print(f"??prepare_search_query ?�스???�류: {e}")
+        logger.exception("prepare_search_query ?�스???�패")
         results["prepare_search_query"] = False
     
-    # 테스트 3: 통합 LLM 분류
+    # ?�스??3: ?�합 LLM 분류
     try:
         results["unified_classification"] = await test_unified_classification()
     except Exception as e:
-        print(f"❌ 통합 LLM 분류 테스트 오류: {e}")
-        logger.exception("통합 LLM 분류 테스트 실패")
+        print(f"???�합 LLM 분류 ?�스???�류: {e}")
+        logger.exception("?�합 LLM 분류 ?�스???�패")
         results["unified_classification"] = False
     
-    # 테스트 4: 서브노드 순차 실행
+    # ?�스??4: ?�브?�드 ?�차 ?�행
     try:
         results["subnode_sequence"] = await test_subnode_sequence()
     except Exception as e:
-        print(f"❌ 서브노드 순차 실행 테스트 오류: {e}")
-        logger.exception("서브노드 순차 실행 테스트 실패")
+        print(f"???�브?�드 ?�차 ?�행 ?�스???�류: {e}")
+        logger.exception("?�브?�드 ?�차 ?�행 ?�스???�패")
         results["subnode_sequence"] = False
     
-    # 테스트 5: 엔드-투-엔드
+    # ?�스??5: ?�드-???�드
     try:
         results["end_to_end"] = await test_end_to_end_workflow()
     except Exception as e:
-        print(f"❌ 엔드-투-엔드 테스트 오류: {e}")
-        logger.exception("엔드-투-엔드 테스트 실패")
+        print(f"???�드-???�드 ?�스???�류: {e}")
+        logger.exception("?�드-???�드 ?�스???�패")
         results["end_to_end"] = False
     
     # 최종 결과
     print("\n" + "=" * 80)
-    print("테스트 최종 결과")
+    print("?�스??최종 결과")
     print("=" * 80)
     
     for test_name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = "??PASS" if passed else "??FAIL"
         print(f"  {test_name}: {status}")
     
     total_passed = sum(1 for v in results.values() if v)
     total_tests = len(results)
     
-    print(f"\n📊 총계: {total_passed}/{total_tests} 테스트 통과")
+    print(f"\n?�� 총계: {total_passed}/{total_tests} ?�스???�과")
     
     if total_passed == total_tests:
-        print("✅ 모든 테스트 통과!")
+        print("??모든 ?�스???�과!")
         return 0
     else:
-        print("⚠️ 일부 테스트 실패")
+        print("?�️ ?��? ?�스???�패")
         return 1
 
 

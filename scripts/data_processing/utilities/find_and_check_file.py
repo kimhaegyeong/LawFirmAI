@@ -11,9 +11,9 @@ def find_and_check_file():
     demo_dir = "../../data/processed/assembly/law/individual_laws_demo"
     files = os.listdir(demo_dir)
     
-    # Find files with 연금법
-    target_files = [f for f in files if '연금법' in f]
-    print(f"Files with 연금법: {len(target_files)}")
+    # Find files with ?�금�?
+    target_files = [f for f in files if '?�금�? in f]
+    print(f"Files with ?�금�? {len(target_files)}")
     
     if target_files:
         target_file = target_files[0]
@@ -45,7 +45,7 @@ def find_and_check_file():
         except Exception as e:
             print(f"Error reading file: {e}")
     else:
-        print("No files with 연금법 found")
+        print("No files with ?�금�?found")
 
 if __name__ == "__main__":
     find_and_check_file()

@@ -1,4 +1,4 @@
-# LawFirmAI 서비스 아키텍처
+﻿# LawFirmAI 서비스 아키텍처
 
 ## 개요
 
@@ -49,7 +49,7 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 ### 1. LangGraph 워크플로우 서비스
 
-**파일**: `core/agents/workflow_service.py`
+**파일**: `source/agents/workflow_service.py`
 
 **역할**: LangGraph 기반 법률 질문 처리 워크플로우 관리
 
@@ -60,7 +60,7 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 **사용 예시**:
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
@@ -70,7 +70,7 @@ result = await workflow.process_query("질문", "session_id")
 
 ### 2. 하이브리드 검색 엔진
 
-**파일**: `core/services/search/hybrid_search_engine.py`
+**파일**: `source/services/search/hybrid_search_engine.py`
 
 **역할**: 의미적 검색 + 정확 매칭 통합
 
@@ -81,7 +81,7 @@ result = await workflow.process_query("질문", "session_id")
 
 **사용 예시**:
 ```python
-from core.services.search import HybridSearchEngine
+from source.services.search import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("계약 해지", question_type="law_inquiry")
@@ -89,7 +89,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 3. 의미적 검색 엔진
 
-**파일**: `core/services/search/semantic_search_engine.py`
+**파일**: `source/services/search/semantic_search_engine.py`
 
 **역할**: FAISS 벡터 기반 의미적 유사도 검색
 
@@ -100,7 +100,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 4. 정확한 매칭 검색 엔진
 
-**파일**: `core/services/search/exact_search_engine.py`
+**파일**: `source/services/search/exact_search_engine.py`
 
 **역할**: 키워드 기반 정확한 매칭 검색
 
@@ -111,7 +111,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 5. 질문 분류기
 
-**파일**: `core/services/search/question_classifier.py`
+**파일**: `source/services/search/question_classifier.py`
 
 **역할**: 질문 유형 분류 및 처리 전략 결정
 
@@ -123,7 +123,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 6. 답변 생성기
 
-**파일**: `core/services/generation/answer_generator.py`
+**파일**: `source/services/generation/answer_generator.py`
 
 **역할**: 검색 결과를 바탕으로 답변 생성
 
@@ -134,7 +134,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 **사용 예시**:
 ```python
-from core.services.generation import AnswerGenerator
+from source.services.generation import AnswerGenerator
 
 generator = AnswerGenerator()
 answer = generator.generate(query, context)
@@ -142,7 +142,7 @@ answer = generator.generate(query, context)
 
 ### 7. 컨텍스트 빌더
 
-**파일**: `core/services/generation/context_builder.py`
+**파일**: `source/services/generation/context_builder.py`
 
 **역할**: 검색 결과를 바탕으로 답변 생성에 필요한 컨텍스트 구성
 
@@ -153,7 +153,7 @@ answer = generator.generate(query, context)
 
 ### 8. 신뢰도 계산기
 
-**파일**: `core/services/enhancement/confidence_calculator.py`
+**파일**: `source/services/enhancement/confidence_calculator.py`
 
 **역할**: 답변의 신뢰도 계산
 
@@ -166,7 +166,7 @@ answer = generator.generate(query, context)
 
 ### 1. 데이터베이스 관리자
 
-**파일**: `core/data/database.py`
+**파일**: `source/data/database.py`
 
 **기능**:
 - SQLite 데이터베이스 관리
@@ -181,7 +181,7 @@ answer = generator.generate(query, context)
 
 ### 2. 벡터 스토어
 
-**파일**: `core/data/vector_store.py`
+**파일**: `source/data/vector_store.py`
 
 **기능**:
 - FAISS 벡터 인덱스 관리
@@ -190,7 +190,7 @@ answer = generator.generate(query, context)
 
 ### 3. 대화 저장소
 
-**파일**: `core/data/conversation_store.py`
+**파일**: `source/data/conversation_store.py`
 
 **기능**:
 - 대화 데이터 저장
@@ -201,7 +201,7 @@ answer = generator.generate(query, context)
 
 ### 1. 모델 관리자
 
-**파일**: `core/models/model_manager.py`
+**파일**: `source/models/model_manager.py`
 
 **기능**:
 - 모델 로딩 및 관리
@@ -210,7 +210,7 @@ answer = generator.generate(query, context)
 
 ### 2. Sentence BERT
 
-**파일**: `core/models/sentence_bert.py`
+**파일**: `source/models/sentence_bert.py`
 
 **기능**:
 - 텍스트 임베딩 생성
@@ -218,7 +218,7 @@ answer = generator.generate(query, context)
 
 ### 3. Gemini 클라이언트
 
-**파일**: `core/models/gemini_client.py`
+**파일**: `source/models/gemini_client.py`
 
 **기능**:
 - Google Gemini API 통신
@@ -273,8 +273,8 @@ Results
 
 ```python
 # 직접 호출
-from core.services.search import HybridSearchEngine
-from core.services.generation import AnswerGenerator
+from source.services.search import HybridSearchEngine
+from source.services.generation import AnswerGenerator
 
 search_engine = HybridSearchEngine()
 answer_generator = AnswerGenerator()
@@ -287,7 +287,7 @@ answer = answer_generator.generate("계약 해지", results)
 
 ```python
 import asyncio
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 
 async def process_query_async(query: str, session_id: str):
     workflow = LangGraphWorkflowService()
@@ -347,7 +347,7 @@ workflow = LangGraphWorkflowService(config)
 ### 1. 메모리 최적화
 
 ```python
-from core.agents.performance_optimizer import PerformanceOptimizer
+from source.agents.performance_optimizer import PerformanceOptimizer
 
 optimizer = PerformanceOptimizer()
 optimizer.optimize_memory()
@@ -465,7 +465,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY core/ ./core/
+COPY core/ ./source/
 COPY apps/ ./apps/
 COPY infrastructure/ ./infrastructure/
 

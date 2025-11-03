@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-부칙 파싱 개선 스크립트
-대한민국 법률 부칙 작성 규칙에 따른 부칙 인식 및 파싱 개선
+부�??�싱 개선 ?�크립트
+?�?��?�?법률 부�??�성 규칙???�른 부�??�식 �??�싱 개선
 """
 
 import json
@@ -12,125 +12,125 @@ import re
 from pathlib import Path
 import logging
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
+# Windows 콘솔?�서 UTF-8 ?�코???�정
 if os.name == 'nt':  # Windows
     import codecs
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
 
-# 파서 모듈 경로 추가
+# ?�서 모듈 경로 추�?
 sys.path.append(str(Path(__file__).parent / 'parsers'))
 
 from parsers.improved_article_parser import ImprovedArticleParser
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EnhancedArticleParser(ImprovedArticleParser):
-    """부칙 파싱이 개선된 조문 파서"""
+    """부�??�싱??개선??조문 ?�서"""
     
     def __init__(self):
         super().__init__()
-        # 부칙 관련 정규식 패턴들
+        # 부�?관???�규???�턴??
         self.supplementary_patterns = [
-            # 기본 부칙 패턴
-            r'부칙\s*<[^>]*>',
-            r'부칙\s*$',
-            r'부칙\s*펼치기접기',
+            # 기본 부�??�턴
+            r'부�?s*<[^>]*>',
+            r'부�?s*$',
+            r'부�?s*?�치기접�?,
             
-            # 부칙 조문 패턴 (제1조, 제2조 등)
-            r'제(\d+)조\s*\([^)]*\)',
-            r'제(\d+)조\s*[가-힣]',
+            # 부�?조문 ?�턴 (??�? ??�???
+            r'??\d+)�?s*\([^)]*\)',
+            r'??\d+)�?s*[가-??',
             
-            # 시행일 관련 패턴
-            r'이\s*[법령규칙]\s*은\s*공포한\s*날부터\s*시행한다',
-            r'이\s*[법령규칙]\s*은\s*공포\s*후\s*\d+개월이\s*경과한\s*날부터\s*시행한다',
-            r'이\s*[법령규칙]\s*은\s*\d{4}년\s*\d{1,2}월\s*\d{1,2}일부터\s*시행한다',
+            # ?�행??관???�턴
+            r'??s*[법령규칙]\s*?�\s*공포??s*?��???s*?�행?�다',
+            r'??s*[법령규칙]\s*?�\s*공포\s*??s*\d+개월??s*경과??s*?��???s*?�행?�다',
+            r'??s*[법령규칙]\s*?�\s*\d{4}??s*\d{1,2}??s*\d{1,2}?��???s*?�행?�다',
             
-            # 경과조치 관련 패턴
+            # 경과조치 관???�턴
             r'경과조치',
-            r'적용례',
-            r'종전의\s*규정',
-            r'이\s*[법령규칙]\s*시행\s*당시',
+            r'?�용례',
+            r'종전??s*규정',
+            r'??s*[법령규칙]\s*?�행\s*?�시',
         ]
         
-        # 부칙 시작을 나타내는 키워드들
+        # 부�??�작???��??�는 ?�워?�들
         self.supplementary_keywords = [
-            '부칙', '시행일', '경과조치', '적용례', '준비행위', 
-            '종전 처분', '다른 법률의 개정', '다른 법률의 폐지'
+            '부�?, '?�행??, '경과조치', '?�용례', '준비행??, 
+            '종전 처분', '?�른 법률??개정', '?�른 법률???��?'
         ]
     
     def _identify_supplementary_section(self, content: str) -> tuple:
-        """부칙 섹션 식별"""
+        """부�??�션 ?�별"""
         lines = content.split('\n')
         supplementary_start = -1
         supplementary_end = len(lines)
         
-        # 부칙 시작점 찾기
+        # 부�??�작??찾기
         for i, line in enumerate(lines):
             line_clean = line.strip()
             
-            # 부칙 시작 패턴 확인
-            if re.search(r'부칙\s*<[^>]*>', line_clean) or \
-               re.search(r'부칙\s*$', line_clean) or \
-               re.search(r'부칙\s*펼치기접기', line_clean):
+            # 부�??�작 ?�턴 ?�인
+            if re.search(r'부�?s*<[^>]*>', line_clean) or \
+               re.search(r'부�?s*$', line_clean) or \
+               re.search(r'부�?s*?�치기접�?, line_clean):
                 supplementary_start = i
                 break
         
         if supplementary_start == -1:
             return None, None
         
-        # 부칙 끝점 찾기 (다음 섹션이나 문서 끝)
+        # 부�??�점 찾기 (?�음 ?�션?�나 문서 ??
         for i in range(supplementary_start + 1, len(lines)):
             line_clean = lines[i].strip()
             
-            # 부칙이 아닌 다른 섹션 시작 확인
+            # 부칙이 ?�닌 ?�른 ?�션 ?�작 ?�인
             if line_clean and not self._is_supplementary_line(line_clean):
-                # 부칙이 아닌 새로운 섹션인지 확인
-                if re.match(r'제\d+조', line_clean) and not self._is_supplementary_article(line_clean):
+                # 부칙이 ?�닌 ?�로???�션?��? ?�인
+                if re.match(r'??d+�?, line_clean) and not self._is_supplementary_article(line_clean):
                     supplementary_end = i
                     break
         
         return supplementary_start, supplementary_end
     
     def _is_supplementary_line(self, line: str) -> bool:
-        """부칙 관련 라인인지 확인"""
-        # 빈 라인은 부칙에 포함될 수 있음
+        """부�?관???�인?��? ?�인"""
+        # �??�인?� 부칙에 ?�함?????�음
         if not line.strip():
             return True
         
-        # 부칙 키워드 확인
+        # 부�??�워???�인
         for keyword in self.supplementary_keywords:
             if keyword in line:
                 return True
         
-        # 부칙 조문 패턴 확인
-        if re.match(r'제\d+조\s*\([^)]*\)', line) or \
-           re.match(r'제\d+조\s*[가-힣]', line):
+        # 부�?조문 ?�턴 ?�인
+        if re.match(r'??d+�?s*\([^)]*\)', line) or \
+           re.match(r'??d+�?s*[가-??', line):
             return True
         
-        # 시행일 관련 패턴 확인
-        if re.search(r'시행한다', line) or \
-           re.search(r'공포한\s*날부터', line) or \
-           re.search(r'경과한\s*날부터', line):
+        # ?�행??관???�턴 ?�인
+        if re.search(r'?�행?�다', line) or \
+           re.search(r'공포??s*?��???, line) or \
+           re.search(r'경과??s*?��???, line):
             return True
         
         return False
     
     def _is_supplementary_article(self, line: str) -> bool:
-        """부칙 조문인지 확인"""
-        # 부칙 조문의 특징적인 패턴들
+        """부�?조문?��? ?�인"""
+        # 부�?조문???�징?�인 ?�턴??
         supplementary_patterns = [
-            r'시행일',
+            r'?�행??,
             r'경과조치',
-            r'적용례',
-            r'준비행위',
+            r'?�용례',
+            r'준비행??,
             r'종전\s*처분',
-            r'다른\s*법률의\s*개정',
-            r'다른\s*법률의\s*폐지',
-            r'벌칙\s*적용',
-            r'과태료\s*적용'
+            r'?�른\s*법률??s*개정',
+            r'?�른\s*법률??s*?��?',
+            r'벌칙\s*?�용',
+            r'과태�?s*?�용'
         ]
         
         for pattern in supplementary_patterns:
@@ -140,7 +140,7 @@ class EnhancedArticleParser(ImprovedArticleParser):
         return False
     
     def _parse_supplementary_articles(self, content: str) -> list:
-        """부칙 조문 파싱"""
+        """부�?조문 ?�싱"""
         supplementary_start, supplementary_end = self._identify_supplementary_section(content)
         
         if supplementary_start is None:
@@ -149,19 +149,19 @@ class EnhancedArticleParser(ImprovedArticleParser):
         lines = content.split('\n')
         supplementary_content = '\n'.join(lines[supplementary_start:supplementary_end])
         
-        # 부칙 조문 추출
+        # 부�?조문 추출
         articles = []
         
-        # 부칙 조문 패턴으로 매칭 (더 정확한 패턴)
-        article_pattern = r'제(\d+)조\s*\(([^)]*)\)\s*(.*?)(?=제\d+조\s*\(|$)'
+        # 부�?조문 ?�턴?�로 매칭 (???�확???�턴)
+        article_pattern = r'??\d+)�?s*\(([^)]*)\)\s*(.*?)(?=??d+�?s*\(|$)'
         matches = re.finditer(article_pattern, supplementary_content, re.DOTALL)
         
         for match in matches:
-            article_number = f"부칙제{match.group(1)}조"
+            article_number = f"부칙제{match.group(1)}�?
             article_title = match.group(2).strip()
             article_content = match.group(3).strip()
             
-            # 내용 정리
+            # ?�용 ?�리
             article_content = self._clean_content(article_content)
             
             if article_content:
@@ -176,16 +176,16 @@ class EnhancedArticleParser(ImprovedArticleParser):
                     'is_supplementary': True
                 })
         
-        # 조문이 없는 단순 부칙 처리
+        # 조문???�는 ?�순 부�?처리
         if not articles and supplementary_content.strip():
-            # 부칙 헤더 제거
-            clean_content = re.sub(r'부칙\s*<[^>]*>펼치기접기', '', supplementary_content)
-            clean_content = re.sub(r'부칙\s*<[^>]*>', '', clean_content)
+            # 부�??�더 ?�거
+            clean_content = re.sub(r'부�?s*<[^>]*>?�치기접�?, '', supplementary_content)
+            clean_content = re.sub(r'부�?s*<[^>]*>', '', clean_content)
             clean_content = clean_content.strip()
             
             if clean_content:
                 articles.append({
-                    'article_number': '부칙',
+                    'article_number': '부�?,
                     'article_title': '',
                     'article_content': clean_content,
                     'sub_articles': [],
@@ -198,14 +198,14 @@ class EnhancedArticleParser(ImprovedArticleParser):
         return articles
     
     def parse_law_document(self, content: str) -> dict:
-        """법률 문서 파싱 (부칙 포함)"""
-        # 기본 조문 파싱
+        """법률 문서 ?�싱 (부�??�함)"""
+        # 기본 조문 ?�싱
         result = super().parse_law_document(content)
         
-        # 부칙 파싱
+        # 부�??�싱
         supplementary_articles = self._parse_supplementary_articles(content)
         
-        # 결과에 부칙 추가
+        # 결과??부�?추�?
         if supplementary_articles:
             result['all_articles'].extend(supplementary_articles)
             result['supplementary_articles'] = supplementary_articles
@@ -215,101 +215,101 @@ class EnhancedArticleParser(ImprovedArticleParser):
         return result
 
 def test_supplementary_parsing():
-    """부칙 파싱 테스트"""
+    """부�??�싱 ?�스??""
     
-    # 테스트용 법률 문서 (부칙 포함)
-    test_content = """제1조(목적) 이 법은 대한민국의 법치주의를 구현하기 위하여 필요한 사항을 규정함을 목적으로 한다.
+    # ?�스?�용 법률 문서 (부�??�함)
+    test_content = """??�?목적) ??법�? ?�?��?�?�� 법치주의�?구현?�기 ?�하???�요???�항??규정?�을 목적?�로 ?�다.
 
-제2조(정의) 이 법에서 사용하는 용어의 정의는 다음과 같다.
-1. "법률"이란 국회에서 제정한 법을 말한다.
-2. "명령"이란 행정부에서 제정한 규칙을 말한다.
+??�??�의) ??법에???�용?�는 ?�어???�의???�음�?같다.
+1. "법률"?��? �?��?�서 ?�정??법을 말한??
+2. "명령"?��? ?�정부?�서 ?�정??규칙??말한??
 
-제3조(적용 범위) 이 법은 대한민국 영토 내에서 적용한다.
+??�??�용 범위) ??법�? ?�?��?�??�토 ?�에???�용?�다.
 
-부칙 <법률 제20000호, 2025. 1. 15.>
+부�?<법률 ??0000?? 2025. 1. 15.>
 
-제1조(시행일) 이 법은 공포 후 6개월이 경과한 날부터 시행한다.
+??�??�행?? ??법�? 공포 ??6개월??경과???��????�행?�다.
 
-제2조(경과조치) 이 법 시행 당시 종전의 규정에 따라 행한 처분은 이 법에 따라 행한 것으로 본다.
+??�?경과조치) ??�??�행 ?�시 종전??규정???�라 ?�한 처분?� ??법에 ?�라 ?�한 것으�?본다.
 
-제3조(다른 법률의 개정) 근로기준법 일부를 다음과 같이 개정한다.
-제56조제1항 중 "8시간"을 "7시간"으로 한다."""
+??�??�른 법률??개정) 근로기�?�??��?�??�음�?같이 개정?�다.
+??6조제1??�?"8?�간"??"7?�간"?�로 ?�다."""
     
-    print("=== 부칙 파싱 테스트 ===")
-    print("원본 내용:")
+    print("=== 부�??�싱 ?�스??===")
+    print("?�본 ?�용:")
     print(test_content)
     print("\n" + "="*80 + "\n")
     
-    # 개선된 파서로 테스트
+    # 개선???�서�??�스??
     parser = EnhancedArticleParser()
     result = parser.parse_law_document(test_content)
     
-    print("파싱 결과:")
-    print(f"총 조문 수: {result['total_articles']}")
-    print(f"본칙 조문 수: {result['total_articles'] - result.get('total_supplementary_articles', 0)}")
-    print(f"부칙 조문 수: {result.get('total_supplementary_articles', 0)}")
+    print("?�싱 결과:")
+    print(f"�?조문 ?? {result['total_articles']}")
+    print(f"본칙 조문 ?? {result['total_articles'] - result.get('total_supplementary_articles', 0)}")
+    print(f"부�?조문 ?? {result.get('total_supplementary_articles', 0)}")
     print()
     
     for i, article in enumerate(result['all_articles']):
         print(f"조문 {i+1}:")
         print(f"  번호: {article['article_number']}")
-        print(f"  제목: {article.get('article_title', 'N/A')}")
-        print(f"  부칙 여부: {article.get('is_supplementary', False)}")
-        print(f"  내용: {article['article_content'][:100]}...")
+        print(f"  ?�목: {article.get('article_title', 'N/A')}")
+        print(f"  부�??��?: {article.get('is_supplementary', False)}")
+        print(f"  ?�용: {article['article_content'][:100]}...")
         print()
 
 def test_real_law_with_supplementary():
-    """실제 법률 문서로 부칙 파싱 테스트"""
+    """?�제 법률 문서�?부�??�싱 ?�스??""
     
-    # 실제 법률 문서 로드
-    test_file = "data/processed/assembly/law/ml_enhanced/20251013/_대한민국_법원의_날_제정에_관한_규칙_assembly_law_1951.json"
+    # ?�제 법률 문서 로드
+    test_file = "data/processed/assembly/law/ml_enhanced/20251013/_?�?��?�?법원?????�정??관??규칙_assembly_law_1951.json"
     
     if not Path(test_file).exists():
-        print(f"테스트 파일이 없습니다: {test_file}")
+        print(f"?�스???�일???�습?�다: {test_file}")
         return
     
     with open(test_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    # 원본 내용 재구성 (부칙 포함)
-    original_content = """제1조(목적) 이 규칙은 대한민국 법원이 사법주권을 회복한 날을 기념하기 위하여 『대한민국 법원의 날』을 제정하고, 사법독립과 법치주의의 중요성을 알리며 그 의의를 기념하기 위한 행사 등을 진행함에 있어 필요한 사항을 규정함을 목적으로 한다.
-제2조(정의 및 명칭) ① 제1조에서 사법주권을 회복한 날이라 함은, 일제에 사법주권을 빼앗겼다가 대한민국이 1948년 9월 13일 미군정으로부터 사법권을 이양받음으로써 헌법기관인 대한민국 법원이 실질적으로 수립된 날을 의미한다.
-② 『대한민국 법원의 날』은 매년 9월 13일로 한다.
-제3조(기념식 및 행사) ① 법원은 『대한민국 법원의 날』에 기념식과 그에 부수되는 행사를 실시할 수 있다.
-제4조(포상) ① 대법원장은 제2조제1항에 규정된 기념일의 의식에서 사법부의 발전 또는 법률문화의 향상에 공헌한 행적이 뚜렷한 사람에게 포상할 수 있다.
-부칙 <제2605호, 2015.6.29.>펼치기접기
-이 규칙은 공포한 날부터 시행한다."""
+    # ?�본 ?�용 ?�구??(부�??�함)
+    original_content = """??�?목적) ??규칙?� ?�?��?�?법원???�법주권???�복???�을 기념?�기 ?�하???��??��?�?법원???�』을 ?�정?�고, ?�법?�립�?법치주의??중요?�을 ?�리�?�??�의�?기념?�기 ?�한 ?�사 ?�을 진행?�에 ?�어 ?�요???�항??규정?�을 목적?�로 ?�다.
+??�??�의 �?명칭) ????조에???�법주권???�복???�이???��?, ?�제???�법주권??빼앗겼다가 ?�?��?�?�� 1948??9??13??미군?�으로�????�법권을 ?�양받음?�로???�법기�????�?��?�?법원???�질?�으�??�립???�을 ?��??�다.
+???��??��?�?법원???�』�? 매년 9??13?�로 ?�다.
+??�?기념??�??�사) ??법원?� ?��??��?�?법원???�』에 기념?�과 그에 부?�되???�사�??�시?????�다.
+??�??�상) ???�법원?��? ??조제1??�� 규정??기념?�의 ?�식?�서 ?�법부??발전 ?�는 법률문화???�상??공헌???�적???�렷???�람?�게 ?�상?????�다.
+부�?<??605?? 2015.6.29.>?�치기접�?
+??규칙?� 공포???��????�행?�다."""
     
-    print("=== 실제 법률 문서 부칙 파싱 테스트 ===")
+    print("=== ?�제 법률 문서 부�??�싱 ?�스??===")
     
-    # 개선된 파서로 테스트
+    # 개선???�서�??�스??
     parser = EnhancedArticleParser()
     result = parser.parse_law_document(original_content)
     
-    print("파싱 결과:")
-    print(f"총 조문 수: {result['total_articles']}")
-    print(f"본칙 조문 수: {result['total_articles'] - result.get('total_supplementary_articles', 0)}")
-    print(f"부칙 조문 수: {result.get('total_supplementary_articles', 0)}")
+    print("?�싱 결과:")
+    print(f"�?조문 ?? {result['total_articles']}")
+    print(f"본칙 조문 ?? {result['total_articles'] - result.get('total_supplementary_articles', 0)}")
+    print(f"부�?조문 ?? {result.get('total_supplementary_articles', 0)}")
     print()
     
     for i, article in enumerate(result['all_articles']):
         print(f"조문 {i+1}:")
         print(f"  번호: {article['article_number']}")
-        print(f"  제목: {article.get('article_title', 'N/A')}")
-        print(f"  부칙 여부: {article.get('is_supplementary', False)}")
-        print(f"  내용: {article['article_content'][:100]}...")
+        print(f"  ?�목: {article.get('article_title', 'N/A')}")
+        print(f"  부�??��?: {article.get('is_supplementary', False)}")
+        print(f"  ?�용: {article['article_content'][:100]}...")
         print()
 
 if __name__ == "__main__":
-    print("부칙 파싱 개선 테스트")
+    print("부�??�싱 개선 ?�스??)
     print("=" * 50)
     
-    # 기본 테스트
+    # 기본 ?�스??
     test_supplementary_parsing()
     
     print("\n" + "="*80 + "\n")
     
-    # 실제 법률 문서 테스트
+    # ?�제 법률 문서 ?�스??
     test_real_law_with_supplementary()
     
-    print("\n부칙 파싱 개선 완료!")
+    print("\n부�??�싱 개선 ?�료!")

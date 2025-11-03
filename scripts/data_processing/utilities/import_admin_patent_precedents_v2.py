@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-행정 및 특허 판례 데이터 임포트 스크립트 (수정된 버전)
+?�정 �??�허 ?��? ?�이???�포???�크립트 (?�정??버전)
 """
 
 import os
@@ -14,25 +14,25 @@ from pathlib import Path
 from typing import List, Dict, Any
 import argparse
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-# 현재 디렉토리를 Python 경로에 추가
+# ?�재 ?�렉?�리�?Python 경로??추�?
 current_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(current_dir))
 
 try:
     from source.data.database import DatabaseManager
 except ImportError:
-    # 직접 import 시도
+    # 직접 import ?�도
     sys.path.append('source')
     from data.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 def calculate_file_hash(file_path: Path) -> str:
-    """파일 해시 계산"""
+    """?�일 ?�시 계산"""
     try:
         with open(file_path, 'rb') as f:
             content = f.read()
@@ -42,7 +42,7 @@ def calculate_file_hash(file_path: Path) -> str:
         return ""
 
 def import_precedent_data(input_dir: str, category: str, incremental: bool = True):
-    """판례 데이터를 데이터베이스에 임포트"""
+    """?��? ?�이?��? ?�이?�베?�스???�포??""
     
     input_path = Path(input_dir)
     if not input_path.exists():
@@ -51,7 +51,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     
     db_manager = DatabaseManager()
     
-    # 처리된 파일 추적
+    # 처리???�일 추적
     processed_files = set()
     if incremental:
         try:
@@ -69,7 +69,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     
     logger.info(f"Starting import of {category} precedents from {input_dir}")
     
-    # JSON 파일 처리
+    # JSON ?�일 처리
     for file_path in input_path.glob('*.json'):
         if 'precedent_' not in file_path.name or 'summary' in file_path.name:
             continue
@@ -91,7 +91,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
             cases_imported = 0
             for item in data['items']:
                 try:
-                    # 판례 데이터 추출 - 안전한 방식으로 처리
+                    # ?��? ?�이??추출 - ?�전??방식?�로 처리
                     case_data = {
                         'case_id': str(item.get('case_number', '')),
                         'case_name': str(item.get('case_name', '')),
@@ -106,7 +106,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                         'collected_at': str(item.get('collected_at', ''))
                     }
                     
-                    # 데이터베이스에 삽입
+                    # ?�이?�베?�스???�입
                     with db_manager.get_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute("""
@@ -134,10 +134,10 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
                     logger.error(f"Error processing case in {file_path.name}: {e}")
                     continue
             
-            # 파일 해시 계산
+            # ?�일 ?�시 계산
             file_hash = calculate_file_hash(file_path)
             
-            # 처리된 파일 기록
+            # 처리???�일 기록
             with db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -155,7 +155,7 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
             logger.error(f"Error processing file {file_path.name}: {e}")
             failed_files += 1
             
-            # 실패한 파일 기록
+            # ?�패???�일 기록
             try:
                 file_hash = calculate_file_hash(file_path)
                 with db_manager.get_connection() as conn:
@@ -178,15 +178,15 @@ def import_precedent_data(input_dir: str, category: str, incremental: bool = Tru
     }
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description='행정 및 특허 판례 데이터 임포트')
-    parser.add_argument('--input', required=True, help='입력 디렉토리')
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description='?�정 �??�허 ?��? ?�이???�포??)
+    parser.add_argument('--input', required=True, help='?�력 ?�렉?�리')
     parser.add_argument('--category', required=True, choices=['administrative', 'patent'], help='카테고리')
-    parser.add_argument('--incremental', action='store_true', help='증분 임포트')
+    parser.add_argument('--incremental', action='store_true', help='증분 ?�포??)
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'

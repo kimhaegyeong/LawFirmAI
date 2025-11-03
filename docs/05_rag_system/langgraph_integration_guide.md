@@ -1,4 +1,4 @@
-# LangGraph 워크플로우 통합 가이드
+﻿# LangGraph 워크플로우 통합 가이드
 
 ## 개요
 
@@ -288,7 +288,7 @@ MAX_PROCESSING_STEPS=20
 ### 기본 사용법
 
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 설정 및 서비스 초기화
@@ -569,7 +569,7 @@ print(f"Errors: {result.get('errors', [])}")
 
 ```python
 import asyncio
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 async def main():
@@ -676,10 +676,10 @@ print(f"LLM 제공자: {status.get('llm_provider', 'unknown')}")
 
 ## 관련 파일
 
-- `core/agents/legal_workflow_enhanced.py` - 워크플로우 구현
-- `core/agents/state_definitions.py` - State 정의
-- `core/agents/workflow_service.py` - 워크플로우 서비스
-- `core/agents/state_utils.py` - State 최적화 유틸리티
+- `source/agents/legal_workflow_enhanced.py` - 워크플로우 구현
+- `source/agents/state_definitions.py` - State 정의
+- `source/agents/workflow_service.py` - 워크플로우 서비스
+- `source/agents/state_utils.py` - State 최적화 유틸리티
 - `infrastructure/utils/langgraph_config.py` - 설정 관리
 
 이 가이드를 통해 LawFirmAI의 LangGraph 워크플로우를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으시면 프로젝트 이슈를 통해 문의해주세요.

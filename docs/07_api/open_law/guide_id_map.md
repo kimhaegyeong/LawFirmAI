@@ -1,4 +1,4 @@
-## openApiGuide ID 매핑표
+﻿## openApiGuide ID 매핑표
 
 출처: [OPEN API 활용가이드](https://open.law.go.kr/LSO/openApi/guideList.do)
 

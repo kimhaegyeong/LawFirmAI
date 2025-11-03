@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-증분 판례 전처리 프로세서
+증분 ?��? ?�처�??�로?�서
 
-미처리 판례 파일만 선별하여 전처리하는 증분 처리 시스템입니다.
-기존 PrecedentPreprocessor를 재사용하고 체크포인트 시스템을 통합합니다.
+미처�??��? ?�일�??�별?�여 ?�처리하??증분 처리 ?�스?�입?�다.
+기존 PrecedentPreprocessor�??�사?�하�?체크?�인???�스?�을 ?�합?�니??
 """
 
 import os
@@ -19,7 +19,7 @@ import argparse
 from dataclasses import dataclass
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -31,7 +31,7 @@ from scripts.data_processing.auto_data_detector import AutoDataDetector
 
 @dataclass
 class ProcessingResult:
-    """처리 결과 데이터 클래스"""
+    """처리 결과 ?�이???�래??""
     success: bool
     processed_files: List[Path]
     failed_files: List[Path]
@@ -41,7 +41,7 @@ class ProcessingResult:
 
 
 class IncrementalPrecedentPreprocessor:
-    """증분 판례 전처리 프로세서 클래스"""
+    """증분 ?��? ?�처�??�로?�서 ?�래??""
     
     def __init__(self, 
                  raw_data_base_path: str = "data/raw/assembly",
@@ -52,16 +52,16 @@ class IncrementalPrecedentPreprocessor:
                  enable_term_normalization: bool = True,
                  batch_size: int = 100):
         """
-        증분 판례 전처리 프로세서 초기화
+        증분 ?��? ?�처�??�로?�서 초기??
         
         Args:
-            raw_data_base_path: 원본 데이터 기본 경로
-            processed_data_base_path: 전처리된 데이터 기본 경로
+            raw_data_base_path: ?�본 ?�이??기본 경로
+            processed_data_base_path: ?�처리된 ?�이??기본 경로
             processing_version: 처리 버전
-            checkpoint_manager: 체크포인트 관리자
-            db_manager: 데이터베이스 관리자
-            enable_term_normalization: 법률 용어 정규화 활성화
-            batch_size: 배치 처리 크기
+            checkpoint_manager: 체크?�인??관리자
+            db_manager: ?�이?�베?�스 관리자
+            enable_term_normalization: 법률 ?�어 ?�규???�성??
+            batch_size: 배치 처리 ?�기
         """
         self.raw_data_base_path = Path(raw_data_base_path)
         self.processed_data_base_path = Path(processed_data_base_path)
@@ -72,20 +72,20 @@ class IncrementalPrecedentPreprocessor:
         self.batch_size = batch_size
         self.processing_version = processing_version
         
-        # 판례 전처리기 초기화
+        # ?��? ?�처리기 초기??
         self.preprocessor = PrecedentPreprocessor(enable_term_normalization)
         
-        # 자동 데이터 감지기 초기화
+        # ?�동 ?�이??감�?�?초기??
         self.auto_detector = AutoDataDetector(raw_data_base_path)
         
-        # 출력 디렉토리 설정
+        # 출력 ?�렉?�리 ?�정
         self.output_dir = Path("data/processed")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 로깅 설정
+        # 로깅 ?�정
         self.logger = logging.getLogger(__name__)
         
-        # 처리 통계
+        # 처리 ?�계
         self.stats = {
             'total_scanned_files': 0,
             'new_files_to_process': 0,
@@ -99,21 +99,21 @@ class IncrementalPrecedentPreprocessor:
     
     def process_new_data_only(self, category: str = "civil") -> Dict[str, Any]:
         """
-        새로 추가된 판례 데이터만 감지하여 전처리
+        ?�로 추�????��? ?�이?�만 감�??�여 ?�처�?
         
         Args:
-            category: 처리할 특정 카테고리 (civil, criminal, family)
+            category: 처리???�정 카테고리 (civil, criminal, family)
             
         Returns:
-            Dict[str, Any]: 처리 결과 통계
+            Dict[str, Any]: 처리 결과 ?�계
         """
         self.logger.info(f"Starting incremental precedent preprocessing for category: {category}")
         start_time = datetime.now()
         
-        # 데이터 타입 결정
+        # ?�이???�??결정
         data_type = f"precedent_{category}"
         
-        # 새로운 파일 감지
+        # ?�로???�일 감�?
         new_files_by_type = self.auto_detector.detect_new_data_sources(
             str(self.raw_data_base_path / "precedent"), 
             data_type
@@ -136,21 +136,21 @@ class IncrementalPrecedentPreprocessor:
             raw_file_path_str = str(file_path)
             file_hash = self.auto_detector.get_file_hash(file_path)
             
-            # 이미 처리된 파일인지 다시 확인 (경쟁 조건 방지)
+            # ?��? 처리???�일?��? ?�시 ?�인 (경쟁 조건 방�?)
             if self.db_manager.is_file_processed(raw_file_path_str):
                 self.stats['skipped_already_processed'] += 1
                 self.logger.info(f"Skipping already processed file: {file_path}")
                 continue
 
             try:
-                # 데이터 로드
+                # ?�이??로드
                 with open(file_path, 'r', encoding='utf-8') as f:
                     raw_data = json.load(f)
                 
-                # 전처리 수행 - 판례 데이터 구조에 맞게 변환
+                # ?�처�??�행 - ?��? ?�이??구조??맞게 변??
                 processed_data = self._process_assembly_precedent_data(raw_data, category)
                 
-                # 출력 경로 설정 (예: data/processed/assembly/precedent/civil/20251016/ml_enhanced_...)
+                # 출력 경로 ?�정 (?? data/processed/assembly/precedent/civil/20251016/ml_enhanced_...)
                 relative_path = file_path.relative_to(self.raw_data_base_path / "precedent")
                 output_subdir = self.processed_data_base_path / "precedent" / category / relative_path.parent
                 output_subdir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +161,7 @@ class IncrementalPrecedentPreprocessor:
                 with open(output_file_path, 'w', encoding='utf-8') as f:
                     json.dump(processed_data, f, ensure_ascii=False, indent=2)
                 
-                # 처리 이력 기록
+                # 처리 ?�력 기록
                 record_count = len(processed_data.get('cases', [])) if isinstance(processed_data, dict) else 1
                 self.db_manager.mark_file_as_processed(
                     raw_file_path_str, file_hash, data_type, 
@@ -188,20 +188,20 @@ class IncrementalPrecedentPreprocessor:
     
     def _process_assembly_precedent_data(self, raw_data: Dict[str, Any], category: str) -> Dict[str, Any]:
         """
-        국회 판례 데이터 구조에 맞게 전처리
+        �?�� ?��? ?�이??구조??맞게 ?�처�?
         
         Args:
-            raw_data: 원본 데이터 (metadata, items 구조)
-            category: 판례 카테고리
+            raw_data: ?�본 ?�이??(metadata, items 구조)
+            category: ?��? 카테고리
             
         Returns:
-            Dict[str, Any]: 전처리된 데이터
+            Dict[str, Any]: ?�처리된 ?�이??
         """
         try:
-            # PrecedentPreprocessor를 사용하여 처리
+            # PrecedentPreprocessor�??�용?�여 처리
             processed_data = self.preprocessor.process_precedent_data(raw_data)
             
-            # 카테고리 정보 추가
+            # 카테고리 ?�보 추�?
             if isinstance(processed_data, dict) and 'metadata' in processed_data:
                 processed_data['metadata']['category'] = category
             
@@ -214,11 +214,11 @@ class IncrementalPrecedentPreprocessor:
     def process_new_files_only(self, files: List[Path], 
                               category: str = "civil") -> ProcessingResult:
         """
-        새로운 파일만 처리
+        ?�로???�일�?처리
         
         Args:
-            files: 처리할 파일 목록
-            category: 판례 카테고리
+            files: 처리???�일 목록
+            category: ?��? 카테고리
         
         Returns:
             ProcessingResult: 처리 결과
@@ -231,7 +231,7 @@ class IncrementalPrecedentPreprocessor:
         total_records = 0
         error_messages = []
         
-        # 체크포인트에서 재개할 수 있는지 확인
+        # 체크?�인?�에???�개?????�는지 ?�인
         checkpoint_data = self._load_checkpoint()
         if checkpoint_data:
             self.logger.info("Resuming from checkpoint...")
@@ -241,21 +241,21 @@ class IncrementalPrecedentPreprocessor:
         else:
             start_index = 0
         
-        # 파일별 처리
+        # ?�일�?처리
         for i, file_path in enumerate(tqdm(files[start_index:], 
                                           desc="Processing precedent files",
                                           initial=start_index,
                                           total=len(files))):
             try:
-                # 파일 해시 계산
+                # ?�일 ?�시 계산
                 file_hash = self._calculate_file_hash(file_path)
                 
-                # 이미 처리된 파일인지 확인
+                # ?��? 처리???�일?��? ?�인
                 if self.db_manager.is_file_processed(str(file_path)):
                     self.logger.debug(f"File already processed: {file_path}")
                     continue
                 
-                # 단일 파일 처리
+                # ?�일 ?�일 처리
                 file_result = self._process_single_file(file_path, category)
                 
                 if file_result['success']:
@@ -275,7 +275,7 @@ class IncrementalPrecedentPreprocessor:
                         processing_version=self.processing_version
                     )
                 
-                # 체크포인트 저장
+                # 체크?�인???�??
                 self._save_checkpoint(i + start_index + 1, processed_files, failed_files)
                 
             except Exception as e:
@@ -308,14 +308,14 @@ class IncrementalPrecedentPreprocessor:
     
     def _process_single_file(self, file_path: Path, category: str) -> Dict[str, Any]:
         """
-        단일 파일 처리
+        ?�일 ?�일 처리
         
         Args:
-            file_path: 처리할 파일 경로
-            category: 판례 카테고리
+            file_path: 처리???�일 경로
+            category: ?��? 카테고리
         
         Returns:
-            Dict[str, Any]: 처리 결과 (성공 여부, 레코드 수, 에러 메시지)
+            Dict[str, Any]: 처리 결과 (?�공 ?��?, ?�코???? ?�러 메시지)
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -323,7 +323,7 @@ class IncrementalPrecedentPreprocessor:
             
             processed_data = self._process_assembly_precedent_data(raw_data, category)
             
-            # 처리된 데이터를 임시 파일로 저장하거나, 메모리에서 다음 단계로 전달
+            # 처리???�이?��? ?�시 ?�일�??�?�하거나, 메모리에???�음 ?�계�??�달
             record_count = len(processed_data.get('cases', [])) if isinstance(processed_data, dict) else 1
             
             return {'success': True, 'record_count': record_count, 'error': None}
@@ -331,7 +331,7 @@ class IncrementalPrecedentPreprocessor:
             return {'success': False, 'record_count': 0, 'error': str(e)}
 
     def _calculate_file_hash(self, file_path: Path) -> str:
-        """파일 내용의 SHA256 해시를 계산하여 반환"""
+        """?�일 ?�용??SHA256 ?�시�?계산?�여 반환"""
         h = hashlib.sha256()
         with open(file_path, 'rb') as f:
             while chunk := f.read(8192):
@@ -342,7 +342,7 @@ class IncrementalPrecedentPreprocessor:
                          processed_files: List[Path], 
                          failed_files: List[Path]):
         """
-        현재 처리 상태를 체크포인트로 저장
+        ?�재 처리 ?�태�?체크?�인?�로 ?�??
         """
         if self.checkpoint_manager:
             checkpoint_data = {
@@ -356,7 +356,7 @@ class IncrementalPrecedentPreprocessor:
 
     def _load_checkpoint(self) -> Optional[Dict[str, Any]]:
         """
-        체크포인트 로드
+        체크?�인??로드
         """
         if self.checkpoint_manager:
             return self.checkpoint_manager.load_checkpoint('incremental_precedent_preprocessing')
@@ -364,24 +364,24 @@ class IncrementalPrecedentPreprocessor:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="증분 판례 데이터 전처리 프로세서")
+    parser = argparse.ArgumentParser(description="증분 ?��? ?�이???�처�??�로?�서")
     parser.add_argument('--input-files', nargs='*', type=Path,
-                        help='처리할 파일 목록')
+                        help='처리???�일 목록')
     parser.add_argument('--category', default='civil',
                         choices=['civil', 'criminal', 'family'],
-                        help='판례 카테고리')
+                        help='?��? 카테고리')
     parser.add_argument('--batch-size', type=int, default=100,
-                        help='배치 처리 크기')
+                        help='배치 처리 ?�기')
     parser.add_argument('--checkpoint-dir', default='data/checkpoints',
-                        help='체크포인트 디렉토리')
+                        help='체크?�인???�렉?�리')
     parser.add_argument('--resume', action='store_true',
-                        help='체크포인트에서 재개')
+                        help='체크?�인?�에???�개')
     parser.add_argument('--verbose', '-v', action='store_true',
-                        help='상세 로그 출력')
+                        help='?�세 로그 출력')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -389,16 +389,16 @@ def main():
     )
     
     try:
-        # 체크포인트 관리자 초기화
+        # 체크?�인??관리자 초기??
         checkpoint_manager = CheckpointManager(args.checkpoint_dir)
         
-        # 증분 판례 전처리 프로세서 초기화
+        # 증분 ?��? ?�처�??�로?�서 초기??
         preprocessor = IncrementalPrecedentPreprocessor(
             checkpoint_manager=checkpoint_manager,
             batch_size=args.batch_size
         )
         
-        # 파일 처리 실행
+        # ?�일 처리 ?�행
         if args.input_files:
             result = preprocessor.process_new_files_only(args.input_files, args.category)
             # 결과 출력
@@ -415,7 +415,7 @@ def main():
             
             return result.success
         else:
-            # 자동으로 새 파일 감지하여 처리
+            # ?�동?�로 ???�일 감�??�여 처리
             stats = preprocessor.process_new_data_only(args.category)
             
             # 결과 출력

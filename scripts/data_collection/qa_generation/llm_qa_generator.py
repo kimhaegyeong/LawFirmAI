@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LLM 기반 Q&A 데이터셋 생성기
+LLM 기반 Q&A ?�이?�셋 ?�성�?
 
-Ollama Qwen2.5:7b 모델을 사용하여 다양하고 자연스러운 법률 Q&A를 생성
+Ollama Qwen2.5:7b 모델???�용?�여 ?�양?�고 ?�연?�러??법률 Q&A�??�성
 """
 
 import os
@@ -16,14 +16,14 @@ from pathlib import Path
 import random
 import re
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from source.utils.ollama_client import OllamaClient
 from source.utils.qa_quality_validator import QAQualityValidator
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMQAGenerator:
-    """LLM 기반 Q&A 생성기"""
+    """LLM 기반 Q&A ?�성�?""
     
     def __init__(
         self, 
@@ -45,12 +45,12 @@ class LLMQAGenerator:
         max_tokens: int = 1500
     ):
         """
-        LLM Q&A 생성기 초기화
+        LLM Q&A ?�성�?초기??
         
         Args:
-            model: 사용할 Ollama 모델명
-            temperature: 생성 온도
-            max_tokens: 최대 토큰 수
+            model: ?�용??Ollama 모델�?
+            temperature: ?�성 ?�도
+            max_tokens: 최�? ?�큰 ??
         """
         self.ollama_client = OllamaClient(model=model)
         self.temperature = temperature
@@ -58,17 +58,17 @@ class LLMQAGenerator:
         self.qa_pairs = []
         self.logger = logging.getLogger(__name__)
         
-        # 품질 검증기 초기화
+        # ?�질 검증기 초기??
         self.quality_validator = QAQualityValidator()
         
-        # 질문 유형 정의
+        # 질문 ?�형 ?�의
         self.question_types = [
-            "개념 설명", "실제 적용", "요건/효과", 
-            "비교/차이", "절차", "예시", "주의사항",
-            "법적 근거", "실무 적용", "예외 사항"
+            "개념 ?�명", "?�제 ?�용", "?�건/?�과", 
+            "비교/차이", "?�차", "?�시", "주의?�항",
+            "법적 근거", "?�무 ?�용", "?�외 ?�항"
         ]
         
-        # 품질 필터링 기준
+        # ?�질 ?�터�?기�?
         self.quality_criteria = {
             "min_question_length": 10,
             "max_question_length": 200,
@@ -78,7 +78,7 @@ class LLMQAGenerator:
         }
     
     def generate_law_qa_pairs(self, law_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """법령 데이터에서 LLM 기반 Q&A 쌍 생성"""
+        """법령 ?�이?�에??LLM 기반 Q&A ???�성"""
         qa_pairs = []
         
         try:
@@ -89,30 +89,30 @@ class LLMQAGenerator:
             if not law_name:
                 return qa_pairs
             
-            self.logger.info(f"법령 '{law_name}' 처리 중... (조문 {len(articles)}개)")
+            self.logger.info(f"법령 '{law_name}' 처리 �?.. (조문 {len(articles)}�?")
             
-            # 법령 전체 정의 Q&A 생성
+            # 법령 ?�체 ?�의 Q&A ?�성
             if cleaned_content:
                 definition_qa = self._generate_law_definition_qa(law_name, cleaned_content)
                 qa_pairs.extend(definition_qa)
             
-            # 각 조문별 Q&A 생성
-            for article in articles[:10]:  # 처음 10개 조문만 처리
+            # �?조문�?Q&A ?�성
+            for article in articles[:10]:  # 처음 10�?조문�?처리
                 article_qa = self._generate_article_qa(law_name, article)
                 qa_pairs.extend(article_qa)
             
-            # 품질 검증 및 필터링
+            # ?�질 검�?�??�터�?
             filtered_qa = self._filter_qa_pairs(qa_pairs)
             
-            self.logger.info(f"법령 '{law_name}'에서 {len(filtered_qa)}개 Q&A 생성")
+            self.logger.info(f"법령 '{law_name}'?�서 {len(filtered_qa)}�?Q&A ?�성")
             return filtered_qa
             
         except Exception as e:
-            self.logger.error(f"법령 Q&A 생성 중 오류: {e}")
+            self.logger.error(f"법령 Q&A ?�성 �??�류: {e}")
             return []
     
     def generate_precedent_qa_pairs(self, precedent_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """판례 데이터에서 LLM 기반 Q&A 쌍 생성"""
+        """?��? ?�이?�에??LLM 기반 Q&A ???�성"""
         qa_pairs = []
         
         try:
@@ -125,33 +125,33 @@ class LLMQAGenerator:
             if not case_name:
                 return qa_pairs
             
-            self.logger.info(f"판례 '{case_name}' 처리 중...")
+            self.logger.info(f"?��? '{case_name}' 처리 �?..")
             
-            # 판례 컨텍스트 구성
+            # ?��? 컨텍?�트 구성
             context = f"""
-            사건명: {case_name}
+            ?�건�? {case_name}
             법원: {court}
-            쟁점: {issue}
-            판결 요지: {reasoning[:500] if reasoning else ''}
+            ?�점: {issue}
+            ?�결 ?��?: {reasoning[:500] if reasoning else ''}
             결론: {conclusion[:300] if conclusion else ''}
             """
             
-            # 다양한 관점에서 Q&A 생성
+            # ?�양??관?�에??Q&A ?�성
             precedent_qa = self._generate_precedent_qa(context, case_name)
             qa_pairs.extend(precedent_qa)
             
-            # 품질 검증 및 필터링
+            # ?�질 검�?�??�터�?
             filtered_qa = self._filter_qa_pairs(qa_pairs)
             
-            self.logger.info(f"판례 '{case_name}'에서 {len(filtered_qa)}개 Q&A 생성")
+            self.logger.info(f"?��? '{case_name}'?�서 {len(filtered_qa)}�?Q&A ?�성")
             return filtered_qa
             
         except Exception as e:
-            self.logger.error(f"판례 Q&A 생성 중 오류: {e}")
+            self.logger.error(f"?��? Q&A ?�성 �??�류: {e}")
             return []
     
     def generate_constitutional_qa_pairs(self, decision_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """헌재결정례 데이터에서 LLM 기반 Q&A 쌍 생성"""
+        """?�재결정례 ?�이?�에??LLM 기반 Q&A ???�성"""
         qa_pairs = []
         
         try:
@@ -163,45 +163,45 @@ class LLMQAGenerator:
             if not case_name:
                 return qa_pairs
             
-            self.logger.info(f"헌재결정례 '{case_name}' 처리 중...")
+            self.logger.info(f"?�재결정례 '{case_name}' 처리 �?..")
             
-            # 헌재결정례 컨텍스트 구성
+            # ?�재결정례 컨텍?�트 구성
             context = f"""
-            사건명: {case_name}
-            결정 유형: {decision_type}
-            헌법적 쟁점: {issue}
-            헌법재판소 판단: {reasoning[:500] if reasoning else ''}
+            ?�건�? {case_name}
+            결정 ?�형: {decision_type}
+            ?�법???�점: {issue}
+            ?�법?�판???�단: {reasoning[:500] if reasoning else ''}
             """
             
-            # 헌법적 관점에서 Q&A 생성
+            # ?�법??관?�에??Q&A ?�성
             constitutional_qa = self._generate_constitutional_qa(context, case_name)
             qa_pairs.extend(constitutional_qa)
             
-            # 품질 검증 및 필터링
+            # ?�질 검�?�??�터�?
             filtered_qa = self._filter_qa_pairs(qa_pairs)
             
-            self.logger.info(f"헌재결정례 '{case_name}'에서 {len(filtered_qa)}개 Q&A 생성")
+            self.logger.info(f"?�재결정례 '{case_name}'?�서 {len(filtered_qa)}�?Q&A ?�성")
             return filtered_qa
             
         except Exception as e:
-            self.logger.error(f"헌재결정례 Q&A 생성 중 오류: {e}")
+            self.logger.error(f"?�재결정례 Q&A ?�성 �??�류: {e}")
             return []
     
     def _generate_law_definition_qa(self, law_name: str, content: str) -> List[Dict[str, Any]]:
-        """법령 정의 기반 Q&A 생성"""
+        """법령 ?�의 기반 Q&A ?�성"""
         context = f"""
-        법령명: {law_name}
-        법령 내용: {content[:800]}
+        법령�? {law_name}
+        법령 ?�용: {content[:800]}
         """
         
         qa_pairs = self.ollama_client.generate_qa_pairs(
             context=context,
             qa_count=3,
-            question_types=["개념 설명", "목적", "적용 범위"],
+            question_types=["개념 ?�명", "목적", "?�용 범위"],
             temperature=self.temperature
         )
         
-        # 메타데이터 추가
+        # 메�??�이??추�?
         for qa in qa_pairs:
             qa.update({
                 'source': 'law_definition_llm',
@@ -214,7 +214,7 @@ class LLMQAGenerator:
         return qa_pairs
     
     def _generate_article_qa(self, law_name: str, article: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """조문 기반 Q&A 생성"""
+        """조문 기반 Q&A ?�성"""
         article_number = article.get('article_number', '')
         content = article.get('content', '')
         title = article.get('title', '')
@@ -223,20 +223,20 @@ class LLMQAGenerator:
             return []
         
         context = f"""
-        법령명: {law_name}
-        조문 번호: 제{article_number}조
-        조문 제목: {title}
-        조문 내용: {content[:600]}
+        법령�? {law_name}
+        조문 번호: ??article_number}�?
+        조문 ?�목: {title}
+        조문 ?�용: {content[:600]}
         """
         
         qa_pairs = self.ollama_client.generate_qa_pairs(
             context=context,
             qa_count=2,
-            question_types=["실제 적용", "요건/효과", "절차", "주의사항"],
+            question_types=["?�제 ?�용", "?�건/?�과", "?�차", "주의?�항"],
             temperature=self.temperature
         )
         
-        # 메타데이터 추가
+        # 메�??�이??추�?
         for qa in qa_pairs:
             qa.update({
                 'source': 'law_article_llm',
@@ -250,15 +250,15 @@ class LLMQAGenerator:
         return qa_pairs
     
     def _generate_precedent_qa(self, context: str, case_name: str) -> List[Dict[str, Any]]:
-        """판례 기반 Q&A 생성"""
+        """?��? 기반 Q&A ?�성"""
         qa_pairs = self.ollama_client.generate_qa_pairs(
             context=context,
             qa_count=3,
-            question_types=["실무 적용", "시사점", "예방 조치", "유사 사례"],
+            question_types=["?�무 ?�용", "?�사??, "?�방 조치", "?�사 ?��?"],
             temperature=self.temperature
         )
         
-        # 메타데이터 추가
+        # 메�??�이??추�?
         for qa in qa_pairs:
             qa.update({
                 'source': 'precedent_llm',
@@ -271,15 +271,15 @@ class LLMQAGenerator:
         return qa_pairs
     
     def _generate_constitutional_qa(self, context: str, case_name: str) -> List[Dict[str, Any]]:
-        """헌재결정례 기반 Q&A 생성"""
+        """?�재결정례 기반 Q&A ?�성"""
         qa_pairs = self.ollama_client.generate_qa_pairs(
             context=context,
             qa_count=2,
-            question_types=["헌법적 의미", "기본권", "법적 효과"],
+            question_types=["?�법???��?", "기본�?, "법적 ?�과"],
             temperature=self.temperature
         )
         
-        # 메타데이터 추가
+        # 메�??�이??추�?
         for qa in qa_pairs:
             qa.update({
                 'source': 'constitutional_llm',
@@ -292,15 +292,15 @@ class LLMQAGenerator:
         return qa_pairs
     
     def _filter_qa_pairs(self, qa_pairs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Q&A 쌍 품질 필터링 (개선된 품질 검증기 사용)"""
+        """Q&A ???�질 ?�터�?(개선???�질 검증기 ?�용)"""
         filtered_pairs = []
         
         for qa in qa_pairs:
-            # 품질 검증기로 검증
+            # ?�질 검증기�?검�?
             validation_result = self.quality_validator.validate_qa_pair(qa)
             
             if validation_result['is_valid']:
-                # 검증된 품질 점수와 신뢰도 업데이트
+                # 검증된 ?�질 ?�수?� ?�뢰???�데?�트
                 qa['quality_score'] = validation_result['quality_score']
                 qa['confidence'] = validation_result['confidence']
                 qa['validation_issues'] = validation_result['issues']
@@ -308,65 +308,65 @@ class LLMQAGenerator:
                 
                 filtered_pairs.append(qa)
             else:
-                self.logger.debug(f"Q&A 필터링됨: {validation_result['issues']}")
+                self.logger.debug(f"Q&A ?�터링됨: {validation_result['issues']}")
         
         return filtered_pairs
     
     def _calculate_quality_score(self, qa_pair: Dict[str, Any]) -> float:
-        """Q&A 품질 점수 계산"""
+        """Q&A ?�질 ?�수 계산"""
         score = 0.0
         
         question = qa_pair.get('question', '')
         answer = qa_pair.get('answer', '')
         
-        # 기본 점수
+        # 기본 ?�수
         score += 0.2
         
-        # 질문 품질 점수
+        # 질문 ?�질 ?�수
         if 15 <= len(question) <= 100:
             score += 0.25
         elif 100 < len(question) <= 150:
             score += 0.15
         
-        # 답변 품질 점수
+        # ?��? ?�질 ?�수
         if 30 <= len(answer) <= 400:
             score += 0.3
         elif 400 < len(answer) <= 600:
             score += 0.2
         
-        # 질문 유형 점수
+        # 질문 ?�형 ?�수
         question_type = qa_pair.get('type', '')
-        if question_type in ['실제 적용', '실무 적용', '예시']:
+        if question_type in ['?�제 ?�용', '?�무 ?�용', '?�시']:
             score += 0.15
-        elif question_type in ['개념 설명', '요건/효과']:
+        elif question_type in ['개념 ?�명', '?�건/?�과']:
             score += 0.1
         
-        # 신뢰도 점수
+        # ?�뢰???�수
         confidence = qa_pair.get('confidence', 0.5)
         score += confidence * 0.1
         
         return min(score, 1.0)
     
     def _remove_duplicates(self):
-        """중복 Q&A 제거"""
-        self.logger.info("중복 Q&A 제거 중...")
+        """중복 Q&A ?�거"""
+        self.logger.info("중복 Q&A ?�거 �?..")
         
-        # 중복 감지
+        # 중복 감�?
         duplicate_groups = self.quality_validator.detect_duplicates(self.qa_pairs)
         
         removed_count = 0
         for group in duplicate_groups:
             if len(group) > 1:
-                # 그룹 내에서 가장 높은 품질 점수를 가진 Q&A만 유지
+                # 그룹 ?�에??가???��? ?�질 ?�수�?가�?Q&A�??��?
                 best_qa = max(group, key=lambda i: self.qa_pairs[i].get('quality_score', 0))
                 
-                # 나머지 제거
+                # ?�머지 ?�거
                 for i in sorted(group, reverse=True):
                     if i != best_qa:
                         del self.qa_pairs[i]
                         removed_count += 1
         
-        self.logger.info(f"중복 제거 완료: {removed_count}개 제거, 남은 Q&A: {len(self.qa_pairs)}개")
+        self.logger.info(f"중복 ?�거 ?�료: {removed_count}�??�거, ?��? Q&A: {len(self.qa_pairs)}�?)
     
     def generate_dataset(
         self, 
@@ -375,7 +375,7 @@ class LLMQAGenerator:
         data_types: List[str] = None,
         max_items_per_type: int = 50
     ) -> bool:
-        """전체 LLM 기반 Q&A 데이터셋 생성"""
+        """?�체 LLM 기반 Q&A ?�이?�셋 ?�성"""
         try:
             data_path = Path(data_dir)
             output_path = Path(output_dir)
@@ -384,12 +384,12 @@ class LLMQAGenerator:
             if data_types is None:
                 data_types = ['laws', 'precedents', 'constitutional_decisions']
             
-            self.logger.info("LLM 기반 Q&A 데이터셋 생성 시작...")
+            self.logger.info("LLM 기반 Q&A ?�이?�셋 ?�성 ?�작...")
             
             total_generated = 0
             
             for data_type in data_types:
-                self.logger.info(f"{data_type} 데이터 처리 중...")
+                self.logger.info(f"{data_type} ?�이??처리 �?..")
                 
                 data_files = list(data_path.glob(f"{data_type}/*.json"))
                 processed_count = 0
@@ -403,7 +403,7 @@ class LLMQAGenerator:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                         
-                        # 데이터가 배열인 경우 각 항목별로 처리
+                        # ?�이?��? 배열??경우 �???��별로 처리
                         if isinstance(data, list):
                             for item in data:
                                 if processed_count >= max_items_per_type:
@@ -412,7 +412,7 @@ class LLMQAGenerator:
                                 if not isinstance(item, dict):
                                     continue
                                 
-                                # 데이터 타입에 따른 Q&A 생성
+                                # ?�이???�?�에 ?�른 Q&A ?�성
                                 if data_type == 'laws':
                                     qa_pairs = self.generate_law_qa_pairs(item)
                                 elif data_type == 'precedents':
@@ -426,11 +426,11 @@ class LLMQAGenerator:
                                 type_generated += len(qa_pairs)
                                 processed_count += 1
                                 
-                                # 진행 상황 로깅
+                                # 진행 ?�황 로깅
                                 if processed_count % 10 == 0:
-                                    self.logger.info(f"{data_type}: {processed_count}개 항목 처리 완료, 현재 Q&A: {len(self.qa_pairs)}개")
+                                    self.logger.info(f"{data_type}: {processed_count}�???�� 처리 ?�료, ?�재 Q&A: {len(self.qa_pairs)}�?)
                         else:
-                            # 단일 객체인 경우
+                            # ?�일 객체??경우
                             if data_type == 'laws':
                                 qa_pairs = self.generate_law_qa_pairs(data)
                             elif data_type == 'precedents':
@@ -445,38 +445,38 @@ class LLMQAGenerator:
                             processed_count += 1
                         
                     except Exception as e:
-                        self.logger.error(f"파일 처리 중 오류 {file_path}: {e}")
+                        self.logger.error(f"?�일 처리 �??�류 {file_path}: {e}")
                         continue
                 
-                self.logger.info(f"{data_type} 처리 완료: {processed_count}개 항목, {type_generated}개 Q&A 생성")
+                self.logger.info(f"{data_type} 처리 ?�료: {processed_count}�???��, {type_generated}�?Q&A ?�성")
                 total_generated += type_generated
             
-            # 중복 제거
+            # 중복 ?�거
             self._remove_duplicates()
             
-            # 품질 점수별 정렬
+            # ?�질 ?�수�??�렬
             self.qa_pairs.sort(key=lambda x: x.get('quality_score', 0), reverse=True)
             
-            # 데이터셋 저장
+            # ?�이?�셋 ?�??
             self._save_dataset(output_path)
             
-            # 통계 생성
+            # ?�계 ?�성
             self._generate_statistics(output_path)
             
-            self.logger.info(f"LLM 기반 Q&A 데이터셋 생성 완료: {len(self.qa_pairs)}개 쌍")
+            self.logger.info(f"LLM 기반 Q&A ?�이?�셋 ?�성 ?�료: {len(self.qa_pairs)}�???)
             return True
             
         except Exception as e:
-            self.logger.error(f"데이터셋 생성 중 오류: {e}")
+            self.logger.error(f"?�이?�셋 ?�성 �??�류: {e}")
             return False
     
     def _save_dataset(self, output_path: Path):
-        """데이터셋 저장"""
-        # 전체 데이터셋 저장
+        """?�이?�셋 ?�??""
+        # ?�체 ?�이?�셋 ?�??
         with open(output_path / "llm_qa_dataset.json", 'w', encoding='utf-8') as f:
             json.dump(self.qa_pairs, f, ensure_ascii=False, indent=2)
         
-        # 품질별 분할 저장
+        # ?�질�?분할 ?�??
         high_quality = [qa for qa in self.qa_pairs if qa.get('quality_score', 0) >= 0.8]
         medium_quality = [qa for qa in self.qa_pairs if 0.6 <= qa.get('quality_score', 0) < 0.8]
         low_quality = [qa for qa in self.qa_pairs if qa.get('quality_score', 0) < 0.6]
@@ -491,7 +491,7 @@ class LLMQAGenerator:
             json.dump(low_quality, f, ensure_ascii=False, indent=2)
     
     def _generate_statistics(self, output_path: Path):
-        """통계 정보 생성"""
+        """?�계 ?�보 ?�성"""
         stats = {
             'total_pairs': len(self.qa_pairs),
             'high_quality_pairs': len([qa for qa in self.qa_pairs if qa.get('quality_score', 0) >= 0.8]),
@@ -506,17 +506,17 @@ class LLMQAGenerator:
             'temperature': self.temperature
         }
         
-        # 소스별 분포
+        # ?�스�?분포
         for qa in self.qa_pairs:
             source = qa.get('source', 'unknown')
             stats['source_distribution'][source] = stats['source_distribution'].get(source, 0) + 1
         
-        # 난이도별 분포
+        # ?�이?�별 분포
         for qa in self.qa_pairs:
             difficulty = qa.get('difficulty', 'unknown')
             stats['difficulty_distribution'][difficulty] = stats['difficulty_distribution'].get(difficulty, 0) + 1
         
-        # 질문 유형별 분포
+        # 질문 ?�형�?분포
         for qa in self.qa_pairs:
             q_type = qa.get('type', 'unknown')
             stats['question_type_distribution'][q_type] = stats['question_type_distribution'].get(q_type, 0) + 1
@@ -526,16 +526,16 @@ class LLMQAGenerator:
 
 
 def main():
-    """테스트 함수"""
-    # 로그 디렉토리 생성
+    """?�스???�수"""
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
     try:
-        # LLM Q&A 생성기 생성
+        # LLM Q&A ?�성�??�성
         generator = LLMQAGenerator()
         
-        # 소규모 테스트 데이터셋 생성
+        # ?�규�??�스???�이?�셋 ?�성
         success = generator.generate_dataset(
             data_dir="data/processed",
             output_dir="data/qa_dataset/llm_test",
@@ -544,12 +544,12 @@ def main():
         )
         
         if success:
-            print("✅ LLM 기반 Q&A 데이터셋 생성 성공")
+            print("??LLM 기반 Q&A ?�이?�셋 ?�성 ?�공")
         else:
-            print("❌ LLM 기반 Q&A 데이터셋 생성 실패")
+            print("??LLM 기반 Q&A ?�이?�셋 ?�성 ?�패")
             
     except Exception as e:
-        print(f"❌ 오류 발생: {e}")
+        print(f"???�류 발생: {e}")
 
 
 if __name__ == "__main__":

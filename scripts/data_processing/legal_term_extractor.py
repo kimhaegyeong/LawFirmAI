@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-법률 용어 사전 확장을 위한 용어 추출 스크립트
-기존 법령 및 판례 데이터에서 법률 용어를 자동으로 추출하고 분류합니다.
+법률 ?�어 ?�전 ?�장???�한 ?�어 추출 ?�크립트
+기존 법령 �??��? ?�이?�에??법률 ?�어�??�동?�로 추출?�고 분류?�니??
 """
 
 import os
@@ -13,7 +13,7 @@ from collections import defaultdict, Counter
 from dataclasses import dataclass
 from datetime import datetime
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LegalTerm:
-    """법률 용어 데이터 클래스"""
+    """법률 ?�어 ?�이???�래??""
     term: str
     category: str
     domain: str
@@ -38,7 +38,7 @@ class LegalTerm:
     confidence: float
 
 class LegalTermExtractor:
-    """법률 용어 추출기"""
+    """법률 ?�어 추출�?""
     
     def __init__(self):
         self.extracted_terms: Dict[str, LegalTerm] = {}
@@ -47,100 +47,100 @@ class LegalTermExtractor:
         self.stop_words = self._initialize_stop_words()
         
     def _initialize_domain_patterns(self) -> Dict[str, List[str]]:
-        """도메인별 패턴 초기화"""
+        """?�메?�별 ?�턴 초기??""
         return {
-            "형사법": [
-                r"범죄", r"처벌", r"형벌", r"구속", r"기소", r"공소", r"피고", r"검사",
-                r"변호사", r"재판", r"판결", r"형사소송", r"불법행위", r"과실", r"고의"
+            "?�사�?: [
+                r"범죄", r"처벌", r"?�벌", r"구속", r"기소", r"공소", r"?�고", r"검??,
+                r"변?�사", r"?�판", r"?�결", r"?�사?�송", r"불법?�위", r"과실", r"고의"
             ],
-            "민사법": [
-                r"계약", r"손해배상", r"소유권", r"채권", r"채무", r"이행", r"위반",
-                r"해지", r"해제", r"무효", r"취소", r"민사소송", r"소장", r"답변서"
+            "민사�?: [
+                r"계약", r"?�해배상", r"?�유�?, r"채권", r"채무", r"?�행", r"?�반",
+                r"?��?", r"?�제", r"무효", r"취소", r"민사?�송", r"?�장", r"?��???
             ],
             "가족법": [
-                r"혼인", r"이혼", r"상속", r"양육", r"위자료", r"재산분할", r"양육권",
-                r"면접교섭권", r"양육비", r"가정법원", r"가족법", r"이혼법"
+                r"?�인", r"?�혼", r"?�속", r"?�육", r"?�자�?, r"?�산분할", r"?�육�?,
+                r"면접교섭�?, r"?�육�?, r"가?�법??, r"가족법", r"?�혼�?
             ],
-            "상사법": [
-                r"회사", r"주식", r"어음", r"수표", r"상행위", r"회사법", r"상법",
-                r"주주", r"이사", r"감사", r"자본금", r"주식회사"
+            "?�사�?: [
+                r"?�사", r"주식", r"?�음", r"?�표", r"?�행??, r"?�사�?, r"?�법",
+                r"주주", r"?�사", r"감사", r"?�본�?, r"주식?�사"
             ],
-            "노동법": [
-                r"근로", r"근로자", r"근로계약", r"임금", r"근로시간", r"해고",
-                r"부당해고", r"노동위원회", r"근로기준법", r"노동조합법"
+            "?�동�?: [
+                r"근로", r"근로??, r"근로계약", r"?�금", r"근로?�간", r"?�고",
+                r"부?�해�?, r"?�동?�원??, r"근로기�?�?, r"?�동조합�?
             ],
-            "부동산법": [
-                r"부동산", r"토지", r"건물", r"등기", r"소유권이전", r"매매",
-                r"임대차", r"전세", r"월세", r"등기부등본", r"부동산등기법"
+            "부?�산�?: [
+                r"부?�산", r"?��?", r"건물", r"?�기", r"?�유권이??, r"매매",
+                r"?��?�?, r"?�세", r"?�세", r"?�기부?�본", r"부?�산?�기�?
             ],
-            "특허법": [
-                r"특허", r"특허권", r"특허출원", r"특허등록", r"특허침해", r"발명",
-                r"특허청", r"특허심판원", r"특허법", r"특허심사"
+            "?�허�?: [
+                r"?�허", r"?�허�?, r"?�허출원", r"?�허?�록", r"?�허침해", r"발명",
+                r"?�허�?, r"?�허?�판??, r"?�허�?, r"?�허?�사"
             ],
-            "행정법": [
-                r"행정처분", r"행정소송", r"행정법", r"허가", r"인가", r"승인",
-                r"신고", r"신청", r"행정기관", r"공무원", r"행정절차"
+            "?�정�?: [
+                r"?�정처분", r"?�정?�송", r"?�정�?, r"?��?", r"?��?", r"?�인",
+                r"?�고", r"?�청", r"?�정기�?", r"공무??, r"?�정?�차"
             ]
         }
     
     def _initialize_legal_patterns(self) -> List[str]:
-        """법률 용어 패턴 초기화"""
+        """법률 ?�어 ?�턴 초기??""
         return [
-            # 조문 패턴
-            r"제\d+조",
-            r"제\d+항",
-            r"제\d+호",
-            r"제\d+장",
-            r"제\d+절",
-            r"제\d+편",
+            # 조문 ?�턴
+            r"??d+�?,
+            r"??d+??,
+            r"??d+??,
+            r"??d+??,
+            r"??d+??,
+            r"??d+??,
             
-            # 법률명 패턴
-            r"[가-힣]+법",
-            r"[가-힣]+규칙",
-            r"[가-힣]+령",
-            r"[가-힣]+시행령",
-            r"[가-힣]+시행규칙",
+            # 법률�??�턴
+            r"[가-??+�?,
+            r"[가-??+규칙",
+            r"[가-??+??,
+            r"[가-??+?�행??,
+            r"[가-??+?�행규칙",
             
-            # 권리/의무 패턴
-            r"[가-힣]+권",
-            r"[가-힣]+의무",
-            r"[가-힣]+책임",
-            r"[가-힣]+의무",
+            # 권리/?�무 ?�턴
+            r"[가-??+�?,
+            r"[가-??+?�무",
+            r"[가-??+책임",
+            r"[가-??+?�무",
             
-            # 절차 패턴
-            r"[가-힣]+절차",
-            r"[가-힣]+신청",
-            r"[가-힣]+신고",
-            r"[가-힣]+허가",
-            r"[가-힣]+인가",
-            r"[가-힣]+승인",
+            # ?�차 ?�턴
+            r"[가-??+?�차",
+            r"[가-??+?�청",
+            r"[가-??+?�고",
+            r"[가-??+?��?",
+            r"[가-??+?��?",
+            r"[가-??+?�인",
             
-            # 기관 패턴
-            r"[가-힣]+원",
-            r"[가-힣]+청",
-            r"[가-힣]+부",
-            r"[가-힣]+위원회",
-            r"[가-힣]+법원",
+            # 기�? ?�턴
+            r"[가-??+??,
+            r"[가-??+�?,
+            r"[가-??+부",
+            r"[가-??+?�원??,
+            r"[가-??+법원",
             
-            # 행위 패턴
-            r"[가-힣]+행위",
-            r"[가-힣]+처분",
-            r"[가-힣]+결정",
-            r"[가-힣]+명령",
-            r"[가-힣]+지시"
+            # ?�위 ?�턴
+            r"[가-??+?�위",
+            r"[가-??+처분",
+            r"[가-??+결정",
+            r"[가-??+명령",
+            r"[가-??+지??
         ]
     
     def _initialize_stop_words(self) -> Set[str]:
-        """불용어 초기화"""
+        """불용??초기??""
         return {
-            "것", "수", "등", "및", "또는", "그", "이", "저", "의", "가", "을", "를",
-            "에", "에서", "로", "으로", "와", "과", "는", "은", "도", "만", "부터",
-            "까지", "까지의", "에의", "에대한", "에관한", "에따른", "에의한"
+            "�?, "??, "??, "�?, "?�는", "�?, "??, "?�", "??, "가", "??, "�?,
+            "??, "?�서", "�?, "?�로", "?�", "�?, "??, "?�", "??, "�?, "부??,
+            "까�?", "까�???, "?�의", "?��???, "?��???, "?�따�?, "?�의??
         }
     
     def extract_terms_from_laws(self, law_data_dir: str) -> Dict[str, LegalTerm]:
-        """법령 데이터에서 용어 추출"""
-        logger.info(f"법령 데이터에서 용어 추출 시작: {law_data_dir}")
+        """법령 ?�이?�에???�어 추출"""
+        logger.info(f"법령 ?�이?�에???�어 추출 ?�작: {law_data_dir}")
         
         extracted_terms = defaultdict(lambda: {
             'frequency': 0,
@@ -149,7 +149,7 @@ class LegalTermExtractor:
             'contexts': set()
         })
         
-        # 법령 파일들 처리
+        # 법령 ?�일??처리
         for root, dirs, files in os.walk(law_data_dir):
             for file in files:
                 if file.endswith('.json'):
@@ -158,19 +158,19 @@ class LegalTermExtractor:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                         
-                        # 법령 데이터에서 용어 추출
+                        # 법령 ?�이?�에???�어 추출
                         if 'laws' in data:
                             for law in data['laws']:
                                 self._extract_from_law(law, extracted_terms, file_path)
                                 
                     except Exception as e:
-                        logger.error(f"파일 처리 오류 {file_path}: {e}")
+                        logger.error(f"?�일 처리 ?�류 {file_path}: {e}")
                         continue
         
-        # LegalTerm 객체로 변환
+        # LegalTerm 객체�?변??
         legal_terms = {}
         for term, data in extracted_terms.items():
-            if len(term) >= 2 and term not in self.stop_words:  # 최소 길이 및 불용어 필터링
+            if len(term) >= 2 and term not in self.stop_words:  # 최소 길이 �?불용???�터�?
                 legal_terms[term] = LegalTerm(
                     term=term,
                     category=self._categorize_term(term),
@@ -183,12 +183,12 @@ class LegalTermExtractor:
                     confidence=self._calculate_confidence(term, data)
                 )
         
-        logger.info(f"법령에서 추출된 용어 수: {len(legal_terms)}")
+        logger.info(f"법령?�서 추출???�어 ?? {len(legal_terms)}")
         return legal_terms
     
     def extract_terms_from_precedents(self, precedent_data_dir: str) -> Dict[str, LegalTerm]:
-        """판례 데이터에서 용어 추출"""
-        logger.info(f"판례 데이터에서 용어 추출 시작: {precedent_data_dir}")
+        """?��? ?�이?�에???�어 추출"""
+        logger.info(f"?��? ?�이?�에???�어 추출 ?�작: {precedent_data_dir}")
         
         extracted_terms = defaultdict(lambda: {
             'frequency': 0,
@@ -197,7 +197,7 @@ class LegalTermExtractor:
             'contexts': set()
         })
         
-        # 판례 파일들 처리
+        # ?��? ?�일??처리
         for root, dirs, files in os.walk(precedent_data_dir):
             for file in files:
                 if file.endswith('.json'):
@@ -206,16 +206,16 @@ class LegalTermExtractor:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                         
-                        # 판례 데이터에서 용어 추출
+                        # ?��? ?�이?�에???�어 추출
                         if 'cases' in data:
                             for case in data['cases']:
                                 self._extract_from_precedent(case, extracted_terms, file_path)
                                 
                     except Exception as e:
-                        logger.error(f"파일 처리 오류 {file_path}: {e}")
+                        logger.error(f"?�일 처리 ?�류 {file_path}: {e}")
                         continue
         
-        # LegalTerm 객체로 변환
+        # LegalTerm 객체�?변??
         legal_terms = {}
         for term, data in extracted_terms.items():
             if len(term) >= 2 and term not in self.stop_words:
@@ -231,61 +231,61 @@ class LegalTermExtractor:
                     confidence=self._calculate_confidence(term, data)
                 )
         
-        logger.info(f"판례에서 추출된 용어 수: {len(legal_terms)}")
+        logger.info(f"?��??�서 추출???�어 ?? {len(legal_terms)}")
         return legal_terms
     
     def _extract_from_law(self, law: Dict[str, Any], extracted_terms: Dict, file_path: str):
-        """개별 법령에서 용어 추출"""
-        # 법령명에서 용어 추출
+        """개별 법령?�서 ?�어 추출"""
+        # 법령명에???�어 추출
         if 'law_name' in law and law['law_name']:
-            self._extract_terms_from_text(law['law_name'], extracted_terms, file_path, "법령명")
+            self._extract_terms_from_text(law['law_name'], extracted_terms, file_path, "법령�?)
         
-        # 조문에서 용어 추출
+        # 조문?�서 ?�어 추출
         if 'articles' in law:
             for article in law['articles']:
                 if 'article_title' in article and article['article_title']:
-                    self._extract_terms_from_text(article['article_title'], extracted_terms, file_path, "조문제목")
+                    self._extract_terms_from_text(article['article_title'], extracted_terms, file_path, "조문?�목")
                 
                 if 'article_content' in article and article['article_content']:
-                    self._extract_terms_from_text(article['article_content'], extracted_terms, file_path, "조문내용")
+                    self._extract_terms_from_text(article['article_content'], extracted_terms, file_path, "조문?�용")
     
     def _extract_from_precedent(self, case: Dict[str, Any], extracted_terms: Dict, file_path: str):
-        """개별 판례에서 용어 추출"""
-        # 사건명에서 용어 추출
+        """개별 ?��??�서 ?�어 추출"""
+        # ?�건명에???�어 추출
         if 'case_name' in case and case['case_name']:
-            self._extract_terms_from_text(case['case_name'], extracted_terms, file_path, "사건명")
+            self._extract_terms_from_text(case['case_name'], extracted_terms, file_path, "?�건�?)
         
-        # 판시사항에서 용어 추출
+        # ?�시?�항?�서 ?�어 추출
         if 'sections' in case:
             for section in case['sections']:
                 if section.get('has_content', False) and section.get('section_content'):
-                    section_type = section.get('section_type_korean', '기타')
+                    section_type = section.get('section_type_korean', '기�?')
                     self._extract_terms_from_text(section['section_content'], extracted_terms, file_path, section_type)
     
     def _extract_terms_from_text(self, text: str, extracted_terms: Dict, file_path: str, context: str):
-        """텍스트에서 용어 추출"""
+        """?�스?�에???�어 추출"""
         if not text or not isinstance(text, str):
             return
         
-        # 패턴 매칭으로 용어 추출
+        # ?�턴 매칭?�로 ?�어 추출
         for pattern in self.legal_patterns:
             matches = re.findall(pattern, text)
             for match in matches:
                 if isinstance(match, tuple):
-                    match = match[0]  # 그룹이 있는 경우 첫 번째 그룹 사용
+                    match = match[0]  # 그룹???�는 경우 �?번째 그룹 ?�용
                 
                 if match and len(match) >= 2:
                     extracted_terms[match]['frequency'] += 1
                     extracted_terms[match]['sources'].append(file_path)
                     extracted_terms[match]['contexts'].add(context)
                     
-                    # 도메인 분류
+                    # ?�메??분류
                     domain = self._classify_domain(match)
                     if domain:
                         extracted_terms[match]['domains'].add(domain)
         
-        # 일반적인 법률 용어 추출 (2-4글자 한글)
-        general_terms = re.findall(r'[가-힣]{2,4}', text)
+        # ?�반?�인 법률 ?�어 추출 (2-4글???��?)
+        general_terms = re.findall(r'[가-??{2,4}', text)
         for term in general_terms:
             if term not in self.stop_words and self._is_legal_term(term):
                 extracted_terms[term]['frequency'] += 1
@@ -297,87 +297,87 @@ class LegalTermExtractor:
                     extracted_terms[term]['domains'].add(domain)
     
     def _classify_domain(self, term: str) -> str:
-        """용어의 도메인 분류"""
+        """?�어???�메??분류"""
         for domain, patterns in self.domain_patterns.items():
             for pattern in patterns:
                 if re.search(pattern, term):
                     return domain
-        return "기타"
+        return "기�?"
     
     def _is_legal_term(self, term: str) -> bool:
-        """법률 용어 여부 판단"""
+        """법률 ?�어 ?��? ?�단"""
         legal_indicators = [
-            '법', '규칙', '령', '권', '의무', '책임', '절차', '신청', '신고',
-            '허가', '인가', '승인', '원', '청', '부', '위원회', '법원',
-            '행위', '처분', '결정', '명령', '지시', '소송', '재판', '판결'
+            '�?, '규칙', '??, '�?, '?�무', '책임', '?�차', '?�청', '?�고',
+            '?��?', '?��?', '?�인', '??, '�?, '부', '?�원??, '법원',
+            '?�위', '처분', '결정', '명령', '지??, '?�송', '?�판', '?�결'
         ]
         
         return any(indicator in term for indicator in legal_indicators)
     
     def _categorize_term(self, term: str) -> str:
-        """용어 카테고리 분류"""
-        if '법' in term or '규칙' in term or '령' in term:
-            return "법률명"
-        elif '조' in term or '항' in term or '호' in term:
+        """?�어 카테고리 분류"""
+        if '�? in term or '규칙' in term or '?? in term:
+            return "법률�?
+        elif '�? in term or '?? in term or '?? in term:
             return "조문"
-        elif '권' in term:
+        elif '�? in term:
             return "권리"
-        elif '의무' in term or '책임' in term:
-            return "의무"
-        elif '절차' in term or '신청' in term or '신고' in term:
-            return "절차"
-        elif '원' in term or '청' in term or '부' in term:
-            return "기관"
-        elif '소송' in term or '재판' in term or '판결' in term:
-            return "소송"
+        elif '?�무' in term or '책임' in term:
+            return "?�무"
+        elif '?�차' in term or '?�청' in term or '?�고' in term:
+            return "?�차"
+        elif '?? in term or '�? in term or '부' in term:
+            return "기�?"
+        elif '?�송' in term or '?�판' in term or '?�결' in term:
+            return "?�송"
         else:
-            return "일반"
+            return "?�반"
     
     def _determine_domain(self, term: str, domains: Set[str]) -> str:
-        """주요 도메인 결정"""
+        """주요 ?�메??결정"""
         if not domains:
-            return "기타"
+            return "기�?"
         
-        # 가장 빈번한 도메인 반환
+        # 가??빈번???�메??반환
         domain_counts = Counter(domains)
         return domain_counts.most_common(1)[0][0]
     
     def _calculate_confidence(self, term: str, data: Dict) -> float:
-        """용어 신뢰도 계산"""
+        """?�어 ?�뢰??계산"""
         confidence = 0.0
         
-        # 빈도수 기반 점수 (0-0.4)
+        # 빈도??기반 ?�수 (0-0.4)
         frequency_score = min(data['frequency'] / 10.0, 0.4)
         confidence += frequency_score
         
-        # 소스 다양성 점수 (0-0.3)
+        # ?�스 ?�양???�수 (0-0.3)
         source_diversity = min(len(set(data['sources'])) / 5.0, 0.3)
         confidence += source_diversity
         
-        # 컨텍스트 다양성 점수 (0-0.2)
+        # 컨텍?�트 ?�양???�수 (0-0.2)
         context_diversity = min(len(data['contexts']) / 3.0, 0.2)
         confidence += context_diversity
         
-        # 도메인 명확성 점수 (0-0.1)
+        # ?�메??명확???�수 (0-0.1)
         if len(data['domains']) == 1:
             confidence += 0.1
         
         return min(confidence, 1.0)
     
     def merge_and_deduplicate(self, law_terms: Dict[str, LegalTerm], precedent_terms: Dict[str, LegalTerm]) -> Dict[str, LegalTerm]:
-        """용어 통합 및 중복 제거"""
-        logger.info("용어 통합 및 중복 제거 시작")
+        """?�어 ?�합 �?중복 ?�거"""
+        logger.info("?�어 ?�합 �?중복 ?�거 ?�작")
         
         merged_terms = {}
         
-        # 법령 용어 추가
+        # 법령 ?�어 추�?
         for term, legal_term in law_terms.items():
             merged_terms[term] = legal_term
         
-        # 판례 용어 통합
+        # ?��? ?�어 ?�합
         for term, legal_term in precedent_terms.items():
             if term in merged_terms:
-                # 중복된 용어의 경우 빈도수와 소스 통합
+                # 중복???�어??경우 빈도?��? ?�스 ?�합
                 existing_term = merged_terms[term]
                 existing_term.frequency += legal_term.frequency
                 existing_term.sources.extend(legal_term.sources)
@@ -386,34 +386,34 @@ class LegalTermExtractor:
             else:
                 merged_terms[term] = legal_term
         
-        # 품질 필터링 (신뢰도 0.3 이상, 빈도수 2 이상)
+        # ?�질 ?�터�?(?�뢰??0.3 ?�상, 빈도??2 ?�상)
         filtered_terms = {
             term: legal_term for term, legal_term in merged_terms.items()
             if legal_term.confidence >= 0.3 and legal_term.frequency >= 2
         }
         
-        logger.info(f"통합 후 용어 수: {len(merged_terms)}")
-        logger.info(f"품질 필터링 후 용어 수: {len(filtered_terms)}")
+        logger.info(f"?�합 ???�어 ?? {len(merged_terms)}")
+        logger.info(f"?�질 ?�터�????�어 ?? {len(filtered_terms)}")
         
         return filtered_terms
     
     def generate_semantic_relations(self, terms: Dict[str, LegalTerm]) -> Dict[str, Dict[str, List[str]]]:
-        """의미적 관계 생성"""
-        logger.info("의미적 관계 생성 시작")
+        """?��???관�??�성"""
+        logger.info("?��???관�??�성 ?�작")
         
         semantic_relations = {}
         
-        # 도메인별 그룹화
+        # ?�메?�별 그룹??
         domain_groups = defaultdict(list)
         for term, legal_term in terms.items():
             domain_groups[legal_term.domain].append(term)
         
-        # 각 도메인별로 의미적 관계 생성
+        # �??�메?�별�??��???관�??�성
         for domain, domain_terms in domain_groups.items():
             if len(domain_terms) < 3:
                 continue
             
-            # 상위 빈도수 용어들을 대표 용어로 선택
+            # ?�위 빈도???�어?�을 ?�???�어�??�택
             domain_term_freq = [(term, terms[term].frequency) for term in domain_terms]
             domain_term_freq.sort(key=lambda x: x[1], reverse=True)
             
@@ -422,7 +422,7 @@ class LegalTermExtractor:
             if representative_terms:
                 main_term = representative_terms[0]
                 synonyms = representative_terms[1:3] if len(representative_terms) > 1 else []
-                related_terms = domain_terms[:10]  # 관련 용어
+                related_terms = domain_terms[:10]  # 관???�어
                 
                 semantic_relations[main_term] = {
                     "synonyms": synonyms,
@@ -430,14 +430,14 @@ class LegalTermExtractor:
                     "context": [domain]
                 }
         
-        logger.info(f"생성된 의미적 관계 수: {len(semantic_relations)}")
+        logger.info(f"?�성???��???관�??? {len(semantic_relations)}")
         return semantic_relations
     
     def save_results(self, terms: Dict[str, LegalTerm], semantic_relations: Dict[str, Dict[str, List[str]]], output_dir: str):
-        """결과 저장"""
+        """결과 ?�??""
         os.makedirs(output_dir, exist_ok=True)
         
-        # 용어 사전 저장
+        # ?�어 ?�전 ?�??
         terms_dict = {}
         for term, legal_term in terms.items():
             terms_dict[term] = {
@@ -456,18 +456,18 @@ class LegalTermExtractor:
         with open(terms_file, 'w', encoding='utf-8') as f:
             json.dump(terms_dict, f, ensure_ascii=False, indent=2)
         
-        # 의미적 관계 저장
+        # ?��???관�??�??
         relations_file = os.path.join(output_dir, "semantic_relations.json")
         with open(relations_file, 'w', encoding='utf-8') as f:
             json.dump(semantic_relations, f, ensure_ascii=False, indent=2)
         
-        # 통계 보고서 생성
+        # ?�계 보고???�성
         self._generate_statistics_report(terms, semantic_relations, output_dir)
         
-        logger.info(f"결과 저장 완료: {output_dir}")
+        logger.info(f"결과 ?�???�료: {output_dir}")
     
     def _generate_statistics_report(self, terms: Dict[str, LegalTerm], semantic_relations: Dict[str, Dict[str, List[str]]], output_dir: str):
-        """통계 보고서 생성"""
+        """?�계 보고???�성"""
         stats = {
             "extraction_summary": {
                 "total_terms": len(terms),
@@ -480,15 +480,15 @@ class LegalTermExtractor:
             "frequency_distribution": {}
         }
         
-        # 도메인별 분포
+        # ?�메?�별 분포
         domain_counts = Counter(term.domain for term in terms.values())
         stats["domain_distribution"] = dict(domain_counts)
         
-        # 카테고리별 분포
+        # 카테고리�?분포
         category_counts = Counter(term.category for term in terms.values())
         stats["category_distribution"] = dict(category_counts)
         
-        # 신뢰도 분포
+        # ?�뢰??분포
         confidence_ranges = {"high": 0, "medium": 0, "low": 0}
         for term in terms.values():
             if term.confidence >= 0.7:
@@ -499,7 +499,7 @@ class LegalTermExtractor:
                 confidence_ranges["low"] += 1
         stats["confidence_distribution"] = confidence_ranges
         
-        # 빈도수 분포
+        # 빈도??분포
         frequency_ranges = {"high": 0, "medium": 0, "low": 0}
         for term in terms.values():
             if term.frequency >= 10:
@@ -510,43 +510,43 @@ class LegalTermExtractor:
                 frequency_ranges["low"] += 1
         stats["frequency_distribution"] = frequency_ranges
         
-        # 보고서 저장
+        # 보고???�??
         report_file = os.path.join(output_dir, "extraction_report.json")
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
 
 def main():
-    """메인 실행 함수"""
-    logger.info("법률 용어 추출 시작")
+    """메인 ?�행 ?�수"""
+    logger.info("법률 ?�어 추출 ?�작")
     
-    # 데이터 디렉토리 설정
+    # ?�이???�렉?�리 ?�정
     law_data_dir = "data/processed/assembly/law"
     precedent_data_dir = "data/processed/assembly/precedent"
     output_dir = "data/extracted_terms"
     
-    # 추출기 초기화
+    # 추출�?초기??
     extractor = LegalTermExtractor()
     
     try:
-        # 법령에서 용어 추출
+        # 법령?�서 ?�어 추출
         law_terms = extractor.extract_terms_from_laws(law_data_dir)
         
-        # 판례에서 용어 추출
+        # ?��??�서 ?�어 추출
         precedent_terms = extractor.extract_terms_from_precedents(precedent_data_dir)
         
-        # 용어 통합 및 중복 제거
+        # ?�어 ?�합 �?중복 ?�거
         merged_terms = extractor.merge_and_deduplicate(law_terms, precedent_terms)
         
-        # 의미적 관계 생성
+        # ?��???관�??�성
         semantic_relations = extractor.generate_semantic_relations(merged_terms)
         
-        # 결과 저장
+        # 결과 ?�??
         extractor.save_results(merged_terms, semantic_relations, output_dir)
         
-        logger.info("법률 용어 추출 완료")
+        logger.info("법률 ?�어 추출 ?�료")
         
     except Exception as e:
-        logger.error(f"용어 추출 중 오류 발생: {e}")
+        logger.error(f"?�어 추출 �??�류 발생: {e}")
         raise
 
 if __name__ == "__main__":

@@ -3,12 +3,12 @@
 """
 Enhanced Preprocessing Pipeline
 
-통합된 전처리 파이프라인으로 법령과 판례 데이터를 효율적으로 처리합니다.
-- 메모리 최적화
+?�합???�처�??�이?�라?�으�?법령�??��? ?�이?��? ?�율?�으�?처리?�니??
+- 메모�?최적??
 - 병렬 처리
-- 품질 검증
-- 오류 복구
-- 진행 상황 추적
+- ?�질 검�?
+- ?�류 복구
+- 진행 ?�황 추적
 """
 
 import os
@@ -27,7 +27,7 @@ from tqdm import tqdm
 import gc
 import psutil
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -37,22 +37,22 @@ from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 
 @dataclass
 class ProcessingConfig:
-    """처리 설정 데이터 클래스"""
-    # 기본 설정
+    """처리 ?�정 ?�이???�래??""
+    # 기본 ?�정
     max_workers: int = min(multiprocessing.cpu_count(), 8)
     batch_size: int = 100
     max_memory_gb: float = 8.0
     
-    # 전처리 설정
+    # ?�처�??�정
     enable_legal_analysis: bool = True
     enable_quality_validation: bool = True
     enable_duplicate_detection: bool = True
     
-    # 출력 설정
+    # 출력 ?�정
     output_format: str = "json"  # json, parquet, csv
     compress_output: bool = False
     
-    # 오류 처리
+    # ?�류 처리
     max_retries: int = 3
     retry_delay: float = 1.0
     continue_on_error: bool = True
@@ -60,7 +60,7 @@ class ProcessingConfig:
 
 @dataclass
 class ProcessingResult:
-    """처리 결과 데이터 클래스"""
+    """처리 결과 ?�이???�래??""
     success: bool
     processed_files: List[Path] = field(default_factory=list)
     failed_files: List[Path] = field(default_factory=list)
@@ -73,7 +73,7 @@ class ProcessingResult:
 
 
 class MemoryMonitor:
-    """메모리 사용량 모니터링 클래스"""
+    """메모�??�용??모니?�링 ?�래??""
     
     def __init__(self, max_memory_gb: float = 8.0):
         self.max_memory_gb = max_memory_gb
@@ -81,32 +81,32 @@ class MemoryMonitor:
         self.process = psutil.Process()
     
     def get_memory_usage(self) -> float:
-        """현재 메모리 사용량을 MB 단위로 반환"""
+        """?�재 메모�??�용?�을 MB ?�위�?반환"""
         memory_mb = self.process.memory_info().rss / 1024 / 1024
         self.peak_memory_mb = max(self.peak_memory_mb, memory_mb)
         return memory_mb
     
     def check_memory_limit(self) -> bool:
-        """메모리 한계 확인"""
+        """메모�??�계 ?�인"""
         current_mb = self.get_memory_usage()
         return current_mb < (self.max_memory_gb * 1024)
     
     def force_gc(self):
-        """강제 가비지 컬렉션 실행"""
+        """강제 가비�? 컬렉???�행"""
         gc.collect()
 
 
 class QualityValidator:
-    """데이터 품질 검증 클래스"""
+    """?�이???�질 검�??�래??""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
     
     def validate_law_data(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """법령 데이터 품질 검증"""
+        """법령 ?�이???�질 검�?""
         issues = []
         
-        # 필수 필드 검증
+        # ?�수 ?�드 검�?
         required_fields = ['law_id', 'law_name', 'articles']
         for field in required_fields:
             if field not in data or not data[field]:
@@ -117,7 +117,7 @@ class QualityValidator:
                     'message': f'Missing required field: {field}'
                 })
         
-        # 조문 데이터 검증
+        # 조문 ?�이??검�?
         if 'articles' in data and isinstance(data['articles'], list):
             for i, article in enumerate(data['articles']):
                 if not isinstance(article, dict):
@@ -138,10 +138,10 @@ class QualityValidator:
         return issues
     
     def validate_precedent_data(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """판례 데이터 품질 검증"""
+        """?��? ?�이???�질 검�?""
         issues = []
         
-        # 필수 필드 검증
+        # ?�수 ?�드 검�?
         required_fields = ['case_id', 'case_name', 'case_number', 'decision_date']
         for field in required_fields:
             if field not in data or not data[field]:
@@ -152,7 +152,7 @@ class QualityValidator:
                     'message': f'Missing required field: {field}'
                 })
         
-        # 날짜 형식 검증
+        # ?�짜 ?�식 검�?
         if 'decision_date' in data:
             try:
                 datetime.strptime(data['decision_date'], '%Y-%m-%d')
@@ -168,27 +168,27 @@ class QualityValidator:
 
 
 class DuplicateDetector:
-    """중복 데이터 탐지 클래스"""
+    """중복 ?�이???��? ?�래??""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.seen_hashes = set()
     
     def calculate_content_hash(self, data: Dict[str, Any]) -> str:
-        """데이터 내용의 해시값 계산"""
-        # 핵심 필드만으로 해시 계산
+        """?�이???�용???�시�?계산"""
+        # ?�심 ?�드만으�??�시 계산
         if 'law_id' in data:
-            # 법령 데이터
+            # 법령 ?�이??
             key_fields = ['law_id', 'law_name']
         else:
-            # 판례 데이터
+            # ?��? ?�이??
             key_fields = ['case_id', 'case_name', 'case_number']
         
         content = ''.join(str(data.get(field, '')) for field in key_fields)
         return hashlib.md5(content.encode('utf-8')).hexdigest()
     
     def is_duplicate(self, data: Dict[str, Any]) -> bool:
-        """중복 데이터 여부 확인"""
+        """중복 ?�이???��? ?�인"""
         content_hash = self.calculate_content_hash(data)
         
         if content_hash in self.seen_hashes:
@@ -199,33 +199,33 @@ class DuplicateDetector:
 
 
 class EnhancedPreprocessingPipeline:
-    """향상된 전처리 파이프라인"""
+    """?�상???�처�??�이?�라??""
     
     def __init__(self, 
                  config: ProcessingConfig = None,
                  checkpoint_manager: CheckpointManager = None,
                  db_manager: DatabaseManager = None):
         """
-        전처리 파이프라인 초기화
+        ?�처�??�이?�라??초기??
         
         Args:
-            config: 처리 설정
-            checkpoint_manager: 체크포인트 관리자
-            db_manager: 데이터베이스 관리자
+            config: 처리 ?�정
+            checkpoint_manager: 체크?�인??관리자
+            db_manager: ?�이?�베?�스 관리자
         """
         self.config = config or ProcessingConfig()
         self.checkpoint_manager = checkpoint_manager
         self.db_manager = db_manager
         
-        # 로깅 설정
+        # 로깅 ?�정
         self.logger = logging.getLogger(__name__)
         
-        # 모니터링 및 검증 컴포넌트
+        # 모니?�링 �?검�?컴포?�트
         self.memory_monitor = MemoryMonitor(self.config.max_memory_gb)
         self.quality_validator = QualityValidator()
         self.duplicate_detector = DuplicateDetector()
         
-        # 통계
+        # ?�계
         self.stats = {
             'total_files': 0,
             'processed_files': 0,
@@ -240,17 +240,17 @@ class EnhancedPreprocessingPipeline:
     def process_law_files(self, 
                          input_paths: List[Path], 
                          output_dir: Path) -> ProcessingResult:
-        """법령 파일들 처리"""
+        """법령 ?�일??처리"""
         self.logger.info(f"Processing {len(input_paths)} law files...")
         
         result = ProcessingResult(success=True)
         result.processing_time = datetime.now()
         
-        # 배치별 처리
+        # 배치�?처리
         for i in range(0, len(input_paths), self.config.batch_size):
             batch = input_paths[i:i + self.config.batch_size]
             
-            # 메모리 확인
+            # 메모�??�인
             if not self.memory_monitor.check_memory_limit():
                 self.logger.warning("Memory limit reached, forcing garbage collection")
                 self.memory_monitor.force_gc()
@@ -277,17 +277,17 @@ class EnhancedPreprocessingPipeline:
     def process_precedent_files(self, 
                                input_paths: List[Path], 
                                output_dir: Path) -> ProcessingResult:
-        """판례 파일들 처리"""
+        """?��? ?�일??처리"""
         self.logger.info(f"Processing {len(input_paths)} precedent files...")
         
         result = ProcessingResult(success=True)
         result.processing_time = datetime.now()
         
-        # 배치별 처리
+        # 배치�?처리
         for i in range(0, len(input_paths), self.config.batch_size):
             batch = input_paths[i:i + self.config.batch_size]
             
-            # 메모리 확인
+            # 메모�??�인
             if not self.memory_monitor.check_memory_limit():
                 self.logger.warning("Memory limit reached, forcing garbage collection")
                 self.memory_monitor.force_gc()
@@ -319,26 +319,26 @@ class EnhancedPreprocessingPipeline:
         
         for file_path in tqdm(batch, desc="Processing law batch"):
             try:
-                # 파일 읽기
+                # ?�일 ?�기
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                # 중복 확인
+                # 중복 ?�인
                 if self.duplicate_detector.is_duplicate(data):
                     result.duplicates_found += 1
                     continue
                 
-                # 품질 검증
+                # ?�질 검�?
                 if self.config.enable_quality_validation:
                     quality_issues = self.quality_validator.validate_law_data(data)
                     if quality_issues:
                         result.quality_issues.extend(quality_issues)
                         result.quality_issues += len(quality_issues)
                 
-                # 전처리 (기존 파서 사용)
+                # ?�처�?(기존 ?�서 ?�용)
                 processed_data = self._preprocess_law_data(data)
                 
-                # 출력 파일 저장
+                # 출력 ?�일 ?�??
                 output_file = output_dir / f"{file_path.stem}_processed.json"
                 with open(output_file, 'w', encoding='utf-8') as f:
                     json.dump(processed_data, f, ensure_ascii=False, indent=2)
@@ -361,16 +361,16 @@ class EnhancedPreprocessingPipeline:
     def _process_precedent_batch(self, 
                                 batch: List[Path], 
                                 output_dir: Path) -> ProcessingResult:
-        """판례 배치 처리"""
+        """?��? 배치 처리"""
         result = ProcessingResult(success=True)
         
         for file_path in tqdm(batch, desc="Processing precedent batch"):
             try:
-                # 파일 읽기
+                # ?�일 ?�기
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                # 데이터 구조 확인 및 처리
+                # ?�이??구조 ?�인 �?처리
                 if isinstance(data, dict) and 'items' in data:
                     # items 배열 처리
                     items = data.get('items', [])
@@ -383,22 +383,22 @@ class EnhancedPreprocessingPipeline:
                         if not isinstance(item, dict):
                             continue
                         
-                        # 중복 확인
+                        # 중복 ?�인
                         if self.duplicate_detector.is_duplicate(item):
                             result.duplicates_found += 1
                             continue
                         
-                        # 품질 검증
+                        # ?�질 검�?
                         if self.config.enable_quality_validation:
                             quality_issues = self.quality_validator.validate_precedent_data(item)
                             if quality_issues:
                                 result.quality_issues.extend(quality_issues)
                         
-                        # 전처리
+                        # ?�처�?
                         processed_item = self._preprocess_precedent_data(item)
                         processed_items.append(processed_item)
                     
-                    # 출력 파일 저장
+                    # 출력 ?�일 ?�??
                     output_file = output_dir / f"{file_path.stem}_processed.json"
                     with open(output_file, 'w', encoding='utf-8') as f:
                         json.dump({
@@ -410,28 +410,28 @@ class EnhancedPreprocessingPipeline:
                     result.total_records += len(processed_items)
                 
                 elif isinstance(data, list):
-                    # 직접 배열인 경우
+                    # 직접 배열??경우
                     processed_items = []
                     for item in data:
                         if not isinstance(item, dict):
                             continue
                         
-                        # 중복 확인
+                        # 중복 ?�인
                         if self.duplicate_detector.is_duplicate(item):
                             result.duplicates_found += 1
                             continue
                         
-                        # 품질 검증
+                        # ?�질 검�?
                         if self.config.enable_quality_validation:
                             quality_issues = self.quality_validator.validate_precedent_data(item)
                             if quality_issues:
                                 result.quality_issues.extend(quality_issues)
                         
-                        # 전처리
+                        # ?�처�?
                         processed_item = self._preprocess_precedent_data(item)
                         processed_items.append(processed_item)
                     
-                    # 출력 파일 저장
+                    # 출력 ?�일 ?�??
                     output_file = output_dir / f"{file_path.stem}_processed.json"
                     with open(output_file, 'w', encoding='utf-8') as f:
                         json.dump(processed_items, f, ensure_ascii=False, indent=2)
@@ -456,8 +456,8 @@ class EnhancedPreprocessingPipeline:
         return result
     
     def _preprocess_law_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """법령 데이터 전처리"""
-        # 기본 전처리 로직 (기존 파서 활용)
+        """법령 ?�이???�처�?""
+        # 기본 ?�처�?로직 (기존 ?�서 ?�용)
         processed = {
             'law_id': data.get('law_id', ''),
             'law_name': data.get('law_name', ''),
@@ -481,8 +481,8 @@ class EnhancedPreprocessingPipeline:
         return processed
     
     def _preprocess_precedent_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """판례 데이터 전처리"""
-        # 기본 전처리 로직
+        """?��? ?�이???�처�?""
+        # 기본 ?�처�?로직
         processed = {
             'case_id': data.get('case_id', ''),
             'case_name': data.get('case_name', ''),
@@ -500,23 +500,23 @@ class EnhancedPreprocessingPipeline:
         return processed
     
     def _generate_searchable_text(self, content: str) -> str:
-        """검색 가능한 텍스트 생성"""
+        """검??가?�한 ?�스???�성"""
         if not content:
             return ""
         
-        # 기본 정규화
+        # 기본 ?�규??
         import re
-        # HTML 태그 제거
+        # HTML ?�그 ?�거
         content = re.sub(r'<[^>]+>', '', content)
-        # 연속 공백 제거
+        # ?�속 공백 ?�거
         content = re.sub(r'\s+', ' ', content)
-        # 앞뒤 공백 제거
+        # ?�뒤 공백 ?�거
         content = content.strip()
         
         return content
     
     def generate_report(self, result: ProcessingResult) -> Dict[str, Any]:
-        """처리 결과 보고서 생성"""
+        """처리 결과 보고???�성"""
         return {
             'summary': {
                 'success': result.success,
@@ -529,13 +529,13 @@ class EnhancedPreprocessingPipeline:
                 'quality_issues': len(result.quality_issues)
             },
             'errors': result.errors,
-            'quality_issues': result.quality_issues[:10],  # 상위 10개만
-            'failed_files': [str(f) for f in result.failed_files[:10]]  # 상위 10개만
+            'quality_issues': result.quality_issues[:10],  # ?�위 10개만
+            'failed_files': [str(f) for f in result.failed_files[:10]]  # ?�위 10개만
         }
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description='Enhanced Preprocessing Pipeline')
     parser.add_argument('--input', required=True, help='Input directory or file pattern')
     parser.add_argument('--output', required=True, help='Output directory')
@@ -549,13 +549,13 @@ def main():
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 설정 생성
+    # ?�정 ?�성
     config = ProcessingConfig(
         max_workers=args.max_workers,
         batch_size=args.batch_size,
@@ -564,27 +564,27 @@ def main():
         enable_duplicate_detection=args.enable_duplicate_detection
     )
     
-    # 파이프라인 초기화
+    # ?�이?�라??초기??
     pipeline = EnhancedPreprocessingPipeline(config=config)
     
-    # 입력 파일 수집
+    # ?�력 ?�일 ?�집
     input_path = Path(args.input)
     if input_path.is_file():
         input_files = [input_path]
     else:
         input_files = list(input_path.rglob('*.json'))
     
-    # 출력 디렉토리 생성
+    # 출력 ?�렉?�리 ?�성
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 처리 실행
+    # 처리 ?�행
     if args.data_type == 'law':
         result = pipeline.process_law_files(input_files, output_dir)
     else:
         result = pipeline.process_precedent_files(input_files, output_dir)
     
-    # 보고서 생성 및 저장
+    # 보고???�성 �??�??
     report = pipeline.generate_report(result)
     report_file = output_dir / 'processing_report.json'
     with open(report_file, 'w', encoding='utf-8') as f:

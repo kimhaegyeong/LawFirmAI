@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-lawfirm_v2.db 통합 테스트 스크립트
-실제 데이터베이스와 연동하여 검색 기능 검증
+lawfirm_v2.db ?�합 ?�스???�크립트
+?�제 ?�이?�베?�스?� ?�동?�여 검??기능 검�?
 """
 
 import sys
 import os
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import logging
 from source.utils.config import Config
-from core.agents.legal_data_connector_v2 import LegalDataConnectorV2, route_query
+from source.agents.legal_data_connector_v2 import LegalDataConnectorV2, route_query
 from source.services.semantic_search_engine_v2 import SemanticSearchEngineV2
 from source.services.hybrid_search_engine_v2 import HybridSearchEngineV2
 
@@ -23,117 +23,117 @@ logger = logging.getLogger(__name__)
 
 
 def test_query_routing():
-    """Query Router 테스트"""
-    print("\n=== Query Router 테스트 ===")
+    """Query Router ?�스??""
+    print("\n=== Query Router ?�스??===")
 
     test_queries = [
-        ("제3조 알려줘", "text2sql"),
-        ("2023-10-19 시행", "text2sql"),
-        ("대법원 판례", "text2sql"),
-        ("부당이득 반환 요건", "vector"),
-        ("계약 해지 절차", "vector"),
+        ("??�??�려�?, "text2sql"),
+        ("2023-10-19 ?�행", "text2sql"),
+        ("?�법원 ?��?", "text2sql"),
+        ("부?�이??반환 ?�건", "vector"),
+        ("계약 ?��? ?�차", "vector"),
     ]
 
     for query, expected in test_queries:
         result = route_query(query)
-        status = "✅" if result == expected else "❌"
-        print(f"{status} '{query}' → {result} (expected: {expected})")
+        status = "?? if result == expected else "??
+        print(f"{status} '{query}' ??{result} (expected: {expected})")
 
 
 def test_fts_search(config):
-    """FTS5 검색 테스트"""
-    print("\n=== FTS5 검색 테스트 ===")
+    """FTS5 검???�스??""
+    print("\n=== FTS5 검???�스??===")
 
     db_path = config.database_path
     if not os.path.exists(db_path):
-        print(f"⚠️ 데이터베이스가 없습니다: {db_path}")
-        print("먼저 데이터를 적재하세요:")
-        print("  python scripts/ingest/ingest_statutes.py --json <path> --domain 민사법")
+        print(f"?�️ ?�이?�베?�스가 ?�습?�다: {db_path}")
+        print("먼�? ?�이?��? ?�재?�세??")
+        print("  python scripts/ingest/ingest_statutes.py --json <path> --domain 민사�?)
         return
 
     connector = LegalDataConnectorV2(db_path)
 
-    # 법령 검색
-    print("\n1. 법령 FTS 검색:")
-    results = connector.search_statutes_fts("인지", limit=5)
-    print(f"   결과: {len(results)}개")
+    # 법령 검??
+    print("\n1. 법령 FTS 검??")
+    results = connector.search_statutes_fts("?��?", limit=5)
+    print(f"   결과: {len(results)}�?)
     for i, r in enumerate(results[:3], 1):
         print(f"   {i}. [{r['relevance_score']:.3f}] {r['source']} - {r['content'][:50]}...")
 
-    # 판례 검색
-    print("\n2. 판례 FTS 검색:")
-    results = connector.search_cases_fts("손해배상", limit=5)
-    print(f"   결과: {len(results)}개")
+    # ?��? 검??
+    print("\n2. ?��? FTS 검??")
+    results = connector.search_cases_fts("?�해배상", limit=5)
+    print(f"   결과: {len(results)}�?)
     for i, r in enumerate(results[:3], 1):
         print(f"   {i}. [{r['relevance_score']:.3f}] {r['source']} - {r['content'][:50]}...")
 
-    # 통합 검색 (라우팅)
-    print("\n3. 통합 검색 (자동 라우팅):")
-    results = connector.search_documents("제1조", limit=5)
-    print(f"   Text2SQL 라우팅 결과: {len(results)}개")
+    # ?�합 검??(?�우??
+    print("\n3. ?�합 검??(?�동 ?�우??:")
+    results = connector.search_documents("??�?, limit=5)
+    print(f"   Text2SQL ?�우??결과: {len(results)}�?)
 
-    results = connector.search_documents("부당이득", limit=5)
-    print(f"   Vector 라우팅 결과: {len(results)}개 (SemanticSearchEngineV2로 위임)")
+    results = connector.search_documents("부?�이??, limit=5)
+    print(f"   Vector ?�우??결과: {len(results)}�?(SemanticSearchEngineV2�??�임)")
 
 
 def test_semantic_search(config):
-    """벡터 검색 테스트"""
-    print("\n=== 벡터 의미 검색 테스트 ===")
+    """벡터 검???�스??""
+    print("\n=== 벡터 ?��? 검???�스??===")
 
     db_path = config.database_path
     if not os.path.exists(db_path):
-        print(f"⚠️ 데이터베이스가 없습니다: {db_path}")
+        print(f"?�️ ?�이?�베?�스가 ?�습?�다: {db_path}")
         return
 
     try:
         engine = SemanticSearchEngineV2(db_path)
 
         if not engine.embedder:
-            print("⚠️ 임베딩 모델을 로드할 수 없습니다. 모델 다운로드가 필요할 수 있습니다.")
+            print("?�️ ?�베??모델??로드?????�습?�다. 모델 ?�운로드가 ?�요?????�습?�다.")
             return
 
-        print("\n벡터 검색 실행 중...")
+        print("\n벡터 검???�행 �?..")
         results = engine.search(
-            query="부당이득 반환 청구 요건",
+            query="부?�이??반환 �?�� ?�건",
             k=5,
             similarity_threshold=0.3
         )
 
-        print(f"결과: {len(results)}개")
+        print(f"결과: {len(results)}�?)
         for i, r in enumerate(results[:3], 1):
             print(f"   {i}. [{r['score']:.3f}] {r['source']}")
             print(f"      {r['text'][:80]}...")
 
     except Exception as e:
-        print(f"❌ 벡터 검색 실패: {e}")
+        print(f"??벡터 검???�패: {e}")
         import traceback
         traceback.print_exc()
 
 
 def test_hybrid_search(config):
-    """하이브리드 검색 테스트"""
-    print("\n=== 하이브리드 검색 테스트 ===")
+    """?�이브리??검???�스??""
+    print("\n=== ?�이브리??검???�스??===")
 
     db_path = config.database_path
     if not os.path.exists(db_path):
-        print(f"⚠️ 데이터베이스가 없습니다: {db_path}")
+        print(f"?�️ ?�이?�베?�스가 ?�습?�다: {db_path}")
         return
 
     try:
         engine = HybridSearchEngineV2(db_path)
 
-        print("\n하이브리드 검색 실행 중...")
+        print("\n?�이브리??검???�행 �?..")
         result = engine.search(
-            query="인지",
+            query="?��?",
             search_types=["law"],
             max_results=10,
             include_exact=True,
             include_semantic=True
         )
 
-        print(f"총 결과: {result['total']}개")
-        print(f"FTS5 결과: {result['exact_count']}개")
-        print(f"벡터 결과: {result['semantic_count']}개")
+        print(f"�?결과: {result['total']}�?)
+        print(f"FTS5 결과: {result['exact_count']}�?)
+        print(f"벡터 결과: {result['semantic_count']}�?)
 
         for i, r in enumerate(result['results'][:3], 1):
             print(f"\n   {i}. [{r.get('search_type', 'unknown')}] {r.get('relevance_score', 0):.3f}")
@@ -141,36 +141,36 @@ def test_hybrid_search(config):
             print(f"      {text}...")
 
     except Exception as e:
-        print(f"❌ 하이브리드 검색 실패: {e}")
+        print(f"???�이브리??검???�패: {e}")
         import traceback
         traceback.print_exc()
 
 
 def check_database_status(config):
-    """데이터베이스 상태 확인"""
-    print("\n=== 데이터베이스 상태 확인 ===")
+    """?�이?�베?�스 ?�태 ?�인"""
+    print("\n=== ?�이?�베?�스 ?�태 ?�인 ===")
 
     db_path = config.database_path
 
     if not os.path.exists(db_path):
-        print(f"❌ 데이터베이스 파일이 없습니다: {db_path}")
-        print("\n초기화 방법:")
+        print(f"???�이?�베?�스 ?�일???�습?�다: {db_path}")
+        print("\n초기??방법:")
         print("  python scripts/init_lawfirm_v2_db.py")
         return False
 
-    print(f"✅ 데이터베이스 존재: {db_path}")
+    print(f"???�이?�베?�스 존재: {db_path}")
 
     import sqlite3
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 테이블 확인
+        # ?�이�??�인
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = [row[0] for row in cursor.fetchall()]
-        print(f"\n테이블 수: {len(tables)}")
+        print(f"\n?�이�??? {len(tables)}")
 
-        # 주요 테이블 데이터 확인
+        # 주요 ?�이�??�이???�인
         checks = [
             ("domains", "SELECT COUNT(*) FROM domains"),
             ("statutes", "SELECT COUNT(*) FROM statutes"),
@@ -181,19 +181,19 @@ def check_database_status(config):
             ("embeddings", "SELECT COUNT(*) FROM embeddings"),
         ]
 
-        print("\n데이터 통계:")
+        print("\n?�이???�계:")
         for name, query in checks:
             try:
                 cursor.execute(query)
                 count = cursor.fetchone()[0]
-                print(f"  {name}: {count}개")
+                print(f"  {name}: {count}�?)
             except:
-                print(f"  {name}: 테이블 없음")
+                print(f"  {name}: ?�이�??�음")
 
-        # FTS5 테이블 확인
+        # FTS5 ?�이�??�인
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_fts'")
         fts_tables = [row[0] for row in cursor.fetchall()]
-        print(f"\nFTS5 테이블: {len(fts_tables)}개")
+        print(f"\nFTS5 ?�이�? {len(fts_tables)}�?)
         for table in fts_tables:
             print(f"  - {table}")
 
@@ -201,38 +201,38 @@ def check_database_status(config):
         return True
 
     except Exception as e:
-        print(f"❌ 데이터베이스 접근 실패: {e}")
+        print(f"???�이?�베?�스 ?�근 ?�패: {e}")
         return False
 
 
 def main():
-    """메인 테스트 실행"""
+    """메인 ?�스???�행"""
     print("=" * 60)
-    print("lawfirm_v2.db 통합 테스트")
+    print("lawfirm_v2.db ?�합 ?�스??)
     print("=" * 60)
 
-    # V2 DB 경로 명시적 설정
+    # V2 DB 경로 명시???�정
     v2_db_path = "./data/lawfirm_v2.db"
-    print(f"\n테스트 대상 데이터베이스: {v2_db_path}")
+    print(f"\n?�스???�???�이?�베?�스: {v2_db_path}")
 
-    # Config 객체 생성 (내부적으로 사용)
+    # Config 객체 ?�성 (?��??�으�??�용)
     config = Config()
-    # 테스트에서는 v2 경로를 직접 사용
+    # ?�스?�에?�는 v2 경로�?직접 ?�용
     config.database_path = v2_db_path
 
-    # 데이터베이스 상태 확인
+    # ?�이?�베?�스 ?�태 ?�인
     if not check_database_status(config):
-        print("\n⚠️ 데이터베이스가 준비되지 않았습니다. 테스트를 건너뜁니다.")
+        print("\n?�️ ?�이?�베?�스가 준비되지 ?�았?�니?? ?�스?��? 건너?�니??")
         return
 
-    # 테스트 실행
+    # ?�스???�행
     test_query_routing()
     test_fts_search(config)
     test_semantic_search(config)
     test_hybrid_search(config)
 
     print("\n" + "=" * 60)
-    print("테스트 완료")
+    print("?�스???�료")
     print("=" * 60)
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-LawFirmAI 질의 답변 시스템 테스트 스크립트
-Gradio 실행 전에 시스템이 정상적으로 동작하는지 확인
+LawFirmAI 질의 ?��? ?�스???�스???�크립트
+Gradio ?�행 ?�에 ?�스?�이 ?�상?�으�??�작?�는지 ?�인
 """
 
 import asyncio
@@ -12,22 +12,22 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 로깅 설정
+# 로깅 ?�정
 import logging
 import warnings
 
-# 경고 메시지 필터링
+# 경고 메시지 ?�터�?
 warnings.filterwarnings("ignore")
 
-# 로거 설정
+# 로거 ?�정
 logger = logging.getLogger(__name__)
 
 class QuerySystemTester:
-    """질의 답변 시스템 테스트 클래스"""
+    """질의 ?��? ?�스???�스???�래??""
 
     def __init__(self):
         self.test_results = {}
@@ -35,19 +35,19 @@ class QuerySystemTester:
         self.config = None
 
     def setup_test_environment(self) -> bool:
-        """테스트 환경 설정"""
+        """?�스???�경 ?�정"""
         try:
             logger.info("[SETUP] Setting up test environment...")
 
-            # 환경 변수 설정
+            # ?�경 변???�정
             os.environ.setdefault('USE_LANGGRAPH', 'false')
             os.environ.setdefault('GEMINI_ENABLED', 'false')
 
-            # Config 초기화
+            # Config 초기??
             from source.utils.config import Config
             self.config = Config()
 
-            # ChatService 초기화
+            # ChatService 초기??
             from source.services.chat_service import ChatService
             self.chat_service = ChatService(self.config)
 
@@ -59,12 +59,12 @@ class QuerySystemTester:
             return False
 
     async def test_chat_service_initialization(self) -> Dict[str, Any]:
-        """ChatService 초기화 테스트"""
+        """ChatService 초기???�스??""
         test_name = "chat_service_initialization"
         logger.info(f"[TEST] Testing {test_name}...")
 
         try:
-            # 서비스 상태 확인
+            # ?�비???�태 ?�인
             status = self.chat_service.get_service_status()
 
             result = {
@@ -88,21 +88,21 @@ class QuerySystemTester:
             return result
 
     async def test_basic_query_processing(self) -> Dict[str, Any]:
-        """기본 질의 처리 테스트"""
+        """기본 질의 처리 ?�스??""
         test_name = "basic_query_processing"
         logger.info(f"[TEST] Testing {test_name}...")
 
         test_queries = [
-            "안녕하세요",
-            "계약서 검토 요청",
-            "민법 제750조의 내용이 무엇인가요?",
-            "손해배상 관련 판례를 찾아주세요",
-            "이혼 절차는 어떻게 진행하나요?",
-            "부동산 매매계약서 작성 시 주의사항은?",
-            "근로기준법상 휴가수당은 어떻게 계산하나요?",
-            "형법 제250조 살인의 정의를 알려주세요",
-            "상속 포기 절차와 기간은?",
-            "임대차보증금 반환 청구 방법은?"
+            "?�녕?�세??,
+            "계약??검???�청",
+            "민법 ??50조의 ?�용??무엇?��???",
+            "?�해배상 관???��?�?찾아주세??,
+            "?�혼 ?�차???�떻�?진행?�나??",
+            "부?�산 매매계약???�성 ??주의?�항?�?",
+            "근로기�?법상 ?��??�당?� ?�떻�?계산?�나??",
+            "?�법 ??50�??�인???�의�??�려주세??,
+            "?�속 ?�기 ?�차?� 기간?�?",
+            "?��?차보증금 반환 �?�� 방법?�?"
         ]
 
         results = []
@@ -134,7 +134,7 @@ class QuerySystemTester:
                 results.append(test_result)
                 logger.error(f"Query failed: {str(e)[:100]}...")
 
-        # 전체 테스트 결과
+        # ?�체 ?�스??결과
         passed_count = sum(1 for r in results if r.get("success", False))
         total_count = len(results)
 
@@ -155,13 +155,13 @@ class QuerySystemTester:
         return result
 
     async def test_service_components(self) -> Dict[str, Any]:
-        """서비스 컴포넌트 테스트"""
+        """?�비??컴포?�트 ?�스??""
         test_name = "service_components"
         logger.info(f"[TEST] Testing {test_name}...")
 
         components_status = {}
 
-        # 각 컴포넌트 상태 확인
+        # �?컴포?�트 ?�태 ?�인
         components_to_check = [
             ("rag_service", self.chat_service.rag_service),
             ("hybrid_search_engine", self.chat_service.hybrid_search_engine),
@@ -187,13 +187,13 @@ class QuerySystemTester:
                     "error": str(e)
                 }
 
-        # 전체 상태 평가
+        # ?�체 ?�태 ?��?
         available_count = sum(1 for status in components_status.values() if status.get("available", False))
         total_count = len(components_status)
 
         result = {
             "test_name": test_name,
-            "passed": available_count > 0,  # 최소 하나의 컴포넌트라도 사용 가능하면 통과
+            "passed": available_count > 0,  # 최소 ?�나??컴포?�트?�도 ?�용 가?�하�??�과
             "available_count": available_count,
             "total_count": total_count,
             "components_status": components_status,
@@ -208,7 +208,7 @@ class QuerySystemTester:
         return result
 
     async def test_input_validation(self) -> Dict[str, Any]:
-        """입력 검증 테스트"""
+        """?�력 검�??�스??""
         test_name = "input_validation"
         logger.info(f"[TEST] Testing {test_name}...")
 
@@ -269,11 +269,11 @@ class QuerySystemTester:
         return result
 
     async def test_performance_benchmark(self) -> Dict[str, Any]:
-        """성능 벤치마크 테스트"""
+        """?�능 벤치마크 ?�스??""
         test_name = "performance_benchmark"
         logger.info(f"[TEST] Testing {test_name}...")
 
-        test_query = "계약서 검토 요청"
+        test_query = "계약??검???�청"
         iterations = 5
         response_times = []
 
@@ -290,7 +290,7 @@ class QuerySystemTester:
                 logger.error(f"Iteration {i+1} failed: {e}")
                 response_times.append(None)
 
-        # 성능 통계 계산
+        # ?�능 ?�계 계산
         valid_times = [t for t in response_times if t is not None]
 
         if valid_times:
@@ -300,7 +300,7 @@ class QuerySystemTester:
 
             result = {
                 "test_name": test_name,
-                "passed": len(valid_times) >= iterations * 0.8,  # 80% 이상 성공하면 통과
+                "passed": len(valid_times) >= iterations * 0.8,  # 80% ?�상 ?�공?�면 ?�과
                 "iterations": iterations,
                 "successful_iterations": len(valid_times),
                 "avg_response_time": avg_time,
@@ -324,10 +324,10 @@ class QuerySystemTester:
         return result
 
     async def run_all_tests(self) -> Dict[str, Any]:
-        """모든 테스트 실행"""
+        """모든 ?�스???�행"""
         logger.info("[TEST] Starting comprehensive query system tests...")
 
-        # 테스트 환경 설정
+        # ?�스???�경 ?�정
         if not self.setup_test_environment():
             return {
                 "overall_passed": False,
@@ -335,7 +335,7 @@ class QuerySystemTester:
                 "tests": {}
             }
 
-        # 테스트 실행
+        # ?�스???�행
         tests = [
             self.test_chat_service_initialization(),
             self.test_service_components(),
@@ -346,7 +346,7 @@ class QuerySystemTester:
 
         test_results = await asyncio.gather(*tests, return_exceptions=True)
 
-        # 결과 정리
+        # 결과 ?�리
         results = {}
         passed_count = 0
         total_count = len(test_results)
@@ -370,9 +370,9 @@ class QuerySystemTester:
                 else:
                     logger.warning(f"{test_name} failed or partially passed")
 
-        # 전체 결과
+        # ?�체 결과
         overall_result = {
-            "overall_passed": passed_count >= total_count * 0.8,  # 80% 이상 통과하면 전체 통과
+            "overall_passed": passed_count >= total_count * 0.8,  # 80% ?�상 ?�과?�면 ?�체 ?�과
             "passed_count": passed_count,
             "total_count": total_count,
             "pass_rate": passed_count / total_count if total_count > 0 else 0,
@@ -399,11 +399,11 @@ class QuerySystemTester:
         return overall_result
 
 async def main():
-    """메인 함수"""
+    """메인 ?�수"""
     tester = QuerySystemTester()
     result = await tester.run_all_tests()
 
-    # 결과를 JSON 파일로 저장
+    # 결과�?JSON ?�일�??�??
     import json
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     result_file = f"test_results_{timestamp}.json"
@@ -413,7 +413,7 @@ async def main():
 
     logger.info(f"[INFO] Test results saved to: {result_file}")
 
-    # 종료 코드 설정
+    # 종료 코드 ?�정
     exit_code = 0 if result["overall_passed"] else 1
     logger.info(f"[INFO] Exiting with code: {exit_code}")
 

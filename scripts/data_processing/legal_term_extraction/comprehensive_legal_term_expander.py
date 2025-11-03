@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-전체 법률 용어 확장 및 저장 시스템
-배치 처리, 품질 관리, 데이터베이스 저장 기능 포함
+?�체 법률 ?�어 ?�장 �??�???�스??
+배치 처리, ?�질 관�? ?�이?�베?�스 ?�??기능 ?�함
 """
 
 import os
@@ -17,16 +17,16 @@ from dotenv import load_dotenv
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 한글 출력을 위한 환경 설정
+# ?��? 출력???�한 ?�경 ?�정
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 os.environ['GRPC_PYTHON_LOG_VERBOSITY'] = 'ERROR'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-# Google API 관련 경고 비활성화
+# Google API 관??경고 비활?�화
 import warnings
 warnings.filterwarnings('ignore')
 
-# 환경변수 로드
+# ?�경변??로드
 env_path = r"D:\project\LawFirmAI\LawFirmAI\.env"
 load_dotenv(env_path)
 
@@ -40,15 +40,15 @@ from pydantic import BaseModel, Field
 
 
 class LegalTermExpansion(BaseModel):
-    """법률 용어 확장 결과 모델"""
-    synonyms: List[str] = Field(description="동의어 목록")
-    related_terms: List[str] = Field(description="관련 용어 목록")
-    precedent_keywords: List[str] = Field(description="판례 키워드 목록")
-    confidence: float = Field(description="신뢰도 점수 (0.0-1.0)")
+    """법률 ?�어 ?�장 결과 모델"""
+    synonyms: List[str] = Field(description="?�의??목록")
+    related_terms: List[str] = Field(description="관???�어 목록")
+    precedent_keywords: List[str] = Field(description="?��? ?�워??목록")
+    confidence: float = Field(description="?�뢰???�수 (0.0-1.0)")
 
 
 class LegalTermBatchExpander:
-    """법률 용어 배치 확장기"""
+    """법률 ?�어 배치 ?�장�?""
     
     def __init__(self, 
                  model_name: str = "gemini-2.0-flash-exp",
@@ -56,20 +56,20 @@ class LegalTermBatchExpander:
                  max_tokens: int = 1000,
                  batch_size: int = 10,
                  delay_between_batches: float = 2.0):
-        """배치 확장기 초기화"""
+        """배치 ?�장�?초기??""
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.CRITICAL)
         
-        # 환경변수에서 API 키 확인
+        # ?�경변?�에??API ???�인
         api_key = os.getenv("GOOGLE_API_KEY")
         
         if not api_key or api_key == "your_google_api_key_here":
-            raise ValueError("GOOGLE_API_KEY가 설정되지 않았습니다. .env 파일에 유효한 Google API 키를 설정하세요.")
+            raise ValueError("GOOGLE_API_KEY가 ?�정?��? ?�았?�니?? .env ?�일???�효??Google API ?��? ?�정?�세??")
         
         if not api_key.startswith("AIza"):
-            raise ValueError("유효하지 않은 Google API 키 형식입니다. Google API 키는 'AIza'로 시작해야 합니다.")
+            raise ValueError("?�효?��? ?��? Google API ???�식?�니?? Google API ?�는 'AIza'�??�작?�야 ?�니??")
         
-        # Gemini 모델 초기화
+        # Gemini 모델 초기??
         self.model = ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=api_key,
@@ -77,101 +77,101 @@ class LegalTermBatchExpander:
             max_output_tokens=max_tokens
         )
         
-        # 출력 파서 초기화
+        # 출력 ?�서 초기??
         self.output_parser = JsonOutputParser(pydantic_object=LegalTermExpansion)
         
-        # 프롬프트 템플릿 설정
+        # ?�롬?�트 ?�플�??�정
         self.prompt_template = self._create_prompt_template()
         
-        # 법률 도메인별 프롬프트 로드
+        # 법률 ?�메?�별 ?�롬?�트 로드
         self.domain_prompts = self._load_domain_prompts()
         
-        # 배치 처리 설정
+        # 배치 처리 ?�정
         self.batch_size = batch_size
         self.delay_between_batches = delay_between_batches
         
-        self.logger.info(f"LegalTermBatchExpander 초기화 완료: {model_name}")
+        self.logger.info(f"LegalTermBatchExpander 초기???�료: {model_name}")
     
     def _create_prompt_template(self) -> ChatPromptTemplate:
-        """프롬프트 템플릿 생성"""
+        """?�롬?�트 ?�플�??�성"""
         template = """
-당신은 한국 법률 전문가입니다. 주어진 법률 용어에 대해 정확하고 전문적인 용어 확장을 수행해주세요.
+?�신?� ?�국 법률 ?�문가?�니?? 주어�?법률 ?�어???�???�확?�고 ?�문?�인 ?�어 ?�장???�행?�주?�요.
 
-법률 도메인: {domain}
-기본 용어: {base_term}
+법률 ?�메?? {domain}
+기본 ?�어: {base_term}
 
 {domain_context}
 
-다음 형식으로 JSON 응답을 생성해주세요:
+?�음 ?�식?�로 JSON ?�답???�성?�주?�요:
 {format_instructions}
 
-요구사항:
-1. 동의어는 의미가 동일하거나 매우 유사한 용어만 포함
-2. 관련 용어는 법률적으로 연관된 개념들
-3. 판례 키워드는 실제 판례에서 사용되는 키워드
-4. 신뢰도는 생성된 용어들의 정확성을 평가 (0.0-1.0)
-5. 모든 용어는 한국어로 작성
-6. 각 카테고리당 최대 5개 용어 생성
+?�구?�항:
+1. ?�의?�는 ?��?가 ?�일?�거??매우 ?�사???�어�??�함
+2. 관???�어??법률?�으�??��???개념??
+3. ?��? ?�워?�는 ?�제 ?��??�서 ?�용?�는 ?�워??
+4. ?�뢰?�는 ?�성???�어?�의 ?�확?�을 ?��? (0.0-1.0)
+5. 모든 ?�어???�국?�로 ?�성
+6. �?카테고리??최�? 5�??�어 ?�성
 """
         
         return ChatPromptTemplate.from_template(template)
     
     def _load_domain_prompts(self) -> Dict[str, str]:
-        """법률 도메인별 프롬프트 로드"""
+        """법률 ?�메?�별 ?�롬?�트 로드"""
         domain_prompts = {
-            "민사법": """
-민사법 도메인 특화 지침:
-- 계약, 불법행위, 소유권, 상속, 가족관계 등 민사 분쟁 관련 용어
-- 손해배상, 계약해지, 소유권이전, 상속분할 등 구체적 법률 행위
-- 민법 조문과 연관된 전문 용어 사용
+            "민사�?: """
+민사�??�메???�화 지�?
+- 계약, 불법?�위, ?�유�? ?�속, 가족�?�???민사 분쟁 관???�어
+- ?�해배상, 계약?��?, ?�유권이?? ?�속분할 ??구체??법률 ?�위
+- 민법 조문�??��????�문 ?�어 ?�용
 """,
-            "형사법": """
-형사법 도메인 특화 지침:
-- 범죄 유형, 처벌, 소송절차, 관련인물 등 형사 사건 관련 용어
-- 살인, 절도, 사기, 강도, 강간 등 구체적 범죄 유형
-- 형법 조문과 연관된 전문 용어 사용
+            "?�사�?: """
+?�사�??�메???�화 지�?
+- 범죄 ?�형, 처벌, ?�송?�차, 관?�인�????�사 ?�건 관???�어
+- ?�인, ?�도, ?�기, 강도, 강간 ??구체??범죄 ?�형
+- ?�법 조문�??��????�문 ?�어 ?�용
 """,
             "가족법": """
-가족법 도메인 특화 지침:
-- 혼인관계, 친자관계, 재산관계 등 가족 관련 법률 용어
-- 이혼, 양육권, 친권, 상속 등 구체적 가족법 사안
-- 가족법 조문과 연관된 전문 용어 사용
+가족법 ?�메???�화 지�?
+- ?�인관�? 친자관�? ?�산관�???가�?관??법률 ?�어
+- ?�혼, ?�육�? 친권, ?�속 ??구체??가족법 ?�안
+- 가족법 조문�??��????�문 ?�어 ?�용
 """,
-            "상사법": """
-상사법 도메인 특화 지침:
-- 회사법, 상행위, 어음수표 등 상업 관련 법률 용어
-- 주식회사, 유한회사, 상행위, 어음, 수표 등 구체적 상사법 개념
-- 상법 조문과 연관된 전문 용어 사용
+            "?�사�?: """
+?�사�??�메???�화 지�?
+- ?�사�? ?�행?? ?�음?�표 ???�업 관??법률 ?�어
+- 주식?�사, ?�한?�사, ?�행?? ?�음, ?�표 ??구체???�사�?개념
+- ?�법 조문�??��????�문 ?�어 ?�용
 """,
-            "행정법": """
-행정법 도메인 특화 지침:
-- 행정행위, 행정절차, 행정소송 등 행정 관련 법률 용어
-- 행정처분, 행정지도, 행정심판 등 구체적 행정법 개념
-- 행정법 조문과 연관된 전문 용어 사용
+            "?�정�?: """
+?�정�??�메???�화 지�?
+- ?�정?�위, ?�정?�차, ?�정?�송 ???�정 관??법률 ?�어
+- ?�정처분, ?�정지?? ?�정?�판 ??구체???�정�?개념
+- ?�정�?조문�??��????�문 ?�어 ?�용
 """,
-            "노동법": """
-노동법 도메인 특화 지침:
-- 근로계약, 임금, 근로시간, 휴가 등 근로 관련 법률 용어
-- 해고, 부당해고, 실업급여 등 구체적 노동법 개념
-- 근로기준법, 노동조합법 등 관련 법령 용어 사용
+            "?�동�?: """
+?�동�??�메???�화 지�?
+- 근로계약, ?�금, 근로?�간, ?��? ??근로 관??법률 ?�어
+- ?�고, 부?�해�? ?�업급여 ??구체???�동�?개념
+- 근로기�?�? ?�동조합�???관??법령 ?�어 ?�용
 """,
-            "기타": """
-일반 법률 도메인 지침:
-- 다양한 법률 분야에 공통적으로 사용되는 용어
-- 법률 일반론, 법원, 검사, 변호사 등 법률 제도 관련 용어
-- 헌법, 국제법 등 기타 법률 분야 용어
+            "기�?": """
+?�반 법률 ?�메??지�?
+- ?�양??법률 분야??공통?�으�??�용?�는 ?�어
+- 법률 ?�반�? 법원, 검?? 변?�사 ??법률 ?�도 관???�어
+- ?�법, �?���???기�? 법률 분야 ?�어
 """
         }
         
         return domain_prompts
     
-    def expand_term(self, base_term: str, domain: str = "민사법") -> Dict[str, Any]:
-        """단일 용어 확장"""
+    def expand_term(self, base_term: str, domain: str = "민사�?) -> Dict[str, Any]:
+        """?�일 ?�어 ?�장"""
         try:
-            # 도메인 컨텍스트 가져오기
-            domain_context = self.domain_prompts.get(domain, self.domain_prompts["기타"])
+            # ?�메??컨텍?�트 가?�오�?
+            domain_context = self.domain_prompts.get(domain, self.domain_prompts["기�?"])
             
-            # 프롬프트 생성
+            # ?�롬?�트 ?�성
             prompt = self.prompt_template.format_messages(
                 domain=domain,
                 base_term=base_term,
@@ -179,19 +179,19 @@ class LegalTermBatchExpander:
                 format_instructions=self.output_parser.get_format_instructions()
             )
             
-            # LLM 호출
+            # LLM ?�출
             response = self.model.invoke(prompt)
             
-            # 응답 파싱
+            # ?�답 ?�싱
             parsed_response = self.output_parser.parse(response.content)
             
-            # 결과 검증 및 정제
+            # 결과 검�?�??�제
             validated_result = self._validate_and_refine_result(parsed_response, base_term)
             
             return validated_result
             
         except Exception as e:
-            print(f"용어 확장 중 오류 발생: {e}")
+            print(f"?�어 ?�장 �??�류 발생: {e}")
             return {
                 "synonyms": [],
                 "related_terms": [],
@@ -201,7 +201,7 @@ class LegalTermBatchExpander:
             }
     
     def _validate_and_refine_result(self, result: Dict[str, Any], base_term: str) -> Dict[str, Any]:
-        """결과 검증 및 정제"""
+        """결과 검�?�??�제"""
         try:
             validated_result = {
                 "synonyms": [],
@@ -211,42 +211,42 @@ class LegalTermBatchExpander:
                 "expanded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # 동의어 검증
+            # ?�의??검�?
             if "synonyms" in result and isinstance(result["synonyms"], list):
                 validated_synonyms = []
                 for synonym in result["synonyms"]:
                     if self._is_valid_legal_term(synonym) and synonym != base_term:
                         validated_synonyms.append(synonym.strip())
-                validated_result["synonyms"] = validated_synonyms[:5]  # 최대 5개
+                validated_result["synonyms"] = validated_synonyms[:5]  # 최�? 5�?
             
-            # 관련 용어 검증
+            # 관???�어 검�?
             if "related_terms" in result and isinstance(result["related_terms"], list):
                 validated_related = []
                 for term in result["related_terms"]:
                     if self._is_valid_legal_term(term) and term != base_term:
                         validated_related.append(term.strip())
-                validated_result["related_terms"] = validated_related[:5]  # 최대 5개
+                validated_result["related_terms"] = validated_related[:5]  # 최�? 5�?
             
-            # 판례 키워드 검증
+            # ?��? ?�워??검�?
             if "precedent_keywords" in result and isinstance(result["precedent_keywords"], list):
                 validated_keywords = []
                 for keyword in result["precedent_keywords"]:
                     if self._is_valid_legal_term(keyword) and keyword != base_term:
                         validated_keywords.append(keyword.strip())
-                validated_result["precedent_keywords"] = validated_keywords[:5]  # 최대 5개
+                validated_result["precedent_keywords"] = validated_keywords[:5]  # 최�? 5�?
             
-            # 신뢰도 계산
+            # ?�뢰??계산
             confidence = result.get("confidence", 0.0)
             if isinstance(confidence, (int, float)) and 0.0 <= confidence <= 1.0:
                 validated_result["confidence"] = float(confidence)
             else:
-                # 자동 신뢰도 계산
+                # ?�동 ?�뢰??계산
                 validated_result["confidence"] = self._calculate_confidence(validated_result, base_term)
             
             return validated_result
             
         except Exception as e:
-            self.logger.error(f"결과 검증 중 오류 발생: {e}")
+            self.logger.error(f"결과 검�?�??�류 발생: {e}")
             return {
                 "synonyms": [],
                 "related_terms": [],
@@ -256,89 +256,89 @@ class LegalTermBatchExpander:
             }
     
     def _is_valid_legal_term(self, term: str) -> bool:
-        """법률 용어 유효성 검증"""
+        """법률 ?�어 ?�효??검�?""
         if not term or not isinstance(term, str):
             return False
         
         term = term.strip()
         
-        # 기본 길이 검증
+        # 기본 길이 검�?
         if len(term) < 2 or len(term) > 20:
             return False
         
-        # 한글 포함 검증
-        if not re.search(r'[가-힣]', term):
+        # ?��? ?�함 검�?
+        if not re.search(r'[가-??', term):
             return False
         
-        # 특수문자 제한
-        if re.search(r'[^\w가-힣\s]', term):
+        # ?�수문자 ?�한
+        if re.search(r'[^\w가-??s]', term):
             return False
         
-        # 법률 도메인 키워드 검증
+        # 법률 ?�메???�워??검�?
         legal_keywords = [
-            '법', '권', '책임', '손해', '계약', '소송', '처벌', '제재',
-            '배상', '보상', '청구', '제기', '해지', '위반', '침해',
-            '절차', '신청', '심리', '판결', '항소', '상고',
-            '법원', '검사', '변호사', '피고인', '원고', '피고'
+            '�?, '�?, '책임', '?�해', '계약', '?�송', '처벌', '?�재',
+            '배상', '보상', '�?��', '?�기', '?��?', '?�반', '침해',
+            '?�차', '?�청', '?�리', '?�결', '??��', '?�고',
+            '법원', '검??, '변?�사', '?�고??, '?�고', '?�고'
         ]
         
-        # 법률 키워드가 포함되어 있거나 법률 관련 용어인지 확인
+        # 법률 ?�워?��? ?�함?�어 ?�거??법률 관???�어?��? ?�인
         has_legal_keyword = any(keyword in term for keyword in legal_keywords)
-        is_legal_concept = re.search(r'[가-힣]{2,6}(?:법|권|책임|손해|계약|소송)', term)
+        is_legal_concept = re.search(r'[가-??{2,6}(?:�?�?책임|?�해|계약|?�송)', term)
         
         return has_legal_keyword or is_legal_concept or len(term) >= 3
     
     def _calculate_confidence(self, result: Dict[str, Any], base_term: str) -> float:
-        """신뢰도 자동 계산"""
+        """?�뢰???�동 계산"""
         try:
             total_terms = len(result.get("synonyms", [])) + len(result.get("related_terms", [])) + len(result.get("precedent_keywords", []))
             
             if total_terms == 0:
                 return 0.0
             
-            # 기본 점수
+            # 기본 ?�수
             base_score = 0.5
             
-            # 용어 수에 따른 점수
-            term_count_score = min(total_terms / 15, 0.3)  # 최대 0.3점
+            # ?�어 ?�에 ?�른 ?�수
+            term_count_score = min(total_terms / 15, 0.3)  # 최�? 0.3??
             
-            # 용어 품질 점수
+            # ?�어 ?�질 ?�수
             quality_score = 0.0
             for category in ["synonyms", "related_terms", "precedent_keywords"]:
                 for term in result.get(category, []):
                     if self._is_valid_legal_term(term):
                         quality_score += 0.1
             
-            quality_score = min(quality_score, 0.2)  # 최대 0.2점
+            quality_score = min(quality_score, 0.2)  # 최�? 0.2??
             
             final_score = base_score + term_count_score + quality_score
             return min(final_score, 1.0)
             
         except Exception as e:
-            self.logger.error(f"신뢰도 계산 중 오류 발생: {e}")
+            self.logger.error(f"?�뢰??계산 �??�류 발생: {e}")
             return 0.5
     
-    def expand_all_terms(self, terms: List[str], domain: str = "민사법") -> Dict[str, Any]:
-        """전체 용어를 배치로 확장"""
+    def expand_all_terms(self, terms: List[str], domain: str = "민사�?) -> Dict[str, Any]:
+        """?�체 ?�어�?배치�??�장"""
         try:
-            self.logger.info(f"전체 용어 확장 시작: {len(terms)}개 용어 ({domain})")
+            self.logger.info(f"?�체 ?�어 ?�장 ?�작: {len(terms)}�??�어 ({domain})")
             
             results = {}
             successful_expansions = 0
             failed_expansions = 0
             
-            # 배치 단위로 처리
+            # 배치 ?�위�?처리
             for i in range(0, len(terms), self.batch_size):
                 batch_terms = terms[i:i + self.batch_size]
                 batch_num = i // self.batch_size + 1
                 total_batches = (len(terms) + self.batch_size - 1) // self.batch_size
                 
-                self.logger.info(f"배치 {batch_num}/{total_batches} 처리 중: {len(batch_terms)}개 용어")
+                self.logger.info(f"배치 {batch_num}/{total_batches} 처리 �? {len(batch_terms)}�??�어")
                 
-                # 배치 내에서 순차 처리
+                # 배치 ?�에???�차 처리
                 for j, term in enumerate(batch_terms):
                     try:
-                        self.logger.info(f"용어 확장: {term} ({i+j+1}/{len(terms)})")
+                        self.logger.info(f"?�어 ?�장: {term} ({i+j+1}/{len(terms)})")
                         
                         expansion_result = self.expand_term(term, domain)
                         results[term] = expansion_result
@@ -348,12 +348,12 @@ class LegalTermBatchExpander:
                         else:
                             failed_expansions += 1
                         
-                        # 진행률 로깅
+                        # 진행�?로깅
                         progress = (i + j + 1) / len(terms) * 100
-                        self.logger.info(f"진행률: {progress:.1f}% ({i+j+1}/{len(terms)})")
+                        self.logger.info(f"진행�? {progress:.1f}% ({i+j+1}/{len(terms)})")
                         
                     except Exception as e:
-                        self.logger.error(f"용어 '{term}' 확장 중 오류: {e}")
+                        self.logger.error(f"?�어 '{term}' ?�장 �??�류: {e}")
                         results[term] = {
                             "synonyms": [],
                             "related_terms": [],
@@ -363,17 +363,17 @@ class LegalTermBatchExpander:
                         }
                         failed_expansions += 1
                 
-                # 배치 간 지연
+                # 배치 �?지??
                 if i + self.batch_size < len(terms):
-                    self.logger.info(f"배치 간 지연: {self.delay_between_batches}초")
+                    self.logger.info(f"배치 �?지?? {self.delay_between_batches}�?)
                     time.sleep(self.delay_between_batches)
                 
-                # API 할당량 관리를 위한 추가 지연
+                # API ?�당??관리�? ?�한 추�? 지??
                 if i + self.batch_size < len(terms):
-                    self.logger.info("API 할당량 관리를 위한 추가 2초 지연...")
+                    self.logger.info("API ?�당??관리�? ?�한 추�? 2�?지??..")
                     time.sleep(2)
             
-            # 전체 결과 요약
+            # ?�체 결과 ?�약
             batch_summary = {
                 "total_terms": len(terms),
                 "successful_expansions": successful_expansions,
@@ -384,12 +384,12 @@ class LegalTermBatchExpander:
                 "results": results
             }
             
-            self.logger.info(f"전체 확장 완료: {successful_expansions}/{len(terms)} 성공 ({batch_summary['success_rate']:.1%})")
+            self.logger.info(f"?�체 ?�장 ?�료: {successful_expansions}/{len(terms)} ?�공 ({batch_summary['success_rate']:.1%})")
             
             return batch_summary
             
         except Exception as e:
-            self.logger.error(f"전체 확장 중 오류 발생: {e}")
+            self.logger.error(f"?�체 ?�장 �??�류 발생: {e}")
             return {
                 "total_terms": len(terms),
                 "successful_expansions": 0,
@@ -400,84 +400,84 @@ class LegalTermBatchExpander:
             }
     
     def save_progress(self, results: Dict[str, Any], checkpoint_file: str):
-        """진행 상황 저장"""
+        """진행 ?�황 ?�??""
         try:
             with open(checkpoint_file, 'w', encoding='utf-8') as f:
                 json.dump(results, f, ensure_ascii=False, indent=2)
-            self.logger.info(f"진행 상황 저장 완료: {checkpoint_file}")
+            self.logger.info(f"진행 ?�황 ?�???�료: {checkpoint_file}")
         except Exception as e:
-            self.logger.error(f"진행 상황 저장 중 오류: {e}")
+            self.logger.error(f"진행 ?�황 ?�??�??�류: {e}")
     
     def resume_from_checkpoint(self, checkpoint_file: str) -> Dict[str, Any]:
-        """중단된 작업 재개"""
+        """중단???�업 ?�개"""
         try:
             if os.path.exists(checkpoint_file):
                 with open(checkpoint_file, 'r', encoding='utf-8') as f:
                     results = json.load(f)
-                self.logger.info(f"체크포인트에서 복구: {checkpoint_file}")
+                self.logger.info(f"체크?�인?�에??복구: {checkpoint_file}")
                 return results
             else:
-                self.logger.info(f"체크포인트 파일이 존재하지 않음: {checkpoint_file}")
+                self.logger.info(f"체크?�인???�일??존재?��? ?�음: {checkpoint_file}")
                 return {}
         except Exception as e:
-            self.logger.error(f"체크포인트 복구 중 오류: {e}")
+            self.logger.error(f"체크?�인??복구 �??�류: {e}")
             return {}
 
 
 class QualityValidator:
-    """용어 확장 품질 검증기"""
+    """?�어 ?�장 ?�질 검증기"""
     
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.CRITICAL)
     
     def validate_expansion_quality(self, original_term: str, expansion_result: Dict) -> float:
-        """확장 결과 품질 검증"""
+        """?�장 결과 ?�질 검�?""
         try:
             quality_score = 0.0
             
-            # 기본 점수
+            # 기본 ?�수
             base_score = 0.3
             
-            # 용어 수 점수
+            # ?�어 ???�수
             total_terms = len(expansion_result.get("synonyms", [])) + \
                          len(expansion_result.get("related_terms", [])) + \
                          len(expansion_result.get("precedent_keywords", []))
             
-            term_count_score = min(total_terms / 15, 0.3)  # 최대 0.3점
+            term_count_score = min(total_terms / 15, 0.3)  # 최�? 0.3??
             
-            # 용어 품질 점수
+            # ?�어 ?�질 ?�수
             quality_score = 0.0
             for category in ["synonyms", "related_terms", "precedent_keywords"]:
                 for term in expansion_result.get(category, []):
                     if self._is_high_quality_term(term):
                         quality_score += 0.1
             
-            quality_score = min(quality_score, 0.4)  # 최대 0.4점
+            quality_score = min(quality_score, 0.4)  # 최�? 0.4??
             
             final_score = base_score + term_count_score + quality_score
             return min(final_score, 1.0)
             
         except Exception as e:
-            self.logger.error(f"품질 검증 중 오류: {e}")
+            self.logger.error(f"?�질 검�?�??�류: {e}")
             return 0.5
     
     def _is_high_quality_term(self, term: str) -> bool:
-        """고품질 용어 판단"""
+        """고품�??�어 ?�단"""
         if not term or len(term) < 2:
             return False
         
-        # 법률 전문 용어 키워드
+        # 법률 ?�문 ?�어 ?�워??
         legal_keywords = [
-            '법', '권', '책임', '손해', '계약', '소송', '처벌', '제재',
-            '배상', '보상', '청구', '제기', '해지', '위반', '침해',
-            '절차', '신청', '심리', '판결', '항소', '상고'
+            '�?, '�?, '책임', '?�해', '계약', '?�송', '처벌', '?�재',
+            '배상', '보상', '�?��', '?�기', '?��?', '?�반', '침해',
+            '?�차', '?�청', '?�리', '?�결', '??��', '?�고'
         ]
         
         return any(keyword in term for keyword in legal_keywords)
     
     def filter_low_quality_terms(self, results: Dict[str, Any], threshold: float = 0.7) -> Dict[str, Any]:
-        """저품질 용어 필터링"""
+        """?�?�질 ?�어 ?�터�?""
         try:
             filtered_results = {}
             
@@ -488,16 +488,16 @@ class QualityValidator:
                     expansion_result["quality_score"] = quality_score
                     filtered_results[term] = expansion_result
                 else:
-                    self.logger.info(f"저품질 용어 제외: {term} (품질점수: {quality_score:.2f})")
+                    self.logger.info(f"?�?�질 ?�어 ?�외: {term} (?�질?�수: {quality_score:.2f})")
             
             return filtered_results
             
         except Exception as e:
-            self.logger.error(f"품질 필터링 중 오류: {e}")
+            self.logger.error(f"?�질 ?�터�?�??�류: {e}")
             return results
     
     def generate_quality_report(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """품질 보고서 생성"""
+        """?�질 보고???�성"""
         try:
             total_terms = len(results)
             quality_scores = []
@@ -527,12 +527,12 @@ class QualityValidator:
             return report
             
         except Exception as e:
-            self.logger.error(f"품질 보고서 생성 중 오류: {e}")
+            self.logger.error(f"?�질 보고???�성 �??�류: {e}")
             return {}
 
 
 class LegalTermDatabase:
-    """법률 용어 데이터베이스 관리자"""
+    """법률 ?�어 ?�이?�베?�스 관리자"""
     
     def __init__(self, db_path: str = "data/legal_terms.db"):
         self.db_path = db_path
@@ -541,12 +541,12 @@ class LegalTermDatabase:
         self._create_tables()
     
     def _create_tables(self):
-        """데이터베이스 테이블 생성"""
+        """?�이?�베?�스 ?�이�??�성"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # 용어 테이블
+                # ?�어 ?�이�?
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS legal_terms (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -563,7 +563,7 @@ class LegalTermDatabase:
                     )
                 ''')
                 
-                # 확장 이력 테이블
+                # ?�장 ?�력 ?�이�?
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS expansion_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -577,24 +577,24 @@ class LegalTermDatabase:
                 ''')
                 
                 conn.commit()
-                self.logger.info("데이터베이스 테이블 생성 완료")
+                self.logger.info("?�이?�베?�스 ?�이�??�성 ?�료")
                 
         except Exception as e:
-            self.logger.error(f"데이터베이스 테이블 생성 중 오류: {e}")
+            self.logger.error(f"?�이?�베?�스 ?�이�??�성 �??�류: {e}")
     
-    def save_expanded_terms(self, terms: Dict[str, Any], domain: str = "민사법"):
-        """확장된 용어 저장"""
+    def save_expanded_terms(self, terms: Dict[str, Any], domain: str = "민사�?):
+        """?�장???�어 ?�??""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
                 for term, expansion_result in terms.items():
-                    # 기존 용어 확인
+                    # 기존 ?�어 ?�인
                     cursor.execute("SELECT id FROM legal_terms WHERE term = ?", (term,))
                     existing = cursor.fetchone()
                     
                     if existing:
-                        # 기존 용어 업데이트
+                        # 기존 ?�어 ?�데?�트
                         cursor.execute('''
                             UPDATE legal_terms SET
                                 synonyms = ?, related_terms = ?, precedent_keywords = ?,
@@ -609,7 +609,7 @@ class LegalTermDatabase:
                             term
                         ))
                     else:
-                        # 새 용어 삽입
+                        # ???�어 ?�입
                         cursor.execute('''
                             INSERT INTO legal_terms 
                             (term, domain, synonyms, related_terms, precedent_keywords, 
@@ -627,13 +627,13 @@ class LegalTermDatabase:
                         ))
                 
                 conn.commit()
-                self.logger.info(f"용어 저장 완료: {len(terms)}개")
+                self.logger.info(f"?�어 ?�???�료: {len(terms)}�?)
                 
         except Exception as e:
-            self.logger.error(f"용어 저장 중 오류: {e}")
+            self.logger.error(f"?�어 ?�??�??�류: {e}")
     
     def get_terms_by_domain(self, domain: str) -> List[Dict]:
-        """도메인별 용어 조회"""
+        """?�메?�별 ?�어 조회"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -659,11 +659,11 @@ class LegalTermDatabase:
                 return terms
                 
         except Exception as e:
-            self.logger.error(f"용어 조회 중 오류: {e}")
+            self.logger.error(f"?�어 조회 �??�류: {e}")
             return []
     
     def get_all_terms(self) -> List[Dict]:
-        """모든 용어 조회"""
+        """모든 ?�어 조회"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -689,11 +689,11 @@ class LegalTermDatabase:
                 return terms
                 
         except Exception as e:
-            self.logger.error(f"전체 용어 조회 중 오류: {e}")
+            self.logger.error(f"?�체 ?�어 조회 �??�류: {e}")
             return []
     
     def update_term_quality(self, term: str, quality_score: float):
-        """용어 품질 점수 업데이트"""
+        """?�어 ?�질 ?�수 ?�데?�트"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -704,13 +704,13 @@ class LegalTermDatabase:
                 ''', (quality_score, term))
                 
                 conn.commit()
-                self.logger.info(f"용어 품질 점수 업데이트: {term} -> {quality_score}")
+                self.logger.info(f"?�어 ?�질 ?�수 ?�데?�트: {term} -> {quality_score}")
                 
         except Exception as e:
-            self.logger.error(f"품질 점수 업데이트 중 오류: {e}")
+            self.logger.error(f"?�질 ?�수 ?�데?�트 �??�류: {e}")
     
     def export_to_json(self, output_file: str):
-        """JSON 파일로 내보내기"""
+        """JSON ?�일�??�보?�기"""
         try:
             terms = self.get_all_terms()
             
@@ -737,14 +737,14 @@ class LegalTermDatabase:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
             
-            self.logger.info(f"JSON 내보내기 완료: {output_file}")
+            self.logger.info(f"JSON ?�보?�기 ?�료: {output_file}")
             
         except Exception as e:
-            self.logger.error(f"JSON 내보내기 중 오류: {e}")
+            self.logger.error(f"JSON ?�보?�기 �??�류: {e}")
 
 
 class ProgressMonitor:
-    """진행 상황 모니터링"""
+    """진행 ?�황 모니?�링"""
     
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -756,16 +756,16 @@ class ProgressMonitor:
         self.start_time = None
     
     def start_monitoring(self, total_terms: int):
-        """모니터링 시작"""
+        """모니?�링 ?�작"""
         self.total_terms = total_terms
         self.processed_terms = 0
         self.successful_expansions = 0
         self.failed_expansions = 0
         self.start_time = datetime.now()
-        self.logger.info(f"모니터링 시작: {total_terms}개 용어")
+        self.logger.info(f"모니?�링 ?�작: {total_terms}�??�어")
     
     def update_progress(self, batch_results: Dict[str, Any]):
-        """진행 상황 업데이트"""
+        """진행 ?�황 ?�데?�트"""
         try:
             if "results" in batch_results:
                 batch_size = len(batch_results["results"])
@@ -774,13 +774,13 @@ class ProgressMonitor:
                 self.failed_expansions += batch_results.get("failed_expansions", 0)
                 
                 progress = self.processed_terms / self.total_terms * 100
-                self.logger.info(f"진행률: {progress:.1f}% ({self.processed_terms}/{self.total_terms})")
+                self.logger.info(f"진행�? {progress:.1f}% ({self.processed_terms}/{self.total_terms})")
                 
         except Exception as e:
-            self.logger.error(f"진행 상황 업데이트 중 오류: {e}")
+            self.logger.error(f"진행 ?�황 ?�데?�트 �??�류: {e}")
     
     def generate_progress_report(self) -> Dict[str, Any]:
-        """진행 상황 보고서 생성"""
+        """진행 ?�황 보고???�성"""
         try:
             if self.start_time:
                 elapsed_time = datetime.now() - self.start_time
@@ -814,139 +814,139 @@ class ProgressMonitor:
             return report
             
         except Exception as e:
-            self.logger.error(f"진행 상황 보고서 생성 중 오류: {e}")
+            self.logger.error(f"진행 ?�황 보고???�성 �??�류: {e}")
             return {}
 
 
 def safe_print(text: str):
-    """안전한 한글 출력 함수"""
+    """?�전???��? 출력 ?�수"""
     try:
-        # 파일로 출력하여 한글 문제 해결
+        # ?�일�?출력?�여 ?��? 문제 ?�결
         with open('legal_term_expansion_output.txt', 'a', encoding='utf-8') as f:
             f.write(text + '\n')
         
-        # 콘솔 출력은 ASCII로 변환하여 깨짐 방지
+        # 콘솔 출력?� ASCII�?변?�하??깨짐 방�?
         try:
             ascii_text = text.encode('ascii', 'ignore').decode('ascii')
             if ascii_text.strip():
                 print(ascii_text)
         except:
-            print("[한글 출력 - legal_term_expansion_output.txt 파일 참조]")
+            print("[?��? 출력 - legal_term_expansion_output.txt ?�일 참조]")
     except Exception:
-        # 기타 오류 시 원본 출력
+        # 기�? ?�류 ???�본 출력
         print(text)
 
 
 def main():
-    """메인 실행 함수"""
-    # 로깅 비활성화
+    """메인 ?�행 ?�수"""
+    # 로깅 비활?�화
     logging.getLogger().setLevel(logging.CRITICAL)
     
-    safe_print("전체 법률 용어 확장 및 저장 시스템")
+    safe_print("?�체 법률 ?�어 ?�장 �??�???�스??)
     safe_print("=" * 50)
     
     try:
-        # 시스템 초기화
+        # ?�스??초기??
         expander = LegalTermBatchExpander()
         validator = QualityValidator()
         database = LegalTermDatabase()
         monitor = ProgressMonitor()
         
-        # 테스트용 법률 용어 목록 (실제로는 더 많은 용어 사용)
+        # ?�스?�용 법률 ?�어 목록 (?�제로는 ??많�? ?�어 ?�용)
         test_terms = [
-            # 민사법 도메인
-            "손해배상", "계약", "소유권", "임대차", "불법행위", "상속", "이혼", "교통사고", "근로",
-            "물권", "채권", "가족관계", "친족", "양육권", "친권", "위자료", "재산분할",
+            # 민사�??�메??
+            "?�해배상", "계약", "?�유�?, "?��?�?, "불법?�위", "?�속", "?�혼", "교통?�고", "근로",
+            "물권", "채권", "가족�?�?, "친족", "?�육�?, "친권", "?�자�?, "?�산분할",
             
-            # 형사법 도메인
-            "살인", "절도", "사기", "강도", "강간", "폭행", "상해", "명예훼손", "모독",
-            "도주", "증거인멸", "위증", "무고", "공갈", "횡령", "배임", "뇌물",
+            # ?�사�??�메??
+            "?�인", "?�도", "?�기", "강도", "강간", "??��", "?�해", "명예?�손", "모독",
+            "?�주", "증거?�멸", "?�증", "무고", "공갈", "?�령", "배임", "?�물",
             
-            # 상사법 도메인
-            "주식회사", "유한회사", "합명회사", "합자회사", "상행위", "어음", "수표", "해상",
-            "보험", "운송", "위임", "대리", "중개", "도급", "임치", "사용대차",
+            # ?�사�??�메??
+            "주식?�사", "?�한?�사", "?�명?�사", "?�자?�사", "?�행??, "?�음", "?�표", "?�상",
+            "보험", "?�송", "?�임", "?��?, "중개", "?�급", "?�치", "?�용?��?,
             
-            # 행정법 도메인
-            "행정처분", "행정지도", "행정심판", "행정소송", "허가", "인가", "승인", "면허",
-            "등록", "신고", "신청", "고지", "공고", "공시", "조사", "검사",
+            # ?�정�??�메??
+            "?�정처분", "?�정지??, "?�정?�판", "?�정?�송", "?��?", "?��?", "?�인", "면허",
+            "?�록", "?�고", "?�청", "고�?", "공고", "공시", "조사", "검??,
             
-            # 노동법 도메인
-            "근로계약", "임금", "근로시간", "휴가", "해고", "부당해고", "실업급여", "산업재해",
-            "노동조합", "단체교섭", "단체협약", "파업", "로크아웃", "분쟁조정", "중재", "조정"
+            # ?�동�??�메??
+            "근로계약", "?�금", "근로?�간", "?��?", "?�고", "부?�해�?, "?�업급여", "?�업?�해",
+            "?�동조합", "?�체교섭", "?�체?�약", "?�업", "로크?�웃", "분쟁조정", "중재", "조정"
         ]
         
-        safe_print(f"확장할 용어 수: {len(test_terms)}개")
-        safe_print(f"도메인별 분류:")
-        safe_print(f"  - 민사법: 18개")
-        safe_print(f"  - 형사법: 18개")
-        safe_print(f"  - 상사법: 16개")
-        safe_print(f"  - 행정법: 16개")
-        safe_print(f"  - 노동법: 16개")
+        safe_print(f"?�장???�어 ?? {len(test_terms)}�?)
+        safe_print(f"?�메?�별 분류:")
+        safe_print(f"  - 민사�? 18�?)
+        safe_print(f"  - ?�사�? 18�?)
+        safe_print(f"  - ?�사�? 16�?)
+        safe_print(f"  - ?�정�? 16�?)
+        safe_print(f"  - ?�동�? 16�?)
         safe_print("-" * 30)
         
-        # 모니터링 시작
+        # 모니?�링 ?�작
         monitor.start_monitoring(len(test_terms))
         
-        # 도메인별 확장
+        # ?�메?�별 ?�장
         domains = {
-            "민사법": test_terms[:18],
-            "형사법": test_terms[18:36],
-            "상사법": test_terms[36:52],
-            "행정법": test_terms[52:68],
-            "노동법": test_terms[68:84]
+            "민사�?: test_terms[:18],
+            "?�사�?: test_terms[18:36],
+            "?�사�?: test_terms[36:52],
+            "?�정�?: test_terms[52:68],
+            "?�동�?: test_terms[68:84]
         }
         
         all_results = {}
         
         for domain, terms in domains.items():
-            safe_print(f"\n{domain} 도메인 확장 시작: {len(terms)}개 용어")
+            safe_print(f"\n{domain} ?�메???�장 ?�작: {len(terms)}�??�어")
             safe_print("-" * 30)
             
-            # 용어 확장
+            # ?�어 ?�장
             domain_results = expander.expand_all_terms(terms, domain)
             
-            # 품질 검증
+            # ?�질 검�?
             validated_results = validator.filter_low_quality_terms(domain_results["results"], threshold=0.6)
             
-            # 데이터베이스 저장
+            # ?�이?�베?�스 ?�??
             database.save_expanded_terms(validated_results, domain)
             
-            # 결과 통합
+            # 결과 ?�합
             all_results.update(validated_results)
             
-            # 진행 상황 업데이트
+            # 진행 ?�황 ?�데?�트
             monitor.update_progress(domain_results)
             
-            safe_print(f"{domain} 도메인 확장 완료:")
-            safe_print(f"  성공: {domain_results['successful_expansions']}개")
-            safe_print(f"  실패: {domain_results['failed_expansions']}개")
-            safe_print(f"  성공률: {domain_results['success_rate']:.1%}")
+            safe_print(f"{domain} ?�메???�장 ?�료:")
+            safe_print(f"  ?�공: {domain_results['successful_expansions']}�?)
+            safe_print(f"  ?�패: {domain_results['failed_expansions']}�?)
+            safe_print(f"  ?�공�? {domain_results['success_rate']:.1%}")
         
-        # 전체 품질 보고서 생성
+        # ?�체 ?�질 보고???�성
         quality_report = validator.generate_quality_report(all_results)
         
-        # 진행 상황 보고서 생성
+        # 진행 ?�황 보고???�성
         progress_report = monitor.generate_progress_report()
         
-        # JSON 파일로 내보내기
+        # JSON ?�일�??�보?�기
         database.export_to_json("data/comprehensive_legal_term_dictionary.json")
         
         # 최종 결과 출력
-        safe_print(f"\n전체 법률 용어 확장 완료!")
+        safe_print(f"\n?�체 법률 ?�어 ?�장 ?�료!")
         safe_print("=" * 50)
-        safe_print(f"총 처리 용어: {progress_report['total_terms']}개")
-        safe_print(f"성공: {progress_report['successful_expansions']}개")
-        safe_print(f"실패: {progress_report['failed_expansions']}개")
-        safe_print(f"성공률: {progress_report['success_rate']:.1%}")
-        safe_print(f"평균 품질: {quality_report.get('average_quality', 0):.2f}")
-        safe_print(f"처리 시간: {progress_report['elapsed_time_seconds']:.1f}초")
-        safe_print(f"저장 위치: data/comprehensive_legal_term_dictionary.json")
+        safe_print(f"�?처리 ?�어: {progress_report['total_terms']}�?)
+        safe_print(f"?�공: {progress_report['successful_expansions']}�?)
+        safe_print(f"?�패: {progress_report['failed_expansions']}�?)
+        safe_print(f"?�공�? {progress_report['success_rate']:.1%}")
+        safe_print(f"?�균 ?�질: {quality_report.get('average_quality', 0):.2f}")
+        safe_print(f"처리 ?�간: {progress_report['elapsed_time_seconds']:.1f}�?)
+        safe_print(f"?�???�치: data/comprehensive_legal_term_dictionary.json")
         
     except ValueError as e:
-        safe_print(f"초기화 오류: {e}")
-        safe_print("해결 방법: .env 파일에 유효한 GOOGLE_API_KEY를 설정하세요.")
+        safe_print(f"초기???�류: {e}")
+        safe_print("?�결 방법: .env ?�일???�효??GOOGLE_API_KEY�??�정?�세??")
     except Exception as e:
-        safe_print(f"실행 중 오류 발생: {e}")
+        safe_print(f"?�행 �??�류 발생: {e}")
 
 
 if __name__ == "__main__":

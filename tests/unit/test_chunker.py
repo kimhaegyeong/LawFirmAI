@@ -3,22 +3,22 @@ from scripts.utils.text_chunker import split_statute_sentences_into_articles, ex
 
 def test_split_articles_basic():
     sents = [
-        "제1조(목적)",
-        "이 법은 ...",
-        "제2조(정의)",
-        "1. 용어의 뜻은 ...",
+        "??�?목적)",
+        "??법�? ...",
+        "??�??�의)",
+        "1. ?�어???��? ...",
     ]
     blocks = split_statute_sentences_into_articles(sents)
     assert len(blocks) == 2
-    assert blocks[0]["heading"].startswith("제1조")
-    assert "이 법" in blocks[0]["text"]
+    assert blocks[0]["heading"].startswith("??�?)
+    assert "??�? in blocks[0]["text"]
 
 
 def test_explode_article_hierarchy():
-    heading = "제2조(정의)"
-    body = "제1항 어떤 내용\n제2항 1호 세부내용 A\n2호 세부내용 B"
+    heading = "??�??�의)"
+    body = "?????�떤 ?�용\n????1???��??�용 A\n2???��??�용 B"
     rows = explode_article_to_hierarchy(heading, body)
-    # expect clause-only row for 1항, and two item rows for 2항
+    # expect clause-only row for 1?? and two item rows for 2??
     assert any(r["clause_no"] == "1" and r["item_no"] is None for r in rows)
     assert any(r["clause_no"] == "2" and r["item_no"] == "1" for r in rows)
     assert any(r["clause_no"] == "2" and r["item_no"] == "2" for r in rows)

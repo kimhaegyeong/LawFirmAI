@@ -32,7 +32,7 @@ class QualityReport:
     issues: List[str]
     suggestions: List[str]
     validation_timestamp: str
-    validation_results: Dict[str, Any]  # 추가: 상세 검증 결과
+    validation_results: Dict[str, Any]  # 추�?: ?�세 검�?결과
 
 
 class DataQualityValidator:
@@ -50,11 +50,11 @@ class DataQualityValidator:
         
         # Legal structure patterns
         self.legal_patterns = {
-            'article_start': r'제\s*\d+\s*조',
-            'supplementary_start': r'부칙',
-            'paragraph_start': r'제\s*\d+\s*항',
-            'subparagraph_start': r'제\s*\d+\s*호',
-            'law_title': r'법|규칙|령|규정|조치|지침'
+            'article_start': r'??s*\d+\s*�?,
+            'supplementary_start': r'부�?,
+            'paragraph_start': r'??s*\d+\s*??,
+            'subparagraph_start': r'??s*\d+\s*??,
+            'law_title': r'�?규칙|??규정|조치|지�?
         }
     
     def validate_parsing_quality(self, law_data: Dict[str, Any]) -> QualityReport:
@@ -243,7 +243,7 @@ class DataQualityValidator:
             for field in number_fields:
                 if field in article and article[field]:
                     try:
-                        # Extract number from string like "제1조", "1조", "1"
+                        # Extract number from string like "??�?, "1�?, "1"
                         number_text = str(article[field])
                         number_match = re.search(r'\d+', number_text)
                         if number_match:
@@ -288,7 +288,7 @@ class DataQualityValidator:
         
         # Check for law title
         law_name = law_data.get('law_name', '')
-        if law_name and any(pattern in law_name for pattern in ['법', '규칙', '령', '규정']):
+        if law_name and any(pattern in law_name for pattern in ['�?, '규칙', '??, '규정']):
             score += 1.0
         checks += 1
         
@@ -297,11 +297,11 @@ class DataQualityValidator:
             score += 1.0
         checks += 1
         
-        # Check for supplementary articles (부칙)
+        # Check for supplementary articles (부�?
         has_supplementary = False
         for article in articles:
             article_text = str(article.get('content', '')) + str(article.get('text', ''))
-            if '부칙' in article_text:
+            if '부�? in article_text:
                 has_supplementary = True
                 break
         
@@ -371,7 +371,7 @@ class DataQualityValidator:
         
         # Structure issues
         law_name = law_data.get('law_name', '')
-        if not law_name or not any(pattern in law_name for pattern in ['법', '규칙', '령', '규정']):
+        if not law_name or not any(pattern in law_name for pattern in ['�?, '규칙', '??, '규정']):
             issues.append("Law name does not follow standard legal naming convention")
         
         return issues
@@ -428,9 +428,9 @@ if __name__ == "__main__":
     sample_law_data = {
         'law_name': '민법',
         'articles': [
-            {'number': '1', 'title': '민법의 목적', 'content': '이 법은 민사에 관한 기본법이다.'},
-            {'number': '2', 'title': '민법의 적용', 'content': '민법은 민사에 관하여 적용한다.'},
-            {'number': '3', 'title': '민법의 해석', 'content': '민법은 공정과 신의에 따라 해석한다.'}
+            {'number': '1', 'title': '민법??목적', 'content': '??법�? 민사??관??기본법이??'},
+            {'number': '2', 'title': '민법???�용', 'content': '민법?� 민사??관?�여 ?�용?�다.'},
+            {'number': '3', 'title': '민법???�석', 'content': '민법?� 공정�??�의???�라 ?�석?�다.'}
         ]
     }
     

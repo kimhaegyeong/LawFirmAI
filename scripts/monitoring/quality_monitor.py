@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-품질 모니터링 시스템
-ML 강화 파싱 품질을 실시간으로 모니터링하고 대시보드 메트릭을 제공합니다.
+?�질 모니?�링 ?�스??
+ML 강화 ?�싱 ?�질???�시간으�?모니?�링?�고 ?�?�보??메트�?�� ?�공?�니??
 """
 
 import json
@@ -14,49 +14,49 @@ from datetime import datetime, timedelta
 import sqlite3
 from contextlib import contextmanager
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.database import DatabaseManager
 from source.utils.config import Config
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
+# Windows 콘솔?�서 UTF-8 ?�코???�정
 if os.name == 'nt':  # Windows
     try:
         import codecs
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
         sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
     except AttributeError:
-        # 이미 UTF-8로 설정된 경우 무시
+        # ?��? UTF-8�??�정??경우 무시
         pass
 
 logger = logging.getLogger(__name__)
 
 
 class QualityMonitor:
-    """품질 모니터링 클래스"""
+    """?�질 모니?�링 ?�래??""
     
     def __init__(self, config: Config):
-        """품질 모니터링 초기화"""
+        """?�질 모니?�링 초기??""
         self.config = config
         
-        # SQLite URL을 파일 경로로 변환
+        # SQLite URL???�일 경로�?변??
         db_url = config.database_url
         if db_url.startswith("sqlite:///"):
             db_path = db_url.replace("sqlite:///", "")
             if db_path.startswith("./"):
-                db_path = db_path[2:]  # "./" 제거
+                db_path = db_path[2:]  # "./" ?�거
         else:
             db_path = config.database_path
         
-        # 절대 경로로 변환
+        # ?��? 경로�?변??
         db_path = os.path.abspath(db_path)
         
         self.database = DatabaseManager(db_path)
         self.logger = logging.getLogger(__name__)
         
-        # 모니터링 설정
+        # 모니?�링 ?�정
         self.quality_thresholds = {
             'excellent': 0.9,
             'good': 0.7,
@@ -67,7 +67,7 @@ class QualityMonitor:
         self.logger.info("QualityMonitor initialized")
     
     def get_overall_quality_stats(self) -> Dict[str, Any]:
-        """전체 품질 통계 조회"""
+        """?�체 ?�질 ?�계 조회"""
         try:
             stats_query = """
                 SELECT 
@@ -87,7 +87,7 @@ class QualityMonitor:
             result = self.database.execute_query(stats_query)
             stats = result[0] if result else {}
             
-            # 품질 등급별 분포 계산
+            # ?�질 ?�급�?분포 계산
             quality_distribution = self._calculate_quality_distribution()
             
             return {
@@ -111,13 +111,13 @@ class QualityMonitor:
             return {}
     
     def _calculate_quality_distribution(self) -> Dict[str, int]:
-        """품질 등급별 분포 계산"""
+        """?�질 ?�급�?분포 계산"""
         try:
             distribution = {}
             
             for grade, threshold in self.quality_thresholds.items():
                 if grade == 'poor':
-                    # poor는 최하위 등급
+                    # poor??최하???�급
                     query = f"""
                         SELECT COUNT(*) as count 
                         FROM assembly_articles aa
@@ -125,7 +125,7 @@ class QualityMonitor:
                         WHERE al.parsing_quality_score < {self.quality_thresholds['fair']}
                     """
                 else:
-                    # 다른 등급들은 임계값 이상
+                    # ?�른 ?�급?��? ?�계�??�상
                     query = f"""
                         SELECT COUNT(*) as count 
                         FROM assembly_articles aa
@@ -144,7 +144,7 @@ class QualityMonitor:
             return {}
     
     def get_law_quality_stats(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """법률별 품질 통계 조회"""
+        """법률�??�질 ?�계 조회"""
         try:
             law_stats_query = """
                 SELECT 
@@ -189,7 +189,7 @@ class QualityMonitor:
             return []
     
     def get_parsing_method_comparison(self) -> Dict[str, Any]:
-        """파싱 방법별 비교 통계"""
+        """?�싱 방법�?비교 ?�계"""
         try:
             comparison_query = """
                 SELECT 
@@ -224,9 +224,9 @@ class QualityMonitor:
             return {}
     
     def get_quality_trends(self, days: int = 30) -> Dict[str, List[Dict[str, Any]]]:
-        """품질 트렌드 분석 (간소화된 버전)"""
+        """?�질 ?�렌??분석 (간소?�된 버전)"""
         try:
-            # 최근 데이터가 있는지 확인 (created_at 기준)
+            # 최근 ?�이?��? ?�는지 ?�인 (created_at 기�?)
             trend_query = """
                 SELECT 
                     DATE(aa.created_at) as date,
@@ -276,9 +276,9 @@ class QualityMonitor:
             return {'daily_stats': [], 'quality_trend': [], 'ml_adoption_trend': []}
     
     def get_error_analysis(self) -> Dict[str, Any]:
-        """에러 분석"""
+        """?�러 분석"""
         try:
-            # 품질 점수가 낮은 조문들 분석
+            # ?�질 ?�수가 ??? 조문??분석
             low_quality_query = """
                 SELECT 
                     al.law_name,
@@ -317,11 +317,11 @@ class QualityMonitor:
                 }
                 error_analysis['low_quality_articles'].append(article_info)
             
-            # 에러 패턴 분석
+            # ?�러 ?�턴 분석
             error_patterns = self._analyze_error_patterns(results)
             error_analysis['error_patterns'] = error_patterns
             
-            # 개선 권장사항 생성
+            # 개선 권장?�항 ?�성
             recommendations = self._generate_recommendations(error_patterns)
             error_analysis['recommendations'] = recommendations
             
@@ -332,7 +332,7 @@ class QualityMonitor:
             return {'low_quality_articles': [], 'error_patterns': {}, 'recommendations': []}
     
     def _analyze_error_patterns(self, low_quality_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """에러 패턴 분석"""
+        """?�러 ?�턴 분석"""
         try:
             patterns = {
                 'common_issues': {},
@@ -340,7 +340,7 @@ class QualityMonitor:
                 'content_characteristics': {}
             }
             
-            # 파싱 방법별 성능 분석
+            # ?�싱 방법�??�능 분석
             method_counts = {}
             for row in low_quality_results:
                 method = row['parsing_method'] or 'unknown'
@@ -348,7 +348,7 @@ class QualityMonitor:
             
             patterns['method_performance'] = method_counts
             
-            # 내용 특성 분석
+            # ?�용 ?�성 분석
             short_articles = sum(1 for row in low_quality_results if row['word_count'] < 10)
             long_articles = sum(1 for row in low_quality_results if row['word_count'] > 1000)
             
@@ -365,29 +365,29 @@ class QualityMonitor:
             return {}
     
     def _generate_recommendations(self, error_patterns: Dict[str, Any]) -> List[str]:
-        """개선 권장사항 생성"""
+        """개선 권장?�항 ?�성"""
         try:
             recommendations = []
             
             method_performance = error_patterns.get('method_performance', {})
             content_characteristics = error_patterns.get('content_characteristics', {})
             
-            # 파싱 방법별 권장사항
+            # ?�싱 방법�?권장?�항
             if method_performance.get('rule_based', 0) > method_performance.get('ml_enhanced', 0):
-                recommendations.append("규칙 기반 파서의 성능이 ML 강화 파서보다 낮습니다. ML 모델 재훈련을 고려하세요.")
+                recommendations.append("규칙 기반 ?�서???�능??ML 강화 ?�서보다 ??��?�다. ML 모델 ?�훈?�을 고려?�세??")
             
-            # 내용 특성별 권장사항
+            # ?�용 ?�성�?권장?�항
             if content_characteristics.get('short_articles', 0) > 10:
-                recommendations.append("짧은 조문들의 파싱 품질이 낮습니다. 최소 길이 임계값을 조정하세요.")
+                recommendations.append("짧�? 조문?�의 ?�싱 ?�질????��?�다. 최소 길이 ?�계값을 조정?�세??")
             
             if content_characteristics.get('long_articles', 0) > 5:
-                recommendations.append("긴 조문들의 파싱 품질이 낮습니다. 청크 분할 로직을 개선하세요.")
+                recommendations.append("�?조문?�의 ?�싱 ?�질????��?�다. �?�� 분할 로직??개선?�세??")
             
-            # 일반적인 권장사항
+            # ?�반?�인 권장?�항
             recommendations.extend([
-                "정기적인 품질 모니터링을 통해 파싱 성능을 추적하세요.",
-                "ML 모델의 신뢰도 점수를 활용하여 품질 임계값을 조정하세요.",
-                "부칙 파싱 로직을 별도로 최적화하세요."
+                "?�기?�인 ?�질 모니?�링???�해 ?�싱 ?�능??추적?�세??",
+                "ML 모델???�뢰???�수�??�용?�여 ?�질 ?�계값을 조정?�세??",
+                "부�??�싱 로직??별도�?최적?�하?�요."
             ])
             
             return recommendations
@@ -397,7 +397,7 @@ class QualityMonitor:
             return []
     
     def generate_quality_report(self) -> Dict[str, Any]:
-        """종합 품질 보고서 생성"""
+        """종합 ?�질 보고???�성"""
         try:
             report = {
                 'generated_at': datetime.now().isoformat(),
@@ -415,7 +415,7 @@ class QualityMonitor:
             return {'error': str(e)}
     
     def save_quality_report(self, report: Dict[str, Any], output_path: str):
-        """품질 보고서 저장"""
+        """?�질 보고???�??""
         try:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -430,46 +430,46 @@ class QualityMonitor:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="품질 모니터링 시스템")
-    parser.add_argument("--config", default="config.json", help="설정 파일 경로")
-    parser.add_argument("--output", default="reports/quality_report.json", help="보고서 출력 경로")
-    parser.add_argument("--log-level", default="INFO", help="로그 레벨")
+    parser = argparse.ArgumentParser(description="?�질 모니?�링 ?�스??)
+    parser.add_argument("--config", default="config.json", help="?�정 ?�일 경로")
+    parser.add_argument("--output", default="reports/quality_report.json", help="보고??출력 경로")
+    parser.add_argument("--log-level", default="INFO", help="로그 ?�벨")
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 설정 로드
+    # ?�정 로드
     config = Config()
     
-    # 품질 모니터 초기화
+    # ?�질 모니??초기??
     monitor = QualityMonitor(config)
     
-    # 품질 보고서 생성
+    # ?�질 보고???�성
     report = monitor.generate_quality_report()
     
-    # 보고서 저장
+    # 보고???�??
     monitor.save_quality_report(report, args.output)
     
-    # 요약 출력
+    # ?�약 출력
     overall_stats = report.get('overall_stats', {})
-    print(f"\n=== 품질 모니터링 보고서 ===")
-    print(f"총 조문 수: {overall_stats.get('total_articles', 0):,}")
-    print(f"ML 강화 조문 수: {overall_stats.get('ml_enhanced_articles', 0):,}")
-    print(f"평균 품질 점수: {overall_stats.get('avg_quality_score', 0.0):.3f}")
+    print(f"\n=== ?�질 모니?�링 보고??===")
+    print(f"�?조문 ?? {overall_stats.get('total_articles', 0):,}")
+    print(f"ML 강화 조문 ?? {overall_stats.get('ml_enhanced_articles', 0):,}")
+    print(f"?�균 ?�질 ?�수: {overall_stats.get('avg_quality_score', 0.0):.3f}")
     print(f"ML 강화 비율: {overall_stats.get('ml_enhancement_rate', 0.0):.1f}%")
     print(f"본칙 조문: {overall_stats.get('main_articles', 0):,}")
-    print(f"부칙 조문: {overall_stats.get('supplementary_articles', 0):,}")
+    print(f"부�?조문: {overall_stats.get('supplementary_articles', 0):,}")
     
     quality_dist = overall_stats.get('quality_distribution', {})
-    print(f"\n품질 등급별 분포:")
+    print(f"\n?�질 ?�급�?분포:")
     for grade, count in quality_dist.items():
         print(f"  {grade}: {count:,}")
 

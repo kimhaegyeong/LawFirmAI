@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Assembly Collection Performance Test
-국회 수집 스크립트 성능 테스트 및 벤치마크
+�?�� ?�집 ?�크립트 ?�능 ?�스??�?벤치마크
 
-이 스크립트는 수집 스크립트들의 성능을 테스트하고 벤치마크를 제공합니다.
+???�크립트???�집 ?�크립트?�의 ?�능???�스?�하�?벤치마크�??�공?�니??
 """
 
 import time
@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 import json
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 import sys
 sys.path.append(str(project_root))
@@ -27,10 +27,10 @@ from scripts.assembly.common_utils import (
 
 
 class PerformanceMonitor:
-    """성능 모니터링 클래스"""
+    """?�능 모니?�링 ?�래??""
     
     def __init__(self):
-        """성능 모니터 초기화"""
+        """?�능 모니??초기??""
         self.start_time = None
         self.end_time = None
         self.memory_samples = []
@@ -38,24 +38,24 @@ class PerformanceMonitor:
         self.logger = CollectionLogger.setup_logging("performance_test")
     
     def start_monitoring(self):
-        """모니터링 시작"""
+        """모니?�링 ?�작"""
         self.start_time = time.time()
         self.logger.info("Performance monitoring started")
     
     def stop_monitoring(self):
-        """모니터링 중지"""
+        """모니?�링 중�?"""
         self.end_time = time.time()
         self.logger.info("Performance monitoring stopped")
     
     def sample_system_metrics(self):
-        """시스템 메트릭 샘플링"""
+        """?�스??메트�??�플�?""
         try:
-            # 메모리 사용량
+            # 메모�??�용??
             process = psutil.Process()
             memory_mb = process.memory_info().rss / 1024 / 1024
             self.memory_samples.append(memory_mb)
             
-            # CPU 사용률
+            # CPU ?�용�?
             cpu_percent = psutil.cpu_percent()
             self.cpu_samples.append(cpu_percent)
             
@@ -63,13 +63,13 @@ class PerformanceMonitor:
             self.logger.error(f"Failed to sample metrics: {e}")
     
     def get_performance_report(self) -> Dict[str, Any]:
-        """성능 리포트 생성"""
+        """?�능 리포???�성"""
         if not self.start_time or not self.end_time:
             return {"error": "Monitoring not completed"}
         
         duration = self.end_time - self.start_time
         
-        # 메모리 통계
+        # 메모�??�계
         memory_stats = {}
         if self.memory_samples:
             memory_stats = {
@@ -79,7 +79,7 @@ class PerformanceMonitor:
                 "samples": len(self.memory_samples)
             }
         
-        # CPU 통계
+        # CPU ?�계
         cpu_stats = {}
         if self.cpu_samples:
             cpu_stats = {
@@ -99,28 +99,28 @@ class PerformanceMonitor:
 
 
 class CollectionBenchmark:
-    """수집 성능 벤치마크 클래스"""
+    """?�집 ?�능 벤치마크 ?�래??""
     
     def __init__(self):
-        """벤치마크 초기화"""
+        """벤치마크 초기??""
         self.logger = CollectionLogger.setup_logging("collection_benchmark")
         self.results = []
     
     def benchmark_memory_manager(self, iterations: int = 100) -> Dict[str, Any]:
-        """메모리 매니저 벤치마크"""
+        """메모�?매니?� 벤치마크"""
         self.logger.info(f"Benchmarking MemoryManager with {iterations} iterations")
         
         monitor = PerformanceMonitor()
         monitor.start_monitoring()
         
-        # 메모리 매니저 테스트
+        # 메모�?매니?� ?�스??
         memory_manager = MemoryManager(memory_limit_mb=600)
         
         for i in range(iterations):
-            # 메모리 사용량 체크
+            # 메모�??�용??체크
             memory_manager.get_memory_usage()
             
-            # 주기적으로 샘플링
+            # 주기?�으�??�플�?
             if i % 10 == 0:
                 monitor.sample_system_metrics()
         
@@ -136,12 +136,12 @@ class CollectionBenchmark:
         return result
     
     def benchmark_data_optimizer(self, test_data_size: int = 1000) -> Dict[str, Any]:
-        """데이터 최적화 벤치마크"""
+        """?�이??최적??벤치마크"""
         self.logger.info(f"Benchmarking DataOptimizer with {test_data_size} items")
         
         from scripts.assembly.common_utils import DataOptimizer
         
-        # 테스트 데이터 생성
+        # ?�스???�이???�성
         test_items = []
         for i in range(test_data_size):
             test_items.append({
@@ -156,19 +156,19 @@ class CollectionBenchmark:
         monitor = PerformanceMonitor()
         monitor.start_monitoring()
         
-        # 데이터 최적화 테스트
+        # ?�이??최적???�스??
         optimized_items = []
         for i, item in enumerate(test_items):
             optimized_item = DataOptimizer.optimize_item(item)
             optimized_items.append(optimized_item)
             
-            # 주기적으로 샘플링
+            # 주기?�으�??�플�?
             if i % 100 == 0:
                 monitor.sample_system_metrics()
         
         monitor.stop_monitoring()
         
-        # 크기 비교
+        # ?�기 비교
         original_size = sum(len(str(item)) for item in test_items)
         optimized_size = sum(len(str(item)) for item in optimized_items)
         compression_ratio = optimized_size / original_size if original_size > 0 else 0
@@ -186,13 +186,13 @@ class CollectionBenchmark:
         return result
     
     def benchmark_collection_config(self) -> Dict[str, Any]:
-        """수집 설정 벤치마크"""
+        """?�집 ?�정 벤치마크"""
         self.logger.info("Benchmarking CollectionConfig")
         
         monitor = PerformanceMonitor()
         monitor.start_monitoring()
         
-        # 설정 생성 및 조회 테스트
+        # ?�정 ?�성 �?조회 ?�스??
         configs = []
         for i in range(1000):
             config = CollectionConfig(
@@ -202,7 +202,7 @@ class CollectionBenchmark:
             )
             configs.append(config)
         
-        # 설정 조회 테스트
+        # ?�정 조회 ?�스??
         for config in configs:
             _ = config.get('memory_limit_mb')
             _ = config.get('batch_size')
@@ -220,14 +220,14 @@ class CollectionBenchmark:
         return result
     
     def run_all_benchmarks(self) -> List[Dict[str, Any]]:
-        """모든 벤치마크 실행"""
+        """모든 벤치마크 ?�행"""
         self.logger.info("Starting comprehensive benchmark suite")
         
-        # 시스템 요구사항 확인
+        # ?�스???�구?�항 ?�인
         if not check_system_requirements(min_memory_gb=2.0):
             self.logger.warning("System requirements not met, proceeding with caution")
         
-        # 벤치마크 실행
+        # 벤치마크 ?�행
         self.benchmark_memory_manager(iterations=100)
         self.benchmark_data_optimizer(test_data_size=500)
         self.benchmark_collection_config()
@@ -236,7 +236,7 @@ class CollectionBenchmark:
         return self.results
     
     def save_results(self, output_file: Path):
-        """결과 저장"""
+        """결과 ?�??""
         results_data = {
             "benchmark_info": {
                 "timestamp": datetime.now().isoformat(),
@@ -252,9 +252,9 @@ class CollectionBenchmark:
         self.logger.info(f"Benchmark results saved to {output_file}")
     
     def print_summary(self):
-        """결과 요약 출력"""
+        """결과 ?�약 출력"""
         print("\n" + "="*60)
-        print("📊 BENCHMARK RESULTS SUMMARY")
+        print("?�� BENCHMARK RESULTS SUMMARY")
         print("="*60)
         
         for result in self.results:
@@ -262,7 +262,7 @@ class CollectionBenchmark:
             performance = result.get("performance", {})
             duration = performance.get("duration_seconds", 0)
             
-            print(f"\n🔬 {test_name}:")
+            print(f"\n?�� {test_name}:")
             print(f"   Duration: {duration:.3f} seconds")
             
             if "memory_stats" in performance:
@@ -278,7 +278,7 @@ class CollectionBenchmark:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
     
     parser = argparse.ArgumentParser(
@@ -286,38 +286,38 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python performance_test.py --all                    # 모든 벤치마크 실행
-  python performance_test.py --memory-manager         # 메모리 매니저만 테스트
-  python performance_test.py --data-optimizer         # 데이터 최적화만 테스트
-  python performance_test.py --config                # 설정 관리만 테스트
+  python performance_test.py --all                    # 모든 벤치마크 ?�행
+  python performance_test.py --memory-manager         # 메모�?매니?��??�스??
+  python performance_test.py --data-optimizer         # ?�이??최적?�만 ?�스??
+  python performance_test.py --config                # ?�정 관리만 ?�스??
         """
     )
     
     parser.add_argument('--all', action='store_true',
-                        help='모든 벤치마크 실행')
+                        help='모든 벤치마크 ?�행')
     parser.add_argument('--memory-manager', action='store_true',
-                        help='메모리 매니저 벤치마크')
+                        help='메모�?매니?� 벤치마크')
     parser.add_argument('--data-optimizer', action='store_true',
-                        help='데이터 최적화 벤치마크')
+                        help='?�이??최적??벤치마크')
     parser.add_argument('--config', action='store_true',
-                        help='설정 관리 벤치마크')
+                        help='?�정 관�?벤치마크')
     parser.add_argument('--iterations', type=int, default=100,
-                        help='반복 횟수 (기본: 100)')
+                        help='반복 ?�수 (기본: 100)')
     parser.add_argument('--data-size', type=int, default=500,
-                        help='테스트 데이터 크기 (기본: 500)')
+                        help='?�스???�이???�기 (기본: 500)')
     parser.add_argument('--output', type=str, default='benchmark_results.json',
-                        help='결과 저장 파일 (기본: benchmark_results.json)')
+                        help='결과 ?�???�일 (기본: benchmark_results.json)')
     
     args = parser.parse_args()
     
-    # 벤치마크 실행
+    # 벤치마크 ?�행
     benchmark = CollectionBenchmark()
     
     if args.all or not any([args.memory_manager, args.data_optimizer, args.config]):
-        # 모든 벤치마크 실행
+        # 모든 벤치마크 ?�행
         benchmark.run_all_benchmarks()
     else:
-        # 선택적 벤치마크 실행
+        # ?�택??벤치마크 ?�행
         if args.memory_manager:
             benchmark.benchmark_memory_manager(args.iterations)
         if args.data_optimizer:
@@ -325,7 +325,7 @@ Examples:
         if args.config:
             benchmark.benchmark_collection_config()
     
-    # 결과 저장 및 출력
+    # 결과 ?�??�?출력
     output_file = Path(args.output)
     benchmark.save_results(output_file)
     benchmark.print_summary()

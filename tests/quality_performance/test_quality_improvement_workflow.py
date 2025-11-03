@@ -67,18 +67,18 @@ class TestDataQualityValidator(unittest.TestCase):
         
         self.validator = DataQualityValidator()
         self.sample_law_data = {
-            'law_name': '테스트 법률',
-            'full_text': '제1조 (목적) 이 법은 테스트를 위한 법률이다.\n제2조 (정의) 이 법에서 사용하는 용어의 정의는 다음과 같다.',
+            'law_name': '?�스??법률',
+            'full_text': '??�?(목적) ??법�? ?�스?��? ?�한 법률?�다.\n??�?(?�의) ??법에???�용?�는 ?�어???�의???�음�?같다.',
             'articles': [
                 {
-                    'article_number': '제1조',
+                    'article_number': '??�?,
                     'article_title': '목적',
-                    'article_content': '이 법은 테스트를 위한 법률이다.'
+                    'article_content': '??법�? ?�스?��? ?�한 법률?�다.'
                 },
                 {
-                    'article_number': '제2조',
-                    'article_title': '정의',
-                    'article_content': '이 법에서 사용하는 용어의 정의는 다음과 같다.'
+                    'article_number': '??�?,
+                    'article_title': '?�의',
+                    'article_content': '??법에???�용?�는 ?�어???�의???�음�?같다.'
                 }
             ]
         }
@@ -542,13 +542,13 @@ class TestAutoPipelineOrchestratorIntegration(unittest.TestCase):
         # Create sample law data file
         self.sample_law_file = os.path.join(self.processed_dir, 'sample_law.json')
         sample_data = {
-            'law_name': '테스트 법률',
-            'full_text': '제1조 (목적) 이 법은 테스트를 위한 법률이다.',
+            'law_name': '?�스??법률',
+            'full_text': '??�?(목적) ??법�? ?�스?��? ?�한 법률?�다.',
             'articles': [
                 {
-                    'article_number': '제1조',
+                    'article_number': '??�?,
                     'article_title': '목적',
-                    'article_content': '이 법은 테스트를 위한 법률이다.'
+                    'article_content': '??법�? ?�스?��? ?�한 법률?�다.'
                 }
             ]
         }
@@ -647,18 +647,18 @@ class TestEndToEndWorkflow(unittest.TestCase):
         
         # Step 2: Create sample law data
         sample_law_data = {
-            'law_name': '테스트 법률',
-            'full_text': '제1조 (목적) 이 법은 테스트를 위한 법률이다.\n제2조 (정의) 이 법에서 사용하는 용어의 정의는 다음과 같다.',
+            'law_name': '?�스??법률',
+            'full_text': '??�?(목적) ??법�? ?�스?��? ?�한 법률?�다.\n??�?(?�의) ??법에???�용?�는 ?�어???�의???�음�?같다.',
             'articles': [
                 {
-                    'article_number': '제1조',
+                    'article_number': '??�?,
                     'article_title': '목적',
-                    'article_content': '이 법은 테스트를 위한 법률이다.'
+                    'article_content': '??법�? ?�스?��? ?�한 법률?�다.'
                 },
                 {
-                    'article_number': '제2조',
-                    'article_title': '정의',
-                    'article_content': '이 법에서 사용하는 용어의 정의는 다음과 같다.'
+                    'article_number': '??�?,
+                    'article_title': '?�의',
+                    'article_content': '??법에???�용?�는 ?�어???�의???�음�?같다.'
                 }
             ]
         }

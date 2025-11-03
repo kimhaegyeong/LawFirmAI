@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-법률 수집 성능 메트릭 수집기
+법률 ?�집 ?�능 메트�??�집�?
 
-Prometheus 메트릭을 수집하고 노출하는 모듈
+Prometheus 메트�?�� ?�집?�고 ?�출?�는 모듈
 """
 
 from prometheus_client import start_http_server, Counter, Histogram, Gauge, Summary
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class LawCollectionMetrics:
-    """법률 수집 성능 메트릭 수집기"""
+    """법률 ?�집 ?�능 메트�??�집�?""
     
     _instance = None
     _server_started = False
@@ -38,11 +38,11 @@ class LawCollectionMetrics:
         self.port = port
         self.start_time = time.time()
         
-        # 메트릭 파일 경로
+        # 메트�??�일 경로
         self.metrics_file = Path("data/metrics_state.json")
         self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
         
-        # 메트릭 정의
+        # 메트�??�의
         self.pages_processed = Counter(
             'law_collection_pages_processed_total',
             'Total number of pages processed'
@@ -95,45 +95,45 @@ class LawCollectionMetrics:
             'Collection status (0=stopped, 1=running, 2=paused)'
         )
         
-        # 통계 변수
+        # ?�계 변??
         self.total_laws_collected = 0
         self.collection_start_time = None
         self.is_running = False
         
-        # 저장된 메트릭 상태 복원
+        # ?�?�된 메트�??�태 복원
         self._load_metrics_state()
         
-        # 시스템 메트릭 수집 스레드
+        # ?�스??메트�??�집 ?�레??
         self.metrics_thread = threading.Thread(target=self._collect_system_metrics)
         self.metrics_thread.daemon = True
         self.metrics_thread.start()
         
-        # 메트릭 상태 저장 스레드
+        # 메트�??�태 ?�???�레??
         self.save_thread = threading.Thread(target=self._save_metrics_state)
         self.save_thread.daemon = True
         self.save_thread.start()
     
     def _collect_system_metrics(self):
-        """시스템 메트릭 수집 (백그라운드 스레드)"""
+        """?�스??메트�??�집 (백그?�운???�레??"""
         process = psutil.Process()
         while True:
             try:
                 if self.is_running:
-                    # 메모리 사용량
+                    # 메모�??�용??
                     memory_info = process.memory_info()
                     self.memory_usage.set(memory_info.rss)
                     
-                    # CPU 사용률
+                    # CPU ?�용�?
                     cpu_percent = process.cpu_percent()
                     self.cpu_usage.set(cpu_percent)
                 
-                time.sleep(5)  # 5초마다 업데이트
+                time.sleep(5)  # 5초마???�데?�트
             except Exception as e:
                 logger.error(f"Error collecting system metrics: {e}")
                 time.sleep(10)
     
     def start_server(self):
-        """메트릭 서버 시작"""
+        """메트�??�버 ?�작"""
         if LawCollectionMetrics._server_started:
             logger.info(f"Metrics server already running on port {self.port}")
             return
@@ -148,14 +148,14 @@ class LawCollectionMetrics:
             raise
     
     def start_collection(self):
-        """수집 시작"""
+        """?�집 ?�작"""
         self.collection_start_time = time.time()
         self.is_running = True
         self.collection_status.set(1)  # running
         logger.info("Collection started - metrics tracking enabled")
     
     def stop_collection(self):
-        """수집 중지"""
+        """?�집 중�?"""
         self.is_running = False
         self.collection_status.set(0)  # stopped
         
@@ -165,29 +165,29 @@ class LawCollectionMetrics:
             logger.info(f"Collection stopped - total duration: {duration:.2f}s")
     
     def pause_collection(self):
-        """수집 일시 중지"""
+        """?�집 ?�시 중�?"""
         self.is_running = False
         self.collection_status.set(2)  # paused
         logger.info("Collection paused")
     
     def resume_collection(self):
-        """수집 재개"""
+        """?�집 ?�개"""
         self.is_running = True
         self.collection_status.set(1)  # running
         logger.info("Collection resumed")
     
     def record_page_processed(self, page_number: int):
-        """페이지 처리 완료 기록"""
+        """?�이지 처리 ?�료 기록"""
         self.pages_processed.inc()
         self.current_page.set(page_number)
         logger.info(f"Page {page_number} processed - Total: {self.pages_processed._value._value}")
     
     def record_laws_collected(self, count: int):
-        """수집된 법률 수 기록"""
+        """?�집??법률 ??기록"""
         self.laws_collected.inc(count)
         self.total_laws_collected += count
         
-        # 처리량 계산 (분당 법률 수)
+        # 처리??계산 (분당 법률 ??
         if self.collection_start_time:
             elapsed_time = time.time() - self.collection_start_time
             if elapsed_time > 0:
@@ -197,23 +197,23 @@ class LawCollectionMetrics:
         logger.info(f"Laws collected: {count} (total: {self.total_laws_collected})")
     
     def record_error(self, error_type: str):
-        """에러 기록"""
+        """?�러 기록"""
         self.collection_errors.labels(error_type=error_type).inc()
         logger.warning(f"Error recorded: {error_type}")
     
     def record_page_processing_time(self, duration: float):
-        """페이지 처리 시간 기록"""
+        """?�이지 처리 ?�간 기록"""
         self.page_processing_time.observe(duration)
         logger.debug(f"Page processing time: {duration:.2f}s")
     
     def _load_metrics_state(self):
-        """저장된 메트릭 상태 복원"""
+        """?�?�된 메트�??�태 복원"""
         try:
             if self.metrics_file.exists():
                 with open(self.metrics_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                 
-                # 메트릭 값 복원
+                # 메트�?�?복원
                 self.pages_processed._value._value = state.get('pages_processed', 0)
                 self.laws_collected._value._value = state.get('laws_collected', 0)
                 self.total_laws_collected = state.get('total_laws_collected', 0)
@@ -223,7 +223,7 @@ class LawCollectionMetrics:
             logger.warning(f"Failed to load metrics state: {e}")
     
     def _save_metrics_state(self):
-        """메트릭 상태를 파일에 저장 (백그라운드 스레드)"""
+        """메트�??�태�??�일???�??(백그?�운???�레??"""
         while True:
             try:
                 state = {
@@ -236,13 +236,13 @@ class LawCollectionMetrics:
                 with open(self.metrics_file, 'w', encoding='utf-8') as f:
                     json.dump(state, f, ensure_ascii=False, indent=2)
                 
-                time.sleep(30)  # 30초마다 저장
+                time.sleep(30)  # 30초마???�??
             except Exception as e:
                 logger.error(f"Failed to save metrics state: {e}")
                 time.sleep(60)
     
     def get_stats(self) -> dict:
-        """현재 통계 반환"""
+        """?�재 ?�계 반환"""
         return {
             'pages_processed': self.pages_processed._value._value,
             'laws_collected': self.laws_collected._value._value,
@@ -257,7 +257,7 @@ class LawCollectionMetrics:
 
 
 def main():
-    """메트릭 서버 독립 실행"""
+    """메트�??�버 ?�립 ?�행"""
     import argparse
     
     parser = argparse.ArgumentParser(description='Law Collection Metrics Server')
@@ -268,13 +268,13 @@ def main():
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 메트릭 서버 시작
+    # 메트�??�버 ?�작
     metrics = LawCollectionMetrics(port=args.port)
     metrics.start_server()
     

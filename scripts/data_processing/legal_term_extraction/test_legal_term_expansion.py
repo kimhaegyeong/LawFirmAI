@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-법률 용어 사전 확장 테스트 스크립트
+법률 ?�어 ?�전 ?�장 ?�스???�크립트
 """
 
 import json
@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -21,115 +21,115 @@ logger = logging.getLogger(__name__)
 
 
 def test_term_extraction():
-    """용어 추출 테스트"""
-    print("=== 용어 추출 테스트 ===")
+    """?�어 추출 ?�스??""
+    print("=== ?�어 추출 ?�스??===")
     
     extractor = LegalTermExtractor()
     
-    # 테스트 데이터 디렉토리
+    # ?�스???�이???�렉?�리
     test_data_dir = "data/processed/assembly/law/20251013_ml/20251010"
     
     if not Path(test_data_dir).exists():
-        print(f"테스트 데이터 디렉토리가 존재하지 않습니다: {test_data_dir}")
+        print(f"?�스???�이???�렉?�리가 존재?��? ?�습?�다: {test_data_dir}")
         return False
     
     try:
-        # 용어 추출 실행
+        # ?�어 추출 ?�행
         results = extractor.process_directory(test_data_dir, min_frequency=2)
         
-        print(f"처리된 파일: {results['processed_files']}")
-        print(f"추출된 총 용어: {results['total_terms_extracted']}")
-        print(f"필터링 후 용어: {sum(len(terms) for terms in results['filtered_terms'].values())}")
+        print(f"처리???�일: {results['processed_files']}")
+        print(f"추출??�??�어: {results['total_terms_extracted']}")
+        print(f"?�터�????�어: {sum(len(terms) for terms in results['filtered_terms'].values())}")
         
-        # 패턴별 용어 수 출력
-        print("\n패턴별 용어 수:")
+        # ?�턴�??�어 ??출력
+        print("\n?�턴�??�어 ??")
         for pattern_name, terms in results['filtered_terms'].items():
-            print(f"  {pattern_name}: {len(terms)}개")
+            print(f"  {pattern_name}: {len(terms)}�?)
         
-        # 상위 빈도 용어 출력
-        print("\n상위 빈도 용어 (상위 10개):")
+        # ?�위 빈도 ?�어 출력
+        print("\n?�위 빈도 ?�어 (?�위 10�?:")
         for term, freq in list(results['term_frequencies'].items())[:10]:
-            print(f"  {term}: {freq}회")
+            print(f"  {term}: {freq}??)
         
         return True
         
     except Exception as e:
-        print(f"용어 추출 테스트 실패: {e}")
+        print(f"?�어 추출 ?�스???�패: {e}")
         return False
 
 
 def test_domain_expansion():
-    """도메인 확장 테스트"""
-    print("\n=== 도메인 확장 테스트 ===")
+    """?�메???�장 ?�스??""
+    print("\n=== ?�메???�장 ?�스??===")
     
     expander = DomainTermExpander()
     
-    # 테스트용 추출된 용어 데이터
+    # ?�스?�용 추출???�어 ?�이??
     test_extracted_terms = {
-        "legal_concepts": ["손해배상", "계약", "소송", "형벌"],
-        "legal_actions": ["배상", "보상", "청구", "제기"],
-        "legal_procedures": ["절차", "신청", "심리", "판결"],
-        "legal_entities": ["법원", "검사", "변호사", "피고인"],
-        "legal_documents": ["소장", "답변서", "증거", "판결서"]
+        "legal_concepts": ["?�해배상", "계약", "?�송", "?�벌"],
+        "legal_actions": ["배상", "보상", "�?��", "?�기"],
+        "legal_procedures": ["?�차", "?�청", "?�리", "?�결"],
+        "legal_entities": ["법원", "검??, "변?�사", "?�고??],
+        "legal_documents": ["?�장", "?��???, "증거", "?�결??]
     }
     
     try:
-        # 도메인별 용어 확장
+        # ?�메?�별 ?�어 ?�장
         domain_terms = expander.expand_domain_terms(test_extracted_terms)
         
-        print("도메인별 용어 수:")
+        print("?�메?�별 ?�어 ??")
         for domain, categories in domain_terms.items():
             total_terms = sum(len(terms) for terms in categories.values())
-            print(f"  {domain}: {total_terms}개")
+            print(f"  {domain}: {total_terms}�?)
         
-        # 향상된 사전 생성
+        # ?�상???�전 ?�성
         enhanced_dict = expander.generate_enhanced_dictionary(test_extracted_terms, domain_terms)
         
-        print(f"\n향상된 사전 총 용어 수: {len(enhanced_dict)}")
+        print(f"\n?�상???�전 �??�어 ?? {len(enhanced_dict)}")
         
-        # 샘플 용어 정보 출력
-        print("\n샘플 용어 정보:")
+        # ?�플 ?�어 ?�보 출력
+        print("\n?�플 ?�어 ?�보:")
         sample_terms = list(enhanced_dict.keys())[:3]
         for term in sample_terms:
             info = enhanced_dict[term]
             print(f"  {term}:")
-            print(f"    동의어: {info.get('synonyms', [])}")
-            print(f"    관련 용어: {info.get('related_terms', [])}")
-            print(f"    관련 법률: {info.get('related_laws', [])}")
-            print(f"    신뢰도: {info.get('confidence', 0):.2f}")
+            print(f"    ?�의?? {info.get('synonyms', [])}")
+            print(f"    관???�어: {info.get('related_terms', [])}")
+            print(f"    관??법률: {info.get('related_laws', [])}")
+            print(f"    ?�뢰?? {info.get('confidence', 0):.2f}")
         
         return True
         
     except Exception as e:
-        print(f"도메인 확장 테스트 실패: {e}")
+        print(f"?�메???�장 ?�스???�패: {e}")
         return False
 
 
 def test_quality_validation():
-    """품질 검증 테스트"""
-    print("\n=== 품질 검증 테스트 ===")
+    """?�질 검�??�스??""
+    print("\n=== ?�질 검�??�스??===")
     
     validator = QualityValidator()
     
-    # 테스트용 사전 데이터
+    # ?�스?�용 ?�전 ?�이??
     test_dictionary = {
-        "손해배상": {
-            "synonyms": ["배상", "보상", "피해보상"],
-            "related_terms": ["불법행위", "채무불이행", "과실", "고의"],
-            "related_laws": ["민법 제750조", "민법 제751조"],
-            "precedent_keywords": ["손해배상청구권", "배상책임"],
+        "?�해배상": {
+            "synonyms": ["배상", "보상", "?�해보상"],
+            "related_terms": ["불법?�위", "채무불이??, "과실", "고의"],
+            "related_laws": ["민법 ??50�?, "민법 ??51�?],
+            "precedent_keywords": ["?�해배상�?���?, "배상책임"],
             "confidence": 0.9,
             "frequency": 10
         },
         "계약": {
-            "synonyms": ["계약서", "약정"],
-            "related_terms": ["계약해지", "계약위반"],
-            "related_laws": ["민법 제105조"],
-            "precedent_keywords": ["계약해지권"],
+            "synonyms": ["계약??, "?�정"],
+            "related_terms": ["계약?��?", "계약?�반"],
+            "related_laws": ["민법 ??05�?],
+            "precedent_keywords": ["계약?��?�?],
             "confidence": 0.8,
             "frequency": 8
         },
-        "저품질용어": {
+        "?�?�질?�어": {
             "synonyms": [],
             "related_terms": [],
             "related_laws": [],
@@ -140,109 +140,109 @@ def test_quality_validation():
     }
     
     try:
-        # 품질 검증 실행
+        # ?�질 검�??�행
         validation_summary = validator.validate_dictionary_quality(test_dictionary)
         
-        print("품질 검증 결과:")
-        print(f"  총 용어 수: {validation_summary['total_terms']}")
-        print(f"  고품질 용어: {validation_summary['high_quality_terms']}")
-        print(f"  중품질 용어: {validation_summary['medium_quality_terms']}")
-        print(f"  저품질 용어: {validation_summary['low_quality_terms']}")
-        print(f"  제외된 용어: {validation_summary['rejected_terms']}")
+        print("?�질 검�?결과:")
+        print(f"  �??�어 ?? {validation_summary['total_terms']}")
+        print(f"  고품�??�어: {validation_summary['high_quality_terms']}")
+        print(f"  중품�??�어: {validation_summary['medium_quality_terms']}")
+        print(f"  ?�?�질 ?�어: {validation_summary['low_quality_terms']}")
+        print(f"  ?�외???�어: {validation_summary['rejected_terms']}")
         
-        # 개선 제안 생성
+        # 개선 ?�안 ?�성
         suggestions = validator.generate_improvement_suggestions(test_dictionary)
         
-        print("\n개선 제안:")
+        print("\n개선 ?�안:")
         for suggestion in suggestions["overall_suggestions"]:
-            print(f"  • {suggestion}")
+            print(f"  ??{suggestion}")
         
-        # 고품질 용어 필터링
+        # 고품�??�어 ?�터�?
         high_quality_dict = validator.filter_high_quality_terms(test_dictionary)
         
-        print(f"\n고품질 용어 수: {len(high_quality_dict)}")
+        print(f"\n고품�??�어 ?? {len(high_quality_dict)}")
         
         return True
         
     except Exception as e:
-        print(f"품질 검증 테스트 실패: {e}")
+        print(f"?�질 검�??�스???�패: {e}")
         return False
 
 
 def test_dictionary_integration():
-    """사전 통합 테스트"""
-    print("\n=== 사전 통합 테스트 ===")
+    """?�전 ?�합 ?�스??""
+    print("\n=== ?�전 ?�합 ?�스??===")
     
     integrator = DictionaryIntegrator()
     
-    # 기존 사전 (테스트용)
+    # 기존 ?�전 (?�스?�용)
     existing_dict = {
-        "손해배상": {
+        "?�해배상": {
             "synonyms": ["배상", "보상"],
-            "related_terms": ["불법행위", "채무불이행"],
-            "related_laws": ["민법 제750조"],
-            "precedent_keywords": ["손해배상청구권"],
+            "related_terms": ["불법?�위", "채무불이??],
+            "related_laws": ["민법 ??50�?],
+            "precedent_keywords": ["?�해배상�?���?],
             "confidence": 0.8,
             "frequency": 5
         }
     }
     
-    # 향상된 사전 (테스트용)
+    # ?�상???�전 (?�스?�용)
     enhanced_dict = {
-        "손해배상": {
-            "synonyms": ["배상", "보상", "피해보상"],
-            "related_terms": ["불법행위", "채무불이행", "과실", "고의"],
-            "related_laws": ["민법 제750조", "민법 제751조"],
-            "precedent_keywords": ["손해배상청구권", "배상책임"],
+        "?�해배상": {
+            "synonyms": ["배상", "보상", "?�해보상"],
+            "related_terms": ["불법?�위", "채무불이??, "과실", "고의"],
+            "related_laws": ["민법 ??50�?, "민법 ??51�?],
+            "precedent_keywords": ["?�해배상�?���?, "배상책임"],
             "confidence": 0.9,
             "frequency": 10
         },
         "계약": {
-            "synonyms": ["계약서", "약정", "합의"],
-            "related_terms": ["계약해지", "계약위반", "계약이행"],
-            "related_laws": ["민법 제105조", "민법 제543조"],
-            "precedent_keywords": ["계약해지권", "계약위반"],
+            "synonyms": ["계약??, "?�정", "?�의"],
+            "related_terms": ["계약?��?", "계약?�반", "계약?�행"],
+            "related_laws": ["민법 ??05�?, "민법 ??43�?],
+            "precedent_keywords": ["계약?��?�?, "계약?�반"],
             "confidence": 0.8,
             "frequency": 8
         }
     }
     
     try:
-        # 사전 통합 실행
+        # ?�전 ?�합 ?�행
         merged_dict, integration_stats = integrator.merge_dictionaries(
             existing_dict, enhanced_dict
         )
         
-        print("통합 결과:")
-        print(f"  기존 용어 수: {integration_stats['existing_terms']}")
-        print(f"  향상된 용어 수: {integration_stats['enhanced_terms']}")
-        print(f"  통합된 용어 수: {integration_stats['merged_terms']}")
-        print(f"  새로 추가된 용어: {integration_stats['new_terms']}")
-        print(f"  업데이트된 용어: {integration_stats['updated_terms']}")
-        print(f"  제외된 용어: {integration_stats['rejected_terms']}")
+        print("?�합 결과:")
+        print(f"  기존 ?�어 ?? {integration_stats['existing_terms']}")
+        print(f"  ?�상???�어 ?? {integration_stats['enhanced_terms']}")
+        print(f"  ?�합???�어 ?? {integration_stats['merged_terms']}")
+        print(f"  ?�로 추�????�어: {integration_stats['new_terms']}")
+        print(f"  ?�데?�트???�어: {integration_stats['updated_terms']}")
+        print(f"  ?�외???�어: {integration_stats['rejected_terms']}")
         
-        # 통합된 사전 검증
+        # ?�합???�전 검�?
         validation_results = integrator.validate_integrated_dictionary(merged_dict)
         
-        print(f"\n통합된 사전 검증:")
-        print(f"  총 용어 수: {validation_results['total_terms']}")
-        print(f"  동의어가 있는 용어: {validation_results['terms_with_synonyms']}")
-        print(f"  관련 용어가 있는 용어: {validation_results['terms_with_related_terms']}")
-        print(f"  관련 법률이 있는 용어: {validation_results['terms_with_related_laws']}")
-        print(f"  고신뢰도 용어: {validation_results['high_confidence_terms']}")
+        print(f"\n?�합???�전 검�?")
+        print(f"  �??�어 ?? {validation_results['total_terms']}")
+        print(f"  ?�의?��? ?�는 ?�어: {validation_results['terms_with_synonyms']}")
+        print(f"  관???�어가 ?�는 ?�어: {validation_results['terms_with_related_terms']}")
+        print(f"  관??법률???�는 ?�어: {validation_results['terms_with_related_laws']}")
+        print(f"  고신뢰도 ?�어: {validation_results['high_confidence_terms']}")
         
         return True
         
     except Exception as e:
-        print(f"사전 통합 테스트 실패: {e}")
+        print(f"?�전 ?�합 ?�스???�패: {e}")
         return False
 
 
 def main():
-    """메인 테스트 함수"""
-    print("법률 용어 사전 확장 시스템 테스트 시작\n")
+    """메인 ?�스???�수"""
+    print("법률 ?�어 ?�전 ?�장 ?�스???�스???�작\n")
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -250,28 +250,28 @@ def main():
     
     test_results = []
     
-    # 각 단계별 테스트 실행
-    test_results.append(("용어 추출", test_term_extraction()))
-    test_results.append(("도메인 확장", test_domain_expansion()))
-    test_results.append(("품질 검증", test_quality_validation()))
-    test_results.append(("사전 통합", test_dictionary_integration()))
+    # �??�계�??�스???�행
+    test_results.append(("?�어 추출", test_term_extraction()))
+    test_results.append(("?�메???�장", test_domain_expansion()))
+    test_results.append(("?�질 검�?, test_quality_validation()))
+    test_results.append(("?�전 ?�합", test_dictionary_integration()))
     
-    # 테스트 결과 요약
-    print("\n=== 테스트 결과 요약 ===")
+    # ?�스??결과 ?�약
+    print("\n=== ?�스??결과 ?�약 ===")
     passed_tests = 0
     for test_name, result in test_results:
-        status = "통과" if result else "실패"
+        status = "?�과" if result else "?�패"
         print(f"{test_name}: {status}")
         if result:
             passed_tests += 1
     
-    print(f"\n총 {len(test_results)}개 테스트 중 {passed_tests}개 통과")
+    print(f"\n�?{len(test_results)}�??�스??�?{passed_tests}�??�과")
     
     if passed_tests == len(test_results):
-        print("모든 테스트가 성공적으로 완료되었습니다!")
+        print("모든 ?�스?��? ?�공?�으�??�료?�었?�니??")
         return True
     else:
-        print("일부 테스트가 실패했습니다. 로그를 확인해주세요.")
+        print("?��? ?�스?��? ?�패?�습?�다. 로그�??�인?�주?�요.")
         return False
 
 

@@ -14,29 +14,29 @@ sys.path.insert(0, str(project_root))
 
 
 def _make_engine_with_metadata():
-    from core.services.search.semantic_search_engine import SemanticSearchEngine
+    from source.services.semantic_search_engine import SemanticSearchEngine
     engine = SemanticSearchEngine()
     # Prevent loading actual FAISS/model by overriding components
     engine.index = None
     engine.model = None
     engine.metadata = [
-        {"id": 1, "text": "민법 제750조 불법행위 손해배상 규정", "type": "law", "source": "민법"},
-        {"id": 2, "text": "이혼 절차와 요건에 대한 해설", "type": "guide", "source": "가이드"},
-        {"id": 3, "text": "계약 해지 시 유의사항 및 판례 요지", "type": "guide", "source": "가이드"},
+        {"id": 1, "text": "민법 ??50�?불법?�위 ?�해배상 규정", "type": "law", "source": "민법"},
+        {"id": 2, "text": "?�혼 ?�차?� ?�건???�???�설", "type": "guide", "source": "가?�드"},
+        {"id": 3, "text": "계약 ?��? ???�의?�항 �??��? ?��?", "type": "guide", "source": "가?�드"},
     ]
     return engine
 
 
 def test_query_rewrite_generates_variants():
     engine = _make_engine_with_metadata()
-    variants = engine._rewrite_query("민법 제750조 조문")
+    variants = engine._rewrite_query("민법 ??50�?조문")
     assert isinstance(variants, list)
-    assert any("대한민국 민법" in v or "제 750 조" in v for v in variants)
+    assert any("?�?��?�?민법" in v or "??750 �? in v for v in variants)
 
 
 def test_keyword_rank_returns_results():
     engine = _make_engine_with_metadata()
-    res = engine._keyword_rank("손해배상", k=5)
+    res = engine._keyword_rank("?�해배상", k=5)
     assert isinstance(res, list)
     assert len(res) > 0
     assert all(isinstance(r, dict) for r in res)
@@ -59,7 +59,7 @@ def test_hybrid_prefers_vector_when_available(monkeypatch):
             return np.array([[0.1, 0.2, 0.3]], dtype=np.float32)
     engine.model = _FakeModel()
 
-    results = engine.search("민법 손해배상", k=3)
+    results = engine.search("민법 ?�해배상", k=3)
     assert isinstance(results, list)
     assert len(results) > 0
     # Ensure hybrid score computed
