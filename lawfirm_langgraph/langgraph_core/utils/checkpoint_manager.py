@@ -4,10 +4,8 @@ LangGraph Checkpoint Manager
 SQLite 기반 체크포인트 관리 모듈
 """
 
-import sqlite3
 import logging
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+from typing import Dict, Any, List
 from pathlib import Path
 
 try:
@@ -72,53 +70,6 @@ class CheckpointManager:
                 return None
         return self.saver
     
-    def save_checkpoint(self, thread_id: str, state: Dict[str, Any]) -> bool:
-        """
-        체크포인트 저장
-        
-        Args:
-            thread_id: 스레드 ID
-            state: 상태 데이터
-            
-        Returns:
-            bool: 저장 성공 여부
-        """
-        if not self.saver:
-            self.logger.warning("Checkpoint saver not available")
-            return False
-        
-        try:
-            # LangGraph의 SqliteSaver가 자동으로 처리
-            # 실제 저장은 워크플로우 실행 시 자동으로 수행됨
-            self.logger.debug(f"Checkpoint saved for thread: {thread_id}")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to save checkpoint: {e}")
-            return False
-    
-    def load_checkpoint(self, thread_id: str) -> Optional[Dict[str, Any]]:
-        """
-        체크포인트 로드
-        
-        Args:
-            thread_id: 스레드 ID
-            
-        Returns:
-            Optional[Dict[str, Any]]: 로드된 상태 데이터
-        """
-        if not self.saver:
-            self.logger.warning("Checkpoint saver not available")
-            return None
-        
-        try:
-            # LangGraph의 SqliteSaver가 자동으로 처리
-            # 실제 로드는 워크플로우 실행 시 자동으로 수행됨
-            self.logger.debug(f"Checkpoint loaded for thread: {thread_id}")
-            return None  # LangGraph가 자동으로 처리하므로 None 반환
-        except Exception as e:
-            self.logger.error(f"Failed to load checkpoint: {e}")
-            return None
-    
     def list_checkpoints(self, thread_id: str) -> List[Dict[str, Any]]:
         """
         특정 스레드의 체크포인트 목록 조회
@@ -171,93 +122,39 @@ class CheckpointManager:
         """
         오래된 체크포인트 정리
         
+        Note: LangGraph의 SqliteSaver가 직접 관리하므로,
+        이 메서드는 호환성을 위해 유지되지만 실제 cleanup은 SqliteSaver가 처리합니다.
+        
         Args:
-            ttl_hours: 유지 시간 (시간)
-            
+            ttl_hours: 유지 시간 (시간) - 참고용
+        
         Returns:
-            int: 삭제된 체크포인트 수
+            int: 항상 0 반환 (SqliteSaver가 자동 관리)
         """
         if not self.saver:
             self.logger.warning("Checkpoint saver not available")
             return 0
         
-        try:
-            # SQLite 직접 조작으로 오래된 체크포인트 삭제
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # 오래된 체크포인트 조회 및 삭제
-            cutoff_time = datetime.now().timestamp() - (ttl_hours * 3600)
-            
-            cursor.execute("""
-                SELECT COUNT(*) FROM checkpoints 
-                WHERE created_at < ?
-            """, (cutoff_time,))
-            
-            count = cursor.fetchone()[0]
-            
-            cursor.execute("""
-                DELETE FROM checkpoints 
-                WHERE created_at < ?
-            """, (cutoff_time,))
-            
-            conn.commit()
-            conn.close()
-            
-            self.logger.info(f"Cleaned up {count} old checkpoints")
-            return count
-            
-        except Exception as e:
-            self.logger.error(f"Failed to cleanup old checkpoints: {e}")
-            return 0
+        self.logger.info(
+            f"Cleanup requested for checkpoints older than {ttl_hours} hours. "
+            "LangGraph SqliteSaver manages checkpoints automatically."
+        )
+        return 0
     
     def get_database_info(self) -> Dict[str, Any]:
         """
         데이터베이스 정보 조회
         
+        Note: LangGraph의 SqliteSaver가 직접 관리하므로,
+        기본 정보만 반환합니다.
+        
         Returns:
-            Dict[str, Any]: 데이터베이스 정보
+            Dict[str, Any]: 데이터베이스 기본 정보
         """
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # 테이블 존재 확인
-            cursor.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='checkpoints'
-            """)
-            
-            table_exists = cursor.fetchone() is not None
-            
-            if table_exists:
-                # 체크포인트 수 조회
-                cursor.execute("SELECT COUNT(*) FROM checkpoints")
-                checkpoint_count = cursor.fetchone()[0]
-                
-                # 최신 체크포인트 시간 조회
-                cursor.execute("""
-                    SELECT MAX(created_at) FROM checkpoints
-                """)
-                latest_checkpoint = cursor.fetchone()[0]
-            else:
-                checkpoint_count = 0
-                latest_checkpoint = None
-            
-            conn.close()
-            
-            return {
-                "database_path": self.db_path,
-                "table_exists": table_exists,
-                "checkpoint_count": checkpoint_count,
-                "latest_checkpoint": latest_checkpoint,
-                "langgraph_available": LANGGRAPH_AVAILABLE
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get database info: {e}")
-            return {
-                "database_path": self.db_path,
-                "error": str(e),
-                "langgraph_available": LANGGRAPH_AVAILABLE
-            }
+        return {
+            "database_path": self.db_path,
+            "langgraph_available": LANGGRAPH_AVAILABLE,
+            "saver_type": type(self.saver).__name__ if self.saver else None,
+            "note": "LangGraph SqliteSaver manages the database internally. "
+                    "Use list_checkpoints() to query checkpoints for specific threads."
+        }
