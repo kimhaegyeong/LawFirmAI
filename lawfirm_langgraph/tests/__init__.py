@@ -1,5 +1,7 @@
 """
 LawFirm LangGraph Tests
-테스트 모듈 초기화
+LangGraph 테스트 모듈
 """
+
+__version__ = "1.0.0"
 
