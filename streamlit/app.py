@@ -17,13 +17,17 @@ from typing import Any, Dict
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
 # LangGraph 활성화 설정
 os.environ["USE_LANGGRAPH"] = "true"
 
 import streamlit as st
 
 # LangGraph 워크플로우 서비스만 사용
-from core.agents.workflow_service import LangGraphWorkflowService
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 로깅 설정
