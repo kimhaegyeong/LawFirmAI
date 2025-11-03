@@ -1,0 +1,60 @@
+# LangGraph v1.0 및 필수 의존성
+
+# LangGraph 관련
+langgraph>=1.0.0
+langgraph-checkpoint>=1.0.0
+langgraph-checkpoint-sqlite>=0.0.1
+langgraph-cli[inmem]>=0.4.5
+
+# LangChain 관련 (LangGraph v1.0 호환 버전)
+langchain>=1.0.0
+langchain-openai>=1.0.0
+langchain-community>=0.4.0
+langchain-core>=1.0.0
+langchain-google-genai>=3.0.0
+
+# LLM 관찰성 및 디버깅
+langfuse>=2.0.0
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
+
+# Google AI (Gemini) - langchain-google-genai에 포함됨
+# google-generativeai>=0.3.0
+
+# 데이터 처리
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 벡터 데이터베이스
+faiss-cpu>=1.7.0
+
+# 임베딩 및 ML
+sentence-transformers>=2.2.0
+
+# 기본 라이브러리
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# 메모리 모니터링
+psutil>=5.9.0
+
+# 로깅
+colorlog>=6.7.0
+structlog>=23.2.0
+
+# 날짜 처리
+python-dateutil>=2.8.0
+
+# API 클라이언트
+urllib3>=2.0.0
+
+# 문서 처리
+pypdf>=3.0.0
+python-docx>=0.8.11
+markdown>=3.4.0
+
+# Pydantic (설정 및 검증)
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
