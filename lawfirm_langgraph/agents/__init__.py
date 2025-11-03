@@ -9,6 +9,6 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.services.workflow_service import LangGraphWorkflowService
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
 
 __all__ = ["LangGraphWorkflowService"]

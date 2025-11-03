@@ -7,12 +7,24 @@ Studio에서 사용할 그래프를 export하는 파일
 import sys
 from pathlib import Path
 
-# 상위 프로젝트 경로 추가 (필수 모듈 참조용)
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# 상위 프로젝트 경로를 먼저 추가 (core.services, source.utils 등이 여기에 있음)
+project_root = Path(__file__).parent.parent.resolve()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-from source.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from source.services.workflow_service import LangGraphWorkflowService
+# lawfirm_langgraph 경로 추가 (langgraph_core.services 등이 여기에 있음)
+lawfirm_langgraph_root = Path(__file__).parent.resolve()
+if str(lawfirm_langgraph_root) not in sys.path:
+    sys.path.insert(0, str(lawfirm_langgraph_root))
+
+# 현재 작업 디렉토리도 추가 (다양한 실행 환경 대응)
+import os
+current_dir = os.getcwd()
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
 from config.langgraph_config import LangGraphConfig
 from langgraph.graph import StateGraph
 

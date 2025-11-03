@@ -6,24 +6,14 @@ LangGraph 설정 관리 모듈
 
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import List
-
-# 상위 프로젝트 경로 추가
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv
 
-# .env 파일 로드 (상위 프로젝트에서)
-env_path = project_root / ".env"
-if env_path.exists():
-    load_dotenv(dotenv_path=str(env_path))
-else:
-    load_dotenv()
+# .env 파일 로드
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +31,7 @@ class LangGraphConfig:
 
     # 체크포인트 설정
     checkpoint_storage: CheckpointStorageType = CheckpointStorageType.SQLITE
-    checkpoint_db_path: str = "../data/checkpoints/langgraph.db"
+    checkpoint_db_path: str = "./data/checkpoints/langgraph.db"
     checkpoint_ttl: int = 3600  # 1시간
 
     # 워크플로우 설정
@@ -76,7 +66,7 @@ class LangGraphConfig:
     langsmith_tracing: bool = True
 
     # RAG 품질 제어 설정
-    similarity_threshold: float = 0.3  # 문서 유사도 임계값
+    similarity_threshold: float = 0.5  # 문서 유사도 임계값 (V2 벡터 검색에 최적화, 0.9는 너무 높아 0.5로 조정)
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
     max_tokens: int = 2000  # 최대 토큰 수
 
@@ -90,10 +80,6 @@ class LangGraphConfig:
     max_conversation_history: int = 5
     max_processing_steps: int = 20
     enable_state_pruning: bool = True
-
-    # LLM 기반 복잡도 분류 설정
-    use_llm_for_complexity: bool = True  # LLM 기반 복잡도 분류 활성화
-    complexity_llm_model: str = "fast"  # "fast" | "main" | "disabled"
 
     @classmethod
     def from_env(cls) -> 'LangGraphConfig':
@@ -159,10 +145,6 @@ class LangGraphConfig:
         config.max_processing_steps = int(os.getenv("MAX_PROCESSING_STEPS", config.max_processing_steps))
         config.enable_state_pruning = os.getenv("ENABLE_STATE_PRUNING", "true").lower() == "true"
 
-        # LLM 기반 복잡도 분류 설정
-        config.use_llm_for_complexity = os.getenv("USE_LLM_FOR_COMPLEXITY", "true").lower() == "true"
-        config.complexity_llm_model = os.getenv("COMPLEXITY_LLM_MODEL", "fast")
-
         logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}")
         return config
 
@@ -214,3 +196,7 @@ class LangGraphConfig:
             "max_processing_steps": self.max_processing_steps,
             "enable_state_pruning": self.enable_state_pruning
         }
+
+
+# 전역 설정 인스턴스
+langgraph_config = LangGraphConfig.from_env()
