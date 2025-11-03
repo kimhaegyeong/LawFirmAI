@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 if not LANGFUSE_CLIENT_AVAILABLE:
     logger.warning("LangfuseClient not available for LangGraph workflow tracking")
 
-# from agents.checkpoint_manager import CheckpointManager
+from langgraph_core.utils.checkpoint_manager import CheckpointManager
 from langgraph_core.utils.state_definitions import create_initial_legal_state
 
 
@@ -69,13 +69,26 @@ class LangGraphWorkflowService:
         # 검색 결과 보존을 위한 캐시 (LangGraph reducer 문제 우회)
         self._search_results_cache: Optional[Dict[str, Any]] = None
 
-        # 컴포넌트 초기화 (체크포인트 제거)
-        # self.checkpoint_manager = CheckpointManager(self.config.checkpoint_db_path)
-        self.checkpoint_manager = None  # Checkpoint manager is disabled
+        # CheckpointManager 초기화
+        import os
+        enable_checkpoint = os.getenv("ENABLE_CHECKPOINT", "true").lower() == "true"
+        if enable_checkpoint:
+            try:
+                self.checkpoint_manager = CheckpointManager(self.config.checkpoint_db_path)
+                checkpointer = self.checkpoint_manager.get_memory()
+                self.logger.info("Checkpoint enabled with SQLite storage")
+            except Exception as e:
+                self.logger.warning(f"Checkpoint initialization failed: {e}. Using None.")
+                checkpointer = None
+                self.checkpoint_manager = None
+        else:
+            checkpointer = None
+            self.checkpoint_manager = None
+            self.logger.info("Checkpoint disabled")
+
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
 
         # LangSmith 활성화 여부 확인 (환경 변수로 제어 가능)
-        import os
         enable_langsmith = os.environ.get("ENABLE_LANGSMITH", "false").lower() == "true"
 
         if not enable_langsmith:
@@ -92,12 +105,13 @@ class LangGraphWorkflowService:
             try:
                 # 워크플로우 컴파일
                 self.app = self.legal_workflow.graph.compile(
-                    checkpointer=None,
+                    checkpointer=checkpointer,
                     interrupt_before=None,
                     interrupt_after=None,
                     debug=False,
                 )
-                self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
+                checkpoint_status = "with checkpoint" if checkpointer else "without checkpoint"
+                self.logger.info(f"워크플로우가 {checkpoint_status}로 컴파일되었습니다 (LangSmith 비활성화됨)")
             finally:
                 # 환경 변수 복원
                 if original_tracing:
@@ -110,12 +124,13 @@ class LangGraphWorkflowService:
         else:
             # LangSmith 활성화 모드 (ENABLE_LANGSMITH=true로 설정된 경우)
             self.app = self.legal_workflow.graph.compile(
-                checkpointer=None,
+                checkpointer=checkpointer,
                 interrupt_before=None,
                 interrupt_after=None,
                 debug=False,
             )
-            self.logger.info("워크플로우가 LangSmith 추적으로 컴파일되었습니다 (State Reduction 적용됨)")
+            checkpoint_status = "with checkpoint" if checkpointer else "without checkpoint"
+            self.logger.info(f"워크플로우가 LangSmith 추적으로 컴파일되었습니다 ({checkpoint_status}, State Reduction 적용됨)")
 
         if self.app is None:
             self.logger.error("Failed to compile workflow")
@@ -194,10 +209,10 @@ class LangGraphWorkflowService:
             else:
                 self.logger.debug(f"process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
 
-            # 워크플로우 실행 설정 (체크포인트 비활성화)
+            # 워크플로우 실행 설정 (체크포인트 활성화)
             config = {}
-            # if enable_checkpoint:
-            #     config = {"configurable": {"thread_id": session_id}}
+            if self.checkpoint_manager and enable_checkpoint:
+                config = {"configurable": {"thread_id": session_id}}
 
             # 워크플로우 실행 (스트리밍으로 진행상황 표시)
             if self.app:
