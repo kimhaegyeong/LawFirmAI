@@ -11,7 +11,7 @@
 ### 1. 중간 생성 텍스트 포함 문제
 - **증상**: "STEP 0: 원본 품질 평가", "질문 정보", "원본 답변" 등 중간 생성 텍스트가 최종 답변에 포함됨
 - **영향**: 답변 가독성 저하, 전문성 저하
-- **발생 위치**: `core/agents/answer_formatter.py`
+- **발생 위치**: `lawfirm_langgraph/source/services/answer_formatter.py` (또는 해당 서비스)
 
 ### 2. 검색되지 않은 내용이 답변에 포함되는 문제 (Hallucination)
 - **증상**: 검색 결과에 없는 정보가 답변에 포함될 가능성
@@ -42,8 +42,10 @@
 ## 1. 중간 생성 텍스트 필터링 강화
 
 ### 1.1 구현 위치
-- **파일**: `core/agents/answer_formatter.py`
+- **파일**: `lawfirm_langgraph/source/services/answer_formatter.py` (또는 해당 서비스)
 - **함수**: `_remove_intermediate_text()` 추가, `_validate_final_answer()` 수정
+
+> ⚠️ **참고**: 실제 파일 경로는 프로젝트 구조에 따라 다를 수 있습니다. `lawfirm_langgraph/source/services/` 디렉토리를 확인하세요.
 
 ### 1.2 제거할 패턴
 ```python
@@ -140,7 +142,7 @@ def _remove_intermediate_text(self, answer_text: str) -> str:
 ## 2. 검색 결과 기반 검증 강화 (Hallucination 방지)
 
 ### 2.1 구현 위치
-- **파일**: `core/agents/quality_validators.py`, `core/agents/answer_formatter.py`
+- **파일**: `lawfirm_langgraph/source/services/quality_validators.py` (또는 해당 서비스), `lawfirm_langgraph/source/services/answer_formatter.py` (또는 해당 서비스)
 - **함수**: `validate_answer_source_verification()`, `_validate_final_answer()` 추가/수정
 
 ### 2.2 검증 로직
@@ -570,14 +572,14 @@ def _calculate_consistent_confidence(
 ## 📝 파일 수정 목록
 
 ### 수정할 파일
-1. `core/agents/answer_formatter.py`
+1. `lawfirm_langgraph/source/services/answer_formatter.py` (또는 해당 서비스)
    - `_remove_intermediate_text()` 추가
    - `_adjust_answer_length()` 추가
    - `_calculate_consistent_confidence()` 추가
    - `format_and_prepare_final()` 수정
    - `_validate_final_answer()` 수정
 
-2. `core/agents/quality_validators.py`
+2. `lawfirm_langgraph/source/services/quality_validators.py` (또는 해당 서비스)
    - `validate_answer_source_verification()` 추가
    - `AnswerValidator` 클래스 확장
 
