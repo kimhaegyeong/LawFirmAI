@@ -2,29 +2,48 @@
 
 ## 개요
 
-LawFirmAI는 명확한 계층 구조로 구성된 법률 AI 시스템입니다.
+LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 명확한 계층 구조로 구성된 법률 AI 시스템입니다.
 
 ## 전체 구조
 
 ```
 LawFirmAI/
-├── source/                   # 핵심 비즈니스 로직 (agents, services, models, data)
-├── apps/                     # 애플리케이션 레이어
-├── infrastructure/           # 인프라 및 유틸리티
-├── scripts/                  # 실행 스크립트
-├── data/                     # 데이터 파일
-├── tests/                    # 테스트 코드
-├── docs/                     # 문서
-└── monitoring/               # 모니터링 시스템
+├── lawfirm_langgraph/       # 핵심 LangGraph 워크플로우 시스템
+│   ├── config/              # 설정 파일
+│   ├── core/                # 핵심 비즈니스 로직
+│   │   ├── agents/          # LangGraph 워크플로우 에이전트
+│   │   ├── services/        # 비즈니스 서비스
+│   │   ├── data/            # 데이터 레이어
+│   │   ├── models/          # AI 모델
+│   │   └── utils/           # 유틸리티
+│   ├── langgraph_core/      # LangGraph 핵심 모듈
+│   ├── tests/               # 테스트 코드
+│   └── docs/                # 문서
+├── scripts/                 # 유틸리티 스크립트
+│   ├── data_collection/     # 데이터 수집
+│   ├── data_processing/     # 데이터 전처리
+│   ├── database/            # 데이터베이스 관리
+│   ├── ml_training/         # ML 모델 훈련
+│   └── monitoring/          # 모니터링
+├── data/                    # 데이터 파일
+│   ├── raw/                 # 원본 데이터
+│   ├── processed/           # 전처리된 데이터
+│   ├── embeddings/          # 벡터 임베딩
+│   └── database/            # 데이터베이스 파일
+├── monitoring/              # 모니터링 시스템
+│   ├── grafana/             # Grafana 설정
+│   └── prometheus/          # Prometheus 설정
+├── docs/                    # 프로젝트 문서
+└── README.md                # 프로젝트 문서
 ```
 
-## 📦 Source 모듈
+## 📦 lawfirm_langgraph 모듈
 
-### source/agents/ - LangGraph 에이전트
+### lawfirm_langgraph/core/agents/ - LangGraph 에이전트
 **역할**: AI 워크플로우 관리
 
 ```
-source/agents/
+lawfirm_langgraph/core/agents/
 ├── workflow_service.py              # 워크플로우 서비스 (메인)
 ├── legal_workflow_enhanced.py       # 법률 워크플로우
 ├── state_definitions.py             # 상태 정의
@@ -36,122 +55,96 @@ source/agents/
 ├── performance_optimizer.py          # 성능 최적화
 ├── node_wrappers.py                 # 노드 래퍼
 ├── query_optimizer.py               # 쿼리 최적화
-└── ...
+├── handlers/                        # 핸들러 모듈
+│   ├── answer_formatter.py
+│   ├── answer_generator.py
+│   ├── classification_handler.py
+│   ├── context_builder.py
+│   ├── direct_answer_handler.py
+│   └── search_handler.py
+├── tools/                           # Agentic AI Tools
+└── validators/                      # 검증 모듈
+    └── quality_validators.py
 ```
 
 **사용 예시**:
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
-result = await workflow.process_query("질문", "session_id")
+result = await workflow.process_query_async("질문", "session_id")
 ```
 
-### source/services/ - 검색 서비스
-**역할**: 법률 문서 검색
+### lawfirm_langgraph/core/services/ - 비즈니스 서비스
+**역할**: 검색, 답변 생성, 품질 개선 등
 
 ```
-source/services/
+lawfirm_langgraph/core/services/
 ├── hybrid_search_engine.py          # 하이브리드 검색
-├── exact_search_engine.py           # 정확한 매칭
-├── semantic_search_engine.py        # 의미적 검색
-├── precedent_search_engine.py       # 판례 검색
-├── question_classifier.py           # 질문 분류
-└── result_merger.py                 # 결과 병합
+├── semantic_search_engine.py         # 의미적 검색
+├── exact_search_engine.py            # 정확한 매칭
+├── precedent_search_engine.py         # 판례 검색
+├── question_classifier.py            # 질문 분류
+├── answer_generator.py                # 답변 생성
+├── context_builder.py                 # 컨텍스트 빌더
+├── confidence_calculator.py          # 신뢰도 계산
+├── gemini_client.py                   # Gemini 클라이언트
+├── unified_prompt_manager.py          # 통합 프롬프트 관리
+└── ... (70+ 서비스 파일)
 ```
 
 **사용 예시**:
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 
 engine = HybridSearchEngine()
 results = engine.search("계약 해지", question_type="law_inquiry")
 ```
 
-### source/services/ - 답변 생성
-**역할**: 답변 생성 및 포맷팅 (source/services에 통합됨)
+### lawfirm_langgraph/core/data/ - 데이터 레이어
+**역할**: 데이터베이스 및 벡터 스토어 관리
 
 ```
-source/services/
-├── answer_generator.py             # 답변 생성
-├── improved_answer_generator.py   # 개선된 답변 생성
-├── context_builder.py              # 컨텍스트 구축
-└── answer_formatter.py             # 답변 포맷팅
+lawfirm_langgraph/core/data/
+├── database.py                     # SQLite 데이터베이스
+├── vector_store.py                  # FAISS 벡터 스토어
+├── data_processor.py                # 데이터 처리
+├── conversation_store.py            # 대화 저장소
+├── legal_term_normalizer.py         # 법률 용어 정규화
+├── assembly_playwright_client.py    # Assembly 데이터 수집
+└── versioned_schema.py              # 버전 관리 스키마
 ```
 
-**사용 예시**:
-```python
-from source.services.generation import AnswerGenerator
-
-generator = AnswerGenerator()
-answer = generator.generate(query, context)
-```
-
-### source/services/ - 품질 개선
-**역할**: 답변 품질 향상 (source/services에 통합됨)
-
-```
-source/services/
-└── confidence_calculator.py       # 신뢰도 계산
-```
-
-### source/models/ - AI 모델
+### lawfirm_langgraph/core/models/ - AI 모델
 **역할**: AI 모델 관리
 
 ```
-source/models/
-├── model_manager.py                # 모델 관리자
-├── sentence_bert.py                # Sentence BERT
-└── gemini_client.py                # Gemini 클라이언트
+lawfirm_langgraph/core/models/
+└── sentence_bert.py                 # Sentence BERT 임베딩 모델
 ```
 
-### source/data/ - 데이터 레이어
-**역할**: 데이터 관리
+### lawfirm_langgraph/core/utils/ - 유틸리티
+**역할**: 설정 및 유틸리티 함수
 
 ```
-source/data/
-├── database.py                     # SQLite 데이터베이스
-├── vector_store.py                 # FAISS 벡터 스토어
-├── data_processor.py               # 데이터 처리
-├── conversation_store.py            # 대화 저장소
-└── legal_term_normalizer.py        # 법률 용어 정규화
+lawfirm_langgraph/core/utils/
+├── langgraph_config.py              # LangGraph 설정
+├── langchain_config.py              # LangChain 설정
+├── logger.py                         # 로깅
+├── config.py                        # 일반 설정
+├── ollama_client.py                  # Ollama 클라이언트
+└── ... (기타 유틸리티)
 ```
 
-## 📱 Apps 모듈
-
-### apps/streamlit/
-**역할**: Streamlit 웹 인터페이스
+### lawfirm_langgraph/config/ - 설정
+**역할**: 설정 관리
 
 ```
-apps/streamlit/
-├── app.py                          # 메인 앱
-└── ...
-```
-
-### apps/api/
-**역할**: FastAPI 서버
-
-```
-apps/api/
-├── routes/                         # API 라우트
-└── ...
-```
-
-## 🔧 Infrastructure 모듈
-
-### infrastructure/utils/
-**역할**: 유틸리티 함수
-
-```
-infrastructure/utils/
-├── langgraph_config.py             # LangGraph 설정
-├── langchain_config.py             # LangChain 설정
-├── logger.py                       # 로깅
-├── config.py                       # 일반 설정
-├── ollama_client.py                # Ollama 클라이언트
-└── ...
+lawfirm_langgraph/config/
+├── langgraph_config.py               # LangGraph 설정
+└── app_config.py                     # 애플리케이션 설정
 ```
 
 ## 📊 데이터 흐름
@@ -160,17 +153,14 @@ infrastructure/utils/
 ```
 User Input
     ↓
-apps/streamlit/app.py 또는 apps/api/
+lawfirm_langgraph/core/agents/workflow_service.py
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
-    ↓
-core/services/search/ (검색)
-    ↓
-core/services/generation/ (생성)
-    ↓
-core/services/enhancement/ (품질)
+lawfirm_langgraph/core/services/ (검색, 생성, 품질 개선)
+    ├── hybrid_search_engine.py
+    ├── answer_generator.py
+    └── confidence_calculator.py
     ↓
 User Output
 ```
@@ -179,11 +169,11 @@ User Output
 ```
 Query
     ↓
-core/services/search/question_classifier.py (분류)
+lawfirm_langgraph/core/services/question_classifier.py (분류)
     ↓
-core/services/search/hybrid_search_engine.py (검색)
-    ├── exact_search_engine.py
-    └── semantic_search_engine.py
+lawfirm_langgraph/core/services/hybrid_search_engine.py (검색)
+    ├── semantic_search_engine.py
+    └── exact_search_engine.py
     ↓
 Results
 ```
@@ -201,67 +191,71 @@ sys.path.insert(0, str(project_root))
 
 ### Core 모듈 Import
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from source.services.search import HybridSearchEngine
-from source.services.generation import AnswerGenerator
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 ```
 
-## 📚 확장 가이드
+## 📚 scripts 모듈
 
-### 새 검색 엔진 추가
-1. `source/services/search/new_engine.py` 생성
-2. `source/services/search/__init__.py` 업데이트
-3. 테스트 작성
+### scripts/data_collection/
+**역할**: 법률 데이터 수집
+- Assembly 데이터 수집
+- 국가법령정보센터 API 연동
 
-### 새 답변 생성기 추가
-1. `source/services/generation/new_generator.py` 생성
-2. `source/services/generation/__init__.py` 업데이트
-3. 테스트 작성
+### scripts/data_processing/
+**역할**: 데이터 전처리 및 임베딩 생성
+- 텍스트 정리 및 청킹
+- 벡터 임베딩 생성
+- FAISS 인덱스 구축
 
-### 새 애플리케이션 추가
-1. `apps/new_app/` 디렉토리 생성
-2. 메인 파일 작성
-3. Dockerfile 추가
-4. 문서 업데이트
+### scripts/database/
+**역할**: 데이터베이스 관리
+- 스키마 생성 및 마이그레이션
+- 데이터 검증
+
+### scripts/ml_training/
+**역할**: ML 모델 훈련
+- 모델 파인튜닝
+- 성능 평가
 
 ## 🎯 모듈별 책임
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `source/agents/` | 워크플로우 관리 | services, models |
-| `source/services/search/` | 검색 로직 | data |
-| `source/services/generation/` | 답변 생성 | search, models |
-| `source/services/enhancement/` | 품질 개선 | generation |
-| `source/models/` | AI 모델 | - |
-| `source/data/` | 데이터 관리 | - |
-| `apps/streamlit/` | 웹 UI | source/agents |
-| `apps/api/` | API 서버 | source/agents |
-| `infrastructure/` | 인프라 | - |
-| `source/` | 레거시 모듈 | (호환성 유지) |
+| `lawfirm_langgraph/core/agents/` | 워크플로우 관리 | services, models, data |
+| `lawfirm_langgraph/core/services/` | 비즈니스 로직 | data, models |
+| `lawfirm_langgraph/core/data/` | 데이터 관리 | - |
+| `lawfirm_langgraph/core/models/` | AI 모델 | - |
+| `lawfirm_langgraph/core/utils/` | 유틸리티 | - |
+| `scripts/` | 스크립트 및 유틸리티 | core 모듈 |
+| `data/` | 데이터 파일 | - |
 
 ## 🚀 개발 워크플로우
 
 ### 1. 기능 추가
 ```bash
 # 새 서비스 추가
-vim source/services/new_service.py
+vim lawfirm_langgraph/core/services/new_service.py
 
 # __init__.py 업데이트
-vim source/services/__init__.py
+vim lawfirm_langgraph/core/services/__init__.py
 
 # 테스트 작성
-vim tests/test_new_service.py
+vim lawfirm_langgraph/tests/test_new_service.py
 
 # 테스트 실행
-python tests/test_new_service.py
+pytest lawfirm_langgraph/tests/test_new_service.py -v
 ```
 
 ### 2. 디버깅
 ```python
 # 로깅 활성화
 import logging
-logging.basicConfig(level=logging.DEBUG)
+from lawfirm_langgraph.core.utils.logger import setup_logging
+
+setup_logging(level=logging.DEBUG)
 
 # 에러 추적
 import traceback
@@ -274,11 +268,12 @@ except Exception as e:
 ### 3. 테스트
 ```bash
 # 전체 테스트
-python tests/test_core_imports.py
-python tests/test_core_workflow.py
+cd lawfirm_langgraph/tests
+python run_all_tests.py
 
 # 특정 테스트
-python tests/test_hybrid_search.py
+pytest lawfirm_langgraph/tests/test_workflow_service.py -v
+pytest lawfirm_langgraph/tests/test_integration.py -v
 ```
 
 ## 📝 규칙 및 컨벤션
@@ -300,7 +295,7 @@ import torch
 from fastapi import FastAPI
 
 # 프로젝트 모듈
-from source.agents import LangGraphWorkflowService
+from lawfirm_langgraph.core.agents import LangGraphWorkflowService
 ```
 
 ### 3. Docstring
@@ -317,3 +312,9 @@ def process_data(data: Dict[str, Any]) -> str:
     """
     pass
 ```
+
+## 📖 추가 정보
+
+- [프로젝트 개요](project_overview.md)
+- [아키텍처](architecture.md)
+- [LangGraph 워크플로우 가이드](../05_rag_system/langgraph_integration_guide.md)
