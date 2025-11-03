@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 법률 AI Agent용 Tool System
 LangChain의 Tool, StructuredTool 패턴 사용

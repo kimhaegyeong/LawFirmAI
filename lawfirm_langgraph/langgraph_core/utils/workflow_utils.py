@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 워크플로우 유틸리티 함수 집합
 상태 관리, 파싱, 정규화 등의 공통 기능 제공
@@ -10,57 +10,15 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# 유틸리티 import (상대 import 사용 - 같은 패키지 내부)
-try:
-    from .state_definitions import LegalWorkflowState
-    from .state_utils import (
-        MAX_PROCESSING_STEPS,
-        prune_processing_steps,
-    )
-except ImportError:
-    # Fallback: 프로젝트 루트 기준 import
-    try:
-        from lawfirm_langgraph.langgraph_core.utils.state_definitions import LegalWorkflowState
-        from lawfirm_langgraph.langgraph_core.utils.state_utils import (
-            MAX_PROCESSING_STEPS,
-            prune_processing_steps,
-        )
-    except ImportError:
-        # Fallback: 기존 경로 (호환성 유지)
-        from source.agents.state_definitions import LegalWorkflowState
-        from source.agents.state_utils import (
-            MAX_PROCESSING_STEPS,
-            prune_processing_steps,
-        )
-
-# state_helpers와 extractors는 아직 source에 있으므로 그대로 사용
-from source.agents.extractors import ResponseExtractor
-try:
-    from source.agents.state_helpers import ensure_state_group, get_field, set_field
-except ImportError:
-    # state_helpers가 없을 경우 빈 함수로 대체
-    def ensure_state_group(state, group_name):
-        if group_name not in state:
-            state[group_name] = {}
-    def get_field(state, path, default=None):
-        keys = path.split('.')
-        value = state
-        for key in keys:
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                return default
-        return value
-    def set_field(state, path, value):
-        keys = path.split('.')
-        target = state
-        for key in keys[:-1]:
-            if key not in target:
-                target[key] = {}
-            target = target[key]
-        target[keys[-1]] = value
-from source.services.question_classifier import QuestionType
-from source.services.unified_prompt_manager import LegalDomain
+from core.agents.extractors import ResponseExtractor
+from core.agents.state_definitions import LegalWorkflowState
+from core.agents.state_helpers import ensure_state_group, get_field, set_field
+from core.agents.state_utils import (
+    MAX_PROCESSING_STEPS,
+    prune_processing_steps,
+)
+from core.services.question_classifier import QuestionType
+from core.services.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:
@@ -124,12 +82,8 @@ class WorkflowUtils:
         elif key in ["search_query", "extracted_keywords", "ai_keyword_expansion", "retrieved_docs",
                      "optimized_queries", "search_params", "semantic_results", "keyword_results",
                      "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
-                     "prompt_optimized_context", "structured_documents", "search_metadata",
-                     "search_quality_evaluation"]:
+                     "prompt_optimized_context"]:
             ensure_state_group(state, "search")
-        # quality_metrics는 metadata에 저장
-        elif key == "quality_metrics":
-            ensure_state_group(state, "common")
         # Analysis 필드인 경우 그룹 초기화
         elif key in ["analysis", "legal_references", "legal_citations"]:
             ensure_state_group(state, "analysis")

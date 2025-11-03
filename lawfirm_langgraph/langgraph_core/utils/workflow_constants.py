@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 워크플로우 상수 정의
 리팩토링: legal_workflow_enhanced.py에서 상수 분리
