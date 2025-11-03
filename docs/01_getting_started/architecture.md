@@ -11,13 +11,13 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    애플리케이션 레이어                        │
-│  ├── apps/streamlit/ (Streamlit 웹 인터페이스)              │
+│  ├── streamlit/ (Streamlit 웹 인터페이스)                    │
 │  └── apps/api/ (FastAPI 서버)                                │
 ├─────────────────────────────────────────────────────────────┤
-│                    LangGraph 워크플로우                      │
-│  ├── core/agents/workflow_service.py                         │
-│  ├── core/agents/legal_workflow_enhanced.py                  │
-│  └── core/agents/state_definitions.py                        │
+│                    LangGraph 워크플로우 (메인) ⭐            │
+│  ├── lawfirm_langgraph/source/services/workflow_service.py  │
+│  ├── lawfirm_langgraph/source/services/legal_workflow_enhanced.py │
+│  └── lawfirm_langgraph/source/utils/state_definitions.py    │
 ├─────────────────────────────────────────────────────────────┤
 │                    핵심 서비스 레이어                        │
 │  ├── core/services/search/  │  ├── core/services/generation/ │
@@ -36,20 +36,20 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 | 모듈 | 책임 | 주요 컴포넌트 |
 |------|------|-------------|
-| **core/agents/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced |
+| **lawfirm_langgraph/source/** | LangGraph 워크플로우 관리 (메인) | workflow_service, legal_workflow_enhanced |
 | **core/services/search/** | 법률 문서 검색 | hybrid_search, semantic_search, exact_search |
 | **core/services/generation/** | 답변 생성 | answer_generator, context_builder |
 | **core/services/enhancement/** | 품질 개선 | confidence_calculator |
 | **core/data/** | 데이터 관리 | database, vector_store, conversation_store |
 | **core/models/** | AI 모델 관리 | model_manager, sentence_bert, gemini_client |
-| **apps/streamlit/** | 웹 UI | Streamlit 인터페이스 |
+| **streamlit/** | 웹 UI | Streamlit 인터페이스 |
 | **apps/api/** | API 서버 | FastAPI 엔드포인트 |
 
 ## 핵심 서비스
 
 ### 1. LangGraph 워크플로우 서비스
 
-**파일**: `core/agents/workflow_service.py`
+**파일**: `lawfirm_langgraph/source/services/workflow_service.py`
 
 **역할**: LangGraph 기반 법률 질문 처리 워크플로우 관리
 
@@ -60,7 +60,14 @@ LawFirmAI의 서비스 아키텍처는 core 모듈 기반의 모듈화된 서비
 
 **사용 예시**:
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
@@ -230,11 +237,11 @@ answer = generator.generate(query, context)
 ### 1. 쿼리 처리 흐름
 
 ```
-User Input (apps/streamlit 또는 apps/api)
+User Input (streamlit 또는 apps/api)
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/source/services/workflow_service.py
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/source/services/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── classify_query (질문 분류)
     ├── assess_urgency (긴급도 평가)
     ├── resolve_multi_turn (멀티턴 처리)
@@ -287,10 +294,19 @@ answer = answer_generator.generate("계약 해지", results)
 
 ```python
 import asyncio
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
 async def process_query_async(query: str, session_id: str):
-    workflow = LangGraphWorkflowService()
+    config = LangGraphConfig.from_env()
+    workflow = LangGraphWorkflowService(config)
     result = await workflow.process_query(query, session_id)
     return result
 ```
@@ -336,7 +352,15 @@ class WorkflowService:
 ### 3. 설정 관리
 
 ```python
+import sys
+from pathlib import Path
 from infrastructure.utils.langgraph_config import LangGraphConfig
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
@@ -347,10 +371,8 @@ workflow = LangGraphWorkflowService(config)
 ### 1. 메모리 최적화
 
 ```python
-from core.agents.performance_optimizer import PerformanceOptimizer
-
-optimizer = PerformanceOptimizer()
-optimizer.optimize_memory()
+# 성능 최적화는 lawfirm_langgraph 내부에서 자동으로 처리됩니다
+# 별도의 최적화 함수 호출이 필요하지 않습니다
 ```
 
 ### 2. 캐싱 전략
@@ -427,10 +449,21 @@ class TestHybridSearchEngine:
 ### 2. 통합 테스트
 
 ```python
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
+
 class TestWorkflowIntegration:
     def test_end_to_end(self):
         """전체 워크플로우 테스트"""
-        workflow = LangGraphWorkflowService()
+        config = LangGraphConfig.from_env()
+        workflow = LangGraphWorkflowService(config)
         result = await workflow.process_query("계약 해지 조건은?", "session_123")
         assert result is not None
         assert "answer" in result
@@ -440,11 +473,21 @@ class TestWorkflowIntegration:
 
 ```python
 import time
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
 
 class TestPerformance:
     def test_response_time(self):
         """응답 시간 테스트"""
-        workflow = LangGraphWorkflowService()
+        config = LangGraphConfig.from_env()
+        workflow = LangGraphWorkflowService(config)
         
         start_time = time.time()
         result = await workflow.process_query("테스트 질문", "session_123")

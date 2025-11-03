@@ -180,11 +180,11 @@ infrastructure/utils/
 ```
 User Input
     ↓
-apps/streamlit/app.py 또는 apps/api/
+streamlit/app.py 또는 apps/api/
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/source/services/workflow_service.py
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/source/services/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ↓
 core/services/search/ (검색)
     ↓
@@ -221,10 +221,20 @@ sys.path.insert(0, str(project_root))
 
 ### Core 모듈 Import
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+# LangGraph 워크플로우 서비스
+from source.services.workflow_service import LangGraphWorkflowService
+from infrastructure.utils.langgraph_config import LangGraphConfig
+
+# 기타 서비스
 from core.services.search import HybridSearchEngine
 from core.services.generation import AnswerGenerator
-from infrastructure.utils.langgraph_config import LangGraphConfig
 ```
 
 ## 📚 확장 가이드
@@ -249,15 +259,16 @@ from infrastructure.utils.langgraph_config import LangGraphConfig
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `core/agents/` | 워크플로우 관리 | services, models |
+| `lawfirm_langgraph/source/` | 워크플로우 관리 (메인) ⭐ | services, models |
 | `core/services/search/` | 검색 로직 | data |
 | `core/services/generation/` | 답변 생성 | search, models |
 | `core/services/enhancement/` | 품질 개선 | generation |
 | `core/models/` | AI 모델 | - |
 | `core/data/` | 데이터 관리 | - |
-| `apps/streamlit/` | 웹 UI | core/agents |
-| `apps/api/` | API 서버 | core/agents |
+| `streamlit/` | 웹 UI | lawfirm_langgraph/source |
+| `apps/api/` | API 서버 | lawfirm_langgraph/source |
 | `infrastructure/` | 인프라 | - |
+| `core/agents/` | 레거시 (삭제 예정) | (호환성 유지) |
 | `source/` | 레거시 모듈 | (호환성 유지) |
 
 ## 🚀 개발 워크플로우
@@ -314,13 +325,19 @@ python tests/test_hybrid_search.py
 # 표준 라이브러리
 import os
 import sys
+from pathlib import Path
 
 # 서드파티
 import torch
 from fastapi import FastAPI
 
 # 프로젝트 모듈
-from core.agents import LangGraphWorkflowService
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
+from core.services.search import HybridSearchEngine
 ```
 
 ### 3. Docstring

@@ -56,11 +56,19 @@
 
 ```
 LawFirmAI/
+├── lawfirm_langgraph/               # LangGraph 워크플로우 (메인) ⭐
+│   ├── source/                      # 워크플로우 소스 코드
+│   │   ├── services/                # 비즈니스 로직
+│   │   │   ├── workflow_service.py  # 워크플로우 서비스 (메인)
+│   │   │   ├── legal_workflow_enhanced.py # 법률 워크플로우
+│   │   │   └── ...
+│   │   ├── utils/                   # 유틸리티
+│   │   │   ├── state_definitions.py # 상태 정의
+│   │   │   └── ...
+│   │   └── models/                  # AI 모델 래퍼
+│   ├── graph.py                     # LangGraph 그래프 정의
+│   └── streamlit/                   # Streamlit 통합
 ├── core/                            # 핵심 비즈니스 로직
-│   ├── agents/                      # LangGraph 워크플로우 에이전트
-│   │   ├── workflow_service.py      # 워크플로우 서비스 (메인)
-│   │   ├── legal_workflow_enhanced.py # 법률 워크플로우
-│   │   └── ...
 │   ├── services/                    # 비즈니스 서비스
 │   │   ├── search/                  # 검색 서비스
 │   │   ├── generation/              # 답변 생성
@@ -71,9 +79,8 @@ LawFirmAI/
 │   └── models/                      # AI 모델
 │       ├── model_manager.py         # 모델 관리자
 │       └── sentence_bert.py         # Sentence BERT
-├── apps/                            # 애플리케이션 레이어
-│   ├── streamlit/                   # Streamlit 웹 인터페이스
-│   └── api/                         # FastAPI 서버
+├── streamlit/                       # Streamlit 웹 인터페이스
+│   └── app.py                       # 메인 애플리케이션
 ├── infrastructure/                  # 인프라 및 유틸리티
 │   └── utils/                       # 유틸리티 함수
 ├── source/                          # 레거시 모듈 (호환성 유지)
