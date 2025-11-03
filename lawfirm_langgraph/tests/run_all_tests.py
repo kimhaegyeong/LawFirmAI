@@ -1,164 +1,98 @@
 # -*- coding: utf-8 -*-
 """
 모든 테스트 실행 스크립트
-기본 기능, 전체 워크플로우 테스트를 순차적으로 실행
+전체 테스트를 실행하고 결과를 리포트합니다
 """
 
-import asyncio
-import logging
 import sys
+import os
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True
-)
+# lawfirm_langgraph 디렉토리를 sys.path에 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent
+sys.path.insert(0, str(lawfirm_langgraph_path))
 
-logger = logging.getLogger(__name__)
+import pytest
 
 
-def run_import_test():
-    """Import 테스트 실행 (기본 기능 테스트로 대체)"""
-    logger.info("\n" + "=" * 80)
-    logger.info("1단계: 기본 Import 검증")
-    logger.info("=" * 80)
+def run_all_tests():
+    """모든 테스트 실행"""
+    print("=" * 80)
+    print("LawFirm LangGraph 테스트 실행")
+    print("=" * 80)
+    print()
     
+    # 테스트 디렉토리 경로
+    test_dir = Path(__file__).parent
+    
+    # pytest 실행 옵션
+    pytest_args = [
+        str(test_dir),
+        "-v",  # 상세 출력
+        "--tb=short",  # 짧은 트레이스백
+        "--color=yes",  # 컬러 출력
+        "--durations=10",  # 가장 느린 10개 테스트 표시
+    ]
+    
+    # 커버리지 옵션 (pytest-cov가 설치된 경우)
     try:
-        # 기본 import 확인
-        from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-        from lawfirm_langgraph.langgraph_core.services.workflow_service import LangGraphWorkflowService
-        from lawfirm_langgraph.langgraph_core.utils.state_definitions import LegalWorkflowState
-        logger.info("✅ 모든 핵심 모듈 import 성공")
-        return True
-    except ImportError as e:
-        logger.error(f"❌ Import 실패: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ Import 검증 실패: {e}")
-        return False
-
-
-async def run_basic_functionality_test():
-    """기본 기능 테스트 실행"""
-    logger.info("\n" + "=" * 80)
-    logger.info("2단계: 기본 기능 테스트")
-    logger.info("=" * 80)
+        import pytest_cov
+        pytest_args.extend([
+            "--cov=lawfirm_langgraph",
+            "--cov-report=term-missing",
+            "--cov-report=html",
+        ])
+    except ImportError:
+        print("주의: pytest-cov가 설치되지 않았습니다. 커버리지 리포트를 생성하지 않습니다.")
+        print("      설치하려면: pip install pytest-cov")
+        print()
     
-    try:
-        import test_basic_functionality
-        return await test_basic_functionality.run_all_tests()
-    except ImportError as e:
-        logger.error(f"❌ 테스트 파일을 찾을 수 없습니다: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ 기본 기능 테스트 실행 실패: {e}")
-        return False
-
-
-async def run_full_workflow_test():
-    """전체 워크플로우 테스트 실행"""
-    logger.info("\n" + "=" * 80)
-    logger.info("3단계: 전체 워크플로우 통합 테스트")
-    logger.info("=" * 80)
+    # pytest 실행
+    exit_code = pytest.main(pytest_args)
     
-    try:
-        import test_full_workflow
-        return await test_full_workflow.run_all_tests()
-    except ImportError as e:
-        logger.error(f"❌ 테스트 파일을 찾을 수 없습니다: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ 전체 워크플로우 테스트 실행 실패: {e}")
-        return False
-
-
-async def check_dependencies():
-    """의존성 확인"""
-    logger.info("\n" + "=" * 80)
-    logger.info("의존성 확인")
-    logger.info("=" * 80)
-    
-    missing = []
-    
-    # 필수 의존성 확인
-    dependencies = {
-        'langchain': 'langchain',
-        'langchain_core': 'langchain-core',
-        'langgraph': 'langgraph',
-        'google.generativeai': 'google-generativeai',
-    }
-    
-    for module, package in dependencies.items():
-        try:
-            __import__(module)
-            logger.info(f"✅ {package} 설치됨")
-        except ImportError:
-            logger.warning(f"⚠️ {package} 미설치")
-            missing.append(package)
-    
-    if missing:
-        logger.error("\n❌ 다음 패키지를 설치해주세요:")
-        logger.error(f"pip install {' '.join(missing)}")
-        return False
-    
-    logger.info("✅ 모든 필수 의존성이 설치되어 있습니다")
-    return True
-
-
-async def main():
-    """메인 실행 함수"""
-    logger.info("\n" + "=" * 80)
-    logger.info("LawFirm LangGraph 전체 테스트 스위트")
-    logger.info("=" * 80 + "\n")
-    
-    # 의존성 확인
-    if not await check_dependencies():
-        logger.error("\n❌ 의존성 확인 실패. 테스트를 중단합니다.")
-        return False
-    
-    results = []
-    
-    # 1단계: Import 검증
-    results.append(("Import Verification", run_import_test()))
-    
-    # 2단계: 기본 기능 테스트
-    results.append(("Basic Functionality Test", await run_basic_functionality_test()))
-    
-    # 3단계: 전체 워크플로우 테스트
-    results.append(("Full Workflow Test", await run_full_workflow_test()))
-    
-    # 최종 결과 요약
-    logger.info("\n" + "=" * 80)
-    logger.info("최종 테스트 결과 요약")
-    logger.info("=" * 80)
-    
-    for test_name, success in results:
-        status = "✅ PASS" if success else "❌ FAIL"
-        logger.info(f"{status} - {test_name}")
-    
-    total = len(results)
-    passed = sum(1 for _, success in results if success)
-    failed = total - passed
-    
-    logger.info("=" * 80)
-    logger.info(f"총 테스트 스위트: {total}개 | 통과: {passed}개 | 실패: {failed}개")
-    logger.info("=" * 80)
-    
-    if failed == 0:
-        logger.info("\n🎉 모든 테스트가 통과했습니다!")
+    print()
+    print("=" * 80)
+    if exit_code == 0:
+        print("✅ 모든 테스트가 성공적으로 완료되었습니다!")
     else:
-        logger.warning(f"\n⚠️ {failed}개의 테스트 스위트가 실패했습니다.")
+        print(f"❌ 일부 테스트가 실패했습니다. (exit code: {exit_code})")
+    print("=" * 80)
     
-    return failed == 0
+    return exit_code
+
+
+def run_specific_test(test_name: str):
+    """특정 테스트 실행"""
+    test_dir = Path(__file__).parent
+    test_file = test_dir / f"test_{test_name}.py"
+    
+    if not test_file.exists():
+        print(f"❌ 테스트 파일을 찾을 수 없습니다: {test_file}")
+        return 1
+    
+    pytest_args = [
+        str(test_file),
+        "-v",
+        "--tb=short",
+        "--color=yes",
+    ]
+    
+    exit_code = pytest.main(pytest_args)
+    return exit_code
 
 
 if __name__ == "__main__":
-    success = asyncio.run(main())
-    sys.exit(0 if success else 1)
+    if len(sys.argv) > 1:
+        # 특정 테스트 실행
+        test_name = sys.argv[1]
+        exit_code = run_specific_test(test_name)
+    else:
+        # 모든 테스트 실행
+        exit_code = run_all_tests()
+    
+    sys.exit(exit_code)
 
