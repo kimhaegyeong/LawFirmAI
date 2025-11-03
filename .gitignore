@@ -58,6 +58,7 @@ lawfirm_langgraph/.env
 
 # Model Files
 models/
+!lawfirm_langgraph/langgraph_core/models/  # Allow langgraph_core/models module (source code)
 model_cache/
 *.bin
 *.safetensors
@@ -129,6 +130,7 @@ chroma_db/
 
 # personal data
 data/
+!lawfirm_langgraph/langgraph_core/data/  # Allow langgraph_core/data module (source code)
 reports/
 results/
 debug/
