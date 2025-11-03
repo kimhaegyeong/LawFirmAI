@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Agentic AI ?�합 ?�스??
-Tool Use/Function Calling 기능�?기존 ?�크?�로???�합 검�?
+Agentic AI 통합 테스트
+Tool Use/Function Calling 기능과 기존 워크플로우의 통합 검증
 """
 
 import asyncio
@@ -12,11 +12,11 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
-# ?�로?�트 루트 경로 추�?
+# 프로젝트 루트 경로 추가
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 로깅 ?�정
+# 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -27,65 +27,65 @@ logger = logging.getLogger(__name__)
 
 
 class TestAgenticIntegration:
-    """Agentic AI ?�합 ?�스???�래??""
+    """Agentic AI 통합 테스트 클래스"""
     
     def __init__(self):
         self.test_results = []
     
     def test_tool_import(self):
-        """Tool ?�스??import ?�스??""
+        """Tool 클래스 import 테스트"""
         logger.info("=" * 80)
-        logger.info("Test 1: Tool ?�스??Import ?�스??)
+        logger.info("Test 1: Tool 클래스 Import 테스트")
         logger.info("=" * 80)
         
         try:
             from langgraph_core.tools import LEGAL_TOOLS
-            logger.info(f"??Tool ?�스??import ?�공: {len(LEGAL_TOOLS)}�?Tool")
+            logger.info(f"✅ Tool 클래스 import 성공: {len(LEGAL_TOOLS)}개의 Tool")
             
             # Tool 목록 출력
             for i, tool in enumerate(LEGAL_TOOLS, 1):
                 logger.info(f"   {i}. {tool.name}: {tool.description[:80]}...")
             
-            self.test_results.append(("Tool Import", True, f"{len(LEGAL_TOOLS)}�?Tool"))
+            self.test_results.append(("Tool Import", True, f"{len(LEGAL_TOOLS)}개의 Tool"))
             return True
         except Exception as e:
-            logger.error(f"??Tool ?�스??import ?�패: {e}")
+            logger.error(f"❌ Tool 클래스 import 실패: {e}")
             self.test_results.append(("Tool Import", False, str(e)))
             return False
     
     def test_config_flag(self):
-        """?�정 ?�래�??�스??""
+        """설정 플래그 테스트"""
         logger.info("=" * 80)
-        logger.info("Test 2: Agentic 모드 ?�정 ?�래�??�스??)
+        logger.info("Test 2: Agentic 모드 설정 플래그 테스트")
         logger.info("=" * 80)
         
         try:
             from infrastructure.utils.langgraph_config import LangGraphConfig
             
-            # 기본�??�스??(비활?�화)
+            # 기본으로 테스트 (비활성화)
             config_default = LangGraphConfig.from_env()
             logger.info(f"   기본 use_agentic_mode: {config_default.use_agentic_mode}")
-            assert config_default.use_agentic_mode == False, "기본값�? False?�야 ??
+            assert config_default.use_agentic_mode == False, "기본값은 False여야 함"
             
-            # ?�경 변?�로 ?�성???�스??
+            # 환경 변수로 활성화한 테스트
             original_value = os.environ.get("USE_AGENTIC_MODE")
             try:
                 os.environ["USE_AGENTIC_MODE"] = "true"
                 config_enabled = LangGraphConfig.from_env()
-                logger.info(f"   ?�성????use_agentic_mode: {config_enabled.use_agentic_mode}")
-                assert config_enabled.use_agentic_mode == True, "?�성????True?�야 ??
+                logger.info(f"   활성화된 use_agentic_mode: {config_enabled.use_agentic_mode}")
+                assert config_enabled.use_agentic_mode == True, "활성화된 경우 True여야 함"
                 
-                # ?�경 변??복원
+                # 환경 변수 복원
                 if original_value:
                     os.environ["USE_AGENTIC_MODE"] = original_value
                 else:
                     os.environ.pop("USE_AGENTIC_MODE", None)
                 
-                logger.info("???�정 ?�래�??�스???�공")
-                self.test_results.append(("Config Flag", True, "?�정 ?�래�??�상 ?�작"))
+                logger.info("✅ 설정 플래그 테스트 성공")
+                self.test_results.append(("Config Flag", True, "설정 플래그 정상 작동"))
                 return True
             except Exception as e:
-                # ?�경 변??복원
+                # 환경 변수 복원
                 if original_value:
                     os.environ["USE_AGENTIC_MODE"] = original_value
                 else:
@@ -93,18 +93,18 @@ class TestAgenticIntegration:
                 raise e
                 
         except Exception as e:
-            logger.error(f"???�정 ?�래�??�스???�패: {e}")
+            logger.error(f"❌ 설정 플래그 테스트 실패: {e}")
             self.test_results.append(("Config Flag", False, str(e)))
             return False
     
     async def test_workflow_without_agentic(self):
-        """Agentic 모드 비활?�화 ?�태?�서 ?�크?�로???�스??(기존 ?�작 ?�인)"""
+        """Agentic 모드 비활성화 상태에서 워크플로우 테스트 (기존 작동 확인)"""
         logger.info("=" * 80)
-        logger.info("Test 3: Agentic 모드 비활?�화 ?�태 ?�크?�로???�스??)
+        logger.info("Test 3: Agentic 모드 비활성화 상태 워크플로우 테스트")
         logger.info("=" * 80)
         
         try:
-            # ?�경 변???�인 �??�시 비활?�화
+            # 환경 변수 확인 후 즉시 비활성화
             original_value = os.environ.get("USE_AGENTIC_MODE")
             os.environ["USE_AGENTIC_MODE"] = "false"
             
@@ -112,33 +112,33 @@ class TestAgenticIntegration:
             from infrastructure.utils.langgraph_config import LangGraphConfig
             
             config = LangGraphConfig.from_env()
-            assert config.use_agentic_mode == False, "Agentic 모드가 비활?�화?�어????
+            assert config.use_agentic_mode == False, "Agentic 모드가 비활성화되어야 함"
             
             workflow_service = LangGraphWorkflowService(config)
-            logger.info("   ???�크?�로???�비??초기???�공 (Agentic 모드 비활?�화)")
+            logger.info("   ✅ 워크플로우 서비스 초기화 성공 (Agentic 모드 비활성화)")
             
-            # 간단??질문?�로 ?�스??
-            test_query = "계약?��? 무엇?��???"
-            logger.info(f"   ?�스??질의: {test_query}")
+            # 간단한 질문으로 테스트
+            test_query = "계약이란 무엇인가요?"
+            logger.info(f"   테스트 질의: {test_query}")
             
             result = await workflow_service.process_query(test_query)
             
-            # 결과 검�?
-            assert "answer" in result or result.get("response"), "?��? ?�드가 ?�어????
-            logger.info(f"   ???�크?�로???�행 ?�공 (기존 방식)")
+            # 결과 검증
+            assert "answer" in result or result.get("response"), "응답 코드가 있어야 함"
+            logger.info(f"   ✅ 워크플로우 실행 성공 (기존 방식)")
             
-            # ?�경 변??복원
+            # 환경 변수 복원
             if original_value:
                 os.environ["USE_AGENTIC_MODE"] = original_value
             else:
                 os.environ.pop("USE_AGENTIC_MODE", None)
             
-            self.test_results.append(("Workflow Without Agentic", True, "기존 ?�크?�로???�상 ?�작"))
+            self.test_results.append(("Workflow Without Agentic", True, "기존 워크플로우 정상 작동"))
             return True
             
         except Exception as e:
-            logger.error(f"??기존 ?�크?�로???�스???�패: {e}")
-            # ?�경 변??복원
+            logger.error(f"❌ 기존 워크플로우 테스트 실패: {e}")
+            # 환경 변수 복원
             if original_value:
                 os.environ["USE_AGENTIC_MODE"] = original_value
             else:
@@ -148,13 +148,13 @@ class TestAgenticIntegration:
             return False
     
     async def test_agentic_node_initialization(self):
-        """Agentic ?�드 초기???�스??""
+        """Agentic 노드 초기화 테스트"""
         logger.info("=" * 80)
-        logger.info("Test 4: Agentic ?�드 초기???�스??)
+        logger.info("Test 4: Agentic 노드 초기화 테스트")
         logger.info("=" * 80)
         
         try:
-            # ?�경 변???�인 �??�시 ?�성??
+            # 환경 변수 확인 후 즉시 활성화
             original_value = os.environ.get("USE_AGENTIC_MODE")
             os.environ["USE_AGENTIC_MODE"] = "true"
             
@@ -162,39 +162,39 @@ class TestAgenticIntegration:
             from infrastructure.utils.langgraph_config import LangGraphConfig
             
             config = LangGraphConfig.from_env()
-            assert config.use_agentic_mode == True, "Agentic 모드가 ?�성?�되?�야 ??
+            assert config.use_agentic_mode == True, "Agentic 모드가 활성화되어야 함"
             
             workflow = EnhancedLegalQuestionWorkflow(config)
             
-            # Tool ?�스??초기???�인
-            assert hasattr(workflow, "legal_tools"), "legal_tools ?�성???�어????
-            logger.info(f"   ??Agentic ?�드 초기???�공")
+            # Tool 클래스 초기화 확인
+            assert hasattr(workflow, "legal_tools"), "legal_tools 속성이 있어야 함"
+            logger.info(f"   ✅ Agentic 노드 초기화 성공")
             logger.info(f"   Tool 개수: {len(workflow.legal_tools)}")
             
-            # 그래?�에 Agentic ?�드가 추�??�었?��? ?�인
+            # 그래프에 Agentic 노드가 추가되었는지 확인
             graph = workflow._build_graph()
             nodes = graph.nodes.keys() if hasattr(graph, 'nodes') else []
             
             if "agentic_decision" in nodes:
-                logger.info("   ??agentic_decision ?�드가 그래?�에 추�???)
+                logger.info("   ✅ agentic_decision 노드가 그래프에 추가됨")
             else:
-                logger.warning("   ?�️ agentic_decision ?�드가 그래?�에 ?�음 (?�동 ?�인 ?�요)")
+                logger.warning("   ⚠️ agentic_decision 노드가 그래프에 없음 (추가 확인 필요)")
             
-            # ?�경 변??복원
+            # 환경 변수 복원
             if original_value:
                 os.environ["USE_AGENTIC_MODE"] = original_value
             else:
                 os.environ.pop("USE_AGENTIC_MODE", None)
             
-            self.test_results.append(("Agentic Node Init", True, f"{len(workflow.legal_tools)}�?Tool"))
+            self.test_results.append(("Agentic Node Init", True, f"{len(workflow.legal_tools)}개의 Tool"))
             return True
             
         except Exception as e:
-            logger.error(f"??Agentic ?�드 초기???�스???�패: {e}")
+            logger.error(f"❌ Agentic 노드 초기화 테스트 실패: {e}")
             import traceback
             logger.error(traceback.format_exc())
             
-            # ?�경 변??복원
+            # 환경 변수 복원
             if original_value:
                 os.environ["USE_AGENTIC_MODE"] = original_value
             else:
@@ -204,47 +204,47 @@ class TestAgenticIntegration:
             return False
     
     async def test_tool_execution(self):
-        """Tool ?�행 ?�스??""
+        """Tool 실행 테스트"""
         logger.info("=" * 80)
-        logger.info("Test 5: Tool ?�행 ?�스??)
+        logger.info("Test 5: Tool 실행 테스트")
         logger.info("=" * 80)
         
         try:
             from langgraph_core.tools import LEGAL_TOOLS
             
             if not LEGAL_TOOLS:
-                logger.warning("   ?�️ ?�용 가?�한 Tool???�음 (검???�진 미초기화 가??")
-                self.test_results.append(("Tool Execution", True, "Tool ?�음 (?�상)"))
+                logger.warning("   ⚠️ 사용 가능한 Tool이 없음 (검색 엔진 미초기화 가능)")
+                self.test_results.append(("Tool Execution", True, "Tool 없음 (정상)"))
                 return True
             
-            # �?번째 Tool�??�스??(보통 hybrid_search_tool)
+            # 첫 번째 Tool로 테스트 (보통 hybrid_search_tool)
             test_tool = LEGAL_TOOLS[0]
-            logger.info(f"   ?�스??Tool: {test_tool.name}")
+            logger.info(f"   테스트 Tool: {test_tool.name}")
             
-            # Tool ?�행 ?�스??(?�제 검?��? ?��? ?�고 ?�수 ?�출�?
+            # Tool 실행 테스트 (실제 검색은 하지 않고 구조만 확인)
             try:
-                # Tool???�수 ?�인
+                # Tool의 함수 확인
                 if hasattr(test_tool, 'func'):
-                    logger.info(f"   ??Tool ?�수 ?�인: {test_tool.func.__name__}")
+                    logger.info(f"   ✅ Tool 함수 확인: {test_tool.func.__name__}")
                 else:
-                    logger.info(f"   ??Tool 구조 ?�인 ?�료")
+                    logger.info(f"   ✅ Tool 구조 확인 완료")
                 
-                self.test_results.append(("Tool Execution", True, f"{test_tool.name} ?�인 ?�료"))
+                self.test_results.append(("Tool Execution", True, f"{test_tool.name} 확인 완료"))
                 return True
             except Exception as e:
-                logger.error(f"   ??Tool ?�행 ?�스???�패: {e}")
+                logger.error(f"   ❌ Tool 실행 테스트 실패: {e}")
                 self.test_results.append(("Tool Execution", False, str(e)))
                 return False
                 
         except Exception as e:
-            logger.error(f"??Tool ?�행 ?�스???�패: {e}")
+            logger.error(f"❌ Tool 실행 테스트 실패: {e}")
             self.test_results.append(("Tool Execution", False, str(e)))
             return False
     
     def print_summary(self):
-        """?�스??결과 ?�약 출력"""
+        """테스트 결과 요약 출력"""
         logger.info("=" * 80)
-        logger.info("?�스??결과 ?�약")
+        logger.info("테스트 결과 요약")
         logger.info("=" * 80)
         
         total = len(self.test_results)
@@ -252,39 +252,38 @@ class TestAgenticIntegration:
         failed = total - passed
         
         for test_name, success, detail in self.test_results:
-            status = "??PASS" if success else "??FAIL"
+            status = "✅ PASS" if success else "❌ FAIL"
             logger.info(f"{status} - {test_name}: {detail}")
         
         logger.info("=" * 80)
-        logger.info(f"�??�스?? {total}�?| ?�과: {passed}�?| ?�패: {failed}�?)
+        logger.info(f"전체 테스트: {total}개 | 통과: {passed}개 | 실패: {failed}개")
         logger.info("=" * 80)
         
         return failed == 0
 
 
 async def run_all_tests():
-    """모든 ?�스???�행"""
+    """모든 테스트 실행"""
     tester = TestAgenticIntegration()
     
-    # ?�기 ?�스??
+    # 동기 테스트
     tester.test_tool_import()
     tester.test_config_flag()
     tester.test_tool_execution()
     
-    # 비동�??�스??
+    # 비동기 테스트
     await tester.test_workflow_without_agentic()
     await tester.test_agentic_node_initialization()
     
-    # 결과 ?�약
+    # 결과 요약
     success = tester.print_summary()
     
     return success
 
 
 if __name__ == "__main__":
-    # ?�스???�행
+    # 테스트 실행
     success = asyncio.run(run_all_tests())
     
     # 종료 코드
     sys.exit(0 if success else 1)
-

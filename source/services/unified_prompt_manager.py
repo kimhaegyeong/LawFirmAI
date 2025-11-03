@@ -52,19 +52,59 @@ class UnifiedPromptManager:
     def __init__(self, prompts_dir: str = "streamlit/prompts"):
         """통합 프롬프트 매니저 초기화"""
         self.prompts_dir = Path(prompts_dir)
-        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        # 성능 최적화: 디렉토리 생성은 실제 사용 시점으로 지연
+        # self.prompts_dir.mkdir(parents=True, exist_ok=True)  # 제거
 
-        # 기본 프롬프트 로드
-        self.base_prompts = self._load_base_prompts()
-        self.domain_templates = self._load_domain_templates()
-        self.question_type_templates = self._load_question_type_templates()
-        self.model_optimizations = self._load_model_optimizations()
+        # 성능 최적화: 프롬프트 로드 지연 (실제 사용 시점에 로드)
+        self._base_prompts = None
+        self._domain_templates = None
+        self._question_type_templates = None
+        self._model_optimizations = None
+        self._prompts_loaded = False
 
         try:
-            logger.info("UnifiedPromptManager initialized successfully")
+            logger.debug("UnifiedPromptManager initialized (lazy loading enabled)")
         except Exception:
             # 로깅 오류를 무시하고 계속 진행
             pass
+
+    def _ensure_prompts_loaded(self):
+        """프롬프트가 로드되지 않았으면 로드 (지연 로딩)"""
+        if not self._prompts_loaded:
+            # 디렉토리 생성 (필요한 경우)
+            self.prompts_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 기본 프롬프트 로드
+            self._base_prompts = self._load_base_prompts()
+            self._domain_templates = self._load_domain_templates()
+            self._question_type_templates = self._load_question_type_templates()
+            self._model_optimizations = self._load_model_optimizations()
+            self._prompts_loaded = True
+            logger.debug("UnifiedPromptManager prompts loaded")
+
+    @property
+    def base_prompts(self) -> Dict[str, str]:
+        """기본 프롬프트 (지연 로딩)"""
+        self._ensure_prompts_loaded()
+        return self._base_prompts
+
+    @property
+    def domain_templates(self) -> Dict[LegalDomain, Dict[str, Any]]:
+        """도메인 템플릿 (지연 로딩)"""
+        self._ensure_prompts_loaded()
+        return self._domain_templates
+
+    @property
+    def question_type_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
+        """질문 유형 템플릿 (지연 로딩)"""
+        self._ensure_prompts_loaded()
+        return self._question_type_templates
+
+    @property
+    def model_optimizations(self) -> Dict[ModelType, Dict[str, Any]]:
+        """모델 최적화 설정 (지연 로딩)"""
+        self._ensure_prompts_loaded()
+        return self._model_optimizations
 
     def _load_base_prompts(self) -> Dict[str, str]:
         """기본 프롬프트 로드 - JSON 파일 우선, 없으면 하드코딩된 프롬프트 사용"""
@@ -275,12 +315,14 @@ class UnifiedPromptManager:
                 f"model={model_type.value if hasattr(model_type, 'value') else model_type}"
             )
 
-            # 1. 기본 프롬프트 로드
-            base_prompt = self.base_prompts.get(base_prompt_type, self.base_prompts["korean_legal_expert"])
+            # 1. 기본 프롬프트 로드 (property로 지연 로딩)
+            base_prompts = self.base_prompts  # property 접근으로 지연 로딩 트리거
+            base_prompt = base_prompts.get(base_prompt_type, base_prompts["korean_legal_expert"])
 
-            # 2. 도메인 특화 강화 (정규화된 domain 사용)
-            if normalized_domain and normalized_domain in self.domain_templates:
-                domain_info = self.domain_templates[normalized_domain]
+            # 2. 도메인 특화 강화 (정규화된 domain 사용, property로 지연 로딩)
+            domain_templates = self.domain_templates  # property 접근으로 지연 로딩 트리거
+            if normalized_domain and normalized_domain in domain_templates:
+                domain_info = domain_templates[normalized_domain]
                 base_prompt = self._add_domain_specificity(base_prompt, domain_info)
                 logger.info(f"✅ [DOMAIN TEMPLATE] Applied domain template: {normalized_domain.value}")
             elif normalized_domain:
@@ -288,8 +330,9 @@ class UnifiedPromptManager:
             else:
                 logger.debug("ℹ️ [DOMAIN TEMPLATE] No domain specified, skipping domain template")
 
-            # 3. 질문 유형별 구조화
-            question_template = self.question_type_templates.get(question_type)
+            # 3. 질문 유형별 구조화 (property로 지연 로딩)
+            question_type_templates = self.question_type_templates  # property 접근으로 지연 로딩 트리거
+            question_template = question_type_templates.get(question_type)
             if question_template:
                 base_prompt = self._add_question_structure(base_prompt, question_template)
                 logger.info(
@@ -307,8 +350,9 @@ class UnifiedPromptManager:
             if context:
                 base_prompt = self._optimize_context(base_prompt, context, question_template)
 
-            # 5. 모델별 최적화
-            model_config = self.model_optimizations.get(model_type)
+            # 5. 모델별 최적화 (property로 지연 로딩)
+            model_optimizations = self.model_optimizations  # property 접근으로 지연 로딩 트리거
+            model_config = model_optimizations.get(model_type)
             if model_config:
                 base_prompt = self._model_specific_optimization(base_prompt, model_config)
                 logger.info(
@@ -1610,9 +1654,11 @@ class UnifiedPromptManager:
             documents = structured_docs.get("documents", [])
             for doc in documents[:10]:  # 상위 10개 문서
                 if isinstance(doc, dict):
-                    doc_content = doc.get("content", "")
+                    # content 필드 우선 확인, 없으면 text 필드 사용
+                    doc_content = doc.get("content", "") or doc.get("text", "")
                     doc_source = doc.get("source", "Unknown")
-                    doc_score = doc.get("relevance_score", 0.0)
+                    # relevance_score 우선 확인, 없으면 score 사용
+                    doc_score = doc.get("relevance_score", 0.0) or doc.get("score", 0.0)
                     if doc_content and len(doc_content.strip()) > 10:
                         # 법률 정보와 판례 정보도 함께 추출
                         doc_dict = {
@@ -1664,21 +1710,25 @@ class UnifiedPromptManager:
 
         structured_parts = []
 
+        # 개선: 문서 내용을 가장 먼저 추가하여 경고 방지
+        # 질문 유형과 관계없이 document_contents가 있으면 항상 먼저 포함
+        if document_contents:
+            # 문서 내용을 질문 유형에 맞게 구조화하되, 항상 포함되도록 보장
+            sorted_docs = sorted(
+                document_contents,
+                key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
+                reverse=True
+            )
+            
+            high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
+            medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
+
         try:
             # 질문 유형별 구조화
             if question_type == QuestionType.PRECEDENT_SEARCH:
                 # 판례 정보 우선 배치
-                # 문서 내용 강제 포함 (가장 중요)
+                # 문서 내용 강제 포함 (가장 중요) - 이미 위에서 정렬됨
                 if document_contents:
-                    # 🔴 추가 개선: 관련도 기준으로 분류하여 섹션 구분
-                    sorted_docs = sorted(
-                        document_contents,
-                        key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                        reverse=True
-                    )
-
-                    high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
-                    medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
 
                     structured_parts.append("## 검색된 판례 문서\n")
                     structured_parts.append("다음은 질문에 대한 답변을 위해 검색된 관련 판례 문서입니다. **반드시 이 문서들의 내용을 참고하여 답변하세요.**\n")
@@ -1743,18 +1793,8 @@ class UnifiedPromptManager:
                             structured_parts.append(f"- {cit.get('text', '')}")
                         structured_parts.append("")
 
-                # 문서 내용 강제 포함
+                # 문서 내용 강제 포함 - 이미 위에서 정렬됨
                 if document_contents:
-                    # 🔴 추가 개선: 관련도 기준으로 분류하여 섹션 구분
-                    sorted_docs = sorted(
-                        document_contents,
-                        key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                        reverse=True
-                    )
-
-                    high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
-                    medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
-
                     structured_parts.append("## 검색된 법률 조문 문서\n")
 
                     if high_relevance:
@@ -1800,18 +1840,8 @@ class UnifiedPromptManager:
                             structured_parts.append(f"- {cit.get('text', '')}")
                         structured_parts.append("")
 
-                # 문서 내용 강제 포함
+                # 문서 내용 강제 포함 - 이미 위에서 정렬됨
                 if document_contents:
-                    # 🔴 추가 개선: 관련도 기준으로 분류하여 섹션 구분
-                    sorted_docs = sorted(
-                        document_contents,
-                        key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                        reverse=True
-                    )
-
-                    high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
-                    medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
-
                     structured_parts.append("## 검색된 법률 문서 및 판례\n")
 
                     if high_relevance:
@@ -1843,19 +1873,8 @@ class UnifiedPromptManager:
                     for insight in insights[:3]:
                         structured_parts.append(f"- {insight}")
             else:
-                # 기본 구조: 문서 내용 우선 포함
-                # 🔴 추가 개선: 관련도 기준으로 분류하여 섹션 구분
+                # 기본 구조: 문서 내용 우선 포함 - 이미 위에서 정렬됨
                 if document_contents:
-                    # 관련도 기준으로 정렬 및 분류
-                    sorted_docs = sorted(
-                        document_contents,
-                        key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
-                        reverse=True
-                    )
-
-                    high_relevance = [d for d in sorted_docs if d.get("score", 0.0) >= 0.65]
-                    medium_relevance = [d for d in sorted_docs if 0.35 <= d.get("score", 0.0) < 0.65]
-
                     structured_parts.append("## 검색된 법률 문서\n")
                     structured_parts.append("다음은 질문에 대한 답변을 위해 검색된 관련 법률 문서입니다.\n")
 
@@ -1897,17 +1916,40 @@ class UnifiedPromptManager:
 
             # 최종 검증: structured_parts에 실제 문서 내용이 포함되었는지 확인
             result_text = "\n".join(structured_parts)
-            if document_contents and len(result_text) < 500:
+            
+            # 개선: 문서 내용 포함 검증 강화
+            # 1. document_contents가 있는데 result_text에 문서 내용이 거의 없는 경우
+            # 2. result_text 길이가 너무 짧은 경우 (500자 미만)
+            # 3. result_text에 "문서", "document", "content" 등의 키워드가 거의 없는 경우
+            has_doc_content = document_contents and len(document_contents) > 0
+            has_doc_keywords = any(keyword in result_text.lower() for keyword in ["문서", "document", "content", "법률", "판례"])
+            text_too_short = len(result_text) < 500
+            
+            if has_doc_content and (text_too_short or not has_doc_keywords):
                 # 문서 내용이 추가되지 않은 경우 강제 추가
                 logger.warning(
                     f"⚠️ [CONTEXT STRUCTURE] Document contents not properly included in structured context. "
-                    f"Force adding documents."
+                    f"Force adding {len(document_contents)} documents. (text_len={len(result_text)}, has_keywords={has_doc_keywords})"
                 )
                 doc_section = "\n## 검색된 법률 문서\n"
-                for idx, doc in enumerate(document_contents[:5], 1):
-                    content = doc["content"][:2000] if len(doc["content"]) > 2000 else doc["content"]
-                    # 🔴 개선: 관련도 표기 통일 (.3f → .2f)
-                    doc_section += f"\n### 문서 {idx}: {doc['source']} (관련도: {doc['score']:.2f})\n{content}\n---\n"
+                doc_section += "다음은 질문에 대한 답변을 위해 검색된 관련 법률 문서입니다.\n\n"
+                
+                # 상위 5개 문서 추가 (관련도 순)
+                sorted_docs = sorted(
+                    document_contents,
+                    key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
+                    reverse=True
+                )
+                
+                for idx, doc in enumerate(sorted_docs[:5], 1):
+                    content = doc.get("content", "")[:2000] if len(doc.get("content", "")) > 2000 else doc.get("content", "")
+                    if content and len(content.strip()) > 10:
+                        doc_source = doc.get("source", "Unknown")
+                        doc_score = doc.get("score", 0.0)
+                        # 문서 형식화
+                        doc_section += f"\n### 문서 {idx}: {doc_source} (관련도: {doc_score:.2f})\n{content}\n---\n"
+                
+                # 문서 섹션을 앞쪽에 추가
                 result_text = doc_section + "\n" + result_text
 
             return result_text

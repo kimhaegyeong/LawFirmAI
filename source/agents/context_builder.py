@@ -128,12 +128,13 @@ class ContextBuilder:
                 extracted_keywords
             )
 
-            # 2. 고품질 문서 선별
+            # 2. 고품질 문서 선별 (최소 3개 보장)
             high_value_docs = self.select_high_value_documents(
                 reranked_docs,
                 query,
                 min_relevance=0.5,
-                max_docs=8
+                max_docs=8,
+                min_docs=3  # 최소 3개 문서 보장
             )
 
             # 3. 컨텍스트 조합 최적화
@@ -327,11 +328,16 @@ class ContextBuilder:
         documents: List[Dict],
         query: str,
         min_relevance: float = 0.7,
-        max_docs: int = 5
+        max_docs: int = 5,
+        min_docs: int = 3  # 최소 문서 수 보장 파라미터 추가
     ) -> List[Dict]:
-        """정보 밀도 기반 문서 선택"""
+        """정보 밀도 기반 문서 선택 (최소 문서 수 보장 포함)"""
+        # 입력 검증
         if not documents:
-            return documents
+            return []
+        
+        # 최소 문서 수 보장
+        min_docs = min(min_docs, len(documents), max_docs)
 
         try:
             high_value_docs = []
@@ -398,6 +404,34 @@ class ContextBuilder:
 
             # 최대 문서 수 제한
             selected_docs = high_value_docs[:max_docs]
+            
+            # 개선: 최소 문서 수 보장 (min_relevance 기준을 만족하지 못해도 상위 N개는 선택)
+            min_required_docs = min(3, max_docs)  # 최소 3개 또는 max_docs 중 작은 값
+            if len(selected_docs) < min_required_docs:
+                # 점수 기준을 만족하지 못한 문서가 많으면, 상위 문서를 강제로 포함
+                all_docs_sorted = sorted(documents, key=lambda x: x.get("combined_value_score", 0.0) or 
+                                         x.get("final_relevance_score", 0.0) or 
+                                         x.get("combined_score", 0.0) or 
+                                         x.get("relevance_score", 0.0), reverse=True)
+                
+                # 이미 선택된 문서 ID 추출
+                selected_ids = {doc.get("id") or doc.get("document_id") for doc in selected_docs}
+                
+                # 추가 문서 선택 (중복 방지)
+                additional_needed = min_required_docs - len(selected_docs)
+                for doc in all_docs_sorted:
+                    if len(selected_docs) >= min_required_docs:
+                        break
+                    doc_id = doc.get("id") or doc.get("document_id")
+                    if doc_id not in selected_ids:
+                        selected_docs.append(doc)
+                        selected_ids.add(doc_id)
+                
+                self.logger.warning(
+                    f"⚠️ [HIGH VALUE SELECTION] Only {len(high_value_docs)} docs met relevance threshold, "
+                    f"adding top documents to meet minimum {min_required_docs} requirement. "
+                    f"Final selection: {len(selected_docs)} documents"
+                )
 
             self.logger.info(
                 f"📚 [HIGH VALUE SELECTION] Selected {len(selected_docs)}/{len(documents)} documents. "
@@ -408,7 +442,9 @@ class ContextBuilder:
 
         except Exception as e:
             self.logger.warning(f"High value document selection failed: {e}, using first {max_docs} documents")
-            return documents[:max_docs]
+            # 폴백: 상위 문서 반환 (최소 3개 보장)
+            min_docs = min(3, len(documents), max_docs)
+            return documents[:min_docs] if documents else []
 
     def optimize_context_composition(
         self,
