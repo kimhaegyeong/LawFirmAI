@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 특허 판례 벡터 임베딩 업데이트
@@ -6,7 +6,7 @@
 
 import sys
 sys.path.append('source')
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import LegalVectorStore
 import json
 from pathlib import Path
 from tqdm import tqdm

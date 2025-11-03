@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 통합 자동화 파이프라인 오케스트레이터
@@ -30,7 +30,7 @@ from scripts.ml_training.vector_embedding.incremental_precedent_vector_builder i
 from scripts.data_processing.utilities.import_laws_to_db import AssemblyLawImporter
 from scripts.data_processing.utilities.import_precedents_to_db import PrecedentDataImporter
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 # Import quality modules
 try:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 검색 성능 최적화 스크립트
@@ -6,7 +6,7 @@
 
 import sys
 sys.path.append('source')
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import LegalVectorStore
 import time
 import json
 from pathlib import Path

@@ -18,10 +18,15 @@ def project_bootstrap():
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
+    # lawfirm_langgraph 경로 추가
+    lawfirm_langgraph_path = root / "lawfirm_langgraph"
+    if str(lawfirm_langgraph_path) not in sys.path:
+        sys.path.insert(0, str(lawfirm_langgraph_path))
+
 
 async def run(query: str):
     from infrastructure.utils.langgraph_config import LangGraphConfig
-    from core.agents.workflow_service import LangGraphWorkflowService
+    from langgraph_core.services.workflow_service import LangGraphWorkflowService
 
     config = LangGraphConfig.from_env()
     service = LangGraphWorkflowService(config)
@@ -63,5 +68,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

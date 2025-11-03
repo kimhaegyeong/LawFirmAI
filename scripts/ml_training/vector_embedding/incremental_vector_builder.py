@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 증분 벡터 임베딩 생성기
@@ -21,8 +21,8 @@ from tqdm import tqdm
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.vector_store import LegalVectorStore
-from source.data.database import DatabaseManager # 파일 처리 이력 추적용
+from core.data.vector_store import LegalVectorStore
+from core.data.database import DatabaseManager # 파일 처리 이력 추적용
 from scripts.data_processing.auto_data_detector import AutoDataDetector # 파일 해시 생성용
 
 logger = logging.getLogger(__name__)

@@ -4,19 +4,27 @@ lawfirm_v2.db 통합 테스트 스크립트
 실제 데이터베이스와 연동하여 검색 기능 검증
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 # 프로젝트 루트 경로 추가
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
 import logging
-from source.utils.config import Config
-from core.agents.legal_data_connector_v2 import LegalDataConnectorV2, route_query
-from source.services.semantic_search_engine_v2 import SemanticSearchEngineV2
-from source.services.hybrid_search_engine_v2 import HybridSearchEngineV2
+
+from core.services.search.hybrid_search_engine_v2 import HybridSearchEngineV2
+from core.services.search.semantic_search_engine_v2 import SemanticSearchEngineV2
+from core.utils.config import Config
+from lawfirm_langgraph.langgraph_core.services.legal_data_connector_v2 import (
+    LegalDataConnectorV2,
+    route_query,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

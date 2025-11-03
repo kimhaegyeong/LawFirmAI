@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Enhanced Preprocessing Pipeline
@@ -31,7 +31,7 @@ import psutil
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 
 

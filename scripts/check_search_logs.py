@@ -12,11 +12,16 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
 import logging
 
-from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
-from source.services.semantic_search_engine_v2 import SemanticSearchEngineV2
-from source.utils.config import Config
+from langgraph_core.services.legal_data_connector_v2 import LegalDataConnectorV2
+
+from core.services.search.semantic_search_engine_v2 import SemanticSearchEngineV2
+from core.utils.config import Config
 
 # 로깅 설정
 logging.basicConfig(

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Unified Import Manager
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 
 @dataclass

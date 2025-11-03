@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 자동 데이터 감지 시스템
@@ -22,7 +22,7 @@ from collections import defaultdict
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

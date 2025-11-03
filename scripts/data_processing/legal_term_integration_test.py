@@ -13,10 +13,17 @@ from typing import Dict, List, Tuple, Any
 from collections import defaultdict, Counter
 from datetime import datetime
 
-# 프로젝트 루트를 Python 경로에 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from pathlib import Path
 
-from core.agents.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
+# 프로젝트 루트를 Python 경로에 추가
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from langgraph_core.utils.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
 
 # 로깅 설정
 logging.basicConfig(

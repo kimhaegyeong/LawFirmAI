@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Assembly Law Database Import Script
 
@@ -24,7 +24,7 @@ from typing import Dict, List, Any, Optional, Tuple
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 # Import quality modules for duplicate checking
 try:

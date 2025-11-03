@@ -16,8 +16,12 @@ from typing import Any, Dict
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# core/agents/workflow_service.py를 사용하도록 변경
-from core.agents.workflow_service import LangGraphWorkflowService
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+# source/services/workflow_service.py를 사용하도록 변경
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 로깅 설정

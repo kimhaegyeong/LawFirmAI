@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Quality Reporting Dashboard and Report Generator for LawFirmAI
 
@@ -41,7 +41,7 @@ except ImportError as e:
 
 # Import database manager
 try:
-    from source.data.database import DatabaseManager
+    from core.data.database import DatabaseManager
     DATABASE_MODULE_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Database module not available: {e}")

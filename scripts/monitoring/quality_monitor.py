@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 품질 모니터링 시스템
 ML 강화 파싱 품질을 실시간으로 모니터링하고 대시보드 메트릭을 제공합니다.
@@ -18,8 +18,8 @@ from contextlib import contextmanager
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.database import DatabaseManager
-from source.utils.config import Config
+from core.data.database import DatabaseManager
+from core.utils.config import Config
 
 # Windows 콘솔에서 UTF-8 인코딩 설정
 if os.name == 'nt':  # Windows

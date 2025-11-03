@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 CLI: Switch active corpus/model versions by updating .env
 
@@ -9,7 +9,7 @@ Usage:
 import sys
 from pathlib import Path
 
-from source.utils.versioning import switch_active_versions
+from core.utils.versioning import switch_active_versions
 
 
 def main() -> int:

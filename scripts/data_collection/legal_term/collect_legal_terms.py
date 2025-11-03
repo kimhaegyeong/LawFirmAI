@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 법률 용어 수집 스크립트
@@ -277,7 +277,7 @@ def main():
         if args.search_detail:
             logger.info(f"법령용어 상세조회 시작: {args.search_detail}")
             from source.data.legal_term_collection_api import LegalTermCollectionAPI
-            from source.utils.config import Config
+            from core.utils.config import Config
             
             config = Config()
             api_client = LegalTermCollectionAPI(config)

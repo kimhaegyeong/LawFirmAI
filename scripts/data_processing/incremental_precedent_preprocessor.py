@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 증분 판례 전처리 프로세서
@@ -24,7 +24,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from scripts.data_processing.precedent_preprocessor import PrecedentPreprocessor
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 from scripts.data_processing.auto_data_detector import AutoDataDetector
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 판례 데이터 DB 임포터
@@ -20,7 +20,7 @@ from typing import List, Dict, Any, Optional
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from core.data.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

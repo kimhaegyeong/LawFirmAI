@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 최적화된 벡터 인덱스 생성
@@ -6,7 +6,7 @@
 
 import sys
 sys.path.append('source')
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import LegalVectorStore
 import time
 import json
 from pathlib import Path

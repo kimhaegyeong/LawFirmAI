@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Database Schema Migration Script v2
@@ -29,7 +29,7 @@ sys.path.append(str(project_root))
 
 # Import database manager
 try:
-    from source.data.database import DatabaseManager
+    from core.data.database import DatabaseManager
     DATABASE_MANAGER_AVAILABLE = True
 except ImportError:
     DATABASE_MANAGER_AVAILABLE = False

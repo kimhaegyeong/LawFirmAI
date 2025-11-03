@@ -12,13 +12,20 @@ import logging
 from typing import Dict, List, Any
 from datetime import datetime
 
-# 프로젝트 루트를 Python 경로에 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from pathlib import Path
 
-# core/agents를 사용하도록 변경
-from core.agents.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
-from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from core.agents.workflow_service import LangGraphWorkflowService
+# 프로젝트 루트를 Python 경로에 추가
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+# source 모듈을 사용하도록 변경
+from langgraph_core.utils.keyword_mapper import EnhancedKeywordMapper, LegalKeywordMapper
+from langgraph_core.services.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+from langgraph_core.services.workflow_service import LangGraphWorkflowService
 
 # 로깅 설정
 logging.basicConfig(

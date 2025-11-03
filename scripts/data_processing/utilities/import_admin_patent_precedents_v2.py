@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 행정 및 특허 판례 데이터 임포트 스크립트 (수정된 버전)
@@ -23,7 +23,7 @@ current_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(current_dir))
 
 try:
-    from source.data.database import DatabaseManager
+    from core.data.database import DatabaseManager
 except ImportError:
     # 직접 import 시도
     sys.path.append('source')

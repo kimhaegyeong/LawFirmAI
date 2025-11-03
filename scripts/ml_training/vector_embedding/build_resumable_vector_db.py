@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 중단점 복구 기능이 있는 ML 강화 벡터 임베딩 생성기
 """
@@ -20,7 +20,7 @@ from tqdm import tqdm
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import LegalVectorStore
 
 # Windows 콘솔에서 UTF-8 인코딩 설정
 if os.name == 'nt':  # Windows

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 벡터 임베딩 기본 테스트
 """
@@ -12,7 +12,7 @@ import time
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.vector_store import LegalVectorStore
+from core.data.vector_store import LegalVectorStore
 
 def test_vector_embedding():
     """벡터 임베딩 기본 테스트"""

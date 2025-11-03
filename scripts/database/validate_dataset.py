@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Validate a versioned dataset: print table counts and simple sanity checks.
 
@@ -9,8 +9,8 @@ Usage:
 import sqlite3
 import sys
 
-from source.data.versioned_schema import ensure_versioned_db
-from source.utils.config import Config
+from core.data.versioned_schema import ensure_versioned_db
+from core.utils.config import Config
 
 
 def main() -> int:

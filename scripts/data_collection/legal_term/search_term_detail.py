@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 법령용어 상세조회 스크립트
@@ -17,7 +17,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.legal_term_collection_api import LegalTermCollectionAPI
-from source.utils.config import Config
+from core.utils.config import Config
 
 # 로깅 설정
 logging.basicConfig(

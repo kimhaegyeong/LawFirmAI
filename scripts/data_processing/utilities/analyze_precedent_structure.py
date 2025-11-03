@@ -11,39 +11,39 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.assembly_playwright_client import AssemblyPlaywrightClient
+from core.data.assembly_playwright_client import AssemblyPlaywrightClient
 
 def analyze_precedent_structure():
     """판례 상세 페이지의 목차 구조 분석"""
-    
+
     with AssemblyPlaywrightClient(headless=False) as client:
         # 민사 판례 첫 번째 항목으로 이동
         print("🔍 Analyzing precedent detail page structure...")
-        
+
         # 판례 목록 페이지로 이동
         precedents = client.get_precedent_list_page_by_category("PREC00_001", 1, 10)
-        
+
         if precedents:
             first_precedent = precedents[0]
             print(f"📋 Analyzing: {first_precedent['case_name']}")
-            
+
             # 상세 페이지로 이동
             url = f"{client.BASE_URL}/law/lawsPrecInqyDetl1010.do"
             url_params = []
             for key, value in first_precedent['params'].items():
                 if value:
                     url_params.append(f"{key}={value}")
-            
+
             params_str = "&".join(url_params)
             full_url = f"{url}?{params_str}"
-            
+
             print(f"🌐 Navigating to: {full_url}")
             client.page.goto(full_url, wait_until='domcontentloaded')
             client.page.wait_for_timeout(5000)
-            
+
             # 페이지 구조 분석
             print("\n📊 Page Structure Analysis:")
-            
+
             # 1. 헤더 정보
             print("\n1️⃣ Header Information:")
             try:
@@ -52,7 +52,7 @@ def analyze_precedent_structure():
                     print(f"   H1-{i+1}: {h1.inner_text().strip()}")
             except Exception as e:
                 print(f"   H1 Error: {e}")
-            
+
             # 2. 목차/섹션 구조
             print("\n2️⃣ Table of Contents / Sections:")
             try:
@@ -62,7 +62,7 @@ def analyze_precedent_structure():
                     "ul.toc", "ol.toc", "div.section",
                     "div.content-section", "div.precedent-section"
                 ]
-                
+
                 for selector in toc_selectors:
                     elements = client.page.locator(selector).all()
                     if elements:
@@ -71,7 +71,7 @@ def analyze_precedent_structure():
                             text = elem.inner_text().strip()
                             if text:
                                 print(f"     {i+1}: {text[:100]}...")
-                
+
                 # 일반적인 헤딩 태그들
                 heading_tags = ["h2", "h3", "h4", "h5", "h6"]
                 for tag in heading_tags:
@@ -82,18 +82,18 @@ def analyze_precedent_structure():
                             text = elem.inner_text().strip()
                             if text:
                                 print(f"     {i+1}: {text}")
-                
+
             except Exception as e:
                 print(f"   TOC Error: {e}")
-            
+
             # 3. 판례 관련 특정 섹션들
             print("\n3️⃣ Legal Sections:")
             legal_sections = [
-                "판시사항", "판결요지", "사건", "원고", "피고", "원심", "상고", 
+                "판시사항", "판결요지", "사건", "원고", "피고", "원심", "상고",
                 "항소", "소송", "계약", "손해", "배상", "위약", "해지", "무효", "취소",
                 "주문", "이유", "참조조문", "참조판례", "판례집", "법원", "선고일"
             ]
-            
+
             for section in legal_sections:
                 try:
                     elements = client.page.locator(f"text={section}").all()
@@ -105,7 +105,7 @@ def analyze_precedent_structure():
                                 print(f"     {i+1}: {parent_text[:100]}...")
                 except Exception as e:
                     print(f"   '{section}' Error: {e}")
-            
+
             # 4. 테이블 구조
             print("\n4️⃣ Table Structure:")
             try:
@@ -122,32 +122,32 @@ def analyze_precedent_structure():
                         print(f"     Headers: {headers}")
             except Exception as e:
                 print(f"   Table Error: {e}")
-            
+
             # 5. 전체 텍스트 구조 분석
             print("\n5️⃣ Text Structure Analysis:")
             try:
                 full_text = client.page.locator("body").inner_text()
                 lines = full_text.split('\n')
-                
+
                 print(f"   Total lines: {len(lines)}")
                 print(f"   Total characters: {len(full_text)}")
-                
+
                 # 빈 줄이 아닌 라인들
                 non_empty_lines = [line.strip() for line in lines if line.strip()]
                 print(f"   Non-empty lines: {len(non_empty_lines)}")
-                
+
                 # 긴 라인들 (50자 이상)
                 long_lines = [line for line in non_empty_lines if len(line) >= 50]
                 print(f"   Long lines (50+ chars): {len(long_lines)}")
-                
+
                 # 첫 10개 긴 라인 출력
                 print("   Sample long lines:")
                 for i, line in enumerate(long_lines[:10]):
                     print(f"     {i+1}: {line[:80]}...")
-                    
+
             except Exception as e:
                 print(f"   Text Analysis Error: {e}")
-            
+
             # 6. HTML 구조 저장
             print("\n6️⃣ Saving HTML structure for analysis...")
             try:

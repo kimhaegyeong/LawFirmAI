@@ -28,8 +28,8 @@ except ImportError:
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
-from source.data.vector_store import LegalVectorStore
+from core.data.database import DatabaseManager
+from core.data.vector_store import LegalVectorStore
 
 
 def setup_local_logging():
