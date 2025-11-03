@@ -21,22 +21,22 @@ agents/
 
 **변경 후:**
 ```
-source/
-├── models/        # AI 모델 관련
-├── services/      # 비즈니스 로직
-├── utils/         # 유틸리티
-└── data/          # 데이터 처리
+langgraph_core/
+├── models/        # AI 모델 관련 (LangGraph 전용)
+├── services/      # 비즈니스 로직 (LangGraph 전용)
+├── utils/         # 유틸리티 (LangGraph 전용)
+└── data/          # 데이터 처리 (LangGraph 전용)
 ```
 
 ### 2. 파일 분류
 
-#### source/models/
+#### langgraph_core/models/
 - `chain_builders.py` - 체인 빌더
 - `prompt_builders.py` - 프롬프트 빌더
 - `node_wrappers.py` - 노드 래퍼
 - `node_input_output_spec.py` - 노드 입출력 사양
 
-#### source/services/
+#### langgraph_core/services/
 - `workflow_service.py` - 워크플로우 서비스
 - `legal_workflow_enhanced.py` - 메인 워크플로우
 - `workflow_routes.py` - 라우팅
@@ -51,7 +51,7 @@ source/
 - `legal_data_connector_v2.py` - 데이터 커넥터
 - `feedback_system.py` - 피드백 시스템
 
-#### source/utils/
+#### langgraph_core/utils/
 - `state_definitions.py` - 상태 정의
 - `state_utils.py` - 상태 유틸리티
 - `state_helpers.py` - 상태 헬퍼

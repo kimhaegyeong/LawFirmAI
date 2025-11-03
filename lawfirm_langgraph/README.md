@@ -12,7 +12,7 @@ LangGraph Studio에서 실행 가능한 독립 프로젝트입니다.
 
 ```
 lawfirm_langgraph/
-├── source/                  # Core Modules (공통 소스 코드)
+├── langgraph_core/           # Core Modules (LangGraph 워크플로우 전용)
 │   ├── __init__.py
 │   ├── models/              # AI 모델 관련
 │   │   ├── __init__.py
@@ -160,16 +160,16 @@ Studio에서 그래프를 선택하여 시각화 및 디버깅할 수 있습니�
 
 ## 모듈 구조
 
-### source/models/
+### langgraph_core/models/
 체인 빌더, 프롬프트 빌더, 노드 래퍼 등 모델 관련 컴포넌트
 
-### source/services/
+### langgraph_core/services/
 워크플로우 서비스, 핸들러, 비즈니스 로직 등 서비스 레이어
 
-### source/utils/
+### langgraph_core/utils/
 상태 관리, 워크플로우 유틸리티, 성능 최적화 등 유틸리티 함수
 
-### source/data/
+### langgraph_core/data/
 데이터 추출, 파싱, 검증 등 데이터 처리 모듈
 
 ## 문제 해결

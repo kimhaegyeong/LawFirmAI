@@ -21,34 +21,53 @@ LawFirmAI/
 
 ## 📦 Core 모듈
 
-### core/agents/ - LangGraph 에이전트
-**역할**: AI 워크플로우 관리
+### lawfirm_langgraph/ - LangGraph 워크플로우 (권장)
+**역할**: AI 워크플로우 관리 (LangGraph Studio 프로젝트)
+
+> **⚠️ 중요**: `core/agents/`는 레거시이며 삭제 예정입니다. 새로운 코드는 `lawfirm_langgraph/source/`를 사용하세요.
 
 ```
-core/agents/
-├── workflow_service.py              # 워크플로우 서비스 (메인)
-├── legal_workflow_enhanced.py       # 법률 워크플로우
-├── state_definitions.py             # 상태 정의
-├── state_utils.py                   # 상태 유틸리티
-├── state_helpers.py                 # 상태 헬퍼 함수
-├── state_reduction.py                # 상태 최적화
-├── keyword_mapper.py                # 키워드 매퍼
-├── legal_data_connector_v2.py       # 데이터 커넥터 (v2)
-├── performance_optimizer.py          # 성능 최적화
-├── node_wrappers.py                 # 노드 래퍼
-├── query_optimizer.py               # 쿼리 최적화
-└── ...
+lawfirm_langgraph/
+├── source/
+│   ├── services/                     # 비즈니스 로직
+│   │   ├── workflow_service.py       # 워크플로우 서비스 (메인)
+│   │   ├── legal_workflow_enhanced.py # 법률 워크플로우
+│   │   ├── search_handler.py         # 검색 핸들러
+│   │   └── ...
+│   ├── utils/                        # 유틸리티
+│   │   ├── state_definitions.py      # 상태 정의
+│   │   ├── state_utils.py            # 상태 유틸리티
+│   │   ├── state_helpers.py          # 상태 헬퍼 함수
+│   │   ├── state_reduction.py       # 상태 최적화
+│   │   ├── keyword_mapper.py        # 키워드 매퍼
+│   │   ├── performance_optimizer.py  # 성능 최적화
+│   │   └── ...
+│   ├── models/                       # AI 모델 관련
+│   │   ├── node_wrappers.py          # 노드 래퍼
+│   │   └── ...
+│   └── data/                         # 데이터 처리
+│       └── ...
 ```
 
 **사용 예시**:
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
 result = await workflow.process_query("질문", "session_id")
 ```
+
+### core/agents/ - LangGraph 에이전트 (레거시, 삭제 예정)
+> **⚠️ Deprecated**: 이 디렉토리는 레거시이며 삭제 예정입니다. `lawfirm_langgraph/source/`를 사용하세요.
 
 ### core/services/search/ - 검색 서비스
 **역할**: 법률 문서 검색

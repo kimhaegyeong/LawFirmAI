@@ -17,11 +17,15 @@ core/
 └── models/          # AI 모델
 ```
 
-## 1. Agents 모듈 (`core/agents/`)
+## 1. LangGraph 워크플로우 모듈 (`lawfirm_langgraph/source/`)
+
+> **⚠️ 중요**: `core/agents/`는 레거시이며 삭제 예정입니다. 새로운 코드는 `lawfirm_langgraph/source/`를 사용하세요.
 
 ### 1.1 LangGraph 워크플로우
 
 #### workflow_service.py
+**위치**: `lawfirm_langgraph/source/services/workflow_service.py`
+
 **역할**: LangGraph 워크플로우 서비스 메인 진입점
 
 **주요 클래스**:
@@ -29,7 +33,14 @@ core/
 
 **사용 예시**:
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 설정 초기화
@@ -43,6 +54,8 @@ result = await workflow.process_query("계약 해지 조건은?", "session_id")
 ```
 
 #### legal_workflow_enhanced.py
+**위치**: `lawfirm_langgraph/source/services/legal_workflow_enhanced.py`
+
 **역할**: 향상된 법률 질문 처리 워크플로우 구현
 
 **주요 클래스**:
@@ -59,6 +72,8 @@ result = await workflow.process_query("계약 해지 조건은?", "session_id")
 ### 1.2 State 관리
 
 #### state_definitions.py
+**위치**: `lawfirm_langgraph/source/utils/state_definitions.py`
+
 **역할**: LangGraph State 정의
 
 **주요 타입**:
@@ -67,6 +82,7 @@ result = await workflow.process_query("계약 해지 조건은?", "session_id")
 - `StreamingWorkflowState`: 스트리밍 State
 
 #### modular_states.py
+**위치**: `lawfirm_langgraph/source/utils/modular_states.py`
 **역할**: 모듈화된 State 구조 (11개 그룹)
 
 **State 그룹**:

@@ -11,11 +11,11 @@ LangGraph State Reduction 마이그레이션 예제
 from typing import Any, Dict
 
 # 프로젝트 루트에서 실행 가능하도록 절대 경로 사용
-from source.models.node_input_output_spec import get_node_spec
-from source.utils.state_adapter import adapt_state, validate_state_for_node
+from langgraph_core.models.node_input_output_spec import get_node_spec
+from langgraph_core.utils.state_adapter import adapt_state, validate_state_for_node
 
 # State Reduction 및 Adapter import
-from source.utils.state_reduction import (
+from langgraph_core.utils.state_reduction import (
     reduce_state_for_node,
     reduce_state_size,
     with_state_reduction,
@@ -199,7 +199,7 @@ def get_migration_guide():
 
 ### 2단계: 점진적 적용 (권장)
 ```python
-from core.agents.state_reduction import with_state_reduction
+from langgraph_core.utils.state_reduction import with_state_reduction
 
 # 기존 코드에 데코레이터만 추가
 @with_state_reduction("retrieve_documents")
@@ -212,7 +212,7 @@ def retrieve_documents(state):
 ### 3단계: 최적화
 ```python
 # 노드별 필요한 그룹 확인
-from core.agents.node_input_output_spec import get_required_state_groups
+from langgraph_core.models.node_input_output_spec import get_required_state_groups
 
 groups = get_required_state_groups("retrieve_documents")
 # → {"input", "search", "classification"}
@@ -234,7 +234,7 @@ def retrieve_documents(state):
 ## 성능 측정
 
 ```python
-from core.agents.state_reduction import StateReducer
+from langgraph_core.utils.state_reduction import StateReducer
 
 reducer = StateReducer()
 reduced = reducer.reduce_state_for_node(full_state, "retrieve_documents")
