@@ -39,62 +39,102 @@ except ImportError:
 import sys
 from pathlib import Path
 
-# 프로젝트 루트를 sys.path에 추가
-project_root = Path(__file__).parent.parent.parent
+# 프로젝트 루트를 sys.path에 추가 (lawfirm_langgraph 구조에 맞게 수정)
+# lawfirm_langgraph/langgraph_core/services/ 에서 프로젝트 루트까지의 경로
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# 즉시 필요한 핵심 컴포넌트 import
 from source.agents.answer_formatter import AnswerFormatterHandler
 from source.agents.answer_generator import AnswerGenerator
-from source.agents.chain_builders import (
-    AnswerGenerationChainBuilder,
-    ClassificationChainBuilder,
-    DirectAnswerChainBuilder,
-    DocumentAnalysisChainBuilder,
-    QueryEnhancementChainBuilder,
-)
-from source.agents.classification_handler import ClassificationHandler
+from source.agents.keyword_mapper import LegalKeywordMapper
+from source.agents.legal_data_connector_v2 import LegalDataConnectorV2
+from source.agents.node_wrappers import with_state_optimization
+from source.agents.performance_optimizer import PerformanceOptimizer
+from source.agents.reasoning_extractor import ReasoningExtractor
+from source.agents.search_handler import SearchHandler
 from source.agents.context_builder import ContextBuilder
+
+# 실제 사용되는 컴포넌트 import (static 메서드 호출)
 from source.agents.extractors import (
     DocumentExtractor,
     QueryExtractor,
     ResponseExtractor,
 )
-from source.agents.keyword_mapper import LegalKeywordMapper
-from source.agents.legal_data_connector_v2 import LegalDataConnectorV2
-from source.agents.node_wrappers import with_state_optimization
-from source.agents.performance_optimizer import PerformanceOptimizer
-from source.agents.prompt_builders import PromptBuilder, QueryBuilder
-from source.agents.prompt_chain_executor import PromptChainExecutor
-from source.agents.quality_validators import (
-    AnswerValidator,
-    ContextValidator,
-    SearchValidator,
-)
-from source.agents.query_enhancer import QueryEnhancer
-from source.agents.reasoning_extractor import ReasoningExtractor
 from source.agents.response_parsers import (
     AnswerParser,
     ClassificationParser,
     DocumentParser,
     QueryParser,
 )
-from source.agents.search_handler import SearchHandler
-from source.agents.state_definitions import LegalWorkflowState
-from source.agents.state_utils import (
-    MAX_DOCUMENT_CONTENT_LENGTH,
-    MAX_PROCESSING_STEPS,
-    MAX_RETRIEVED_DOCS,
-    prune_processing_steps,
-    prune_retrieved_docs,
+from source.agents.quality_validators import (
+    AnswerValidator,
+    ContextValidator,
+    SearchValidator,
 )
-from source.agents.workflow_constants import (
-    AnswerExtractionPatterns,
-    QualityThresholds,
-    RetryConfig,
-    WorkflowConstants,
-)
-from source.agents.workflow_routes import WorkflowRoutes
-from source.agents.workflow_utils import WorkflowUtils
+
+# 지연 로딩 가능한 컴포넌트 - property 패턴으로 구현됨
+# ClassificationHandler, QueryEnhancer는 property로 지연 로딩되므로 여기서 import 제거
+
+# 사용되지 않는 것으로 보이는 import - 지연 import로 변경 (최적화)
+# chain_builders는 실제로 사용되지 않는 것으로 보임 (제거 또는 지연 import)
+# QueryBuilder, PromptChainExecutor는 실제 사용 시점에 import
+
+# 유틸리티 import (상대 import 사용 - 같은 패키지 내부)
+try:
+    from ..utils.state_definitions import LegalWorkflowState
+    from ..utils.state_utils import (
+        MAX_DOCUMENT_CONTENT_LENGTH,
+        MAX_PROCESSING_STEPS,
+        MAX_RETRIEVED_DOCS,
+        prune_processing_steps,
+        prune_retrieved_docs,
+    )
+    from ..utils.workflow_constants import (
+        AnswerExtractionPatterns,
+        QualityThresholds,
+        RetryConfig,
+        WorkflowConstants,
+    )
+    from ..utils.workflow_routes import WorkflowRoutes
+    from ..utils.workflow_utils import WorkflowUtils
+except ImportError:
+    # Fallback: 프로젝트 루트 기준 import
+    try:
+        from lawfirm_langgraph.langgraph_core.utils.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.langgraph_core.utils.state_utils import (
+            MAX_DOCUMENT_CONTENT_LENGTH,
+            MAX_PROCESSING_STEPS,
+            MAX_RETRIEVED_DOCS,
+            prune_processing_steps,
+            prune_retrieved_docs,
+        )
+        from lawfirm_langgraph.langgraph_core.utils.workflow_constants import (
+            AnswerExtractionPatterns,
+            QualityThresholds,
+            RetryConfig,
+            WorkflowConstants,
+        )
+        from lawfirm_langgraph.langgraph_core.utils.workflow_routes import WorkflowRoutes
+        from lawfirm_langgraph.langgraph_core.utils.workflow_utils import WorkflowUtils
+    except ImportError:
+        # Fallback: 기존 경로 (호환성 유지)
+        from source.agents.state_definitions import LegalWorkflowState
+        from source.agents.state_utils import (
+            MAX_DOCUMENT_CONTENT_LENGTH,
+            MAX_PROCESSING_STEPS,
+            MAX_RETRIEVED_DOCS,
+            prune_processing_steps,
+            prune_retrieved_docs,
+        )
+        from source.agents.workflow_constants import (
+            AnswerExtractionPatterns,
+            QualityThresholds,
+            RetryConfig,
+            WorkflowConstants,
+        )
+        from source.agents.workflow_routes import WorkflowRoutes
+        from source.agents.workflow_utils import WorkflowUtils
 from source.services.question_classifier import QuestionType
 from source.services.result_merger import ResultMerger, ResultRanker
 # 설정 파일 import (lawfirm_langgraph 구조 우선 시도)
@@ -292,22 +332,31 @@ class EnhancedLegalQuestionWorkflow:
         # 로거의 propagate 설정 (루트 로거로 전파 보장)
         self.logger.propagate = True
 
-        # 핸들러가 없으면 추가 (표준 출력 스트림 핸들러)
+        # 핸들러 설정 개선: 멀티스레드 환경에서 안전한 핸들러 사용
+        # 테스트 환경에서는 NullHandler 사용, 일반 환경에서는 루트 로거에 위임
         if not self.logger.handlers:
-            import sys
-            handler = logging.StreamHandler(sys.stdout)
-            handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+            # 테스트 환경 확인 (환경 변수로 제어 가능)
+            import os
+            is_test_env = os.environ.get("TESTING", "false").lower() == "true"
+            
+            if is_test_env:
+                # 테스트 환경: NullHandler 사용 (스트림 분리 오류 방지)
+                null_handler = logging.NullHandler()
+                null_handler.setLevel(logging.DEBUG)
+                self.logger.addHandler(null_handler)
+                self.logger.propagate = False
+            else:
+                # 일반 환경: 루트 로거에 위임 (루트 로거의 핸들러 사용)
+                # 직접 StreamHandler 추가하지 않고 propagate만 활성화
+                self.logger.propagate = True
 
         # 로거 설정 확인 (디버깅용 - 한 번만 출력)
         self.logger.debug(f"Logger initialized: name={__name__}, level={self.logger.level}, handlers={len(self.logger.handlers)}")
 
-        # 통합 프롬프트 관리자 초기화 (우선)
-        self.unified_prompt_manager = UnifiedPromptManager()
+        # 통합 프롬프트 관리자 초기화 (지연 로딩 적용 - 성능 최적화)
+        # 파일 I/O가 포함되어 있어 실제 사용 시점에 초기화
+        self._unified_prompt_manager = None
+        self._unified_prompt_manager_initialized = False
 
         # 컴포넌트 초기화
         self.keyword_mapper = LegalKeywordMapper()
@@ -323,39 +372,22 @@ class EnhancedLegalQuestionWorkflow:
         # 추론 과정 분리 모듈 초기화 (Phase 1 리팩토링)
         self.reasoning_extractor = ReasoningExtractor(logger=self.logger)
 
-        # AnswerStructureEnhancer 초기화 (답변 구조화 및 법적 근거 강화)
-        if ANSWER_STRUCTURE_ENHANCER_AVAILABLE:
-            self.answer_structure_enhancer = AnswerStructureEnhancer()
-            self.logger.info("AnswerStructureEnhancer initialized for answer quality enhancement")
-        else:
-            self.answer_structure_enhancer = None
-            self.logger.warning("AnswerStructureEnhancer not available")
+        # AnswerStructureEnhancer 초기화 (지연 로딩 적용 - 성능 최적화)
+        self._answer_structure_enhancer = None
+        self._answer_structure_enhancer_initialized = False
 
-        # AnswerFormatter 초기화 (시각적 포맷팅)
-        try:
-            from source.services.answer_formatter import AnswerFormatter
-            self.answer_formatter = AnswerFormatter()
-            self.logger.info("AnswerFormatter initialized for visual formatting")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize AnswerFormatter: {e}")
-            self.answer_formatter = None
+        # AnswerFormatter 초기화 (지연 로딩 적용 - 성능 최적화)
+        self._answer_formatter = None
+        self._answer_formatter_initialized = False
 
-        # Semantic Search Engine 초기화 (벡터 검색을 위한 - lawfirm_v2_faiss.index 사용)
-        try:
-            from source.services.semantic_search_engine_v2 import SemanticSearchEngineV2
-            from source.utils.config import Config
-            # lawfirm_v2.db 기반으로 자동으로 ./data/lawfirm_v2_faiss.index 사용
-            config = Config()
-            db_path = config.database_path
-            self.semantic_search = SemanticSearchEngineV2(db_path=db_path)
-            self.logger.info(f"SemanticSearchEngineV2 initialized successfully with {db_path}")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize SemanticSearchEngineV2: {e}")
-            self.semantic_search = None
+        # Semantic Search Engine 초기화 (지연 로딩 적용 - 성능 최적화)
+        # 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        self._semantic_search_engine = None
+        self._semantic_search_initialized = False
 
-        # 검색 핸들러 초기화 (Phase 2 리팩토링) - semantic_search 초기화 이후
+        # 검색 핸들러 초기화 (Phase 2 리팩토링) - semantic_search는 None으로 전달, 지연 로딩
         self.search_handler = SearchHandler(
-            semantic_search=self.semantic_search,
+            semantic_search=None,  # 지연 로딩: 실제 사용 시점에 self.semantic_search로 로드
             keyword_mapper=self.keyword_mapper,
             data_connector=self.data_connector,
             result_merger=self.result_merger,
@@ -365,100 +397,74 @@ class EnhancedLegalQuestionWorkflow:
             logger=self.logger
         )
 
-        # 컨텍스트 빌더 초기화 (Phase 6 리팩토링) - semantic_search 초기화 이후
+        # 컨텍스트 빌더 초기화 (Phase 6 리팩토링) - semantic_search는 None으로 전달, 지연 로딩
         self.context_builder = ContextBuilder(
-            semantic_search=self.semantic_search,
+            semantic_search=None,  # 지연 로딩: 실제 사용 시점에 self.semantic_search로 로드
             config=self.config,
             logger=self.logger
         )
 
-        # MultiTurnQuestionHandler 초기화 (멀티턴 질문 처리)
-        try:
-            from source.services.conversation_manager import ConversationManager
-            from source.services.multi_turn_handler import MultiTurnQuestionHandler
-            self.multi_turn_handler = MultiTurnQuestionHandler()
-            self.conversation_manager = ConversationManager()
-            self.logger.info("MultiTurnQuestionHandler initialized successfully")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize MultiTurnQuestionHandler: {e}")
-            self.multi_turn_handler = None
-            self.conversation_manager = None
+        # 선택적 컴포넌트 초기화 (지연 로딩 - 성능 최적화)
+        # 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        self.multi_turn_handler = None
+        self.conversation_manager = None
+        self._multi_turn_initialized = False
+        
+        self._ai_keyword_generator_engine = None  # property로 접근하므로 private 변수 사용
+        self._ai_keyword_generator_initialized = False
+        
+        self.emotion_analyzer = None
+        self._emotion_analyzer_initialized = False
+        
+        self.legal_validator = None
+        self._legal_validator_initialized = False
+        
+        self.document_processor = None
+        self._document_processor_initialized = False
 
-        # AIKeywordGenerator 초기화 (AI 키워드 확장)
-        try:
-            from source.services.ai_keyword_generator import AIKeywordGenerator
-            self.ai_keyword_generator = AIKeywordGenerator()
-            self.logger.info("AIKeywordGenerator initialized successfully")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize AIKeywordGenerator: {e}")
-            self.ai_keyword_generator = None
+        # QueryEnhancer 초기화 (지연 로딩 적용 - 성능 최적화)
+        # LLM과 llm_fast를 필요로 하므로 property로 지연 로딩
+        self._query_enhancer = None
+        self._query_enhancer_initialized = False
 
-        # EmotionIntentAnalyzer 초기화 (긴급도 평가용)
-        try:
-            from source.services.emotion_intent_analyzer import EmotionIntentAnalyzer
-            self.emotion_analyzer = EmotionIntentAnalyzer()
-            self.logger.info("EmotionIntentAnalyzer initialized")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize EmotionIntentAnalyzer: {e}")
-            self.emotion_analyzer = None
+        # ClassificationHandler 초기화 (지연 로딩 적용 - 성능 최적화)
+        # LLM과 llm_fast를 필요로 하므로 property로 지연 로딩
+        self._classification_handler = None
+        self._classification_handler_initialized = False
 
-        # LegalBasisValidator 초기화 (법령 검증용)
-        try:
-            from source.services.legal_basis_validator import LegalBasisValidator
-            self.legal_validator = LegalBasisValidator()
-            self.logger.info("LegalBasisValidator initialized")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize LegalBasisValidator: {e}")
-            self.legal_validator = None
+        # ConfidenceCalculator 초기화 (신뢰도 계산용) - 지연 로딩
+        self._confidence_calculator = None
+        self._confidence_calculator_initialized = False
 
-        # DocumentProcessor 초기화 (문서 분석용)
-        try:
-            from infrastructure.utils.config import Config as UtilsConfig
-            from source.services.document_processor import LegalDocumentProcessor
-            utils_config = UtilsConfig()
-            self.document_processor = LegalDocumentProcessor(utils_config)
-            self.logger.info("LegalDocumentProcessor initialized")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize LegalDocumentProcessor: {e}")
-            self.document_processor = None
+        # LLM 초기화 (지연 로딩 적용 - 성능 최적화)
+        # 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        self._llm_engine = None
+        self._llm_fast_engine = None
+        self._llm_initialized = False
+        self._llm_fast_initialized = False
 
-        # ConfidenceCalculator 초기화 (신뢰도 계산용)
-        try:
-            from source.services.confidence_calculator import (
-                ConfidenceCalculator,
-            )
-            self.confidence_calculator = ConfidenceCalculator()
-            self.logger.info("ConfidenceCalculator initialized")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize ConfidenceCalculator: {e}")
-            self.confidence_calculator = None
-
-        # LLM 초기화
-        self.llm = self._initialize_llm()
-
-        # 빠른 LLM 초기화 (간단한 질문용)
-        self.llm_fast = self._initialize_llm_fast()
-
-        # 답변 생성 핸들러 초기화 (Phase 5 리팩토링) - LLM 초기화 이후
+        # 답변 생성 핸들러 초기화 (Phase 5 리팩토링) - LLM은 property로 지연 로딩
         self.answer_generator = AnswerGenerator(
-            llm=self.llm,
+            llm=None,  # 지연 로딩: 실제 사용 시점에 self.llm property로 로드
             logger=self.logger
         )
 
         # 워크플로우 라우팅 핸들러 초기화 (Phase 9 리팩토링) - answer_generator 초기화 이후
+        # ai_keyword_generator는 property로 지연 로딩
         self.workflow_routes = WorkflowRoutes(
             retry_manager=self.retry_manager,
             answer_generator=self.answer_generator,
-            ai_keyword_generator=self.ai_keyword_generator,
+            ai_keyword_generator=None,  # 지연 로딩: self.ai_keyword_generator property 사용
             logger=self.logger
         )
 
         # 답변 포맷팅 핸들러 초기화 (Phase 4 리팩토링) - 필요한 의존성 초기화 이후
+        # answer_structure_enhancer, answer_formatter, confidence_calculator는 property로 지연 로딩
         self.answer_formatter_handler = AnswerFormatterHandler(
             keyword_mapper=self.keyword_mapper,
-            answer_structure_enhancer=self.answer_structure_enhancer,
-            answer_formatter=self.answer_formatter,
-            confidence_calculator=self.confidence_calculator,
+            answer_structure_enhancer=None,  # 지연 로딩: self.answer_structure_enhancer property 사용
+            answer_formatter=None,  # 지연 로딩: self.answer_formatter property 사용
+            confidence_calculator=None,  # 지연 로딩: self.confidence_calculator property 사용
             reasoning_extractor=self.reasoning_extractor,
             answer_generator=self.answer_generator,
             logger=self.logger
@@ -478,12 +484,18 @@ class EnhancedLegalQuestionWorkflow:
         # lawfirm_langgraph 구조 사용 (langgraph_core.tools)
         if self.config.use_agentic_mode:
             try:
-                from langgraph_core.tools import LEGAL_TOOLS
+                # 상대 import 시도
+                from ..tools import LEGAL_TOOLS
                 self.legal_tools = LEGAL_TOOLS
                 self.agentic_agent = None  # 지연 초기화
                 self.logger.info(f"Agentic AI mode enabled with {len(LEGAL_TOOLS)} tools (from langgraph_core.tools)")
-            except ImportError as e:
-                self.logger.warning(f"Failed to import legal tools from langgraph_core.tools: {e}. Agentic mode disabled.")
+            except ImportError:
+                # Fallback: 프로젝트 루트 기준 import
+                try:
+                    from lawfirm_langgraph.langgraph_core.tools import LEGAL_TOOLS
+                    self.logger.info(f"Agentic AI mode enabled with {len(LEGAL_TOOLS)} tools (from lawfirm_langgraph.langgraph_core.tools)")
+                except ImportError as e:
+                    self.logger.warning(f"Failed to import legal tools: {e}. Agentic mode disabled.")
                 self.legal_tools = []
                 self.agentic_agent = None
             except Exception as e:
@@ -508,8 +520,10 @@ class EnhancedLegalQuestionWorkflow:
             'avg_complexity_classification_time': 0.0
         } if self.config.enable_statistics else None
 
-        # 워크플로우 그래프 구축
-        self.graph = self._build_graph()
+        # 워크플로우 그래프 구축 (지연 로딩 적용 - 성능 최적화)
+        # 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        self._graph = None
+        self._graph_built = False
         logger.info("EnhancedLegalQuestionWorkflow initialized with UnifiedPromptManager.")
 
     def _initialize_llm(self):
@@ -2500,6 +2514,254 @@ class EnhancedLegalQuestionWorkflow:
     def _clean_query_for_fallback(self, query: str) -> str:
         """QueryEnhancer.clean_query_for_fallback 래퍼"""
         return self.query_enhancer.clean_query_for_fallback(query)
+
+    @property
+    def semantic_search(self):
+        """
+        SemanticSearchEngineV2 지연 로딩 Property
+        
+        첫 번째 접근 시에만 초기화하여 Component Initialization 시간 단축
+        SearchHandler와 ContextBuilder에서 사용 시 자동 초기화
+        """
+        if not self._semantic_search_initialized:
+            try:
+                from source.services.semantic_search_engine_v2 import SemanticSearchEngineV2
+                from source.utils.config import Config
+                # lawfirm_v2.db 기반으로 자동으로 ./data/lawfirm_v2_faiss.index 사용
+                config = Config()
+                db_path = config.database_path
+                self._semantic_search_engine = SemanticSearchEngineV2(db_path=db_path)
+                self._semantic_search_initialized = True
+                self.logger.info(f"SemanticSearchEngineV2 lazy-loaded successfully with {db_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load SemanticSearchEngineV2: {e}")
+                self._semantic_search_engine = None
+                self._semantic_search_initialized = True  # 실패해도 재시도 방지
+        
+        return self._semantic_search_engine
+
+    @property
+    def llm(self):
+        """
+        LLM 지연 로딩 Property
+        
+        첫 번째 접근 시에만 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._llm_initialized:
+            try:
+                self._llm_engine = self._initialize_llm()
+                self._llm_initialized = True
+                self.logger.info("LLM lazy-loaded successfully")
+                # AnswerGenerator에 LLM 설정
+                if hasattr(self.answer_generator, 'llm') and self.answer_generator.llm is None:
+                    self.answer_generator.llm = self._llm_engine
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load LLM: {e}")
+                self._llm_engine = self._create_mock_llm()
+                self._llm_initialized = True
+        
+        return self._llm_engine
+
+    @property
+    def llm_fast(self):
+        """
+        Fast LLM 지연 로딩 Property
+        
+        첫 번째 접근 시에만 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._llm_fast_initialized:
+            try:
+                # llm이 초기화되지 않았다면 먼저 초기화
+                if not self._llm_initialized:
+                    _ = self.llm
+                self._llm_fast_engine = self._initialize_llm_fast()
+                self._llm_fast_initialized = True
+                self.logger.info("Fast LLM lazy-loaded successfully")
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load fast LLM: {e}")
+                # 폴백: 메인 LLM 사용
+                self._llm_fast_engine = self.llm
+                self._llm_fast_initialized = True
+        
+        return self._llm_fast_engine
+
+    @property
+    def confidence_calculator(self):
+        """
+        ConfidenceCalculator 지연 로딩 Property
+        """
+        if not self._confidence_calculator_initialized:
+            try:
+                from source.services.confidence_calculator import ConfidenceCalculator
+                self._confidence_calculator = ConfidenceCalculator()
+                self._confidence_calculator_initialized = True
+                self.logger.info("ConfidenceCalculator lazy-loaded successfully")
+                # AnswerFormatterHandler에 설정
+                if hasattr(self.answer_formatter_handler, 'confidence_calculator') and \
+                   self.answer_formatter_handler.confidence_calculator is None:
+                    self.answer_formatter_handler.confidence_calculator = self._confidence_calculator
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load ConfidenceCalculator: {e}")
+                self._confidence_calculator = None
+                self._confidence_calculator_initialized = True
+        
+        return self._confidence_calculator
+
+    @property
+    def ai_keyword_generator(self):
+        """
+        AIKeywordGenerator 지연 로딩 Property
+        """
+        if not self._ai_keyword_generator_initialized:
+            try:
+                from source.services.ai_keyword_generator import AIKeywordGenerator
+                self._ai_keyword_generator_engine = AIKeywordGenerator()
+                self._ai_keyword_generator_initialized = True
+                self.logger.info("AIKeywordGenerator lazy-loaded successfully")
+                # WorkflowRoutes에 설정
+                if hasattr(self.workflow_routes, 'ai_keyword_generator') and \
+                   self.workflow_routes.ai_keyword_generator is None:
+                    self.workflow_routes.ai_keyword_generator = self._ai_keyword_generator_engine
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load AIKeywordGenerator: {e}")
+                self._ai_keyword_generator_engine = None
+                self._ai_keyword_generator_initialized = True
+        
+        return self._ai_keyword_generator_engine
+
+    @property
+    def unified_prompt_manager(self):
+        """
+        UnifiedPromptManager 지연 로딩 Property
+        
+        파일 I/O가 포함되어 있어 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._unified_prompt_manager_initialized:
+            try:
+                from source.services.unified_prompt_manager import UnifiedPromptManager
+                self._unified_prompt_manager = UnifiedPromptManager()
+                self._unified_prompt_manager_initialized = True
+                self.logger.info("UnifiedPromptManager lazy-loaded successfully")
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load UnifiedPromptManager: {e}")
+                self._unified_prompt_manager = None
+                self._unified_prompt_manager_initialized = True
+        return self._unified_prompt_manager
+
+    @property
+    def answer_structure_enhancer(self):
+        """
+        AnswerStructureEnhancer 지연 로딩 Property
+        """
+        if not self._answer_structure_enhancer_initialized:
+            if ANSWER_STRUCTURE_ENHANCER_AVAILABLE:
+                try:
+                    from lawfirm_langgraph.langgraph_core.services.answer_structure_enhancer import AnswerStructureEnhancer
+                    self._answer_structure_enhancer = AnswerStructureEnhancer()
+                    self._answer_structure_enhancer_initialized = True
+                    self.logger.info("AnswerStructureEnhancer lazy-loaded successfully")
+                    # AnswerFormatterHandler에 설정
+                    if hasattr(self.answer_formatter_handler, 'answer_structure_enhancer') and \
+                       self.answer_formatter_handler.answer_structure_enhancer is None:
+                        self.answer_formatter_handler.answer_structure_enhancer = self._answer_structure_enhancer
+                except Exception as e:
+                    self.logger.warning(f"Failed to lazy-load AnswerStructureEnhancer: {e}")
+                    self._answer_structure_enhancer = None
+                    self._answer_structure_enhancer_initialized = True
+            else:
+                self._answer_structure_enhancer = None
+                self._answer_structure_enhancer_initialized = True
+                self.logger.warning("AnswerStructureEnhancer not available")
+        return self._answer_structure_enhancer
+
+    @property
+    def answer_formatter(self):
+        """
+        AnswerFormatter 지연 로딩 Property
+        """
+        if not self._answer_formatter_initialized:
+            try:
+                from source.services.answer_formatter import AnswerFormatter
+                self._answer_formatter = AnswerFormatter()
+                self._answer_formatter_initialized = True
+                self.logger.info("AnswerFormatter lazy-loaded successfully")
+                # AnswerFormatterHandler에 설정
+                if hasattr(self.answer_formatter_handler, 'answer_formatter') and \
+                   self.answer_formatter_handler.answer_formatter is None:
+                    self.answer_formatter_handler.answer_formatter = self._answer_formatter
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load AnswerFormatter: {e}")
+                self._answer_formatter = None
+                self._answer_formatter_initialized = True
+        return self._answer_formatter
+
+    @property
+    def query_enhancer(self):
+        """
+        QueryEnhancer 지연 로딩 Property
+        
+        LLM과 llm_fast를 필요로 하므로 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._query_enhancer_initialized:
+            try:
+                from source.agents.query_enhancer import QueryEnhancer
+                # LLM과 llm_fast는 property로 접근하여 지연 로딩
+                self._query_enhancer = QueryEnhancer(
+                    llm=self.llm,  # property 접근으로 지연 로딩 트리거
+                    llm_fast=self.llm_fast,  # property 접근으로 지연 로딩 트리거
+                    term_integrator=self.term_integrator,
+                    config=self.config,
+                    logger=self.logger
+                )
+                self._query_enhancer_initialized = True
+                self.logger.info("QueryEnhancer lazy-loaded successfully")
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load QueryEnhancer: {e}")
+                self._query_enhancer = None
+                self._query_enhancer_initialized = True
+        return self._query_enhancer
+
+    @property
+    def classification_handler(self):
+        """
+        ClassificationHandler 지연 로딩 Property
+        
+        LLM과 llm_fast를 필요로 하므로 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._classification_handler_initialized:
+            try:
+                from source.agents.classification_handler import ClassificationHandler
+                # LLM과 llm_fast는 property로 접근하여 지연 로딩
+                self._classification_handler = ClassificationHandler(
+                    llm=self.llm,  # property 접근으로 지연 로딩 트리거
+                    llm_fast=self.llm_fast,  # property 접근으로 지연 로딩 트리거
+                    stats=self.stats,
+                    logger=self.logger
+                )
+                self._classification_handler_initialized = True
+                self.logger.info("ClassificationHandler lazy-loaded successfully")
+            except Exception as e:
+                self.logger.warning(f"Failed to lazy-load ClassificationHandler: {e}")
+                self._classification_handler = None
+                self._classification_handler_initialized = True
+        return self._classification_handler
+
+    @property
+    def graph(self):
+        """
+        Graph 지연 로딩 Property
+        
+        워크플로우 그래프 구축은 시간이 걸릴 수 있으므로 실제 사용 시점에 초기화하여 Component Initialization 시간 단축
+        """
+        if not self._graph_built:
+            try:
+                self._graph = self._build_graph()
+                self._graph_built = True
+                self.logger.info("Graph lazy-loaded successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to lazy-load graph: {e}")
+                raise
+        return self._graph
 
     def _build_semantic_query(self, query: str, expanded_terms: List[str]) -> str:
         """QueryEnhancer.build_semantic_query 래퍼"""

@@ -21,56 +21,111 @@ logger = logging.getLogger(__name__)
 
 
 class CheckpointManager:
-    """SQLite 기반 체크포인트 관리자"""
+    """체크포인트 관리자 (MemorySaver 또는 SqliteSaver 지원)"""
     
-    def __init__(self, db_path: str):
+    def __init__(self, storage_type: str = "memory", db_path: Optional[str] = None):
         """
         체크포인트 관리자 초기화
         
         Args:
-            db_path: SQLite 데이터베이스 파일 경로
+            storage_type: 저장소 타입 ("memory", "sqlite", "postgres", "redis", "disabled")
+            db_path: 데이터베이스 파일 경로 (SQLite 사용 시 필요)
         """
+        self.storage_type = storage_type
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+        self.saver = None
         
-        # 디렉토리 생성
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        # disabled인 경우 체크포인터 없음
+        if storage_type == "disabled":
+            self.logger.info("Checkpoint manager is disabled")
+            return
         
-        # LangGraph SqliteSaver 초기화
-        if LANGGRAPH_AVAILABLE:
-            try:
-                # SQLite 연결 문자열 형식으로 변환
-                if not db_path.startswith("sqlite:///"):
-                    db_path = f"sqlite:///{db_path}"
-                
-                self.saver = SqliteSaver.from_conn_string(db_path)
-                self.logger.info(f"Checkpoint manager initialized with database: {db_path}")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize SqliteSaver: {e}")
-                # 폴백: 메모리 기반 체크포인터 사용
-                try:
-                    from langgraph.checkpoint.memory import MemorySaver
-                    self.saver = MemorySaver()
-                    self.logger.warning("Using MemorySaver as fallback")
-                except ImportError:
-                    self.saver = None
-                    self.logger.error("No checkpoint functionality available")
-        else:
-            self.saver = None
+        # LangGraph 사용 가능 여부 확인
+        if not LANGGRAPH_AVAILABLE:
             self.logger.warning("LangGraph checkpoint functionality not available")
-    
-    def get_memory(self):
-        """체크포인트 메모리 객체 반환"""
-        if self.saver is None:
-            # 폴백: MemorySaver 사용
+            # 폴백으로 MemorySaver 시도
             try:
                 from langgraph.checkpoint.memory import MemorySaver
                 self.saver = MemorySaver()
-                self.logger.warning("Using MemorySaver as fallback")
+                self.storage_type = "memory"
+                self.logger.info("Using MemorySaver as fallback (LangGraph not available)")
             except ImportError:
                 self.logger.error("No checkpoint functionality available")
-                return None
+            return
+        
+        # 저장소 타입에 따라 초기화
+        if storage_type == "memory":
+            self._init_memory_saver()
+        elif storage_type == "sqlite":
+            self._init_sqlite_saver()
+        elif storage_type in ["postgres", "redis"]:
+            self.logger.warning(f"{storage_type} checkpoint storage not yet implemented, using MemorySaver")
+            self._init_memory_saver()
+        else:
+            self.logger.warning(f"Unknown storage type: {storage_type}, using MemorySaver")
+            self._init_memory_saver()
+    
+    def _init_memory_saver(self):
+        """MemorySaver 초기화"""
+        try:
+            from langgraph.checkpoint.memory import MemorySaver
+            self.saver = MemorySaver()
+            self.logger.info("Checkpoint manager initialized with MemorySaver")
+        except ImportError as e:
+            self.logger.error(f"Failed to initialize MemorySaver: {e}")
+            self.saver = None
+    
+    def _init_sqlite_saver(self):
+        """SqliteSaver 초기화"""
+        if not self.db_path:
+            self.logger.warning("SQLite requires db_path, falling back to MemorySaver")
+            self._init_memory_saver()
+            return
+        
+        try:
+            # 디렉토리 생성
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            # SQLite 연결 문자열 형식으로 변환
+            db_path_str = self.db_path
+            if not db_path_str.startswith("sqlite:///"):
+                db_path_str = f"sqlite:///{db_path_str}"
+            
+            self.saver = SqliteSaver.from_conn_string(db_path_str)
+            self.logger.info(f"Checkpoint manager initialized with SqliteSaver: {db_path_str}")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize SqliteSaver: {e}")
+            # 폴백: 메모리 기반 체크포인터 사용
+            self.logger.warning("Falling back to MemorySaver")
+            self._init_memory_saver()
+    
+    def get_checkpointer(self):
+        """
+        체크포인터 객체 반환 (LangGraph compile에서 사용)
+        
+        Returns:
+            CheckpointSaver 또는 None
+        """
         return self.saver
+    
+    def get_memory(self):
+        """
+        체크포인트 메모리 객체 반환 (하위 호환성)
+        
+        Returns:
+            CheckpointSaver 또는 None
+        """
+        return self.get_checkpointer()
+    
+    def is_enabled(self) -> bool:
+        """
+        체크포인터가 활성화되어 있는지 확인
+        
+        Returns:
+            bool: 활성화 여부
+        """
+        return self.saver is not None and self.storage_type != "disabled"
     
     def save_checkpoint(self, thread_id: str, state: Dict[str, Any]) -> bool:
         """

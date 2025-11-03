@@ -530,7 +530,8 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
     elif field_path in ["search_query", "extracted_keywords", "ai_keyword_expansion",
                         "optimized_queries", "search_params", "semantic_results", "keyword_results",
                         "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
-                        "prompt_optimized_context"]:
+                        "prompt_optimized_context", "structured_documents", "search_metadata",
+                        "search_quality_evaluation"]:
         set_search(state, {field_path: value})  # type: ignore
     elif field_path == "retrieved_docs":
         set_retrieved_docs(state, value)  # type: ignore
@@ -556,5 +557,13 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
         state["common"][field_path] = value  # type: ignore
     elif field_path == "metadata":
         set_metadata(state, value if isinstance(value, dict) else {})  # type: ignore
+    elif field_path == "quality_metrics":
+        # quality_metrics는 common.metadata에 저장
+        if "common" not in state or state["common"] is None:
+            from .modular_states import create_default_common
+            state["common"] = create_default_common()
+        if "metadata" not in state["common"]:
+            state["common"]["metadata"] = {}
+        state["common"]["metadata"]["quality_metrics"] = value
     else:
         logger.warning(f"Unknown field path for setting: {field_path}")

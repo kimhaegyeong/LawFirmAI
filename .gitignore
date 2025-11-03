@@ -40,6 +40,7 @@ venv.bak/
 lawfirm_langgraph/.env
 .env.profiles/
 
+
 # IDE
 .vscode/
 .idea/
