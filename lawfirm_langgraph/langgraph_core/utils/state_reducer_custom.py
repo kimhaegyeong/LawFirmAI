@@ -5,6 +5,10 @@ TypedDict reducer의 기본 동작을 확장하여 search 그룹 보존
 
 LangGraph의 기본 TypedDict reducer는 TypedDict에 정의된 필드만 보존하는데,
 이 커스텀 reducer는 search 그룹 내부의 모든 필드도 보존합니다.
+
+NOTE: 이 reducer는 현재 사용되지 않습니다.
+      Phase 1에서 Annotated reducer를 적용했으므로 커스텀 reducer가 더 이상 필요하지 않습니다.
+      하지만 하위 호환성을 위해 보관합니다.
 """
 
 from typing import Any, Dict
@@ -16,6 +20,9 @@ logger = logging.getLogger(__name__)
 def custom_state_reducer(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """
     커스텀 State Reducer - search 그룹 보존
+    
+    DEPRECATED: Annotated reducer (merge_search_lists, merge_dict_updates) 사용 권장
+                이 reducer는 하위 호환성을 위해 보관됩니다.
 
     LangGraph의 기본 reducer는 TypedDict의 필드만 병합하는데,
     이 reducer는 search 그룹 내부의 모든 필드도 병합합니다.
