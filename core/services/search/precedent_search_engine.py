@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 판례 전용 검색 엔진
 판례 데이터베이스와 벡터 인덱스를 활용한 전문 검색 시스템
@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))
 
 # source 모듈 경로 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-from source.utils.config import Config
+from core.utils.config import Config
 
 from core.data.database import DatabaseManager
 from core.data.vector_store import LegalVectorStore

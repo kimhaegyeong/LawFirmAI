@@ -1,4 +1,4 @@
-"""
+﻿"""
 하이브리드 검색 엔진
 정확한 매칭과 의미적 검색을 결합한 통합 검색 시스템
 질문 유형별 가중치를 적용한 지능형 검색
@@ -16,7 +16,7 @@ from .precedent_search_engine import PrecedentSearchEngine, PrecedentSearchResul
 
 # source 모듈 경로 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-from source.utils.config import Config
+from core.utils.config import Config
 
 logger = logging.getLogger(__name__)
 

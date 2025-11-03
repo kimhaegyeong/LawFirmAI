@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Semantic Search Engine
 의미적 검색을 위한 검색 엔진
@@ -321,7 +321,7 @@ class SemanticSearchEngine:
             import sys
             # source 모듈 경로 추가
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-            from source.utils.config import Config
+            from core.utils.config import Config
             config = Config()
             db_path = config.database_path
             if not os.path.exists(db_path):

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Exact Search Engine
 정확한 매칭을 위한 검색 엔진
@@ -15,7 +15,7 @@ from pathlib import Path
 
 # source 모듈 경로 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-from source.utils.config import Config
+from core.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
