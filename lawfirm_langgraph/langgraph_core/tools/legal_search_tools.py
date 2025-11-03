@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 법률 검색 관련 Tools
 기존 검색 엔진을 LangChain Tool로 캡슐화
@@ -35,7 +35,7 @@ try:
     HYBRID_SEARCH_AVAILABLE = True
 except ImportError:
     try:
-        from source.services.hybrid_search_engine import HybridSearchEngine
+        from core.services.hybrid_search_engine import HybridSearchEngine
         HYBRID_SEARCH_AVAILABLE = True
     except ImportError:
         HYBRID_SEARCH_AVAILABLE = False
@@ -58,7 +58,7 @@ def get_search_engine():
             except:
                 # Fallback: HybridSearchEngine
                 try:
-                    from source.services.hybrid_search_engine import HybridSearchEngine
+                    from core.services.hybrid_search_engine import HybridSearchEngine
                     _search_engine_instance = HybridSearchEngine()
                     logger.info("HybridSearchEngine initialized for tools")
                 except:

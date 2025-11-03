@@ -1,10 +1,10 @@
-"""
+﻿"""
 LangGraph Core Utils
 워크플로우 유틸리티 모듈
 """
 
 # State definitions
-from .state_definitions import (
+from ..state.state_definitions import (
     LegalWorkflowState,
     AgentWorkflowState,
     StreamingWorkflowState,
@@ -19,7 +19,7 @@ from .state_definitions import (
 )
 
 # State utilities
-from .state_utils import (
+from ..state.state_utils import (
     summarize_document,
     prune_retrieved_docs,
     prune_processing_steps,

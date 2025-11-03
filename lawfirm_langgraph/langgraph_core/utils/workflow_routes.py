@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 워크플로우 라우팅 모듈
 LangGraph 워크플로우의 조건부 라우팅 로직을 독립 모듈로 분리
@@ -7,34 +7,13 @@ LangGraph 워크플로우의 조건부 라우팅 로직을 독립 모듈로 분�
 import logging
 from typing import Any, Dict, Optional
 
-# 유틸리티 import (상대 import 사용 - 같은 패키지 내부)
-try:
-    from .state_definitions import LegalWorkflowState
-    from .workflow_constants import (
-        QualityThresholds,
-        RetryConfig,
-        WorkflowConstants,
-    )
-    from .workflow_utils import WorkflowUtils
-except ImportError:
-    # Fallback: 프로젝트 루트 기준 import
-    try:
-        from lawfirm_langgraph.langgraph_core.utils.state_definitions import LegalWorkflowState
-        from lawfirm_langgraph.langgraph_core.utils.workflow_constants import (
-            QualityThresholds,
-            RetryConfig,
-            WorkflowConstants,
-        )
-        from lawfirm_langgraph.langgraph_core.utils.workflow_utils import WorkflowUtils
-    except ImportError:
-        # Fallback: 기존 경로 (호환성 유지)
-        from source.agents.state_definitions import LegalWorkflowState
-        from source.agents.workflow_constants import (
-            QualityThresholds,
-            RetryConfig,
-            WorkflowConstants,
-        )
-        from source.agents.workflow_utils import WorkflowUtils
+from core.agents.state_definitions import LegalWorkflowState
+from core.agents.workflow_constants import (
+    QualityThresholds,
+    RetryConfig,
+    WorkflowConstants,
+)
+from core.agents.workflow_utils import WorkflowUtils
 
 
 class QueryComplexity:
