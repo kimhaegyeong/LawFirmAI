@@ -49,13 +49,15 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 ### 핵심 컴포넌트
 
 #### 1. LangGraph Workflow Service
-**파일**: `core/agents/workflow_service.py`
+**파일**: `lawfirm_langgraph/source/services/workflow_service.py`
 
 - **역할**: LangGraph 기반 법률 질문 처리 워크플로우 오케스트레이션
 - **주요 기능**:
   - 질문 처리 워크플로우 실행
   - 상태 관리 및 최적화
   - 세션 관리
+
+> ⚠️ **참고**: `core/agents/workflow_service.py`는 레거시입니다. `lawfirm_langgraph/source/services/workflow_service.py`를 사용하세요.
 
 #### 2. 검색 엔진
 **파일**: `core/services/search/`
@@ -177,11 +179,11 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ### 1. 쿼리 처리 플로우
 
 ```
-사용자 쿼리 (apps/streamlit 또는 apps/api)
+사용자 쿼리 (streamlit 또는 apps/api)
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/source/services/workflow_service.py
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/source/services/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── classify_query (질문 분류)
     ├── resolve_multi_turn (멀티턴 처리)
     ├── retrieve_documents (문서 검색)
@@ -365,7 +367,14 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 ### 워크플로우 서비스
 
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화
@@ -392,7 +401,14 @@ print(f"소스: {result.get('sources', [])}")
 ### 1. 기본 RAG 쿼리
 
 ```python
-from core.agents.workflow_service import LangGraphWorkflowService
+import sys
+from pathlib import Path
+
+# lawfirm_langgraph 경로 추가
+lawfirm_langgraph_path = Path(__file__).parent.parent / "lawfirm_langgraph"
+sys.path.insert(0, str(lawfirm_langgraph_path))
+
+from source.services.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화

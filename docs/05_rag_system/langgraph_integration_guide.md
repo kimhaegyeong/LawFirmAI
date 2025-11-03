@@ -676,10 +676,12 @@ print(f"LLM 제공자: {status.get('llm_provider', 'unknown')}")
 
 ## 관련 파일
 
-- `core/agents/legal_workflow_enhanced.py` - 워크플로우 구현
-- `core/agents/state_definitions.py` - State 정의
-- `core/agents/workflow_service.py` - 워크플로우 서비스
-- `core/agents/state_utils.py` - State 최적화 유틸리티
+- `lawfirm_langgraph/source/services/legal_workflow_enhanced.py` - 워크플로우 구현
+- `lawfirm_langgraph/source/utils/state_definitions.py` - State 정의
+- `lawfirm_langgraph/source/services/workflow_service.py` - 워크플로우 서비스
+- `lawfirm_langgraph/source/utils/state_utils.py` - State 최적화 유틸리티
 - `infrastructure/utils/langgraph_config.py` - 설정 관리
+
+> ⚠️ **참고**: `core/agents/` 경로는 레거시입니다. 위의 `lawfirm_langgraph/source/` 경로를 사용하세요.
 
 이 가이드를 통해 LawFirmAI의 LangGraph 워크플로우를 효과적으로 활용할 수 있습니다. 추가 질문이나 문제가 있으시면 프로젝트 이슈를 통해 문의해주세요.
