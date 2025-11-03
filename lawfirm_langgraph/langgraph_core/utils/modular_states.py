@@ -14,6 +14,77 @@ from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 
 # ============================================
+# State Reducer Functions for Annotated Fields
+# ============================================
+
+def merge_search_lists(
+    left: Optional[List[Dict[str, Any]]], 
+    right: Optional[List[Dict[str, Any]]]
+) -> List[Dict[str, Any]]:
+    """
+    검색 결과 리스트 병합 - 중복 제거 및 최대 개수 제한
+    
+    Args:
+        left: 기존 검색 결과 리스트
+        right: 새로 추가할 검색 결과 리스트
+    
+    Returns:
+        병합된 검색 결과 리스트 (최대 10개)
+    """
+    if not left:
+        return right or []
+    if not right:
+        return left
+    
+    # 중복 제거 로직 포함
+    combined = left + right
+    seen_ids = set()
+    result = []
+    
+    for item in combined:
+        if not isinstance(item, dict):
+            continue
+        
+        # 문서 ID 생성 (id 필드가 있으면 사용, 없으면 content 해시)
+        doc_id = item.get('id')
+        if not doc_id:
+            # content나 source 기반 ID 생성
+            content = item.get('content') or item.get('text') or ''
+            source = item.get('source') or item.get('title') or ''
+            doc_id = hash(f"{source}:{content[:100]}")
+        
+        if doc_id not in seen_ids:
+            seen_ids.add(doc_id)
+            result.append(item)
+            if len(result) >= 10:  # 최대 10개
+                break
+    
+    return result
+
+
+def merge_dict_updates(
+    left: Dict[str, Any], 
+    right: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    딕셔너리 병합 (right가 우선)
+    
+    Args:
+        left: 기존 딕셔너리
+        right: 새로 추가할 딕셔너리
+    
+    Returns:
+        병합된 딕셔너리
+    """
+    if not left:
+        return right or {}
+    if not right:
+        return left
+    
+    return {**left, **right}
+
+
+# ============================================
 # 1. Input State - 모든 노드가 필요
 # ============================================
 class InputState(TypedDict):
@@ -54,22 +125,26 @@ class SearchState(TypedDict, total=False):
     LangGraph의 TypedDict 병합에서 손실되지 않음
 
     중요: LangGraph는 TypedDict의 필드만 병합하므로, 모든 검색 관련 필드를 명시적으로 정의해야 함
+    
+    Annotated reducer 적용:
+    - 리스트 필드는 merge_search_lists로 중복 제거 및 병합
+    - 딕셔너리 필드는 merge_dict_updates로 병합 (right 우선)
     """
     search_query: str
     extracted_keywords: List[str]
     ai_keyword_expansion: Optional[Dict[str, Any]]
-    retrieved_docs: List[Dict[str, Any]]  # 최대 10개, 각 500자 이하
+    retrieved_docs: Annotated[List[Dict[str, Any]], merge_search_lists]  # 최대 10개, 각 500자 이하
     # 중요: 검색 과정에서 사용되는 필드들 (total=False로 Optional)
     # LangGraph reducer가 이 필드들을 보존하도록 명시적으로 정의
-    optimized_queries: Optional[Dict[str, Any]]
-    search_params: Optional[Dict[str, Any]]
-    semantic_results: Optional[List[Dict[str, Any]]]  # 의미적 검색 결과
-    keyword_results: Optional[List[Dict[str, Any]]]  # 키워드 검색 결과
+    optimized_queries: Annotated[Optional[Dict[str, Any]], merge_dict_updates]
+    search_params: Annotated[Optional[Dict[str, Any]], merge_dict_updates]
+    semantic_results: Annotated[Optional[List[Dict[str, Any]]], merge_search_lists]  # 의미적 검색 결과
+    keyword_results: Annotated[Optional[List[Dict[str, Any]]], merge_search_lists]  # 키워드 검색 결과
     semantic_count: Optional[int]
     keyword_count: Optional[int]
-    merged_documents: Optional[List[Dict[str, Any]]]  # 병합된 문서
-    keyword_weights: Optional[Dict[str, Any]]  # 키워드별 가중치
-    prompt_optimized_context: Optional[Dict[str, Any]]  # 프롬프트 최적화 컨텍스트
+    merged_documents: Annotated[Optional[List[Dict[str, Any]]], merge_search_lists]  # 병합된 문서
+    keyword_weights: Annotated[Optional[Dict[str, Any]], merge_dict_updates]  # 키워드별 가중치
+    prompt_optimized_context: Annotated[Optional[Dict[str, Any]], merge_dict_updates]  # 프롬프트 최적화 컨텍스트
 
 
 # ============================================
