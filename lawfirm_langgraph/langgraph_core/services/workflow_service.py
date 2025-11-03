@@ -180,34 +180,14 @@ class LangGraphWorkflowService:
             self.logger.info(f"Processing query: {query[:100]}... (session: {session_id})")
             self.logger.debug(f"process_query: query length={len(query)}, query='{query[:50]}...'")
 
-            # 초기 상태 설정 (flat 구조 사용)
+            # 초기 상태 설정 (create_initial_legal_state가 이미 올바르게 설정함)
             initial_state = create_initial_legal_state(query, session_id)
-
-            # 중요: initial_state에 query가 반드시 포함되도록 강제
-            # LangGraph에 전달하기 전에 input 그룹에 query가 있어야 함
-            if "input" not in initial_state:
-                initial_state["input"] = {}
-            if not initial_state["input"].get("query"):
-                initial_state["input"]["query"] = query
-            if not initial_state["input"].get("session_id"):
-                initial_state["input"]["session_id"] = session_id
-
-            # 최상위 레벨에도 query 포함 (이중 보장)
-            if not initial_state.get("query"):
-                initial_state["query"] = query
-            if not initial_state.get("session_id"):
-                initial_state["session_id"] = session_id
-
-            # 초기 state 검증
-            initial_query = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-            self.logger.debug(f"process_query: initial_state query length={len(initial_query)}, query='{initial_query[:50] if initial_query else 'EMPTY'}...'")
-            if not initial_query or not str(initial_query).strip():
-                self.logger.error(f"Initial state query is empty! Input query was: '{query[:50]}...'")
-                self.logger.debug(f"process_query: ERROR - initial_state query is empty!")
-                self.logger.debug(f"process_query: initial_state keys: {list(initial_state.keys())}")
-                self.logger.debug(f"process_query: initial_state['input']: {initial_state.get('input')}")
+            
+            # 기본 검증만 수행 (LangGraph가 자동으로 input 보존)
+            if not initial_state.get("input", {}).get("query"):
+                self.logger.error(f"Initial state query is empty! This should not happen.")
             else:
-                self.logger.debug(f"process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
+                self.logger.debug(f"Initial state ready: query length={len(query)}")
 
             # 워크플로우 실행 설정 (체크포인트 활성화)
             config = {}
@@ -232,55 +212,13 @@ class LangGraphWorkflowService:
                 self.logger.info("🔄 워크플로우 실행 시작...")
                 print("🔄 워크플로우 실행 시작...", flush=True)
 
-                # 초기 state 검증: input 그룹과 query 확인
-                initial_query_check = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-                self.logger.debug(f"astream: initial_state before astream - query='{initial_query_check[:50] if initial_query_check else 'EMPTY'}...', keys={list(initial_state.keys())}")
-
-                # 중요: initial_state에 input이 없거나 query가 비어있으면 복원
-                # LangGraph에 전달하기 전에 반드시 query가 있어야 함
-                if not initial_query_check or not str(initial_query_check).strip():
-                    self.logger.error(f"Initial state query is empty before astream! Initial state keys: {list(initial_state.keys())}")
-                    if initial_state.get("input"):
-                        self.logger.error(f"Initial state input: {initial_state['input']}")
-
-                    # query 파라미터에서 직접 복원 (process_query의 query 파라미터)
-                    # 하지만 여기서는 이미 initial_state를 받았으므로, query를 다시 찾아야 함
-                    # 대신 initial_state를 수정하여 query 포함 보장
-                    if "input" not in initial_state:
-                        initial_state["input"] = {}
-                    # query 파라미터는 함수 인자에 있으므로 직접 접근 가능
-                    # 하지만 이미 initial_state를 생성했으므로, 원본 query를 사용
-                    # create_initial_legal_state에서 이미 설정했을 것이므로 문제 없어야 함
-                    # 혹시 모르니 다시 확인
-                    if not initial_state["input"].get("query"):
-                        # 최상위 레벨 확인
-                        if initial_state.get("query"):
-                            initial_state["input"]["query"] = initial_state["query"]
-                        else:
-                            self.logger.error(f"CRITICAL: Cannot find query anywhere in initial_state!")
-
-                # 중요: 초기 input 보존 (모든 노드에서 복원 가능하도록)
-                if initial_state.get("input") and isinstance(initial_state["input"], dict):
-                    self._initial_input = initial_state["input"].copy()
-                    # query가 비어있지 않은지 확인
-                    if not self._initial_input.get("query"):
-                        # 최상위에서 찾기
-                        if initial_state.get("query"):
-                            self._initial_input["query"] = initial_state["query"]
-                elif initial_state.get("query"):
-                    # nested 구조가 아니면 flat에서 추출
-                    self._initial_input = {
-                        "query": initial_state["query"],
-                        "session_id": initial_state.get("session_id", "") if initial_state.get("session_id") else (initial_state.get("input", {}).get("session_id", "") if initial_state.get("input") else "")
-                    }
-                else:
-                    self._initial_input = {"query": "", "session_id": ""}
-
-                # 최종 확인: initial_input에 query가 있어야 함
-                if not self._initial_input.get("query"):
-                    self.logger.error(f"CRITICAL: _initial_input has no query! This should never happen.")
-                else:
-                    self.logger.debug(f"Preserved initial input: query length={len(self._initial_input.get('query', ''))}")
+                # LangGraph가 자동으로 input을 보존하므로 복잡한 복원 로직 불필요
+                # 기본 검증만 수행
+                if not initial_state.get("input", {}).get("query"):
+                    self.logger.error(f"Initial state query is empty before astream!")
+                
+                # 초기 input 백업 (디버깅용, 선택적)
+                self._initial_input = initial_state.get("input", {}).copy() if initial_state.get("input") else {}
 
                 async for event in self.app.astream(initial_state, enhanced_config):
                     # 각 이벤트는 {node_name: updated_state} 형태
@@ -456,33 +394,14 @@ class LangGraphWorkflowService:
                                     keyword_restored = len(node_state["search"].get("keyword_results", []))
                                     self.logger.debug(f"astream: Restored search results - semantic={semantic_restored}, keyword={keyword_restored}")
 
-                        if isinstance(node_state, dict) and self._initial_input:
-                            # 중요: node_state.get("input")이 None일 수 있으므로 안전하게 처리
+                        # LangGraph가 자동으로 input을 보존하므로 복원 로직 불필요
+                        # (부분 업데이트로 전환한 노드들은 input을 반환하지 않으므로 LangGraph가 자동 보존)
+                        # 디버깅용: input 상태 확인만 수행
+                        if isinstance(node_state, dict):
                             node_input = node_state.get("input")
-                            node_has_input = node_input is not None and isinstance(node_input, dict)
-                            node_has_query = node_has_input and bool(node_input.get("query"))
-
-                            # node_state에 input이 없거나 query가 없으면 보존된 초기 input에서 복원
-                            if not node_has_input or not node_has_query:
-                                if self._initial_input.get("query"):
-                                    if "input" not in node_state or not isinstance(node_state.get("input"), dict):
-                                        node_state["input"] = {}
-                                    node_state["input"]["query"] = self._initial_input["query"]
-                                    if self._initial_input.get("session_id"):
-                                        node_state["input"]["session_id"] = self._initial_input["session_id"]
-                                    if node_name == "classify_query":
-                                        self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
-
-                            # 모든 노드 결과에 항상 input 그룹 포함 (LangGraph 병합 보장)
-                            # 초기 input이 있으면 항상 포함
-                            node_input_check = node_state.get("input")
-                            if node_input_check is None or not isinstance(node_input_check, dict):
-                                node_state["input"] = self._initial_input.copy()
-                            elif not node_input_check.get("query") and self._initial_input.get("query"):
-                                # query가 비어있으면 복원
-                                node_state["input"]["query"] = self._initial_input["query"]
-                                if self._initial_input.get("session_id"):
-                                    node_state["input"]["session_id"] = self._initial_input["session_id"]
+                            if not node_input or not isinstance(node_input, dict) or not node_input.get("query"):
+                                # 경고만 로깅 (LangGraph가 자동 보존해야 함)
+                                self.logger.debug(f"astream: Node {node_name} has no input/query (LangGraph should preserve it)")
 
                         # 중요: merge_and_rerank_with_keyword_weights 이후 retrieved_docs 캐시 업데이트
                         if node_name == "merge_and_rerank_with_keyword_weights" and isinstance(node_state, dict):
