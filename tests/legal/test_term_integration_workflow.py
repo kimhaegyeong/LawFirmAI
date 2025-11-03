@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-용어 통합 기능 포함 LangGraph 워크플로우 테스트
-TermIntegrationSystem 통합 후 워크플로우 검증
+?�어 ?�합 기능 ?�함 LangGraph ?�크?�로???�스??
+TermIntegrationSystem ?�합 ???�크?�로??검�?
 """
 
 import asyncio
@@ -9,46 +9,46 @@ import os
 import sys
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-# 테스트 환경 설정
+# ?�스???�경 ?�정
 os.environ["USE_LANGGRAPH"] = "true"
 os.environ["LANGGRAPH_ENABLED"] = "true"
 
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 from source.utils.langgraph_config import LangGraphConfig
 
 
 async def test_term_integration_workflow():
-    """용어 통합 워크플로우 테스트"""
+    """?�어 ?�합 ?�크?�로???�스??""
     print("\n" + "="*80)
-    print("용어 통합 LangGraph 워크플로우 테스트")
+    print("?�어 ?�합 LangGraph ?�크?�로???�스??)
     print("="*80 + "\n")
 
     try:
-        # 설정 로드
+        # ?�정 로드
         config = LangGraphConfig.from_env()
-        print("✅ LangGraph 설정 로드 완료")
+        print("??LangGraph ?�정 로드 ?�료")
 
-        # 워크플로우 서비스 초기화
+        # ?�크?�로???�비??초기??
         workflow_service = LangGraphWorkflowService(config)
-        print("✅ LangGraphWorkflowService 초기화 완료")
+        print("??LangGraphWorkflowService 초기???�료")
 
-        # 테스트 쿼리들 - 법률 용어가 많은 질문들
+        # ?�스??쿼리??- 법률 ?�어가 많�? 질문??
         test_queries = [
             {
-                "query": "이혼 절차와 양육권 분쟁에 대해 알려주세요",
-                "description": "가족법 - 용어 통합 테스트"
+                "query": "?�혼 ?�차?� ?�육�?분쟁???�???�려주세??,
+                "description": "가족법 - ?�어 ?�합 ?�스??
             },
             {
-                "query": "계약서 작성 시 손해배상 조항과 위약금 조항의 차이점은?",
-                "description": "민사법 - 중복 용어 정리 테스트"
+                "query": "계약???�성 ???�해배상 조항�??�약�?조항??차이?��??",
+                "description": "민사�?- 중복 ?�어 ?�리 ?�스??
             },
             {
-                "query": "해고 제한 조건과 부당해고 방지에 대해 설명해주세요",
-                "description": "노동법 - 유사 용어 그룹화 테스트"
+                "query": "?�고 ?�한 조건�?부?�해�?방�????�???�명?�주?�요",
+                "description": "?�동�?- ?�사 ?�어 그룹???�스??
             },
         ]
 
@@ -59,18 +59,18 @@ async def test_term_integration_workflow():
             description = test_case["description"]
 
             print(f"\n{'='*80}")
-            print(f"테스트 {i}: {description}")
+            print(f"?�스??{i}: {description}")
             print(f"{'='*80}")
             print(f"질문: {query}\n")
 
             try:
-                # 워크플로우 실행
+                # ?�크?�로???�행
                 result = await workflow_service.process_query(query)
 
-                # 결과 검증
-                assert "answer" in result, "답변이 없습니다"
-                assert len(result["answer"]) > 0, "답변이 비어있습니다"
-                assert "confidence" in result, "신뢰도 정보가 없습니다"
+                # 결과 검�?
+                assert "answer" in result, "?��????�습?�다"
+                assert len(result["answer"]) > 0, "?��???비어?�습?�다"
+                assert "confidence" in result, "?�뢰???�보가 ?�습?�다"
 
                 # 결과 출력
                 answer_length = len(result["answer"])
@@ -78,44 +78,44 @@ async def test_term_integration_workflow():
                 processing_time = result.get("processing_time", 0.0)
                 sources_count = len(result.get("sources", []))
 
-                print(f"📊 처리 결과:")
-                print(f"   - 답변 길이: {answer_length}자")
-                print(f"   - 신뢰도: {confidence:.2f}")
-                print(f"   - 처리 시간: {processing_time:.2f}초")
-                print(f"   - 출처: {sources_count}개")
+                print(f"?�� 처리 결과:")
+                print(f"   - ?��? 길이: {answer_length}??)
+                print(f"   - ?�뢰?? {confidence:.2f}")
+                print(f"   - 처리 ?�간: {processing_time:.2f}�?)
+                print(f"   - 출처: {sources_count}�?)
 
-                # 용어 통합 결과 확인
+                # ?�어 ?�합 결과 ?�인
                 metadata = result.get("metadata", {})
                 extracted_terms = metadata.get("extracted_terms", [])
                 unique_terms = metadata.get("unique_terms", 0)
                 total_terms = metadata.get("total_terms_extracted", 0)
 
-                print(f"\n📝 용어 통합 결과:")
-                print(f"   - 총 추출된 용어: {total_terms}개")
-                print(f"   - 고유 용어 (통합 후): {unique_terms}개")
-                print(f"   - 중복 제거율: {(1 - unique_terms/total_terms)*100:.1f}%" if total_terms > 0 else "   - 중복 제거율: N/A")
+                print(f"\n?�� ?�어 ?�합 결과:")
+                print(f"   - �?추출???�어: {total_terms}�?)
+                print(f"   - 고유 ?�어 (?�합 ??: {unique_terms}�?)
+                print(f"   - 중복 ?�거?? {(1 - unique_terms/total_terms)*100:.1f}%" if total_terms > 0 else "   - 중복 ?�거?? N/A")
 
                 if extracted_terms:
-                    print(f"\n   🔑 주요 법률 용어 (최대 10개):")
+                    print(f"\n   ?�� 주요 법률 ?�어 (최�? 10�?:")
                     for j, term in enumerate(extracted_terms[:10], 1):
                         print(f"   {j}. {term}")
                     if len(extracted_terms) > 10:
-                        print(f"   ... 외 {len(extracted_terms) - 10}개")
+                        print(f"   ... ??{len(extracted_terms) - 10}�?)
 
-                # 처리 단계 확인
+                # 처리 ?�계 ?�인
                 processing_steps = result.get("processing_steps", [])
                 if processing_steps:
-                    print(f"\n   🔄 처리 단계:")
+                    print(f"\n   ?�� 처리 ?�계:")
                     for step in processing_steps:
-                        if "용어" in step:
-                            print(f"      ✅ {step}")
+                        if "?�어" in step:
+                            print(f"      ??{step}")
                         else:
-                            print(f"      • {step}")
+                            print(f"      ??{step}")
 
-                # 오류 확인
+                # ?�류 ?�인
                 errors = result.get("errors", [])
                 if errors:
-                    print(f"\n   ⚠️ 오류 발생:")
+                    print(f"\n   ?�️ ?�류 발생:")
                     for error in errors:
                         print(f"      - {error}")
 
@@ -129,10 +129,10 @@ async def test_term_integration_workflow():
                     "total_terms": total_terms
                 })
 
-                print(f"\n   ✅ 테스트 {i} 성공")
+                print(f"\n   ???�스??{i} ?�공")
 
             except Exception as e:
-                print(f"\n   ❌ 테스트 {i} 실패: {e}")
+                print(f"\n   ???�스??{i} ?�패: {e}")
                 import traceback
                 traceback.print_exc()
                 results.append({
@@ -142,107 +142,107 @@ async def test_term_integration_workflow():
                     "error": str(e)
                 })
 
-        # 결과 요약
+        # 결과 ?�약
         print("\n" + "="*80)
-        print("테스트 결과 요약")
+        print("?�스??결과 ?�약")
         print("="*80)
 
         successful_tests = [r for r in results if r["success"]]
         failed_tests = [r for r in results if not r["success"]]
 
-        print(f"\n✅ 성공: {len(successful_tests)}/{len(results)}")
-        print(f"❌ 실패: {len(failed_tests)}/{len(results)}")
+        print(f"\n???�공: {len(successful_tests)}/{len(results)}")
+        print(f"???�패: {len(failed_tests)}/{len(results)}")
 
         if successful_tests:
-            print(f"\n📊 성공한 테스트 통계:")
+            print(f"\n?�� ?�공???�스???�계:")
             avg_time = sum(r["processing_time"] for r in successful_tests) / len(successful_tests)
             avg_confidence = sum(r["confidence"] for r in successful_tests) / len(successful_tests)
             avg_unique_terms = sum(r["extracted_terms_count"] for r in successful_tests) / len(successful_tests)
             avg_total_terms = sum(r["total_terms"] for r in successful_tests) / len(successful_tests)
 
-            print(f"   - 평균 처리 시간: {avg_time:.2f}초")
-            print(f"   - 평균 신뢰도: {avg_confidence:.2f}")
-            print(f"   - 평균 고유 용어: {avg_unique_terms:.0f}개")
-            print(f"   - 평균 총 용어: {avg_total_terms:.0f}개")
+            print(f"   - ?�균 처리 ?�간: {avg_time:.2f}�?)
+            print(f"   - ?�균 ?�뢰?? {avg_confidence:.2f}")
+            print(f"   - ?�균 고유 ?�어: {avg_unique_terms:.0f}�?)
+            print(f"   - ?�균 �??�어: {avg_total_terms:.0f}�?)
 
         if failed_tests:
-            print(f"\n❌ 실패한 테스트:")
+            print(f"\n???�패???�스??")
             for test in failed_tests:
                 print(f"   - {test['description']}: {test.get('error', 'Unknown error')}")
 
         if all(r["success"] for r in results):
             print("\n" + "="*80)
-            print("✅ 모든 테스트가 성공했습니다!")
+            print("??모든 ?�스?��? ?�공?�습?�다!")
             print("="*80 + "\n")
             return True
         else:
             print("\n" + "="*80)
-            print("⚠️ 일부 테스트가 실패했습니다.")
+            print("?�️ ?��? ?�스?��? ?�패?�습?�다.")
             print("="*80 + "\n")
             return False
 
     except Exception as e:
-        print(f"\n❌ 테스트 중 오류 발생: {e}")
+        print(f"\n???�스??�??�류 발생: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 async def test_single_query_detailed():
-    """단일 쿼리에 대한 상세 테스트"""
+    """?�일 쿼리???�???�세 ?�스??""
     print("\n" + "="*80)
-    print("상세 단일 쿼리 테스트")
+    print("?�세 ?�일 쿼리 ?�스??)
     print("="*80 + "\n")
 
     try:
         config = LangGraphConfig.from_env()
         workflow_service = LangGraphWorkflowService(config)
 
-        query = "이혼 절차와 양육권 분쟁, 상속 문제에 대해 상세히 알려주세요"
+        query = "?�혼 ?�차?� ?�육�?분쟁, ?�속 문제???�???�세???�려주세??
 
-        print(f"테스트 질문: {query}\n")
+        print(f"?�스??질문: {query}\n")
 
         result = await workflow_service.process_query(query)
 
         print("\n" + "="*80)
-        print("워크플로우 처리 결과")
+        print("?�크?�로??처리 결과")
         print("="*80)
-        print(f"\n답변:\n{result['answer']}\n")
+        print(f"\n?��?:\n{result['answer']}\n")
 
-        # 메타데이터 상세 출력
+        # 메�??�이???�세 출력
         metadata = result.get("metadata", {})
-        print(f"메타데이터:")
+        print(f"메�??�이??")
         for key, value in metadata.items():
             if isinstance(value, list) and len(value) > 5:
-                print(f"  - {key}: {len(value)}개 항목")
+                print(f"  - {key}: {len(value)}�???��")
             else:
                 print(f"  - {key}: {value}")
 
-        print(f"\n처리 단계:")
+        print(f"\n처리 ?�계:")
         for step in result.get("processing_steps", []):
-            print(f"  • {step}")
+            print(f"  ??{step}")
 
         if result.get("errors"):
-            print(f"\n오류:")
+            print(f"\n?�류:")
             for error in result["errors"]:
-                print(f"  ⚠️ {error}")
+                print(f"  ?�️ {error}")
 
         return True
 
     except Exception as e:
-        print(f"\n❌ 테스트 중 오류: {e}")
+        print(f"\n???�스??�??�류: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def run_tests():
-    """전체 테스트 실행"""
+    """?�체 ?�스???�행"""
     print("\n" + "="*80)
-    print("용어 통합 워크플로우 테스트 시작")
+    print("?�어 ?�합 ?�크?�로???�스???�작")
     print("="*80)
 
-    # 비동기 테스트 실행
+    # 비동�??�스???�행
     result1 = asyncio.run(test_term_integration_workflow())
     result2 = asyncio.run(test_single_query_detailed())
 
@@ -250,9 +250,9 @@ def run_tests():
 
     print("\n" + "="*80)
     if success:
-        print("✅ 모든 테스트 완료!")
+        print("??모든 ?�스???�료!")
     else:
-        print("⚠️ 일부 테스트 실패")
+        print("?�️ ?��? ?�스???�패")
     print("="*80 + "\n")
 
     return success

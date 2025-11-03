@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-LawFirmAI 스트레스 테스트
-대량 데이터 처리 및 동시성 테스트
+LawFirmAI ?�트?�스 ?�스??
+?�???�이??처리 �??�시???�스??
 """
 
 import unittest
@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -30,14 +30,14 @@ from source.data.conversation_store import ConversationStore
 
 
 class TestStressSystem(unittest.TestCase):
-    """스트레스 테스트"""
+    """?�트?�스 ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test_stress.db")
         
-        # 컴포넌트 초기화
+        # 컴포?�트 초기??
         self.session_manager = IntegratedSessionManager(self.db_path)
         self.memory_manager = ContextualMemoryManager(self.session_manager.conversation_store)
         self.quality_monitor = ConversationQualityMonitor(self.session_manager.conversation_store)
@@ -45,37 +45,37 @@ class TestStressSystem(unittest.TestCase):
         self.memory_optimizer = MemoryOptimizer()
         self.cache_manager = CacheManager(max_size=1000, ttl=3600)
         
-        # 테스트 데이터
+        # ?�스???�이??
         self.test_users = [f"stress_user_{i}" for i in range(50)]
         self.test_sessions = [f"stress_session_{i}" for i in range(100)]
         
     def tearDown(self):
-        """테스트 정리"""
+        """?�스???�리"""
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
     
     def test_large_scale_conversations(self):
-        """대규모 대화 처리 테스트"""
-        print("\n=== 대규모 대화 처리 테스트 ===")
+        """?�규모 ?�??처리 ?�스??""
+        print("\n=== ?�규모 ?�??처리 ?�스??===")
         
-        # 대량 대화 데이터 생성
+        # ?�???�???�이???�성
         conversation_data = []
-        for i in range(500):  # 500개의 대화 생성
+        for i in range(500):  # 500개의 ?�???�성
             conversation_data.append({
                 "session_id": f"large_scale_session_{i}",
                 "user_id": f"large_scale_user_{i % 50}",
-                "query": f"법률 질문 {i} - 손해배상, 계약, 형법 관련 문의",
-                "response": f"법률 답변 {i} - 상세한 법률 설명과 판례 인용",
+                "query": f"법률 질문 {i} - ?�해배상, 계약, ?�법 관??문의",
+                "response": f"법률 ?��? {i} - ?�세??법률 ?�명�??��? ?�용",
                 "question_type": random.choice(["legal_advice", "law_inquiry", "procedure_guide"])
             })
         
         start_time = time.time()
         
-        # 대량 대화 처리
+        # ?�???�??처리
         processed_count = 0
         for data in conversation_data:
             try:
-                # 턴 추가
+                # ??추�?
                 context = self.session_manager.add_turn(
                     data["session_id"],
                     data["query"],
@@ -84,7 +84,7 @@ class TestStressSystem(unittest.TestCase):
                     data["user_id"]
                 )
                 
-                # 메모리 저장
+                # 메모�??�??
                 facts = {
                     "legal_knowledge": [data["response"]],
                     "user_context": [data["query"]]
@@ -95,35 +95,35 @@ class TestStressSystem(unittest.TestCase):
                 
                 processed_count += 1
                 
-                # 진행률 표시
+                # 진행�??�시
                 if processed_count % 100 == 0:
-                    print(f"  처리된 대화: {processed_count}/500")
+                    print(f"  처리???�?? {processed_count}/500")
                     
             except Exception as e:
-                print(f"  오류 발생 (대화 {processed_count}): {e}")
+                print(f"  ?�류 발생 (?�??{processed_count}): {e}")
         
         processing_time = time.time() - start_time
         
-        print(f"\n대규모 대화 처리 결과:")
-        print(f"  처리된 대화 수: {processed_count}")
-        print(f"  총 처리 시간: {processing_time:.2f}초")
-        print(f"  평균 처리 시간: {processing_time/processed_count:.3f}초/대화")
-        print(f"  처리 속도: {processed_count/processing_time:.1f}대화/초")
+        print(f"\n?�규모 ?�??처리 결과:")
+        print(f"  처리???�???? {processed_count}")
+        print(f"  �?처리 ?�간: {processing_time:.2f}�?)
+        print(f"  ?�균 처리 ?�간: {processing_time/processed_count:.3f}�??�??)
+        print(f"  처리 ?�도: {processed_count/processing_time:.1f}?�??�?)
         
-        # 결과 검증
-        self.assertGreaterEqual(processed_count, 450)  # 최소 90% 성공
-        self.assertLess(processing_time, 60)  # 60초 이내 완료
+        # 결과 검�?
+        self.assertGreaterEqual(processed_count, 450)  # 최소 90% ?�공
+        self.assertLess(processing_time, 60)  # 60�??�내 ?�료
         
-        print("✅ 대규모 대화 처리 테스트 완료")
+        print("???�규모 ?�??처리 ?�스???�료")
     
     def test_concurrent_sessions(self):
-        """동시 세션 처리 테스트"""
-        print("\n=== 동시 세션 처리 테스트 ===")
+        """?�시 ?�션 처리 ?�스??""
+        print("\n=== ?�시 ?�션 처리 ?�스??===")
         
         def process_session(session_data):
-            """세션 처리 함수"""
+            """?�션 처리 ?�수"""
             try:
-                # 턴 추가
+                # ??추�?
                 context = self.session_manager.add_turn(
                     session_data["session_id"],
                     session_data["query"],
@@ -132,7 +132,7 @@ class TestStressSystem(unittest.TestCase):
                     session_data["user_id"]
                 )
                 
-                # 메모리 저장
+                # 메모�??�??
                 facts = {"test_data": [session_data["query"]]}
                 self.memory_manager.store_important_facts(
                     session_data["session_id"], session_data["user_id"], facts
@@ -151,20 +151,20 @@ class TestStressSystem(unittest.TestCase):
                     "error": str(e)
                 }
         
-        # 동시 처리할 세션 데이터 생성
+        # ?�시 처리???�션 ?�이???�성
         concurrent_sessions = []
         for i in range(100):
             concurrent_sessions.append({
                 "session_id": f"concurrent_session_{i}",
                 "user_id": f"concurrent_user_{i % 20}",
-                "query": f"동시 처리 테스트 질문 {i}",
-                "response": f"동시 처리 테스트 응답 {i}",
+                "query": f"?�시 처리 ?�스??질문 {i}",
+                "response": f"?�시 처리 ?�스???�답 {i}",
                 "question_type": "test"
             })
         
         start_time = time.time()
         
-        # ThreadPoolExecutor를 사용한 동시 처리
+        # ThreadPoolExecutor�??�용???�시 처리
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(process_session, session) for session in concurrent_sessions]
             
@@ -179,112 +179,112 @@ class TestStressSystem(unittest.TestCase):
         successful_sessions = [r for r in results if r["success"]]
         failed_sessions = [r for r in results if not r["success"]]
         
-        print(f"\n동시 세션 처리 결과:")
-        print(f"  총 세션 수: {len(concurrent_sessions)}")
-        print(f"  성공한 세션: {len(successful_sessions)}")
-        print(f"  실패한 세션: {len(failed_sessions)}")
-        print(f"  성공률: {len(successful_sessions)/len(concurrent_sessions)*100:.1f}%")
-        print(f"  총 처리 시간: {processing_time:.2f}초")
-        print(f"  평균 처리 시간: {processing_time/len(concurrent_sessions):.3f}초/세션")
+        print(f"\n?�시 ?�션 처리 결과:")
+        print(f"  �??�션 ?? {len(concurrent_sessions)}")
+        print(f"  ?�공???�션: {len(successful_sessions)}")
+        print(f"  ?�패???�션: {len(failed_sessions)}")
+        print(f"  ?�공�? {len(successful_sessions)/len(concurrent_sessions)*100:.1f}%")
+        print(f"  �?처리 ?�간: {processing_time:.2f}�?)
+        print(f"  ?�균 처리 ?�간: {processing_time/len(concurrent_sessions):.3f}�??�션")
         
-        # 결과 검증
-        self.assertGreaterEqual(len(successful_sessions), 90)  # 최소 90% 성공
-        self.assertLess(processing_time, 30)  # 30초 이내 완료
+        # 결과 검�?
+        self.assertGreaterEqual(len(successful_sessions), 90)  # 최소 90% ?�공
+        self.assertLess(processing_time, 30)  # 30�??�내 ?�료
         
         if failed_sessions:
-            print(f"\n실패한 세션들:")
-            for failed in failed_sessions[:5]:  # 처음 5개만 표시
+            print(f"\n?�패???�션??")
+            for failed in failed_sessions[:5]:  # 처음 5개만 ?�시
                 print(f"  - {failed['session_id']}: {failed['error']}")
         
-        print("✅ 동시 세션 처리 테스트 완료")
+        print("???�시 ?�션 처리 ?�스???�료")
     
     def test_memory_stress(self):
-        """메모리 스트레스 테스트"""
-        print("\n=== 메모리 스트레스 테스트 ===")
+        """메모�??�트?�스 ?�스??""
+        print("\n=== 메모�??�트?�스 ?�스??===")
         
-        # 초기 메모리 사용량
+        # 초기 메모�??�용??
         initial_memory_obj = self.memory_optimizer.get_memory_usage()
-        initial_memory = initial_memory_obj.process_memory / 1024 / 1024  # MB로 변환
-        print(f"초기 메모리 사용량: {initial_memory:.1f} MB")
+        initial_memory = initial_memory_obj.process_memory / 1024 / 1024  # MB�?변??
+        print(f"초기 메모�??�용?? {initial_memory:.1f} MB")
         
-        # 대량 메모리 할당
+        # ?�??메모�??�당
         large_data_sets = []
         for i in range(100):
-            # 각각 1MB 정도의 데이터 생성
+            # 각각 1MB ?�도???�이???�성
             large_data = {
                 "id": i,
-                "content": "x" * 1000000,  # 1MB 문자열
+                "content": "x" * 1000000,  # 1MB 문자??
                 "metadata": {"created_at": datetime.now().isoformat()},
                 "entities": [f"entity_{j}" for j in range(100)]
             }
             large_data_sets.append(large_data)
         
-        # 메모리 사용량 모니터링
+        # 메모�??�용??모니?�링
         peak_memory = initial_memory
         for i, data in enumerate(large_data_sets):
-            # 데이터 처리 시뮬레이션
+            # ?�이??처리 ?��??�이??
             facts = {"large_data": [data["content"]]}
             self.memory_manager.store_important_facts(
                 f"memory_stress_session_{i}", f"memory_stress_user_{i}", facts
             )
             
-            # 메모리 사용량 체크
+            # 메모�??�용??체크
             current_memory_obj = self.memory_optimizer.get_memory_usage()
-            current_memory = current_memory_obj.process_memory / 1024 / 1024  # MB로 변환
+            current_memory = current_memory_obj.process_memory / 1024 / 1024  # MB�?변??
             peak_memory = max(peak_memory, current_memory)
             
             if i % 20 == 0:
-                print(f"  처리된 데이터: {i+1}/100, 현재 메모리: {current_memory:.1f} MB")
+                print(f"  처리???�이?? {i+1}/100, ?�재 메모�? {current_memory:.1f} MB")
         
-        # 메모리 최적화
-        print("\n메모리 최적화 실행...")
+        # 메모�?최적??
+        print("\n메모�?최적???�행...")
         freed_memory_result = self.memory_optimizer.optimize_memory()
         freed_memory = freed_memory_result["memory_freed_mb"]
         
         final_memory_obj = self.memory_optimizer.get_memory_usage()
-        final_memory = final_memory_obj.process_memory / 1024 / 1024  # MB로 변환
+        final_memory = final_memory_obj.process_memory / 1024 / 1024  # MB�?변??
         
-        print(f"\n메모리 스트레스 테스트 결과:")
-        print(f"  초기 메모리: {initial_memory:.1f} MB")
-        print(f"  최대 메모리: {peak_memory:.1f} MB")
-        print(f"  최종 메모리: {final_memory:.1f} MB")
-        print(f"  해제된 메모리: {freed_memory:.1f} MB")
-        print(f"  메모리 증가량: {peak_memory - initial_memory:.1f} MB")
+        print(f"\n메모�??�트?�스 ?�스??결과:")
+        print(f"  초기 메모�? {initial_memory:.1f} MB")
+        print(f"  최�? 메모�? {peak_memory:.1f} MB")
+        print(f"  최종 메모�? {final_memory:.1f} MB")
+        print(f"  ?�제??메모�? {freed_memory:.1f} MB")
+        print(f"  메모�?증�??? {peak_memory - initial_memory:.1f} MB")
         
-        # 결과 검증
-        self.assertLess(peak_memory - initial_memory, 500)  # 500MB 이하 증가
-        self.assertGreater(freed_memory, 0)  # 메모리 해제 확인
+        # 결과 검�?
+        self.assertLess(peak_memory - initial_memory, 500)  # 500MB ?�하 증�?
+        self.assertGreater(freed_memory, 0)  # 메모�??�제 ?�인
         
-        print("✅ 메모리 스트레스 테스트 완료")
+        print("??메모�??�트?�스 ?�스???�료")
     
     def test_cache_stress(self):
-        """캐시 스트레스 테스트"""
-        print("\n=== 캐시 스트레스 테스트 ===")
+        """캐시 ?�트?�스 ?�스??""
+        print("\n=== 캐시 ?�트?�스 ?�스??===")
         
-        # 대량 캐시 데이터 생성 및 저장
+        # ?�??캐시 ?�이???�성 �??�??
         cache_data_count = 1000
         start_time = time.time()
         
-        print(f"캐시 데이터 {cache_data_count}개 생성 중...")
+        print(f"캐시 ?�이??{cache_data_count}�??�성 �?..")
         
         for i in range(cache_data_count):
             cache_key = f"stress_cache_key_{i}"
             cache_value = {
                 "id": i,
-                "data": f"스트레스 테스트 데이터 {i}",
+                "data": f"?�트?�스 ?�스???�이??{i}",
                 "timestamp": datetime.now().isoformat(),
-                "large_content": "x" * 1000  # 1KB 데이터
+                "large_content": "x" * 1000  # 1KB ?�이??
             }
             
             self.cache_manager.set(cache_key, cache_value)
             
             if i % 200 == 0:
-                print(f"  저장된 캐시: {i+1}/{cache_data_count}")
+                print(f"  ?�?�된 캐시: {i+1}/{cache_data_count}")
         
         storage_time = time.time() - start_time
         
-        # 캐시 조회 테스트
-        print(f"\n캐시 조회 테스트 시작...")
+        # 캐시 조회 ?�스??
+        print(f"\n캐시 조회 ?�스???�작...")
         start_time = time.time()
         
         hit_count = 0
@@ -300,46 +300,46 @@ class TestStressSystem(unittest.TestCase):
                 miss_count += 1
             
             if i % 200 == 0:
-                print(f"  조회된 캐시: {i+1}/{cache_data_count}")
+                print(f"  조회??캐시: {i+1}/{cache_data_count}")
         
         retrieval_time = time.time() - start_time
         
-        # 캐시 통계
+        # 캐시 ?�계
         cache_stats = self.cache_manager.get_stats()
         
-        print(f"\n캐시 스트레스 테스트 결과:")
-        print(f"  저장된 캐시 수: {cache_data_count}")
-        print(f"  저장 시간: {storage_time:.2f}초")
-        print(f"  조회 시간: {retrieval_time:.2f}초")
-        print(f"  히트 수: {hit_count}")
-        print(f"  미스 수: {miss_count}")
-        print(f"  히트율: {hit_count/(hit_count+miss_count)*100:.1f}%")
-        print(f"  캐시 크기: {cache_stats['cache_size']}")
-        print(f"  평균 저장 시간: {storage_time/cache_data_count*1000:.2f}ms/항목")
-        print(f"  평균 조회 시간: {retrieval_time/cache_data_count*1000:.2f}ms/항목")
+        print(f"\n캐시 ?�트?�스 ?�스??결과:")
+        print(f"  ?�?�된 캐시 ?? {cache_data_count}")
+        print(f"  ?�???�간: {storage_time:.2f}�?)
+        print(f"  조회 ?�간: {retrieval_time:.2f}�?)
+        print(f"  ?�트 ?? {hit_count}")
+        print(f"  미스 ?? {miss_count}")
+        print(f"  ?�트?? {hit_count/(hit_count+miss_count)*100:.1f}%")
+        print(f"  캐시 ?�기: {cache_stats['cache_size']}")
+        print(f"  ?�균 ?�???�간: {storage_time/cache_data_count*1000:.2f}ms/??��")
+        print(f"  ?�균 조회 ?�간: {retrieval_time/cache_data_count*1000:.2f}ms/??��")
         
-        # 결과 검증
-        self.assertGreater(hit_count, cache_data_count * 0.8)  # 80% 이상 히트율
-        self.assertLess(storage_time, 10)  # 10초 이내 저장
-        self.assertLess(retrieval_time, 5)  # 5초 이내 조회
+        # 결과 검�?
+        self.assertGreater(hit_count, cache_data_count * 0.8)  # 80% ?�상 ?�트??
+        self.assertLess(storage_time, 10)  # 10�??�내 ?�??
+        self.assertLess(retrieval_time, 5)  # 5�??�내 조회
         
-        print("✅ 캐시 스트레스 테스트 완료")
+        print("??캐시 ?�트?�스 ?�스???�료")
     
     def test_database_stress(self):
-        """데이터베이스 스트레스 테스트"""
-        print("\n=== 데이터베이스 스트레스 테스트 ===")
+        """?�이?�베?�스 ?�트?�스 ?�스??""
+        print("\n=== ?�이?�베?�스 ?�트?�스 ?�스??===")
         
-        # 대량 데이터베이스 작업
+        # ?�???�이?�베?�스 ?�업
         operations_count = 1000
         start_time = time.time()
         
-        print(f"데이터베이스 작업 {operations_count}개 실행 중...")
+        print(f"?�이?�베?�스 ?�업 {operations_count}�??�행 �?..")
         
         successful_operations = 0
         
         for i in range(operations_count):
             try:
-                # 세션 생성 및 저장
+                # ?�션 ?�성 �??�??
                 session_data = {
                     "session_id": f"db_stress_session_{i}",
                     "created_at": datetime.now().isoformat(),
@@ -348,8 +348,8 @@ class TestStressSystem(unittest.TestCase):
                     "metadata": {"user_id": f"db_stress_user_{i % 100}"},
                     "turns": [
                         {
-                            "user_query": f"데이터베이스 스트레스 테스트 질문 {i}",
-                            "bot_response": f"데이터베이스 스트레스 테스트 응답 {i}",
+                            "user_query": f"?�이?�베?�스 ?�트?�스 ?�스??질문 {i}",
+                            "bot_response": f"?�이?�베?�스 ?�트?�스 ?�스???�답 {i}",
                             "timestamp": datetime.now().isoformat(),
                             "question_type": "test",
                             "entities": {"test_entities": [f"entity_{i}"]}
@@ -358,65 +358,65 @@ class TestStressSystem(unittest.TestCase):
                     "entities": {"test_entities": [f"entity_{i}"]}
                 }
                 
-                # 세션 저장
+                # ?�션 ?�??
                 success = self.session_manager.conversation_store.save_session(session_data)
                 if success:
                     successful_operations += 1
                 
-                # 진행률 표시
+                # 진행�??�시
                 if i % 200 == 0:
-                    print(f"  완료된 작업: {i+1}/{operations_count}")
+                    print(f"  ?�료???�업: {i+1}/{operations_count}")
                     
             except Exception as e:
-                print(f"  오류 발생 (작업 {i}): {e}")
+                print(f"  ?�류 발생 (?�업 {i}): {e}")
         
         processing_time = time.time() - start_time
         
-        # 데이터베이스 통계 조회
+        # ?�이?�베?�스 ?�계 조회
         try:
             stats = self.session_manager.conversation_store.get_statistics()
-            print(f"\n데이터베이스 통계:")
-            print(f"  총 세션 수: {stats.get('total_sessions', 0)}")
-            print(f"  총 턴 수: {stats.get('total_turns', 0)}")
-            print(f"  총 엔티티 수: {stats.get('total_entities', 0)}")
+            print(f"\n?�이?�베?�스 ?�계:")
+            print(f"  �??�션 ?? {stats.get('total_sessions', 0)}")
+            print(f"  �????? {stats.get('total_turns', 0)}")
+            print(f"  �??�티???? {stats.get('total_entities', 0)}")
         except Exception as e:
-            print(f"  통계 조회 오류: {e}")
+            print(f"  ?�계 조회 ?�류: {e}")
         
-        print(f"\n데이터베이스 스트레스 테스트 결과:")
-        print(f"  총 작업 수: {operations_count}")
-        print(f"  성공한 작업: {successful_operations}")
-        print(f"  실패한 작업: {operations_count - successful_operations}")
-        print(f"  성공률: {successful_operations/operations_count*100:.1f}%")
-        print(f"  총 처리 시간: {processing_time:.2f}초")
-        print(f"  평균 처리 시간: {processing_time/operations_count*1000:.2f}ms/작업")
-        print(f"  처리 속도: {operations_count/processing_time:.1f}작업/초")
+        print(f"\n?�이?�베?�스 ?�트?�스 ?�스??결과:")
+        print(f"  �??�업 ?? {operations_count}")
+        print(f"  ?�공???�업: {successful_operations}")
+        print(f"  ?�패???�업: {operations_count - successful_operations}")
+        print(f"  ?�공�? {successful_operations/operations_count*100:.1f}%")
+        print(f"  �?처리 ?�간: {processing_time:.2f}�?)
+        print(f"  ?�균 처리 ?�간: {processing_time/operations_count*1000:.2f}ms/?�업")
+        print(f"  처리 ?�도: {operations_count/processing_time:.1f}?�업/�?)
         
-        # 결과 검증
-        self.assertGreaterEqual(successful_operations, operations_count * 0.9)  # 90% 이상 성공
-        self.assertLess(processing_time, 60)  # 60초 이내 완료
+        # 결과 검�?
+        self.assertGreaterEqual(successful_operations, operations_count * 0.9)  # 90% ?�상 ?�공
+        self.assertLess(processing_time, 60)  # 60�??�내 ?�료
         
-        print("✅ 데이터베이스 스트레스 테스트 완료")
+        print("???�이?�베?�스 ?�트?�스 ?�스???�료")
     
     def test_error_recovery(self):
-        """오류 복구 테스트"""
-        print("\n=== 오류 복구 테스트 ===")
+        """?�류 복구 ?�스??""
+        print("\n=== ?�류 복구 ?�스??===")
         
-        # 다양한 오류 상황 시뮬레이션
+        # ?�양???�류 ?�황 ?��??�이??
         error_scenarios = [
             {
-                "name": "잘못된 세션 ID",
+                "name": "?�못???�션 ID",
                 "test": lambda: self.session_manager.add_turn("", "test", "test", "test", "test")
             },
             {
-                "name": "잘못된 사용자 ID",
+                "name": "?�못???�용??ID",
                 "test": lambda: self.session_manager.add_turn("test", "test", "test", "test", "")
             },
             {
-                "name": "잘못된 메모리 데이터",
+                "name": "?�못??메모�??�이??,
                 "test": lambda: self.memory_manager.store_important_facts("test", "test", None)
             },
             {
-                "name": "잘못된 캐시 키",
+                "name": "?�못??캐시 ??,
                 "test": lambda: self.cache_manager.get(None)
             }
         ]
@@ -424,90 +424,90 @@ class TestStressSystem(unittest.TestCase):
         recovery_success_count = 0
         
         for scenario in error_scenarios:
-            print(f"\n오류 시나리오: {scenario['name']}")
+            print(f"\n?�류 ?�나리오: {scenario['name']}")
             
             try:
-                # 오류 발생 시도
+                # ?�류 발생 ?�도
                 result = scenario['test']()
-                print(f"  예상치 못한 성공: {result}")
+                print(f"  ?�상�?못한 ?�공: {result}")
             except Exception as e:
-                print(f"  예상된 오류: {type(e).__name__}")
+                print(f"  ?�상???�류: {type(e).__name__}")
                 
-                # 시스템이 여전히 작동하는지 확인
+                # ?�스?�이 ?�전???�동?�는지 ?�인
                 try:
-                    # 정상적인 작업 수행
+                    # ?�상?�인 ?�업 ?�행
                     context = self.session_manager.add_turn(
                         "recovery_test_session",
-                        "복구 테스트 질문",
-                        "복구 테스트 응답",
+                        "복구 ?�스??질문",
+                        "복구 ?�스???�답",
                         "test",
                         "recovery_test_user"
                     )
                     
                     if context and len(context.turns) > 0:
-                        print(f"  ✅ 시스템 복구 성공")
+                        print(f"  ???�스??복구 ?�공")
                         recovery_success_count += 1
                     else:
-                        print(f"  ❌ 시스템 복구 실패")
+                        print(f"  ???�스??복구 ?�패")
                         
                 except Exception as recovery_error:
-                    print(f"  ❌ 복구 중 오류: {recovery_error}")
+                    print(f"  ??복구 �??�류: {recovery_error}")
         
-        print(f"\n오류 복구 테스트 결과:")
-        print(f"  테스트된 시나리오: {len(error_scenarios)}")
-        print(f"  성공한 복구: {recovery_success_count}")
-        print(f"  복구 성공률: {recovery_success_count/len(error_scenarios)*100:.1f}%")
+        print(f"\n?�류 복구 ?�스??결과:")
+        print(f"  ?�스?�된 ?�나리오: {len(error_scenarios)}")
+        print(f"  ?�공??복구: {recovery_success_count}")
+        print(f"  복구 ?�공�? {recovery_success_count/len(error_scenarios)*100:.1f}%")
         
-        # 결과 검증
-        self.assertGreaterEqual(recovery_success_count, len(error_scenarios) * 0.8)  # 80% 이상 복구 성공
+        # 결과 검�?
+        self.assertGreaterEqual(recovery_success_count, len(error_scenarios) * 0.8)  # 80% ?�상 복구 ?�공
         
-        print("✅ 오류 복구 테스트 완료")
+        print("???�류 복구 ?�스???�료")
 
 
 def run_stress_tests():
-    """스트레스 테스트 실행"""
+    """?�트?�스 ?�스???�행"""
     print("=" * 60)
-    print("LawFirmAI 스트레스 테스트 시작")
+    print("LawFirmAI ?�트?�스 ?�스???�작")
     print("=" * 60)
     
-    # 테스트 스위트 생성
+    # ?�스???�위???�성
     test_suite = unittest.TestSuite()
     
-    # 테스트 케이스 추가
+    # ?�스??케?�스 추�?
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestStressSystem))
     
-    # 테스트 실행
+    # ?�스???�행
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(test_suite)
     
-    # 결과 요약
+    # 결과 ?�약
     print("\n" + "=" * 60)
-    print("스트레스 테스트 결과 요약")
+    print("?�트?�스 ?�스??결과 ?�약")
     print("=" * 60)
-    print(f"실행된 테스트: {result.testsRun}")
-    print(f"성공: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"실패: {len(result.failures)}")
-    print(f"오류: {len(result.errors)}")
+    print(f"?�행???�스?? {result.testsRun}")
+    print(f"?�공: {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"?�패: {len(result.failures)}")
+    print(f"?�류: {len(result.errors)}")
     
     if result.failures:
-        print("\n실패한 테스트:")
+        print("\n?�패???�스??")
         for test, traceback in result.failures:
             print(f"- {test}: {traceback.split('AssertionError:')[-1].strip()}")
     
     if result.errors:
-        print("\n오류가 발생한 테스트:")
+        print("\n?�류가 발생???�스??")
         for test, traceback in result.errors:
             print(f"- {test}: {traceback.split('Exception:')[-1].strip()}")
     
     success_rate = (result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100
-    print(f"\n전체 통과율: {success_rate:.1f}%")
+    print(f"\n?�체 ?�과?? {success_rate:.1f}%")
     
     if success_rate >= 90:
-        print("🎉 우수한 스트레스 저항성! 시스템이 안정적으로 작동합니다.")
+        print("?�� ?�수???�트?�스 ?�??��! ?�스?�이 ?�정?�으�??�동?�니??")
     elif success_rate >= 75:
-        print("✅ 양호한 스트레스 저항성! 일부 개선이 필요합니다.")
+        print("???�호???�트?�스 ?�??��! ?��? 개선???�요?�니??")
     else:
-        print("⚠️ 스트레스 저항성 개선이 필요합니다. 시스템을 점검해주세요.")
+        print("?�️ ?�트?�스 ?�??�� 개선???�요?�니?? ?�스?�을 ?��??�주?�요.")
     
     return result
 

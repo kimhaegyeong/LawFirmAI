@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-성능 최적화 테스트 스크립트
-최적화 전후 성능 비교 및 벤치마크
+?�능 최적???�스???�크립트
+최적???�후 ?�능 비교 �?벤치마크
 """
 
 import asyncio
@@ -12,18 +12,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-# 로깅 설정
+# 로깅 ?�정
 import logging
 import warnings
 
 warnings.filterwarnings("ignore")
 
 class PerformanceTester:
-    """성능 테스트 클래스"""
+    """?�능 ?�스???�래??""
 
     def __init__(self):
         self.test_results = {}
@@ -31,19 +31,19 @@ class PerformanceTester:
         self.config = None
 
     def setup_test_environment(self) -> bool:
-        """테스트 환경 설정"""
+        """?�스???�경 ?�정"""
         try:
             print("[SETUP] Setting up optimized test environment...")
 
-            # 환경 변수 설정
+            # ?�경 변???�정
             os.environ.setdefault('USE_LANGGRAPH', 'false')
             os.environ.setdefault('GEMINI_ENABLED', 'false')
 
-            # Config 초기화
+            # Config 초기??
             from source.utils.config import Config
             self.config = Config()
 
-            # 최적화된 ChatService 초기화
+            # 최적?�된 ChatService 초기??
             from source.services.optimized_chat_service import OptimizedChatService
             self.optimized_service = OptimizedChatService(self.config)
 
@@ -55,16 +55,16 @@ class PerformanceTester:
             return False
 
     async def test_optimized_performance(self) -> Dict[str, Any]:
-        """최적화된 성능 테스트"""
+        """최적?�된 ?�능 ?�스??""
         test_name = "optimized_performance"
         print(f"[TEST] Testing {test_name}...")
 
         test_queries = [
-            "안녕하세요",
-            "계약서 검토 요청",
-            "민법 제750조의 내용이 무엇인가요?",
-            "손해배상 관련 판례를 찾아주세요",
-            "이혼 절차는 어떻게 진행하나요?"
+            "?�녕?�세??,
+            "계약??검???�청",
+            "민법 ??50조의 ?�용??무엇?��???",
+            "?�해배상 관???��?�?찾아주세??,
+            "?�혼 ?�차???�떻�?진행?�나??"
         ]
 
         results = []
@@ -97,7 +97,7 @@ class PerformanceTester:
                 results.append(test_result)
                 print(f"[FAIL] Query failed: {str(e)[:100]}...")
 
-        # 전체 테스트 결과
+        # ?�체 ?�스??결과
         passed_count = sum(1 for r in results if r.get("success", False))
         total_count = len(results)
         avg_time = sum(r.get("processing_time", 0) for r in results if r.get("success", False)) / max(passed_count, 1)
@@ -122,12 +122,12 @@ class PerformanceTester:
         return result
 
     async def test_cache_performance(self) -> Dict[str, Any]:
-        """캐시 성능 테스트"""
+        """캐시 ?�능 ?�스??""
         test_name = "cache_performance"
         print(f"[TEST] Testing {test_name}...")
 
-        # 동일한 질문을 여러 번 반복하여 캐시 효과 측정
-        test_query = "계약서 검토 요청"
+        # ?�일??질문???�러 �?반복?�여 캐시 ?�과 측정
+        test_query = "계약??검???�청"
         iterations = 5
 
         first_run_time = None
@@ -149,7 +149,7 @@ class PerformanceTester:
             except Exception as e:
                 print(f"[FAIL] Iteration {i+1} failed: {e}")
 
-        # 캐시 효과 계산
+        # 캐시 ?�과 계산
         avg_cached_time = sum(cached_times) / len(cached_times) if cached_times else 0
         speedup_factor = first_run_time / avg_cached_time if avg_cached_time > 0 else 0
 
@@ -167,19 +167,19 @@ class PerformanceTester:
         return result
 
     async def test_concurrent_performance(self) -> Dict[str, Any]:
-        """동시 처리 성능 테스트"""
+        """?�시 처리 ?�능 ?�스??""
         test_name = "concurrent_performance"
         print(f"[TEST] Testing {test_name}...")
 
         test_queries = [
-            "안녕하세요",
-            "계약서 검토 요청",
-            "민법 제750조의 내용이 무엇인가요?",
-            "손해배상 관련 판례를 찾아주세요",
-            "이혼 절차는 어떻게 진행하나요?"
+            "?�녕?�세??,
+            "계약??검???�청",
+            "민법 ??50조의 ?�용??무엇?��???",
+            "?�해배상 관???��?�?찾아주세??,
+            "?�혼 ?�차???�떻�?진행?�나??"
         ]
 
-        # 동시 처리
+        # ?�시 처리
         start_time = time.time()
         tasks = [self.optimized_service.process_message(query) for query in test_queries]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -204,12 +204,12 @@ class PerformanceTester:
         return result
 
     async def test_performance_stats(self) -> Dict[str, Any]:
-        """성능 통계 테스트"""
+        """?�능 ?�계 ?�스??""
         test_name = "performance_stats"
         print(f"[TEST] Testing {test_name}...")
 
         try:
-            # 서비스 상태 확인
+            # ?�비???�태 ?�인
             service_status = self.optimized_service.get_service_status()
             performance_stats = self.optimized_service.get_performance_stats()
 
@@ -235,10 +235,10 @@ class PerformanceTester:
             return result
 
     async def run_all_tests(self) -> Dict[str, Any]:
-        """모든 테스트 실행"""
+        """모든 ?�스???�행"""
         print("[TEST] Starting optimized performance tests...")
 
-        # 테스트 환경 설정
+        # ?�스???�경 ?�정
         if not self.setup_test_environment():
             return {
                 "overall_passed": False,
@@ -246,7 +246,7 @@ class PerformanceTester:
                 "tests": {}
             }
 
-        # 테스트 실행
+        # ?�스???�행
         tests = [
             self.test_optimized_performance(),
             self.test_cache_performance(),
@@ -256,7 +256,7 @@ class PerformanceTester:
 
         test_results = await asyncio.gather(*tests, return_exceptions=True)
 
-        # 결과 정리
+        # 결과 ?�리
         results = {}
         passed_count = 0
         total_count = len(test_results)
@@ -280,7 +280,7 @@ class PerformanceTester:
                 else:
                     print(f"[WARN] {test_name} failed or partially passed")
 
-        # 전체 결과
+        # ?�체 결과
         overall_result = {
             "overall_passed": passed_count >= total_count * 0.8,
             "passed_count": passed_count,
@@ -309,17 +309,17 @@ class PerformanceTester:
         return overall_result
 
 async def main():
-    """메인 함수"""
+    """메인 ?�수"""
     tester = PerformanceTester()
     result = await tester.run_all_tests()
 
-    # 결과를 JSON 파일로 저장
+    # 결과�?JSON ?�일�??�??
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     result_file = f"optimized_performance_test_results_{timestamp}.json"
 
-    # JSON 직렬화를 위한 커스텀 encoder
+    # JSON 직렬?��? ?�한 커스?� encoder
     def json_default(obj):
-        """커스텀 객체를 JSON으로 직렬화"""
+        """커스?� 객체�?JSON?�로 직렬??""
         if hasattr(obj, '__dict__'):
             return obj.__dict__
         elif hasattr(obj, '__str__'):
@@ -332,7 +332,7 @@ async def main():
 
     print(f"[INFO] Test results saved to: {result_file}")
 
-    # 종료 코드 설정
+    # 종료 코드 ?�정
     exit_code = 0 if result["overall_passed"] else 1
     print(f"[INFO] Exiting with code: {exit_code}")
 

@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-추가 데이터 타입 지원 (헌재결정례, 법령해석례)
+추�? ?�이???�??지??(?�재결정례, 법령?�석례)
 """
 
 import json
 import sys
 from pathlib import Path
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 sys.path.append(str(Path(__file__).parent.parent))
 
 def check_missing_data_types():
-    """누락된 데이터 타입 확인"""
+    """?�락???�이???�???�인"""
     print("Checking missing data types...")
     
-    # 전처리된 데이터 디렉토리 확인
+    # ?�처리된 ?�이???�렉?�리 ?�인
     processed_dir = Path("data/processed")
     
     data_types = {
-        'constitutional_decisions': '헌재결정례',
-        'legal_interpretations': '법령해석례',
-        'administrative_rules': '행정규칙',
-        'local_ordinances': '자치법규'
+        'constitutional_decisions': '?�재결정례',
+        'legal_interpretations': '법령?�석례',
+        'administrative_rules': '?�정규칙',
+        'local_ordinances': '?�치법규'
     }
     
     missing_types = []
@@ -45,74 +45,74 @@ def check_missing_data_types():
     return available_types, missing_types
 
 def create_sample_data():
-    """샘플 데이터 생성 (테스트용)"""
+    """?�플 ?�이???�성 (?�스?�용)"""
     print("\nCreating sample data for missing types...")
     
-    # 샘플 헌재결정례 데이터
+    # ?�플 ?�재결정례 ?�이??
     constitutional_samples = [
         {
             "id": "const_001",
-            "title": "헌법재판소 2023헌마1234 결정",
-            "content": "이 사건은 기본권 침해 여부에 대한 헌법재판소의 결정입니다. 원고는 국가의 행정처분이 자신의 기본권을 침해한다고 주장하였으며, 헌법재판소는 이를 심리한 결과 일부 인용하기로 결정하였습니다.",
+            "title": "?�법?�판??2023?�마1234 결정",
+            "content": "???�건?� 기본�?침해 ?��????�???�법?�판?�의 결정?�니?? ?�고??�?????�정처분???�신??기본권을 침해?�다�?주장?��??�며, ?�법?�판?�는 ?��? ?�리??결과 ?��? ?�용?�기�?결정?��??�니??",
             "decision_date": "2023-12-15",
-            "case_type": "헌법소원",
-            "court": "헌법재판소"
+            "case_type": "?�법?�원",
+            "court": "?�법?�판??
         },
         {
             "id": "const_002", 
-            "title": "헌법재판소 2023헌바5678 결정",
-            "content": "이 사건은 법률의 위헌성 여부에 대한 헌법재판소의 결정입니다. 해당 법률 조항이 헌법에 위반되는지 여부를 심리한 결과, 위헌 결정을 내렸습니다.",
+            "title": "?�법?�판??2023?�바5678 결정",
+            "content": "???�건?� 법률???�헌???��????�???�법?�판?�의 결정?�니?? ?�당 법률 조항???�법???�반?�는지 ?��?�??�리??결과, ?�헌 결정???�렸?�니??",
             "decision_date": "2023-11-20",
-            "case_type": "법률위헌제소",
-            "court": "헌법재판소"
+            "case_type": "법률?�헌?�소",
+            "court": "?�법?�판??
         }
     ]
     
-    # 샘플 법령해석례 데이터
+    # ?�플 법령?�석례 ?�이??
     interpretation_samples = [
         {
             "id": "interp_001",
-            "title": "민법 제1조 해석례",
-            "content": "민법 제1조에 대한 법무부의 해석입니다. 민법의 기본 원칙과 적용 범위에 대해 상세히 설명하고 있으며, 실제 사례를 통한 구체적인 적용 방법을 제시합니다.",
+            "title": "민법 ??�??�석례",
+            "content": "민법 ??조에 ?�??법무부???�석?�니?? 민법??기본 ?�칙�??�용 범위???�???�세???�명?�고 ?�으�? ?�제 ?��?�??�한 구체?�인 ?�용 방법???�시?�니??",
             "interpretation_date": "2023-10-10",
             "department": "법무부",
             "law_name": "민법"
         },
         {
             "id": "interp_002",
-            "title": "형법 제20조 해석례", 
-            "content": "형법 제20조 정당방위에 대한 대법원의 해석입니다. 정당방위의 성립 요건과 한계에 대해 구체적으로 설명하고 있으며, 관련 판례와 함께 해석하고 있습니다.",
+            "title": "?�법 ??0�??�석례", 
+            "content": "?�법 ??0�??�당방위???�???�법원???�석?�니?? ?�당방위???�립 ?�건�??�계???�??구체?�으�??�명?�고 ?�으�? 관???��??� ?�께 ?�석?�고 ?�습?�다.",
             "interpretation_date": "2023-09-15",
-            "department": "대법원",
-            "law_name": "형법"
+            "department": "?�법원",
+            "law_name": "?�법"
         }
     ]
     
-    # 샘플 행정규칙 데이터
+    # ?�플 ?�정규칙 ?�이??
     administrative_samples = [
         {
             "id": "admin_001",
-            "title": "행정절차법 시행규칙",
-            "content": "행정절차법의 시행을 위한 구체적인 규칙입니다. 행정처분의 절차, 청문회 개최 방법, 이의신청 절차 등에 대해 상세히 규정하고 있습니다.",
+            "title": "?�정?�차�??�행규칙",
+            "content": "?�정?�차법의 ?�행???�한 구체?�인 규칙?�니?? ?�정처분???�차, �?��??개최 방법, ?�의?�청 ?�차 ?�에 ?�???�세??규정?�고 ?�습?�다.",
             "promulgation_date": "2023-08-01",
             "enforcement_date": "2023-08-01",
-            "department": "행정안전부"
+            "department": "?�정?�전부"
         }
     ]
     
-    # 샘플 자치법규 데이터
+    # ?�플 ?�치법규 ?�이??
     local_samples = [
         {
             "id": "local_001",
-            "title": "서울특별시 조례 제1234호",
-            "content": "서울특별시의 조례입니다. 도시계획, 환경보호, 주민복지 등에 관한 사항을 규정하고 있으며, 시민의 권리와 의무에 대해 명시하고 있습니다.",
+            "title": "?�울?�별??조�? ??234??,
+            "content": "?�울?�별?�의 조�??�니?? ?�시계획, ?�경보호, 주�?복�? ?�에 관???�항??규정?�고 ?�으�? ?��???권리?� ?�무???�??명시?�고 ?�습?�다.",
             "promulgation_date": "2023-07-15",
             "enforcement_date": "2023-07-15",
-            "local_government": "서울특별시"
+            "local_government": "?�울?�별??
         }
     ]
     
-    # 샘플 데이터 저장
+    # ?�플 ?�이???�??
     sample_data = {
         'constitutional_decisions': constitutional_samples,
         'legal_interpretations': interpretation_samples,
@@ -130,13 +130,13 @@ def create_sample_data():
         print(f"Created sample data: {output_file} ({len(samples)} items)")
 
 def process_missing_data_types():
-    """누락된 데이터 타입 처리"""
+    """?�락???�이???�??처리"""
     print("\nProcessing missing data types...")
     
-    # 샘플 데이터 생성
+    # ?�플 ?�이???�성
     create_sample_data()
     
-    # 전처리된 데이터 확인
+    # ?�처리된 ?�이???�인
     available_types, missing_types = check_missing_data_types()
     
     print(f"\nAvailable data types: {len(available_types)}")
@@ -145,17 +145,17 @@ def process_missing_data_types():
     return available_types, missing_types
 
 def update_vector_database():
-    """벡터 데이터베이스 업데이트"""
+    """벡터 ?�이?�베?�스 ?�데?�트"""
     print("\nUpdating vector database with new data types...")
     
-    # 기존 메타데이터 로드
+    # 기존 메�??�이??로드
     with open('data/embeddings/metadata_improved.json', 'r', encoding='utf-8') as f:
         existing_data = json.load(f)
     
-    # 새로운 데이터 타입 추가
+    # ?�로???�이???�??추�?
     new_data = []
     
-    # 헌재결정례 데이터 추가
+    # ?�재결정례 ?�이??추�?
     const_file = "data/processed/constitutional_decisions/constitutional_decisions_sample.json"
     if Path(const_file).exists():
         with open(const_file, 'r', encoding='utf-8') as f:
@@ -177,14 +177,14 @@ def update_vector_database():
                     'entities': {},
                     'processed_at': '2025-09-30',
                     'is_valid': True,
-                    'court_name': item.get('court', '헌법재판소'),
-                    'case_type': item.get('case_type', '헌법소원'),
+                    'court_name': item.get('court', '?�법?�판??),
+                    'case_type': item.get('case_type', '?�법?�원'),
                     'decision_date': item.get('decision_date', '')
                 }
             }
             new_data.append(new_doc)
     
-    # 법령해석례 데이터 추가
+    # 법령?�석례 ?�이??추�?
     interp_file = "data/processed/legal_interpretations/legal_interpretations_sample.json"
     if Path(interp_file).exists():
         with open(interp_file, 'r', encoding='utf-8') as f:
@@ -213,10 +213,10 @@ def update_vector_database():
             }
             new_data.append(new_doc)
     
-    # 기존 데이터와 새 데이터 결합
+    # 기존 ?�이?��? ???�이??결합
     all_data = existing_data + new_data
     
-    # 업데이트된 메타데이터 저장
+    # ?�데?�트??메�??�이???�??
     with open('data/embeddings/metadata_final.json', 'w', encoding='utf-8') as f:
         json.dump(all_data, f, ensure_ascii=False, indent=2)
     
@@ -230,20 +230,20 @@ def main():
     print("Adding Missing Data Types")
     print("=" * 50)
     
-    # 1. 누락된 데이터 타입 확인
+    # 1. ?�락???�이???�???�인
     available_types, missing_types = check_missing_data_types()
     
-    # 2. 누락된 데이터 타입 처리
+    # 2. ?�락???�이???�??처리
     process_missing_data_types()
     
-    # 3. 벡터 데이터베이스 업데이트
+    # 3. 벡터 ?�이?�베?�스 ?�데?�트
     updated_data = update_vector_database()
     
     print("\n" + "=" * 50)
     print("Missing data types added successfully!")
     print(f"Total documents: {len(updated_data)}")
     
-    # 데이터 타입별 분포 확인
+    # ?�이???�?�별 분포 ?�인
     type_distribution = {}
     for doc in updated_data:
         doc_type = doc['metadata']['data_type']

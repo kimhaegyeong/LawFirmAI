@@ -3,7 +3,7 @@
 Single-query runner for evaluating current workflow answer quality.
 
 Usage:
-    python scripts/testing/run_single_query.py "질의문"
+    python scripts/testing/run_single_query.py "질의�?
 If no argument is provided, a default legal query will be used.
 """
 
@@ -21,7 +21,7 @@ def project_bootstrap():
 
 async def run(query: str):
     from infrastructure.utils.langgraph_config import LangGraphConfig
-    from core.agents.workflow_service import LangGraphWorkflowService
+    from source.agents.workflow_service import LangGraphWorkflowService
 
     config = LangGraphConfig.from_env()
     service = LangGraphWorkflowService(config)
@@ -55,7 +55,7 @@ async def run(query: str):
 
 def main():
     project_bootstrap()
-    query = "민법 제750조 손해배상 요건은?"
+    query = "민법 ??50�??�해배상 ?�건?�?"
     if len(sys.argv) > 1:
         query = " ".join(sys.argv[1:])
     asyncio.run(run(query))

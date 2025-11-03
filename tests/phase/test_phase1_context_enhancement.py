@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Phase 1 단위 및 통합 테스트
-ConversationStore 확장, IntegratedSessionManager, MultiTurnQuestionHandler, ContextCompressor 테스트
+Phase 1 ?�위 �??�합 ?�스??
+ConversationStore ?�장, IntegratedSessionManager, MultiTurnQuestionHandler, ContextCompressor ?�스??
 """
 
 import os
@@ -12,7 +12,7 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -24,72 +24,72 @@ from source.services.conversation_manager import ConversationContext, Conversati
 
 
 class TestConversationStoreExtensions(unittest.TestCase):
-    """ConversationStore 확장 기능 테스트"""
+    """ConversationStore ?�장 기능 ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test_conversations.db")
         self.store = ConversationStore(self.db_path)
     
     def tearDown(self):
-        """테스트 정리"""
+        """?�스???�리"""
         shutil.rmtree(self.temp_dir)
     
     def test_user_sessions(self):
-        """사용자별 세션 조회 테스트"""
-        # 테스트 세션 데이터 생성
+        """?�용?�별 ?�션 조회 ?�스??""
+        # ?�스???�션 ?�이???�성
         test_session = {
             "session_id": "test_user_session_001",
             "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat(),
-            "topic_stack": ["손해배상", "계약"],
+            "topic_stack": ["?�해배상", "계약"],
             "metadata": {"user_id": "test_user_001"},
             "turns": [
                 {
-                    "user_query": "손해배상 청구 방법을 알려주세요",
-                    "bot_response": "민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+                    "user_query": "?�해배상 �?�� 방법???�려주세??,
+                    "bot_response": "민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
                     "timestamp": datetime.now().isoformat(),
                     "question_type": "legal_advice",
-                    "entities": {"laws": ["민법"], "articles": ["제750조"]}
+                    "entities": {"laws": ["민법"], "articles": ["??50�?]}
                 }
             ],
             "entities": {
                 "laws": ["민법"],
-                "articles": ["제750조"],
+                "articles": ["??50�?],
                 "precedents": [],
-                "legal_terms": ["손해배상"]
+                "legal_terms": ["?�해배상"]
             }
         }
         
-        # 세션 저장
+        # ?�션 ?�??
         self.assertTrue(self.store.save_session(test_session))
         
-        # 사용자 세션 조회
+        # ?�용???�션 조회
         user_sessions = self.store.get_user_sessions("test_user_001")
         self.assertEqual(len(user_sessions), 1)
         self.assertEqual(user_sessions[0]["session_id"], "test_user_session_001")
     
     def test_session_search(self):
-        """세션 검색 테스트"""
-        # 테스트 세션들 생성
+        """?�션 검???�스??""
+        # ?�스???�션???�성
         sessions = [
             {
                 "session_id": "search_test_001",
                 "created_at": datetime.now().isoformat(),
                 "last_updated": datetime.now().isoformat(),
-                "topic_stack": ["손해배상"],
+                "topic_stack": ["?�해배상"],
                 "metadata": {"user_id": "user_001"},
                 "turns": [
                     {
-                        "user_query": "손해배상 청구 방법",
-                        "bot_response": "손해배상 관련 답변",
+                        "user_query": "?�해배상 �?�� 방법",
+                        "bot_response": "?�해배상 관???��?",
                         "timestamp": datetime.now().isoformat(),
                         "question_type": "legal_advice",
-                        "entities": {"legal_terms": ["손해배상"]}
+                        "entities": {"legal_terms": ["?�해배상"]}
                     }
                 ],
-                "entities": {"legal_terms": ["손해배상"]}
+                "entities": {"legal_terms": ["?�해배상"]}
             },
             {
                 "session_id": "search_test_002",
@@ -99,8 +99,8 @@ class TestConversationStoreExtensions(unittest.TestCase):
                 "metadata": {"user_id": "user_002"},
                 "turns": [
                     {
-                        "user_query": "계약 해지 절차",
-                        "bot_response": "계약 관련 답변",
+                        "user_query": "계약 ?��? ?�차",
+                        "bot_response": "계약 관???��?",
                         "timestamp": datetime.now().isoformat(),
                         "question_type": "procedure_guide",
                         "entities": {"legal_terms": ["계약"]}
@@ -110,49 +110,49 @@ class TestConversationStoreExtensions(unittest.TestCase):
             }
         ]
         
-        # 세션들 저장
+        # ?�션???�??
         for session in sessions:
             self.assertTrue(self.store.save_session(session))
         
-        # 키워드 검색
-        results = self.store.search_sessions("손해배상", {"limit": 10})
+        # ?�워??검??
+        results = self.store.search_sessions("?�해배상", {"limit": 10})
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["session_id"], "search_test_001")
         
-        # 사용자 필터 검색
+        # ?�용???�터 검??
         results = self.store.search_sessions("", {"user_id": "user_001", "limit": 10})
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["session_id"], "search_test_001")
     
     def test_session_backup_restore(self):
-        """세션 백업 및 복원 테스트"""
-        # 테스트 세션 생성
+        """?�션 백업 �?복원 ?�스??""
+        # ?�스???�션 ?�성
         test_session = {
             "session_id": "backup_test_001",
             "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat(),
-            "topic_stack": ["손해배상"],
+            "topic_stack": ["?�해배상"],
             "metadata": {},
             "turns": [
                 {
-                    "user_query": "손해배상 청구 방법",
-                    "bot_response": "손해배상 관련 답변",
+                    "user_query": "?�해배상 �?�� 방법",
+                    "bot_response": "?�해배상 관???��?",
                     "timestamp": datetime.now().isoformat(),
                     "question_type": "legal_advice",
-                    "entities": {"legal_terms": ["손해배상"]}
+                    "entities": {"legal_terms": ["?�해배상"]}
                 }
             ],
-            "entities": {"legal_terms": ["손해배상"]}
+            "entities": {"legal_terms": ["?�해배상"]}
         }
         
-        # 세션 저장
+        # ?�션 ?�??
         self.assertTrue(self.store.save_session(test_session))
         
         # 백업
         backup_dir = os.path.join(self.temp_dir, "backup")
         self.assertTrue(self.store.backup_session("backup_test_001", backup_dir))
         
-        # 백업 파일 확인
+        # 백업 ?�일 ?�인
         backup_file = os.path.join(backup_dir, "backup_test_001_backup.json")
         self.assertTrue(os.path.exists(backup_file))
         
@@ -162,30 +162,30 @@ class TestConversationStoreExtensions(unittest.TestCase):
         self.assertTrue(restored_session_id.startswith("backup_test_001_restored_"))
     
     def test_statistics(self):
-        """통계 조회 테스트"""
-        # 테스트 데이터 생성
+        """?�계 조회 ?�스??""
+        # ?�스???�이???�성
         test_session = {
             "session_id": "stats_test_001",
             "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat(),
-            "topic_stack": ["손해배상"],
+            "topic_stack": ["?�해배상"],
             "metadata": {},
             "turns": [
                 {
-                    "user_query": "손해배상 청구 방법",
-                    "bot_response": "손해배상 관련 답변",
+                    "user_query": "?�해배상 �?�� 방법",
+                    "bot_response": "?�해배상 관???��?",
                     "timestamp": datetime.now().isoformat(),
                     "question_type": "legal_advice",
-                    "entities": {"legal_terms": ["손해배상"]}
+                    "entities": {"legal_terms": ["?�해배상"]}
                 }
             ],
-            "entities": {"legal_terms": ["손해배상"]}
+            "entities": {"legal_terms": ["?�해배상"]}
         }
         
-        # 세션 저장
+        # ?�션 ?�??
         self.assertTrue(self.store.save_session(test_session))
         
-        # 통계 조회
+        # ?�계 조회
         stats = self.store.get_statistics()
         self.assertIn("session_count", stats)
         self.assertIn("turn_count", stats)
@@ -200,28 +200,28 @@ class TestConversationStoreExtensions(unittest.TestCase):
 
 
 class TestIntegratedSessionManager(unittest.TestCase):
-    """IntegratedSessionManager 테스트"""
+    """IntegratedSessionManager ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test_integrated_conversations.db")
         self.manager = IntegratedSessionManager(self.db_path)
     
     def tearDown(self):
-        """테스트 정리"""
+        """?�스???�리"""
         shutil.rmtree(self.temp_dir)
     
     def test_add_turn(self):
-        """턴 추가 테스트"""
+        """??추�? ?�스??""
         session_id = "test_session_001"
         user_id = "test_user_001"
         
-        # 턴 추가
+        # ??추�?
         context = self.manager.add_turn(
             session_id, 
-            "손해배상 청구 방법을 알려주세요",
-            "민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+            "?�해배상 �?�� 방법???�려주세??,
+            "민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
             "legal_advice",
             user_id
         )
@@ -229,132 +229,132 @@ class TestIntegratedSessionManager(unittest.TestCase):
         self.assertIsNotNone(context)
         self.assertEqual(context.session_id, session_id)
         self.assertEqual(len(context.turns), 1)
-        self.assertEqual(context.turns[0].user_query, "손해배상 청구 방법을 알려주세요")
+        self.assertEqual(context.turns[0].user_query, "?�해배상 �?�� 방법???�려주세??)
     
     def test_session_persistence(self):
-        """세션 지속성 테스트"""
+        """?�션 지?�성 ?�스??""
         session_id = "test_persistence_001"
         user_id = "test_user_001"
         
-        # 턴 추가
+        # ??추�?
         context1 = self.manager.add_turn(
             session_id,
-            "손해배상 청구 방법을 알려주세요",
-            "민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+            "?�해배상 �?�� 방법???�려주세??,
+            "민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
             "legal_advice",
             user_id
         )
         
-        # 강제 동기화
+        # 강제 ?�기??
         self.assertTrue(self.manager.sync_to_database(session_id))
         
-        # 새로운 매니저 인스턴스로 세션 로드
+        # ?�로??매니?� ?�스?�스�??�션 로드
         new_manager = IntegratedSessionManager(self.db_path)
         context2 = new_manager.get_or_create_session(session_id, user_id)
         
         self.assertIsNotNone(context2)
         self.assertEqual(len(context2.turns), 1)
-        self.assertEqual(context2.turns[0].user_query, "손해배상 청구 방법을 알려주세요")
+        self.assertEqual(context2.turns[0].user_query, "?�해배상 �?�� 방법???�려주세??)
     
     def test_user_sessions(self):
-        """사용자 세션 조회 테스트"""
+        """?�용???�션 조회 ?�스??""
         user_id = "test_user_002"
         
-        # 여러 세션 생성
+        # ?�러 ?�션 ?�성
         for i in range(3):
             session_id = f"test_user_sessions_{i:03d}"
             self.manager.add_turn(
                 session_id,
                 f"질문 {i}",
-                f"답변 {i}",
+                f"?��? {i}",
                 "legal_advice",
                 user_id
             )
             self.manager.sync_to_database(session_id)
         
-        # 사용자 세션 조회
+        # ?�용???�션 조회
         user_sessions = self.manager.get_user_sessions(user_id)
         self.assertEqual(len(user_sessions), 3)
     
     def test_session_search(self):
-        """세션 검색 테스트"""
+        """?�션 검???�스??""
         user_id = "test_user_003"
         
-        # 검색용 세션 생성
+        # 검?�용 ?�션 ?�성
         session_id = "test_search_001"
         self.manager.add_turn(
             session_id,
-            "손해배상 청구 방법",
-            "손해배상 관련 답변",
+            "?�해배상 �?�� 방법",
+            "?�해배상 관???��?",
             "legal_advice",
             user_id
         )
         self.manager.sync_to_database(session_id)
         
-        # 검색 실행
-        results = self.manager.search_sessions("손해배상", {"limit": 10})
+        # 검???�행
+        results = self.manager.search_sessions("?�해배상", {"limit": 10})
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["session_id"], session_id)
     
     def test_cleanup(self):
-        """세션 정리 테스트"""
-        # 오래된 세션 생성
+        """?�션 ?�리 ?�스??""
+        # ?�래???�션 ?�성
         old_session_id = "test_cleanup_001"
         self.manager.add_turn(
             old_session_id,
-            "오래된 질문",
-            "오래된 답변",
+            "?�래??질문",
+            "?�래???��?",
             "legal_advice"
         )
         
-        # 정리 실행
-        cleaned_count = self.manager.cleanup_old_sessions(days=0)  # 즉시 정리
+        # ?�리 ?�행
+        cleaned_count = self.manager.cleanup_old_sessions(days=0)  # 즉시 ?�리
         self.assertGreaterEqual(cleaned_count, 0)
 
 
 class TestMultiTurnQuestionHandler(unittest.TestCase):
-    """MultiTurnQuestionHandler 테스트"""
+    """MultiTurnQuestionHandler ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.handler = MultiTurnQuestionHandler()
         
-        # 테스트용 대화 맥락 생성
+        # ?�스?�용 ?�??맥락 ?�성
         self.test_turns = [
             ConversationTurn(
-                user_query="계약 해지 절차는 어떻게 되나요?",
-                bot_response="계약 해지 절차는 다음과 같습니다...",
+                user_query="계약 ?��? ?�차???�떻�??�나??",
+                bot_response="계약 ?��? ?�차???�음�?같습?�다...",
                 timestamp=datetime.now(),
                 question_type="procedure_guide",
-                entities={"legal_terms": ["계약", "해지"]}
+                entities={"legal_terms": ["계약", "?��?"]}
             ),
             ConversationTurn(
-                user_query="손해배상 청구 방법을 알려주세요",
-                bot_response="민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+                user_query="?�해배상 �?�� 방법???�려주세??,
+                bot_response="민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
                 timestamp=datetime.now(),
                 question_type="legal_advice",
-                entities={"laws": ["민법"], "articles": ["제750조"], "legal_terms": ["손해배상"]}
+                entities={"laws": ["민법"], "articles": ["??50�?], "legal_terms": ["?�해배상"]}
             )
         ]
         
         self.context = ConversationContext(
             session_id="test_session",
             turns=self.test_turns,
-            entities={"laws": {"민법"}, "articles": {"제750조"}, 
-                     "precedents": set(), "legal_terms": {"손해배상", "계약", "해지"}},
-            topic_stack=["손해배상", "계약"],
+            entities={"laws": {"민법"}, "articles": {"??50�?}, 
+                     "precedents": set(), "legal_terms": {"?�해배상", "계약", "?��?"}},
+            topic_stack=["?�해배상", "계약"],
             created_at=datetime.now(),
             last_updated=datetime.now()
         )
     
     def test_detect_multi_turn_question(self):
-        """다중 턴 질문 감지 테스트"""
-        # 다중 턴 질문들
+        """?�중 ??질문 감�? ?�스??""
+        # ?�중 ??질문??
         multi_turn_queries = [
-            "그것에 대해 더 자세히 알려주세요",
-            "위의 손해배상 사건에서 과실비율은 어떻게 정해지나요?",
-            "그 판례는 어떤 사건이었나요?",
-            "이것의 법적 근거는 무엇인가요?"
+            "그것???�?????�세???�려주세??,
+            "?�의 ?�해배상 ?�건?�서 과실비율?� ?�떻�??�해지?�요?",
+            "�??��????�떤 ?�건?�었?�요?",
+            "?�것??법적 근거??무엇?��???"
         ]
         
         for query in multi_turn_queries:
@@ -362,27 +362,27 @@ class TestMultiTurnQuestionHandler(unittest.TestCase):
                 is_multi_turn = self.handler.detect_multi_turn_question(query, self.context)
                 self.assertTrue(is_multi_turn, f"'{query}' should be detected as multi-turn")
         
-        # 일반 질문
-        normal_query = "일반적인 질문입니다"
+        # ?�반 질문
+        normal_query = "?�반?�인 질문?�니??
         is_multi_turn = self.handler.detect_multi_turn_question(normal_query, self.context)
         self.assertFalse(is_multi_turn, f"'{normal_query}' should not be detected as multi-turn")
     
     def test_resolve_pronouns(self):
-        """대명사 해결 테스트"""
-        # 대명사가 포함된 질문
-        pronoun_query = "그것에 대해 더 자세히 알려주세요"
+        """?�명사 ?�결 ?�스??""
+        # ?�명사가 ?�함??질문
+        pronoun_query = "그것???�?????�세???�려주세??
         resolved_query = self.handler.resolve_pronouns(pronoun_query, self.context)
         
         self.assertNotEqual(pronoun_query, resolved_query)
-        # 대명사가 해결되어야 함 (손해배상, 민법, 계약, 해지 중 하나)
+        # ?�명사가 ?�결?�어????(?�해배상, 민법, 계약, ?��? �??�나)
         self.assertTrue(
-            any(keyword in resolved_query for keyword in ["손해배상", "민법", "계약", "해지"]),
-            f"Expected one of ['손해배상', '민법', '계약', '해지'] in '{resolved_query}'"
+            any(keyword in resolved_query for keyword in ["?�해배상", "민법", "계약", "?��?"]),
+            f"Expected one of ['?�해배상', '민법', '계약', '?��?'] in '{resolved_query}'"
         )
     
     def test_build_complete_query(self):
-        """완전한 질문 구성 테스트"""
-        query = "그것에 대해 더 자세히 알려주세요"
+        """?�전??질문 구성 ?�스??""
+        query = "그것???�?????�세???�려주세??
         result = self.handler.build_complete_query(query, self.context)
         
         self.assertIn("original_query", result)
@@ -396,74 +396,74 @@ class TestMultiTurnQuestionHandler(unittest.TestCase):
         self.assertGreater(result["confidence"], 0.0)
     
     def test_extract_reference_entities(self):
-        """참조 엔티티 추출 테스트"""
-        # 엔티티 참조가 포함된 질문
-        query = "그 판례는 어떤 사건이었나요?"
+        """참조 ?�티??추출 ?�스??""
+        # ?�티??참조가 ?�함??질문
+        query = "�??��????�떤 ?�건?�었?�요?"
         entities = self.handler.extract_reference_entities(query)
         
         self.assertIsInstance(entities, list)
-        # 판례 참조가 감지되어야 함
-        self.assertTrue(any("판례" in entity for entity in entities))
+        # ?��? 참조가 감�??�어????
+        self.assertTrue(any("?��?" in entity for entity in entities))
 
 
 class TestContextCompressor(unittest.TestCase):
-    """ContextCompressor 테스트"""
+    """ContextCompressor ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.compressor = ContextCompressor(max_tokens=1000)
         
-        # 테스트용 대화 맥락 생성
+        # ?�스?�용 ?�??맥락 ?�성
         self.test_turns = [
             ConversationTurn(
-                user_query="손해배상 청구 방법을 알려주세요",
-                bot_response="민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다. 손해배상은 불법행위로 인한 손해를 배상받는 제도입니다. 손해의 발생, 가해자의 고의 또는 과실, 인과관계, 손해의 발생이 필요합니다.",
+                user_query="?�해배상 �?�� 방법???�려주세??,
+                bot_response="민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다. ?�해배상?� 불법?�위�??�한 ?�해�?배상받는 ?�도?�니?? ?�해??발생, 가?�자??고의 ?�는 과실, ?�과관�? ?�해??발생???�요?�니??",
                 timestamp=datetime.now(),
                 question_type="legal_advice",
-                entities={"laws": ["민법"], "articles": ["제750조"], "legal_terms": ["손해배상", "불법행위"]}
+                entities={"laws": ["민법"], "articles": ["??50�?], "legal_terms": ["?�해배상", "불법?�위"]}
             ),
             ConversationTurn(
-                user_query="계약 해지 절차는 어떻게 되나요?",
-                bot_response="계약 해지 절차는 다음과 같습니다. 1) 해지 사유 확인 2) 해지 통지 3) 손해배상 청구 4) 소송 제기 등이 있습니다. 민법 제543조에 따라 계약은 당사자 일방의 의사표시로 해지할 수 있습니다.",
+                user_query="계약 ?��? ?�차???�떻�??�나??",
+                bot_response="계약 ?��? ?�차???�음�?같습?�다. 1) ?��? ?�유 ?�인 2) ?��? ?��? 3) ?�해배상 �?�� 4) ?�송 ?�기 ?�이 ?�습?�다. 민법 ??43조에 ?�라 계약?� ?�사???�방???�사?�시�??��??????�습?�다.",
                 timestamp=datetime.now(),
                 question_type="procedure_guide",
-                entities={"laws": ["민법"], "articles": ["제543조"], "legal_terms": ["계약", "해지"]}
+                entities={"laws": ["민법"], "articles": ["??43�?], "legal_terms": ["계약", "?��?"]}
             ),
             ConversationTurn(
-                user_query="위의 손해배상 사건에서 과실비율은 어떻게 정해지나요?",
-                bot_response="과실비율은 교통사고의 경우 보험회사에서 정한 기준표를 참고하여 결정됩니다. 대법원 2023다12345 판례에 따르면 과실비율은 사고 상황, 도로 상황, 차량 상태 등을 종합적으로 고려하여 결정됩니다.",
+                user_query="?�의 ?�해배상 ?�건?�서 과실비율?� ?�떻�??�해지?�요?",
+                bot_response="과실비율?� 교통?�고??경우 보험?�사?�서 ?�한 기�??��? 참고?�여 결정?�니?? ?�법원 2023??2345 ?��????�르�?과실비율?� ?�고 ?�황, ?�로 ?�황, 차량 ?�태 ?�을 종합?�으�?고려?�여 결정?�니??",
                 timestamp=datetime.now(),
                 question_type="legal_advice",
-                entities={"precedents": ["2023다12345"], "legal_terms": ["과실비율", "교통사고"]}
+                entities={"precedents": ["2023??2345"], "legal_terms": ["과실비율", "교통?�고"]}
             )
         ]
         
         self.context = ConversationContext(
             session_id="test_session",
             turns=self.test_turns,
-            entities={"laws": {"민법"}, "articles": {"제750조", "제543조"}, 
-                     "precedents": {"2023다12345"}, 
-                     "legal_terms": {"손해배상", "불법행위", "계약", "해지", "과실비율", "교통사고"}},
-            topic_stack=["손해배상", "계약", "교통사고"],
+            entities={"laws": {"민법"}, "articles": {"??50�?, "??43�?}, 
+                     "precedents": {"2023??2345"}, 
+                     "legal_terms": {"?�해배상", "불법?�위", "계약", "?��?", "과실비율", "교통?�고"}},
+            topic_stack=["?�해배상", "계약", "교통?�고"],
             created_at=datetime.now(),
             last_updated=datetime.now()
         )
     
     def test_calculate_tokens(self):
-        """토큰 수 계산 테스트"""
+        """?�큰 ??계산 ?�스??""
         tokens = self.compressor.calculate_tokens(self.context)
         self.assertGreater(tokens, 0)
         self.assertIsInstance(tokens, int)
     
     def test_calculate_tokens_from_text(self):
-        """텍스트 토큰 수 계산 테스트"""
-        text = "손해배상 청구 방법을 알려주세요"
+        """?�스???�큰 ??계산 ?�스??""
+        text = "?�해배상 �?�� 방법???�려주세??
         tokens = self.compressor.calculate_tokens_from_text(text)
         self.assertGreater(tokens, 0)
         self.assertIsInstance(tokens, int)
     
     def test_extract_key_information(self):
-        """핵심 정보 추출 테스트"""
+        """?�심 ?�보 추출 ?�스??""
         key_info = self.compressor.extract_key_information(self.context.turns)
         
         self.assertIn("entities", key_info)
@@ -477,17 +477,17 @@ class TestContextCompressor(unittest.TestCase):
         self.assertIsInstance(key_info["important_queries"], list)
     
     def test_maintain_relevant_context(self):
-        """관련 컨텍스트 유지 테스트"""
+        """관??컨텍?�트 ?��? ?�스??""
         relevant_turns = self.compressor.maintain_relevant_context(self.context, "")
         
         self.assertIsInstance(relevant_turns, list)
         self.assertLessEqual(len(relevant_turns), len(self.context.turns))
-        # 최근 턴은 항상 포함되어야 함
+        # 최근 ?��? ??�� ?�함?�어????
         self.assertIn(self.context.turns[-1], relevant_turns)
     
     def test_compress_long_conversation(self):
-        """긴 대화 압축 테스트"""
-        # 작은 토큰 제한으로 압축 강제
+        """�??�???�축 ?�스??""
+        # ?��? ?�큰 ?�한?�로 ?�축 강제
         result = self.compressor.compress_long_conversation(self.context, max_tokens=100)
         
         self.assertIn("original_tokens", result.__dict__)
@@ -507,132 +507,132 @@ class TestContextCompressor(unittest.TestCase):
 
 
 class TestPhase1Integration(unittest.TestCase):
-    """Phase 1 통합 테스트"""
+    """Phase 1 ?�합 ?�스??""
     
     def setUp(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test_integration.db")
         
-        # 모든 컴포넌트 초기화
+        # 모든 컴포?�트 초기??
         self.session_manager = IntegratedSessionManager(self.db_path)
         self.multi_turn_handler = MultiTurnQuestionHandler()
         self.context_compressor = ContextCompressor(max_tokens=500)
     
     def tearDown(self):
-        """테스트 정리"""
+        """?�스???�리"""
         shutil.rmtree(self.temp_dir)
     
     def test_end_to_end_conversation(self):
-        """전체 대화 흐름 테스트"""
+        """?�체 ?�???�름 ?�스??""
         session_id = "integration_test_001"
         user_id = "test_user_001"
         
-        # 1. 첫 번째 질문
+        # 1. �?번째 질문
         context1 = self.session_manager.add_turn(
             session_id,
-            "손해배상 청구 방법을 알려주세요",
-            "민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+            "?�해배상 �?�� 방법???�려주세??,
+            "민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
             "legal_advice",
             user_id
         )
         
         self.assertEqual(len(context1.turns), 1)
         
-        # 2. 다중 턴 질문 처리
-        multi_turn_query = "그것에 대해 더 자세히 알려주세요"
+        # 2. ?�중 ??질문 처리
+        multi_turn_query = "그것???�?????�세???�려주세??
         is_multi_turn = self.multi_turn_handler.detect_multi_turn_question(multi_turn_query, context1)
         self.assertTrue(is_multi_turn)
         
         resolved_result = self.multi_turn_handler.build_complete_query(multi_turn_query, context1)
         resolved_query = resolved_result["resolved_query"]
         
-        # 3. 해결된 질문으로 두 번째 턴 추가
+        # 3. ?�결??질문?�로 ??번째 ??추�?
         context2 = self.session_manager.add_turn(
             session_id,
             resolved_query,
-            "손해배상의 구체적인 요건에 대해 자세히 설명드리겠습니다...",
+            "?�해배상??구체?�인 ?�건???�???�세???�명?�리겠습?�다...",
             "legal_advice",
             user_id
         )
         
         self.assertEqual(len(context2.turns), 2)
         
-        # 4. 컨텍스트 압축 테스트
+        # 4. 컨텍?�트 ?�축 ?�스??
         compression_result = self.context_compressor.compress_long_conversation(context2)
         self.assertLessEqual(compression_result.compressed_tokens, 500)
         
-        # 5. 세션 지속성 확인
+        # 5. ?�션 지?�성 ?�인
         self.session_manager.sync_to_database(session_id)
         
-        # 새로운 매니저로 세션 로드
+        # ?�로??매니?��??�션 로드
         new_manager = IntegratedSessionManager(self.db_path)
         loaded_context = new_manager.get_or_create_session(session_id, user_id)
         
         self.assertEqual(len(loaded_context.turns), 2)
-        self.assertEqual(loaded_context.turns[0].user_query, "손해배상 청구 방법을 알려주세요")
+        self.assertEqual(loaded_context.turns[0].user_query, "?�해배상 �?�� 방법???�려주세??)
     
     def test_performance_metrics(self):
-        """성능 메트릭 테스트"""
+        """?�능 메트�??�스??""
         session_id = "performance_test_001"
         user_id = "test_user_001"
         
-        # 여러 턴 추가
+        # ?�러 ??추�?
         for i in range(5):
             self.session_manager.add_turn(
                 session_id,
                 f"질문 {i}",
-                f"답변 {i}",
+                f"?��? {i}",
                 "legal_advice",
                 user_id
             )
         
-        # 통계 조회
+        # ?�계 조회
         stats = self.session_manager.get_session_stats()
         self.assertIn("memory_stats", stats)
         self.assertIn("database_stats", stats)
         self.assertIn("sync_stats", stats)
         
-        # 성능 확인
+        # ?�능 ?�인
         memory_stats = stats["memory_stats"]
         self.assertEqual(memory_stats["total_sessions"], 1)
         self.assertEqual(memory_stats["total_turns"], 5)
 
 
 def run_phase1_tests():
-    """Phase 1 테스트 실행"""
-    print("=== Phase 1 단위 및 통합 테스트 실행 ===")
+    """Phase 1 ?�스???�행"""
+    print("=== Phase 1 ?�위 �??�합 ?�스???�행 ===")
     
-    # 테스트 스위트 생성
+    # ?�스???�위???�성
     test_suite = unittest.TestSuite()
     
-    # 단위 테스트 추가
+    # ?�위 ?�스??추�?
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestConversationStoreExtensions))
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestIntegratedSessionManager))
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestMultiTurnQuestionHandler))
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestContextCompressor))
     
-    # 통합 테스트 추가
+    # ?�합 ?�스??추�?
     test_suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestPhase1Integration))
     
-    # 테스트 실행
+    # ?�스???�행
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(test_suite)
     
-    # 결과 요약
-    print(f"\n=== 테스트 결과 요약 ===")
-    print(f"실행된 테스트: {result.testsRun}")
-    print(f"성공: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"실패: {len(result.failures)}")
-    print(f"오류: {len(result.errors)}")
+    # 결과 ?�약
+    print(f"\n=== ?�스??결과 ?�약 ===")
+    print(f"?�행???�스?? {result.testsRun}")
+    print(f"?�공: {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"?�패: {len(result.failures)}")
+    print(f"?�류: {len(result.errors)}")
     
     if result.failures:
-        print(f"\n실패한 테스트:")
+        print(f"\n?�패???�스??")
         for test, traceback in result.failures:
             print(f"- {test}: {traceback}")
     
     if result.errors:
-        print(f"\n오류가 발생한 테스트:")
+        print(f"\n?�류가 발생???�스??")
         for test, traceback in result.errors:
             print(f"- {test}: {traceback}")
     

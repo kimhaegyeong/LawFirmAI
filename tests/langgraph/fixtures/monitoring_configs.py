@@ -1,40 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-모니터링 설정 예시
-각 모니터링 모드별 설정 예시
+모니?�링 ?�정 ?�시
+�?모니?�링 모드�??�정 ?�시
 """
 
 from typing import Any, Dict
 
-# LangSmith 전용 설정 예시
+# LangSmith ?�용 ?�정 ?�시
 LANGSMITH_CONFIG: Dict[str, Any] = {
     "LANGCHAIN_TRACING_V2": "true",
     "LANGFUSE_ENABLED": "false",
-    "description": "LangSmith만 활성화 (LangChain 네이티브 추적)"
+    "description": "LangSmith�??�성??(LangChain ?�이?�브 추적)"
 }
 
-# Langfuse 전용 설정 예시
+# Langfuse ?�용 ?�정 ?�시
 LANGFUSE_CONFIG: Dict[str, Any] = {
     "LANGCHAIN_TRACING_V2": "false",
     "LANGFUSE_ENABLED": "true",
-    "description": "Langfuse만 활성화 (답변 품질 추적)"
+    "description": "Langfuse�??�성??(?��? ?�질 추적)"
 }
 
-# 둘 다 사용 설정 예시
+# ?????�용 ?�정 ?�시
 BOTH_CONFIG: Dict[str, Any] = {
     "LANGCHAIN_TRACING_V2": "true",
     "LANGFUSE_ENABLED": "true",
-    "description": "LangSmith + Langfuse 동시 사용"
+    "description": "LangSmith + Langfuse ?�시 ?�용"
 }
 
-# 모니터링 없음 설정 예시
+# 모니?�링 ?�음 ?�정 ?�시
 NONE_CONFIG: Dict[str, Any] = {
     "LANGCHAIN_TRACING_V2": "false",
     "LANGFUSE_ENABLED": "false",
-    "description": "모니터링 비활성화 (최소 리소스)"
+    "description": "모니?�링 비활?�화 (최소 리소??"
 }
 
-# 모든 설정 매핑
+# 모든 ?�정 매핑
 MONITORING_CONFIGS = {
     "langsmith": LANGSMITH_CONFIG,
     "langfuse": LANGFUSE_CONFIG,

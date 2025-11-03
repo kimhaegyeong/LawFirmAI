@@ -222,7 +222,7 @@ class AssemblyLawImporter:
             with open(file_path, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
             
-            # ML 강화 데이터 구조 처리
+            # ML 강화 ?�이??구조 처리
             if isinstance(file_data, dict) and 'laws' in file_data:
                 processed_laws = file_data['laws']
             elif isinstance(file_data, list):
@@ -344,7 +344,7 @@ class AssemblyLawImporter:
                 
                 # Insert articles
                 articles = law_data.get('articles', [])
-                actual_law_id = enhanced_law_record[0]  # _prepare_law_record에서 생성된 law_id 사용
+                actual_law_id = enhanced_law_record[0]  # _prepare_law_record?�서 ?�성??law_id ?�용
                 for article in articles:
                     article_record = self._prepare_article_record(actual_law_id, article)
                     cursor.execute('''
@@ -364,13 +364,13 @@ class AssemblyLawImporter:
     
     def _generate_law_id(self, law_data: Dict[str, Any]) -> str:
         """Generate law ID from law data"""
-        # 기존 law_id가 있으면 사용
+        # 기존 law_id가 ?�으�??�용
         if law_data.get('law_id'):
             return law_data['law_id']
         
-        # law_name을 기반으로 ID 생성
+        # law_name??기반?�로 ID ?�성
         law_name = law_data.get('law_name', 'unknown')
-        # 공백을 언더스코어로 변경하고 특수문자 제거
+        # 공백???�더?�코?�로 변경하�??�수문자 ?�거
         clean_name = law_name.replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
         return f"ml_enhanced_{clean_name}"
 
@@ -388,19 +388,19 @@ class AssemblyLawImporter:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 법률 ID 확인
+                # 법률 ID ?�인
                 law_id = self._generate_law_id(law_data)
                 
-                # 기존 법률 존재 여부 확인
+                # 기존 법률 존재 ?��? ?�인
                 cursor.execute('SELECT law_id FROM assembly_laws WHERE law_id = ?', (law_id,))
                 existing_law = cursor.fetchone()
                 
                 if existing_law:
-                    # 기존 법률과 비교하여 업데이트 필요 여부 확인
+                    # 기존 법률�?비교?�여 ?�데?�트 ?�요 ?��? ?�인
                     needs_update = self._check_if_update_needed(cursor, law_id, law_data)
                     
                     if needs_update:
-                        # 업데이트 수행
+                        # ?�데?�트 ?�행
                         success = self._update_existing_law(cursor, law_id, law_data)
                         if success:
                             conn.commit()
@@ -408,10 +408,10 @@ class AssemblyLawImporter:
                         else:
                             return {'action': 'failed', 'law_id': law_id, 'error': 'Update failed'}
                     else:
-                        # 업데이트 불필요 (스킵)
+                        # ?�데?�트 불필??(?�킵)
                         return {'action': 'skipped', 'law_id': law_id, 'reason': 'No changes needed'}
                 else:
-                    # 새로운 법률 삽입
+                    # ?�로??법률 ?�입
                     success = self._insert_new_law(cursor, law_data)
                     if success:
                         conn.commit()
@@ -425,14 +425,14 @@ class AssemblyLawImporter:
     
     def _extract_full_text(self, law_data: Dict[str, Any]) -> str:
         """Extract full text from law data"""
-        # 여러 필드에서 텍스트 추출 시도
+        # ?�러 ?�드?�서 ?�스??추출 ?�도
         full_text = law_data.get('full_text', '')
         if not full_text:
             full_text = law_data.get('full_content', '')
         if not full_text:
             full_text = law_data.get('cleaned_content', '')
         if not full_text:
-            # articles에서 텍스트 조합
+            # articles?�서 ?�스??조합
             articles = law_data.get('articles', [])
             if articles:
                 full_text = '\n'.join([article.get('article_content', '') for article in articles])
@@ -441,18 +441,18 @@ class AssemblyLawImporter:
 
     def _check_if_update_needed(self, cursor, law_id: str, law_data: Dict[str, Any]) -> bool:
         """
-        기존 법률과 새 데이터를 비교하여 업데이트 필요 여부 확인
+        기존 법률�????�이?��? 비교?�여 ?�데?�트 ?�요 ?��? ?�인
         
         Args:
-            cursor: 데이터베이스 커서
+            cursor: ?�이?�베?�스 커서
             law_id: 법률 ID
-            law_data: 새로운 법률 데이터
+            law_data: ?�로??법률 ?�이??
         
         Returns:
-            bool: 업데이트 필요 여부
+            bool: ?�데?�트 ?�요 ?��?
         """
         try:
-            # 기존 법률 데이터 조회
+            # 기존 법률 ?�이??조회
             cursor.execute('''
                 SELECT law_name, full_text, processed_at, processing_version
                 FROM assembly_laws 
@@ -461,9 +461,9 @@ class AssemblyLawImporter:
             
             existing = cursor.fetchone()
             if not existing:
-                return True  # 존재하지 않으면 삽입 필요
+                return True  # 존재?��? ?�으�??�입 ?�요
             
-            # 주요 필드 비교
+            # 주요 ?�드 비교
             new_law_name = law_data.get('law_name', '')
             new_full_text = self._extract_full_text(law_data)
             
@@ -471,7 +471,7 @@ class AssemblyLawImporter:
                 existing[1] != new_full_text):
                 return True
             
-            # 처리 버전 비교 (새로운 버전이면 업데이트)
+            # 처리 버전 비교 (?�로??버전?�면 ?�데?�트)
             new_version = law_data.get('processing_version', '1.0')
             if existing[3] != new_version:
                 return True
@@ -480,25 +480,25 @@ class AssemblyLawImporter:
             
         except Exception as e:
             logger.error(f"Error checking update need: {e}")
-            return True  # 에러 시 업데이트 수행
+            return True  # ?�러 ???�데?�트 ?�행
     
     def _update_existing_law(self, cursor, law_id: str, law_data: Dict[str, Any]) -> bool:
         """
-        기존 법률 업데이트
+        기존 법률 ?�데?�트
         
         Args:
-            cursor: 데이터베이스 커서
+            cursor: ?�이?�베?�스 커서
             law_id: 법률 ID
-            law_data: 새로운 법률 데이터
+            law_data: ?�로??법률 ?�이??
         
         Returns:
-            bool: 업데이트 성공 여부
+            bool: ?�데?�트 ?�공 ?��?
         """
         try:
-            # 법률 레코드 준비
+            # 법률 ?�코??준�?
             law_record = self._prepare_law_record(law_data)
             
-            # 기존 법률 업데이트
+            # 기존 법률 ?�데?�트
             cursor.execute('''
                 UPDATE assembly_laws SET
                     source = ?, law_name = ?, law_type = ?, category = ?, row_number = ?,
@@ -511,12 +511,12 @@ class AssemblyLawImporter:
                     ml_enhanced = ?, parsing_quality_score = ?, article_count = ?, supplementary_count = ?, control_characters_removed = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE law_id = ?
-            ''', law_record[1:] + (law_id,))  # law_id 제외하고 업데이트
+            ''', law_record[1:] + (law_id,))  # law_id ?�외?�고 ?�데?�트
             
-            # 기존 조문 삭제
+            # 기존 조문 ??��
             cursor.execute('DELETE FROM assembly_articles WHERE law_id = ?', (law_id,))
             
-            # 새로운 조문 삽입
+            # ?�로??조문 ?�입
             articles = law_data.get('articles', [])
             for article in articles:
                 article_record = self._prepare_article_record(law_id, article)
@@ -536,20 +536,20 @@ class AssemblyLawImporter:
     
     def _insert_new_law(self, cursor, law_data: Dict[str, Any]) -> bool:
         """
-        새로운 법률 삽입
+        ?�로??법률 ?�입
         
         Args:
-            cursor: 데이터베이스 커서
-            law_data: 법률 데이터
+            cursor: ?�이?�베?�스 커서
+            law_data: 법률 ?�이??
         
         Returns:
-            bool: 삽입 성공 여부
+            bool: ?�입 ?�공 ?��?
         """
         try:
-            # 법률 레코드 준비
+            # 법률 ?�코??준�?
             law_record = self._prepare_law_record(law_data)
             
-            # 법률 삽입
+            # 법률 ?�입
             cursor.execute('''
                 INSERT INTO assembly_laws (
                     law_id, source, law_name, law_type, category, row_number,
@@ -563,7 +563,7 @@ class AssemblyLawImporter:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', law_record)
             
-            # 조문 삽입
+            # 조문 ?�입
             articles = law_data.get('articles', [])
             law_id = law_record[0]
             for article in articles:
@@ -584,11 +584,11 @@ class AssemblyLawImporter:
     
     def _prepare_law_record(self, law_data: Dict[str, Any]) -> Tuple:
         """Prepare law record for database insertion"""
-        # ML 강화 필드 추출
+        # ML 강화 ?�드 추출
         ml_enhanced = law_data.get('ml_enhanced', False)
         parsing_quality_score = law_data.get('data_quality', {}).get('parsing_quality_score', 0.0)
         
-        # 본칙/부칙 카운트
+        # 본칙/부�?카운??
         articles = law_data.get('articles', [])
         main_articles = [a for a in articles if not a.get('is_supplementary', False)]
         supp_articles = [a for a in articles if a.get('is_supplementary', False)]
@@ -621,7 +621,7 @@ class AssemblyLawImporter:
             law_data.get('processed_at', ''),
             law_data.get('processing_version', ''),
             json.dumps(law_data.get('data_quality', {}), ensure_ascii=False),
-            # ML 강화 필드
+            # ML 강화 ?�드
             ml_enhanced,
             parsing_quality_score,
             len(main_articles),
@@ -640,7 +640,7 @@ class AssemblyLawImporter:
             json.dumps(article.get('references', []), ensure_ascii=False),
             article.get('word_count', 0),
             article.get('char_count', 0),
-            # ML 강화 필드
+            # ML 강화 ?�드
             article.get('is_supplementary', False),
             article.get('ml_confidence_score'),
             article.get('parsing_method', 'rule_based'),
@@ -966,8 +966,8 @@ class AssemblyLawImporter:
         normalized = re.sub(r'\s+', ' ', law_name.strip().lower())
         
         # Remove common legal prefixes/suffixes for better matching
-        normalized = re.sub(r'^(법률|법|규칙|시행령|시행규칙)\s*', '', normalized)
-        normalized = re.sub(r'\s*(법률|법|규칙|시행령|시행규칙)$', '', normalized)
+        normalized = re.sub(r'^(법률|�?규칙|?�행???�행규칙)\s*', '', normalized)
+        normalized = re.sub(r'\s*(법률|�?규칙|?�행???�행규칙)$', '', normalized)
         
         return normalized
     

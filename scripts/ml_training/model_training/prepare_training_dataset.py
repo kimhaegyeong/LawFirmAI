@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Day 2: 데이터셋 준비 및 전처리 스크립트
-LawFirmAI 프로젝트 - TASK 3.1 Day 2
+Day 2: ?�이?�셋 준�?�??�처�??�크립트
+LawFirmAI ?�로?�트 - TASK 3.1 Day 2
 """
 
 import os
@@ -15,12 +15,12 @@ from pathlib import Path
 import random
 import re
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 def setup_logging():
-    """로깅 설정"""
+    """로깅 ?�정"""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
@@ -28,124 +28,124 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 def create_sample_qa_dataset() -> List[Dict[str, Any]]:
-    """샘플 Q&A 데이터셋 생성"""
+    """?�플 Q&A ?�이?�셋 ?�성"""
     logger = setup_logging()
     
     sample_data = [
         {
             "id": "law_001",
-            "question": "민법에서 계약이란 무엇인가요?",
-            "answer": "민법 제105조에 따르면, 계약은 당사자 쌍방이 서로 대립하는 의사표시의 합치에 의하여 성립하는 법률행위를 말합니다.",
+            "question": "민법?�서 계약?��? 무엇?��???",
+            "answer": "민법 ??05조에 ?�르�? 계약?� ?�사???�방???�로 ?�립하???�사?�시???�치???�하???�립?�는 법률?�위�?말합?�다.",
             "type": "law_definition",
             "source": "민법",
-            "article": "제105조",
+            "article": "??05�?,
             "quality_score": 0.95,
             "confidence": 0.9
         },
         {
             "id": "law_002", 
-            "question": "계약서 작성 시 주의해야 할 사항은 무엇인가요?",
-            "answer": "계약서 작성 시에는 당사자의 표시, 목적물의 표시, 대금의 표시 등 계약의 필수 요소를 명확히 기재해야 합니다. 또한 계약의 성질에 따라 특별한 조항을 포함해야 할 수도 있습니다.",
+            "question": "계약???�성 ??주의?�야 ???�항?� 무엇?��???",
+            "answer": "계약???�성 ?�에???�사?�의 ?�시, 목적물의 ?�시, ?�금의 ?�시 ??계약???�수 ?�소�?명확??기재?�야 ?�니?? ?�한 계약???�질???�라 ?�별??조항???�함?�야 ???�도 ?�습?�다.",
             "type": "legal_advice",
             "source": "민법",
-            "article": "제105조",
+            "article": "??05�?,
             "quality_score": 0.88,
             "confidence": 0.85
         },
         {
             "id": "precedent_001",
-            "question": "부동산 매매계약에서 하자담보책임에 관한 판례는 어떻게 되나요?",
-            "answer": "대법원 2018다12345 판결에 따르면, 매도인은 매매목적물의 하자에 대하여 담보책임을 지며, 하자로 인한 손해배상책임을 부담합니다. 다만 매수인이 하자를 알았거나 중대한 과실로 알지 못한 경우에는 예외입니다.",
+            "question": "부?�산 매매계약?�서 ?�자?�보책임??관???��????�떻�??�나??",
+            "answer": "?�법원 2018??2345 ?�결???�르�? 매도?��? 매매목적물의 ?�자???�?�여 ?�보책임??지�? ?�자�??�한 ?�해배상책임??부?�합?�다. ?�만 매수?�이 ?�자�??�았거나 중�???과실�??��? 못한 경우?�는 ?�외?�니??",
             "type": "precedent_search",
-            "source": "대법원 판례",
-            "case_number": "2018다12345",
+            "source": "?�법원 ?��?",
+            "case_number": "2018??2345",
             "quality_score": 0.92,
             "confidence": 0.88
         },
         {
             "id": "law_003",
-            "question": "채무불이행의 효과는 무엇인가요?",
-            "answer": "채무불이행의 효과로는 강제이행, 손해배상, 계약해제 등이 있습니다. 민법 제390조에 따르면 채무자가 채무의 내용에 좇아 이행하지 아니한 때에는 채권자는 손해배상을 청구할 수 있습니다.",
+            "question": "채무불이?�의 ?�과??무엇?��???",
+            "answer": "채무불이?�의 ?�과로는 강제?�행, ?�해배상, 계약?�제 ?�이 ?�습?�다. 민법 ??90조에 ?�르�?채무?��? 채무???�용??좇아 ?�행?��? ?�니???�에??채권?�는 ?�해배상??�?��?????�습?�다.",
             "type": "law_explanation",
             "source": "민법",
-            "article": "제390조",
+            "article": "??90�?,
             "quality_score": 0.90,
             "confidence": 0.87
         },
         {
             "id": "precedent_002",
-            "question": "근로계약서에 명시되지 않은 수당 지급 의무가 있나요?",
-            "answer": "대법원 2019다67890 판결에 따르면, 근로계약서에 명시되지 않았더라도 상습적으로 지급되던 수당은 임금의 성질을 가지며, 사용자는 이를 지급할 의무가 있습니다. 다만 일회성 보상이나 특별한 경우의 수당은 예외입니다.",
+            "question": "근로계약?�에 명시?��? ?��? ?�당 지�??�무가 ?�나??",
+            "answer": "?�법원 2019??7890 ?�결???�르�? 근로계약?�에 명시?��? ?�았?�라???�습?�으�?지급되???�당?� ?�금???�질??가지�? ?�용?�는 ?��? 지급할 ?�무가 ?�습?�다. ?�만 ?�회??보상?�나 ?�별??경우???�당?� ?�외?�니??",
             "type": "precedent_search",
-            "source": "대법원 판례",
-            "case_number": "2019다67890",
+            "source": "?�법원 ?��?",
+            "case_number": "2019??7890",
             "quality_score": 0.89,
             "confidence": 0.86
         },
         {
             "id": "law_004",
-            "question": "법인의 권리능력과 행위능력에 대해 설명해주세요.",
-            "answer": "법인은 법률에 의하여 권리능력을 가지며, 법인의 목적범위 내에서 권리와 의무의 주체가 됩니다. 법인의 행위능력은 이사나 대표자가 법인을 대표하여 행사합니다. 민법 제34조에 규정되어 있습니다.",
+            "question": "법인??권리?�력�??�위?�력???�???�명?�주?�요.",
+            "answer": "법인?� 법률???�하??권리?�력??가지�? 법인??목적범위 ?�에??권리?� ?�무??주체가 ?�니?? 법인???�위?�력?� ?�사???�?�자가 법인???�?�하???�사?�니?? 민법 ??4조에 규정?�어 ?�습?�다.",
             "type": "law_explanation",
             "source": "민법",
-            "article": "제34조",
+            "article": "??4�?,
             "quality_score": 0.93,
             "confidence": 0.89
         },
         {
             "id": "precedent_003",
-            "question": "불법행위에서 과실상계의 요건은 무엇인가요?",
-            "answer": "대법원 2020다11111 판결에 따르면, 불법행위에서 과실상계는 피해자에게 과실이 있고, 그 과실이 손해발생에 기여한 경우에 적용됩니다. 과실상계의 비율은 당사자의 과실 정도와 손해에 대한 기여도를 고려하여 결정합니다.",
+            "question": "불법?�위?�서 과실?�계???�건?� 무엇?��???",
+            "answer": "?�법원 2020??1111 ?�결???�르�? 불법?�위?�서 과실?�계???�해?�에�?과실???�고, �?과실???�해발생??기여??경우???�용?�니?? 과실?�계??비율?� ?�사?�의 과실 ?�도?� ?�해???�??기여?��? 고려?�여 결정?�니??",
             "type": "precedent_search",
-            "source": "대법원 판례",
-            "case_number": "2020다11111",
+            "source": "?�법원 ?��?",
+            "case_number": "2020??1111",
             "quality_score": 0.91,
             "confidence": 0.88
         },
         {
             "id": "law_005",
-            "question": "소멸시효의 기간은 어떻게 되나요?",
-            "answer": "민법 제162조에 따르면, 채권은 10년간 행사하지 아니하면 소멸시효가 완성됩니다. 다만 상사채권은 5년, 근로자의 임금채권은 3년의 단기소멸시효가 적용됩니다.",
+            "question": "?�멸?�효??기간?� ?�떻�??�나??",
+            "answer": "민법 ??62조에 ?�르�? 채권?� 10?�간 ?�사?��? ?�니?�면 ?�멸?�효가 ?�성?�니?? ?�만 ?�사채권?� 5?? 근로?�의 ?�금채권?� 3?�의 ?�기?�멸?�효가 ?�용?�니??",
             "type": "law_explanation",
             "source": "민법",
-            "article": "제162조",
+            "article": "??62�?,
             "quality_score": 0.94,
             "confidence": 0.90
         },
         {
             "id": "precedent_004",
-            "question": "건물명도소송에서 점유권의 성립요건은 무엇인가요?",
-            "answer": "대법원 2021다22222 판결에 따르면, 점유권의 성립요건으로는 물건에 대한 사실상의 지배와 점유의 의사가 필요합니다. 건물의 경우 실제 거주하거나 사용하고 있다는 사실이 중요합니다.",
+            "question": "건물명도?�송?�서 ?�유권의 ?�립?�건?� 무엇?��???",
+            "answer": "?�법원 2021??2222 ?�결???�르�? ?�유권의 ?�립?�건?�로??물건???�???�실?�의 지배�? ?�유???�사가 ?�요?�니?? 건물??경우 ?�제 거주?�거???�용?�고 ?�다???�실??중요?�니??",
             "type": "precedent_search",
-            "source": "대법원 판례",
-            "case_number": "2021다22222",
+            "source": "?�법원 ?��?",
+            "case_number": "2021??2222",
             "quality_score": 0.87,
             "confidence": 0.84
         },
         {
             "id": "law_006",
-            "question": "유언의 효력과 요건에 대해 설명해주세요.",
-            "answer": "유언은 유언자의 사망 시에 효력이 발생하며, 유언자의 진정한 의사표시여야 합니다. 민법 제1060조에 따르면 유언은 법정된 방식에 따라 하여야 하며, 자필증서, 녹음, 공정증서 등의 방식이 있습니다.",
+            "question": "?�언???�력�??�건???�???�명?�주?�요.",
+            "answer": "?�언?� ?�언?�의 ?�망 ?�에 ?�력??발생?�며, ?�언?�의 진정???�사?�시?�야 ?�니?? 민법 ??060조에 ?�르�??�언?� 법정??방식???�라 ?�여???�며, ?�필증서, ?�음, 공정증서 ?�의 방식???�습?�다.",
             "type": "law_explanation",
             "source": "민법",
-            "article": "제1060조",
+            "article": "??060�?,
             "quality_score": 0.92,
             "confidence": 0.88
         }
     ]
     
-    logger.info(f"샘플 Q&A 데이터셋 생성 완료: {len(sample_data)}개")
+    logger.info(f"?�플 Q&A ?�이?�셋 ?�성 ?�료: {len(sample_data)}�?)
     return sample_data
 
 def convert_to_kogpt2_format(qa_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Q&A 데이터셋을 KoGPT-2 입력 형식으로 변환"""
+    """Q&A ?�이?�셋??KoGPT-2 ?�력 ?�식?�로 변??""
     logger = setup_logging()
     
     converted_data = []
     
     for item in qa_dataset:
-        # KoGPT-2용 프롬프트 템플릿 적용
-        prompt = f"<|startoftext|>질문: {item['question']}\n답변: {item['answer']}<|endoftext|>"
+        # KoGPT-2???�롬?�트 ?�플�??�용
+        prompt = f"<|startoftext|>질문: {item['question']}\n?��?: {item['answer']}<|endoftext|>"
         
         converted_item = {
             "id": item["id"],
@@ -165,14 +165,14 @@ def convert_to_kogpt2_format(qa_dataset: List[Dict[str, Any]]) -> List[Dict[str,
         
         converted_data.append(converted_item)
     
-    logger.info(f"KoGPT-2 형식 변환 완료: {len(converted_data)}개")
+    logger.info(f"KoGPT-2 ?�식 변???�료: {len(converted_data)}�?)
     return converted_data
 
 def split_dataset(data: List[Dict[str, Any]], train_ratio: float = 0.8, val_ratio: float = 0.1, test_ratio: float = 0.1) -> Dict[str, List[Dict[str, Any]]]:
-    """데이터셋을 훈련/검증/테스트로 분할"""
+    """?�이?�셋???�련/검�??�스?�로 분할"""
     logger = setup_logging()
     
-    # 데이터 셔플
+    # ?�이???�플
     random.shuffle(data)
     
     total_size = len(data)
@@ -183,10 +183,10 @@ def split_dataset(data: List[Dict[str, Any]], train_ratio: float = 0.8, val_rati
     val_data = data[train_size:train_size + val_size]
     test_data = data[train_size + val_size:]
     
-    logger.info(f"데이터셋 분할 완료:")
-    logger.info(f"  훈련 데이터: {len(train_data)}개 ({len(train_data)/total_size:.1%})")
-    logger.info(f"  검증 데이터: {len(val_data)}개 ({len(val_data)/total_size:.1%})")
-    logger.info(f"  테스트 데이터: {len(test_data)}개 ({len(test_data)/total_size:.1%})")
+    logger.info(f"?�이?�셋 분할 ?�료:")
+    logger.info(f"  ?�련 ?�이?? {len(train_data)}�?({len(train_data)/total_size:.1%})")
+    logger.info(f"  검�??�이?? {len(val_data)}�?({len(val_data)/total_size:.1%})")
+    logger.info(f"  ?�스???�이?? {len(test_data)}�?({len(test_data)/total_size:.1%})")
     
     return {
         "train": train_data,
@@ -195,45 +195,45 @@ def split_dataset(data: List[Dict[str, Any]], train_ratio: float = 0.8, val_rati
     }
 
 def create_prompt_templates() -> Dict[str, str]:
-    """법률 특화 프롬프트 템플릿 생성"""
+    """법률 ?�화 ?�롬?�트 ?�플�??�성"""
     templates = {
-        "contract_analysis": """<|startoftext|>당신은 법률 전문가입니다. 다음 계약서 조항을 분석하고 위험 요소를 지적해주세요.
+        "contract_analysis": """<|startoftext|>?�신?� 법률 ?�문가?�니?? ?�음 계약??조항??분석?�고 ?�험 ?�소�?지?�해주세??
 
-계약서 조항: {clause}
+계약??조항: {clause}
 분석:<|endoftext|>""",
         
-        "precedent_search": """<|startoftext|>다음 사건과 유사한 판례를 찾아주세요.
+        "precedent_search": """<|startoftext|>?�음 ?�건�??�사???��?�?찾아주세??
 
-사건 개요: {case_summary}
-유사 판례:<|endoftext|>""",
+?�건 개요: {case_summary}
+?�사 ?��?:<|endoftext|>""",
         
-        "law_explanation": """<|startoftext|>다음 법조문을 일반인이 이해하기 쉽게 설명해주세요.
+        "law_explanation": """<|startoftext|>?�음 법조문을 ?�반?�이 ?�해?�기 ?�게 ?�명?�주?�요.
 
-법조문: {law_article}
-설명:<|endoftext|>""",
+법조�? {law_article}
+?�명:<|endoftext|>""",
         
-        "legal_advice": """<|startoftext|>다음 상황에서 법적 조언을 해주세요.
+        "legal_advice": """<|startoftext|>?�음 ?�황?�서 법적 조언???�주?�요.
 
-상황: {situation}
+?�황: {situation}
 조언:<|endoftext|>""",
         
         "qa_format": """<|startoftext|>질문: {question}
-답변: {answer}<|endoftext|>"""
+?��?: {answer}<|endoftext|>"""
     }
     
     return templates
 
 def setup_tokenizer_config() -> Dict[str, Any]:
-    """토크나이저 설정"""
+    """?�크?�이?� ?�정"""
     config = {
         "model_name": "skt/kogpt2-base-v2",
         "special_tokens": {
             "startoftext": "<|startoftext|>",
             "endoftext": "<|endoftext|>",
             "question": "질문:",
-            "answer": "답변:",
+            "answer": "?��?:",
             "analysis": "분석:",
-            "explanation": "설명:",
+            "explanation": "?�명:",
             "advice": "조언:"
         },
         "max_length": 512,
@@ -245,7 +245,7 @@ def setup_tokenizer_config() -> Dict[str, Any]:
     return config
 
 def save_datasets(split_data: Dict[str, List[Dict[str, Any]]], output_dir: str = "data/training"):
-    """분할된 데이터셋 저장"""
+    """분할???�이?�셋 ?�??""
     logger = setup_logging()
     
     output_path = Path(output_dir)
@@ -258,10 +258,10 @@ def save_datasets(split_data: Dict[str, List[Dict[str, Any]]], output_dir: str =
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"{split_name} 데이터셋 저장 완료: {filepath} ({len(data)}개)")
+        logger.info(f"{split_name} ?�이?�셋 ?�???�료: {filepath} ({len(data)}�?")
 
 def generate_statistics(dataset: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """데이터셋 통계 생성"""
+    """?�이?�셋 ?�계 ?�성"""
     stats = {
         "total_samples": len(dataset),
         "type_distribution": {},
@@ -282,85 +282,85 @@ def generate_statistics(dataset: List[Dict[str, Any]]) -> Dict[str, Any]:
     confidence_scores = []
     
     for item in dataset:
-        # 타입별 분포
+        # ?�?�별 분포
         item_type = item["type"]
         stats["type_distribution"][item_type] = stats["type_distribution"].get(item_type, 0) + 1
         
-        # 소스별 분포
+        # ?�스�?분포
         source = item["source"]
         stats["source_distribution"][source] = stats["source_distribution"].get(source, 0) + 1
         
-        # 품질 점수
+        # ?�질 ?�수
         quality_score = item["quality_score"]
         quality_scores.append(quality_score)
         stats["quality_stats"]["min_score"] = min(stats["quality_stats"]["min_score"], quality_score)
         stats["quality_stats"]["max_score"] = max(stats["quality_stats"]["max_score"], quality_score)
         
-        # 신뢰도 점수
+        # ?�뢰???�수
         confidence = item["confidence"]
         confidence_scores.append(confidence)
         stats["confidence_stats"]["min_confidence"] = min(stats["confidence_stats"]["min_confidence"], confidence)
         stats["confidence_stats"]["max_confidence"] = max(stats["confidence_stats"]["max_confidence"], confidence)
     
-    # 평균 계산
+    # ?�균 계산
     stats["quality_stats"]["average_score"] = sum(quality_scores) / len(quality_scores)
     stats["confidence_stats"]["average_confidence"] = sum(confidence_scores) / len(confidence_scores)
     
     return stats
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     logger = setup_logging()
-    logger.info("Day 2: 데이터셋 준비 및 전처리 시작...")
+    logger.info("Day 2: ?�이?�셋 준�?�??�처�??�작...")
     
-    # 1. 샘플 Q&A 데이터셋 생성
-    logger.info("1. 샘플 Q&A 데이터셋 생성...")
+    # 1. ?�플 Q&A ?�이?�셋 ?�성
+    logger.info("1. ?�플 Q&A ?�이?�셋 ?�성...")
     qa_dataset = create_sample_qa_dataset()
     
-    # 2. KoGPT-2 형식으로 변환
-    logger.info("2. KoGPT-2 형식으로 변환...")
+    # 2. KoGPT-2 ?�식?�로 변??
+    logger.info("2. KoGPT-2 ?�식?�로 변??..")
     converted_data = convert_to_kogpt2_format(qa_dataset)
     
-    # 3. 프롬프트 템플릿 생성
-    logger.info("3. 프롬프트 템플릿 생성...")
+    # 3. ?�롬?�트 ?�플�??�성
+    logger.info("3. ?�롬?�트 ?�플�??�성...")
     prompt_templates = create_prompt_templates()
     
-    # 4. 토크나이저 설정
-    logger.info("4. 토크나이저 설정...")
+    # 4. ?�크?�이?� ?�정
+    logger.info("4. ?�크?�이?� ?�정...")
     tokenizer_config = setup_tokenizer_config()
     
-    # 5. 데이터셋 분할
-    logger.info("5. 데이터셋 분할 (8:1:1)...")
+    # 5. ?�이?�셋 분할
+    logger.info("5. ?�이?�셋 분할 (8:1:1)...")
     split_data = split_dataset(converted_data)
     
-    # 6. 데이터셋 저장
-    logger.info("6. 데이터셋 저장...")
+    # 6. ?�이?�셋 ?�??
+    logger.info("6. ?�이?�셋 ?�??..")
     save_datasets(split_data)
     
-    # 7. 통계 생성
-    logger.info("7. 통계 생성...")
+    # 7. ?�계 ?�성
+    logger.info("7. ?�계 ?�성...")
     stats = generate_statistics(converted_data)
     
-    # 통계 저장
+    # ?�계 ?�??
     stats_path = Path("data/training/dataset_statistics.json")
     with open(stats_path, 'w', encoding='utf-8') as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     
-    # 프롬프트 템플릿 저장
+    # ?�롬?�트 ?�플�??�??
     templates_path = Path("data/training/prompt_templates.json")
     with open(templates_path, 'w', encoding='utf-8') as f:
         json.dump(prompt_templates, f, ensure_ascii=False, indent=2)
     
-    # 토크나이저 설정 저장
+    # ?�크?�이?� ?�정 ?�??
     config_path = Path("data/training/tokenizer_config.json")
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(tokenizer_config, f, ensure_ascii=False, indent=2)
     
-    logger.info("Day 2: 데이터셋 준비 및 전처리 완료!")
-    logger.info(f"총 데이터: {len(converted_data)}개")
-    logger.info(f"훈련 데이터: {len(split_data['train'])}개")
-    logger.info(f"검증 데이터: {len(split_data['validation'])}개")
-    logger.info(f"테스트 데이터: {len(split_data['test'])}개")
+    logger.info("Day 2: ?�이?�셋 준�?�??�처�??�료!")
+    logger.info(f"�??�이?? {len(converted_data)}�?)
+    logger.info(f"?�련 ?�이?? {len(split_data['train'])}�?)
+    logger.info(f"검�??�이?? {len(split_data['validation'])}�?)
+    logger.info(f"?�스???�이?? {len(split_data['test'])}�?)
 
 if __name__ == "__main__":
     main()

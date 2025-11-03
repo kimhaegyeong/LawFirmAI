@@ -77,11 +77,11 @@ def parse_articles_simple(content: str) -> List[Dict[str, Any]]:
     
     articles = []
     
-    # Pattern for main articles (제1조, 제2조, etc.)
-    main_pattern = r'제(\d+)조(?:\(([^)]+)\))?\s*(.*?)(?=제\d+조|부칙|$)'
+    # Pattern for main articles (??�? ??�? etc.)
+    main_pattern = r'??\d+)�??:\(([^)]+)\))?\s*(.*?)(?=??d+�?부�?$)'
     
-    # Pattern for supplementary articles (부칙 제1조, etc.)
-    supp_pattern = r'부칙\s*제(\d+)조(?:\(([^)]+)\))?\s*(.*?)(?=부칙\s*제\d+조|$)'
+    # Pattern for supplementary articles (부�???�? etc.)
+    supp_pattern = r'부�?s*??\d+)�??:\(([^)]+)\))?\s*(.*?)(?=부�?s*??d+�?$)'
     
     # Find main articles
     main_matches = re.finditer(main_pattern, content, re.DOTALL)
@@ -92,7 +92,7 @@ def parse_articles_simple(content: str) -> List[Dict[str, Any]]:
         
         if article_content:  # Only add if there's content
             articles.append({
-                'article_number': f'제{article_num}조',
+                'article_number': f'??article_num}�?,
                 'article_title': article_title,
                 'article_content': article_content,
                 'sub_articles': [],
@@ -111,7 +111,7 @@ def parse_articles_simple(content: str) -> List[Dict[str, Any]]:
         
         if article_content:  # Only add if there's content
             articles.append({
-                'article_number': f'부칙제{article_num}조',
+                'article_number': f'부칙제{article_num}�?,
                 'article_title': article_title,
                 'article_content': article_content,
                 'sub_articles': [],

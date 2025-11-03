@@ -1,4 +1,4 @@
-# Open Law API — Generated from official guide pages
+﻿# Open Law API — Generated from official guide pages
 
 출처: https://open.law.go.kr/LSO/openApi/guideResult.do (htmlName POST)
 생성시각: 2025-10-30 21:17:02

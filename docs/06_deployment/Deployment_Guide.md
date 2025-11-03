@@ -1,4 +1,4 @@
-# LawFirmAI 배포 가이드
+﻿# LawFirmAI 배포 가이드
 
 ## 개요
 
@@ -100,7 +100,7 @@ HUGGINGFACE_TOKEN=your_hf_token_here
 mkdir -p data logs runtime
 
 # 데이터베이스 초기화 (자동으로 생성됨)
-python -c "from core.data.database import DatabaseManager; db = DatabaseManager(); print('Database initialized')"
+python -c "from source.data.database import DatabaseManager; db = DatabaseManager(); print('Database initialized')"
 ```
 
 ### 6. 애플리케이션 실행
@@ -143,7 +143,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 코드 복사
-COPY core/ ./core/
+COPY core/ ./source/
 COPY streamlit/ ./streamlit/
 COPY infrastructure/ ./infrastructure/
 COPY source/ ./source/

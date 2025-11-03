@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-법률 용어 사전 구축 통합 빌더
-전체 파이프라인을 실행하여 향상된 법률 용어 사전을 구축
+법률 ?�어 ?�전 구축 ?�합 빌더
+?�체 ?�이?�라?�을 ?�행?�여 ?�상??법률 ?�어 ?�전??구축
 """
 
 import json
@@ -12,7 +12,7 @@ from typing import Dict, List
 import sys
 import os
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -25,19 +25,19 @@ logger = logging.getLogger(__name__)
 
 
 class LegalTermDictionaryBuilder:
-    """법률 용어 사전 구축 통합 빌더"""
+    """법률 ?�어 ?�전 구축 ?�합 빌더"""
     
     def __init__(self):
-        """초기화"""
+        """초기??""
         self.logger = logging.getLogger(__name__)
         
-        # 파이프라인 구성 요소
+        # ?�이?�라??구성 ?�소
         self.extractor = LegalTermExtractor()
         self.expander = DomainTermExpander()
         self.validator = QualityValidator()
         self.integrator = DictionaryIntegrator()
         
-        # 결과 저장
+        # 결과 ?�??
         self.pipeline_results = {}
     
     def run_full_pipeline(self, 
@@ -46,29 +46,29 @@ class LegalTermDictionaryBuilder:
                          output_directory: str = "data/extracted_terms",
                          min_frequency: int = 5,
                          quality_threshold: float = 0.6) -> Dict:
-        """전체 파이프라인 실행"""
+        """?�체 ?�이?�라???�행"""
         
         self.logger.info("Starting legal term dictionary building pipeline")
         
-        # 1단계: 용어 추출
+        # 1?�계: ?�어 추출
         self.logger.info("Step 1: Extracting terms from corpus")
         extraction_results = self._extract_terms(data_directory, min_frequency)
         
-        # 2단계: 도메인별 확장
+        # 2?�계: ?�메?�별 ?�장
         self.logger.info("Step 2: Expanding domain-specific terms")
         domain_results = self._expand_domain_terms(extraction_results)
         
-        # 3단계: 품질 검증
+        # 3?�계: ?�질 검�?
         self.logger.info("Step 3: Validating term quality")
         validation_results = self._validate_quality(domain_results)
         
-        # 4단계: 사전 통합
+        # 4?�계: ?�전 ?�합
         self.logger.info("Step 4: Integrating dictionaries")
         integration_results = self._integrate_dictionaries(
             existing_dictionary_path, validation_results, quality_threshold
         )
         
-        # 최종 결과 정리
+        # 최종 결과 ?�리
         final_results = {
             "pipeline_summary": {
                 "extraction": extraction_results,
@@ -85,12 +85,12 @@ class LegalTermDictionaryBuilder:
         return final_results
     
     def _extract_terms(self, data_directory: str, min_frequency: int) -> Dict:
-        """1단계: 용어 추출"""
+        """1?�계: ?�어 추출"""
         try:
-            # 용어 추출 실행
+            # ?�어 추출 ?�행
             extraction_results = self.extractor.process_directory(data_directory, min_frequency)
             
-            # 결과 저장
+            # 결과 ?�??
             output_path = "data/extracted_terms/raw_extracted_terms.json"
             self.extractor.save_results(output_path, extraction_results)
             
@@ -108,17 +108,17 @@ class LegalTermDictionaryBuilder:
             raise
     
     def _expand_domain_terms(self, extraction_results: Dict) -> Dict:
-        """2단계: 도메인별 용어 확장"""
+        """2?�계: ?�메?�별 ?�어 ?�장"""
         try:
-            # 추출된 용어로 도메인 확장
+            # 추출???�어�??�메???�장
             domain_terms = self.expander.expand_domain_terms(extraction_results["filtered_terms"])
             
-            # 향상된 사전 생성
+            # ?�상???�전 ?�성
             enhanced_dict = self.expander.generate_enhanced_dictionary(
                 extraction_results["filtered_terms"], domain_terms
             )
             
-            # 결과 저장
+            # 결과 ?�??
             output_path = "data/extracted_terms/domain_expanded_terms.json"
             self.expander.save_enhanced_dictionary(enhanced_dict, output_path)
             
@@ -135,22 +135,22 @@ class LegalTermDictionaryBuilder:
             raise
     
     def _validate_quality(self, enhanced_dict: Dict) -> Dict:
-        """3단계: 품질 검증"""
+        """3?�계: ?�질 검�?""
         try:
-            # 품질 검증 실행
+            # ?�질 검�??�행
             validation_summary = self.validator.validate_dictionary_quality(enhanced_dict)
             
-            # 개선 제안 생성
+            # 개선 ?�안 ?�성
             suggestions = self.validator.generate_improvement_suggestions(enhanced_dict)
             
-            # 고품질 용어 필터링
+            # 고품�??�어 ?�터�?
             high_quality_dict = self.validator.filter_high_quality_terms(enhanced_dict)
             
-            # 결과 저장
+            # 결과 ?�??
             output_path = "data/extracted_terms/quality_validated_terms.json"
             self.validator.save_validation_results(output_path, validation_summary, suggestions)
             
-            # 고품질 사전 저장
+            # 고품�??�전 ?�??
             high_quality_path = "data/extracted_terms/high_quality_terms.json"
             with open(high_quality_path, 'w', encoding='utf-8') as f:
                 json.dump(high_quality_dict, f, ensure_ascii=False, indent=2)
@@ -173,27 +173,27 @@ class LegalTermDictionaryBuilder:
                               existing_dict_path: str, 
                               validated_dict: Dict, 
                               quality_threshold: float) -> Dict:
-        """4단계: 사전 통합"""
+        """4?�계: ?�전 ?�합"""
         try:
-            # 기존 사전 로드
+            # 기존 ?�전 로드
             existing_dict = self.integrator.load_existing_dictionary(existing_dict_path)
             
-            # 사전 통합
+            # ?�전 ?�합
             merged_dict, integration_stats = self.integrator.merge_dictionaries(
                 existing_dict, validated_dict
             )
             
-            # 통합된 사전 검증
+            # ?�합???�전 검�?
             validation_results = self.integrator.validate_integrated_dictionary(merged_dict)
             
-            # 최종 사전 저장
+            # 최종 ?�전 ?�??
             output_path = "data/enhanced_legal_term_dictionary.json"
             self.integrator.save_integrated_dictionary(merged_dict, output_path)
             
-            # 통합 보고서 생성
+            # ?�합 보고???�성
             report = self.integrator.generate_integration_report(integration_stats, validation_results)
             
-            # 보고서 저장
+            # 보고???�??
             report_path = "data/extracted_terms/integration_report.txt"
             Path(report_path).parent.mkdir(parents=True, exist_ok=True)
             with open(report_path, 'w', encoding='utf-8') as f:
@@ -221,51 +221,51 @@ class LegalTermDictionaryBuilder:
             raise
     
     def generate_pipeline_report(self, results: Dict) -> str:
-        """파이프라인 실행 보고서 생성"""
+        """?�이?�라???�행 보고???�성"""
         report = []
-        report.append("=== 법률 용어 사전 구축 파이프라인 실행 보고서 ===\n")
+        report.append("=== 법률 ?�어 ?�전 구축 ?�이?�라???�행 보고??===\n")
         
-        # 전체 요약
-        report.append("1. 전체 요약")
-        report.append(f"   최종 사전 경로: {results['final_dictionary_path']}")
-        report.append(f"   총 용어 수: {results['total_terms']}")
-        report.append(f"   품질 점수: {results['quality_score']:.2f}")
+        # ?�체 ?�약
+        report.append("1. ?�체 ?�약")
+        report.append(f"   최종 ?�전 경로: {results['final_dictionary_path']}")
+        report.append(f"   �??�어 ?? {results['total_terms']}")
+        report.append(f"   ?�질 ?�수: {results['quality_score']:.2f}")
         report.append("")
         
-        # 단계별 결과
+        # ?�계�?결과
         pipeline_summary = results["pipeline_summary"]
         
-        report.append("2. 1단계: 용어 추출")
+        report.append("2. 1?�계: ?�어 추출")
         extraction = pipeline_summary["extraction"]
-        report.append(f"   처리된 파일: {extraction['processed_files']}")
-        report.append(f"   추출된 용어: {extraction['total_terms']}")
-        report.append(f"   필터링 후 용어: {extraction['filtered_terms']}")
+        report.append(f"   처리???�일: {extraction['processed_files']}")
+        report.append(f"   추출???�어: {extraction['total_terms']}")
+        report.append(f"   ?�터�????�어: {extraction['filtered_terms']}")
         report.append("")
         
-        report.append("3. 2단계: 도메인별 확장")
+        report.append("3. 2?�계: ?�메?�별 ?�장")
         domain_expansion = pipeline_summary["domain_expansion"]
-        report.append(f"   확장된 용어: {domain_expansion['total_terms']}")
-        report.append(f"   도메인 수: {len(domain_expansion['domains'])}")
+        report.append(f"   ?�장???�어: {domain_expansion['total_terms']}")
+        report.append(f"   ?�메???? {len(domain_expansion['domains'])}")
         report.append("")
         
-        report.append("4. 3단계: 품질 검증")
+        report.append("4. 3?�계: ?�질 검�?)
         validation = pipeline_summary["validation"]
-        report.append(f"   검증된 용어: {validation['total_terms']}")
-        report.append(f"   고품질 용어: {validation['high_quality_terms']}")
-        report.append(f"   품질 비율: {validation['quality_ratio']:.1%}")
+        report.append(f"   검증된 ?�어: {validation['total_terms']}")
+        report.append(f"   고품�??�어: {validation['high_quality_terms']}")
+        report.append(f"   ?�질 비율: {validation['quality_ratio']:.1%}")
         report.append("")
         
-        report.append("5. 4단계: 사전 통합")
+        report.append("5. 4?�계: ?�전 ?�합")
         integration = pipeline_summary["integration"]
-        report.append(f"   통합된 용어: {integration['total_terms']}")
-        report.append(f"   새로 추가된 용어: {integration['new_terms']}")
-        report.append(f"   업데이트된 용어: {integration['updated_terms']}")
-        report.append(f"   최종 품질 점수: {integration['quality_score']:.2f}")
+        report.append(f"   ?�합???�어: {integration['total_terms']}")
+        report.append(f"   ?�로 추�????�어: {integration['new_terms']}")
+        report.append(f"   ?�데?�트???�어: {integration['updated_terms']}")
+        report.append(f"   최종 ?�질 ?�수: {integration['quality_score']:.2f}")
         
         return "\n".join(report)
     
     def save_pipeline_results(self, results: Dict, output_path: str):
-        """파이프라인 결과 저장"""
+        """?�이?�라??결과 ?�??""
         try:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -280,33 +280,33 @@ class LegalTermDictionaryBuilder:
 
 
 def main():
-    """메인 실행 함수"""
-    parser = argparse.ArgumentParser(description='법률 용어 사전 구축 통합 빌더')
+    """메인 ?�행 ?�수"""
+    parser = argparse.ArgumentParser(description='법률 ?�어 ?�전 구축 ?�합 빌더')
     parser.add_argument('--data_dir', type=str, required=True,
-                       help='법률 데이터 디렉토리 경로')
+                       help='법률 ?�이???�렉?�리 경로')
     parser.add_argument('--existing_dict', type=str,
                        default='data/legal_term_dictionary.json',
-                       help='기존 사전 파일 경로')
+                       help='기존 ?�전 ?�일 경로')
     parser.add_argument('--output_dir', type=str,
                        default='data/extracted_terms',
-                       help='출력 디렉토리 경로')
+                       help='출력 ?�렉?�리 경로')
     parser.add_argument('--min_frequency', type=int, default=5,
-                       help='최소 빈도 (기본값: 5)')
+                       help='최소 빈도 (기본�? 5)')
     parser.add_argument('--quality_threshold', type=float, default=0.6,
-                       help='품질 기준 (기본값: 0.6)')
+                       help='?�질 기�? (기본�? 0.6)')
     parser.add_argument('--log_level', type=str, default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='로그 레벨')
+                       help='로그 ?�벨')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 파이프라인 실행
+    # ?�이?�라???�행
     builder = LegalTermDictionaryBuilder()
     
     try:
@@ -318,16 +318,16 @@ def main():
             quality_threshold=args.quality_threshold
         )
         
-        # 파이프라인 보고서 생성 및 출력
+        # ?�이?�라??보고???�성 �?출력
         report = builder.generate_pipeline_report(results)
         print(report)
         
-        # 결과 저장
+        # 결과 ?�??
         builder.save_pipeline_results(results, f"{args.output_dir}/pipeline_results.json")
         
-        print(f"\n파이프라인이 성공적으로 완료되었습니다!")
-        print(f"최종 사전: {results['final_dictionary_path']}")
-        print(f"총 용어 수: {results['total_terms']}")
+        print(f"\n?�이?�라?�이 ?�공?�으�??�료?�었?�니??")
+        print(f"최종 ?�전: {results['final_dictionary_path']}")
+        print(f"�??�어 ?? {results['total_terms']}")
         
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")

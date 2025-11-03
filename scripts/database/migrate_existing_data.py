@@ -237,9 +237,9 @@ class DataMigration:
         
         # Remove common variations
         variations = {
-            '법률': '법',
+            '법률': '�?,
             '규칙': '규칙',
-            '령': '령',
+            '??: '??,
             '규정': '규정'
         }
         
@@ -259,7 +259,7 @@ class DataMigration:
         # Remove common formatting variations
         import re
         normalized = re.sub(r'\s+', ' ', normalized)
-        normalized = re.sub(r'[^\w\s가-힣]', '', normalized)
+        normalized = re.sub(r'[^\w\s가-??', '', normalized)
         
         return normalized.strip()
     

@@ -1,4 +1,4 @@
-# 데이터 처리 (Data Processing)
+﻿# 데이터 처리 (Data Processing)
 
 이 섹션은 수집된 데이터의 전처리 및 처리 방법을 설명합니다.
 

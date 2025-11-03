@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-조약 수집 스크립트
+조약 ?�집 ?�크립트
 
-국가법령정보센터 LAW OPEN API를 사용하여 조약을 수집합니다.
-- 주요 조약 100건 수집
-- 조약 유형별 분류 및 메타데이터 정제
+�??법령?�보?�터 LAW OPEN API�??�용?�여 조약???�집?�니??
+- 주요 조약 100�??�집
+- 조약 ?�형�?분류 �?메�??�이???�제
 """
 
 import os
@@ -16,13 +16,13 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from source.data.law_open_api_client import LawOpenAPIClient, LawOpenAPIConfig
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,76 +33,76 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 조약 관련 검색 키워드
+# 조약 관??검???�워??
 TREATY_KEYWORDS = [
-    # 경제통상 관련
-    "자유무역협정", "FTA", "경제협력", "투자보장", "이중과세방지", "관세",
-    "무역", "수출입", "경제통상", "상호원조", "경제협력협정",
+    # 경제?�상 관??
+    "?�유무역?�정", "FTA", "경제?�력", "?�자보장", "?�중과세방�?", "관??,
+    "무역", "?�출??, "경제?�상", "?�호?�조", "경제?�력?�정",
     
-    # 외교안보 관련
-    "외교", "안보", "방위", "군사", "군사협력", "정보교환", "범죄인인도",
-    "사법공조", "형사사법공조", "마약", "테러", "국제범죄",
+    # ?�교?�보 관??
+    "?�교", "?�보", "방위", "군사", "군사?�력", "?�보교환", "범죄?�인??,
+    "?�법공조", "?�사?�법공조", "마약", "?�러", "�?��범죄",
     
-    # 환경 관련
-    "환경", "기후변화", "온실가스", "오존층", "생물다양성", "해양환경",
-    "대기오염", "수질오염", "폐기물", "환경보호", "지속가능발전",
+    # ?�경 관??
+    "?�경", "기후변??, "?�실가??, "?�존�?, "?�물?�양??, "?�양?�경",
+    "?�기오??, "?�질?�염", "?�기�?, "?�경보호", "지?��??�발??,
     
-    # 인권 관련
-    "인권", "인권보호", "아동권리", "여성권리", "장애인권리", "난민",
-    "이주", "인신매매", "강제노동", "차별금지", "평등권",
+    # ?�권 관??
+    "?�권", "?�권보호", "?�동권리", "?�성권리", "?�애?�권�?, "?��?",
+    "?�주", "?�신매매", "강제?�동", "차별금�?", "?�등�?,
     
-    # 교육문화 관련
-    "교육", "문화", "과학기술", "연구개발", "학술교류", "문화교류",
-    "교육협력", "과학기술협력", "연구협력", "기술이전", "지적재산권",
+    # 교육문화 관??
+    "교육", "문화", "과학기술", "?�구개발", "?�술교류", "문화교류",
+    "교육?�력", "과학기술?�력", "?�구?�력", "기술?�전", "지?�재?�권",
     
-    # 보건의료 관련
-    "보건", "의료", "공중보건", "질병예방", "의료기술", "의료협력",
-    "보건협력", "의료진", "의료기기", "의약품", "의료정보",
+    # 보건?�료 관??
+    "보건", "?�료", "공중보건", "질병?�방", "?�료기술", "?�료?�력",
+    "보건?�력", "?�료�?, "?�료기기", "?�약??, "?�료?�보",
     
-    # 교통통신 관련
-    "교통", "통신", "항공", "해운", "육상교통", "전자통신", "정보통신",
-    "항공협정", "해운협정", "교통협력", "통신협력", "디지털협력",
+    # 교통?�신 관??
+    "교통", "?�신", "??��", "?�운", "?�상교통", "?�자?�신", "?�보?�신",
+    "??��?�정", "?�운?�정", "교통?�력", "?�신?�력", "?��??�협??,
     
-    # 농업식품 관련
-    "농업", "식품", "축산", "수산", "농업협력", "식품안전", "농산물",
-    "축산물", "수산물", "농업기술", "식품기술", "농업교역",
+    # ?�업?�품 관??
+    "?�업", "?�품", "축산", "?�산", "?�업?�력", "?�품?�전", "?�산�?,
+    "축산�?, "?�산�?, "?�업기술", "?�품기술", "?�업교역",
     
-    # 에너지자원 관련
-    "에너지", "자원", "석유", "가스", "원자력", "재생에너지", "에너지협력",
-    "자원협력", "에너지안보", "자원안보", "에너지효율", "신재생에너지",
+    # ?�너지?�원 관??
+    "?�너지", "?�원", "?�유", "가??, "?�자??, "?�생?�너지", "?�너지?�력",
+    "?�원?�력", "?�너지?�보", "?�원?�보", "?�너지?�율", "?�재?�에?��?",
     
-    # 사회보장 관련
-    "사회보장", "복지", "노동", "고용", "사회보험", "국민연금", "건강보험",
-    "산업재해보상보험", "고용보험", "사회보장협력", "복지협력", "노동협력"
+    # ?�회보장 관??
+    "?�회보장", "복�?", "?�동", "고용", "?�회보험", "�???�금", "건강보험",
+    "?�업?�해보상보험", "고용보험", "?�회보장?�력", "복�??�력", "?�동?�력"
 ]
 
-# 조약 유형별 분류 키워드
+# 조약 ?�형�?분류 ?�워??
 TREATY_TYPE_KEYWORDS = {
-    "경제통상": ["자유무역협정", "FTA", "경제협력", "투자보장", "이중과세방지", "관세", "무역"],
-    "외교안보": ["외교", "안보", "방위", "군사", "군사협력", "정보교환", "범죄인인도", "사법공조"],
-    "환경": ["환경", "기후변화", "온실가스", "오존층", "생물다양성", "해양환경", "대기오염"],
-    "인권": ["인권", "인권보호", "아동권리", "여성권리", "장애인권리", "난민", "이주", "인신매매"],
-    "교육문화": ["교육", "문화", "과학기술", "연구개발", "학술교류", "문화교류", "교육협력"],
-    "보건의료": ["보건", "의료", "공중보건", "질병예방", "의료기술", "의료협력", "보건협력"],
-    "교통통신": ["교통", "통신", "항공", "해운", "육상교통", "전자통신", "정보통신"],
-    "농업식품": ["농업", "식품", "축산", "수산", "농업협력", "식품안전", "농산물"],
-    "에너지자원": ["에너지", "자원", "석유", "가스", "원자력", "재생에너지", "에너지협력"],
-    "사회보장": ["사회보장", "복지", "노동", "고용", "사회보험", "국민연금", "건강보험"]
+    "경제?�상": ["?�유무역?�정", "FTA", "경제?�력", "?�자보장", "?�중과세방�?", "관??, "무역"],
+    "?�교?�보": ["?�교", "?�보", "방위", "군사", "군사?�력", "?�보교환", "범죄?�인??, "?�법공조"],
+    "?�경": ["?�경", "기후변??, "?�실가??, "?�존�?, "?�물?�양??, "?�양?�경", "?�기오??],
+    "?�권": ["?�권", "?�권보호", "?�동권리", "?�성권리", "?�애?�권�?, "?��?", "?�주", "?�신매매"],
+    "교육문화": ["교육", "문화", "과학기술", "?�구개발", "?�술교류", "문화교류", "교육?�력"],
+    "보건?�료": ["보건", "?�료", "공중보건", "질병?�방", "?�료기술", "?�료?�력", "보건?�력"],
+    "교통?�신": ["교통", "?�신", "??��", "?�운", "?�상교통", "?�자?�신", "?�보?�신"],
+    "?�업?�품": ["?�업", "?�품", "축산", "?�산", "?�업?�력", "?�품?�전", "?�산�?],
+    "?�너지?�원": ["?�너지", "?�원", "?�유", "가??, "?�자??, "?�생?�너지", "?�너지?�력"],
+    "?�회보장": ["?�회보장", "복�?", "?�동", "고용", "?�회보험", "�???�금", "건강보험"]
 }
 
 
 class TreatyCollector:
-    """조약 수집 클래스"""
+    """조약 ?�집 ?�래??""
     
     def __init__(self, config: LawOpenAPIConfig):
         self.client = LawOpenAPIClient(config)
         self.output_dir = Path("data/raw/treaties")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.collected_treaties = set()  # 중복 방지
+        self.collected_treaties = set()  # 중복 방�?
         
     def collect_treaties_by_keyword(self, keyword: str, max_count: int = 10) -> List[Dict[str, Any]]:
-        """키워드로 조약 검색 및 수집"""
-        logger.info(f"키워드 '{keyword}'로 조약 검색 시작...")
+        """?�워?�로 조약 검??�??�집"""
+        logger.info(f"?�워??'{keyword}'�?조약 검???�작...")
         
         treaties = []
         page = 1
@@ -119,7 +119,7 @@ class TreatyCollector:
                     break
                 
                 for result in results:
-                    treaty_id = result.get('판례일련번호')
+                    treaty_id = result.get('?��??�련번호')
                     if treaty_id and treaty_id not in self.collected_treaties:
                         treaties.append(result)
                         self.collected_treaties.add(treaty_id)
@@ -129,22 +129,22 @@ class TreatyCollector:
                 
                 page += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 검색 중 오류: {e}")
+                logger.error(f"?�워??'{keyword}' 검??�??�류: {e}")
                 break
         
-        logger.info(f"키워드 '{keyword}'로 {len(treaties)}건 수집")
+        logger.info(f"?�워??'{keyword}'�?{len(treaties)}�??�집")
         return treaties
     
     def collect_treaties_by_date_range(self, start_date: str, end_date: str, max_count: int = 100) -> List[Dict[str, Any]]:
-        """날짜 범위로 조약 검색 및 수집"""
-        logger.info(f"날짜 범위 {start_date} ~ {end_date}로 조약 검색 시작...")
+        """?�짜 범위�?조약 검??�??�집"""
+        logger.info(f"?�짜 범위 {start_date} ~ {end_date}�?조약 검???�작...")
         
         treaties = []
         page = 1
@@ -162,7 +162,7 @@ class TreatyCollector:
                     break
                 
                 for result in results:
-                    treaty_id = result.get('판례일련번호')
+                    treaty_id = result.get('?��??�련번호')
                     if treaty_id and treaty_id not in self.collected_treaties:
                         treaties.append(result)
                         self.collected_treaties.add(treaty_id)
@@ -172,29 +172,29 @@ class TreatyCollector:
                 
                 page += 1
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"날짜 범위 검색 중 오류: {e}")
+                logger.error(f"?�짜 범위 검??�??�류: {e}")
                 break
         
-        logger.info(f"날짜 범위로 {len(treaties)}건 수집")
+        logger.info(f"?�짜 범위�?{len(treaties)}�??�집")
         return treaties
     
     def collect_treaty_details(self, treaty: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """조약 상세 정보 수집"""
-        treaty_id = treaty.get('판례일련번호')
+        """조약 ?�세 ?�보 ?�집"""
+        treaty_id = treaty.get('?��??�련번호')
         if not treaty_id:
             return None
         
         try:
             detail = self.client.get_treaty_detail(treaty_id=treaty_id)
             if detail:
-                # 기본 정보와 상세 정보 결합
+                # 기본 ?�보?� ?�세 ?�보 결합
                 combined_data = {
                     'basic_info': treaty,
                     'detail_info': detail,
@@ -202,42 +202,42 @@ class TreatyCollector:
                 }
                 return combined_data
         except Exception as e:
-            logger.error(f"조약 {treaty_id} 상세 정보 수집 실패: {e}")
+            logger.error(f"조약 {treaty_id} ?�세 ?�보 ?�집 ?�패: {e}")
         
         return None
     
     def classify_treaty_type(self, treaty: Dict[str, Any]) -> str:
-        """조약 유형 분류"""
-        case_name = treaty.get('사건명', '').lower()
-        case_content = treaty.get('판시사항', '') + ' ' + treaty.get('판결요지', '')
+        """조약 ?�형 분류"""
+        case_name = treaty.get('?�건�?, '').lower()
+        case_content = treaty.get('?�시?�항', '') + ' ' + treaty.get('?�결?��?', '')
         case_content = case_content.lower()
         
-        # 조약 유형별 키워드 매칭
+        # 조약 ?�형�??�워??매칭
         for treaty_type, keywords in TREATY_TYPE_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in case_name or keyword in case_content:
                     return treaty_type
         
-        return "기타"
+        return "기�?"
     
     def save_treaty_data(self, treaty_data: Dict[str, Any], filename: str):
-        """조약 데이터를 파일로 저장"""
+        """조약 ?�이?��? ?�일�??�??""
         filepath = self.output_dir / filename
         
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(treaty_data, f, ensure_ascii=False, indent=2)
-            logger.debug(f"조약 데이터 저장: {filepath}")
+            logger.debug(f"조약 ?�이???�?? {filepath}")
         except Exception as e:
-            logger.error(f"조약 데이터 저장 실패: {e}")
+            logger.error(f"조약 ?�이???�???�패: {e}")
     
     def collect_all_treaties(self, target_count: int = 100):
-        """모든 조약 수집"""
-        logger.info(f"조약 수집 시작 (목표: {target_count}건)...")
+        """모든 조약 ?�집"""
+        logger.info(f"조약 ?�집 ?�작 (목표: {target_count}�?...")
         
         all_treaties = []
         
-        # 1. 키워드별 검색 (각 키워드당 최대 5건)
+        # 1. ?�워?�별 검??(�??�워?�당 최�? 5�?
         max_per_keyword = min(5, target_count // len(TREATY_KEYWORDS))
         
         for i, keyword in enumerate(TREATY_KEYWORDS):
@@ -247,19 +247,19 @@ class TreatyCollector:
             try:
                 treaties = self.collect_treaties_by_keyword(keyword, max_per_keyword)
                 all_treaties.extend(treaties)
-                logger.info(f"키워드 '{keyword}' 완료. 누적: {len(all_treaties)}건")
+                logger.info(f"?�워??'{keyword}' ?�료. ?�적: {len(all_treaties)}�?)
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 100:
-                    logger.warning("API 요청 한도가 부족합니다.")
+                    logger.warning("API ?�청 ?�도가 부족합?�다.")
                     break
                     
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 검색 실패: {e}")
+                logger.error(f"?�워??'{keyword}' 검???�패: {e}")
                 continue
         
-        # 2. 날짜 범위별 검색 (최근 10년)
+        # 2. ?�짜 범위�?검??(최근 10??
         if len(all_treaties) < target_count:
             end_date = datetime.now().strftime('%Y%m%d')
             start_date = (datetime.now() - timedelta(days=10*365)).strftime('%Y%m%d')
@@ -270,9 +270,9 @@ class TreatyCollector:
             )
             all_treaties.extend(date_treaties)
         
-        logger.info(f"총 {len(all_treaties)}건의 조약 목록 수집 완료")
+        logger.info(f"�?{len(all_treaties)}건의 조약 목록 ?�집 ?�료")
         
-        # 3. 각 조약의 상세 정보 수집
+        # 3. �?조약???�세 ?�보 ?�집
         detailed_treaties = []
         for i, treaty in enumerate(all_treaties):
             if i >= target_count:
@@ -281,43 +281,43 @@ class TreatyCollector:
             try:
                 detail = self.collect_treaty_details(treaty)
                 if detail:
-                    # 조약 유형 분류
+                    # 조약 ?�형 분류
                     treaty_type = self.classify_treaty_type(treaty)
                     detail['treaty_type'] = treaty_type
                     
                     detailed_treaties.append(detail)
                     
-                    # 개별 파일로 저장
-                    treaty_id = treaty.get('판례일련번호', f'unknown_{i}')
+                    # 개별 ?�일�??�??
+                    treaty_id = treaty.get('?��??�련번호', f'unknown_{i}')
                     filename = f"treaty_{treaty_id}_{datetime.now().strftime('%Y%m%d')}.json"
                     self.save_treaty_data(detail, filename)
                 
-                # 진행률 로그
+                # 진행�?로그
                 if (i + 1) % 10 == 0:
-                    logger.info(f"상세 정보 수집 진행률: {i + 1}/{len(all_treaties)}")
+                    logger.info(f"?�세 ?�보 ?�집 진행�? {i + 1}/{len(all_treaties)}")
                 
-                # API 요청 제한 확인
+                # API ?�청 ?�한 ?�인
                 stats = self.client.get_request_stats()
                 if stats['remaining_requests'] < 10:
-                    logger.warning("API 요청 한도가 거의 소진되었습니다.")
+                    logger.warning("API ?�청 ?�도가 거의 ?�진?�었?�니??")
                     break
                     
             except Exception as e:
-                logger.error(f"조약 {i} 상세 정보 수집 실패: {e}")
+                logger.error(f"조약 {i} ?�세 ?�보 ?�집 ?�패: {e}")
                 continue
         
-        logger.info(f"조약 상세 정보 수집 완료: {len(detailed_treaties)}건")
+        logger.info(f"조약 ?�세 ?�보 ?�집 ?�료: {len(detailed_treaties)}�?)
         
-        # 수집 결과 요약 생성
+        # ?�집 결과 ?�약 ?�성
         self.generate_collection_summary(detailed_treaties)
     
     def generate_collection_summary(self, treaties: List[Dict[str, Any]]):
-        """수집 결과 요약 생성"""
-        # 조약 유형별 통계
+        """?�집 결과 ?�약 ?�성"""
+        # 조약 ?�형�??�계
         treaty_type_stats = {}
         
         for treaty in treaties:
-            treaty_type = treaty.get('treaty_type', '기타')
+            treaty_type = treaty.get('treaty_type', '기�?')
             treaty_type_stats[treaty_type] = treaty_type_stats.get(treaty_type, 0) + 1
         
         summary = {
@@ -331,28 +331,28 @@ class TreatyCollector:
         try:
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
-            logger.info(f"수집 결과 요약 저장: {summary_file}")
+            logger.info(f"?�집 결과 ?�약 ?�?? {summary_file}")
         except Exception as e:
-            logger.error(f"수집 결과 요약 저장 실패: {e}")
+            logger.error(f"?�집 결과 ?�약 ?�???�패: {e}")
 
 
 def main():
-    """메인 함수"""
-    # 환경변수 확인
+    """메인 ?�수"""
+    # ?�경변???�인
     oc = os.getenv("LAW_OPEN_API_OC")
     if not oc:
-        logger.error("LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
-        logger.info("사용법: LAW_OPEN_API_OC=your_email_id python collect_treaties.py")
+        logger.error("LAW_OPEN_API_OC ?�경변?��? ?�정?��? ?�았?�니??")
+        logger.info("?�용�? LAW_OPEN_API_OC=your_email_id python collect_treaties.py")
         return
     
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
-    # API 설정
+    # API ?�정
     config = LawOpenAPIConfig(oc=oc)
     
-    # 조약 수집 실행
+    # 조약 ?�집 ?�행
     collector = TreatyCollector(config)
     collector.collect_all_treaties(target_count=100)
 

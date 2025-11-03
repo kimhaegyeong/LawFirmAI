@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SQLRouter allow-list 및 안전성 검증 단위 테스트
+SQLRouter allow-list �??�전??검�??�위 ?�스??
 """
 
 import sys
@@ -19,7 +19,7 @@ def _router():
 
 def test_disallow_write_and_ddl_keywords():
     r = _router()
-    # 내부 안전성 검사 직접 호출
+    # ?��? ?�전??검??직접 ?�출
     assert r._is_sql_safe("SELECT * FROM articles LIMIT 10") is True
     assert r._is_sql_safe("DELETE FROM articles WHERE id=1 LIMIT 1") is False
     assert r._is_sql_safe("DROP TABLE articles") is False
@@ -33,7 +33,7 @@ def test_disallow_unknown_table():
 
 def test_disallow_unknown_columns_in_select():
     r = _router()
-    # articles에는 content, law_name, article_number, id만 허용
+    # articles?�는 content, law_name, article_number, id�??�용
     assert r._is_sql_safe("SELECT content, id FROM articles LIMIT 5") is True
     assert r._is_sql_safe("SELECT content, hacker FROM articles LIMIT 5") is False
 
@@ -47,7 +47,7 @@ def test_disallow_unknown_columns_in_where():
 def test_limit_required_and_capped():
     r = _router()
     assert r._is_sql_safe("SELECT content FROM articles WHERE article_number=1 LIMIT 5") is True
-    # LIMIT 미존재 → 안전성 실패
+    # LIMIT 미존?????�전???�패
     assert r._is_sql_safe("SELECT content FROM articles WHERE article_number=1") is False
-    # 100 초과 → 안전성 실패
+    # 100 초과 ???�전???�패
     assert r._is_sql_safe("SELECT content FROM articles WHERE article_number=1 LIMIT 1000") is False

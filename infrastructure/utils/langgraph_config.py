@@ -84,6 +84,9 @@ class LangGraphConfig:
     # LLM 기반 복잡도 분류 설정
     use_llm_for_complexity: bool = True  # LLM 기반 복잡도 분류 활성화
     complexity_llm_model: str = "fast"  # "fast" | "main" | "disabled"
+    
+    # Agentic AI 모드 설정
+    use_agentic_mode: bool = False  # Agentic AI 모드 활성화 (Tool Use/Function Calling)
 
     @classmethod
     def from_env(cls) -> 'LangGraphConfig':
@@ -152,8 +155,11 @@ class LangGraphConfig:
         # LLM 기반 복잡도 분류 설정
         config.use_llm_for_complexity = os.getenv("USE_LLM_FOR_COMPLEXITY", "true").lower() == "true"
         config.complexity_llm_model = os.getenv("COMPLEXITY_LLM_MODEL", "fast")
+        
+        # Agentic AI 모드 설정
+        config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}")
+        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
         return config
 
     def validate(self) -> List[str]:

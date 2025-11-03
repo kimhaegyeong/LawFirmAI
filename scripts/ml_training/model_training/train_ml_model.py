@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-머신러닝 모델 훈련 스크립트
-조문 분류를 위한 RandomForest 모델 훈련 및 검증
+머신?�닝 모델 ?�련 ?�크립트
+조문 분류�??�한 RandomForest 모델 ?�련 �?검�?
 """
 
 import json
@@ -18,19 +18,19 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MLModelTrainer:
-    """머신러닝 모델 훈련 클래스"""
+    """머신?�닝 모델 ?�련 ?�래??""
     
     def __init__(self, training_data_path: str):
         """
-        초기화
+        초기??
         
         Args:
-            training_data_path: 훈련 데이터 파일 경로
+            training_data_path: ?�련 ?�이???�일 경로
         """
         self.training_data_path = Path(training_data_path)
         self.model = None
@@ -38,7 +38,7 @@ class MLModelTrainer:
         self.feature_names = None
         
     def load_training_data(self) -> Tuple[List[Dict[str, Any]], List[int]]:
-        """훈련 데이터 로드 및 전처리"""
+        """?�련 ?�이??로드 �??�처�?""
         logger.info(f"Loading training data from {self.training_data_path}")
         
         with open(self.training_data_path, 'r', encoding='utf-8') as f:
@@ -46,7 +46,7 @@ class MLModelTrainer:
         
         logger.info(f"Loaded {len(training_samples)} training samples")
         
-        # 특성과 레이블 분리
+        # ?�성�??�이�?분리
         X_features = []
         X_text = []
         y = []
@@ -54,7 +54,7 @@ class MLModelTrainer:
         for sample in training_samples:
             features = sample['features']
             
-            # 수치형 특성 추출
+            # ?�치???�성 추출
             numerical_features = [
                 features['position_ratio'],
                 features['is_at_start'],
@@ -76,11 +76,11 @@ class MLModelTrainer:
             
             X_features.append(numerical_features)
             
-            # 텍스트 특성 (문맥 정보)
+            # ?�스???�성 (문맥 ?�보)
             context_text = f"{sample.get('article_number', '')} {sample.get('article_title', '')}"
             X_text.append(context_text)
             
-            # 레이블 (real_article: 1, reference: 0)
+            # ?�이�?(real_article: 1, reference: 0)
             label = 1 if sample['label'] == 'real_article' else 0
             y.append(label)
         
@@ -90,24 +90,24 @@ class MLModelTrainer:
         return X_features, X_text, y
     
     def prepare_features(self, X_features: List[List[float]], X_text: List[str]) -> np.ndarray:
-        """특성 벡터 준비"""
+        """?�성 벡터 준�?""
         logger.info("Preparing feature vectors...")
         
-        # 수치형 특성을 numpy 배열로 변환
+        # ?�치???�성??numpy 배열�?변??
         numerical_features = np.array(X_features)
         
-        # 텍스트 특성을 TF-IDF로 변환
+        # ?�스???�성??TF-IDF�?변??
         self.vectorizer = TfidfVectorizer(
             max_features=1000,
             ngram_range=(1, 2),
-            stop_words=None,  # 한국어는 불용어 제거하지 않음
+            stop_words=None,  # ?�국?�는 불용???�거?��? ?�음
             min_df=2,
             max_df=0.95
         )
         
         text_features = self.vectorizer.fit_transform(X_text)
         
-        # 수치형 특성과 텍스트 특성 결합
+        # ?�치???�성�??�스???�성 결합
         combined_features = np.hstack([
             numerical_features,
             text_features.toarray()
@@ -115,7 +115,7 @@ class MLModelTrainer:
         
         logger.info(f"Combined feature shape: {combined_features.shape}")
         
-        # 특성 이름 저장
+        # ?�성 ?�름 ?�??
         numerical_feature_names = [
             'position_ratio', 'is_at_start', 'is_at_end', 'has_sentence_end',
             'has_reference_pattern', 'article_number', 'is_supplementary',
@@ -130,10 +130,10 @@ class MLModelTrainer:
         return combined_features
     
     def train_model(self, X: np.ndarray, y: List[int]) -> None:
-        """모델 훈련"""
+        """모델 ?�련"""
         logger.info("Training RandomForest model...")
         
-        # 훈련/검증 데이터 분할
+        # ?�련/검�??�이??분할
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
@@ -141,7 +141,7 @@ class MLModelTrainer:
         logger.info(f"Training set: {len(X_train)} samples")
         logger.info(f"Test set: {len(X_test)} samples")
         
-        # 하이퍼파라미터 튜닝
+        # ?�이?�파?��????�닝
         param_grid = {
             'n_estimators': [100, 200],
             'max_depth': [10, 20, None],
@@ -153,7 +153,7 @@ class MLModelTrainer:
         logger.info("Performing hyperparameter tuning...")
         rf = RandomForestClassifier(random_state=42, n_jobs=-1)
         
-        # 그리드 서치 (시간 단축을 위해 제한적)
+        # 그리???�치 (?�간 ?�축???�해 ?�한??
         grid_search = GridSearchCV(
             rf, param_grid, cv=3, scoring='accuracy', n_jobs=-1, verbose=1
         )
@@ -165,33 +165,33 @@ class MLModelTrainer:
         logger.info(f"Best parameters: {grid_search.best_params_}")
         logger.info(f"Best cross-validation score: {grid_search.best_score_:.4f}")
         
-        # 모델 평가
+        # 모델 ?��?
         y_pred = self.model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
         
         logger.info(f"Test accuracy: {accuracy:.4f}")
         
-        # 상세 평가 리포트
+        # ?�세 ?��? 리포??
         print("\n=== Classification Report ===")
         print(classification_report(y_test, y_pred, target_names=['Reference', 'Real Article']))
         
-        # 혼동 행렬
+        # ?�동 ?�렬
         cm = confusion_matrix(y_test, y_pred)
         print("\n=== Confusion Matrix ===")
         print(cm)
         
-        # 특성 중요도 분석
+        # ?�성 중요??분석
         self._analyze_feature_importance(X_test, y_test)
         
         return X_test, y_test, y_pred
     
     def _analyze_feature_importance(self, X_test: np.ndarray, y_test: List[int]) -> None:
-        """특성 중요도 분석"""
+        """?�성 중요??분석"""
         logger.info("Analyzing feature importance...")
         
         feature_importance = self.model.feature_importances_
         
-        # 상위 20개 특성 중요도 출력
+        # ?�위 20�??�성 중요??출력
         importance_df = pd.DataFrame({
             'feature': self.feature_names,
             'importance': feature_importance
@@ -200,7 +200,7 @@ class MLModelTrainer:
         print("\n=== Top 20 Feature Importance ===")
         print(importance_df.head(20))
         
-        # 특성 중요도 시각화
+        # ?�성 중요???�각??
         plt.figure(figsize=(12, 8))
         top_features = importance_df.head(15)
         sns.barplot(data=top_features, x='importance', y='feature')
@@ -208,7 +208,7 @@ class MLModelTrainer:
         plt.xlabel('Importance')
         plt.tight_layout()
         
-        # 그래프 저장
+        # 그래???�??
         output_dir = Path("models")
         output_dir.mkdir(exist_ok=True)
         plt.savefig(output_dir / "feature_importance.png", dpi=300, bbox_inches='tight')
@@ -217,11 +217,11 @@ class MLModelTrainer:
         logger.info("Feature importance plot saved to models/feature_importance.png")
     
     def save_model(self, model_path: str) -> None:
-        """모델 저장"""
+        """모델 ?�??""
         output_path = Path(model_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # 모델과 벡터라이저를 함께 저장
+        # 모델�?벡터?�이?��??�께 ?�??
         model_data = {
             'model': self.model,
             'vectorizer': self.vectorizer,
@@ -232,7 +232,7 @@ class MLModelTrainer:
         logger.info(f"Model saved to {output_path}")
     
     def cross_validate(self, X: np.ndarray, y: List[int]) -> None:
-        """교차 검증 수행"""
+        """교차 검�??�행"""
         logger.info("Performing cross-validation...")
         
         cv_scores = cross_val_score(
@@ -244,26 +244,26 @@ class MLModelTrainer:
 
 
 def main():
-    """메인 함수"""
-    # 훈련 데이터 경로
+    """메인 ?�수"""
+    # ?�련 ?�이??경로
     training_data_path = "data/training/article_classification_training_data.json"
     
-    # 훈련기 생성
+    # ?�련�??�성
     trainer = MLModelTrainer(training_data_path)
     
-    # 훈련 데이터 로드
+    # ?�련 ?�이??로드
     X_features, X_text, y = trainer.load_training_data()
     
-    # 특성 준비
+    # ?�성 준�?
     X = trainer.prepare_features(X_features, X_text)
     
-    # 모델 훈련
+    # 모델 ?�련
     X_test, y_test, y_pred = trainer.train_model(X, y)
     
-    # 교차 검증
+    # 교차 검�?
     trainer.cross_validate(X, y)
     
-    # 모델 저장
+    # 모델 ?�??
     model_path = "models/article_classifier.pkl"
     trainer.save_model(model_path)
     

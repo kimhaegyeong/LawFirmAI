@@ -216,8 +216,8 @@ class LawDataValidator:
             'has_text': bool(full_text),
             'text_length': len(full_text),
             'word_count': len(full_text.split()) if full_text else 0,
-            'has_articles': '제' in full_text if full_text else False,
-            'has_legal_terms': any(term in full_text for term in ['법률', '시행령', '시행규칙']) if full_text else False,
+            'has_articles': '?? in full_text if full_text else False,
+            'has_legal_terms': any(term in full_text for term in ['법률', '?�행??, '?�행규칙']) if full_text else False,
             'text_quality_score': min(1.0, len(full_text) / 1000) if full_text else 0.0  # Normalize to 0-1
         }
     
@@ -234,7 +234,7 @@ class LawDataValidator:
         for article in articles:
             if isinstance(article, dict):
                 article_num = article.get('article_number', '')
-                if article_num and article_num.startswith('제') and article_num.endswith('조'):
+                if article_num and article_num.startswith('??) and article_num.endswith('�?):
                     article_numbers.append(article_num)
                     valid_articles += 1
         
@@ -242,7 +242,7 @@ class LawDataValidator:
         sequential_score = 0.0
         if len(article_numbers) > 1:
             try:
-                nums = [int(num.replace('제', '').replace('조', '')) for num in article_numbers]
+                nums = [int(num.replace('??, '').replace('�?, '')) for num in article_numbers]
                 nums.sort()
                 expected = list(range(nums[0], nums[0] + len(nums)))
                 sequential_score = 1.0 if nums == expected else 0.5

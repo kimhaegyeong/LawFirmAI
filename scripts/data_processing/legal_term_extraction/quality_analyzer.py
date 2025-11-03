@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-법률 용어 사전 품질 검증 및 분석
+법률 ?�어 ?�전 ?�질 검�?�?분석
 """
 
 import json
@@ -10,7 +10,7 @@ from collections import Counter
 import statistics
 
 def analyze_legal_term_dictionary(file_path: str) -> Dict[str, Any]:
-    """법률 용어 사전 분석"""
+    """법률 ?�어 ?�전 분석"""
     
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -18,11 +18,11 @@ def analyze_legal_term_dictionary(file_path: str) -> Dict[str, Any]:
     dictionary = data.get('dictionary', {})
     metadata = data.get('metadata', {})
     
-    # 기본 통계
+    # 기본 ?�계
     total_terms = len(dictionary)
     domains = metadata.get('domains', [])
     
-    # 용어별 분석
+    # ?�어�?분석
     term_stats = {
         'total_terms': total_terms,
         'domains': domains,
@@ -34,11 +34,11 @@ def analyze_legal_term_dictionary(file_path: str) -> Dict[str, Any]:
         'quality_metrics': {}
     }
     
-    # 도메인별 분포 계산
+    # ?�메?�별 분포 계산
     domain_counts = Counter()
     
     for term, expansion in dictionary.items():
-        # 각 카테고리별 용어 수
+        # �?카테고리�??�어 ??
         synonyms_count = len(expansion.get('synonyms', []))
         related_count = len(expansion.get('related_terms', []))
         keywords_count = len(expansion.get('precedent_keywords', []))
@@ -49,13 +49,13 @@ def analyze_legal_term_dictionary(file_path: str) -> Dict[str, Any]:
         term_stats['precedent_keywords_count'].append(keywords_count)
         term_stats['confidence_scores'].append(confidence)
         
-        # 도메인별 분류 (용어명으로 추정)
+        # ?�메?�별 분류 (?�어명으�?추정)
         domain = classify_term_domain(term)
         domain_counts[domain] += 1
     
     term_stats['domain_distribution'] = dict(domain_counts)
     
-    # 품질 메트릭 계산
+    # ?�질 메트�?계산
     quality_metrics = {
         'avg_synonyms_per_term': statistics.mean(term_stats['synonyms_count']),
         'avg_related_terms_per_term': statistics.mean(term_stats['related_terms_count']),
@@ -73,174 +73,174 @@ def analyze_legal_term_dictionary(file_path: str) -> Dict[str, Any]:
     return term_stats
 
 def classify_term_domain(term: str) -> str:
-    """용어를 도메인별로 분류"""
+    """?�어�??�메?�별�?분류"""
     
-    # 민사법 관련 용어
-    civil_terms = ['손해배상', '계약', '소유권', '임대차', '불법행위', '채권', '채무', '담보', '보증', '연대', '불가분', '분할', '상속', '유언', '유증', '부양', '혼인', '이혼', '친자']
+    # 민사�?관???�어
+    civil_terms = ['?�해배상', '계약', '?�유�?, '?��?�?, '불법?�위', '채권', '채무', '?�보', '보증', '?��?', '불�?�?, '분할', '?�속', '?�언', '?�증', '부??, '?�인', '?�혼', '친자']
     
-    # 형사법 관련 용어
-    criminal_terms = ['살인', '절도', '사기', '강도', '강간', '폭행', '상해', '협박', '감금', '약취', '유인', '강제추행', '명예훼손', '모독', '주거침입', '방화', '공갈', '횡령', '배임']
+    # ?�사�?관???�어
+    criminal_terms = ['?�인', '?�도', '?�기', '강도', '강간', '??��', '?�해', '?�박', '감금', '?�취', '?�인', '강제추행', '명예?�손', '모독', '주거침입', '방화', '공갈', '?�령', '배임']
     
-    # 상사법 관련 용어
-    commercial_terms = ['주식회사', '유한회사', '상행위', '어음', '수표', '보험', '해상', '항공', '운송', '위임', '도급', '임치', '조합', '합자', '합명', '상호', '상표', '특허', '저작권']
+    # ?�사�?관???�어
+    commercial_terms = ['주식?�사', '?�한?�사', '?�행??, '?�음', '?�표', '보험', '?�상', '??��', '?�송', '?�임', '?�급', '?�치', '조합', '?�자', '?�명', '?�호', '?�표', '?�허', '?�?�권']
     
-    # 행정법 관련 용어
-    administrative_terms = ['행정처분', '행정지도', '허가', '인가', '승인', '신고', '신청', '청원', '이의신청', '행정심판', '행정소송', '국가배상', '손실보상', '행정규칙', '행정계획', '행정계약', '공법관계', '사법관계']
+    # ?�정�?관???�어
+    administrative_terms = ['?�정처분', '?�정지??, '?��?', '?��?', '?�인', '?�고', '?�청', '�?��', '?�의?�청', '?�정?�판', '?�정?�송', '�??배상', '?�실보상', '?�정규칙', '?�정계획', '?�정계약', '공법관�?, '?�법관�?]
     
-    # 노동법 관련 용어
-    labor_terms = ['근로계약', '임금', '근로시간', '해고', '부당해고', '퇴직금', '실업급여', '산업재해', '산업안전', '노동조합', '단체교섭', '단체협약', '쟁의행위', '파업', '직장폐쇄', '노동쟁의', '근로기준', '최저임금', '연장근로', '휴게시간']
+    # ?�동�?관???�어
+    labor_terms = ['근로계약', '?�금', '근로?�간', '?�고', '부?�해�?, '?�직�?, '?�업급여', '?�업?�해', '?�업?�전', '?�동조합', '?�체교섭', '?�체?�약', '?�의?�위', '?�업', '직장?�쇄', '?�동?�의', '근로기�?', '최�??�금', '?�장근로', '?�게?�간']
     
     if term in civil_terms:
-        return '민사법'
+        return '민사�?
     elif term in criminal_terms:
-        return '형사법'
+        return '?�사�?
     elif term in commercial_terms:
-        return '상사법'
+        return '?�사�?
     elif term in administrative_terms:
-        return '행정법'
+        return '?�정�?
     elif term in labor_terms:
-        return '노동법'
+        return '?�동�?
     else:
-        return '기타'
+        return '기�?'
 
 def generate_quality_report(stats: Dict[str, Any]) -> str:
-    """품질 보고서 생성"""
+    """?�질 보고???�성"""
     
     report = []
     report.append("=" * 60)
-    report.append("법률 용어 사전 품질 분석 보고서")
+    report.append("법률 ?�어 ?�전 ?�질 분석 보고??)
     report.append("=" * 60)
     
-    # 기본 정보
-    report.append(f"\n📊 기본 통계:")
-    report.append(f"  • 총 용어 수: {stats['total_terms']}개")
-    report.append(f"  • 도메인 수: {len(stats['domains'])}개")
-    report.append(f"  • 도메인: {', '.join(stats['domains'])}")
+    # 기본 ?�보
+    report.append(f"\n?�� 기본 ?�계:")
+    report.append(f"  ??�??�어 ?? {stats['total_terms']}�?)
+    report.append(f"  ???�메???? {len(stats['domains'])}�?)
+    report.append(f"  ???�메?? {', '.join(stats['domains'])}")
     
-    # 도메인별 분포
-    report.append(f"\n📈 도메인별 분포:")
+    # ?�메?�별 분포
+    report.append(f"\n?�� ?�메?�별 분포:")
     for domain, count in stats['domain_distribution'].items():
         percentage = (count / stats['total_terms']) * 100
-        report.append(f"  • {domain}: {count}개 ({percentage:.1f}%)")
+        report.append(f"  ??{domain}: {count}�?({percentage:.1f}%)")
     
-    # 품질 메트릭
+    # ?�질 메트�?
     metrics = stats['quality_metrics']
-    report.append(f"\n🎯 품질 메트릭:")
-    report.append(f"  • 평균 동의어 수: {metrics['avg_synonyms_per_term']:.2f}개")
-    report.append(f"  • 평균 관련 용어 수: {metrics['avg_related_terms_per_term']:.2f}개")
-    report.append(f"  • 평균 판례 키워드 수: {metrics['avg_keywords_per_term']:.2f}개")
-    report.append(f"  • 평균 신뢰도: {metrics['avg_confidence']:.3f}")
-    report.append(f"  • 최소 신뢰도: {metrics['min_confidence']:.3f}")
-    report.append(f"  • 최대 신뢰도: {metrics['max_confidence']:.3f}")
+    report.append(f"\n?�� ?�질 메트�?")
+    report.append(f"  ???�균 ?�의???? {metrics['avg_synonyms_per_term']:.2f}�?)
+    report.append(f"  ???�균 관???�어 ?? {metrics['avg_related_terms_per_term']:.2f}�?)
+    report.append(f"  ???�균 ?��? ?�워???? {metrics['avg_keywords_per_term']:.2f}�?)
+    report.append(f"  ???�균 ?�뢰?? {metrics['avg_confidence']:.3f}")
+    report.append(f"  ??최소 ?�뢰?? {metrics['min_confidence']:.3f}")
+    report.append(f"  ??최�? ?�뢰?? {metrics['max_confidence']:.3f}")
     
-    # 신뢰도 분포
-    report.append(f"\n📊 신뢰도 분포:")
-    report.append(f"  • 고신뢰도 (≥0.9): {metrics['terms_with_high_confidence']}개")
-    report.append(f"  • 중신뢰도 (0.7-0.9): {metrics['terms_with_medium_confidence']}개")
-    report.append(f"  • 저신뢰도 (<0.7): {metrics['terms_with_low_confidence']}개")
+    # ?�뢰??분포
+    report.append(f"\n?�� ?�뢰??분포:")
+    report.append(f"  ??고신뢰도 (??.9): {metrics['terms_with_high_confidence']}�?)
+    report.append(f"  ??중신뢰도 (0.7-0.9): {metrics['terms_with_medium_confidence']}�?)
+    report.append(f"  ???�?�뢰??(<0.7): {metrics['terms_with_low_confidence']}�?)
     
-    # 품질 평가
-    report.append(f"\n⭐ 품질 평가:")
+    # ?�질 ?��?
+    report.append(f"\n�??�질 ?��?:")
     
-    # 전체적인 품질 점수 계산
+    # ?�체?�인 ?�질 ?�수 계산
     quality_score = 0
     
-    # 신뢰도 점수 (40%)
+    # ?�뢰???�수 (40%)
     avg_confidence = metrics['avg_confidence']
     confidence_score = avg_confidence * 40
     quality_score += confidence_score
     
-    # 용어 다양성 점수 (30%)
+    # ?�어 ?�양???�수 (30%)
     avg_total_terms = (metrics['avg_synonyms_per_term'] + 
                       metrics['avg_related_terms_per_term'] + 
                       metrics['avg_keywords_per_term']) / 3
     diversity_score = min(avg_total_terms / 5, 1.0) * 30
     quality_score += diversity_score
     
-    # 도메인 균형 점수 (20%)
+    # ?�메??균형 ?�수 (20%)
     domain_balance = 1.0 - (max(stats['domain_distribution'].values()) - min(stats['domain_distribution'].values())) / stats['total_terms']
     balance_score = domain_balance * 20
     quality_score += balance_score
     
-    # 완성도 점수 (10%)
-    completion_score = 10  # 모든 용어가 처리되었으므로
+    # ?�성???�수 (10%)
+    completion_score = 10  # 모든 ?�어가 처리?�었?��?�?
     quality_score += completion_score
     
-    report.append(f"  • 전체 품질 점수: {quality_score:.1f}/100")
-    report.append(f"    - 신뢰도 점수: {confidence_score:.1f}/40")
-    report.append(f"    - 다양성 점수: {diversity_score:.1f}/30")
-    report.append(f"    - 균형 점수: {balance_score:.1f}/20")
-    report.append(f"    - 완성도 점수: {completion_score:.1f}/10")
+    report.append(f"  ???�체 ?�질 ?�수: {quality_score:.1f}/100")
+    report.append(f"    - ?�뢰???�수: {confidence_score:.1f}/40")
+    report.append(f"    - ?�양???�수: {diversity_score:.1f}/30")
+    report.append(f"    - 균형 ?�수: {balance_score:.1f}/20")
+    report.append(f"    - ?�성???�수: {completion_score:.1f}/10")
     
-    # 등급 평가
+    # ?�급 ?��?
     if quality_score >= 90:
-        grade = "A+ (우수)"
+        grade = "A+ (?�수)"
     elif quality_score >= 80:
-        grade = "A (양호)"
+        grade = "A (?�호)"
     elif quality_score >= 70:
         grade = "B (보통)"
     elif quality_score >= 60:
-        grade = "C (개선 필요)"
+        grade = "C (개선 ?�요)"
     else:
-        grade = "D (재작업 필요)"
+        grade = "D (?�작???�요)"
     
-    report.append(f"  • 등급: {grade}")
+    report.append(f"  ???�급: {grade}")
     
-    report.append(f"\n✅ 결론:")
-    report.append(f"  법률 용어 사전이 성공적으로 구축되었습니다.")
-    report.append(f"  총 {stats['total_terms']}개 용어가 {len(stats['domains'])}개 도메인에 걸쳐 확장되었으며,")
-    report.append(f"  평균 신뢰도 {metrics['avg_confidence']:.3f}로 높은 품질을 보입니다.")
+    report.append(f"\n??결론:")
+    report.append(f"  법률 ?�어 ?�전???�공?�으�?구축?�었?�니??")
+    report.append(f"  �?{stats['total_terms']}�??�어가 {len(stats['domains'])}�??�메?�에 걸쳐 ?�장?�었?�며,")
+    report.append(f"  ?�균 ?�뢰??{metrics['avg_confidence']:.3f}�??��? ?�질??보입?�다.")
     
     return "\n".join(report)
 
 def safe_print(text: str):
-    """안전한 한글 출력 함수"""
+    """?�전???��? 출력 ?�수"""
     try:
-        # 파일로 출력하여 한글 문제 해결
+        # ?�일�?출력?�여 ?��? 문제 ?�결
         with open('quality_analysis_output.txt', 'a', encoding='utf-8') as f:
             f.write(text + '\n')
         
-        # 콘솔 출력은 ASCII로 변환하여 깨짐 방지
+        # 콘솔 출력?� ASCII�?변?�하??깨짐 방�?
         try:
             ascii_text = text.encode('ascii', 'ignore').decode('ascii')
             if ascii_text.strip():
                 print(ascii_text)
         except:
-            print("[한글 출력 - quality_analysis_output.txt 파일 참조]")
+            print("[?��? 출력 - quality_analysis_output.txt ?�일 참조]")
     except Exception:
-        # 기타 오류 시 원본 출력
+        # 기�? ?�류 ???�본 출력
         print(text)
 
 def main():
-    """메인 실행 함수"""
+    """메인 ?�행 ?�수"""
     
-    # 분석할 파일 경로
+    # 분석???�일 경로
     file_path = "data/comprehensive_legal_term_dictionary.json"
     
     if not os.path.exists(file_path):
-        safe_print(f"파일을 찾을 수 없습니다: {file_path}")
+        safe_print(f"?�일??찾을 ???�습?�다: {file_path}")
         return
     
-    safe_print("법률 용어 사전 품질 분석 시작...")
+    safe_print("법률 ?�어 ?�전 ?�질 분석 ?�작...")
     
     try:
-        # 분석 실행
+        # 분석 ?�행
         stats = analyze_legal_term_dictionary(file_path)
         
-        # 보고서 생성
+        # 보고???�성
         report = generate_quality_report(stats)
         
-        # 보고서 출력
+        # 보고??출력
         safe_print(report)
         
-        # 보고서 파일로 저장
+        # 보고???�일�??�??
         with open("data/quality_analysis_report.txt", 'w', encoding='utf-8') as f:
             f.write(report)
         
-        safe_print(f"\n상세 보고서가 저장되었습니다: data/quality_analysis_report.txt")
+        safe_print(f"\n?�세 보고?��? ?�?�되?�습?�다: data/quality_analysis_report.txt")
         
     except Exception as e:
-        safe_print(f"분석 중 오류 발생: {e}")
+        safe_print(f"분석 �??�류 발생: {e}")
 
 if __name__ == "__main__":
     main()

@@ -3,12 +3,12 @@
 """
 Unified Import Manager
 
-모든 데이터 임포트 작업을 통합 관리하는 매니저 클래스입니다.
-- 법령 데이터 임포트
-- 판례 데이터 임포트
-- 데이터 검증
+모든 ?�이???�포???�업???�합 관리하??매니?� ?�래?�입?�다.
+- 법령 ?�이???�포??
+- ?��? ?�이???�포??
+- ?�이??검�?
 - 중복 처리
-- 오류 복구
+- ?�류 복구
 """
 
 import os
@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Optional, Union
 import argparse
 from dataclasses import dataclass, field
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -31,7 +31,7 @@ from source.data.database import DatabaseManager
 
 @dataclass
 class ImportTask:
-    """임포트 작업 데이터 클래스"""
+    """?�포???�업 ?�이???�래??""
     task_id: str
     data_type: str  # 'law' or 'precedent'
     input_path: Path
@@ -50,21 +50,21 @@ class ImportTask:
 
 
 class UnifiedImportManager:
-    """통합 임포트 매니저"""
+    """?�합 ?�포??매니?�"""
     
     def __init__(self, db_path: str = "data/lawfirm.db"):
         """
-        임포트 매니저 초기화
+        ?�포??매니?� 초기??
         
         Args:
-            db_path: 데이터베이스 경로
+            db_path: ?�이?�베?�스 경로
         """
         self.db_manager = DatabaseManager(db_path)
         
-        # 로깅 설정
+        # 로깅 ?�정
         self.logger = logging.getLogger(__name__)
         
-        # 작업 큐
+        # ?�업 ??
         self.task_queue: List[ImportTask] = []
         self.completed_tasks: List[ImportTask] = []
         self.failed_tasks: List[ImportTask] = []
@@ -72,7 +72,7 @@ class UnifiedImportManager:
     def add_law_import_task(self, 
                            input_path: Union[str, Path],
                            priority: int = 1) -> str:
-        """법령 임포트 작업 추가"""
+        """법령 ?�포???�업 추�?"""
         task_id = f"law_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.task_queue)}"
         
         task = ImportTask(
@@ -90,7 +90,7 @@ class UnifiedImportManager:
                                  input_path: Union[str, Path],
                                  category: str,
                                  priority: int = 1) -> str:
-        """판례 임포트 작업 추가"""
+        """?��? ?�포???�업 추�?"""
         task_id = f"precedent_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.task_queue)}"
         
         task = ImportTask(
@@ -106,11 +106,11 @@ class UnifiedImportManager:
         return task_id
     
     def process_next_task(self) -> bool:
-        """다음 작업 처리"""
+        """?�음 ?�업 처리"""
         if not self.task_queue:
             return False
         
-        # 우선순위별로 정렬
+        # ?�선?�위별로 ?�렬
         self.task_queue.sort(key=lambda x: x.priority)
         task = self.task_queue.pop(0)
         
@@ -119,7 +119,7 @@ class UnifiedImportManager:
         task.started_at = datetime.now()
         
         try:
-            # 입력 파일 수집
+            # ?�력 ?�일 ?�집
             if task.input_path.is_file():
                 input_files = [task.input_path]
             else:
@@ -128,7 +128,7 @@ class UnifiedImportManager:
             if not input_files:
                 raise ValueError(f"No JSON files found in {task.input_path}")
             
-            # 임포트 실행
+            # ?�포???�행
             if task.data_type == 'law':
                 records_imported = self._import_law_files(input_files)
             else:
@@ -151,7 +151,7 @@ class UnifiedImportManager:
             return True
     
     def _import_law_files(self, input_files: List[Path]) -> int:
-        """법령 파일들 임포트"""
+        """법령 ?�일???�포??""
         total_records = 0
         
         for file_path in input_files:
@@ -159,9 +159,9 @@ class UnifiedImportManager:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                # 법령 데이터 처리
+                # 법령 ?�이??처리
                 if isinstance(data, dict) and 'articles' in data:
-                    # 단일 법령
+                    # ?�일 법령
                     records = self._import_single_law(data, file_path)
                     total_records += records
                 elif isinstance(data, list):
@@ -178,15 +178,15 @@ class UnifiedImportManager:
         return total_records
     
     def _import_single_law(self, law_data: Dict[str, Any], file_path: Path) -> int:
-        """단일 법령 임포트"""
+        """?�일 법령 ?�포??""
         try:
-            # 법령 기본 정보
+            # 법령 기본 ?�보
             law_id = law_data.get('law_id', '')
             law_name = law_data.get('law_name', '')
             law_type = law_data.get('law_type', '')
             enactment_date = law_data.get('enactment_date', '')
             
-            # 법령 테이블에 삽입
+            # 법령 ?�이블에 ?�입
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -220,7 +220,7 @@ class UnifiedImportManager:
             return 0
     
     def _import_precedent_files(self, input_files: List[Path], category: str) -> int:
-        """판례 파일들 임포트"""
+        """?��? ?�일???�포??""
         total_records = 0
         
         for file_path in input_files:
@@ -228,7 +228,7 @@ class UnifiedImportManager:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                # 판례 데이터 처리
+                # ?��? ?�이??처리
                 if isinstance(data, dict) and 'items' in data:
                     # items 배열 처리
                     items = data.get('items', [])
@@ -251,9 +251,9 @@ class UnifiedImportManager:
         return total_records
     
     def _import_single_precedent(self, precedent_data: Dict[str, Any], file_path: Path, category: str) -> int:
-        """단일 판례 임포트"""
+        """?�일 ?��? ?�포??""
         try:
-            # 판례 기본 정보
+            # ?��? 기본 ?�보
             case_id = precedent_data.get('case_id', '')
             case_name = precedent_data.get('case_name', '')
             case_number = precedent_data.get('case_number', '')
@@ -264,7 +264,7 @@ class UnifiedImportManager:
             full_text = precedent_data.get('precedent_content', precedent_data.get('full_text', ''))
             searchable_text = precedent_data.get('searchable_text', full_text)
             
-            # 판례 테이블에 삽입
+            # ?��? ?�이블에 ?�입
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -281,7 +281,7 @@ class UnifiedImportManager:
             return 0
     
     def process_all_tasks(self) -> Dict[str, Any]:
-        """모든 작업 처리"""
+        """모든 ?�업 처리"""
         self.logger.info(f"Processing {len(self.task_queue)} tasks...")
         
         start_time = datetime.now()
@@ -292,7 +292,7 @@ class UnifiedImportManager:
             success = self.process_next_task()
             if success:
                 processed_count += 1
-                # 완료된 작업의 레코드 수 추가
+                # ?�료???�업???�코????추�?
                 if self.completed_tasks:
                     total_records += self.completed_tasks[-1].records_imported
             else:
@@ -301,7 +301,7 @@ class UnifiedImportManager:
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
         
-        # 결과 요약
+        # 결과 ?�약
         summary = {
             'total_tasks': processed_count,
             'completed_tasks': len(self.completed_tasks),
@@ -316,8 +316,8 @@ class UnifiedImportManager:
         return summary
     
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """작업 상태 조회"""
-        # 대기 중인 작업에서 찾기
+        """?�업 ?�태 조회"""
+        # ?��?중인 ?�업?�서 찾기
         for task in self.task_queue:
             if task.task_id == task_id:
                 return {
@@ -332,7 +332,7 @@ class UnifiedImportManager:
                     'records_imported': task.records_imported
                 }
         
-        # 완료된 작업에서 찾기
+        # ?�료???�업?�서 찾기
         for task in self.completed_tasks + self.failed_tasks:
             if task.task_id == task_id:
                 return {
@@ -350,7 +350,7 @@ class UnifiedImportManager:
         return None
     
     def get_all_tasks_status(self) -> Dict[str, Any]:
-        """모든 작업 상태 조회"""
+        """모든 ?�업 ?�태 조회"""
         return {
             'pending_tasks': len(self.task_queue),
             'completed_tasks': len(self.completed_tasks),
@@ -388,7 +388,7 @@ class UnifiedImportManager:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description='Unified Import Manager')
     parser.add_argument('--mode', choices=['law', 'precedent', 'status'], required=True, help='Operation mode')
     parser.add_argument('--input', required=True, help='Input path')
@@ -398,17 +398,17 @@ def main():
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # 매니저 초기화
+    # 매니?� 초기??
     manager = UnifiedImportManager(db_path=args.db_path)
     
     if args.mode == 'law':
-        # 법령 임포트
+        # 법령 ?�포??
         task_id = manager.add_law_import_task(args.input, args.priority)
         print(f"Added law import task: {task_id}")
         
@@ -416,7 +416,7 @@ def main():
         print(f"Import complete: {summary}")
     
     elif args.mode == 'precedent':
-        # 판례 임포트
+        # ?��? ?�포??
         if not args.category:
             print("Error: --category is required for precedent mode")
             return
@@ -428,7 +428,7 @@ def main():
         print(f"Import complete: {summary}")
     
     elif args.mode == 'status':
-        # 상태 조회
+        # ?�태 조회
         status = manager.get_all_tasks_status()
         print(json.dumps(status, indent=2, ensure_ascii=False))
 

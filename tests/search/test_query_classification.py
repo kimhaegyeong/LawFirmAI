@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-질의 분류 테스트 스크립트
-실제 법률 질의를 대상으로 데이터베이스 기반 질문 유형 매핑 시스템 테스트
-classify_question_type 메서드 테스트 포함
+질의 분류 ?�스???�크립트
+?�제 법률 질의�??�?�으�??�이?�베?�스 기반 질문 ?�형 매핑 ?�스???�스??
+classify_question_type 메서???�스???�함
 """
 
 import os
@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any, Dict, List, Tuple
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from source.services.answer_structure_enhancer import (
@@ -22,240 +22,240 @@ from source.services.database_keyword_manager import DatabaseKeywordManager
 
 
 def get_real_world_queries() -> List[Dict[str, Any]]:
-    """실제 법률 질의 데이터"""
+    """?�제 법률 질의 ?�이??""
     return [
-        # 판례 검색 관련
+        # ?��? 검??관??
         {
-            "query": "부동산 매매 계약 해지 시 위약금 관련 대법원 판례를 찾아주세요",
+            "query": "부?�산 매매 계약 ?��? ???�약�?관???�법원 ?��?�?찾아주세??,
             "expected_type": "precedent_search",
-            "category": "판례 검색",
+            "category": "?��? 검??,
             "difficulty": "high"
         },
         {
-            "query": "이혼 시 재산분할 관련 유사 판례가 있나요?",
+            "query": "?�혼 ???�산분할 관???�사 ?��?가 ?�나??",
             "expected_type": "precedent_search",
-            "category": "판례 검색",
+            "category": "?��? 검??,
             "difficulty": "medium"
         },
         {
-            "query": "근로자 해고 관련 최근 판례를 알려주세요",
+            "query": "근로???�고 관??최근 ?��?�??�려주세??,
             "expected_type": "precedent_search",
-            "category": "판례 검색",
+            "category": "?��? 검??,
             "difficulty": "medium"
         },
 
-        # 계약서 검토 관련
+        # 계약??검??관??
         {
-            "query": "부동산 매매 계약서의 위약금 조항을 검토해주세요",
+            "query": "부?�산 매매 계약?�의 ?�약�?조항??검?�해주세??,
             "expected_type": "contract_review",
-            "category": "계약서 검토",
+            "category": "계약??검??,
             "difficulty": "high"
         },
         {
-            "query": "임대차 계약서에서 수정이 필요한 부분이 있나요?",
+            "query": "?��?�?계약?�에???�정???�요??부분이 ?�나??",
             "expected_type": "contract_review",
-            "category": "계약서 검토",
+            "category": "계약??검??,
             "difficulty": "medium"
         },
         {
-            "query": "근로계약서의 불리한 조항을 확인해주세요",
+            "query": "근로계약?�의 불리??조항???�인?�주?�요",
             "expected_type": "contract_review",
-            "category": "계약서 검토",
+            "category": "계약??검??,
             "difficulty": "medium"
         },
 
-        # 이혼 절차 관련
+        # ?�혼 ?�차 관??
         {
-            "query": "협의이혼 절차는 어떻게 진행되나요?",
+            "query": "?�의?�혼 ?�차???�떻�?진행?�나??",
             "expected_type": "divorce_procedure",
-            "category": "이혼 절차",
+            "category": "?�혼 ?�차",
             "difficulty": "low"
         },
         {
-            "query": "재판이혼 신청 시 필요한 서류는 무엇인가요?",
+            "query": "?�판?�혼 ?�청 ???�요???�류??무엇?��???",
             "expected_type": "divorce_procedure",
-            "category": "이혼 절차",
+            "category": "?�혼 ?�차",
             "difficulty": "medium"
         },
         {
-            "query": "이혼 시 양육권과 면접교섭권은 어떻게 결정되나요?",
+            "query": "?�혼 ???�육권과 면접교섭권�? ?�떻�?결정?�나??",
             "expected_type": "divorce_procedure",
-            "category": "이혼 절차",
+            "category": "?�혼 ?�차",
             "difficulty": "high"
         },
 
-        # 상속 절차 관련
+        # ?�속 ?�차 관??
         {
-            "query": "상속 절차는 어떻게 진행되나요?",
+            "query": "?�속 ?�차???�떻�?진행?�나??",
             "expected_type": "inheritance_procedure",
-            "category": "상속 절차",
+            "category": "?�속 ?�차",
             "difficulty": "low"
         },
         {
-            "query": "유언이 있는 경우 상속 절차는 어떻게 되나요?",
+            "query": "?�언???�는 경우 ?�속 ?�차???�떻�??�나??",
             "expected_type": "inheritance_procedure",
-            "category": "상속 절차",
+            "category": "?�속 ?�차",
             "difficulty": "medium"
         },
         {
-            "query": "상속세 신고는 언제까지 해야 하나요?",
+            "query": "?�속???�고???�제까�? ?�야 ?�나??",
             "expected_type": "inheritance_procedure",
-            "category": "상속 절차",
+            "category": "?�속 ?�차",
             "difficulty": "medium"
         },
 
-        # 형사 사건 관련
+        # ?�사 ?�건 관??
         {
-            "query": "사기죄로 고소당했는데 어떻게 해야 하나요?",
+            "query": "?�기죄로 고소?�했?�데 ?�떻�??�야 ?�나??",
             "expected_type": "criminal_case",
-            "category": "형사 사건",
+            "category": "?�사 ?�건",
             "difficulty": "high"
         },
         {
-            "query": "교통사고로 과실치상상죄가 적용되나요?",
+            "query": "교통?�고�?과실치상?�죄가 ?�용?�나??",
             "expected_type": "criminal_case",
-            "category": "형사 사건",
+            "category": "?�사 ?�건",
             "difficulty": "medium"
         },
         {
-            "query": "형사사건에서 변호인 선임은 필수인가요?",
+            "query": "?�사?�건?�서 변?�인 ?�임?� ?�수?��???",
             "expected_type": "criminal_case",
-            "category": "형사 사건",
+            "category": "?�사 ?�건",
             "difficulty": "low"
         },
 
-        # 노동 분쟁 관련
+        # ?�동 분쟁 관??
         {
-            "query": "부당해고로 노동위원회에 신청하려고 합니다",
+            "query": "부?�해고로 ?�동?�원?�에 ?�청?�려�??�니??,
             "expected_type": "labor_dispute",
-            "category": "노동 분쟁",
+            "category": "?�동 분쟁",
             "difficulty": "medium"
         },
         {
-            "query": "임금체불로 인한 구제 절차를 알려주세요",
+            "query": "?�금체불�??�한 구제 ?�차�??�려주세??,
             "expected_type": "labor_dispute",
-            "category": "노동 분쟁",
+            "category": "?�동 분쟁",
             "difficulty": "medium"
         },
         {
-            "query": "근로시간 위반으로 인한 분쟁 해결 방법은?",
+            "query": "근로?�간 ?�반?�로 ?�한 분쟁 ?�결 방법?�?",
             "expected_type": "labor_dispute",
-            "category": "노동 분쟁",
+            "category": "?�동 분쟁",
             "difficulty": "medium"
         },
 
-        # 절차 안내 관련
+        # ?�차 ?�내 관??
         {
-            "query": "소액사건심판절차는 어떻게 신청하나요?",
+            "query": "?�액?�건?�판?�차???�떻�??�청?�나??",
             "expected_type": "procedure_guide",
-            "category": "절차 안내",
+            "category": "?�차 ?�내",
             "difficulty": "medium"
         },
         {
-            "query": "민사조정 신청 방법과 절차를 알려주세요",
+            "query": "민사조정 ?�청 방법�??�차�??�려주세??,
             "expected_type": "procedure_guide",
-            "category": "절차 안내",
+            "category": "?�차 ?�내",
             "difficulty": "medium"
         },
         {
-            "query": "가정법원 이혼조정 신청은 어떻게 하나요?",
+            "query": "가?�법???�혼조정 ?�청?� ?�떻�??�나??",
             "expected_type": "procedure_guide",
-            "category": "절차 안내",
+            "category": "?�차 ?�내",
             "difficulty": "medium"
         },
 
-        # 용어 해설 관련
+        # ?�어 ?�설 관??
         {
-            "query": "불법행위의 의미와 구성요건을 설명해주세요",
+            "query": "불법?�위???��??� 구성?�건???�명?�주?�요",
             "expected_type": "term_explanation",
-            "category": "용어 해설",
+            "category": "?�어 ?�설",
             "difficulty": "high"
         },
         {
-            "query": "손해배상과 위자료의 차이점은 무엇인가요?",
+            "query": "?�해배상�??�자료의 차이?��? 무엇?��???",
             "expected_type": "term_explanation",
-            "category": "용어 해설",
+            "category": "?�어 ?�설",
             "difficulty": "medium"
         },
         {
-            "query": "채권과 채무의 개념을 쉽게 설명해주세요",
+            "query": "채권�?채무??개념???�게 ?�명?�주?�요",
             "expected_type": "term_explanation",
-            "category": "용어 해설",
+            "category": "?�어 ?�설",
             "difficulty": "low"
         },
 
-        # 법률 조언 관련
+        # 법률 조언 관??
         {
-            "query": "계약 위반으로 손해를 입었는데 어떻게 해야 하나요?",
+            "query": "계약 ?�반?�로 ?�해�??�었?�데 ?�떻�??�야 ?�나??",
             "expected_type": "legal_advice",
             "category": "법률 조언",
             "difficulty": "high"
         },
         {
-            "query": "이웃과의 소음 분쟁 해결 방법을 조언해주세요",
+            "query": "?�웃과의 ?�음 분쟁 ?�결 방법??조언?�주?�요",
             "expected_type": "legal_advice",
             "category": "법률 조언",
             "difficulty": "medium"
         },
         {
-            "query": "직장에서 성희롱을 당했는데 어떻게 대처해야 하나요?",
+            "query": "직장?�서 ?�희롱을 ?�했?�데 ?�떻�??�처해???�나??",
             "expected_type": "legal_advice",
             "category": "법률 조언",
             "difficulty": "high"
         },
 
-        # 법률 문의 관련
+        # 법률 문의 관??
         {
-            "query": "민법 제750조의 내용을 알려주세요",
+            "query": "민법 ??50조의 ?�용???�려주세??,
             "expected_type": "law_inquiry",
             "category": "법률 문의",
             "difficulty": "medium"
         },
         {
-            "query": "근로기준법에서 정한 최저임금은 얼마인가요?",
+            "query": "근로기�?법에???�한 최�??�금?� ?�마?��???",
             "expected_type": "law_inquiry",
             "category": "법률 문의",
             "difficulty": "low"
         },
         {
-            "query": "형법 제257조의 처벌 기준은 어떻게 되나요?",
+            "query": "?�법 ??57조의 처벌 기�??� ?�떻�??�나??",
             "expected_type": "law_inquiry",
             "category": "법률 문의",
             "difficulty": "medium"
         },
 
-        # 일반 질문 관련
+        # ?�반 질문 관??
         {
-            "query": "법률 상담은 어디서 받을 수 있나요?",
+            "query": "법률 ?�담?� ?�디??받을 ???�나??",
             "expected_type": "general_question",
-            "category": "일반 질문",
+            "category": "?�반 질문",
             "difficulty": "low"
         },
         {
-            "query": "변호사 선임 비용은 얼마나 드나요?",
+            "query": "변?�사 ?�임 비용?� ?�마???�나??",
             "expected_type": "general_question",
-            "category": "일반 질문",
+            "category": "?�반 질문",
             "difficulty": "low"
         },
         {
-            "query": "법원에서 소송을 제기하려면 어떻게 해야 하나요?",
+            "query": "법원?�서 ?�송???�기?�려�??�떻�??�야 ?�나??",
             "expected_type": "general_question",
-            "category": "일반 질문",
+            "category": "?�반 질문",
             "difficulty": "medium"
         }
     ]
 
 
 def test_query_classification():
-    """질의 분류 테스트"""
+    """질의 분류 ?�스??""
     print("=" * 80)
-    print("실제 법률 질의 분류 테스트")
+    print("?�제 법률 질의 분류 ?�스??)
     print("=" * 80)
 
     enhancer = AnswerStructureEnhancer()
     queries = get_real_world_queries()
 
-    # 결과 저장
+    # 결과 ?�??
     results = {
         "total": len(queries),
         "correct": 0,
@@ -265,7 +265,7 @@ def test_query_classification():
         "detailed_results": []
     }
 
-    print(f"\n총 {len(queries)}개의 질의를 테스트합니다...\n")
+    print(f"\n�?{len(queries)}개의 질의�??�스?�합?�다...\n")
 
     for i, query_data in enumerate(queries, 1):
         query = query_data["query"]
@@ -273,40 +273,40 @@ def test_query_classification():
         category = query_data["category"]
         difficulty = query_data["difficulty"]
 
-        print(f"테스트 {i:2d}: {query}")
+        print(f"?�스??{i:2d}: {query}")
 
         try:
-            # 질문 유형 매핑
+            # 질문 ?�형 매핑
             mapped_type = enhancer._map_question_type("", query)
             mapped_type_name = mapped_type.value if hasattr(mapped_type, 'value') else str(mapped_type)
 
-            # 결과 판정
+            # 결과 ?�정
             is_correct = mapped_type_name == expected_type
-            status = "✅" if is_correct else "❌"
+            status = "?? if is_correct else "??
 
-            print(f"         {status} 예상: {expected_type} | 실제: {mapped_type_name}")
+            print(f"         {status} ?�상: {expected_type} | ?�제: {mapped_type_name}")
 
-            # 통계 업데이트
+            # ?�계 ?�데?�트
             if is_correct:
                 results["correct"] += 1
             else:
                 results["incorrect"] += 1
 
-            # 카테고리별 통계
+            # 카테고리�??�계
             if category not in results["by_category"]:
                 results["by_category"][category] = {"total": 0, "correct": 0}
             results["by_category"][category]["total"] += 1
             if is_correct:
                 results["by_category"][category]["correct"] += 1
 
-            # 난이도별 통계
+            # ?�이?�별 ?�계
             if difficulty not in results["by_difficulty"]:
                 results["by_difficulty"][difficulty] = {"total": 0, "correct": 0}
             results["by_difficulty"][difficulty]["total"] += 1
             if is_correct:
                 results["by_difficulty"][difficulty]["correct"] += 1
 
-            # 상세 결과 저장
+            # ?�세 결과 ?�??
             results["detailed_results"].append({
                 "query": query,
                 "expected": expected_type,
@@ -317,92 +317,92 @@ def test_query_classification():
             })
 
         except Exception as e:
-            print(f"         ❌ 오류 발생: {e}")
+            print(f"         ???�류 발생: {e}")
             results["incorrect"] += 1
 
     return results
 
 
 def analyze_results(results: Dict[str, Any]):
-    """결과 분석 및 리포트 생성"""
+    """결과 분석 �?리포???�성"""
     print("\n" + "=" * 80)
-    print("테스트 결과 분석")
+    print("?�스??결과 분석")
     print("=" * 80)
 
-    # 전체 정확도
+    # ?�체 ?�확??
     accuracy = (results["correct"] / results["total"]) * 100
-    print(f"\n📊 전체 정확도: {accuracy:.1f}% ({results['correct']}/{results['total']})")
+    print(f"\n?�� ?�체 ?�확?? {accuracy:.1f}% ({results['correct']}/{results['total']})")
 
-    # 카테고리별 정확도
-    print(f"\n📋 카테고리별 정확도:")
+    # 카테고리�??�확??
+    print(f"\n?�� 카테고리�??�확??")
     for category, stats in results["by_category"].items():
         cat_accuracy = (stats["correct"] / stats["total"]) * 100
         print(f"   {category:12s}: {cat_accuracy:5.1f}% ({stats['correct']:2d}/{stats['total']:2d})")
 
-    # 난이도별 정확도
-    print(f"\n🎯 난이도별 정확도:")
+    # ?�이?�별 ?�확??
+    print(f"\n?�� ?�이?�별 ?�확??")
     for difficulty, stats in results["by_difficulty"].items():
         diff_accuracy = (stats["correct"] / stats["total"]) * 100
         print(f"   {difficulty:8s}: {diff_accuracy:5.1f}% ({stats['correct']:2d}/{stats['total']:2d})")
 
-    # 오분류 분석
-    print(f"\n❌ 오분류 사례:")
+    # ?�분�?분석
+    print(f"\n???�분�??��?:")
     incorrect_cases = [r for r in results["detailed_results"] if not r["correct"]]
 
     for case in incorrect_cases:
         print(f"   질의: {case['query'][:50]}...")
-        print(f"   예상: {case['expected']} | 실제: {case['actual']} | 카테고리: {case['category']}")
+        print(f"   ?�상: {case['expected']} | ?�제: {case['actual']} | 카테고리: {case['category']}")
         print()
 
     return accuracy
 
 
 def test_edge_cases():
-    """엣지 케이스 테스트"""
+    """?��? 케?�스 ?�스??""
     print("\n" + "=" * 80)
-    print("엣지 케이스 테스트")
+    print("?��? 케?�스 ?�스??)
     print("=" * 80)
 
     enhancer = AnswerStructureEnhancer()
 
     edge_cases = [
         {
-            "query": "판례와 계약서 모두 관련된 질문입니다",
-            "description": "복합 키워드"
+            "query": "?��??� 계약??모두 관?�된 질문?�니??,
+            "description": "복합 ?�워??
         },
         {
             "query": "법률",
-            "description": "매우 짧은 질의"
+            "description": "매우 짧�? 질의"
         },
         {
-            "query": "이혼하면서 상속도 같이 처리하고 싶은데 계약서도 검토받고 판례도 찾아주세요",
-            "description": "매우 긴 복합 질의"
+            "query": "?�혼?�면???�속??같이 처리?�고 ?��???계약?�도 검?�받�??��???찾아주세??,
+            "description": "매우 �?복합 질의"
         },
         {
             "query": "123456789",
-            "description": "숫자만 포함"
+            "description": "?�자�??�함"
         },
         {
             "query": "!@#$%^&*()",
-            "description": "특수문자만 포함"
+            "description": "?�수문자�??�함"
         },
         {
             "query": "",
-            "description": "빈 질의"
+            "description": "�?질의"
         },
         {
-            "query": "법률상담변호사계약서이혼상속형사노동절차용어조언문의",
-            "description": "모든 키워드 포함"
+            "query": "법률?�담변?�사계약?�이?�상?�형?�노?�절차용?�조?�문??,
+            "description": "모든 ?�워???�함"
         }
     ]
 
-    print(f"\n엣지 케이스 {len(edge_cases)}개를 테스트합니다...\n")
+    print(f"\n?��? 케?�스 {len(edge_cases)}개�? ?�스?�합?�다...\n")
 
     for i, case in enumerate(edge_cases, 1):
         query = case["query"]
         description = case["description"]
 
-        print(f"엣지 케이스 {i}: {description}")
+        print(f"?��? 케?�스 {i}: {description}")
         print(f"   질의: '{query}'")
 
         try:
@@ -410,18 +410,18 @@ def test_edge_cases():
             mapped_type_name = mapped_type.value if hasattr(mapped_type, 'value') else str(mapped_type)
 
             print(f"   결과: {mapped_type_name}")
-            print(f"   상태: {'✅ 정상 처리' if mapped_type_name else '❌ 오류'}")
+            print(f"   ?�태: {'???�상 처리' if mapped_type_name else '???�류'}")
 
         except Exception as e:
-            print(f"   상태: ❌ 오류 발생 - {e}")
+            print(f"   ?�태: ???�류 발생 - {e}")
 
         print()
 
 
 def test_performance_with_real_queries():
-    """실제 질의로 성능 테스트"""
+    """?�제 질의�??�능 ?�스??""
     print("\n" + "=" * 80)
-    print("실제 질의 성능 테스트")
+    print("?�제 질의 ?�능 ?�스??)
     print("=" * 80)
 
     import time
@@ -429,8 +429,8 @@ def test_performance_with_real_queries():
     enhancer = AnswerStructureEnhancer()
     queries = get_real_world_queries()
 
-    # 성능 테스트
-    print(f"\n{len(queries)}개의 실제 질의로 성능을 측정합니다...")
+    # ?�능 ?�스??
+    print(f"\n{len(queries)}개의 ?�제 질의�??�능??측정?�니??..")
 
     start_time = time.time()
     for query_data in queries:
@@ -440,55 +440,55 @@ def test_performance_with_real_queries():
     total_time = end_time - start_time
 
     if len(queries) == 0:
-        print(f"\n⚠️  질의 데이터가 없어 성능 테스트를 건너뜁니다.")
+        print(f"\n?�️  질의 ?�이?��? ?�어 ?�능 ?�스?��? 건너?�니??")
         return
 
     if total_time == 0:
-        total_time = 0.001  # 최소값 설정하여 division by zero 방지
+        total_time = 0.001  # 최소�??�정?�여 division by zero 방�?
 
-    avg_time = total_time / len(queries) * 1000  # ms로 변환
+    avg_time = total_time / len(queries) * 1000  # ms�?변??
 
-    print(f"\n📈 성능 결과:")
-    print(f"   전체 처리 시간: {total_time:.3f}초")
-    print(f"   평균 처리 시간: {avg_time:.1f}ms/질의")
-    print(f"   처리량: {len(queries)/total_time:.1f}질의/초")
+    print(f"\n?�� ?�능 결과:")
+    print(f"   ?�체 처리 ?�간: {total_time:.3f}�?)
+    print(f"   ?�균 처리 ?�간: {avg_time:.1f}ms/질의")
+    print(f"   처리?? {len(queries)/total_time:.1f}질의/�?)
 
 
 def test_classify_question_type():
-    """classify_question_type 메서드 테스트"""
+    """classify_question_type 메서???�스??""
     print("\n" + "=" * 80)
-    print("classify_question_type 메서드 테스트")
+    print("classify_question_type 메서???�스??)
     print("=" * 80)
 
     enhancer = AnswerStructureEnhancer()
 
-    # 테스트 케이스들
+    # ?�스??케?�스??
     test_cases = [
-        # 법률 문의 테스트
-        ("민법 제123조의 내용이 무엇인가요?", QuestionType.LAW_INQUIRY),
-        ("형법 제250조 처벌 기준은?", QuestionType.LAW_INQUIRY),
-        ("근로기준법 제15조 의미는?", QuestionType.LAW_INQUIRY),
-        ("상법 제123조 해석해주세요", QuestionType.LAW_INQUIRY),
-        ("헌법 제10조 내용은?", QuestionType.LAW_INQUIRY),
-        ("특허법 제25조 규정은?", QuestionType.LAW_INQUIRY),
+        # 법률 문의 ?�스??
+        ("민법 ??23조의 ?�용??무엇?��???", QuestionType.LAW_INQUIRY),
+        ("?�법 ??50�?처벌 기�??�?", QuestionType.LAW_INQUIRY),
+        ("근로기�?�???5�??��???", QuestionType.LAW_INQUIRY),
+        ("?�법 ??23�??�석?�주?�요", QuestionType.LAW_INQUIRY),
+        ("?�법 ??0�??�용?�?", QuestionType.LAW_INQUIRY),
+        ("?�허�???5�?규정?�?", QuestionType.LAW_INQUIRY),
 
-        # 판례 검색 테스트
-        ("대법원 판례를 찾아주세요", QuestionType.PRECEDENT_SEARCH),
-        ("관련 판례가 있나요?", QuestionType.PRECEDENT_SEARCH),
-        ("고등법원 판결을 알려주세요", QuestionType.PRECEDENT_SEARCH),
-        ("지방법원 판례 검색", QuestionType.PRECEDENT_SEARCH),
+        # ?��? 검???�스??
+        ("?�법원 ?��?�?찾아주세??, QuestionType.PRECEDENT_SEARCH),
+        ("관???��?가 ?�나??", QuestionType.PRECEDENT_SEARCH),
+        ("고등법원 ?�결???�려주세??, QuestionType.PRECEDENT_SEARCH),
+        ("지방법???��? 검??, QuestionType.PRECEDENT_SEARCH),
 
-        # 계약서 검토 테스트
-        ("계약서를 검토해주세요", QuestionType.CONTRACT_REVIEW),
-        ("이 계약 조항이 불리한가요?", QuestionType.CONTRACT_REVIEW),
-        ("계약서 수정이 필요한가요?", QuestionType.CONTRACT_REVIEW),
+        # 계약??검???�스??
+        ("계약?��? 검?�해주세??, QuestionType.CONTRACT_REVIEW),
+        ("??계약 조항??불리?��???", QuestionType.CONTRACT_REVIEW),
+        ("계약???�정???�요?��???", QuestionType.CONTRACT_REVIEW),
 
-        # 이혼 절차 테스트
-        ("이혼 절차를 알려주세요", QuestionType.DIVORCE_PROCEDURE),
-        ("협의이혼 방법은?", QuestionType.DIVORCE_PROCEDURE),
+        # ?�혼 ?�차 ?�스??
+        ("?�혼 ?�차�??�려주세??, QuestionType.DIVORCE_PROCEDURE),
+        ("?�의?�혼 방법?�?", QuestionType.DIVORCE_PROCEDURE),
     ]
 
-    print(f"\n{len(test_cases)}개의 테스트 케이스 실행 중...\n")
+    print(f"\n{len(test_cases)}개의 ?�스??케?�스 ?�행 �?..\n")
 
     passed = 0
     failed = 0
@@ -497,10 +497,10 @@ def test_classify_question_type():
         try:
             result_type = enhancer.classify_question_type(question)
             is_correct = result_type == expected_type
-            status = "✅" if is_correct else "❌"
+            status = "?? if is_correct else "??
 
             print(f"{i:2d}. {status} 질문: '{question}'")
-            print(f"    예상: {expected_type.value}")
+            print(f"    ?�상: {expected_type.value}")
             print(f"    결과: {result_type.value}")
             print()
 
@@ -510,71 +510,71 @@ def test_classify_question_type():
                 failed += 1
 
         except Exception as e:
-            print(f"{i:2d}. ❌ 오류: '{question}'")
-            print(f"    오류 메시지: {e}")
+            print(f"{i:2d}. ???�류: '{question}'")
+            print(f"    ?�류 메시지: {e}")
             print()
             failed += 1
 
-    print(f"\n📊 결과: {passed}개 통과, {failed}개 실패")
+    print(f"\n?�� 결과: {passed}�??�과, {failed}�??�패")
 
 
 def test_edge_cases_classification():
-    """엣지 케이스 테스트"""
+    """?��? 케?�스 ?�스??""
     print("\n" + "=" * 80)
-    print("엣지 케이스 테스트")
+    print("?��? 케?�스 ?�스??)
     print("=" * 80)
 
     enhancer = AnswerStructureEnhancer()
 
     edge_cases = [
-        ("", QuestionType.GENERAL_QUESTION),  # 빈 문자열
-        ("   ", QuestionType.GENERAL_QUESTION),  # 공백만
-        ("민법", QuestionType.GENERAL_QUESTION),  # 단어만
-        ("제123조", QuestionType.LAW_INQUIRY),  # 조문만
-        ("123조", QuestionType.GENERAL_QUESTION),  # 숫자+조문
-        ("민법 제", QuestionType.GENERAL_QUESTION),  # 불완전한 조문
-        ("제조", QuestionType.GENERAL_QUESTION),  # 잘못된 조문
-        ("민법 제123조 제456항", QuestionType.LAW_INQUIRY),  # 복합 조문
-        ("민법과 형법", QuestionType.LAW_INQUIRY),  # 여러 법령
-        ("판례와 계약서", QuestionType.PRECEDENT_SEARCH),  # 여러 키워드 (우선순위)
+        ("", QuestionType.GENERAL_QUESTION),  # �?문자??
+        ("   ", QuestionType.GENERAL_QUESTION),  # 공백�?
+        ("민법", QuestionType.GENERAL_QUESTION),  # ?�어�?
+        ("??23�?, QuestionType.LAW_INQUIRY),  # 조문�?
+        ("123�?, QuestionType.GENERAL_QUESTION),  # ?�자+조문
+        ("민법 ??, QuestionType.GENERAL_QUESTION),  # 불완?�한 조문
+        ("?�조", QuestionType.GENERAL_QUESTION),  # ?�못??조문
+        ("민법 ??23�???56??, QuestionType.LAW_INQUIRY),  # 복합 조문
+        ("민법�??�법", QuestionType.LAW_INQUIRY),  # ?�러 법령
+        ("?��??� 계약??, QuestionType.PRECEDENT_SEARCH),  # ?�러 ?�워??(?�선?�위)
     ]
 
-    print(f"\n엣지 케이스 {len(edge_cases)}개 테스트 중...\n")
+    print(f"\n?��? 케?�스 {len(edge_cases)}�??�스??�?..\n")
 
     for i, (question, expected_type) in enumerate(edge_cases, 1):
         try:
             result_type = enhancer.classify_question_type(question)
             is_correct = result_type == expected_type
-            status = "✅" if is_correct else "❌"
+            status = "?? if is_correct else "??
 
             print(f"{i:2d}. {status} 질문: '{question}'")
-            print(f"    예상: {expected_type.value}")
+            print(f"    ?�상: {expected_type.value}")
             print(f"    결과: {result_type.value}")
             print()
 
         except Exception as e:
-            print(f"{i:2d}. ❌ 오류: '{question}'")
-            print(f"    오류 메시지: {e}")
+            print(f"{i:2d}. ???�류: '{question}'")
+            print(f"    ?�류 메시지: {e}")
             print()
 
 
 def test_classify_performance():
-    """classify_question_type 성능 테스트"""
+    """classify_question_type ?�능 ?�스??""
     print("\n" + "=" * 80)
-    print("classify_question_type 성능 테스트")
+    print("classify_question_type ?�능 ?�스??)
     print("=" * 80)
 
     enhancer = AnswerStructureEnhancer()
 
-    # 성능 테스트용 질문들
+    # ?�능 ?�스?�용 질문??
     test_questions = [
-        "민법 제123조의 내용이 무엇인가요?",
-        "대법원 판례를 찾아주세요",
-        "계약서를 검토해주세요",
-        "이혼 절차를 알려주세요",
-    ] * 10  # 40개 질문
+        "민법 ??23조의 ?�용??무엇?��???",
+        "?�법원 ?��?�?찾아주세??,
+        "계약?��? 검?�해주세??,
+        "?�혼 ?�차�??�려주세??,
+    ] * 10  # 40�?질문
 
-    print(f"\n{len(test_questions)}개 질문으로 성능 테스트 실행...")
+    print(f"\n{len(test_questions)}�?질문?�로 ?�능 ?�스???�행...")
 
     start_time = time.time()
     for question in test_questions:
@@ -582,42 +582,42 @@ def test_classify_performance():
     end_time = time.time()
 
     total_time = end_time - start_time
-    avg_time = (total_time / len(test_questions)) * 1000  # ms로 변환
+    avg_time = (total_time / len(test_questions)) * 1000  # ms�?변??
 
-    print(f"\n📈 성능 결과:")
-    print(f"   전체 처리 시간: {total_time:.3f}초")
-    print(f"   평균 처리 시간: {avg_time:.2f}ms/질문")
-    print(f"   처리량: {len(test_questions)/total_time:.1f}질문/초")
+    print(f"\n?�� ?�능 결과:")
+    print(f"   ?�체 처리 ?�간: {total_time:.3f}�?)
+    print(f"   ?�균 처리 ?�간: {avg_time:.2f}ms/질문")
+    print(f"   처리?? {len(test_questions)/total_time:.1f}질문/�?)
 
 
 def main():
-    """메인 테스트 함수"""
+    """메인 ?�스???�수"""
     print("=" * 80)
-    print("법률 질의 분류 시스템 종합 테스트")
+    print("법률 질의 분류 ?�스??종합 ?�스??)
     print("=" * 80)
 
     try:
-        # 1. 실제 질의 분류 테스트
+        # 1. ?�제 질의 분류 ?�스??
         results = test_query_classification()
 
         # 2. 결과 분석
         accuracy = analyze_results(results)
 
-        # 3. 엣지 케이스 테스트
+        # 3. ?��? 케?�스 ?�스??
         test_edge_cases()
 
-        # 4. 성능 테스트
+        # 4. ?�능 ?�스??
         test_performance_with_real_queries()
 
-        # 최종 평가
+        # 최종 ?��?
         print("\n" + "=" * 80)
-        print("최종 평가")
+        print("최종 ?��?")
         print("=" * 80)
 
         if accuracy >= 90:
-            grade = "A+ (우수)"
+            grade = "A+ (?�수)"
         elif accuracy >= 80:
-            grade = "A (양호)"
+            grade = "A (?�호)"
         elif accuracy >= 70:
             grade = "B (보통)"
         elif accuracy >= 60:
@@ -625,20 +625,20 @@ def main():
         else:
             grade = "D (불량)"
 
-        print(f"🎯 전체 정확도: {accuracy:.1f}%")
-        print(f"📊 등급: {grade}")
+        print(f"?�� ?�체 ?�확?? {accuracy:.1f}%")
+        print(f"?�� ?�급: {grade}")
 
         if accuracy >= 80:
-            print("✅ 시스템이 실용적으로 사용 가능한 수준입니다.")
+            print("???�스?�이 ?�용?�으�??�용 가?�한 ?��??�니??")
         else:
-            print("⚠️ 시스템 개선이 필요합니다.")
+            print("?�️ ?�스??개선???�요?�니??")
 
-        print("\n🎉 질의 분류 테스트가 완료되었습니다!")
+        print("\n?�� 질의 분류 ?�스?��? ?�료?�었?�니??")
 
         return accuracy >= 80
 
     except Exception as e:
-        print(f"❌ 테스트 실행 중 오류 발생: {e}")
+        print(f"???�스???�행 �??�류 발생: {e}")
         import traceback
         traceback.print_exc()
         return False

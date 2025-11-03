@@ -1,6 +1,6 @@
-# LangGraph Nodes Input/Output Specification
+﻿# LangGraph Nodes Input/Output Specification
 
-본 문서는 `core/agents/node_input_output_spec.py`에 정의된 LangGraph 노드들의 입력/출력 사양을 정리한 레퍼런스입니다. 각 노드는 필요한 최소 입력만 요구하도록 설계되어 있으며, 상태(State) 그룹 의존성을 최소화하여 메모리와 결합도를 낮춥니다.
+본 문서는 `source/agents/node_input_output_spec.py`에 정의된 LangGraph 노드들의 입력/출력 사양을 정리한 레퍼런스입니다. 각 노드는 필요한 최소 입력만 요구하도록 설계되어 있으며, 상태(State) 그룹 의존성을 최소화하여 메모리와 결합도를 낮춥니다.
 
 ### 범례
 - required_input: 노드 수행에 반드시 필요한 입력 필드

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-국회 법률정보시스템 법률만 수집 (특정 URL용)
+�?�� 법률?�보?�스??법률�??�집 (?�정 URL??
 
-제공된 URL의 법률만 수집하는 스크립트:
+?�공??URL??법률�??�집?�는 ?�크립트:
 https://likms.assembly.go.kr/law/lawsLawtInqyList2020.do?genActiontypeCd=2ACT1010&genMenuId=menu_serv_nlaw_lawt_1020&uid=R310CV1620579091049F522&genDoctreattypeCd=DOCT2041&topicCd=PJJG00_000&pageSize=100&srchNm=&srchType=contNm&orderType=&orderObj=&srchDtType=promDt&srchStaDt=&srchEndDt=
 
-총 1,895건의 법률 수집
+�?1,895건의 법률 ?�집
 
-사용법:
-  python collect_laws_only.py --sample 10     # 샘플 10개
-  python collect_laws_only.py --sample 100    # 샘플 100개
-  python collect_laws_only.py --full          # 전체 1895개
-  python collect_laws_only.py --resume        # 중단 지점에서 재개
+?�용�?
+  python collect_laws_only.py --sample 10     # ?�플 10�?
+  python collect_laws_only.py --sample 100    # ?�플 100�?
+  python collect_laws_only.py --full          # ?�체 1895�?
+  python collect_laws_only.py --resume        # 중단 지?�에???�개
 """
 
 import argparse
@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 import time
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -33,7 +33,7 @@ from source.data.assembly_playwright_client import AssemblyPlaywrightClient
 from scripts.assembly.assembly_collector import AssemblyCollector
 from scripts.assembly.checkpoint_manager import CheckpointManager
 
-# 로거 설정
+# 로거 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -48,17 +48,17 @@ logger = logging.getLogger(__name__)
 interrupted = False
 
 def signal_handler(sig, frame):
-    """시그널 핸들러 (Ctrl+C 등)"""
+    """?�그???�들??(Ctrl+C ??"""
     global interrupted
     logger.warning("\nInterrupt signal received. Saving progress...")
     interrupted = True
 
-# 시그널 핸들러 등록
+# ?�그???�들???�록
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 class LawOnlyCollector:
-    """법률만 수집하는 클래스"""
+    """법률�??�집?�는 ?�래??""
     
     def __init__(self, base_dir: str = "data/raw/assembly"):
         self.base_dir = Path(base_dir)
@@ -66,19 +66,19 @@ class LawOnlyCollector:
         self.failed_items = []
         self.start_time = None
         
-        # 출력 디렉토리 생성
+        # 출력 ?�렉?�리 ?�성
         self.output_dir = self.base_dir / "law_only" / datetime.now().strftime("%Y%m%d")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"Output directory: {self.output_dir}")
         
-        # 특정 URL 설정 (법률만 필터링된 URL)
+        # ?�정 URL ?�정 (법률�??�터링된 URL)
         self.base_url = "https://likms.assembly.go.kr/law/lawsLawtInqyList2020.do"
         self.url_params = {
             'genActiontypeCd': '2ACT1010',
             'genMenuId': 'menu_serv_nlaw_lawt_1020',
             'uid': 'R310CV1620579091049F522',
-            'genDoctreattypeCd': 'DOCT2041',  # 법률만 필터링
+            'genDoctreattypeCd': 'DOCT2041',  # 법률�??�터�?
             'topicCd': 'PJJG00_000',
             'pageSize': '100',
             'srchNm': '',
@@ -94,7 +94,7 @@ class LawOnlyCollector:
         logger.info(f"Expected total: 1,895 laws")
     
     def build_url(self, page_num: int = 1) -> str:
-        """페이지 번호에 따른 URL 구성"""
+        """?�이지 번호???�른 URL 구성"""
         params = self.url_params.copy()
         params['pageNum'] = str(page_num)
         
@@ -102,18 +102,18 @@ class LawOnlyCollector:
         return f"{self.base_url}?{param_str}"
     
     def collect_laws(self, target_count: int = None, page_size: int = 100, resume: bool = True, start_page: int = 1):
-        """법률 수집 메인 함수"""
+        """법률 ?�집 메인 ?�수"""
         
         print(f"\n{'='*60}")
         print(f"LAW ONLY COLLECTION STARTED")
         print(f"Target: Laws only (1,895 total)")
         print(f"{'='*60}")
         
-        # 체크포인트 매니저
+        # 체크?�인??매니?�
         checkpoint_mgr = CheckpointManager("data/checkpoints/laws_only")
         print(f"Checkpoint directory: data/checkpoints/laws_only")
         
-        # 체크포인트 로드
+        # 체크?�인??로드
         actual_start_page = start_page
         checkpoint = None
         
@@ -130,7 +130,7 @@ class LawOnlyCollector:
         else:
             print(f"Resume disabled, starting from page {start_page}")
         
-        # 수집기 초기화
+        # ?�집�?초기??
         print(f"\nInitializing collector...")
         collector = AssemblyCollector(
             base_dir=str(self.base_dir),
@@ -160,18 +160,18 @@ class LawOnlyCollector:
                     print(f"\nProcessing page {page_num}...")
                     
                     try:
-                        # 페이지 정보 설정 (page_number를 위해 필요)
+                        # ?�이지 ?�보 ?�정 (page_number�??�해 ?�요)
                         collector.set_page_info(page_num)
                         
-                        # 특정 URL로 페이지 이동
+                        # ?�정 URL�??�이지 ?�동
                         url = self.build_url(page_num)
                         print(f"URL: {url}")
                         
-                        # 페이지 로드
+                        # ?�이지 로드
                         client.page.goto(url, wait_until='domcontentloaded')
-                        client.page.wait_for_timeout(3000)  # 3초 대기
+                        client.page.wait_for_timeout(3000)  # 3�??��?
                         
-                        # 법률 목록 파싱
+                        # 법률 목록 ?�싱
                         laws = client._parse_law_table()
                         
                         if not laws:
@@ -180,7 +180,7 @@ class LawOnlyCollector:
                         
                         print(f"Found {len(laws)} laws on page {page_num}")
                         
-                        # 법률 상세 정보 수집
+                        # 법률 ?�세 ?�보 ?�집
                         for i, law in enumerate(laws):
                             if interrupted:
                                 break
@@ -191,11 +191,11 @@ class LawOnlyCollector:
                             try:
                                 print(f"   Collecting law {collected_count + 1}: {law['law_name'][:50]}...")
                                 
-                                # 법률 상세 정보 수집
+                                # 법률 ?�세 ?�보 ?�집
                                 detail = client.get_law_detail(law['cont_id'], law['cont_sid'])
                                 
                                 if detail:
-                                    # 수집기에 추가
+                                    # ?�집기에 추�?
                                     collector.save_item(detail)
                                     collected_count += 1
                                     
@@ -204,7 +204,7 @@ class LawOnlyCollector:
                                     print(f"   Failed to collect: {law['law_name'][:50]}...")
                                     self.failed_items.append(law)
                                 
-                                # 배치 저장
+                                # 배치 ?�??
                                 if collected_count % collector.batch_size == 0:
                                     collector._save_batch()
                                     print(f"   Batch saved: {collected_count} items")
@@ -214,7 +214,7 @@ class LawOnlyCollector:
                                 self.failed_items.append(law)
                                 continue
                         
-                        # 페이지 완료 후 체크포인트 저장
+                        # ?�이지 ?�료 ??체크?�인???�??
                         checkpoint_data = {
                             'data_type': 'law_only',
                             'current_page': page_num,
@@ -234,7 +234,7 @@ class LawOnlyCollector:
                         logger.error(f"Page {page_num} error: {e}")
                         break
                 
-                # 최종 배치 저장
+                # 최종 배치 ?�??
                 collector._save_batch()
                 
         except Exception as e:
@@ -242,7 +242,7 @@ class LawOnlyCollector:
             logger.error(f"Collection failed: {e}")
             return False
         
-        # 최종 통계
+        # 최종 ?�계
         end_time = datetime.now()
         duration = end_time - self.start_time
         
@@ -259,46 +259,46 @@ class LawOnlyCollector:
         return True
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(
-        description='국회 법률정보시스템 법률만 수집 (특정 URL용)',
+        description='�?�� 법률?�보?�스??법률�??�집 (?�정 URL??',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python collect_laws_only.py --sample 10     # 샘플 10개
-  python collect_laws_only.py --sample 100    # 샘플 100개
-  python collect_laws_only.py --full          # 전체 1895개
-  python collect_laws_only.py --resume        # 중단 지점에서 재개
+  python collect_laws_only.py --sample 10     # ?�플 10�?
+  python collect_laws_only.py --sample 100    # ?�플 100�?
+  python collect_laws_only.py --full          # ?�체 1895�?
+  python collect_laws_only.py --resume        # 중단 지?�에???�개
         """
     )
     
     parser.add_argument('--sample', type=int, metavar='N',
-                       help='샘플 수집 개수 (10, 100, 1000 등)')
+                       help='?�플 ?�집 개수 (10, 100, 1000 ??')
     parser.add_argument('--full', action='store_true',
-                       help='전체 수집 (1895개)')
+                       help='?�체 ?�집 (1895�?')
     parser.add_argument('--resume', action='store_true', default=True,
-                       help='체크포인트에서 재개 (기본값)')
+                       help='체크?�인?�에???�개 (기본�?')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
-                       help='처음부터 시작')
+                       help='처음부???�작')
     parser.add_argument('--start-page', type=int, default=1,
-                       help='시작 페이지 번호 (기본: 1)')
+                       help='?�작 ?�이지 번호 (기본: 1)')
     parser.add_argument('--page-size', type=int, default=100,
-                       help='페이지당 항목 수 (기본: 100)')
+                       help='?�이지????�� ??(기본: 100)')
     
     args = parser.parse_args()
     
-    # 목표 수집 개수 결정
+    # 목표 ?�집 개수 결정
     if args.full:
-        target_count = 1895  # 전체 법률 수
+        target_count = 1895  # ?�체 법률 ??
         print(f"Full collection mode: {target_count} laws")
     elif args.sample:
         target_count = args.sample
         print(f"Sample mode: {target_count} items")
     else:
-        target_count = 100  # 기본값
+        target_count = 100  # 기본�?
         print(f"Default mode: {target_count} items")
     
-    # 수집기 생성 및 실행
+    # ?�집�??�성 �??�행
     collector = LawOnlyCollector()
     
     try:

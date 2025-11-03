@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-법령해석례 수집 패키지
+법령?�석례 ?�집 ?�키지
 
-국가법령정보센터 LAW OPEN API를 사용하여 법령해석례를 수집하는 패키지입니다.
+�??법령?�보?�터 LAW OPEN API�??�용?�여 법령?�석례�??�집?�는 ?�키지?�니??
 """
 
 from .legal_interpretation_collector import LegalInterpretationCollector
@@ -15,7 +15,7 @@ from .legal_interpretation_logger import setup_logging
 
 __version__ = "1.0.0"
 __author__ = "LawFirmAI Team"
-__description__ = "법령해석례 수집 패키지"
+__description__ = "법령?�석례 ?�집 ?�키지"
 
 __all__ = [
     "LegalInterpretationCollector",

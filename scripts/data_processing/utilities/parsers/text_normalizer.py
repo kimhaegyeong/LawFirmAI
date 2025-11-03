@@ -21,41 +21,41 @@ class TextNormalizer:
         # Date format patterns
         self.date_patterns = [
             (r'(\d{4})\.(\d{1,2})\.(\d{1,2})\.', r'\1-\2-\3'),  # 2025.10.2. -> 2025-10-2
-            (r'(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일', r'\1-\2-\3'),  # 2025년 10월 2일 -> 2025-10-2
+            (r'(\d{4})??s*(\d{1,2})??s*(\d{1,2})??, r'\1-\2-\3'),  # 2025??10??2??-> 2025-10-2
             (r'(\d{4})\.(\d{1,2})\.(\d{1,2})', r'\1-\2-\3'),  # 2025.10.2 -> 2025-10-2
         ]
         
         # Article patterns
         self.article_patterns = [
-            (r'제(\d+)조', r'제\1조'),
-            (r'제(\d+)항', r'제\1항'),
-            (r'제(\d+)호', r'제\1호'),
-            (r'제(\d+)목', r'제\1목'),
+            (r'??\d+)�?, r'??1�?),
+            (r'??\d+)??, r'??1??),
+            (r'??\d+)??, r'??1??),
+            (r'??\d+)�?, r'??1�?),
         ]
         
         # Legal terminology normalization
         self.legal_terms = {
-            '같은 법': 'parent_law_reference',
-            '이 법': 'self_reference',
-            '동법': 'same_law_reference',
-            '상위법': 'superior_law',
-            '관련법': 'related_law',
-            '시행령': 'enforcement_decree',
-            '시행규칙': 'enforcement_rule',
-            '부령': 'ministry_ordinance',
-            '대통령령': 'presidential_decree',
-            '총리령': 'prime_minister_decree'
+            '같�? �?: 'parent_law_reference',
+            '??�?: 'self_reference',
+            '?�법': 'same_law_reference',
+            '?�위�?: 'superior_law',
+            '관?�법': 'related_law',
+            '?�행??: 'enforcement_decree',
+            '?�행규칙': 'enforcement_rule',
+            '부??: 'ministry_ordinance',
+            '?�?�령??: 'presidential_decree',
+            '총리??: 'prime_minister_decree'
         }
         
         # UI elements to remove
         self.ui_patterns = [
-            r'조문버튼선택체크',
-            r'펼치기접기',
-            r'선택체크',
-            r'펼치기',
-            r'접기',
+            r'조문버튼?�택체크',
+            r'?�치기접�?,
+            r'?�택체크',
+            r'?�치�?,
+            r'?�기',
             r'버튼',
-            r'선택',
+            r'?�택',
             r'체크'
         ]
         self.whitespace_patterns = [
@@ -66,23 +66,23 @@ class TextNormalizer:
         
         # Special character patterns
         self.special_char_patterns = [
-            (r'「', '"'),
-            (r'」', '"'),
-            (r'『', '"'),
-            (r'』', '"'),
-            (r'〈', '<'),
-            (r'〉', '>'),
-            (r'〔', '['),
-            (r'〕', ']'),
+            (r'??, '"'),
+            (r'??, '"'),
+            (r'??, '"'),
+            (r'??, '"'),
+            (r'??, '<'),
+            (r'??, '>'),
+            (r'??, '['),
+            (r'??, ']'),
         ]
         
         # Amendment markers
         self.amendment_patterns = [
             (r'<개정\s+[^>]+>', ''),  # Remove amendment markers
-            (r'<신설>', ''),
-            (r'<폐지>', ''),
-            (r'<일부개정>', ''),
-            (r'<전부개정>', ''),
+            (r'<?�설>', ''),
+            (r'<?��?>', ''),
+            (r'<?��?개정>', ''),
+            (r'<?��?개정>', ''),
         ]
     
     def normalize(self, text: str) -> str:
@@ -272,7 +272,7 @@ class TextNormalizer:
             logger.error(f"Error normalizing article: {e}")
             return article
     
-    # extract_keywords와 generate_searchable_text 메서드 제거됨 - 더 이상 사용하지 않음
+    # extract_keywords?� generate_searchable_text 메서???�거??- ???�상 ?�용?��? ?�음
     
     def validate_normalization(self, original_text: str, normalized_text: str) -> Dict[str, Any]:
         """
@@ -289,8 +289,8 @@ class TextNormalizer:
             'original_length': len(original_text) if original_text else 0,
             'normalized_length': len(normalized_text) if normalized_text else 0,
             'length_change': 0,
-            'has_amendment_markers': bool(re.search(r'<개정|신설|폐지>', original_text or '')),
-            'has_special_chars': bool(re.search(r'「|」|『|』', original_text or '')),
+            'has_amendment_markers': bool(re.search(r'<개정|?�설|?��?>', original_text or '')),
+            'has_special_chars': bool(re.search(r'????????, original_text or '')),
             'has_multiple_spaces': bool(re.search(r'\s{2,}', original_text or '')),
             'normalization_score': 0.0
         }

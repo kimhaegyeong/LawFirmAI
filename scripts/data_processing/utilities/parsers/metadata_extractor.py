@@ -19,42 +19,42 @@ class MetadataExtractor:
     def __init__(self):
         """Initialize the metadata extractor"""
         # Date patterns
-        self.enforcement_date_pattern = re.compile(r'\[시행\s+([^\]]+)\]')
+        self.enforcement_date_pattern = re.compile(r'\[?�행\s+([^\]]+)\]')
         
         # Amendment patterns - more flexible
         self.amendment_pattern = re.compile(r'([^,]+),\s*([^,]+),\s*([^,]+)')
-        self.amendment_type_pattern = re.compile(r'(일부개정|전부개정|신설|폐지)')
+        self.amendment_type_pattern = re.compile(r'(?��?개정|?��?개정|?�설|?��?)')
         
         # Ministry patterns
         self.ministry_patterns = [
-            r'([가-힣]+부령)',
-            r'([가-힣]+부)',
-            r'([가-힣]+청)',
-            r'([가-힣]+원)',
-            r'([가-힣]+위원회)',
-            r'([가-힣]+처)'
+            r'([가-??+부??',
+            r'([가-??+부)',
+            r'([가-??+�?',
+            r'([가-??+??',
+            r'([가-??+?�원??',
+            r'([가-??+�?'
         ]
         
         # Law type patterns
         self.law_type_patterns = {
             '법률': r'법률',
-            '시행령': r'시행령',
-            '시행규칙': r'시행규칙',
-            '부령': r'부령',
-            '대통령령': r'대통령령',
-            '총리령': r'총리령',
+            '?�행??: r'?�행??,
+            '?�행규칙': r'?�행규칙',
+            '부??: r'부??,
+            '?�?�령??: r'?�?�령??,
+            '총리??: r'총리??,
             '부고시': r'부고시',
-            '부훈령': r'부훈령'
+            '부?�령': r'부?�령'
         }
         
         # Reference patterns
         self.reference_patterns = [
-            r'「([^」]+)」',
-            r'같은\s+법',
-            r'동법',
-            r'이\s+법',
-            r'상위법',
-            r'관련법'
+            r'??[^??+)??,
+            r'같�?\s+�?,
+            r'?�법',
+            r'??s+�?,
+            r'?�위�?,
+            r'관?�법'
         ]
     
     def extract(self, law_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,7 +123,7 @@ class MetadataExtractor:
         match = self.enforcement_date_pattern.search(content)
         if match:
             enforcement_text = match.group(1).strip()
-            enforcement_info['text'] = f"[시행 {enforcement_text}]"
+            enforcement_info['text'] = f"[?�행 {enforcement_text}]"
             enforcement_info['date'] = enforcement_text
             
             # Try to parse the date
@@ -242,7 +242,7 @@ class MetadataExtractor:
         references = []
         
         # Extract quoted law names
-        quoted_pattern = re.compile(r'「([^」]+)」')
+        quoted_pattern = re.compile(r'??[^??+)??)
         for match in quoted_pattern.finditer(content):
             law_name = match.group(1)
             ref_type = self._classify_reference_type(law_name)
@@ -275,13 +275,13 @@ class MetadataExtractor:
         """
         law_name = law_data.get('law_name', '')
         
-        # Look for 시행령 or 시행규칙 patterns
-        if '시행령' in law_name:
-            parent_match = re.search(r'([^시행령]+)시행령', law_name)
+        # Look for ?�행??or ?�행규칙 patterns
+        if '?�행?? in law_name:
+            parent_match = re.search(r'([^?�행??+)?�행??, law_name)
             if parent_match:
                 return parent_match.group(1).strip()
-        elif '시행규칙' in law_name:
-            parent_match = re.search(r'([^시행규칙]+)시행규칙', law_name)
+        elif '?�행규칙' in law_name:
+            parent_match = re.search(r'([^?�행규칙]+)?�행규칙', law_name)
             if parent_match:
                 return parent_match.group(1).strip()
         
@@ -300,7 +300,7 @@ class MetadataExtractor:
         related_laws = []
         
         # Extract all quoted law names
-        quoted_pattern = re.compile(r'「([^」]+)」')
+        quoted_pattern = re.compile(r'??[^??+)??)
         for match in quoted_pattern.finditer(content):
             law_name = match.group(1)
             if law_name not in related_laws:
@@ -318,13 +318,13 @@ class MetadataExtractor:
         Returns:
             str: Reference type
         """
-        if '시행령' in law_name:
+        if '?�행?? in law_name:
             return 'enforcement_decree'
-        elif '시행규칙' in law_name:
+        elif '?�행규칙' in law_name:
             return 'enforcement_rule'
-        elif '법률' in law_name or law_name.endswith('법'):
+        elif '법률' in law_name or law_name.endswith('�?):
             return 'parent_law'
-        elif '부령' in law_name or '대통령령' in law_name:
+        elif '부?? in law_name or '?�?�령?? in law_name:
             return 'regulation'
         else:
             return 'related_law'
@@ -365,7 +365,7 @@ class MetadataExtractor:
         date_formats = [
             '%Y.%m.%d.',      # 2025.10.2.
             '%Y.%m.%d',       # 2025.10.2
-            '%Y년 %m월 %d일',  # 2025년 10월 2일
+            '%Y??%m??%d??,  # 2025??10??2??
             '%Y-%m-%d',       # 2025-10-02
             '%Y/%m/%d',       # 2025/10/02
         ]

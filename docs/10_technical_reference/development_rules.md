@@ -1,4 +1,4 @@
-# LawFirmAI 개발 규칙 및 가이드라인
+﻿# LawFirmAI 개발 규칙 및 가이드라인
 
 ## 📋 문서 개요
 
@@ -85,9 +85,9 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # Core 모듈 Import
-from core.agents.workflow_service import LangGraphWorkflowService
-from core.services.search import HybridSearchEngine
-from core.services.generation import AnswerGenerator
+from source.agents.workflow_service import LangGraphWorkflowService
+from source.services.search import HybridSearchEngine
+from source.services.generation import AnswerGenerator
 from infrastructure.utils.langgraph_config import LangGraphConfig
 ```
 
@@ -104,8 +104,8 @@ from fastapi import FastAPI
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # 3. 프로젝트 모듈
-from core.agents.workflow_service import LangGraphWorkflowService
-from core.services.search import HybridSearchEngine
+from source.agents.workflow_service import LangGraphWorkflowService
+from source.services.search import HybridSearchEngine
 ```
 
 ## 📝 로깅 규칙
@@ -240,14 +240,14 @@ sys.path.insert(0, str(project_root))
 
 def test_vector_store_loading():
     """벡터 저장소 로딩 테스트"""
-    from core.data.vector_store import VectorStore
+    from source.data.vector_store import VectorStore
     
     vector_store = VectorStore("test-model")
     assert vector_store is not None
 
 def test_workflow_service():
     """워크플로우 서비스 테스트"""
-    from core.agents.workflow_service import LangGraphWorkflowService
+    from source.agents.workflow_service import LangGraphWorkflowService
     from infrastructure.utils.langgraph_config import LangGraphConfig
     
     config = LangGraphConfig.from_env()
@@ -313,7 +313,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 복사
 COPY apps/streamlit/ ./apps/streamlit/
-COPY core/ ./core/
+COPY core/ ./source/
 COPY infrastructure/ ./infrastructure/
 
 # 비root 사용자로 실행

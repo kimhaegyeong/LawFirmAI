@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-국회 법률정보시스템 판례 수집 (Playwright + 점진적)
+�?�� 법률?�보?�스???��? ?�집 (Playwright + ?�진??
 
-사용법:
-  python collect_precedents.py --sample 10     # 샘플 10개
-  python collect_precedents.py --sample 100    # 샘플 100개
-  python collect_precedents.py --sample 1000   # 샘플 1000개
-  python collect_precedents.py --full          # 전체 수집
-  python collect_precedents.py --resume        # 중단 지점에서 재개
+?�용�?
+  python collect_precedents.py --sample 10     # ?�플 10�?
+  python collect_precedents.py --sample 100    # ?�플 100�?
+  python collect_precedents.py --sample 1000   # ?�플 1000�?
+  python collect_precedents.py --full          # ?�체 ?�집
+  python collect_precedents.py --resume        # 중단 지?�에???�개
 """
 
 import argparse
@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -27,16 +27,16 @@ from source.data.assembly_playwright_client import AssemblyPlaywrightClient
 from scripts.assembly.assembly_collector import AssemblyCollector
 from scripts.assembly.checkpoint_manager import CheckpointManager
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("precedent_collection")
 
-# 시그널 핸들러 등록
+# ?�그???�들???�록
 interrupted = False
 
 def signal_handler(signum, frame):
     global interrupted
-    print(f"\n🚨 Signal {signum} received. Initiating graceful shutdown...")
+    print(f"\n?�� Signal {signum} received. Initiating graceful shutdown...")
     interrupted = True
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -49,31 +49,31 @@ def collect_precedents_incremental(
     start_page: int = 1
 ):
     """
-    점진적 판례 수집
+    ?�진???��? ?�집
     
     Args:
-        target_count: 목표 수집 건수 (None=전체)
-        page_size: 페이지당 항목 수 (실제로는 10개 고정)
-        resume: 체크포인트에서 재개 여부
-        start_page: 시작 페이지 번호
+        target_count: 목표 ?�집 건수 (None=?�체)
+        page_size: ?�이지????�� ??(?�제로는 10�?고정)
+        resume: 체크?�인?�에???�개 ?��?
+        start_page: ?�작 ?�이지 번호
     """
     print(f"\n{'='*60}")
-    print(f"🚀 PRECEDENT COLLECTION STARTED")
+    print(f"?? PRECEDENT COLLECTION STARTED")
     print(f"{'='*60}")
     
-    # 체크포인트 매니저
+    # 체크?�인??매니?�
     checkpoint_mgr = CheckpointManager("data/checkpoints/precedents")
-    print(f"📁 Checkpoint directory: data/checkpoints/precedents")
+    print(f"?�� Checkpoint directory: data/checkpoints/precedents")
     
-    # 체크포인트 로드
+    # 체크?�인??로드
     actual_start_page = start_page
     checkpoint = None
     
     if resume:
-        print(f"🔍 Checking for existing checkpoint...")
+        print(f"?�� Checking for existing checkpoint...")
         checkpoint = checkpoint_mgr.load_checkpoint()
         if checkpoint:
-            print(f"📂 Resuming from checkpoint")
+            print(f"?�� Resuming from checkpoint")
             print(f"   Data type: {checkpoint.get('data_type', 'unknown')}")
             print(f"   Category: {checkpoint.get('category', 'None')}")
             print(f"   Page: {checkpoint.get('current_page', 0)}/{checkpoint.get('total_pages', 0)}")
@@ -81,12 +81,12 @@ def collect_precedents_incremental(
             print(f"   Memory: {checkpoint.get('memory_usage_mb', 0):.1f}MB")
             actual_start_page = checkpoint['current_page'] + 1
         else:
-            print(f"📂 No checkpoint found, starting from page {start_page}")
+            print(f"?�� No checkpoint found, starting from page {start_page}")
     else:
-        print(f"📂 Resume disabled, starting from page {start_page}")
+        print(f"?�� Resume disabled, starting from page {start_page}")
     
-    # 수집기 초기화
-    print(f"\n📦 Initializing collector...")
+    # ?�집�?초기??
+    print(f"\n?�� Initializing collector...")
     collector = AssemblyCollector(
         base_dir="data/raw/assembly",
         data_type="precedent",
@@ -94,19 +94,19 @@ def collect_precedents_incremental(
         batch_size=50,
         memory_limit_mb=800
     )
-    print(f"✅ Collector initialized")
+    print(f"??Collector initialized")
     
-    # 시작 시간 설정
+    # ?�작 ?�간 ?�정
     start_time = datetime.now().isoformat()
     collector.set_start_time(start_time)
     
-    # 전체 페이지 계산 (실제로는 페이지당 10개씩 표시됨)
+    # ?�체 ?�이지 계산 (?�제로는 ?�이지??10개씩 ?�시??
     if target_count:
-        total_pages = actual_start_page + (target_count + 10 - 1) // 10 - 1  # 페이지당 10개
+        total_pages = actual_start_page + (target_count + 10 - 1) // 10 - 1  # ?�이지??10�?
     else:
-        total_pages = 100  # 대략적인 페이지 수
+        total_pages = 100  # ?�?�적???�이지 ??
     
-    print(f"\n📊 Collection Parameters:")
+    print(f"\n?�� Collection Parameters:")
     print(f"   Target: {target_count or 'ALL'}")
     print(f"   Pages: {actual_start_page} to {total_pages}")
     print(f"   Page size: 10 (fixed)")
@@ -117,41 +117,41 @@ def collect_precedents_incremental(
     collected_this_run = 0
     
     try:
-        print(f"\n🌐 Starting Playwright browser...")
+        print(f"\n?�� Starting Playwright browser...")
         with AssemblyPlaywrightClient(
             rate_limit=3.0,
             headless=True,
             memory_limit_mb=800
         ) as client:
-            print(f"✅ Playwright browser started")
+            print(f"??Playwright browser started")
             
             for page in range(actual_start_page, total_pages + 1):
                 if interrupted:
-                    print(f"\n⚠️ INTERRUPTED by user signal")
+                    print(f"\n?�️ INTERRUPTED by user signal")
                     break
                 
-                print(f"\n{'─'*50}")
-                print(f"📄 Processing Page {page}/{total_pages}")
-                print(f"{'─'*50}")
+                print(f"\n{'?�'*50}")
+                print(f"?�� Processing Page {page}/{total_pages}")
+                print(f"{'?�'*50}")
                 
                 memory_mb = client.check_memory_usage()
-                print(f"📊 Memory usage: {memory_mb:.1f}MB")
+                print(f"?�� Memory usage: {memory_mb:.1f}MB")
                 
-                print(f"🔍 Fetching precedent list from page {page}...")
+                print(f"?�� Fetching precedent list from page {page}...")
                 precedents = client.get_precedent_list_page(page_num=page, page_size=10)
-                print(f"✅ Found {len(precedents)} precedents on page")
+                print(f"??Found {len(precedents)} precedents on page")
                 
                 if not precedents:
-                    print(f"⚠️ No precedents found on page {page}, skipping...")
+                    print(f"?�️ No precedents found on page {page}, skipping...")
                     continue
                 
-                # 각 판례 상세 수집
-                print(f"📋 Processing {len(precedents)} precedents...")
-                page_precedents = []  # 현재 페이지의 판례들을 저장할 리스트
+                # �??��? ?�세 ?�집
+                print(f"?�� Processing {len(precedents)} precedents...")
+                page_precedents = []  # ?�재 ?�이지???��??�을 ?�?�할 리스??
                 
                 for idx, precedent_item in enumerate(precedents, 1):
                     if interrupted:
-                        print(f"\n⚠️ INTERRUPTED during precedent processing")
+                        print(f"\n?�️ INTERRUPTED during precedent processing")
                         break
                     
                     try:
@@ -159,23 +159,23 @@ def collect_precedents_incremental(
                         
                         detail = client.get_precedent_detail(precedent_item)
                         
-                        page_precedents.append(detail)  # 페이지별 리스트에 추가
+                        page_precedents.append(detail)  # ?�이지�?리스?�에 추�?
                         collector.save_item(detail)
                         collected_this_run += 1
                         
-                        print(f"      ✅ Collected (Total: {collector.collected_count})")
+                        print(f"      ??Collected (Total: {collector.collected_count})")
                         
-                        # 목표 달성 체크
+                        # 목표 ?�성 체크
                         if target_count and collected_this_run >= target_count:
-                            print(f"\n🎯 TARGET REACHED: {collected_this_run}/{target_count}")
+                            print(f"\n?�� TARGET REACHED: {collected_this_run}/{target_count}")
                             break
                         
                     except Exception as e:
-                        print(f"      ❌ Failed: {str(e)[:100]}...")
+                        print(f"      ??Failed: {str(e)[:100]}...")
                         collector.add_failed_item(precedent_item, str(e))
                         continue
                 
-                # 현재 페이지의 판례들을 별도 파일로 저장
+                # ?�재 ?�이지???��??�을 별도 ?�일�??�??
                 if page_precedents:
                     timestamp = datetime.now().strftime("%H%M%S")
                     page_filename = f"precedent_page_{page:03d}_{timestamp}.json"
@@ -192,10 +192,10 @@ def collect_precedents_incremental(
                     with open(page_filepath, 'w', encoding='utf-8') as f:
                         json.dump(page_data, f, ensure_ascii=False, indent=2)
                     
-                    print(f"📄 Page {page} saved: {page_filename} ({len(page_precedents)} precedents)")
+                    print(f"?�� Page {page} saved: {page_filename} ({len(page_precedents)} precedents)")
                 
-                # 진행률 로그
-                print(f"\n📈 Progress Summary:")
+                # 진행�?로그
+                print(f"\n?�� Progress Summary:")
                 print(f"   Page: {page}/{total_pages} ({page/total_pages*100:.1f}%)")
                 print(f"   Collected this run: {collected_this_run}")
                 print(f"   Total collected: {collector.collected_count}")
@@ -216,23 +216,23 @@ def collect_precedents_incremental(
                 }
                 
                 checkpoint_mgr.save_checkpoint(checkpoint_data)
-                print(f"💾 Checkpoint saved at page {page}")
+                print(f"?�� Checkpoint saved at page {page}")
                 
                 if target_count and collected_this_run >= target_count:
-                    print(f"\n🎯 Target achieved, stopping collection")
+                    print(f"\n?�� Target achieved, stopping collection")
                     break
             
-            print(f"\n🏁 Finalizing collection...")
+            print(f"\n?�� Finalizing collection...")
             collector.finalize()
             
             if not interrupted:
                 checkpoint_mgr.clear_checkpoint()
-                print(f"\n✅ COLLECTION COMPLETED SUCCESSFULLY!")
+                print(f"\n??COLLECTION COMPLETED SUCCESSFULLY!")
             else:
-                print(f"\n⚠️ COLLECTION INTERRUPTED (progress saved)")
+                print(f"\n?�️ COLLECTION INTERRUPTED (progress saved)")
             
-            # 최종 통계
-            print(f"\n📊 Final Statistics:")
+            # 최종 ?�계
+            print(f"\n?�� Final Statistics:")
             print(f"   Total collected: {collector.collected_count} items")
             print(f"   Failed: {len(collector.failed_items)} items")
             print(f"   Requests made: {client.request_count}")
@@ -240,51 +240,51 @@ def collect_precedents_incremental(
             print(f"   Timeout: {client.get_stats()['timeout']}ms")
             
     except Exception as e:
-        print(f"\n❌ CRITICAL ERROR: {e}")
-        print(f"🔧 Finalizing collector...")
+        print(f"\n??CRITICAL ERROR: {e}")
+        print(f"?�� Finalizing collector...")
         collector.finalize()
         raise
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(
-        description='국회 법률정보시스템 판례 수집 (Playwright)',
+        description='�?�� 법률?�보?�스???��? ?�집 (Playwright)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python collect_precedents.py --sample 10                    # 샘플 10개 수집
-  python collect_precedents.py --sample 100                   # 샘플 100개 수집
-  python collect_precedents.py --sample 100 --start-page 5     # 5페이지부터 100개 수집
-  python collect_precedents.py --sample 50 --start-page 10     # 10페이지부터 50개 수집
-  python collect_precedents.py --full                          # 전체 수집
-  python collect_precedents.py --resume                        # 중단 지점에서 재개
+  python collect_precedents.py --sample 10                    # ?�플 10�??�집
+  python collect_precedents.py --sample 100                   # ?�플 100�??�집
+  python collect_precedents.py --sample 100 --start-page 5     # 5?�이지부??100�??�집
+  python collect_precedents.py --sample 50 --start-page 10     # 10?�이지부??50�??�집
+  python collect_precedents.py --full                          # ?�체 ?�집
+  python collect_precedents.py --resume                        # 중단 지?�에???�개
         """
     )
     
     parser.add_argument('--sample', type=int, metavar='N',
-                        help='샘플 수집 개수 (10, 100, 1000 등)')
+                        help='?�플 ?�집 개수 (10, 100, 1000 ??')
     parser.add_argument('--full', action='store_true',
-                        help='전체 수집')
+                        help='?�체 ?�집')
     parser.add_argument('--resume', action='store_true', default=True,
-                        help='체크포인트에서 재개 (기본값)')
+                        help='체크?�인?�에???�개 (기본�?')
     parser.add_argument('--no-resume', dest='resume', action='store_false',
-                        help='처음부터 시작')
+                        help='처음부???�작')
     parser.add_argument('--page-size', type=int, default=100,
-                        help='페이지당 항목 수 (기본: 100)')
+                        help='?�이지????�� ??(기본: 100)')
     parser.add_argument('--start-page', type=int, default=1,
-                        help='시작 페이지 번호 (기본: 1)')
+                        help='?�작 ?�이지 번호 (기본: 1)')
     parser.add_argument('--log-level', type=str, default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                        help='로그 레벨 (기본: INFO)')
+                        help='로그 ?�벨 (기본: INFO)')
     
     args = parser.parse_args()
     
-    # 로그 레벨 재설정
+    # 로그 ?�벨 ?�설??
     if args.log_level != 'INFO':
         logger.setLevel(getattr(logging, args.log_level))
     
     if args.sample:
-        print(f"📦 Sample mode: {args.sample} items")
+        print(f"?�� Sample mode: {args.sample} items")
         collect_precedents_incremental(
             target_count=args.sample,
             page_size=args.page_size,
@@ -292,7 +292,7 @@ Examples:
             start_page=args.start_page
         )
     elif args.full:
-        logger.info(f"📦 Full mode: all items")
+        logger.info(f"?�� Full mode: all items")
         collect_precedents_incremental(
             target_count=None,
             page_size=args.page_size,
@@ -301,7 +301,7 @@ Examples:
         )
     else:
         parser.print_help()
-        logger.error("\n❌ Please specify --sample N or --full")
+        logger.error("\n??Please specify --sample N or --full")
         sys.exit(1)
 
 if __name__ == "__main__":

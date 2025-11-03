@@ -103,7 +103,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default=os.path.join("data", "lawfirm_v2.db"))
     parser.add_argument("--json", required=True)
-    parser.add_argument("--domain", default="민사법")
+    parser.add_argument("--domain", default="민사�?)
     parser.add_argument("--model", default="snunlp/KR-SBERT-V40K-klueNLI-augSTS")
     args = parser.parse_args()
 

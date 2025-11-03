@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-RAG 시스템 통합 테스트
+RAG ?�스???�합 ?�스??
 
-이 모듈은 LawFirmAI의 RAG 시스템 전체 통합 테스트를 수행합니다.
-- ChatService 통합 테스트 (LangGraph 기반)
-- 질문 분류 시스템 테스트 (6가지 질문 유형)
-- 답변 생성 품질 테스트 (신뢰도 계산 및 답변 형식 검증)
+??모듈?� LawFirmAI??RAG ?�스???�체 ?�합 ?�스?��? ?�행?�니??
+- ChatService ?�합 ?�스??(LangGraph 기반)
+- 질문 분류 ?�스???�스??(6가지 질문 ?�형)
+- ?��? ?�성 ?�질 ?�스??(?�뢰??계산 �??��? ?�식 검�?
 
 Author: LawFirmAI Development Team
 Date: 2024-01-XX
@@ -55,34 +55,34 @@ except ImportError as e:
 TEST_CONFIG = {
     "test_questions": {
         "precedent_search": [
-            "손해배상 관련 판례를 찾아주세요",
-            "이혼 위자료 판례를 검색해주세요",
-            "계약 해제 관련 대법원 판례가 있나요?"
+            "?�해배상 관???��?�?찾아주세??,
+            "?�혼 ?�자�??��?�?검?�해주세??,
+            "계약 ?�제 관???�법원 ?��?가 ?�나??"
         ],
         "law_inquiry": [
-            "민법 제750조의 내용이 무엇인가요?",
-            "형법 제250조 살인죄에 대해 설명해주세요",
-            "상법 제434조 이사의 책임에 대해 알려주세요"
+            "민법 ??50조의 ?�용??무엇?��???",
+            "?�법 ??50�??�인죄에 ?�???�명?�주?�요",
+            "?�법 ??34�??�사??책임???�???�려주세??
         ],
         "legal_advice": [
-            "계약서 작성 시 주의사항을 조언해주세요",
-            "이혼 절차와 필요한 서류를 알려주세요",
-            "손해배상 청구 방법을 안내해주세요"
+            "계약???�성 ??주의?�항??조언?�주?�요",
+            "?�혼 ?�차?� ?�요???�류�??�려주세??,
+            "?�해배상 �?�� 방법???�내?�주?�요"
         ],
         "procedure_guide": [
-            "소송 제기 절차는 어떻게 되나요?",
-            "부동산 등기 신청 방법을 알려주세요",
-            "특허 출원 절차를 설명해주세요"
+            "?�송 ?�기 ?�차???�떻�??�나??",
+            "부?�산 ?�기 ?�청 방법???�려주세??,
+            "?�허 출원 ?�차�??�명?�주?�요"
         ],
         "term_explanation": [
-            "불법행위의 정의를 알려주세요",
-            "채권과 채무의 차이점은 무엇인가요?",
-            "소멸시효의 개념을 설명해주세요"
+            "불법?�위???�의�??�려주세??,
+            "채권�?채무??차이?��? 무엇?��???",
+            "?�멸?�효??개념???�명?�주?�요"
         ],
         "general_question": [
-            "법률에 대해 궁금한 것이 있습니다",
-            "법적 문제로 고민이 있습니다",
-            "법률 상담이 필요합니다"
+            "법률???�??궁금??것이 ?�습?�다",
+            "법적 문제�?고�????�습?�다",
+            "법률 ?�담???�요?�니??
         ]
     },
     "performance_thresholds": {
@@ -98,7 +98,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class TestResult:
-    """테스트 결과 데이터 클래스"""
+    """?�스??결과 ?�이???�래??""
     test_name: str
     passed: bool
     response_time: float
@@ -110,15 +110,15 @@ class TestResult:
 
 
 class RAGIntegrationTestSuite:
-    """RAG 시스템 통합 테스트 스위트"""
+    """RAG ?�스???�합 ?�스???�위??""
 
     def __init__(self):
-        """테스트 스위트 초기화"""
+        """?�스???�위??초기??""
         self.logger = get_logger(__name__)
         self.config = Config()
         self.test_results: List[TestResult] = []
 
-        # RAG 컴포넌트 초기화
+        # RAG 컴포?�트 초기??
         self.chat_service = None
         self.question_classifier = None
         self.answer_generator = None
@@ -128,20 +128,20 @@ class RAGIntegrationTestSuite:
         self._initialize_components()
 
     def _initialize_components(self):
-        """RAG 컴포넌트 초기화"""
+        """RAG 컴포?�트 초기??""
         try:
             if not RAG_MODULES_AVAILABLE:
                 raise ImportError("RAG modules not available")
 
-            # ChatService 초기화
+            # ChatService 초기??
             self.chat_service = ChatService(self.config)
             self.logger.info("ChatService initialized")
 
-            # 개별 컴포넌트 초기화
+            # 개별 컴포?�트 초기??
             self.question_classifier = QuestionClassifier()
             self.answer_generator = ImprovedAnswerGenerator()
 
-            # RAG 서비스 초기화 (Mock 사용)
+            # RAG ?�비??초기??(Mock ?�용)
             # RAGService removed - use HybridSearchEngine instead
             self.rag_service = None
             self.hybrid_search_engine = Mock(spec=HybridSearchEngine)
@@ -153,27 +153,27 @@ class RAGIntegrationTestSuite:
             raise
 
     async def test_chat_service_integration(self) -> List[TestResult]:
-        """ChatService 통합 테스트"""
+        """ChatService ?�합 ?�스??""
         self.logger.info("Starting ChatService integration tests...")
         results = []
 
-        # 테스트 질문들
+        # ?�스??질문??
         test_questions = [
-            "안녕하세요, 법률 상담이 필요합니다",
-            "계약서 검토를 도와주세요",
-            "이혼 절차에 대해 알려주세요"
+            "?�녕?�세?? 법률 ?�담???�요?�니??,
+            "계약??검?��? ?��?주세??,
+            "?�혼 ?�차???�???�려주세??
         ]
 
         for question in test_questions:
             try:
                 start_time = time.time()
 
-                # ChatService를 통한 메시지 처리
+                # ChatService�??�한 메시지 처리
                 response = await self.chat_service.process_message(question)
 
                 response_time = time.time() - start_time
 
-                # 결과 검증
+                # 결과 검�?
                 passed = self._validate_chat_response(response, response_time)
 
                 result = TestResult(
@@ -207,7 +207,7 @@ class RAGIntegrationTestSuite:
         return results
 
     def test_question_classification_system(self) -> List[TestResult]:
-        """질문 분류 시스템 테스트 (6가지 질문 유형)"""
+        """질문 분류 ?�스???�스??(6가지 질문 ?�형)"""
         self.logger.info("Starting question classification system tests...")
         results = []
 
@@ -216,12 +216,12 @@ class RAGIntegrationTestSuite:
                 try:
                     start_time = time.time()
 
-                    # 질문 분류 수행
+                    # 질문 분류 ?�행
                     classification = self.question_classifier.classify_question(question)
 
                     response_time = time.time() - start_time
 
-                    # 결과 검증
+                    # 결과 검�?
                     passed = self._validate_classification(classification, question_type)
 
                     result = TestResult(
@@ -258,18 +258,18 @@ class RAGIntegrationTestSuite:
         return results
 
     def test_answer_generation_quality(self) -> List[TestResult]:
-        """답변 생성 품질 테스트"""
+        """?��? ?�성 ?�질 ?�스??""
         self.logger.info("Starting answer generation quality tests...")
         results = []
 
-        # 테스트용 질문 분류 결과 생성
+        # ?�스?�용 질문 분류 결과 ?�성
         test_classifications = {
             QuestionType.PRECEDENT_SEARCH: QuestionClassification(
                 question_type=QuestionType.PRECEDENT_SEARCH,
                 law_weight=0.2,
                 precedent_weight=0.8,
                 confidence=0.8,
-                keywords=["판례", "검색"],
+                keywords=["?��?", "검??],
                 patterns=[]
             ),
             QuestionType.LAW_INQUIRY: QuestionClassification(
@@ -291,44 +291,44 @@ class RAGIntegrationTestSuite:
         }
 
         test_questions = [
-            "손해배상 관련 판례를 찾아주세요",
-            "민법 제750조의 내용이 무엇인가요?",
-            "계약서 작성 시 주의사항을 조언해주세요"
+            "?�해배상 관???��?�?찾아주세??,
+            "민법 ??50조의 ?�용??무엇?��???",
+            "계약???�성 ??주의?�항??조언?�주?�요"
         ]
 
         for i, question in enumerate(test_questions):
             try:
                 start_time = time.time()
 
-                # Mock 소스 데이터
+                # Mock ?�스 ?�이??
                 mock_sources = {
                     "results": [
-                        {"type": "law", "law_name": "민법", "article_number": "제750조", "similarity": 0.9},
-                        {"type": "precedent", "case_name": "손해배상 사건", "case_number": "2023다12345", "similarity": 0.8}
+                        {"type": "law", "law_name": "민법", "article_number": "??50�?, "similarity": 0.9},
+                        {"type": "precedent", "case_name": "?�해배상 ?�건", "case_number": "2023??2345", "similarity": 0.8}
                     ],
                     "law_results": [
-                        {"law_name": "민법", "article_number": "제750조", "content": "불법행위로 인한 손해배상"}
+                        {"law_name": "민법", "article_number": "??50�?, "content": "불법?�위�??�한 ?�해배상"}
                     ],
                     "precedent_results": [
-                        {"case_name": "손해배상 사건", "case_number": "2023다12345", "summary": "불법행위 손해배상"}
+                        {"case_name": "?�해배상 ?�건", "case_number": "2023??2345", "summary": "불법?�위 ?�해배상"}
                     ]
                 }
 
-                # 질문 유형에 따른 분류 결과 선택
+                # 질문 ?�형???�른 분류 결과 ?�택
                 question_types = list(test_classifications.keys())
                 classification = test_classifications[question_types[i % len(question_types)]]
 
-                # 답변 생성
+                # ?��? ?�성
                 answer_result = self.answer_generator.generate_answer(
                     query=question,
                     question_type=classification,
-                    context="테스트 컨텍스트",
+                    context="?�스??컨텍?�트",
                     sources=mock_sources
                 )
 
                 response_time = time.time() - start_time
 
-                # 결과 검증
+                # 결과 검�?
                 passed = self._validate_answer_quality(answer_result, response_time)
 
                 result = TestResult(
@@ -366,24 +366,24 @@ class RAGIntegrationTestSuite:
         return results
 
     def _validate_chat_response(self, response: Dict[str, Any], response_time: float) -> bool:
-        """ChatService 응답 검증"""
+        """ChatService ?�답 검�?""
         try:
-            # 필수 키 존재 확인
+            # ?�수 ??존재 ?�인
             required_keys = ["response", "confidence", "sources", "processing_time"]
             if not all(key in response for key in required_keys):
                 self.logger.warning(f"Missing required keys in response. Has: {list(response.keys())}")
                 return False
 
-            # 응답 시간 검증 (경고만 출력, 실패로 처리하지 않음)
+            # ?�답 ?�간 검�?(경고�?출력, ?�패�?처리?��? ?�음)
             if response_time > TEST_CONFIG["performance_thresholds"]["response_time"]:
                 self.logger.warning(f"Response time {response_time:.2f}s exceeds threshold {TEST_CONFIG['performance_thresholds']['response_time']}s")
 
-            # 응답 내용 검증
+            # ?�답 ?�용 검�?
             if not response["response"] or len(response["response"]) < TEST_CONFIG["performance_thresholds"]["min_answer_length"]:
                 self.logger.warning(f"Response too short: {len(response.get('response', ''))} chars")
                 return False
 
-            # 신뢰도 검증
+            # ?�뢰??검�?
             if response["confidence"] < TEST_CONFIG["performance_thresholds"]["min_confidence"]:
                 self.logger.warning(f"Confidence {response['confidence']} below threshold {TEST_CONFIG['performance_thresholds']['min_confidence']}")
                 return False
@@ -395,17 +395,17 @@ class RAGIntegrationTestSuite:
             return False
 
     def _validate_classification(self, classification: QuestionClassification, expected_type: str) -> bool:
-        """질문 분류 결과 검증"""
+        """질문 분류 결과 검�?""
         try:
-            # 분류 결과 존재 확인
+            # 분류 결과 존재 ?�인
             if not classification:
                 return False
 
-            # 신뢰도 검증
+            # ?�뢰??검�?
             if classification.confidence < TEST_CONFIG["performance_thresholds"]["min_confidence"]:
                 return False
 
-            # 가중치 합계 검증 (대략적으로 1.0에 가까워야 함)
+            # 가중치 ?�계 검�?(?�?�적?�로 1.0??가까워????
             total_weight = classification.law_weight + classification.precedent_weight
             if not (0.8 <= total_weight <= 1.2):
                 return False
@@ -417,23 +417,23 @@ class RAGIntegrationTestSuite:
             return False
 
     def _validate_answer_quality(self, answer_result: AnswerResult, response_time: float) -> bool:
-        """답변 품질 검증"""
+        """?��? ?�질 검�?""
         try:
-            # 답변 결과 존재 확인
+            # ?��? 결과 존재 ?�인
             if not answer_result or not answer_result.answer:
                 return False
 
-            # 응답 시간 검증
+            # ?�답 ?�간 검�?
             if response_time > TEST_CONFIG["performance_thresholds"]["response_time"]:
                 return False
 
-            # 답변 길이 검증
+            # ?��? 길이 검�?
             answer_length = len(answer_result.answer)
             if not (TEST_CONFIG["performance_thresholds"]["min_answer_length"] <=
                    answer_length <= TEST_CONFIG["performance_thresholds"]["max_answer_length"]):
                 return False
 
-            # 신뢰도 검증
+            # ?�뢰??검�?
             if answer_result.confidence.confidence < TEST_CONFIG["performance_thresholds"]["min_confidence"]:
                 return False
 
@@ -444,22 +444,22 @@ class RAGIntegrationTestSuite:
             return False
 
     async def run_all_tests(self) -> Dict[str, Any]:
-        """모든 통합 테스트 실행"""
+        """모든 ?�합 ?�스???�행"""
         self.logger.info("Starting RAG system integration tests...")
         start_time = time.time()
 
         all_results = []
 
         try:
-            # 1. ChatService 통합 테스트
+            # 1. ChatService ?�합 ?�스??
             chat_results = await self.test_chat_service_integration()
             all_results.extend(chat_results)
 
-            # 2. 질문 분류 시스템 테스트
+            # 2. 질문 분류 ?�스???�스??
             classification_results = self.test_question_classification_system()
             all_results.extend(classification_results)
 
-            # 3. 답변 생성 품질 테스트
+            # 3. ?��? ?�성 ?�질 ?�스??
             answer_results = self.test_answer_generation_quality()
             all_results.extend(answer_results)
 
@@ -468,26 +468,26 @@ class RAGIntegrationTestSuite:
 
         total_time = time.time() - start_time
 
-        # 테스트 결과 분석
+        # ?�스??결과 분석
         test_summary = self._analyze_test_results(all_results, total_time)
 
         return test_summary
 
     def _analyze_test_results(self, results: List[TestResult], total_time: float) -> Dict[str, Any]:
-        """테스트 결과 분석"""
+        """?�스??결과 분석"""
         total_tests = len(results)
         passed_tests = sum(1 for r in results if r.passed)
         failed_tests = total_tests - passed_tests
 
-        # 성공률 계산
+        # ?�공�?계산
         success_rate = (passed_tests / total_tests * 100) if total_tests > 0 else 0
 
-        # 평균 성능 지표 계산
+        # ?�균 ?�능 지??계산
         avg_response_time = sum(r.response_time for r in results) / total_tests if total_tests > 0 else 0
         avg_confidence = sum(r.confidence for r in results) / total_tests if total_tests > 0 else 0
         avg_answer_length = sum(r.answer_length for r in results) / total_tests if total_tests > 0 else 0
 
-        # 질문 유형별 성공률
+        # 질문 ?�형�??�공�?
         type_stats = {}
         for result in results:
             if result.question_type not in type_stats:
@@ -500,7 +500,7 @@ class RAGIntegrationTestSuite:
             stats = type_stats[question_type]
             stats["success_rate"] = (stats["passed"] / stats["total"] * 100) if stats["total"] > 0 else 0
 
-        # 실패한 테스트 목록
+        # ?�패???�스??목록
         failed_tests_list = [r for r in results if not r.passed]
 
         summary = {
@@ -532,107 +532,107 @@ class RAGIntegrationTestSuite:
         return summary
 
     def generate_test_report(self, test_summary: Dict[str, Any]) -> str:
-        """테스트 보고서 생성"""
+        """?�스??보고???�성"""
         report = f"""
-# RAG 시스템 통합 테스트 보고서
+# RAG ?�스???�합 ?�스??보고??
 
-## 테스트 개요
-- **실행 시간**: {test_summary['test_summary']['total_execution_time']:.2f}초
-- **총 테스트 수**: {test_summary['test_summary']['total_tests']}개
-- **성공한 테스트**: {test_summary['test_summary']['passed_tests']}개
-- **실패한 테스트**: {test_summary['test_summary']['failed_tests']}개
-- **성공률**: {test_summary['test_summary']['success_rate']:.1f}%
+## ?�스??개요
+- **?�행 ?�간**: {test_summary['test_summary']['total_execution_time']:.2f}�?
+- **�??�스????*: {test_summary['test_summary']['total_tests']}�?
+- **?�공???�스??*: {test_summary['test_summary']['passed_tests']}�?
+- **?�패???�스??*: {test_summary['test_summary']['failed_tests']}�?
+- **?�공�?*: {test_summary['test_summary']['success_rate']:.1f}%
 
-## 성능 지표
-- **평균 응답 시간**: {test_summary['performance_metrics']['avg_response_time']:.2f}초
-- **평균 신뢰도**: {test_summary['performance_metrics']['avg_confidence']:.3f}
-- **평균 답변 길이**: {test_summary['performance_metrics']['avg_answer_length']:.0f}자
+## ?�능 지??
+- **?�균 ?�답 ?�간**: {test_summary['performance_metrics']['avg_response_time']:.2f}�?
+- **?�균 ?�뢰??*: {test_summary['performance_metrics']['avg_confidence']:.3f}
+- **?�균 ?��? 길이**: {test_summary['performance_metrics']['avg_answer_length']:.0f}??
 
-## 질문 유형별 성공률
+## 질문 ?�형�??�공�?
 """
 
         for question_type, stats in test_summary['question_type_stats'].items():
             report += f"- **{question_type}**: {stats['success_rate']:.1f}% ({stats['passed']}/{stats['total']})\n"
 
         if test_summary['failed_tests']:
-            report += "\n## 실패한 테스트\n"
+            report += "\n## ?�패???�스??n"
             for failed_test in test_summary['failed_tests']:
                 report += f"- **{failed_test['test_name']}**: {failed_test['error_message']}\n"
 
-        report += f"\n## 테스트 실행 시간\n{test_summary['test_timestamp']}\n"
+        report += f"\n## ?�스???�행 ?�간\n{test_summary['test_timestamp']}\n"
 
         return report
 
 
 async def main():
-    """메인 테스트 실행 함수"""
+    """메인 ?�스???�행 ?�수"""
     print("=" * 60)
-    print("RAG 시스템 통합 테스트 시작")
+    print("RAG ?�스???�합 ?�스???�작")
     print("=" * 60)
 
     try:
-        # 테스트 스위트 초기화
+        # ?�스???�위??초기??
         test_suite = RAGIntegrationTestSuite()
 
-        # 모든 테스트 실행
+        # 모든 ?�스???�행
         test_summary = await test_suite.run_all_tests()
 
         # 결과 출력
         print("\n" + "=" * 60)
-        print("테스트 결과 요약")
+        print("?�스??결과 ?�약")
         print("=" * 60)
 
         summary = test_summary['test_summary']
-        print(f"총 테스트 수: {summary['total_tests']}")
-        print(f"성공한 테스트: {summary['passed_tests']}")
-        print(f"실패한 테스트: {summary['failed_tests']}")
-        print(f"성공률: {summary['success_rate']:.1f}%")
-        print(f"총 실행 시간: {summary['total_execution_time']:.2f}초")
+        print(f"�??�스???? {summary['total_tests']}")
+        print(f"?�공???�스?? {summary['passed_tests']}")
+        print(f"?�패???�스?? {summary['failed_tests']}")
+        print(f"?�공�? {summary['success_rate']:.1f}%")
+        print(f"�??�행 ?�간: {summary['total_execution_time']:.2f}�?)
 
-        # 성능 지표 출력
+        # ?�능 지??출력
         metrics = test_summary['performance_metrics']
-        print(f"\n성능 지표:")
-        print(f"- 평균 응답 시간: {metrics['avg_response_time']:.2f}초")
-        print(f"- 평균 신뢰도: {metrics['avg_confidence']:.3f}")
-        print(f"- 평균 답변 길이: {metrics['avg_answer_length']:.0f}자")
+        print(f"\n?�능 지??")
+        print(f"- ?�균 ?�답 ?�간: {metrics['avg_response_time']:.2f}�?)
+        print(f"- ?�균 ?�뢰?? {metrics['avg_confidence']:.3f}")
+        print(f"- ?�균 ?��? 길이: {metrics['avg_answer_length']:.0f}??)
 
-        # 질문 유형별 결과 출력
-        print(f"\n질문 유형별 성공률:")
+        # 질문 ?�형�?결과 출력
+        print(f"\n질문 ?�형�??�공�?")
         for question_type, stats in test_summary['question_type_stats'].items():
             print(f"- {question_type}: {stats['success_rate']:.1f}% ({stats['passed']}/{stats['total']})")
 
-        # 실패한 테스트 출력
+        # ?�패???�스??출력
         if test_summary['failed_tests']:
-            print(f"\n실패한 테스트:")
+            print(f"\n?�패???�스??")
             for failed_test in test_summary['failed_tests']:
                 print(f"- {failed_test['test_name']}: {failed_test['error_message']}")
 
-        # 상세 보고서 생성 및 저장
+        # ?�세 보고???�성 �??�??
         report = test_suite.generate_test_report(test_summary)
 
-        # 보고서 파일 저장
+        # 보고???�일 ?�??
         report_path = Path("reports/rag_integration_test_report.md")
         report_path.parent.mkdir(exist_ok=True)
 
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report)
 
-        print(f"\n상세 보고서가 저장되었습니다: {report_path}")
+        print(f"\n?�세 보고?��? ?�?�되?�습?�다: {report_path}")
 
-        # JSON 결과 저장
+        # JSON 결과 ?�??
         json_path = Path("reports/rag_integration_test_results.json")
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(test_summary, f, ensure_ascii=False, indent=2)
 
-        print(f"JSON 결과가 저장되었습니다: {json_path}")
+        print(f"JSON 결과가 ?�?�되?�습?�다: {json_path}")
 
         return test_summary
 
     except Exception as e:
-        print(f"테스트 실행 중 오류 발생: {e}")
+        print(f"?�스???�행 �??�류 발생: {e}")
         return None
 
 
 if __name__ == "__main__":
-    # 비동기 테스트 실행
+    # 비동�??�스???�행
     asyncio.run(main())

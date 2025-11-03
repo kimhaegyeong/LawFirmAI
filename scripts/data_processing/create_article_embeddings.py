@@ -1,7 +1,7 @@
-ï»¿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-í˜„í–‰ë²•ë ¹ ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± ìŠ¤í¬ë¦½íŠ¸
+ÇöÇà¹ı·É Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º ½ºÅ©¸³Æ®
 """
 
 import argparse
@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 import psutil
 
-# PyTorch ê´€ë ¨ import
+# PyTorch °ü·Ã import
 try:
     import torch
     TORCH_AVAILABLE = True
@@ -24,7 +24,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     logging.warning("PyTorch not available")
 
-# í”„ë¡œì íŠ¸ ë£¨íŠ¸ë¥¼ Python ê²½ë¡œì— ì¶”ê°€
+# ÇÁ·ÎÁ§Æ® ·çÆ®¸¦ Python °æ·Î¿¡ Ãß°¡
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -33,12 +33,12 @@ from source.data.vector_store import LegalVectorStore
 
 
 def setup_local_logging():
-    """ë¡œì»¬ ë¡œê¹… ì„¤ì • (setup_logging ëŒ€ì‹  ì‚¬ìš©)"""
-    # í™˜ê²½ ë³€ìˆ˜ë¡œ ì™¸ë¶€ ë¼ì´ë¸ŒëŸ¬ë¦¬ ë¡œê¹…ë§Œ ì°¨ë‹¨
+    """·ÎÄÃ ·Î±ë ¼³Á¤ (setup_logging ´ë½Å »ç¿ë)"""
+    # È¯°æ º¯¼ö·Î ¿ÜºÎ ¶óÀÌºê·¯¸® ·Î±ë¸¸ Â÷´Ü
     os.environ['PYTHONWARNINGS'] = 'ignore'
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-    # ì™¸ë¶€ ë¼ì´ë¸ŒëŸ¬ë¦¬ ë¡œê¹…ë§Œ ì°¨ë‹¨
+    # ¿ÜºÎ ¶óÀÌºê·¯¸® ·Î±ë¸¸ Â÷´Ü
     external_loggers = [
         "faiss", "sentence_transformers", "transformers", "torch",
         "numpy", "scipy", "sklearn", "matplotlib", "pandas",
@@ -51,11 +51,11 @@ def setup_local_logging():
         logger.setLevel(logging.WARNING)
         logger.propagate = False
 
-    # ê²½ê³  ë©”ì‹œì§€ í•„í„°
+    # °æ°í ¸Ş½ÃÁö ÇÊÅÍ
     import warnings
     warnings.filterwarnings('ignore')
 
-    # ìš°ë¦¬ ì•±ì˜ ë¡œê¹…ì€ ì •ìƒì ìœ¼ë¡œ ì„¤ì •
+    # ¿ì¸® ¾ÛÀÇ ·Î±ëÀº Á¤»óÀûÀ¸·Î ¼³Á¤
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -63,24 +63,24 @@ def setup_local_logging():
     )
 
 class ArticleVectorEmbedder:
-    """ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± í´ë˜ìŠ¤"""
+    """Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º Å¬·¡½º"""
 
     def __init__(self, start_batch: int = 1, batch_size: int = 1000, use_gpu: bool = False, max_batches: int = None):
         setup_local_logging()
         self.logger = logging.getLogger("article_vector_embedder")
         self.db_manager = DatabaseManager()
 
-        # GPU ì‚¬ìš© ì—¬ë¶€ ê²°ì • (CUDA ë° ROCm ì§€ì›)
+        # GPU »ç¿ë ¿©ºÎ °áÁ¤ (CUDA ¹× ROCm Áö¿ø)
         device = "cpu"
 
         if use_gpu and TORCH_AVAILABLE:
-            # CUDA (NVIDIA GPU) ì²´í¬
+            # CUDA (NVIDIA GPU) Ã¼Å©
             if torch.cuda.is_available():
                 device = "cuda"
                 self.logger.info("NVIDIA CUDA GPU detected. Using CUDA.")
-            # ROCm (AMD GPU) ì²´í¬
+            # ROCm (AMD GPU) Ã¼Å©
             elif hasattr(torch, 'hip') and torch.hip.is_available():
-                device = "cuda"  # ROCmì€ CUDA APIë¥¼ ì‚¬ìš©
+                device = "cuda"  # ROCmÀº CUDA API¸¦ »ç¿ë
                 self.logger.info("AMD ROCm GPU detected. Using ROCm.")
             else:
                 self.logger.warning("GPU requested but neither CUDA nor ROCm available. Using CPU.")
@@ -88,58 +88,58 @@ class ArticleVectorEmbedder:
 
         self.logger.info(f"Using device: {device}")
 
-        # ë²¡í„° ìŠ¤í† ì–´ ì´ˆê¸°í™”
+        # º¤ÅÍ ½ºÅä¾î ÃÊ±âÈ­
         self.vector_store = LegalVectorStore(device=device)
 
-        # ë°°ì¹˜ ì„¤ì •
+        # ¹èÄ¡ ¼³Á¤
         self.start_batch = start_batch
         self.batch_size = batch_size
-        self.max_batches = max_batches  # ì²˜ë¦¬í•  ìµœëŒ€ ë°°ì¹˜ ìˆ˜
+        self.max_batches = max_batches  # Ã³¸®ÇÒ ÃÖ´ë ¹èÄ¡ ¼ö
 
-        # í†µê³„ ì •ë³´
+        # Åë°è Á¤º¸
         self.stats = {
             'total_articles': 0,
             'processed_articles': 0,
             'embedding_errors': []
         }
 
-        # ì§„í–‰ íŒŒì¼ ê²½ë¡œ
+        # ÁøÇà ÆÄÀÏ °æ·Î
         self.progress_file_path = Path("data/embeddings/article_embeddings_progress.json")
 
     def create_article_embeddings(self) -> Dict[str, Any]:
-        """ë©”ëª¨ë¦¬ ìµœì í™”ëœ ë²¡í„° ì„ë² ë”© ìƒì„±"""
-        self.logger.info("ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± ì‹œì‘ (ë©”ëª¨ë¦¬ ìµœì í™”)")
+        """¸Ş¸ğ¸® ÃÖÀûÈ­µÈ º¤ÅÍ ÀÓº£µù »ı¼º"""
+        self.logger.info("Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º ½ÃÀÛ (¸Ş¸ğ¸® ÃÖÀûÈ­)")
 
         try:
-            # ì „ì²´ ë°ì´í„°ë¥¼ ë©”ëª¨ë¦¬ì— ë¡œë“œí•˜ì§€ ì•Šê³  ì´ ê°œìˆ˜ë§Œ ì¡°íšŒ
+            # ÀüÃ¼ µ¥ÀÌÅÍ¸¦ ¸Ş¸ğ¸®¿¡ ·ÎµåÇÏÁö ¾Ê°í ÃÑ °³¼ö¸¸ Á¶È¸
             total_count = self._get_total_articles_count()
             self.stats['total_articles'] = total_count
 
             if total_count == 0:
-                self.logger.warning("ì²˜ë¦¬í•  ì¡°ë¬¸ ë°ì´í„°ê°€ ì—†ìŠµë‹ˆë‹¤.")
+                self.logger.warning("Ã³¸®ÇÒ Á¶¹® µ¥ÀÌÅÍ°¡ ¾ø½À´Ï´Ù.")
                 return self.stats
 
-            self.logger.info(f"ì´ {total_count}ê°œ ì¡°ë¬¸ ë°œê²¬")
+            self.logger.info(f"ÃÑ {total_count}°³ Á¶¹® ¹ß°ß")
 
-            # ì´ˆê¸° ë©”ëª¨ë¦¬ ìƒíƒœ ë¡œê¹…
+            # ÃÊ±â ¸Ş¸ğ¸® »óÅÂ ·Î±ë
             initial_memory = self._get_memory_info()
-            self.logger.info(f"ì´ˆê¸° ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰: {initial_memory['process_memory_mb']:.2f}MB")
+            self.logger.info(f"ÃÊ±â ¸Ş¸ğ¸® »ç¿ë·®: {initial_memory['process_memory_mb']:.2f}MB")
 
-            # ë°°ì¹˜ë³„ë¡œ ìŠ¤íŠ¸ë¦¬ë° ì²˜ë¦¬
+            # ¹èÄ¡º°·Î ½ºÆ®¸®¹Ö Ã³¸®
             start_index = (self.start_batch - 1) * self.batch_size
             total_batches = (total_count + self.batch_size - 1) // self.batch_size
 
-            # ìµœëŒ€ ë°°ì¹˜ ìˆ˜ ì„¤ì •
+            # ÃÖ´ë ¹èÄ¡ ¼ö ¼³Á¤
             if self.max_batches:
                 end_batch = min(self.start_batch + self.max_batches - 1, total_batches)
-                self.logger.info(f"ë°°ì¹˜ {self.start_batch}ë¶€í„° {end_batch}ê¹Œì§€ ì²˜ë¦¬ ({self.max_batches}ê°œ ë°°ì¹˜)")
+                self.logger.info(f"¹èÄ¡ {self.start_batch}ºÎÅÍ {end_batch}±îÁö Ã³¸® ({self.max_batches}°³ ¹èÄ¡)")
             else:
                 end_batch = total_batches
-                self.logger.info(f"ë°°ì¹˜ {self.start_batch}ë¶€í„° {end_batch}ê¹Œì§€ ì²˜ë¦¬ (ì „ì²´)")
+                self.logger.info(f"¹èÄ¡ {self.start_batch}ºÎÅÍ {end_batch}±îÁö Ã³¸® (ÀüÃ¼)")
 
-            self.logger.info(f"ë°°ì¹˜ í¬ê¸°: {self.batch_size}, ì‹œì‘ ì¸ë±ìŠ¤: {start_index}")
+            self.logger.info(f"¹èÄ¡ Å©±â: {self.batch_size}, ½ÃÀÛ ÀÎµ¦½º: {start_index}")
 
-            # ì´ˆê¸° ì§„í–‰ ìƒí™© ê¸°ë¡
+            # ÃÊ±â ÁøÇà »óÈ² ±â·Ï
             self._save_progress(
                 last_completed_batch=self.start_batch - 1,
                 total_batches=total_batches,
@@ -149,39 +149,39 @@ class ArticleVectorEmbedder:
             for batch_num in range(self.start_batch, end_batch + 1):
                 current_start_index = (batch_num - 1) * self.batch_size
 
-                # ë°°ì¹˜ë³„ë¡œ ë°ì´í„° ì¡°íšŒ (ë©”ëª¨ë¦¬ ì ˆì•½)
+                # ¹èÄ¡º°·Î µ¥ÀÌÅÍ Á¶È¸ (¸Ş¸ğ¸® Àı¾à)
                 batch_articles = self._get_articles_data_streaming(current_start_index, self.batch_size)
 
                 if not batch_articles:
-                    self.logger.info(f"ë°°ì¹˜ {batch_num}: ë°ì´í„° ì—†ìŒ, ì²˜ë¦¬ ì¢…ë£Œ")
+                    self.logger.info(f"¹èÄ¡ {batch_num}: µ¥ÀÌÅÍ ¾øÀ½, Ã³¸® Á¾·á")
                     break
 
-                self.logger.info(f"ë°°ì¹˜ {batch_num}/{total_batches} ì²˜ë¦¬ ì¤‘... ({len(batch_articles)}ê°œ ì¡°ë¬¸)")
+                self.logger.info(f"¹èÄ¡ {batch_num}/{total_batches} Ã³¸® Áß... ({len(batch_articles)}°³ Á¶¹®)")
 
-                # ë°°ì¹˜ë³„ ë¬¸ì„œì™€ ë©”íƒ€ë°ì´í„° ì¤€ë¹„
+                # ¹èÄ¡º° ¹®¼­¿Í ¸ŞÅ¸µ¥ÀÌÅÍ ÁØºñ
                 documents, metadatas = self._prepare_embedding_data(batch_articles)
 
-                # ë²¡í„° ìŠ¤í† ì–´ì— ì¶”ê°€
+                # º¤ÅÍ ½ºÅä¾î¿¡ Ãß°¡
                 success = self.vector_store.add_documents(documents, metadatas)
 
                 if success:
                     self.stats['processed_articles'] += len(documents)
-                    self.logger.info(f"âœ… ë°°ì¹˜ {batch_num} ì™„ë£Œ: {len(documents)}ê°œ ì¡°ë¬¸")
+                    self.logger.info(f"? ¹èÄ¡ {batch_num} ¿Ï·á: {len(documents)}°³ Á¶¹®")
 
-                    # ë©”ëª¨ë¦¬ ì •ë¦¬ ë° ëª¨ë‹ˆí„°ë§
+                    # ¸Ş¸ğ¸® Á¤¸® ¹× ¸ğ´ÏÅÍ¸µ
                     del batch_articles, documents, metadatas
                     gc.collect()
                     self._monitor_and_cleanup_memory()
 
-                    # ì§„í–‰ë¥  ë° ë©”ëª¨ë¦¬ ìƒíƒœ ë¡œê¹…
+                    # ÁøÇà·ü ¹× ¸Ş¸ğ¸® »óÅÂ ·Î±ë
                     total_processing_batches = end_batch - self.start_batch + 1
                     progress_percent = (batch_num - self.start_batch + 1) / total_processing_batches * 100
                     current_memory = self._get_memory_info()
-                    self.logger.info(f"ì§„í–‰ë¥ : {progress_percent:.1f}% ({batch_num - self.start_batch + 1}/{total_processing_batches}), í˜„ì¬ ë©”ëª¨ë¦¬: {current_memory['process_memory_mb']:.2f}MB")
+                    self.logger.info(f"ÁøÇà·ü: {progress_percent:.1f}% ({batch_num - self.start_batch + 1}/{total_processing_batches}), ÇöÀç ¸Ş¸ğ¸®: {current_memory['process_memory_mb']:.2f}MB")
 
                 else:
-                    self.logger.error(f"âŒ ë°°ì¹˜ {batch_num} ì‹¤íŒ¨")
-                    # ì‹¤íŒ¨ ì‹œì ì˜ ì§„í–‰ ìƒíƒœ ì €ì¥ í›„ ì¢…ë£Œ
+                    self.logger.error(f"? ¹èÄ¡ {batch_num} ½ÇÆĞ")
+                    # ½ÇÆĞ ½ÃÁ¡ÀÇ ÁøÇà »óÅÂ ÀúÀå ÈÄ Á¾·á
                     self._save_progress(
                         last_completed_batch=batch_num - 1,
                         total_batches=total_batches,
@@ -190,34 +190,34 @@ class ArticleVectorEmbedder:
                     )
                     break
 
-            # ìµœì¢… ë©”ëª¨ë¦¬ ìƒíƒœ ë¡œê¹…
+            # ÃÖÁ¾ ¸Ş¸ğ¸® »óÅÂ ·Î±ë
             final_memory = self._get_memory_info()
             memory_saved = initial_memory['process_memory_mb'] - final_memory['process_memory_mb']
-            self.logger.info(f"ë²¡í„° ì„ë² ë”© ìƒì„± ì™„ë£Œ: ì´ {self.stats['processed_articles']}ê°œ")
-            self.logger.info(f"ìµœì¢… ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰: {final_memory['process_memory_mb']:.2f}MB")
+            self.logger.info(f"º¤ÅÍ ÀÓº£µù »ı¼º ¿Ï·á: ÃÑ {self.stats['processed_articles']}°³")
+            self.logger.info(f"ÃÖÁ¾ ¸Ş¸ğ¸® »ç¿ë·®: {final_memory['process_memory_mb']:.2f}MB")
             if memory_saved > 0:
-                self.logger.info(f"ë©”ëª¨ë¦¬ ì ˆì•½: {memory_saved:.2f}MB")
+                self.logger.info(f"¸Ş¸ğ¸® Àı¾à: {memory_saved:.2f}MB")
 
-            # ìµœì¢… ì§„í–‰ ìƒí™© ê¸°ë¡
+            # ÃÖÁ¾ ÁøÇà »óÈ² ±â·Ï
             self._save_progress(
                 last_completed_batch=min(end_batch, self.start_batch - 1 + (self.stats['processed_articles'] + self.batch_size - 1) // self.batch_size),
                 total_batches=total_batches,
                 progress_percent=100.0 if self.stats['processed_articles'] >= total_count else (self.stats['processed_articles'] / max(total_count, 1) * 100)
             )
 
-            # í†µê³„ ì¶œë ¥
+            # Åë°è Ãâ·Â
             self._print_statistics()
 
             return self.stats
 
         except Exception as e:
-            self.logger.error(f"ë²¡í„° ì„ë² ë”© ìƒì„± ì‹¤íŒ¨: {e}")
+            self.logger.error(f"º¤ÅÍ ÀÓº£µù »ı¼º ½ÇÆĞ: {e}")
             raise
 
     def _save_progress(self, last_completed_batch: int, total_batches: int, progress_percent: float, error_message: str | None = None):
-        """í˜„ì¬ ì§„í–‰ ìƒí™©ì„ JSON íŒŒì¼ë¡œ ì €ì¥"""
+        """ÇöÀç ÁøÇà »óÈ²À» JSON ÆÄÀÏ·Î ÀúÀå"""
         try:
-            # ë””ë ‰í„°ë¦¬ ë³´ì¥
+            # µğ·ºÅÍ¸® º¸Àå
             self.progress_file_path.parent.mkdir(parents=True, exist_ok=True)
 
             progress: Dict[str, Any] = {
@@ -238,27 +238,27 @@ class ArticleVectorEmbedder:
             with open(self.progress_file_path, 'w', encoding='utf-8') as f:
                 json.dump(progress, f, ensure_ascii=False, indent=2)
 
-            # ê°„ëµ ë¡œê¹…
+            # °£·« ·Î±ë
             self.logger.info(
-                f"ì§„í–‰ ì €ì¥: batch {progress['last_completed_batch']}/{progress['total_batches']} "
+                f"ÁøÇà ÀúÀå: batch {progress['last_completed_batch']}/{progress['total_batches']} "
                 f"({progress['progress_percent']}%), articles {progress['processed_articles']}/{progress['total_articles']}"
             )
         except Exception as e:
-            self.logger.warning(f"ì§„í–‰ ìƒí™© ì €ì¥ ì‹¤íŒ¨: {e}")
+            self.logger.warning(f"ÁøÇà »óÈ² ÀúÀå ½ÇÆĞ: {e}")
 
     def _get_total_articles_count(self) -> int:
-        """ì „ì²´ ì¡°ë¬¸ ê°œìˆ˜ ì¡°íšŒ (ë©”ëª¨ë¦¬ ì ˆì•½)"""
+        """ÀüÃ¼ Á¶¹® °³¼ö Á¶È¸ (¸Ş¸ğ¸® Àı¾à)"""
         query = "SELECT COUNT(*) as total FROM current_laws_articles"
 
         try:
             result = self.db_manager.execute_query(query)
             return result[0]['total'] if result else 0
         except Exception as e:
-            self.logger.error(f"ì¡°ë¬¸ ê°œìˆ˜ ì¡°íšŒ ì‹¤íŒ¨: {e}")
+            self.logger.error(f"Á¶¹® °³¼ö Á¶È¸ ½ÇÆĞ: {e}")
             return 0
 
     def _get_articles_data_streaming(self, start_index: int, batch_size: int) -> List[Dict[str, Any]]:
-        """ìŠ¤íŠ¸ë¦¬ë° ë°©ì‹ìœ¼ë¡œ ì¡°ë¬¸ ë°ì´í„° ì¡°íšŒ (ë©”ëª¨ë¦¬ ì ˆì•½)"""
+        """½ºÆ®¸®¹Ö ¹æ½ÄÀ¸·Î Á¶¹® µ¥ÀÌÅÍ Á¶È¸ (¸Ş¸ğ¸® Àı¾à)"""
         query = """
             SELECT ca.*, cl.ministry_name, cl.effective_date
             FROM current_laws_articles ca
@@ -270,11 +270,11 @@ class ArticleVectorEmbedder:
         try:
             return self.db_manager.execute_query(query, (batch_size, start_index))
         except Exception as e:
-            self.logger.error(f"ì¡°ë¬¸ ë°ì´í„° ì¡°íšŒ ì‹¤íŒ¨: {e}")
+            self.logger.error(f"Á¶¹® µ¥ÀÌÅÍ Á¶È¸ ½ÇÆĞ: {e}")
             return []
 
     def _get_articles_data(self) -> List[Dict[str, Any]]:
-        """ì¡°ë¬¸ ë°ì´í„° ì¡°íšŒ (ë ˆê±°ì‹œ ë©”ì„œë“œ - í˜¸í™˜ì„± ìœ ì§€)"""
+        """Á¶¹® µ¥ÀÌÅÍ Á¶È¸ (·¹°Å½Ã ¸Ş¼­µå - È£È¯¼º À¯Áö)"""
         query = """
             SELECT ca.*, cl.ministry_name, cl.effective_date
             FROM current_laws_articles ca
@@ -285,17 +285,17 @@ class ArticleVectorEmbedder:
         try:
             return self.db_manager.execute_query(query)
         except Exception as e:
-            self.logger.error(f"ì¡°ë¬¸ ë°ì´í„° ì¡°íšŒ ì‹¤íŒ¨: {e}")
+            self.logger.error(f"Á¶¹® µ¥ÀÌÅÍ Á¶È¸ ½ÇÆĞ: {e}")
             return []
 
     def _prepare_embedding_data(self, articles: List[Dict[str, Any]]) -> tuple[List[str], List[Dict[str, Any]]]:
-        """ì„ë² ë”©ìš© ë¬¸ì„œì™€ ë©”íƒ€ë°ì´í„° ì¤€ë¹„"""
+        """ÀÓº£µù¿ë ¹®¼­¿Í ¸ŞÅ¸µ¥ÀÌÅÍ ÁØºñ"""
         documents = []
         metadatas = []
 
         for article in articles:
             try:
-                # ì¡°ë¬¸ë³„ ë¬¸ì„œ ìƒì„±
+                # Á¶¹®º° ¹®¼­ »ı¼º
                 document = self._create_article_document(article)
                 metadata = self._create_article_metadata(article)
 
@@ -303,40 +303,40 @@ class ArticleVectorEmbedder:
                 metadatas.append(metadata)
 
             except Exception as e:
-                error_msg = f"ì¡°ë¬¸ {article.get('article_id', 'Unknown')} ì²˜ë¦¬ ì‹¤íŒ¨: {e}"
+                error_msg = f"Á¶¹® {article.get('article_id', 'Unknown')} Ã³¸® ½ÇÆĞ: {e}"
                 self.logger.error(error_msg)
                 self.stats['embedding_errors'].append(error_msg)
 
         return documents, metadatas
 
     def _monitor_and_cleanup_memory(self):
-        """ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰ ëª¨ë‹ˆí„°ë§ ë° ìë™ ì •ë¦¬"""
+        """¸Ş¸ğ¸® »ç¿ë·® ¸ğ´ÏÅÍ¸µ ¹× ÀÚµ¿ Á¤¸®"""
         try:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / (1024**2)
 
-            # ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰ì´ 4GBë¥¼ ì´ˆê³¼í•˜ë©´ ì •ë¦¬
+            # ¸Ş¸ğ¸® »ç¿ë·®ÀÌ 4GB¸¦ ÃÊ°úÇÏ¸é Á¤¸®
             if memory_mb > 4000:
-                self.logger.warning(f"ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰ ë†’ìŒ: {memory_mb:.2f}MB, ì •ë¦¬ ì‹œì‘...")
+                self.logger.warning(f"¸Ş¸ğ¸® »ç¿ë·® ³ôÀ½: {memory_mb:.2f}MB, Á¤¸® ½ÃÀÛ...")
 
-                # ê°€ë¹„ì§€ ì»¬ë ‰ì…˜ ê°•ì œ ì‹¤í–‰
+                # °¡ºñÁö ÄÃ·º¼Ç °­Á¦ ½ÇÇà
                 collected = gc.collect()
-                self.logger.info(f"ê°€ë¹„ì§€ ì»¬ë ‰ì…˜ìœ¼ë¡œ {collected}ê°œ ê°ì²´ ì •ë¦¬")
+                self.logger.info(f"°¡ºñÁö ÄÃ·º¼ÇÀ¸·Î {collected}°³ °´Ã¼ Á¤¸®")
 
-                # ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰ ì¬í™•ì¸
+                # ¸Ş¸ğ¸® »ç¿ë·® ÀçÈ®ÀÎ
                 memory_after = process.memory_info().rss / (1024**2)
-                self.logger.info(f"ì •ë¦¬ í›„ ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰: {memory_after:.2f}MB")
+                self.logger.info(f"Á¤¸® ÈÄ ¸Ş¸ğ¸® »ç¿ë·®: {memory_after:.2f}MB")
 
-                # ë©”ëª¨ë¦¬ ì ˆì•½ëŸ‰ ê³„ì‚°
+                # ¸Ş¸ğ¸® Àı¾à·® °è»ê
                 saved_mb = memory_mb - memory_after
                 if saved_mb > 0:
-                    self.logger.info(f"ë©”ëª¨ë¦¬ ì ˆì•½: {saved_mb:.2f}MB")
+                    self.logger.info(f"¸Ş¸ğ¸® Àı¾à: {saved_mb:.2f}MB")
 
         except Exception as e:
-            self.logger.error(f"ë©”ëª¨ë¦¬ ëª¨ë‹ˆí„°ë§ ì‹¤íŒ¨: {e}")
+            self.logger.error(f"¸Ş¸ğ¸® ¸ğ´ÏÅÍ¸µ ½ÇÆĞ: {e}")
 
     def _get_memory_info(self) -> Dict[str, float]:
-        """í˜„ì¬ ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰ ì •ë³´ ë°˜í™˜"""
+        """ÇöÀç ¸Ş¸ğ¸® »ç¿ë·® Á¤º¸ ¹İÈ¯"""
         try:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / (1024**2)
@@ -348,60 +348,60 @@ class ArticleVectorEmbedder:
                 'memory_percent': psutil.virtual_memory().percent
             }
         except Exception as e:
-            self.logger.error(f"ë©”ëª¨ë¦¬ ì •ë³´ ì¡°íšŒ ì‹¤íŒ¨: {e}")
+            self.logger.error(f"¸Ş¸ğ¸® Á¤º¸ Á¶È¸ ½ÇÆĞ: {e}")
             return {'process_memory_mb': 0, 'available_memory_gb': 0, 'memory_percent': 0}
 
     def _create_article_document(self, article: Dict[str, Any]) -> str:
-        """ìŠ¤ë§ˆíŠ¸ ìë¥´ê¸° ë°©ì‹ì˜ ì¡°ë¬¸ ë¬¸ì„œ ìƒì„±"""
+        """½º¸¶Æ® ÀÚ¸£±â ¹æ½ÄÀÇ Á¶¹® ¹®¼­ »ı¼º"""
         content_parts = [
-            f"ë²•ë ¹ëª…: {article['law_name_korean']}",
-            f"ì¡°ë¬¸ë²ˆí˜¸: ì œ{article['article_number']}ì¡°"
+            f"¹ı·É¸í: {article['law_name_korean']}",
+            f"Á¶¹®¹øÈ£: Á¦{article['article_number']}Á¶"
         ]
 
-        # ì œëª©ì´ ìˆìœ¼ë©´ ìš°ì„  í¬í•¨
+        # Á¦¸ñÀÌ ÀÖÀ¸¸é ¿ì¼± Æ÷ÇÔ
         if article.get('article_title'):
-            content_parts.append(f"ì œëª©: {article['article_title']}")
+            content_parts.append(f"Á¦¸ñ: {article['article_title']}")
 
-        # ë‚´ìš©ì„ ìŠ¤ë§ˆíŠ¸í•˜ê²Œ ìë¥´ê¸°
+        # ³»¿ëÀ» ½º¸¶Æ®ÇÏ°Ô ÀÚ¸£±â
         content = article['article_content']
-        max_content_length = 400  # ì „ì²´ ê¸¸ì´ì˜ 80% í• ë‹¹
+        max_content_length = 400  # ÀüÃ¼ ±æÀÌÀÇ 80% ÇÒ´ç
 
         if len(content) > max_content_length:
-            # ë¬¸ì¥ ë‹¨ìœ„ë¡œ ìë¥´ê¸°
+            # ¹®Àå ´ÜÀ§·Î ÀÚ¸£±â
             truncated_content = self._smart_truncate_text(content, max_content_length)
-            content_parts.append(f"ë‚´ìš©: {truncated_content}")
+            content_parts.append(f"³»¿ë: {truncated_content}")
         else:
-            content_parts.append(f"ë‚´ìš©: {content}")
+            content_parts.append(f"³»¿ë: {content}")
 
-        # í•­ ë‚´ìš© (ìŠ¤ë§ˆíŠ¸ ìë¥´ê¸° ì ìš©)
+        # Ç× ³»¿ë (½º¸¶Æ® ÀÚ¸£±â Àû¿ë)
         if article.get('paragraph_content'):
             para_content = article['paragraph_content']
             if len(para_content) > 100:
                 para_content = self._smart_truncate_text(para_content, 100)
-            content_parts.append(f"í•­: {para_content}")
+            content_parts.append(f"Ç×: {para_content}")
 
-        # í˜¸ ë‚´ìš© (ì„ íƒì , ê¸¸ì´ ì œí•œ)
+        # È£ ³»¿ë (¼±ÅÃÀû, ±æÀÌ Á¦ÇÑ)
         if article.get('sub_paragraph_content'):
             sub_para_content = article['sub_paragraph_content']
             if len(sub_para_content) > 80:
                 sub_para_content = self._smart_truncate_text(sub_para_content, 80)
-            content_parts.append(f"í˜¸: {sub_para_content}")
+            content_parts.append(f"È£: {sub_para_content}")
 
-        # ì†Œê´€ë¶€ì²˜ ì •ë³´ (ì„ íƒì )
+        # ¼Ò°üºÎÃ³ Á¤º¸ (¼±ÅÃÀû)
         if article.get('ministry_name'):
-            content_parts.append(f"ì†Œê´€ë¶€ì²˜: {article['ministry_name']}")
+            content_parts.append(f"¼Ò°üºÎÃ³: {article['ministry_name']}")
 
         return "\n".join(content_parts)
 
     def _smart_truncate_text(self, text: str, max_length: int) -> str:
-        """ìŠ¤ë§ˆíŠ¸ í…ìŠ¤íŠ¸ ìë¥´ê¸° (ë¬¸ì¥ ë‹¨ìœ„ ë³´ì¡´)"""
+        """½º¸¶Æ® ÅØ½ºÆ® ÀÚ¸£±â (¹®Àå ´ÜÀ§ º¸Á¸)"""
         if len(text) <= max_length:
             return text
 
-        # í•œêµ­ì–´ ë¬¸ì¥ êµ¬ë¶„ìë“¤
-        sentence_endings = ['ã€‚', '.', '!', '?', ';', ':', 'ë‹¤.', 'ë‹ˆë‹¤.', 'ìš”.', 'ì–´ìš”.', 'ì•„ìš”.']
+        # ÇÑ±¹¾î ¹®Àå ±¸ºĞÀÚµé
+        sentence_endings = ['¡£', '.', '!', '?', ';', ':', '´Ù.', '´Ï´Ù.', '¿ä.', '¾î¿ä.', '¾Æ¿ä.']
 
-        # ë¬¸ì¥ ë‹¨ìœ„ë¡œ ë¶„í• 
+        # ¹®Àå ´ÜÀ§·Î ºĞÇÒ
         sentences = []
         current_sentence = ""
 
@@ -411,11 +411,11 @@ class ArticleVectorEmbedder:
                 sentences.append(current_sentence.strip())
                 current_sentence = ""
 
-        # ë§ˆì§€ë§‰ ë¬¸ì¥ì´ ìˆìœ¼ë©´ ì¶”ê°€
+        # ¸¶Áö¸· ¹®ÀåÀÌ ÀÖÀ¸¸é Ãß°¡
         if current_sentence.strip():
             sentences.append(current_sentence.strip())
 
-        # ë¬¸ì¥ ë‹¨ìœ„ë¡œ ìë¥´ê¸°
+        # ¹®Àå ´ÜÀ§·Î ÀÚ¸£±â
         truncated_text = ""
         for sentence in sentences:
             if len(truncated_text + sentence) <= max_length:
@@ -423,18 +423,18 @@ class ArticleVectorEmbedder:
             else:
                 break
 
-        # ê²°ê³¼ê°€ ë„ˆë¬´ ì§§ìœ¼ë©´ ë‹¨ì–´ ë‹¨ìœ„ë¡œ ìë¥´ê¸°
-        if len(truncated_text) < max_length * 0.5:  # 50% ë¯¸ë§Œì´ë©´
+        # °á°ú°¡ ³Ê¹« ÂªÀ¸¸é ´Ü¾î ´ÜÀ§·Î ÀÚ¸£±â
+        if len(truncated_text) < max_length * 0.5:  # 50% ¹Ì¸¸ÀÌ¸é
             truncated_text = text[:max_length]
-            # ë‹¨ì–´ ê²½ê³„ì—ì„œ ìë¥´ê¸°
+            # ´Ü¾î °æ°è¿¡¼­ ÀÚ¸£±â
             last_space = truncated_text.rfind(' ')
-            if last_space > max_length * 0.7:  # 70% ì´ìƒì´ë©´
+            if last_space > max_length * 0.7:  # 70% ÀÌ»óÀÌ¸é
                 truncated_text = truncated_text[:last_space]
 
         return truncated_text
 
     def _create_article_metadata(self, article: Dict[str, Any]) -> Dict[str, Any]:
-        """ì¡°ë¬¸ ë©”íƒ€ë°ì´í„° ìƒì„±"""
+        """Á¶¹® ¸ŞÅ¸µ¥ÀÌÅÍ »ı¼º"""
         return {
             'law_id': article['law_id'],
             'law_name': article['law_name_korean'],
@@ -453,63 +453,63 @@ class ArticleVectorEmbedder:
         }
 
     def _print_statistics(self):
-        """í†µê³„ ì •ë³´ ì¶œë ¥"""
+        """Åë°è Á¤º¸ Ãâ·Â"""
         print("\n" + "="*60)
-        print("ğŸ“Š ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± í†µê³„ (ë©”ëª¨ë¦¬ ìµœì í™”)")
+        print("?? Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º Åë°è (¸Ş¸ğ¸® ÃÖÀûÈ­)")
         print("="*60)
-        print(f"ì´ ì¡°ë¬¸ ìˆ˜: {self.stats['total_articles']:,}ê°œ")
-        print(f"ì²˜ë¦¬ëœ ì¡°ë¬¸: {self.stats['processed_articles']:,}ê°œ")
-        print(f"ì²˜ë¦¬ ì‹¤íŒ¨: {len(self.stats['embedding_errors'])}ê°œ")
+        print(f"ÃÑ Á¶¹® ¼ö: {self.stats['total_articles']:,}°³")
+        print(f"Ã³¸®µÈ Á¶¹®: {self.stats['processed_articles']:,}°³")
+        print(f"Ã³¸® ½ÇÆĞ: {len(self.stats['embedding_errors'])}°³")
 
-        # ë©”ëª¨ë¦¬ í†µê³„
+        # ¸Ş¸ğ¸® Åë°è
         memory_info = self._get_memory_info()
-        print(f"\nğŸ§  ë©”ëª¨ë¦¬ ì‚¬ìš©ëŸ‰:")
-        print(f"  í”„ë¡œì„¸ìŠ¤ ë©”ëª¨ë¦¬: {memory_info['process_memory_mb']:.2f}MB")
-        print(f"  ì‹œìŠ¤í…œ ì‚¬ìš© ê°€ëŠ¥ ë©”ëª¨ë¦¬: {memory_info['available_memory_gb']:.2f}GB")
-        print(f"  ì‹œìŠ¤í…œ ë©”ëª¨ë¦¬ ì‚¬ìš©ë¥ : {memory_info['memory_percent']:.1f}%")
+        print(f"\n?? ¸Ş¸ğ¸® »ç¿ë·®:")
+        print(f"  ÇÁ·Î¼¼½º ¸Ş¸ğ¸®: {memory_info['process_memory_mb']:.2f}MB")
+        print(f"  ½Ã½ºÅÛ »ç¿ë °¡´É ¸Ş¸ğ¸®: {memory_info['available_memory_gb']:.2f}GB")
+        print(f"  ½Ã½ºÅÛ ¸Ş¸ğ¸® »ç¿ë·ü: {memory_info['memory_percent']:.1f}%")
 
         if self.stats['embedding_errors']:
-            print("\nâš ï¸ ì²˜ë¦¬ ì‹¤íŒ¨ ëª©ë¡:")
-            for error in self.stats['embedding_errors'][:5]:  # ìµœëŒ€ 5ê°œë§Œ í‘œì‹œ
+            print("\n?? Ã³¸® ½ÇÆĞ ¸ñ·Ï:")
+            for error in self.stats['embedding_errors'][:5]:  # ÃÖ´ë 5°³¸¸ Ç¥½Ã
                 print(f"  - {error}")
 
-        # ë²¡í„° ìŠ¤í† ì–´ í†µê³„
+        # º¤ÅÍ ½ºÅä¾î Åë°è
         try:
             vector_stats = self.vector_store.get_stats()
-            print(f"\nğŸ“ˆ ë²¡í„° ìŠ¤í† ì–´ í†µê³„:")
-            print(f"  ì´ ë¬¸ì„œ ìˆ˜: {vector_stats.get('documents_count', 0):,}ê°œ")
-            print(f"  ë²¡í„° ì°¨ì›: {vector_stats.get('vector_dimension', 0)}")
-            print(f"  ì¸ë±ìŠ¤ í¬ê¸°: {vector_stats.get('index_size_mb', 0):.2f}MB")
+            print(f"\n?? º¤ÅÍ ½ºÅä¾î Åë°è:")
+            print(f"  ÃÑ ¹®¼­ ¼ö: {vector_stats.get('documents_count', 0):,}°³")
+            print(f"  º¤ÅÍ Â÷¿ø: {vector_stats.get('vector_dimension', 0)}")
+            print(f"  ÀÎµ¦½º Å©±â: {vector_stats.get('index_size_mb', 0):.2f}MB")
         except Exception as e:
-            print(f"ë²¡í„° ìŠ¤í† ì–´ í†µê³„ ì¡°íšŒ ì‹¤íŒ¨: {e}")
+            print(f"º¤ÅÍ ½ºÅä¾î Åë°è Á¶È¸ ½ÇÆĞ: {e}")
 
 
 def main():
-    """ë©”ì¸ ì‹¤í–‰ í•¨ìˆ˜"""
-    parser = argparse.ArgumentParser(description='í˜„í–‰ë²•ë ¹ ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„±')
+    """¸ŞÀÎ ½ÇÇà ÇÔ¼ö"""
+    parser = argparse.ArgumentParser(description='ÇöÇà¹ı·É Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º')
     parser.add_argument('--start-batch', type=int, default=1,
-                       help='ì‹œì‘í•  ë°°ì¹˜ ë²ˆí˜¸ (ê¸°ë³¸ê°’: 1)')
+                       help='½ÃÀÛÇÒ ¹èÄ¡ ¹øÈ£ (±âº»°ª: 1)')
     parser.add_argument('--batch-size', type=int, default=1000,
-                       help='ë°°ì¹˜ í¬ê¸° (ê¸°ë³¸ê°’: 1000)')
+                       help='¹èÄ¡ Å©±â (±âº»°ª: 1000)')
     parser.add_argument('--max-batches', type=int, default=None,
-                       help='ì²˜ë¦¬í•  ìµœëŒ€ ë°°ì¹˜ ìˆ˜ (ê¸°ë³¸ê°’: None, ì „ì²´ ì²˜ë¦¬)')
+                       help='Ã³¸®ÇÒ ÃÖ´ë ¹èÄ¡ ¼ö (±âº»°ª: None, ÀüÃ¼ Ã³¸®)')
     parser.add_argument('--use-gpu', action='store_true', default=False,
-                       help='GPU ì‚¬ìš© (ê¸°ë³¸ê°’: False, AMD GPUëŠ” ROCm ì§€ì› í•„ìš”)')
+                       help='GPU »ç¿ë (±âº»°ª: False, AMD GPU´Â ROCm Áö¿ø ÇÊ¿ä)')
     parser.add_argument('--use-cpu', action='store_true', default=False,
-                       help='CPU ê°•ì œ ì‚¬ìš© (AMD GPU ì‚¬ìš©ì ê¶Œì¥)')
+                       help='CPU °­Á¦ »ç¿ë (AMD GPU »ç¿ëÀÚ ±ÇÀå)')
     parser.add_argument('--reset', action='store_true', default=False,
-                       help='ì‹œì‘ ì „ì— ë²¡í„° ìŠ¤í† ì–´ ë° ì¸ë±ìŠ¤ë¥¼ ì´ˆê¸°í™”')
+                       help='½ÃÀÛ Àü¿¡ º¤ÅÍ ½ºÅä¾î ¹× ÀÎµ¦½º¸¦ ÃÊ±âÈ­')
 
     args = parser.parse_args()
 
-    # GPU ì‚¬ìš© ì—¬ë¶€ ê²°ì •
+    # GPU »ç¿ë ¿©ºÎ °áÁ¤
     use_gpu = args.use_gpu and not args.use_cpu
 
-    print(f"ğŸš€ ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± ì‹œì‘")
-    print(f"   ì‹œì‘ ë°°ì¹˜: {args.start_batch}")
-    print(f"   ë°°ì¹˜ í¬ê¸°: {args.batch_size}")
-    print(f"   ìµœëŒ€ ë°°ì¹˜ ìˆ˜: {args.max_batches if args.max_batches else 'ì „ì²´'}")
-    print(f"   GPU ì‚¬ìš©: {'Yes' if use_gpu else 'No'}")
+    print(f"?? Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º ½ÃÀÛ")
+    print(f"   ½ÃÀÛ ¹èÄ¡: {args.start_batch}")
+    print(f"   ¹èÄ¡ Å©±â: {args.batch_size}")
+    print(f"   ÃÖ´ë ¹èÄ¡ ¼ö: {args.max_batches if args.max_batches else 'ÀüÃ¼'}")
+    print(f"   GPU »ç¿ë: {'Yes' if use_gpu else 'No'}")
     print("-" * 50)
 
     embedder = ArticleVectorEmbedder(
@@ -519,22 +519,22 @@ def main():
         max_batches=args.max_batches
     )
 
-    # ì„ íƒì  ì´ˆê¸°í™” ìˆ˜í–‰
+    # ¼±ÅÃÀû ÃÊ±âÈ­ ¼öÇà
     if args.reset:
         try:
-            # ê¸°ë³¸ ì €ì¥ ê²½ë¡œ ê¸°ì¤€ ì´ˆê¸°í™”
+            # ±âº» ÀúÀå °æ·Î ±âÁØ ÃÊ±âÈ­
             embedder.vector_store.reset_store(index_path="data/embeddings/legal_vector_index", delete_disk=True)
-            # ì§„í–‰ íŒŒì¼ë„ ì´ˆê¸°í™”
+            # ÁøÇà ÆÄÀÏµµ ÃÊ±âÈ­
             progress_path = Path("data/embeddings/article_embeddings_progress.json")
             if progress_path.exists():
                 progress_path.unlink()
-            print("ì´ˆê¸°í™” ì™„ë£Œ: ì¸ë±ìŠ¤ ë° ì§„í–‰ íŒŒì¼ ì‚­ì œ í›„ ì¬ì‹œì‘")
+            print("ÃÊ±âÈ­ ¿Ï·á: ÀÎµ¦½º ¹× ÁøÇà ÆÄÀÏ »èÁ¦ ÈÄ Àç½ÃÀÛ")
         except Exception as e:
-            print(f"ì´ˆê¸°í™” ì‹¤íŒ¨: {e}")
+            print(f"ÃÊ±âÈ­ ½ÇÆĞ: {e}")
     stats = embedder.create_article_embeddings()
 
-    print(f"\nğŸ‰ ì¡°ë¬¸ë³„ ë²¡í„° ì„ë² ë”© ìƒì„± ì™„ë£Œ!")
-    print(f"ì´ {stats['processed_articles']:,}ê°œ ì¡°ë¬¸ì˜ ë²¡í„° ì„ë² ë”©ì´ ìƒì„±ë˜ì—ˆìŠµë‹ˆë‹¤.")
+    print(f"\n?? Á¶¹®º° º¤ÅÍ ÀÓº£µù »ı¼º ¿Ï·á!")
+    print(f"ÃÑ {stats['processed_articles']:,}°³ Á¶¹®ÀÇ º¤ÅÍ ÀÓº£µùÀÌ »ı¼ºµÇ¾ú½À´Ï´Ù.")
 
 
 if __name__ == "__main__":

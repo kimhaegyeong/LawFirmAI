@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-검색 결과가 generate_answer_enhanced까지 전달되는지 간단한 테스트
+검??결과가 generate_answer_enhanced까�? ?�달?�는지 간단???�스??
 """
 
 import asyncio
@@ -12,32 +12,32 @@ sys.path.insert(0, str(project_root))
 
 
 async def test_search_results_to_answer():
-    """검색 결과 전달 테스트"""
+    """검??결과 ?�달 ?�스??""
     try:
-        from core.agents.workflow_service import LangGraphWorkflowService
+        from source.agents.workflow_service import LangGraphWorkflowService
         from infrastructure.utils.langgraph_config import LangGraphConfig
 
         print("=" * 80)
-        print("검색 결과 전달 테스트 시작")
+        print("검??결과 ?�달 ?�스???�작")
         print("=" * 80)
 
-        # 설정 로드
+        # ?�정 로드
         config = LangGraphConfig.from_env()
-        print(f"✅ 설정 로드 완료")
+        print(f"???�정 로드 ?�료")
 
-        # 워크플로우 서비스 초기화
+        # ?�크?�로???�비??초기??
         workflow_service = LangGraphWorkflowService(config)
-        print(f"✅ 워크플로우 서비스 초기화 완료")
+        print(f"???�크?�로???�비??초기???�료")
 
-        # 테스트 질의
-        test_query = "계약 해지 요건"
-        print(f"\n테스트 질의: {test_query}")
+        # ?�스??질의
+        test_query = "계약 ?��? ?�건"
+        print(f"\n?�스??질의: {test_query}")
 
-        # 전체 워크플로우 실행
-        print("🔄 전체 워크플로우 실행 중...")
+        # ?�체 ?�크?�로???�행
+        print("?�� ?�체 ?�크?�로???�행 �?..")
         result = await workflow_service.process_query(test_query, "test_session", enable_checkpoint=False)
 
-        # 검색 결과 확인
+        # 검??결과 ?�인
         retrieved_docs = result.get("retrieved_docs", [])
         metadata = result.get("metadata", {})
         search_meta = metadata.get("search", {}) if isinstance(metadata, dict) else {}
@@ -46,67 +46,67 @@ async def test_search_results_to_answer():
         keyword_count = search_meta.get("keyword_results_count", 0)
         final_count = len(retrieved_docs)
 
-        print(f"\n📊 검색 결과:")
-        print(f"   의미적 검색: {semantic_count}개")
-        print(f"   키워드 검색: {keyword_count}개")
-        print(f"   최종 통합 결과: {final_count}개")
+        print(f"\n?�� 검??결과:")
+        print(f"   ?��???검?? {semantic_count}�?)
+        print(f"   ?�워??검?? {keyword_count}�?)
+        print(f"   최종 ?�합 결과: {final_count}�?)
 
-        # 검색 결과 상세
+        # 검??결과 ?�세
         if final_count > 0:
-            print(f"\n📄 검색 결과 샘플:")
+            print(f"\n?�� 검??결과 ?�플:")
             for i, doc in enumerate(retrieved_docs[:3], 1):
                 print(f"   {i}. Type: {doc.get('type', 'unknown')}")
                 print(f"      Source: {str(doc.get('source', 'unknown'))[:60]}")
                 content = str(doc.get('content', '') or doc.get('text', ''))[:100]
                 print(f"      Content: {content}...")
         else:
-            print("   ⚠️ 검색 결과가 없습니다!")
+            print("   ?�️ 검??결과가 ?�습?�다!")
 
-        # 답변 확인
+        # ?��? ?�인
         answer = result.get("answer", "")
-        print(f"\n✍️ generate_answer_enhanced 결과:")
-        print(f"   답변 길이: {len(answer)}자")
-        print(f"   retrieved_docs 개수: {len(retrieved_docs)}개")
+        print(f"\n?�️ generate_answer_enhanced 결과:")
+        print(f"   ?��? 길이: {len(answer)}??)
+        print(f"   retrieved_docs 개수: {len(retrieved_docs)}�?)
 
         if answer:
-            print(f"   답변 미리보기: {answer[:150]}...")
+            print(f"   ?��? 미리보기: {answer[:150]}...")
 
-            # 검색 결과가 답변에 포함되었는지 확인
+            # 검??결과가 ?��????�함?�었?��? ?�인
             if retrieved_docs:
                 doc_found = False
                 for doc in retrieved_docs[:3]:
                     source = str(doc.get("source", ""))
                     if source and len(source) > 10:
-                        # 소스 이름의 일부가 답변에 있는지 확인
-                        source_words = source.split()[:3]  # 처음 3단어
+                        # ?�스 ?�름???��?가 ?��????�는지 ?�인
+                        source_words = source.split()[:3]  # 처음 3?�어
                         for word in source_words:
                             if word and len(word) > 5 and word in answer:
                                 doc_found = True
-                                print(f"   ✅ 검색 결과가 답변에 포함됨: {word}")
+                                print(f"   ??검??결과가 ?��????�함?? {word}")
                                 break
                         if doc_found:
                             break
 
                 if not doc_found:
-                    print("   ⚠️ 검색 결과가 답변에 명시적으로 포함되지 않았을 수 있음")
+                    print("   ?�️ 검??결과가 ?��???명시?�으�??�함?��? ?�았?????�음")
 
-        # 최종 검증
-        print(f"\n✅ 최종 검증:")
-        print(f"   - 검색 결과 있음: {'✅' if final_count > 0 else '❌'}")
-        print(f"   - retrieved_docs 전달됨: {'✅' if len(retrieved_docs) > 0 else '❌'}")
-        print(f"   - 답변 생성됨: {'✅' if answer else '❌'}")
+        # 최종 검�?
+        print(f"\n??최종 검�?")
+        print(f"   - 검??결과 ?�음: {'?? if final_count > 0 else '??}")
+        print(f"   - retrieved_docs ?�달?? {'?? if len(retrieved_docs) > 0 else '??}")
+        print(f"   - ?��? ?�성?? {'?? if answer else '??}")
 
-        # 검증
-        assert final_count > 0, f"검색 결과가 없습니다! (semantic: {semantic_count}, keyword: {keyword_count})"
-        assert len(retrieved_docs) > 0, "retrieved_docs가 비어있습니다!"
-        assert answer and len(answer) > 0, "답변이 생성되지 않았습니다!"
+        # 검�?
+        assert final_count > 0, f"검??결과가 ?�습?�다! (semantic: {semantic_count}, keyword: {keyword_count})"
+        assert len(retrieved_docs) > 0, "retrieved_docs가 비어?�습?�다!"
+        assert answer and len(answer) > 0, "?��????�성?��? ?�았?�니??"
 
-        print(f"\n✅ 모든 검증 통과! 검색 결과가 generate_answer_enhanced까지 잘 전달되었습니다.")
+        print(f"\n??모든 검�??�과! 검??결과가 generate_answer_enhanced까�? ???�달?�었?�니??")
 
         return True
 
     except Exception as e:
-        print(f"\n❌ 테스트 실패: {e}")
+        print(f"\n???�스???�패: {e}")
         import traceback
         traceback.print_exc()
         return False

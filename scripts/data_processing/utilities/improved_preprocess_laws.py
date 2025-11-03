@@ -127,7 +127,7 @@ class ImprovedLawPreprocessor:
         
         # Try different content extraction methods
         content_sources = [
-            raw_data.get('current_text', {}).get('법령', {}).get('개정문', {}).get('개정문내용'),
+            raw_data.get('current_text', {}).get('법령', {}).get('개정�?, {}).get('개정문내??),
             raw_data.get('current_text', {}).get('법령', {}).get('조문'),
             raw_data.get('content'),
             raw_data.get('text')
@@ -241,18 +241,18 @@ class ImprovedLawPreprocessor:
         if not law_name:
             return ""
         
-        if '법' in law_name and '시행령' in law_name:
-            return '시행령'
-        elif '법' in law_name and '시행규칙' in law_name:
-            return '시행규칙'
-        elif '법' in law_name and '규칙' in law_name:
+        if '�? in law_name and '?�행?? in law_name:
+            return '?�행??
+        elif '�? in law_name and '?�행규칙' in law_name:
+            return '?�행규칙'
+        elif '�? in law_name and '규칙' in law_name:
             return '규칙'
-        elif '법' in law_name:
+        elif '�? in law_name:
             return '법률'
-        elif '조례' in law_name:
-            return '조례'
+        elif '조�?' in law_name:
+            return '조�?'
         else:
-            return '기타'
+            return '기�?'
     
     def _extract_category(self, law_name: str) -> str:
         """Extract category from law name"""
@@ -261,19 +261,19 @@ class ImprovedLawPreprocessor:
         
         # Simple category extraction based on keywords
         categories = {
-            '의료': ['의료', '보건', '병원', '의사', '간호'],
-            '교육': ['교육', '학교', '학생', '교사'],
-            '환경': ['환경', '오염', '대기', '수질'],
-            '교통': ['교통', '도로', '자동차', '운전'],
-            '경제': ['경제', '금융', '은행', '투자'],
-            '행정': ['행정', '공무원', '정부', '기관']
+            '?�료': ['?�료', '보건', '병원', '?�사', '간호'],
+            '교육': ['교육', '?�교', '?�생', '교사'],
+            '?�경': ['?�경', '?�염', '?��?, '?�질'],
+            '교통': ['교통', '?�로', '?�동�?, '?�전'],
+            '경제': ['경제', '금융', '?�??, '?�자'],
+            '?�정': ['?�정', '공무??, '?��?', '기�?']
         }
         
         for category, keywords in categories.items():
             if any(keyword in law_name for keyword in keywords):
                 return category
         
-        return '기타'
+        return '기�?'
     
     def _extract_promulgation_number(self, parsed_data: Dict[str, Any]) -> str:
         """Extract promulgation number from parsed data"""

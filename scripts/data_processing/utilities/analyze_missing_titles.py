@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-전처리된 법률 데이터에서 article_title이 없는 케이스 검토
+?�처리된 법률 ?�이?�에??article_title???�는 케?�스 검??
 """
 
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import defaultdict
 
 def analyze_missing_titles():
-    """article_title이 없는 케이스 분석"""
+    """article_title???�는 케?�스 분석"""
     print("Analyzing Missing Article Titles")
     print("=" * 50)
     
@@ -20,7 +20,7 @@ def analyze_missing_titles():
         print(f"Processed directory not found: {processed_dir}")
         return
     
-    # 통계 수집
+    # ?�계 ?�집
     stats = {
         'total_files': 0,
         'total_articles': 0,
@@ -30,7 +30,7 @@ def analyze_missing_titles():
         'problematic_files': []
     }
     
-    # JSON 파일들 처리
+    # JSON ?�일??처리
     json_files = list(processed_dir.glob("*.json"))
     json_files = [f for f in json_files if not f.name.startswith('metadata_')]
     
@@ -56,10 +56,10 @@ def analyze_missing_titles():
                 if not article_title.strip():
                     stats['articles_without_title'] += 1
                     
-                    # 패턴 분석
+                    # ?�턴 분석
                     if '()' in article_content:
                         stats['missing_title_patterns']['empty_parentheses'] += 1
-                    elif '제' in article_content and '조' in article_content:
+                    elif '?? in article_content and '�? in article_content:
                         stats['missing_title_patterns']['article_reference'] += 1
                     elif len(article_content) < 50:
                         stats['missing_title_patterns']['short_content'] += 1

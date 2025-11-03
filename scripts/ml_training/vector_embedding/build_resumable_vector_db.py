@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-중단점 복구 기능이 있는 ML 강화 벡터 임베딩 생성기
+중단??복구 기능???�는 ML 강화 벡터 ?�베???�성�?
 """
 
 import gc
@@ -16,56 +16,56 @@ from typing import Any, Dict, List, Optional
 
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.vector_store import LegalVectorStore
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
+# Windows 콘솔?�서 UTF-8 ?�코???�정
 if os.name == 'nt':  # Windows
     try:
         import codecs
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
         sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
     except AttributeError:
-        # 이미 UTF-8로 설정된 경우 무시
+        # ?��? UTF-8�??�정??경우 무시
         pass
 
 logger = logging.getLogger(__name__)
 
 
 class ResumableVectorBuilder:
-    """중단점 복구 기능이 있는 벡터 빌더"""
+    """중단??복구 기능???�는 벡터 빌더"""
 
     def __init__(self, model_name: str = "jhgan/ko-sroberta-multitask",
                  batch_size: int = 20, chunk_size: int = 200,
                  checkpoint_interval: int = 100):
         """
-        중단점 복구 가능한 벡터 빌더 초기화
+        중단??복구 가?�한 벡터 빌더 초기??
 
         Args:
-            model_name: 사용할 임베딩 모델명
-            batch_size: 파일 배치 크기
-            chunk_size: 문서 청크 크기
-            checkpoint_interval: 체크포인트 저장 간격 (문서 수)
+            model_name: ?�용???�베??모델�?
+            batch_size: ?�일 배치 ?�기
+            chunk_size: 문서 �?�� ?�기
+            checkpoint_interval: 체크?�인???�??간격 (문서 ??
         """
         self.model_name = model_name
         self.batch_size = batch_size
         self.chunk_size = chunk_size
         self.checkpoint_interval = checkpoint_interval
 
-        # Sentence-BERT 모델의 임베딩 차원 (768)
+        # Sentence-BERT 모델???�베??차원 (768)
         embedding_dimension = 768
 
-        # 벡터 스토어 초기화
+        # 벡터 ?�토??초기??
         self.vector_store = LegalVectorStore(
             model_name=model_name,
             dimension=embedding_dimension,
             index_type="flat"
         )
 
-        # 통계 초기화
+        # ?�계 초기??
         self.stats = {
             'total_files_processed': 0,
             'total_laws_processed': 0,
@@ -87,25 +87,25 @@ class ResumableVectorBuilder:
 
     def build_embeddings(self, input_dir: str, output_dir: str, resume: bool = True) -> Dict[str, Any]:
         """
-        중단점 복구 가능한 벡터 임베딩 생성
+        중단??복구 가?�한 벡터 ?�베???�성
 
         Args:
-            input_dir: 입력 디렉토리
-            output_dir: 출력 디렉토리
-            resume: 이전 작업 이어서 진행할지 여부
+            input_dir: ?�력 ?�렉?�리
+            output_dir: 출력 ?�렉?�리
+            resume: ?�전 ?�업 ?�어??진행?��? ?��?
 
         Returns:
-            처리 결과 통계
+            처리 결과 ?�계
         """
         input_path = Path(input_dir)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # 체크포인트 파일 경로
+        # 체크?�인???�일 경로
         checkpoint_file = output_path / "checkpoint.json"
         progress_file = output_path / "progress.pkl"
 
-        # 이전 작업 복구
+        # ?�전 ?�업 복구
         if resume and checkpoint_file.exists():
             self._load_checkpoint(checkpoint_file, progress_file)
             logger.info(f"Resumed from checkpoint: {self.stats['last_checkpoint']}")
@@ -113,7 +113,7 @@ class ResumableVectorBuilder:
 
         logger.info(f"Starting resumable vector embedding generation from: {input_path}")
 
-        # JSON 파일 찾기
+        # JSON ?�일 찾기
         json_files = list(input_path.rglob("ml_enhanced_*.json"))
         logger.info(f"Found {len(json_files)} ML-enhanced files to process")
 
@@ -121,7 +121,7 @@ class ResumableVectorBuilder:
             logger.warning("No ML-enhanced files found!")
             return self.stats
 
-        # 이미 처리된 파일들 제외
+        # ?��? 처리???�일???�외
         remaining_files = [f for f in json_files if str(f) not in self.stats['processed_files']]
         logger.info(f"Remaining files to process: {len(remaining_files)}")
 
@@ -129,7 +129,7 @@ class ResumableVectorBuilder:
             logger.info("All files already processed!")
             return self.stats
 
-        # 파일들을 작은 배치로 나누어 순차 처리
+        # ?�일?�을 ?��? 배치�??�누???�차 처리
         batches = [remaining_files[i:i + self.batch_size] for i in range(0, len(remaining_files), self.batch_size)]
         logger.info(f"Processing {len(batches)} batches with {self.batch_size} files each")
 
@@ -138,7 +138,7 @@ class ResumableVectorBuilder:
                 try:
                     batch_documents = self._process_batch_sequential(batch_files, batch_idx)
 
-                    # 문서들을 작은 청크로 나누어 처리
+                    # 문서?�을 ?��? �?���??�누??처리
                     for i in range(0, len(batch_documents), self.chunk_size):
                         chunk = batch_documents[i:i + self.chunk_size]
                         texts = [doc['text'] for doc in chunk]
@@ -148,11 +148,11 @@ class ResumableVectorBuilder:
                             self.vector_store.add_documents(texts, metadatas)
                             self.stats['total_documents_created'] += len(chunk)
 
-                            # 메모리 정리
+                            # 메모�??�리
                             del texts, metadatas
                             gc.collect()
 
-                            # 체크포인트 저장
+                            # 체크?�인???�??
                             if self.stats['total_documents_created'] % self.checkpoint_interval == 0:
                                 self._save_checkpoint(checkpoint_file, progress_file)
                                 logger.info(f"Checkpoint saved: {self.stats['total_documents_created']} documents processed")
@@ -161,20 +161,20 @@ class ResumableVectorBuilder:
                             logger.error(f"Error creating embeddings for chunk {i//self.chunk_size}: {e}")
                             self.stats['errors'].append(f"Embedding chunk error: {e}")
 
-                    # 배치 완료 후 체크포인트 저장
+                    # 배치 ?�료 ??체크?�인???�??
                     self._save_checkpoint(checkpoint_file, progress_file)
 
-                    # 메모리 정리
+                    # 메모�??�리
                     gc.collect()
 
-                    # 진행 상황 로깅
+                    # 진행 ?�황 로깅
                     if (batch_idx + 1) % 5 == 0:
                         logger.info(f"Processed {batch_idx + 1}/{len(batches)} batches")
 
                 except Exception as e:
                     logger.error(f"Error processing batch {batch_idx}: {e}")
                     self.stats['errors'].append(f"Batch {batch_idx} error: {e}")
-                    # 에러가 발생해도 다음 배치 계속 처리
+                    # ?�러가 발생?�도 ?�음 배치 계속 처리
                     continue
 
         except KeyboardInterrupt:
@@ -188,17 +188,17 @@ class ResumableVectorBuilder:
             self._save_checkpoint(checkpoint_file, progress_file)
             raise
 
-        # 최종 인덱스 저장
+        # 최종 ?�덱???�??
         index_path = output_path / "ml_enhanced_faiss_index"
         self.vector_store.save_index(str(index_path))
 
-        # 최종 통계 저장
+        # 최종 ?�계 ?�??
         self.stats['end_time'] = datetime.now().isoformat()
         stats_path = output_path / "ml_enhanced_stats.json"
         with open(stats_path, 'w', encoding='utf-8') as f:
             json.dump(self.stats, f, ensure_ascii=False, indent=2)
 
-        # 체크포인트 파일 정리
+        # 체크?�인???�일 ?�리
         if checkpoint_file.exists():
             checkpoint_file.unlink()
         if progress_file.exists():
@@ -212,12 +212,12 @@ class ResumableVectorBuilder:
         return self.stats
 
     def _process_batch_sequential(self, batch_files: List[Path], batch_idx: int) -> List[Dict[str, Any]]:
-        """배치 파일들을 순차 처리"""
+        """배치 ?�일?�을 ?�차 처리"""
         batch_documents = []
 
         for file_path in batch_files:
             try:
-                # 파일이 이미 처리되었는지 확인
+                # ?�일???��? 처리?�었?��? ?�인
                 if str(file_path) in self.stats['processed_files']:
                     continue
 
@@ -234,14 +234,14 @@ class ResumableVectorBuilder:
         return batch_documents
 
     def _process_single_file(self, file_path: Path) -> List[Dict[str, Any]]:
-        """단일 파일 처리"""
+        """?�일 ?�일 처리"""
         documents = []
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
 
-            # 파일 구조 확인
+            # ?�일 구조 ?�인
             if isinstance(file_data, dict) and 'laws' in file_data:
                 laws = file_data['laws']
             elif isinstance(file_data, list):
@@ -251,7 +251,7 @@ class ResumableVectorBuilder:
 
             for law_data in laws:
                 try:
-                    # 법률 메타데이터 추출
+                    # 법률 메�??�이??추출
                     law_metadata = self._extract_law_metadata(law_data)
 
                     # 본칙 조문 처리
@@ -259,21 +259,21 @@ class ResumableVectorBuilder:
                     if not isinstance(articles, list):
                         articles = []
 
-                    # 부칙 조문 처리
+                    # 부�?조문 처리
                     supplementary_articles = law_data.get('supplementary_articles', [])
                     if not isinstance(supplementary_articles, list):
                         supplementary_articles = []
 
-                    # 모든 조문을 하나의 리스트로 합치기
+                    # 모든 조문???�나??리스?�로 ?�치�?
                     all_articles = articles + supplementary_articles
 
-                    # 문서 생성
+                    # 문서 ?�성
                     article_documents = self._create_article_documents_batch(
                         all_articles, law_metadata
                     )
                     documents.extend(article_documents)
 
-                    # 통계 업데이트
+                    # ?�계 ?�데?�트
                     self.stats['total_laws_processed'] += 1
                     self.stats['total_articles_processed'] += len(all_articles)
 
@@ -296,12 +296,12 @@ class ResumableVectorBuilder:
 
     def _create_article_documents_batch(self, articles: List[Dict[str, Any]],
                                       law_metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """조문들을 배치로 문서 변환"""
+        """조문?�을 배치�?문서 변??""
         documents = []
 
         for article in articles:
             try:
-                # 조문 메타데이터 생성
+                # 조문 메�??�이???�성
                 article_metadata = {
                     **law_metadata,
                     'article_number': article.get('article_number', ''),
@@ -316,26 +316,26 @@ class ResumableVectorBuilder:
                     'references_count': len(article.get('references', [])) if isinstance(article.get('references'), list) else 0
                 }
 
-                # 문서 ID 생성
+                # 문서 ID ?�성
                 document_id = f"{law_metadata['law_id']}_article_{article_metadata['article_number']}"
                 article_metadata['document_id'] = document_id
 
-                # 텍스트 구성
+                # ?�스??구성
                 text_parts = []
 
-                # 조문 번호와 제목
+                # 조문 번호?� ?�목
                 if article_metadata['article_number']:
                     if article_metadata['article_title']:
                         text_parts.append(f"{article_metadata['article_number']}({article_metadata['article_title']})")
                     else:
                         text_parts.append(article_metadata['article_number'])
 
-                # 조문 내용
+                # 조문 ?�용
                 article_content = article.get('article_content', '')
                 if article_content:
                     text_parts.append(article_content)
 
-                # 하위 조문들
+                # ?�위 조문??
                 sub_articles = article.get('sub_articles', [])
                 if isinstance(sub_articles, list):
                     for sub_article in sub_articles:
@@ -344,7 +344,7 @@ class ResumableVectorBuilder:
                             if sub_content:
                                 text_parts.append(sub_content)
 
-                # 최종 텍스트
+                # 최종 ?�스??
                 full_text = ' '.join(text_parts)
 
                 if full_text.strip():
@@ -369,7 +369,7 @@ class ResumableVectorBuilder:
         return documents
 
     def _extract_law_metadata(self, law_data: Dict[str, Any]) -> Dict[str, Any]:
-        """법률 메타데이터 추출"""
+        """법률 메�??�이??추출"""
         return {
             'law_id': law_data.get('law_id') or f"ml_enhanced_{law_data.get('law_name', 'unknown').replace(' ', '_')}",
             'law_name': law_data.get('law_name', ''),
@@ -387,19 +387,19 @@ class ResumableVectorBuilder:
         }
 
     def _save_checkpoint(self, checkpoint_file: Path, progress_file: Path):
-        """체크포인트 저장"""
+        """체크?�인???�??""
         try:
             self.stats['last_checkpoint'] = datetime.now().isoformat()
 
-            # set을 list로 변환하여 JSON 직렬화 가능하게 만들기
+            # set??list�?변?�하??JSON 직렬??가?�하�?만들�?
             checkpoint_stats = self.stats.copy()
             checkpoint_stats['processed_files'] = list(checkpoint_stats['processed_files'])
 
-            # 통계 정보 저장
+            # ?�계 ?�보 ?�??
             with open(checkpoint_file, 'w', encoding='utf-8') as f:
                 json.dump(checkpoint_stats, f, ensure_ascii=False, indent=2)
 
-            # 벡터 스토어 상태 저장
+            # 벡터 ?�토???�태 ?�??
             vector_state = {
                 'document_count': len(self.vector_store.document_metadata),
                 'index_trained': self.vector_store.index.is_trained if self.vector_store.index else False
@@ -412,20 +412,20 @@ class ResumableVectorBuilder:
             logger.error(f"Failed to save checkpoint: {e}")
 
     def _load_checkpoint(self, checkpoint_file: Path, progress_file: Path):
-        """체크포인트 로드"""
+        """체크?�인??로드"""
         try:
-            # 통계 정보 로드
+            # ?�계 ?�보 로드
             with open(checkpoint_file, 'r', encoding='utf-8') as f:
                 saved_stats = json.load(f)
 
-            # 통계 정보 복원
+            # ?�계 ?�보 복원
             self.stats.update(saved_stats)
 
-            # processed_files를 set으로 변환
+            # processed_files�?set?�로 변??
             if isinstance(self.stats['processed_files'], list):
                 self.stats['processed_files'] = set(self.stats['processed_files'])
 
-            # 벡터 스토어 상태 확인
+            # 벡터 ?�토???�태 ?�인
             if progress_file.exists():
                 with open(progress_file, 'rb') as f:
                     vector_state = pickle.load(f)
@@ -433,32 +433,32 @@ class ResumableVectorBuilder:
 
         except Exception as e:
             logger.error(f"Failed to load checkpoint: {e}")
-            # 체크포인트 로드 실패 시 처음부터 시작
+            # 체크?�인??로드 ?�패 ??처음부???�작
             self.stats['processed_files'] = set()
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="중단점 복구 기능이 있는 ML 강화 벡터 임베딩 생성기")
-    parser.add_argument("--input", required=True, help="입력 디렉토리")
-    parser.add_argument("--output", required=True, help="출력 디렉토리")
-    parser.add_argument("--batch-size", type=int, default=20, help="배치 크기 (기본값: 20)")
-    parser.add_argument("--chunk-size", type=int, default=200, help="청크 크기 (기본값: 200)")
-    parser.add_argument("--checkpoint-interval", type=int, default=100, help="체크포인트 저장 간격 (기본값: 100)")
-    parser.add_argument("--resume", action="store_true", help="이전 작업 이어서 진행")
-    parser.add_argument("--log-level", default="INFO", help="로그 레벨")
+    parser = argparse.ArgumentParser(description="중단??복구 기능???�는 ML 강화 벡터 ?�베???�성�?)
+    parser.add_argument("--input", required=True, help="?�력 ?�렉?�리")
+    parser.add_argument("--output", required=True, help="출력 ?�렉?�리")
+    parser.add_argument("--batch-size", type=int, default=20, help="배치 ?�기 (기본�? 20)")
+    parser.add_argument("--chunk-size", type=int, default=200, help="�?�� ?�기 (기본�? 200)")
+    parser.add_argument("--checkpoint-interval", type=int, default=100, help="체크?�인???�??간격 (기본�? 100)")
+    parser.add_argument("--resume", action="store_true", help="?�전 ?�업 ?�어??진행")
+    parser.add_argument("--log-level", default="INFO", help="로그 ?�벨")
 
     args = parser.parse_args()
 
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    # 벡터 빌더 초기화 및 실행
+    # 벡터 빌더 초기??�??�행
     builder = ResumableVectorBuilder(
         batch_size=args.batch_size,
         chunk_size=args.chunk_size,
@@ -467,18 +467,18 @@ def main():
 
     stats = builder.build_embeddings(args.input, args.output, resume=args.resume)
 
-    print(f"\n=== 처리 완료 ===")
-    print(f"총 파일 수: {stats['total_files_processed']}")
-    print(f"총 법률 수: {stats['total_laws_processed']}")
-    print(f"총 조문 수: {stats['total_articles_processed']}")
-    print(f"총 문서 수: {stats['total_documents_created']}")
-    print(f"에러 수: {len(stats['errors'])}")
+    print(f"\n=== 처리 ?�료 ===")
+    print(f"�??�일 ?? {stats['total_files_processed']}")
+    print(f"�?법률 ?? {stats['total_laws_processed']}")
+    print(f"�?조문 ?? {stats['total_articles_processed']}")
+    print(f"�?문서 ?? {stats['total_documents_created']}")
+    print(f"?�러 ?? {len(stats['errors'])}")
 
     if stats.get('start_time') and stats.get('end_time'):
         start_time = datetime.fromisoformat(stats['start_time'])
         end_time = datetime.fromisoformat(stats['end_time'])
         duration = end_time - start_time
-        print(f"총 소요 시간: {duration}")
+        print(f"�??�요 ?�간: {duration}")
 
 
 if __name__ == "__main__":

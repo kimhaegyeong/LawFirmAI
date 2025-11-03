@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-LangGraph 멀티턴 로직 통합 테스트
+LangGraph 멀?�턴 로직 ?�합 ?�스??
 """
 
 import sys
@@ -11,105 +11,105 @@ try:
     PYTEST_AVAILABLE = True
 except ImportError:
     PYTEST_AVAILABLE = False
-    # pytest가 없으면 unittest로 대체
+    # pytest가 ?�으�?unittest�??��?
     import unittest
     pytest = unittest
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from datetime import datetime
 
 from source.services.conversation_manager import ConversationManager, ConversationTurn
-from core.agents.legal_workflow_enhanced import (
+from source.agents.legal_workflow_enhanced import (
     EnhancedLegalQuestionWorkflow,
 )
-from core.agents.state_definitions import create_initial_legal_state
+from source.agents.state_definitions import create_initial_legal_state
 from source.utils.langgraph_config import LangGraphConfig
 
 
 def test_multi_turn_integration_direct():
-    """LangGraph 멀티턴 통합 테스트 (직접 실행)"""
-    print("\n=== LangGraph 멀티턴 통합 테스트 시작 (직접 실행) ===\n")
+    """LangGraph 멀?�턴 ?�합 ?�스??(직접 ?�행)"""
+    print("\n=== LangGraph 멀?�턴 ?�합 ?�스???�작 (직접 ?�행) ===\n")
 
     try:
-        # 설정 로드
+        # ?�정 로드
         config = LangGraphConfig.from_env()
         workflow = EnhancedLegalQuestionWorkflow(config)
-        print("✓ 워크플로우 초기화 성공")
+        print("???�크?�로??초기???�공")
 
-        # 멀티턴 핸들러 초기화 확인
+        # 멀?�턴 ?�들??초기???�인
         if hasattr(workflow, 'multi_turn_handler') and workflow.multi_turn_handler:
-            print("✓ 멀티턴 핸들러 초기화 완료")
+            print("??멀?�턴 ?�들??초기???�료")
         else:
-            print("⚠ 멀티턴 핸들러가 초기화되지 않음")
+            print("??멀?�턴 ?�들?��? 초기?�되지 ?�음")
 
         if hasattr(workflow, 'conversation_manager') and workflow.conversation_manager:
-            print("✓ 대화 관리자 초기화 완료")
+            print("???�??관리자 초기???�료")
         else:
-            print("⚠ 대화 관리자가 초기화되지 않음")
+            print("???�??관리자가 초기?�되지 ?�음")
 
-        # 상태 정의 멀티턴 필드 확인
-        state = create_initial_legal_state("테스트 질문", "test_session")
+        # ?�태 ?�의 멀?�턴 ?�드 ?�인
+        state = create_initial_legal_state("?�스??질문", "test_session")
         multi_turn_fields = ["is_multi_turn", "original_query", "resolved_query",
                             "multi_turn_confidence", "multi_turn_reasoning",
                             "conversation_history", "conversation_context"]
         missing_fields = [f for f in multi_turn_fields if f not in state]
         if missing_fields:
-            print(f"⚠ 누락된 멀티턴 필드: {missing_fields}")
+            print(f"???�락??멀?�턴 ?�드: {missing_fields}")
         else:
-            print("✓ 멀티턴 필드 모두 존재")
+            print("??멀?�턴 ?�드 모두 존재")
 
-        # 워크플로우 노드 확인
+        # ?�크?�로???�드 ?�인
         if hasattr(workflow, 'graph'):
             nodes = list(workflow.graph.nodes.keys())
             if "resolve_multi_turn" in nodes:
-                print("✓ 멀티턴 노드가 워크플로우에 통합됨")
+                print("??멀?�턴 ?�드가 ?�크?�로?�에 ?�합??)
             else:
-                print("⚠ 멀티턴 노드가 워크플로우에 없음")
+                print("??멀?�턴 ?�드가 ?�크?�로?�에 ?�음")
 
-        print("\n=== LangGraph 멀티턴 통합 테스트 완료 ===\n")
+        print("\n=== LangGraph 멀?�턴 ?�합 ?�스???�료 ===\n")
         return True
 
     except Exception as e:
-        print(f"✗ 테스트 실행 실패: {e}")
+        print(f"???�스???�행 ?�패: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 class TestLangGraphMultiTurnIntegration:
-    """LangGraph 멀티턴 통합 테스트 (pytest용)"""
+    """LangGraph 멀?�턴 ?�합 ?�스??(pytest??"""
 
     def __init__(self):
-        """pytest fixture 없이 실행 가능하도록 초기화"""
-        # pytest 없이 직접 실행 가능하도록 항상 초기화
+        """pytest fixture ?�이 ?�행 가?�하?�록 초기??""
+        # pytest ?�이 직접 ?�행 가?�하?�록 ??�� 초기??
         self.config = LangGraphConfig.from_env()
         self.workflow = EnhancedLegalQuestionWorkflow(self.config)
         self.conversation_manager = self._create_conversation_manager()
 
     def _create_conversation_manager(self):
-        """대화 관리자 생성"""
+        """?�??관리자 ?�성"""
         manager = ConversationManager()
 
-        # 테스트 대화 추가
+        # ?�스???�??추�?
         session_id = "test_session_001"
 
         turn1 = ConversationTurn(
-            user_query="손해배상 청구 방법을 알려주세요",
-            bot_response="민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+            user_query="?�해배상 �?�� 방법???�려주세??,
+            bot_response="민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
             timestamp=datetime.now(),
             question_type="legal_advice",
-            entities={"laws": ["민법"], "articles": ["제750조"], "legal_terms": ["손해배상"]}
+            entities={"laws": ["민법"], "articles": ["??50�?], "legal_terms": ["?�해배상"]}
         )
 
         turn2 = ConversationTurn(
-            user_query="계약 해지 절차는 어떻게 되나요?",
-            bot_response="계약 해지 절차는 다음과 같습니다...",
+            user_query="계약 ?��? ?�차???�떻�??�나??",
+            bot_response="계약 ?��? ?�차???�음�?같습?�다...",
             timestamp=datetime.now(),
             question_type="procedure_guide",
-            entities={"legal_terms": ["계약", "해지"]}
+            entities={"legal_terms": ["계약", "?��?"]}
         )
 
         context = manager.add_turn(session_id, turn1.user_query, turn1.bot_response, turn1.question_type)
@@ -117,40 +117,40 @@ class TestLangGraphMultiTurnIntegration:
 
         return manager
 
-    # pytest가 있을 때만 fixture 정의
+    # pytest가 ?�을 ?�만 fixture ?�의
     if PYTEST_AVAILABLE:
         @pytest.fixture
         def config(self):
-            """LangGraph 설정"""
+            """LangGraph ?�정"""
             return LangGraphConfig.from_env()
 
         @pytest.fixture
         def workflow(self, config):
-            """워크플로우 초기화"""
+            """?�크?�로??초기??""
             return EnhancedLegalQuestionWorkflow(config)
 
         @pytest.fixture
         def conversation_manager(self):
-            """대화 관리자 초기화"""
+            """?�??관리자 초기??""
             manager = ConversationManager()
 
-            # 테스트 대화 추가
+            # ?�스???�??추�?
             session_id = "test_session_001"
 
             turn1 = ConversationTurn(
-                user_query="손해배상 청구 방법을 알려주세요",
-                bot_response="민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+                user_query="?�해배상 �?�� 방법???�려주세??,
+                bot_response="민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
                 timestamp=datetime.now(),
                 question_type="legal_advice",
-                entities={"laws": ["민법"], "articles": ["제750조"], "legal_terms": ["손해배상"]}
+                entities={"laws": ["민법"], "articles": ["??50�?], "legal_terms": ["?�해배상"]}
             )
 
             turn2 = ConversationTurn(
-                user_query="계약 해지 절차는 어떻게 되나요?",
-                bot_response="계약 해지 절차는 다음과 같습니다...",
+                user_query="계약 ?��? ?�차???�떻�??�나??",
+                bot_response="계약 ?��? ?�차???�음�?같습?�다...",
                 timestamp=datetime.now(),
                 question_type="procedure_guide",
-                entities={"legal_terms": ["계약", "해지"]}
+                entities={"legal_terms": ["계약", "?��?"]}
             )
 
             context = manager.add_turn(session_id, turn1.user_query, turn1.bot_response, turn1.question_type)
@@ -159,89 +159,89 @@ class TestLangGraphMultiTurnIntegration:
             return manager
 
     def test_multi_turn_handler_initialization(self, workflow=None):
-        """멀티턴 핸들러 초기화 테스트"""
-        # pytest fixture가 주입되지 않으면 인스턴스 변수 사용
+        """멀?�턴 ?�들??초기???�스??""
+        # pytest fixture가 주입?��? ?�으�??�스?�스 변???�용
         if workflow is None:
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
-        assert workflow.multi_turn_handler is not None, "MultiTurnQuestionHandler가 초기화되지 않았습니다"
-        assert workflow.conversation_manager is not None, "ConversationManager가 초기화되지 않았습니다"
-        print("✓ 멀티턴 핸들러 초기화 성공")
+        assert workflow.multi_turn_handler is not None, "MultiTurnQuestionHandler가 초기?�되지 ?�았?�니??
+        assert workflow.conversation_manager is not None, "ConversationManager가 초기?�되지 ?�았?�니??
+        print("??멀?�턴 ?�들??초기???�공")
 
     def test_state_definitions_multi_turn_fields(self):
-        """상태 정의에 멀티턴 필드가 있는지 테스트"""
-        state = create_initial_legal_state("테스트 질문", "test_session")
+        """?�태 ?�의??멀?�턴 ?�드가 ?�는지 ?�스??""
+        state = create_initial_legal_state("?�스??질문", "test_session")
 
-        # 멀티턴 관련 필드 확인
-        assert "is_multi_turn" in state, "is_multi_turn 필드가 없습니다"
-        assert "original_query" in state, "original_query 필드가 없습니다"
-        assert "resolved_query" in state, "resolved_query 필드가 없습니다"
-        assert "multi_turn_confidence" in state, "multi_turn_confidence 필드가 없습니다"
-        assert "multi_turn_reasoning" in state, "multi_turn_reasoning 필드가 없습니다"
-        assert "conversation_history" in state, "conversation_history 필드가 없습니다"
-        assert "conversation_context" in state, "conversation_context 필드가 없습니다"
+        # 멀?�턴 관???�드 ?�인
+        assert "is_multi_turn" in state, "is_multi_turn ?�드가 ?�습?�다"
+        assert "original_query" in state, "original_query ?�드가 ?�습?�다"
+        assert "resolved_query" in state, "resolved_query ?�드가 ?�습?�다"
+        assert "multi_turn_confidence" in state, "multi_turn_confidence ?�드가 ?�습?�다"
+        assert "multi_turn_reasoning" in state, "multi_turn_reasoning ?�드가 ?�습?�다"
+        assert "conversation_history" in state, "conversation_history ?�드가 ?�습?�다"
+        assert "conversation_context" in state, "conversation_context ?�드가 ?�습?�다"
 
-        print("✓ 멀티턴 필드 모두 존재")
+        print("??멀?�턴 ?�드 모두 존재")
 
     def test_resolve_multi_turn_node(self, workflow=None):
-        """멀티턴 해결 노드 테스트"""
-        # pytest fixture가 주입되지 않으면 인스턴스 변수 사용
+        """멀?�턴 ?�결 ?�드 ?�스??""
+        # pytest fixture가 주입?��? ?�으�??�스?�스 변???�용
         if workflow is None:
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
-        # 테스트 상태 생성
-        state = create_initial_legal_state("그것에 대해 더 자세히 알려주세요", "test_session_001")
+        # ?�스???�태 ?�성
+        state = create_initial_legal_state("그것???�?????�세???�려주세??, "test_session_001")
 
-        # 대화 맥락 시뮬레이션을 위해 conversation_manager에 직접 엑세스
+        # ?�??맥락 ?��??�이?�을 ?�해 conversation_manager??직접 ?�세??
         if workflow.conversation_manager:
             workflow.conversation_manager.sessions = self._create_test_context()
 
-        # 멀티턴 해결 노드 실행
+        # 멀?�턴 ?�결 ?�드 ?�행
         result_state = workflow.resolve_multi_turn(state)
 
-        # 결과 확인
+        # 결과 ?�인
         assert "is_multi_turn" in result_state
         assert "resolved_query" in result_state
         assert "original_query" in result_state
 
-        print(f"✓ 멀티턴 노드 실행: is_multi_turn={result_state.get('is_multi_turn')}")
+        print(f"??멀?�턴 ?�드 ?�행: is_multi_turn={result_state.get('is_multi_turn')}")
         print(f"  Original: {result_state.get('original_query')}")
         print(f"  Resolved: {result_state.get('resolved_query')}")
 
     def test_single_turn_question(self, workflow=None):
-        """단일 턴 질문 처리 테스트"""
-        # pytest fixture가 주입되지 않으면 인스턴스 변수 사용
+        """?�일 ??질문 처리 ?�스??""
+        # pytest fixture가 주입?��? ?�으�??�스?�스 변???�용
         if workflow is None:
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
-        state = create_initial_legal_state("손해배상 청구 방법을 알려주세요", "test_session_001")
+        state = create_initial_legal_state("?�해배상 �?�� 방법???�려주세??, "test_session_001")
 
         result_state = workflow.resolve_multi_turn(state)
 
-        # 단일 턴 질문이므로 is_multi_turn은 False여야 함
+        # ?�일 ??질문?��?�?is_multi_turn?� False?�야 ??
         assert result_state.get("is_multi_turn") == False
         assert result_state.get("resolved_query") == state["query"]
 
-        print("✓ 단일 턴 질문 처리 성공")
+        print("???�일 ??질문 처리 ?�공")
 
     def test_workflow_graph_includes_multi_turn_node(self, workflow=None):
-        """워크플로우 그래프에 멀티턴 노드가 포함되어 있는지 테스트"""
-        # pytest fixture가 주입되지 않으면 인스턴스 변수 사용
+        """?�크?�로??그래?�에 멀?�턴 ?�드가 ?�함?�어 ?�는지 ?�스??""
+        # pytest fixture가 주입?��? ?�으�??�스?�스 변???�용
         if workflow is None:
             if not hasattr(self, 'workflow'):
                 self.__init__()
             workflow = self.workflow
         nodes = workflow.graph.nodes.keys()
 
-        assert "resolve_multi_turn" in nodes, "resolve_multi_turn 노드가 그래프에 없습니다"
+        assert "resolve_multi_turn" in nodes, "resolve_multi_turn ?�드가 그래?�에 ?�습?�다"
 
-        print(f"✓ 워크플로우 노드: {list(nodes)}")
+        print(f"???�크?�로???�드: {list(nodes)}")
 
     def _create_test_context(self):
-        """테스트용 대화 맥락 생성"""
+        """?�스?�용 ?�??맥락 ?�성"""
         from datetime import datetime
 
         from source.services.conversation_manager import (
@@ -254,15 +254,15 @@ class TestLangGraphMultiTurnIntegration:
 
         manager.add_turn(
             session_id,
-            "손해배상 청구 방법을 알려주세요",
-            "민법 제750조에 따른 손해배상 청구 방법을 설명드리겠습니다...",
+            "?�해배상 �?�� 방법???�려주세??,
+            "민법 ??50조에 ?�른 ?�해배상 �?�� 방법???�명?�리겠습?�다...",
             "legal_advice"
         )
 
         manager.add_turn(
             session_id,
-            "계약 해지 절차는 어떻게 되나요?",
-            "계약 해지 절차는 다음과 같습니다...",
+            "계약 ?��? ?�차???�떻�??�나??",
+            "계약 ?��? ?�차???�음�?같습?�다...",
             "procedure_guide"
         )
 
@@ -270,57 +270,57 @@ class TestLangGraphMultiTurnIntegration:
 
 
 def test_multi_turn_integration():
-    """멀티턴 통합 테스트 실행"""
-    print("\n=== LangGraph 멀티턴 통합 테스트 시작 ===\n")
+    """멀?�턴 ?�합 ?�스???�행"""
+    print("\n=== LangGraph 멀?�턴 ?�합 ?�스???�작 ===\n")
 
-    # 설정 로드
+    # ?�정 로드
     try:
         config = LangGraphConfig.from_env()
-        print("✓ 설정 로드 성공")
+        print("???�정 로드 ?�공")
     except Exception as e:
-        print(f"✗ 설정 로드 실패: {e}")
+        print(f"???�정 로드 ?�패: {e}")
         return
 
-    # 워크플로우 초기화
+    # ?�크?�로??초기??
     try:
         workflow = EnhancedLegalQuestionWorkflow(config)
-        print("✓ 워크플로우 초기화 성공")
+        print("???�크?�로??초기???�공")
 
-        # 멀티턴 핸들러 확인
+        # 멀?�턴 ?�들???�인
         if workflow.multi_turn_handler:
-            print("✓ 멀티턴 핸들러 초기화 완료")
+            print("??멀?�턴 ?�들??초기???�료")
         else:
-            print("⚠ 멀티턴 핸들러가 초기화되지 않음")
+            print("??멀?�턴 ?�들?��? 초기?�되지 ?�음")
 
         if workflow.conversation_manager:
-            print("✓ 대화 관리자 초기화 완료")
+            print("???�??관리자 초기???�료")
         else:
-            print("⚠ 대화 관리자가 초기화되지 않음")
+            print("???�??관리자가 초기?�되지 ?�음")
 
     except Exception as e:
-        print(f"✗ 워크플로우 초기화 실패: {e}")
+        print(f"???�크?�로??초기???�패: {e}")
         import traceback
         traceback.print_exc()
         return
 
-    # 워크플로우 노드 확인
+    # ?�크?�로???�드 ?�인
     try:
         nodes = list(workflow.graph.nodes.keys())
-        print(f"\n워크플로우 노드 목록: {nodes}")
+        print(f"\n?�크?�로???�드 목록: {nodes}")
 
         if "resolve_multi_turn" in nodes:
-            print("✓ 멀티턴 노드가 워크플로우에 통합됨")
+            print("??멀?�턴 ?�드가 ?�크?�로?�에 ?�합??)
         else:
-            print("✗ 멀티턴 노드가 워크플로우에 없음")
+            print("??멀?�턴 ?�드가 ?�크?�로?�에 ?�음")
 
     except Exception as e:
-        print(f"✗ 노드 확인 실패: {e}")
+        print(f"???�드 ?�인 ?�패: {e}")
 
-    print("\n=== LangGraph 멀티턴 통합 테스트 완료 ===\n")
+    print("\n=== LangGraph 멀?�턴 ?�합 ?�스???�료 ===\n")
 
 
 if __name__ == "__main__":
-    # pytest가 없으면 직접 실행 가능한 함수 호출
+    # pytest가 ?�으�?직접 ?�행 가?�한 ?�수 ?�출
     if PYTEST_AVAILABLE:
         test_multi_turn_integration()
     else:

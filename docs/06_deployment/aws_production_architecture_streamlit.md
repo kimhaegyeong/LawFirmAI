@@ -1,4 +1,4 @@
-# AWS 프로덕션 아키텍처 설계 문서
+﻿# AWS 프로덕션 아키텍처 설계 문서
 ## LawFirmAI - Streamlit 기반
 
 **작성일**: 2025-10-31  
@@ -376,7 +376,7 @@ def save_chat_history(session_id: str, history: list):
 
 ```python
 # streamlit/app.py (현재 구조)
-from core.agents.workflow_service import LangGraphWorkflowService
+from source.agents.workflow_service import LangGraphWorkflowService
 
 app = StreamlitApp()
 result = app.process_query(query, session_id)
@@ -493,7 +493,7 @@ ENV PATH=/home/app/.local/bin:$PATH
 # 애플리케이션 코드 복사
 COPY --chown=app:app streamlit/ ./streamlit/
 COPY --chown=app:app source/ ./source/
-COPY --chown=app:app core/ ./core/
+COPY --chown=app:app core/ ./source/
 COPY --chown=app:app infrastructure/ ./infrastructure/
 
 # 디렉토리 생성

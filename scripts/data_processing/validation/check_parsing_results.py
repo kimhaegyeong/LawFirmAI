@@ -58,12 +58,12 @@ def check_paragraph_parsing():
     # Check specific law that we know has paragraphs
     target_file = None
     for file_path in files:
-        if '조선재단저당령' in file_path.name:
+        if '조선?�단?�?�령' in file_path.name:
             target_file = file_path
             break
     
     if target_file:
-        print("=== Detailed Check: 조선재단저당령 ===")
+        print("=== Detailed Check: 조선?�단?�?�령 ===")
         with open(target_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         

@@ -414,7 +414,7 @@ class AdvancedDuplicateDetector:
         text = re.sub(r'\s+', ' ', text)
         
         # Remove special characters but keep Korean characters
-        text = re.sub(r'[^\w\s가-힣]', ' ', text)
+        text = re.sub(r'[^\w\s가-??', ' ', text)
         
         return text.strip()
     
@@ -422,17 +422,17 @@ class AdvancedDuplicateDetector:
         """Extract legal keywords from text"""
         # Basic legal keyword patterns
         legal_patterns = [
-            r'법\s*률',
-            r'조\s*문',
-            r'항\s*목',
-            r'부\s*칙',
-            r'시\s*행',
-            r'공\s*포',
-            r'개\s*정',
-            r'폐\s*지',
-            r'제\s*\d+\s*조',
-            r'제\s*\d+\s*항',
-            r'제\s*\d+\s*호'
+            r'�?s*�?,
+            r'�?s*�?,
+            r'??s*�?,
+            r'부\s*�?,
+            r'??s*??,
+            r'�?s*??,
+            r'�?s*??,
+            r'??s*지',
+            r'??s*\d+\s*�?,
+            r'??s*\d+\s*??,
+            r'??s*\d+\s*??
         ]
         
         keywords = set()
@@ -512,15 +512,15 @@ if __name__ == "__main__":
         {
             'law_name': '민법',
             'articles': [
-                {'article_number': '1', 'article_title': '목적', 'content': '이 법은 민사에 관한 기본법이다.'},
-                {'article_number': '2', 'article_title': '적용', 'content': '민법은 민사에 관하여 적용한다.'}
+                {'article_number': '1', 'article_title': '목적', 'content': '??법�? 민사??관??기본법이??'},
+                {'article_number': '2', 'article_title': '?�용', 'content': '민법?� 민사??관?�여 ?�용?�다.'}
             ]
         },
         {
             'law_name': '민법',  # Duplicate name
             'articles': [
-                {'article_number': '1', 'article_title': '목적', 'content': '이 법은 민사에 관한 기본법이다.'},  # Duplicate content
-                {'article_number': '2', 'article_title': '적용', 'content': '민법은 민사에 관하여 적용한다.'}
+                {'article_number': '1', 'article_title': '목적', 'content': '??법�? 민사??관??기본법이??'},  # Duplicate content
+                {'article_number': '2', 'article_title': '?�용', 'content': '민법?� 민사??관?�여 ?�용?�다.'}
             ]
         }
     ]

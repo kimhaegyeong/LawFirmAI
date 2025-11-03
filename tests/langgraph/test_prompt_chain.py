@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Prompt Chaining 테스트
-Phase 6, 7 구현 테스트
+Prompt Chaining ?�스??
+Phase 6, 7 구현 ?�스??
 """
 
 import pytest
@@ -9,17 +9,17 @@ import sys
 import os
 from unittest.mock import Mock, MagicMock
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from core.agents.prompt_chain_executor import PromptChainExecutor
+from source.agents.prompt_chain_executor import PromptChainExecutor
 
 
 class TestPromptChainExecutor:
-    """PromptChainExecutor 테스트"""
+    """PromptChainExecutor ?�스??""
 
     def setup_method(self):
-        """테스트 설정"""
+        """?�스???�정"""
         self.llm = Mock()
         self.llm.invoke = Mock()
         self.logger = Mock()
@@ -27,8 +27,8 @@ class TestPromptChainExecutor:
         self.executor = PromptChainExecutor(self.llm, self.logger)
 
     def test_chain_execution_success(self):
-        """체인 실행 성공 테스트"""
-        # LLM 응답 모킹
+        """체인 ?�행 ?�공 ?�스??""
+        # LLM ?�답 모킹
         self.llm.invoke.return_value = Mock(content='{"result": "success"}')
 
         chain_steps = [
@@ -63,8 +63,8 @@ class TestPromptChainExecutor:
         assert len(result["errors"]) == 0
 
     def test_chain_validation(self):
-        """체인 검증 테스트"""
-        # LLM 응답 모킹
+        """체인 검�??�스??""
+        # LLM ?�답 모킹
         self.llm.invoke.return_value = Mock(content='{"result": "success"}')
 
         chain_steps = [
@@ -90,8 +90,8 @@ class TestPromptChainExecutor:
         assert result["validation_results"].get("is_valid") is True
 
     def test_chain_failure_handling(self):
-        """체인 실패 처리 테스트"""
-        # LLM 호출 실패 모킹
+        """체인 ?�패 처리 ?�스??""
+        # LLM ?�출 ?�패 모킹
         self.llm.invoke.side_effect = Exception("LLM error")
 
         chain_steps = [
@@ -117,12 +117,12 @@ class TestPromptChainExecutor:
 
 
 class TestDirectAnswerChain:
-    """직접 답변 체인 테스트"""
+    """직접 ?��? 체인 ?�스??""
 
     def test_direct_answer_chain_integration(self):
-        """직접 답변 체인 통합 테스트"""
-        # 이 테스트는 실제 워크플로우와 통합하여 실행해야 합니다
-        # 여기서는 기본 구조만 확인
+        """직접 ?��? 체인 ?�합 ?�스??""
+        # ???�스?�는 ?�제 ?�크?�로?��? ?�합?�여 ?�행?�야 ?�니??
+        # ?�기?�는 기본 구조�??�인
         pass
 
 

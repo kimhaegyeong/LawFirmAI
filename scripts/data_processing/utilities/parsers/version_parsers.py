@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class VersionParserRegistry:
-    """버전별 파서 등록 및 관리"""
+    """버전�??�서 ?�록 �?관�?""
     
     def __init__(self):
         """Initialize parser registry"""
@@ -26,7 +26,7 @@ class VersionParserRegistry:
     
     def get_parser(self, version: str):
         """
-        버전에 해당하는 파서 반환
+        버전???�당?�는 ?�서 반환
         
         Args:
             version (str): Version identifier
@@ -38,7 +38,7 @@ class VersionParserRegistry:
     
     def get_supported_versions(self) -> List[str]:
         """
-        지원되는 버전 목록 반환
+        지?�되??버전 목록 반환
         
         Returns:
             List[str]: List of supported versions
@@ -47,7 +47,7 @@ class VersionParserRegistry:
     
     def register_parser(self, version: str, parser):
         """
-        새로운 버전 파서 등록
+        ?�로??버전 ?�서 ?�록
         
         Args:
             version (str): Version identifier
@@ -58,11 +58,11 @@ class VersionParserRegistry:
 
 
 class BaseVersionParser:
-    """기본 버전 파서 클래스"""
+    """기본 버전 ?�서 ?�래??""
     
     def parse(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Raw 데이터 파싱 (기본 구현)
+        Raw ?�이???�싱 (기본 구현)
         
         Args:
             raw_data (Dict[str, Any]): Raw law data
@@ -80,16 +80,16 @@ class BaseVersionParser:
         }
     
     def get_version(self) -> str:
-        """파서 버전 반환"""
+        """?�서 버전 반환"""
         return 'base'
 
 
 class V1_0Parser(BaseVersionParser):
-    """버전 1.0 데이터 파서 (기본 형식)"""
+    """버전 1.0 ?�이???�서 (기본 ?�식)"""
     
     def parse(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        v1.0 형식의 데이터 파싱
+        v1.0 ?�식???�이???�싱
         
         Args:
             raw_data (Dict[str, Any]): Raw law data
@@ -104,18 +104,18 @@ class V1_0Parser(BaseVersionParser):
                 'law_content': raw_data.get('law_content', ''),
                 'content_html': raw_data.get('content_html', ''),
                 
-                # v1.0 기본 메타데이터
+                # v1.0 기본 메�??�이??
                 'basic_metadata': {
                     'category': raw_data.get('category', ''),
                     'law_type': raw_data.get('law_type', ''),
                     'row_number': raw_data.get('row_number', '')
                 },
                 
-                # 버전 정보
+                # 버전 ?�보
                 'parsing_version': 'v1.0',
                 'parsed_at': datetime.now().isoformat(),
                 
-                # v1.0에서는 공포 정보가 없으므로 빈 값으로 설정
+                # v1.0?�서??공포 ?�보가 ?�으므�?�?값으�??�정
                 'promulgation_info': {
                     'number': '',
                     'date': '',
@@ -123,7 +123,7 @@ class V1_0Parser(BaseVersionParser):
                     'amendment_type': ''
                 },
                 
-                # 수집 정보도 없으므로 빈 값으로 설정
+                # ?�집 ?�보???�으므�?�?값으�??�정
                 'collection_info': {
                     'cont_id': '',
                     'cont_sid': '',
@@ -139,16 +139,16 @@ class V1_0Parser(BaseVersionParser):
             return self._get_error_result(raw_data, 'v1.0', str(e))
     
     def get_version(self) -> str:
-        """파서 버전 반환"""
+        """?�서 버전 반환"""
         return 'v1.0'
 
 
 class V1_1Parser(BaseVersionParser):
-    """버전 1.1 데이터 파서 (공포 정보 추가)"""
+    """버전 1.1 ?�이???�서 (공포 ?�보 추�?)"""
     
     def parse(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        v1.1 형식의 데이터 파싱
+        v1.1 ?�식???�이???�싱
         
         Args:
             raw_data (Dict[str, Any]): Raw law data
@@ -163,22 +163,22 @@ class V1_1Parser(BaseVersionParser):
                 'law_content': raw_data.get('law_content', ''),
                 'content_html': raw_data.get('content_html', ''),
                 
-                # v1.1 공포 정보
+                # v1.1 공포 ?�보
                 'promulgation_info': {
                     'number': raw_data.get('promulgation_number', ''),
                     'date': raw_data.get('promulgation_date', ''),
                     'enforcement_date': raw_data.get('enforcement_date', ''),
-                    'amendment_type': ''  # v1.1에서는 수정 정보 없음
+                    'amendment_type': ''  # v1.1?�서???�정 ?�보 ?�음
                 },
                 
-                # 기본 메타데이터
+                # 기본 메�??�이??
                 'basic_metadata': {
                     'category': raw_data.get('category', ''),
                     'law_type': raw_data.get('law_type', ''),
                     'row_number': raw_data.get('row_number', '')
                 },
                 
-                # v1.1에서는 수집 정보가 없으므로 빈 값으로 설정
+                # v1.1?�서???�집 ?�보가 ?�으므�?�?값으�??�정
                 'collection_info': {
                     'cont_id': '',
                     'cont_sid': '',
@@ -186,7 +186,7 @@ class V1_1Parser(BaseVersionParser):
                     'collected_at': ''
                 },
                 
-                # 버전 정보
+                # 버전 ?�보
                 'parsing_version': 'v1.1',
                 'parsed_at': datetime.now().isoformat()
             }
@@ -198,16 +198,16 @@ class V1_1Parser(BaseVersionParser):
             return self._get_error_result(raw_data, 'v1.1', str(e))
     
     def get_version(self) -> str:
-        """파서 버전 반환"""
+        """?�서 버전 반환"""
         return 'v1.1'
 
 
 class V1_2Parser(BaseVersionParser):
-    """버전 1.2 데이터 파서 (현재 구현, 모든 정보 포함)"""
+    """버전 1.2 ?�이???�서 (?�재 구현, 모든 ?�보 ?�함)"""
     
     def parse(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        v1.2 형식의 데이터 파싱
+        v1.2 ?�식???�이???�싱
         
         Args:
             raw_data (Dict[str, Any]): Raw law data
@@ -222,7 +222,7 @@ class V1_2Parser(BaseVersionParser):
                 'law_content': raw_data.get('law_content', ''),
                 'content_html': raw_data.get('content_html', ''),
                 
-                # v1.2 완전한 공포 정보
+                # v1.2 ?�전??공포 ?�보
                 'promulgation_info': {
                     'number': raw_data.get('promulgation_number', ''),
                     'date': raw_data.get('promulgation_date', ''),
@@ -230,7 +230,7 @@ class V1_2Parser(BaseVersionParser):
                     'amendment_type': raw_data.get('amendment_type', '')
                 },
                 
-                # v1.2 수집 정보
+                # v1.2 ?�집 ?�보
                 'collection_info': {
                     'cont_id': raw_data.get('cont_id', ''),
                     'cont_sid': raw_data.get('cont_sid', ''),
@@ -238,14 +238,14 @@ class V1_2Parser(BaseVersionParser):
                     'collected_at': raw_data.get('collected_at', '')
                 },
                 
-                # 기본 메타데이터
+                # 기본 메�??�이??
                 'basic_metadata': {
                     'category': raw_data.get('category', ''),
                     'law_type': raw_data.get('law_type', ''),
                     'row_number': raw_data.get('row_number', '')
                 },
                 
-                # 버전 정보
+                # 버전 ?�보
                 'parsing_version': 'v1.2',
                 'parsed_at': datetime.now().isoformat()
             }
@@ -257,12 +257,12 @@ class V1_2Parser(BaseVersionParser):
             return self._get_error_result(raw_data, 'v1.2', str(e))
     
     def get_version(self) -> str:
-        """파서 버전 반환"""
+        """?�서 버전 반환"""
         return 'v1.2'
     
     def _get_error_result(self, raw_data: Dict[str, Any], version: str, error: str) -> Dict[str, Any]:
         """
-        에러 발생 시 기본 결과 반환
+        ?�러 발생 ??기본 결과 반환
         
         Args:
             raw_data (Dict[str, Any]): Raw data
@@ -301,7 +301,7 @@ class V1_2Parser(BaseVersionParser):
 
 
 class VersionCompatibilityChecker:
-    """버전 호환성 검사기"""
+    """버전 ?�환??검?�기"""
     
     def __init__(self):
         """Initialize compatibility checker"""
@@ -313,7 +313,7 @@ class VersionCompatibilityChecker:
     
     def is_compatible(self, from_version: str, to_version: str) -> bool:
         """
-        버전간 호환성 확인
+        버전�??�환???�인
         
         Args:
             from_version (str): Source version
@@ -329,7 +329,7 @@ class VersionCompatibilityChecker:
     
     def get_migration_path(self, from_version: str, to_version: str) -> List[str]:
         """
-        마이그레이션 경로 반환
+        마이그레?�션 경로 반환
         
         Args:
             from_version (str): Source version
@@ -344,16 +344,16 @@ class VersionCompatibilityChecker:
         if self.is_compatible(from_version, to_version):
             return [from_version, to_version]
         
-        # 직접 호환되지 않는 경우 중간 버전을 통한 경로 찾기
+        # 직접 ?�환?��? ?�는 경우 중간 버전???�한 경로 찾기
         path = [from_version]
         current_version = from_version
         
         while current_version != to_version:
             next_versions = self.compatibility_matrix.get(current_version, {})
             if not next_versions:
-                return []  # 경로 없음
+                return []  # 경로 ?�음
             
-            # 가장 가까운 다음 버전 선택
+            # 가??가까운 ?�음 버전 ?�택
             next_version = min(next_versions.keys())
             path.append(next_version)
             current_version = next_version

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class ComprehensiveLegalAnalyzer:
-    """통합 법률 분석기"""
+    """?�합 법률 분석�?""
     
     def __init__(self):
         """Initialize comprehensive analyzer with all sub-analyzers"""
@@ -43,7 +43,7 @@ class ComprehensiveLegalAnalyzer:
                 'law_name': law_data.get('law_name', ''),
                 'analysis_timestamp': datetime.now().isoformat(),
                 
-                # 위계 구조 분석
+                # ?�계 구조 분석
                 'hierarchy_analysis': self.hierarchy_classifier.classify_law_hierarchy(law_data),
                 
                 # 분야 분류
@@ -54,22 +54,22 @@ class ComprehensiveLegalAnalyzer:
                     law_data.get('law_content', '')
                 ),
                 
-                # 메타데이터 추출 (기존)
+                # 메�??�이??추출 (기존)
                 'metadata_extraction': self.metadata_extractor.extract(law_data),
                 
-                # 종합 평가
+                # 종합 ?��?
                 'comprehensive_score': 0.0,
                 'analysis_quality': 'unknown',
                 'analysis_recommendations': []
             }
             
-            # 종합 점수 계산
+            # 종합 ?�수 계산
             analysis_result['comprehensive_score'] = self._calculate_comprehensive_score(analysis_result)
             
-            # 분석 품질 평가
+            # 분석 ?�질 ?��?
             analysis_result['analysis_quality'] = self._evaluate_analysis_quality(analysis_result)
             
-            # 분석 권장사항 생성
+            # 분석 권장?�항 ?�성
             analysis_result['analysis_recommendations'] = self._generate_recommendations(analysis_result)
             
             return analysis_result
@@ -85,52 +85,52 @@ class ComprehensiveLegalAnalyzer:
             }
     
     def _calculate_comprehensive_score(self, analysis_result: Dict[str, Any]) -> float:
-        """종합 점수 계산"""
+        """종합 ?�수 계산"""
         scores = []
         
-        # 위계 분류 점수
+        # ?�계 분류 ?�수
         hierarchy_score = analysis_result['hierarchy_analysis'].get('hierarchy_confidence', 0.0)
         scores.append(hierarchy_score)
         
-        # 분야 분류 점수
+        # 분야 분류 ?�수
         field_score = analysis_result['field_classification'].get('field_confidence', 0.0)
         scores.append(field_score)
         
-        # 구조 분석 점수
+        # 구조 분석 ?�수
         structure_score = analysis_result['structure_analysis'].get('structure_complexity', 0.0)
         scores.append(structure_score)
         
-        # 메타데이터 추출 점수
+        # 메�??�이??추출 ?�수
         metadata_score = self._calculate_metadata_score(analysis_result['metadata_extraction'])
         scores.append(metadata_score)
         
-        # 가중 평균 계산
-        weights = [0.3, 0.3, 0.2, 0.2]  # 위계, 분야, 구조, 메타데이터 순
+        # 가�??�균 계산
+        weights = [0.3, 0.3, 0.2, 0.2]  # ?�계, 분야, 구조, 메�??�이????
         weighted_score = sum(score * weight for score, weight in zip(scores, weights))
         
         return min(1.0, max(0.0, weighted_score))
     
     def _calculate_metadata_score(self, metadata: Dict[str, Any]) -> float:
-        """메타데이터 점수 계산"""
+        """메�??�이???�수 계산"""
         score = 0.0
         total_factors = 0
         
-        # 시행 정보 점수
+        # ?�행 ?�보 ?�수
         if metadata.get('enforcement_info'):
             score += 0.3
         total_factors += 0.3
         
-        # 개정 정보 점수
+        # 개정 ?�보 ?�수
         if metadata.get('amendment_info'):
             score += 0.3
         total_factors += 0.3
         
-        # 부서 정보 점수
+        # 부???�보 ?�수
         if metadata.get('ministry'):
             score += 0.2
         total_factors += 0.2
         
-        # 참조 정보 점수
+        # 참조 ?�보 ?�수
         if metadata.get('references'):
             score += 0.2
         total_factors += 0.2
@@ -138,15 +138,15 @@ class ComprehensiveLegalAnalyzer:
         return score / total_factors if total_factors > 0 else 0.0
     
     def _evaluate_analysis_quality(self, analysis_result: Dict[str, Any]) -> str:
-        """분석 품질 평가"""
+        """분석 ?�질 ?��?"""
         score = analysis_result['comprehensive_score']
         
-        # 각 분석 요소의 품질도 고려
+        # �?분석 ?�소???�질??고려
         hierarchy_quality = analysis_result['hierarchy_analysis'].get('hierarchy_confidence', 0.0)
         field_quality = analysis_result['field_classification'].get('field_confidence', 0.0)
         structure_quality = analysis_result['structure_analysis'].get('structure_complexity', 0.0)
         
-        # 최소 품질 임계값 확인
+        # 최소 ?�질 ?�계�??�인
         min_quality_threshold = 0.3
         
         if (score >= 0.8 and 
@@ -164,42 +164,42 @@ class ComprehensiveLegalAnalyzer:
             return 'poor'
     
     def _generate_recommendations(self, analysis_result: Dict[str, Any]) -> List[str]:
-        """분석 권장사항 생성"""
+        """분석 권장?�항 ?�성"""
         recommendations = []
         
-        # 위계 분류 권장사항
+        # ?�계 분류 권장?�항
         hierarchy_confidence = analysis_result['hierarchy_analysis'].get('hierarchy_confidence', 0.0)
         if hierarchy_confidence < 0.5:
-            recommendations.append("법률 위계 분류의 신뢰도가 낮습니다. 법률명이나 공포번호를 확인해주세요.")
+            recommendations.append("법률 ?�계 분류???�뢰?��? ??��?�다. 법률명이??공포번호�??�인?�주?�요.")
         
-        # 분야 분류 권장사항
+        # 분야 분류 권장?�항
         field_confidence = analysis_result['field_classification'].get('field_confidence', 0.0)
         if field_confidence < 0.5:
-            recommendations.append("법률 분야 분류의 신뢰도가 낮습니다. 법률 내용을 더 자세히 분석해주세요.")
+            recommendations.append("법률 분야 분류???�뢰?��? ??��?�다. 법률 ?�용?????�세??분석?�주?�요.")
         
-        # 구조 분석 권장사항
+        # 구조 분석 권장?�항
         structure_complexity = analysis_result['structure_analysis'].get('structure_complexity', 0.0)
         if structure_complexity < 0.3:
-            recommendations.append("법률 구조가 단순합니다. 조문, 항, 호 등의 구조를 확인해주세요.")
+            recommendations.append("법률 구조가 ?�순?�니?? 조문, ?? ???�의 구조�??�인?�주?�요.")
         
-        # 메타데이터 권장사항
+        # 메�??�이??권장?�항
         metadata = analysis_result['metadata_extraction']
         if not metadata.get('enforcement_info'):
-            recommendations.append("시행 정보가 누락되었습니다. 시행 조항을 확인해주세요.")
+            recommendations.append("?�행 ?�보가 ?�락?�었?�니?? ?�행 조항???�인?�주?�요.")
         
         if not metadata.get('amendment_info'):
-            recommendations.append("개정 정보가 누락되었습니다. 개정 이력을 확인해주세요.")
+            recommendations.append("개정 ?�보가 ?�락?�었?�니?? 개정 ?�력???�인?�주?�요.")
         
-        # 종합 점수 기반 권장사항
+        # 종합 ?�수 기반 권장?�항
         comprehensive_score = analysis_result['comprehensive_score']
         if comprehensive_score < 0.5:
-            recommendations.append("전체적인 분석 품질이 낮습니다. 원본 데이터의 품질을 확인해주세요.")
+            recommendations.append("?�체?�인 분석 ?�질????��?�다. ?�본 ?�이?�의 ?�질???�인?�주?�요.")
         
         return recommendations
     
     def batch_analyze_laws(self, law_data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        법률 데이터 배치 분석
+        법률 ?�이??배치 분석
         
         Args:
             law_data_list (List[Dict[str, Any]]): List of law data dictionaries
@@ -215,12 +215,12 @@ class ComprehensiveLegalAnalyzer:
                 'batch_timestamp': datetime.now().isoformat()
             }
             
-            # 각 법률 분석
+            # �?법률 분석
             for law_data in law_data_list:
                 analysis_result = self.analyze_law_comprehensively(law_data)
                 batch_results['analysis_results'].append(analysis_result)
             
-            # 배치 통계 생성
+            # 배치 ?�계 ?�성
             batch_results['batch_statistics'] = self._generate_batch_statistics(
                 batch_results['analysis_results']
             )
@@ -236,15 +236,15 @@ class ComprehensiveLegalAnalyzer:
             }
     
     def _generate_batch_statistics(self, analysis_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """배치 통계 생성"""
+        """배치 ?�계 ?�성"""
         if not analysis_results:
             return {}
         
-        # 기본 통계
+        # 기본 ?�계
         total_laws = len(analysis_results)
         scores = [result.get('comprehensive_score', 0.0) for result in analysis_results]
         
-        # 위계별 통계
+        # ?�계�??�계
         hierarchy_stats = {}
         for result in analysis_results:
             hierarchy_type = result.get('hierarchy_analysis', {}).get('hierarchy_type', 'unknown')
@@ -252,7 +252,7 @@ class ComprehensiveLegalAnalyzer:
                 hierarchy_stats[hierarchy_type] = 0
             hierarchy_stats[hierarchy_type] += 1
         
-        # 분야별 통계
+        # 분야�??�계
         field_stats = {}
         for result in analysis_results:
             field = result.get('field_classification', {}).get('primary_field', 'unknown')
@@ -260,7 +260,7 @@ class ComprehensiveLegalAnalyzer:
                 field_stats[field] = 0
             field_stats[field] += 1
         
-        # 품질별 통계
+        # ?�질�??�계
         quality_stats = {}
         for result in analysis_results:
             quality = result.get('analysis_quality', 'unknown')
@@ -281,7 +281,7 @@ class ComprehensiveLegalAnalyzer:
         }
     
     def get_analysis_summary(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
-        """분석 결과 요약"""
+        """분석 결과 ?�약"""
         return {
             'law_id': analysis_result.get('law_id', ''),
             'law_name': analysis_result.get('law_name', ''),
@@ -296,7 +296,7 @@ class ComprehensiveLegalAnalyzer:
         }
     
     def validate_analysis_result(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
-        """분석 결과 검증"""
+        """분석 결과 검�?""
         validation_result = {
             'is_valid': True,
             'validation_errors': [],
@@ -304,26 +304,26 @@ class ComprehensiveLegalAnalyzer:
             'validation_timestamp': datetime.now().isoformat()
         }
         
-        # 필수 필드 검증
+        # ?�수 ?�드 검�?
         required_fields = ['law_id', 'law_name', 'comprehensive_score', 'analysis_quality']
         for field in required_fields:
             if field not in analysis_result or not analysis_result[field]:
                 validation_result['validation_errors'].append(f"Missing required field: {field}")
                 validation_result['is_valid'] = False
         
-        # 점수 범위 검증
+        # ?�수 범위 검�?
         score = analysis_result.get('comprehensive_score', 0.0)
         if not (0.0 <= score <= 1.0):
             validation_result['validation_errors'].append(f"Invalid score range: {score}")
             validation_result['is_valid'] = False
         
-        # 품질 레벨 검증
+        # ?�질 ?�벨 검�?
         quality = analysis_result.get('analysis_quality', 'unknown')
         valid_qualities = ['excellent', 'good', 'fair', 'poor']
         if quality not in valid_qualities:
             validation_result['validation_warnings'].append(f"Unknown quality level: {quality}")
         
-        # 위계 레벨 검증
+        # ?�계 ?�벨 검�?
         hierarchy_level = analysis_result.get('hierarchy_analysis', {}).get('hierarchy_level', 0)
         if not (1 <= hierarchy_level <= 6):
             validation_result['validation_warnings'].append(f"Invalid hierarchy level: {hierarchy_level}")
@@ -332,24 +332,24 @@ class ComprehensiveLegalAnalyzer:
     
     def export_analysis_report(self, analysis_result: Dict[str, Any], 
                               format: str = 'json') -> str:
-        """분석 결과 보고서 내보내기"""
+        """분석 결과 보고???�보?�기"""
         if format == 'json':
             import json
             return json.dumps(analysis_result, ensure_ascii=False, indent=2)
         elif format == 'summary':
             summary = self.get_analysis_summary(analysis_result)
             return f"""
-법률 분석 보고서
+법률 분석 보고??
 ================
 법률 ID: {summary['law_id']}
-법률명: {summary['law_name']}
-위계 유형: {summary['hierarchy_type']} (레벨 {summary['hierarchy_level']})
+법률�? {summary['law_name']}
+?�계 ?�형: {summary['hierarchy_type']} (?�벨 {summary['hierarchy_level']})
 주요 분야: {summary['primary_field']}
-구조 유형: {summary['structure_type']}
-총 조문 수: {summary['total_articles']}
-종합 점수: {summary['comprehensive_score']:.2f}
-분석 품질: {summary['analysis_quality']}
-권장사항 수: {summary['recommendation_count']}
+구조 ?�형: {summary['structure_type']}
+�?조문 ?? {summary['total_articles']}
+종합 ?�수: {summary['comprehensive_score']:.2f}
+분석 ?�질: {summary['analysis_quality']}
+권장?�항 ?? {summary['recommendation_count']}
 """
         else:
             raise ValueError(f"Unsupported format: {format}")

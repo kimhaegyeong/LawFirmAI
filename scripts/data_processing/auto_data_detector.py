@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-자동 데이터 감지 시스템
+?�동 ?�이??감�? ?�스??
 
-새로운 데이터 소스를 자동으로 감지하고 분류하는 시스템입니다.
-날짜별 폴더와 파일 패턴을 분석하여 처리할 데이터를 식별합니다.
+?�로???�이???�스�??�동?�로 감�??�고 분류?�는 ?�스?�입?�다.
+?�짜�??�더?� ?�일 ?�턴??분석?�여 처리???�이?��? ?�별?�니??
 """
 
 import os
@@ -18,7 +18,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import argparse
 from collections import defaultdict
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -28,24 +28,24 @@ logger = logging.getLogger(__name__)
 
 
 class AutoDataDetector:
-    """자동 데이터 감지 클래스"""
+    """?�동 ?�이??감�? ?�래??""
     
     def __init__(self, raw_data_base_path: str = "data/raw/assembly", db_manager: DatabaseManager = None):
         """
-        자동 데이터 감지기 초기화
+        ?�동 ?�이??감�?�?초기??
         
         Args:
-            raw_data_base_path: 원본 데이터 기본 경로
-            db_manager: 데이터베이스 관리자 (선택사항)
+            raw_data_base_path: ?�본 ?�이??기본 경로
+            db_manager: ?�이?�베?�스 관리자 (?�택?�항)
         """
         self.raw_data_base_path = Path(raw_data_base_path)
         self.db_manager = db_manager or DatabaseManager()
         
-        # 데이터 패턴 정의
+        # ?�이???�턴 ?�의
         self.data_patterns = {
             'law_only': {
                 'file_pattern': r'law_only_page_\d+_\d+_\d+\.json',
-                'directory_pattern': r'\d{8}',  # YYYYMMDD 형식
+                'directory_pattern': r'\d{8}',  # YYYYMMDD ?�식
                 'metadata_key': 'data_type',
                 'expected_value': 'law_only'
             },
@@ -99,7 +99,7 @@ class AutoDataDetector:
             }
         }
         
-        # 기본 경로 설정
+        # 기본 경로 ?�정
         self.base_paths = {
             'law_only': 'data/raw/assembly/law_only',
             'precedent_civil': 'data/raw/assembly/precedent',
@@ -116,14 +116,14 @@ class AutoDataDetector:
     
     def detect_new_data_sources(self, base_path: str, data_type: str = None) -> Dict[str, List[Path]]:
         """
-        새로운 데이터 소스 감지
+        ?�로???�이???�스 감�?
         
         Args:
-            base_path: 검색할 기본 경로
-            data_type: 특정 데이터 유형 (None이면 모든 유형)
+            base_path: 검?�할 기본 경로
+            data_type: ?�정 ?�이???�형 (None?�면 모든 ?�형)
         
         Returns:
-            Dict[str, List[Path]]: 데이터 유형별 파일 목록
+            Dict[str, List[Path]]: ?�이???�형�??�일 목록
         """
         logger.info(f"Detecting new data sources in: {base_path}")
         
@@ -134,21 +134,21 @@ class AutoDataDetector:
             logger.warning(f"Base path does not exist: {base_path}")
             return dict(detected_files)
         
-        # 날짜별 폴더 스캔
+        # ?�짜�??�더 ?�캔
         for date_folder in base_path_obj.iterdir():
             if not date_folder.is_dir():
                 continue
             
-            # 날짜 폴더 패턴 확인 (YYYYMMDD)
+            # ?�짜 ?�더 ?�턴 ?�인 (YYYYMMDD)
             if not self._is_date_folder(date_folder.name):
                 continue
             
             logger.info(f"Scanning date folder: {date_folder.name}")
             
-            # 폴더 내 파일 스캔 (직접 파일 또는 카테고리 하위 폴더)
+            # ?�더 ???�일 ?�캔 (직접 ?�일 ?�는 카테고리 ?�위 ?�더)
             self._scan_folder_for_files(date_folder, detected_files, data_type)
         
-        # 결과 요약
+        # 결과 ?�약
         total_files = sum(len(files) for files in detected_files.values())
         logger.info(f"Detection completed: {total_files} new files found")
         for data_type, files in detected_files.items():
@@ -158,37 +158,37 @@ class AutoDataDetector:
     
     def _scan_folder_for_files(self, folder: Path, detected_files: Dict[str, List[Path]], data_type: str = None):
         """
-        폴더 내 파일들을 스캔하여 감지된 파일 목록에 추가
+        ?�더 ???�일?�을 ?�캔?�여 감�????�일 목록??추�?
         
         Args:
-            folder: 스캔할 폴더
-            detected_files: 감지된 파일들을 저장할 딕셔너리
-            data_type: 특정 데이터 유형 필터
+            folder: ?�캔???�더
+            detected_files: 감�????�일?�을 ?�?�할 ?�셔?�리
+            data_type: ?�정 ?�이???�형 ?�터
         """
-        # 직접 파일 스캔
+        # 직접 ?�일 ?�캔
         for file_path in folder.glob("*.json"):
             if not file_path.is_file():
                 continue
             
-            # 파일 유형 분류
+            # ?�일 ?�형 분류
             file_data_type = self.classify_data_type(file_path)
             
             if file_data_type and (data_type is None or file_data_type == data_type):
-                # 이미 처리된 파일인지 확인
+                # ?��? 처리???�일?��? ?�인
                 if not self.db_manager.is_file_processed(str(file_path)):
                     detected_files[file_data_type].append(file_path)
                     logger.debug(f"New file detected: {file_path} (type: {file_data_type})")
                 else:
                     logger.debug(f"File already processed: {file_path}")
         
-        # 하위 카테고리 폴더 스캔 (precedent의 경우 civil, criminal, family, tax 등)
+        # ?�위 카테고리 ?�더 ?�캔 (precedent??경우 civil, criminal, family, tax ??
         for subfolder in folder.iterdir():
             if subfolder.is_dir() and subfolder.name in ['civil', 'criminal', 'family', 'tax']:
                 logger.debug(f"Scanning category subfolder: {subfolder.name}")
                 self._scan_folder_for_files(subfolder, detected_files, data_type)
     
     def get_file_hash(self, file_path: Path) -> str:
-        """파일 내용의 SHA256 해시를 계산하여 반환"""
+        """?�일 ?�용??SHA256 ?�시�?계산?�여 반환"""
         import hashlib
         h = hashlib.sha256()
         with open(file_path, 'rb') as f:
@@ -198,31 +198,31 @@ class AutoDataDetector:
     
     def classify_data_type(self, file_path: Path) -> Optional[str]:
         """
-        파일 내용 기반 데이터 유형 분류
+        ?�일 ?�용 기반 ?�이???�형 분류
         
         Args:
-            file_path: 분류할 파일 경로
+            file_path: 분류???�일 경로
         
         Returns:
-            Optional[str]: 데이터 유형 또는 None
+            Optional[str]: ?�이???�형 ?�는 None
         """
         try:
-            # 파일 크기 확인 (너무 큰 파일은 스킵)
+            # ?�일 ?�기 ?�인 (?�무 ???�일?� ?�킵)
             if file_path.stat().st_size > 100 * 1024 * 1024:  # 100MB
                 logger.warning(f"File too large to analyze: {file_path}")
                 return None
             
-            # JSON 파일 읽기
+            # JSON ?�일 ?�기
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # 메타데이터에서 데이터 유형 확인
+            # 메�??�이?�에???�이???�형 ?�인
             if isinstance(data, dict) and 'metadata' in data:
                 metadata = data['metadata']
                 data_type = metadata.get('data_type')
                 category = metadata.get('category')
                 
-                # precedent 데이터의 경우 카테고리 기반으로 분류
+                # precedent ?�이?�의 경우 카테고리 기반?�로 분류
                 if data_type == 'precedent' and category:
                     precedent_type = f'precedent_{category}'
                     if precedent_type in self.data_patterns:
@@ -231,32 +231,32 @@ class AutoDataDetector:
                 if data_type in self.data_patterns:
                     return data_type
             
-            # 파일명 패턴으로 분류
+            # ?�일�??�턴?�로 분류
             filename = file_path.name
             for data_type, pattern_info in self.data_patterns.items():
                 import re
                 if re.match(pattern_info['file_pattern'], filename):
                     return data_type
             
-            # items 구조로 분류 (law_only 및 precedent 특화)
+            # items 구조�?분류 (law_only �?precedent ?�화)
             if isinstance(data, dict) and 'items' in data:
                 items = data['items']
                 if items and isinstance(items, list):
                     first_item = items[0]
                     if isinstance(first_item, dict):
-                        # law_name이 있으면 법률 데이터로 분류
+                        # law_name???�으�?법률 ?�이?�로 분류
                         if 'law_name' in first_item and 'law_content' in first_item:
                             return 'law_only'
-                        # case_number가 있으면 판례 데이터로 분류
+                        # case_number가 ?�으�??��? ?�이?�로 분류
                         elif 'case_number' in first_item:
-                            # 카테고리 정보가 있으면 구체적인 precedent 타입 반환
+                            # 카테고리 ?�보가 ?�으�?구체?�인 precedent ?�??반환
                             if 'field' in first_item:
                                 field = first_item['field']
                                 if field == '민사':
                                     return 'precedent_civil'
-                                elif field == '형사':
+                                elif field == '?�사':
                                     return 'precedent_criminal'
-                                elif field == '가사':
+                                elif field == '가??:
                                     return 'precedent_family'
                                 elif field == '조세':
                                     return 'precedent_tax'
@@ -271,13 +271,13 @@ class AutoDataDetector:
     
     def get_data_statistics(self, files: List[Path]) -> Dict[str, Any]:
         """
-        파일 목록의 통계 정보 생성
+        ?�일 목록???�계 ?�보 ?�성
         
         Args:
-            files: 분석할 파일 목록
+            files: 분석???�일 목록
         
         Returns:
-            Dict[str, Any]: 통계 정보
+            Dict[str, Any]: ?�계 ?�보
         """
         if not files:
             return {
@@ -294,20 +294,20 @@ class AutoDataDetector:
         estimated_records = 0
         
         for file_path in files:
-            # 파일 크기
+            # ?�일 ?�기
             total_size += file_path.stat().st_size
             
-            # 파일 유형
+            # ?�일 ?�형
             file_type = self.classify_data_type(file_path)
             if file_type:
                 file_types[file_type] += 1
             
-            # 날짜 추출
+            # ?�짜 추출
             date_folder = file_path.parent.name
             if self._is_date_folder(date_folder):
                 dates.append(date_folder)
             
-            # 예상 레코드 수 추정
+            # ?�상 ?�코????추정
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -316,7 +316,7 @@ class AutoDataDetector:
             except Exception:
                 pass
         
-        # 날짜 범위 계산
+        # ?�짜 범위 계산
         date_range = None
         if dates:
             dates.sort()
@@ -338,13 +338,13 @@ class AutoDataDetector:
     
     def calculate_file_hash(self, file_path: Path) -> str:
         """
-        파일 해시 계산
+        ?�일 ?�시 계산
         
         Args:
-            file_path: 해시를 계산할 파일 경로
+            file_path: ?�시�?계산???�일 경로
         
         Returns:
-            str: 파일의 SHA-256 해시값
+            str: ?�일??SHA-256 ?�시�?
         """
         hash_sha256 = hashlib.sha256()
         
@@ -359,26 +359,26 @@ class AutoDataDetector:
     
     def _is_date_folder(self, folder_name: str) -> bool:
         """
-        폴더명이 날짜 형식인지 확인
+        ?�더명이 ?�짜 ?�식?��? ?�인
         
         Args:
-            folder_name: 확인할 폴더명
+            folder_name: ?�인???�더�?
         
         Returns:
-            bool: 날짜 형식 여부
+            bool: ?�짜 ?�식 ?��?
         """
         import re
         return bool(re.match(r'^\d{8}$', folder_name))
     
     def get_processing_priority(self, data_type: str) -> int:
         """
-        데이터 유형별 처리 우선순위 반환
+        ?�이???�형�?처리 ?�선?�위 반환
         
         Args:
-            data_type: 데이터 유형
+            data_type: ?�이???�형
         
         Returns:
-            int: 우선순위 (낮을수록 높은 우선순위)
+            int: ?�선?�위 (??��?�록 ?��? ?�선?�위)
         """
         priority_map = {
             'law_only': 1,
@@ -391,13 +391,13 @@ class AutoDataDetector:
     
     def generate_detection_report(self, detected_files: Dict[str, List[Path]]) -> Dict[str, Any]:
         """
-        감지 결과 리포트 생성
+        감�? 결과 리포???�성
         
         Args:
-            detected_files: 감지된 파일 목록
+            detected_files: 감�????�일 목록
         
         Returns:
-            Dict[str, Any]: 감지 리포트
+            Dict[str, Any]: 감�? 리포??
         """
         report = {
             'detection_time': datetime.now().isoformat(),
@@ -415,18 +415,18 @@ class AutoDataDetector:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description='자동 데이터 감지 시스템')
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description='?�동 ?�이??감�? ?�스??)
     parser.add_argument('--base-path', default='data/raw/assembly/law_only',
-                       help='검색할 기본 경로')
+                       help='검?�할 기본 경로')
     parser.add_argument('--data-type', choices=['law_only', 'precedents', 'constitutional'],
-                       help='특정 데이터 유형만 검색')
-    parser.add_argument('--output-report', help='감지 리포트를 저장할 파일 경로')
-    parser.add_argument('--verbose', '-v', action='store_true', help='상세 로그 출력')
+                       help='?�정 ?�이???�형�?검??)
+    parser.add_argument('--output-report', help='감�? 리포?��? ?�?�할 ?�일 경로')
+    parser.add_argument('--verbose', '-v', action='store_true', help='?�세 로그 출력')
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -434,10 +434,10 @@ def main():
     )
     
     try:
-        # 데이터 감지기 초기화
+        # ?�이??감�?�?초기??
         detector = AutoDataDetector()
         
-        # 데이터 감지 실행
+        # ?�이??감�? ?�행
         logger.info("Starting data detection...")
         detected_files = detector.detect_new_data_sources(args.base_path, args.data_type)
         
@@ -447,7 +447,7 @@ def main():
             for data_type, files in detected_files.items():
                 logger.info(f"  {data_type}: {len(files)} files")
                 
-                # 처음 몇 개 파일 경로 출력
+                # 처음 �?�??�일 경로 출력
                 for i, file_path in enumerate(files[:3]):
                     logger.info(f"    - {file_path}")
                 if len(files) > 3:
@@ -455,7 +455,7 @@ def main():
         else:
             logger.info("No new files detected")
         
-        # 리포트 생성 및 저장
+        # 리포???�성 �??�??
         if args.output_report:
             report = detector.generate_detection_report(detected_files)
             report_path = Path(args.output_report)

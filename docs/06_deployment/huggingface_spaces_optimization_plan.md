@@ -1,4 +1,4 @@
-# HuggingFace Spaces 배포 최적화 계획
+﻿# HuggingFace Spaces 배포 최적화 계획
 
 ## 📋 Phase 3-1: HuggingFace Spaces 배포 최적화
 

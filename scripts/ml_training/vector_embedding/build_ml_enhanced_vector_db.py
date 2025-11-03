@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ML 강화 벡터 임베딩 생성기
+ML 강화 벡터 ?�베???�성�?
 
-ML 강화 파싱된 법률 데이터로부터 벡터 임베딩을 생성하고 FAISS 인덱스를 구축합니다.
-본칙과 부칙을 구분하여 임베딩하고, ML 신뢰도와 품질 점수를 메타데이터에 포함합니다.
+ML 강화 ?�싱??법률 ?�이?�로부??벡터 ?�베?�을 ?�성?�고 FAISS ?�덱?��? 구축?�니??
+본칙�?부칙을 구분?�여 ?�베?�하�? ML ?�뢰?��? ?�질 ?�수�?메�??�이?�에 ?�함?�니??
 """
 
 import logging
@@ -16,50 +16,50 @@ from datetime import datetime
 import argparse
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.vector_store import LegalVectorStore
 
-# Windows 콘솔에서 UTF-8 인코딩 설정
+# Windows 콘솔?�서 UTF-8 ?�코???�정
 if os.name == 'nt':  # Windows
     try:
         import codecs
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
         sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
     except AttributeError:
-        # 이미 UTF-8로 설정된 경우 무시
+        # ?��? UTF-8�??�정??경우 무시
         pass
 
 logger = logging.getLogger(__name__)
 
 
 class MLEnhancedVectorBuilder:
-    """ML 강화 벡터 임베딩 생성기"""
+    """ML 강화 벡터 ?�베???�성�?""
     
     def __init__(self, model_name: str = "jhgan/ko-sroberta-multitask", 
                  dimension: int = 768, index_type: str = "flat"):
         """
-        ML 강화 벡터 빌더 초기화
+        ML 강화 벡터 빌더 초기??
         
         Args:
-            model_name: 사용할 Sentence-BERT 모델명
+            model_name: ?�용??Sentence-BERT 모델�?
             dimension: 벡터 차원
-            index_type: FAISS 인덱스 타입
+            index_type: FAISS ?�덱???�??
         """
         self.model_name = model_name
         self.dimension = dimension
         self.index_type = index_type
         
-        # 벡터 스토어 초기화
+        # 벡터 ?�토??초기??
         self.vector_store = LegalVectorStore(
             model_name=model_name,
             dimension=dimension,
             index_type=index_type
         )
         
-        # 통계 정보
+        # ?�계 ?�보
         self.stats = {
             'total_laws_processed': 0,
             'total_articles_processed': 0,
@@ -74,21 +74,21 @@ class MLEnhancedVectorBuilder:
     
     def build_embeddings(self, processed_dir: Path, batch_size: int = 100) -> bool:
         """
-        ML 강화 법률 데이터로부터 벡터 임베딩 생성
+        ML 강화 법률 ?�이?�로부??벡터 ?�베???�성
         
         Args:
-            processed_dir: ML 강화 처리된 데이터 디렉토리
-            batch_size: 배치 처리 크기
+            processed_dir: ML 강화 처리???�이???�렉?�리
+            batch_size: 배치 처리 ?�기
             
         Returns:
-            bool: 성공 여부
+            bool: ?�공 ?��?
         """
         start_time = datetime.now()
         
         try:
             logger.info(f"Starting ML-enhanced vector embedding generation from: {processed_dir}")
             
-            # JSON 파일 목록 수집
+            # JSON ?�일 목록 ?�집
             json_files = list(processed_dir.rglob("ml_enhanced_*.json"))
             logger.info(f"Found {len(json_files)} ML-enhanced files to process")
             
@@ -109,16 +109,16 @@ class MLEnhancedVectorBuilder:
                 batch_documents = self._process_batch(batch_files)
                 all_documents.extend(batch_documents)
                 
-                # 중간 저장 (메모리 관리)
+                # 중간 ?�??(메모�?관�?
                 if len(all_documents) >= batch_size * 2:
                     self._add_documents_to_index(all_documents)
                     all_documents = []
             
-            # 남은 문서들 처리
+            # ?��? 문서??처리
             if all_documents:
                 self._add_documents_to_index(all_documents)
             
-            # 처리 시간 기록
+            # 처리 ?�간 기록
             self.stats['processing_time'] = (datetime.now() - start_time).total_seconds()
             
             logger.info(f"Vector embedding generation completed in {self.stats['processing_time']:.2f} seconds")
@@ -132,7 +132,7 @@ class MLEnhancedVectorBuilder:
             return False
     
     def _process_batch(self, batch_files: List[Path]) -> List[Dict[str, Any]]:
-        """배치 파일들을 처리하여 문서 리스트 생성"""
+        """배치 ?�일?�을 처리?�여 문서 리스???�성"""
         batch_documents = []
         
         for file_path in tqdm(batch_files, desc="Processing files"):
@@ -149,13 +149,13 @@ class MLEnhancedVectorBuilder:
         return batch_documents
     
     def _process_single_file(self, file_path: Path) -> List[Dict[str, Any]]:
-        """단일 파일 처리"""
+        """?�일 ?�일 처리"""
         with open(file_path, 'r', encoding='utf-8') as f:
             file_data = json.load(f)
         
         documents = []
         
-        # 파일 구조 확인
+        # ?�일 구조 ?�인
         if isinstance(file_data, dict) and 'laws' in file_data:
             laws = file_data['laws']
         elif isinstance(file_data, list):
@@ -165,7 +165,7 @@ class MLEnhancedVectorBuilder:
         
         for law_data in laws:
             try:
-                # 법률 메타데이터 추출
+                # 법률 메�??�이??추출
                 law_metadata = self._extract_law_metadata(law_data)
                 
                 # 본칙 조문 처리
@@ -179,8 +179,8 @@ class MLEnhancedVectorBuilder:
                 )
                 documents.extend(main_documents)
                 
-                # 부칙 조문 처리 (별도 필드가 있는 경우)
-                # 부칙 조문 처리
+                # 부�?조문 처리 (별도 ?�드가 ?�는 경우)
+                # 부�?조문 처리
                 supplementary_articles = law_data.get('supplementary_articles', [])
                 if not isinstance(supplementary_articles, list):
                     supplementary_articles = []
@@ -191,7 +191,7 @@ class MLEnhancedVectorBuilder:
                 )
                 documents.extend(supp_documents)
                 
-                # 통계 업데이트
+                # ?�계 ?�데?�트
                 all_articles = law_data.get('articles', [])
                 if not isinstance(all_articles, list):
                     all_articles = []
@@ -210,7 +210,7 @@ class MLEnhancedVectorBuilder:
                     logger.error(f"First article keys: {list(law_data['articles'][0].keys())}")
                     logger.error(f"First article sub_articles type: {type(law_data['articles'][0].get('sub_articles'))}")
                     logger.error(f"First article references type: {type(law_data['articles'][0].get('references'))}")
-                    # 첫 번째 조문의 sub_articles 내용 확인
+                    # �?번째 조문??sub_articles ?�용 ?�인
                     first_article = law_data['articles'][0]
                     sub_articles = first_article.get('sub_articles', [])
                     if sub_articles:
@@ -225,7 +225,7 @@ class MLEnhancedVectorBuilder:
         return documents
     
     def _extract_law_metadata(self, law_data: Dict[str, Any]) -> Dict[str, Any]:
-        """법률 메타데이터 추출"""
+        """법률 메�??�이??추출"""
         return {
             'law_id': law_data.get('law_id') or f"ml_enhanced_{law_data.get('law_name', 'unknown').replace(' ', '_')}",
             'law_name': law_data.get('law_name', ''),
@@ -245,12 +245,12 @@ class MLEnhancedVectorBuilder:
     def _create_article_documents(self, articles: List[Dict[str, Any]], 
                                 law_metadata: Dict[str, Any], 
                                 article_type: str) -> List[Dict[str, Any]]:
-        """조문들을 문서로 변환"""
+        """조문?�을 문서�?변??""
         documents = []
         
         for article in articles:
             try:
-                # 조문 메타데이터 생성
+                # 조문 메�??�이???�성
                 article_metadata = {
                     **law_metadata,
                     'article_number': article.get('article_number', ''),
@@ -265,26 +265,26 @@ class MLEnhancedVectorBuilder:
                     'references_count': len(article.get('references', [])) if isinstance(article.get('references'), list) else 0
                 }
                 
-                # 문서 ID 생성
+                # 문서 ID ?�성
                 document_id = f"{law_metadata['law_id']}_article_{article_metadata['article_number']}"
                 article_metadata['document_id'] = document_id
                 
-                # 텍스트 구성
+                # ?�스??구성
                 text_parts = []
                 
-                # 조문 번호와 제목
+                # 조문 번호?� ?�목
                 if article_metadata['article_number']:
                     if article_metadata['article_title']:
                         text_parts.append(f"{article_metadata['article_number']}({article_metadata['article_title']})")
                     else:
                         text_parts.append(article_metadata['article_number'])
                 
-                # 조문 내용
+                # 조문 ?�용
                 article_content = article.get('article_content', '')
                 if article_content:
                     text_parts.append(article_content)
                 
-                # 하위 조문들
+                # ?�위 조문??
                 sub_articles = article.get('sub_articles', [])
                 if not isinstance(sub_articles, list):
                     sub_articles = []
@@ -302,7 +302,7 @@ class MLEnhancedVectorBuilder:
                         logger.error(f"Sub-article value: {sub_article}")
                         continue
                 
-                # 최종 텍스트
+                # 최종 ?�스??
                 full_text = ' '.join(text_parts)
                 
                 if full_text.strip():
@@ -329,12 +329,12 @@ class MLEnhancedVectorBuilder:
         return documents
     
     def _add_documents_to_index(self, documents: List[Dict[str, Any]]) -> bool:
-        """문서들을 벡터 인덱스에 추가"""
+        """문서?�을 벡터 ?�덱?�에 추�?"""
         try:
             if not documents:
                 return True
             
-            # 텍스트와 메타데이터 추출
+            # ?�스?��? 메�??�이??추출
             texts = []
             metadatas = []
             
@@ -351,7 +351,7 @@ class MLEnhancedVectorBuilder:
                         'law_name': doc.get('metadata', {}).get('law_name', ''),
                         'category': doc.get('metadata', {}).get('category', ''),
                         'entities': chunk.get('entities', []) if isinstance(chunk.get('entities'), list) else [],
-                        # ML 강화 메타데이터 추가
+                        # ML 강화 메�??�이??추�?
                         'article_number': doc.get('metadata', {}).get('article_number', ''),
                         'article_title': doc.get('metadata', {}).get('article_title', ''),
                         'article_type': doc.get('metadata', {}).get('article_type', ''),
@@ -364,7 +364,7 @@ class MLEnhancedVectorBuilder:
                         'char_count': doc.get('metadata', {}).get('char_count', 0)
                     })
             
-            # 벡터 스토어에 추가
+            # 벡터 ?�토?�에 추�?
             success = self.vector_store.add_documents(texts, metadatas)
             
             if success:
@@ -379,20 +379,20 @@ class MLEnhancedVectorBuilder:
             return False
     
     def save_index(self, output_dir: Path) -> bool:
-        """생성된 인덱스 저장"""
+        """?�성???�덱???�??""
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            # 인덱스 파일명
+            # ?�덱???�일�?
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             index_filename = f"ml_enhanced_faiss_index_{timestamp}"
             index_path = output_dir / index_filename
             
-            # 인덱스 저장
+            # ?�덱???�??
             success = self.vector_store.save_index(str(index_path))
             
             if success:
-                # 통계 정보 저장
+                # ?�계 ?�보 ?�??
                 stats_path = output_dir / f"ml_enhanced_vector_stats_{timestamp}.json"
                 with open(stats_path, 'w', encoding='utf-8') as f:
                     json.dump(self.stats, f, ensure_ascii=False, indent=2)
@@ -410,7 +410,7 @@ class MLEnhancedVectorBuilder:
             return False
     
     def get_stats(self) -> Dict[str, Any]:
-        """통계 정보 반환"""
+        """?�계 ?�보 반환"""
         vector_stats = self.vector_store.get_stats()
         return {
             **self.stats,
@@ -419,28 +419,28 @@ class MLEnhancedVectorBuilder:
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description="ML 강화 벡터 임베딩 생성기")
+    """메인 ?�수"""
+    parser = argparse.ArgumentParser(description="ML 강화 벡터 ?�베???�성�?)
     parser.add_argument("--input", type=str, required=True,
-                       help="ML 강화 처리된 데이터 디렉토리 경로")
+                       help="ML 강화 처리???�이???�렉?�리 경로")
     parser.add_argument("--output", type=str, default="data/embeddings/ml_enhanced",
-                       help="출력 디렉토리 경로")
+                       help="출력 ?�렉?�리 경로")
     parser.add_argument("--model", type=str, default="jhgan/ko-sroberta-multitask",
-                       help="사용할 Sentence-BERT 모델명")
+                       help="?�용??Sentence-BERT 모델�?)
     parser.add_argument("--dimension", type=int, default=768,
                        help="벡터 차원")
     parser.add_argument("--index-type", type=str, default="flat",
                        choices=["flat", "ivf", "hnsw"],
-                       help="FAISS 인덱스 타입")
+                       help="FAISS ?�덱???�??)
     parser.add_argument("--batch-size", type=int, default=100,
-                       help="배치 처리 크기")
+                       help="배치 처리 ?�기")
     parser.add_argument("--log-level", type=str, default="INFO",
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                       help="로그 레벨")
+                       help="로그 ?�벨")
     
     args = parser.parse_args()
     
-    # 로깅 설정
+    # 로깅 ?�정
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -450,25 +450,25 @@ def main():
         ]
     )
     
-    # 입력 디렉토리 확인
+    # ?�력 ?�렉?�리 ?�인
     input_dir = Path(args.input)
     if not input_dir.exists():
         logger.error(f"Input directory does not exist: {input_dir}")
         return 1
     
-    # 출력 디렉토리 생성
+    # 출력 ?�렉?�리 ?�성
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        # ML 강화 벡터 빌더 초기화
+        # ML 강화 벡터 빌더 초기??
         builder = MLEnhancedVectorBuilder(
             model_name=args.model,
             dimension=args.dimension,
             index_type=args.index_type
         )
         
-        # 벡터 임베딩 생성
+        # 벡터 ?�베???�성
         logger.info("Starting ML-enhanced vector embedding generation...")
         success = builder.build_embeddings(input_dir, batch_size=args.batch_size)
         
@@ -476,7 +476,7 @@ def main():
             logger.error("Vector embedding generation failed")
             return 1
         
-        # 인덱스 저장
+        # ?�덱???�??
         logger.info("Saving vector index...")
         save_success = builder.save_index(output_dir)
         
@@ -484,7 +484,7 @@ def main():
             logger.error("Failed to save vector index")
             return 1
         
-        # 최종 통계 출력
+        # 최종 ?�계 출력
         stats = builder.get_stats()
         logger.info("=== ML Enhanced Vector Building Completed ===")
         logger.info(f"Total laws processed: {stats['total_laws_processed']}")
@@ -497,7 +497,7 @@ def main():
         
         if stats['errors']:
             logger.warning(f"Errors encountered: {len(stats['errors'])}")
-            for error in stats['errors'][:5]:  # 처음 5개 오류만 출력
+            for error in stats['errors'][:5]:  # 처음 5�??�류�?출력
                 logger.warning(f"  - {error}")
         
         logger.info("ML-enhanced vector embedding generation completed successfully!")

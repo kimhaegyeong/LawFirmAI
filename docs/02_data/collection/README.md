@@ -1,4 +1,4 @@
-# 데이터 수집 (Data Collection)
+﻿# 데이터 수집 (Data Collection)
 
 이 섹션은 법률 데이터 수집 방법을 설명합니다.
 

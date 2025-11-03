@@ -1,4 +1,4 @@
-# 벡터 임베딩 (Vector Embedding)
+﻿# 벡터 임베딩 (Vector Embedding)
 
 이 섹션은 LawFirmAI 프로젝트의 벡터 임베딩 생성, 관리 및 관련 기술에 대한 문서를 포함합니다.
 

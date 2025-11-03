@@ -88,7 +88,7 @@ def fix_processed_file(input_file: Path, output_file: Path):
 def main():
     """Main function"""
     # Path to the problematic file
-    input_file = Path("../../data/processed/assembly/law/2025101201_ui_cleaned/20251012/가축분뇨의_자원화_및_이용_촉진에_관한_규칙_assembly_law_3693.json")
+    input_file = Path("../../data/processed/assembly/law/2025101201_ui_cleaned/20251012/가축분?�의_?�원??�??�용_촉진??관??규칙_assembly_law_3693.json")
     
     if not input_file.exists():
         print(f"Input file not found: {input_file}")

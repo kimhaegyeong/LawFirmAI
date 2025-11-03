@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-증분 벡터 임베딩 생성기
+증분 벡터 ?�베???�성�?
 
-기존 FAISS 인덱스를 로드하고 새로운 문서만 임베딩하여 기존 인덱스에 추가하는 시스템입니다.
-ko-sroberta-multitask 모델을 사용하여 증분 업데이트를 수행합니다.
+기존 FAISS ?�덱?��? 로드?�고 ?�로??문서�??�베?�하??기존 ?�덱?�에 추�??�는 ?�스?�입?�다.
+ko-sroberta-multitask 모델???�용?�여 증분 ?�데?�트�??�행?�니??
 """
 
 import logging
@@ -17,32 +17,32 @@ from datetime import datetime
 import argparse
 from tqdm import tqdm
 
-# 프로젝트 루트를 Python 경로에 추가
+# ?�로?�트 루트�?Python 경로??추�?
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.vector_store import LegalVectorStore
-from source.data.database import DatabaseManager # 파일 처리 이력 추적용
-from scripts.data_processing.auto_data_detector import AutoDataDetector # 파일 해시 생성용
+from source.data.database import DatabaseManager # ?�일 처리 ?�력 추적??
+from scripts.data_processing.auto_data_detector import AutoDataDetector # ?�일 ?�시 ?�성??
 
 logger = logging.getLogger(__name__)
 
 class IncrementalVectorBuilder:
-    """증분 벡터 임베딩 생성기"""
+    """증분 벡터 ?�베???�성�?""
     
     def __init__(self, model_name: str = "jhgan/ko-sroberta-multitask", 
                  dimension: int = 768, index_type: str = "flat",
                  processed_data_base_path: str = "data/processed/assembly",
                  embedding_output_path: str = "data/embeddings/ml_enhanced_ko_sroberta"):
         """
-        증분 벡터 빌더 초기화
+        증분 벡터 빌더 초기??
         
         Args:
-            model_name: 사용할 Sentence-BERT 모델명
+            model_name: ?�용??Sentence-BERT 모델�?
             dimension: 벡터 차원
-            index_type: FAISS 인덱스 타입
-            processed_data_base_path: 전처리된 데이터가 저장된 기본 디렉토리
-            embedding_output_path: 임베딩 및 FAISS 인덱스 저장 경로
+            index_type: FAISS ?�덱???�??
+            processed_data_base_path: ?�처리된 ?�이?��? ?�?�된 기본 ?�렉?�리
+            embedding_output_path: ?�베??�?FAISS ?�덱???�??경로
         """
         self.model_name = model_name
         self.dimension = dimension
@@ -57,9 +57,9 @@ class IncrementalVectorBuilder:
             index_type=index_type
         )
         self.db_manager = DatabaseManager()
-        self.auto_detector = AutoDataDetector() # 파일 해시 계산용
+        self.auto_detector = AutoDataDetector() # ?�일 ?�시 계산??
         
-        # 기존 FAISS 인덱스 로드 시도
+        # 기존 FAISS ?�덱??로드 ?�도
         self.vector_store.load_index(self.embedding_output_path)
         
         self.stats = {
@@ -78,27 +78,27 @@ class IncrementalVectorBuilder:
 
     def build_incremental_embeddings(self, data_type: str = "law_only", batch_size: int = 100) -> Dict[str, Any]:
         """
-        새로 전처리된 데이터로부터 증분 벡터 임베딩 생성
+        ?�로 ?�처리된 ?�이?�로부??증분 벡터 ?�베???�성
         
         Args:
-            data_type: 임베딩할 특정 데이터 유형 (예: 'law_only'). 'all'이면 모든 유형 처리.
-            batch_size: 임베딩 배치 처리 크기
+            data_type: ?�베?�할 ?�정 ?�이???�형 (?? 'law_only'). 'all'?�면 모든 ?�형 처리.
+            batch_size: ?�베??배치 처리 ?�기
             
         Returns:
-            Dict[str, Any]: 처리 결과 통계
+            Dict[str, Any]: 처리 결과 ?�계
         """
         logger.info(f"Starting incremental vector embedding for data type: {data_type}")
         start_time = datetime.now()
         
-        # 데이터베이스에서 'completed' 상태의 전처리된 파일 목록 가져오기
+        # ?�이?�베?�스?�서 'completed' ?�태???�처리된 ?�일 목록 가?�오�?
         processed_files_info = self.db_manager.get_processed_files_by_type(data_type, status="completed")
         
         files_to_embed = []
         for file_info in processed_files_info:
             processed_file_path = Path(file_info['file_path'])
             
-            # 원본 raw 파일 경로를 기반으로 ml_enhanced_*.json 파일 경로 추론
-            # 예: data/raw/assembly/law_only/20251016/law_only_page_001_...json
+            # ?�본 raw ?�일 경로�?기반?�로 ml_enhanced_*.json ?�일 경로 추론
+            # ?? data/raw/assembly/law_only/20251016/law_only_page_001_...json
             # -> data/processed/assembly/law_only/20251016/ml_enhanced_law_only_page_001_...json
             relative_path = processed_file_path.relative_to(self.auto_detector.raw_data_base_path)
             ml_enhanced_file_name = f"ml_enhanced_{processed_file_path.stem}.json"
@@ -108,11 +108,11 @@ class IncrementalVectorBuilder:
                 logger.warning(f"ML enhanced file not found for {processed_file_path}. Skipping.")
                 continue
             
-            # 이미 임베딩된 파일인지 확인 (processed_files 테이블에서 'embedded' 상태로 추적)
-            # 여기서는 processed_files 테이블에 'embedded' 상태를 추가하지 않고,
-            # 단순히 해당 파일이 벡터 스토어에 이미 존재하는지 여부로 판단
-            # 또는 별도의 임베딩 이력 테이블을 만들 수 있음.
-            # 현재는 processed_files 테이블의 'processing_status'를 'embedded'로 업데이트하는 방식으로 진행
+            # ?��? ?�베?�된 ?�일?��? ?�인 (processed_files ?�이블에??'embedded' ?�태�?추적)
+            # ?�기?�는 processed_files ?�이블에 'embedded' ?�태�?추�??��? ?�고,
+            # ?�순???�당 ?�일??벡터 ?�토?�에 ?��? 존재?�는지 ?��?�??�단
+            # ?�는 별도???�베???�력 ?�이블을 만들 ???�음.
+            # ?�재??processed_files ?�이블의 'processing_status'�?'embedded'�??�데?�트?�는 방식?�로 진행
             file_status = self.db_manager.get_file_processing_status(str(processed_file_path))
             if file_status and file_status['processing_status'] == 'embedded':
                 self.stats['skipped_already_embedded'] += 1
@@ -137,8 +137,8 @@ class IncrementalVectorBuilder:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     file_data = json.load(f)
                 
-                # LegalVectorStore의 add_documents 메서드에 맞는 형식으로 변환
-                # file_data는 { 'laws': [...] } 형태일 수 있음
+                # LegalVectorStore??add_documents 메서?�에 맞는 ?�식?�로 변??
+                # file_data??{ 'laws': [...] } ?�태?????�음
                 laws_data = file_data.get('laws', [file_data]) if isinstance(file_data, dict) else file_data
                 
                 for law_data in laws_data:
@@ -158,13 +158,13 @@ class IncrementalVectorBuilder:
                             "ml_confidence_score": article.get('ml_confidence_score'),
                             "parsing_method": article.get('parsing_method'),
                             "quality_score": law_data.get('data_quality', {}).get('parsing_quality_score', 0.0),
-                            "source_file": str(file_path) # 원본 파일 경로 추가
+                            "source_file": str(file_path) # ?�본 ?�일 경로 추�?
                         }
                         all_documents_to_add.append((chunk_id, content, metadata))
                         self.stats['total_chunks_added'] += 1
                 
-                # 원본 raw 파일 경로를 'embedded' 상태로 업데이트
-                # (ml_enhanced_file_path가 아닌 raw_file_path를 추적)
+                # ?�본 raw ?�일 경로�?'embedded' ?�태�??�데?�트
+                # (ml_enhanced_file_path가 ?�닌 raw_file_path�?추적)
                 original_raw_file_path = self._get_original_raw_file_path(file_path)
                 if original_raw_file_path:
                     self.db_manager.update_file_processing_status(original_raw_file_path, "embedded")
@@ -182,11 +182,11 @@ class IncrementalVectorBuilder:
         if all_documents_to_add:
             logger.info(f"Adding {len(all_documents_to_add)} document chunks to vector store...")
             
-            # 배치 처리로 문서 추가
+            # 배치 처리�?문서 추�?
             texts = [doc[1] for doc in all_documents_to_add]  # content
             metadatas = [doc[2] for doc in all_documents_to_add]  # metadata
             
-            # 배치 크기로 나누어 처리
+            # 배치 ?�기�??�누??처리
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i + batch_size]
                 batch_metadatas = metadatas[i:i + batch_size]
@@ -205,8 +205,8 @@ class IncrementalVectorBuilder:
         return self.stats
 
     def _get_original_raw_file_path(self, ml_enhanced_file_path: Path) -> Optional[str]:
-        """ML enhanced 파일 경로로부터 원본 raw 파일 경로를 추론"""
-        # 예: data/processed/assembly/law_only/20251016/ml_enhanced_law_only_page_001_...json
+        """ML enhanced ?�일 경로로�????�본 raw ?�일 경로�?추론"""
+        # ?? data/processed/assembly/law_only/20251016/ml_enhanced_law_only_page_001_...json
         # -> data/raw/assembly/law_only/20251016/law_only_page_001_...json
         try:
             relative_path_from_processed = ml_enhanced_file_path.relative_to(self.processed_data_base_path)

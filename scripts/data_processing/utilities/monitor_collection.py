@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-법률 수집 모니터링 스크립트
+법률 ?�집 모니?�링 ?�크립트
 """
 
 import json
@@ -10,12 +10,12 @@ from pathlib import Path
 from datetime import datetime
 
 def monitor_collection():
-    """수집 진행 상황 모니터링"""
+    """?�집 진행 ?�황 모니?�링"""
     
-    # 체크포인트 파일 경로
+    # 체크?�인???�일 경로
     checkpoint_path = Path("data/checkpoints/laws_only/checkpoint.json")
     
-    # 데이터 디렉토리 경로
+    # ?�이???�렉?�리 경로
     data_dir = Path("data/raw/assembly/law_only/20251016")
     
     print("=" * 60)
@@ -24,7 +24,7 @@ def monitor_collection():
     
     while True:
         try:
-            # 체크포인트 정보 읽기
+            # 체크?�인???�보 ?�기
             if checkpoint_path.exists():
                 with open(checkpoint_path, 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
@@ -43,17 +43,17 @@ def monitor_collection():
             else:
                 print(f"\n[{datetime.now().strftime('%H:%M:%S')}] No checkpoint found")
             
-            # 데이터 파일 개수 확인
+            # ?�이???�일 개수 ?�인
             if data_dir.exists():
                 files = list(data_dir.glob("*.json"))
                 print(f"  Data Files: {len(files)}")
                 
                 if files:
-                    # 최신 파일 확인
+                    # 최신 ?�일 ?�인
                     latest_file = max(files, key=lambda f: f.stat().st_mtime)
                     print(f"  Latest File: {latest_file.name}")
                     
-                    # 최신 파일의 메타데이터 확인
+                    # 최신 ?�일??메�??�이???�인
                     try:
                         with open(latest_file, 'r', encoding='utf-8') as f:
                             data = json.load(f)
@@ -67,17 +67,17 @@ def monitor_collection():
             else:
                 print(f"  Data directory not found: {data_dir}")
             
-            # 진행률 표시
+            # 진행�??�시
             if checkpoint_path.exists() and target_count > 0:
                 progress = collected_count / target_count
                 bar_length = 30
                 filled_length = int(bar_length * progress)
-                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                bar = '?? * filled_length + '?? * (bar_length - filled_length)
                 print(f"  Progress: [{bar}] {progress*100:.1f}%")
             
             print("-" * 60)
             
-            # 10초 대기
+            # 10�??��?
             time.sleep(10)
             
         except KeyboardInterrupt:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LoRA 파인튜닝 환경 설정 및 검증 스크립트
-LawFirmAI 프로젝트 - TASK 3.1 훈련 환경 구성
+LoRA ?�인?�닝 ?�경 ?�정 �?검�??�크립트
+LawFirmAI ?�로?�트 - TASK 3.1 ?�련 ?�경 구성
 """
 
 import sys
@@ -12,11 +12,11 @@ import logging
 from typing import Dict, List, Optional
 import json
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def setup_logging():
-    """로깅 설정"""
+    """로깅 ?�정"""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
@@ -24,7 +24,7 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 def check_pytorch_installation() -> Dict:
-    """PyTorch 설치 및 버전 확인"""
+    """PyTorch ?�치 �?버전 ?�인"""
     logger = logging.getLogger(__name__)
     
     try:
@@ -55,7 +55,7 @@ def check_pytorch_installation() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def check_transformers_installation() -> Dict:
-    """Transformers 라이브러리 확인"""
+    """Transformers ?�이브러�??�인"""
     logger = logging.getLogger(__name__)
     
     try:
@@ -72,7 +72,7 @@ def check_transformers_installation() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def check_peft_installation() -> Dict:
-    """PEFT 라이브러리 확인"""
+    """PEFT ?�이브러�??�인"""
     logger = logging.getLogger(__name__)
     
     try:
@@ -80,7 +80,7 @@ def check_peft_installation() -> Dict:
         version = peft.__version__
         logger.info(f"PEFT version: {version}")
         
-        # LoRA 관련 클래스 확인
+        # LoRA 관???�래???�인
         from peft import LoraConfig, get_peft_model, TaskType
         logger.info("PEFT LoRA classes imported successfully")
         
@@ -94,7 +94,7 @@ def check_peft_installation() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def check_accelerate_installation() -> Dict:
-    """Accelerate 라이브러리 확인"""
+    """Accelerate ?�이브러�??�인"""
     logger = logging.getLogger(__name__)
     
     try:
@@ -111,7 +111,7 @@ def check_accelerate_installation() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def check_bitsandbytes_installation() -> Dict:
-    """BitsAndBytes 라이브러리 확인 (QLoRA용)"""
+    """BitsAndBytes ?�이브러�??�인 (QLoRA??"""
     logger = logging.getLogger(__name__)
     
     try:
@@ -119,7 +119,7 @@ def check_bitsandbytes_installation() -> Dict:
         version = bitsandbytes.__version__
         logger.info(f"BitsAndBytes version: {version}")
         
-        # QLoRA 관련 기능 확인
+        # QLoRA 관??기능 ?�인
         try:
             from bitsandbytes.nn import Linear4bit
             logger.info("BitsAndBytes 4-bit quantization available")
@@ -138,7 +138,7 @@ def check_bitsandbytes_installation() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def test_kogpt2_loading() -> Dict:
-    """KoGPT-2 모델 로딩 테스트"""
+    """KoGPT-2 모델 로딩 ?�스??""
     logger = logging.getLogger(__name__)
     
     try:
@@ -147,20 +147,20 @@ def test_kogpt2_loading() -> Dict:
         model_name = "skt/kogpt2-base-v2"
         logger.info(f"Testing KoGPT-2 model loading: {model_name}")
         
-        # 토크나이저 로딩 테스트
+        # ?�크?�이?� 로딩 ?�스??
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         logger.info("Tokenizer loaded successfully")
         
-        # 모델 로딩 테스트 (CPU에서)
+        # 모델 로딩 ?�스??(CPU?�서)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float32,  # CPU용
+            torch_dtype=torch.float32,  # CPU??
             device_map="cpu"
         )
         logger.info("Model loaded successfully")
         
-        # 간단한 추론 테스트
-        test_text = "안녕하세요"
+        # 간단??추론 ?�스??
+        test_text = "?�녕?�세??
         inputs = tokenizer(test_text, return_tensors="pt")
         
         with torch.no_grad():
@@ -186,7 +186,7 @@ def test_kogpt2_loading() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def test_lora_configuration() -> Dict:
-    """LoRA 설정 테스트"""
+    """LoRA ?�정 ?�스??""
     logger = logging.getLogger(__name__)
     
     try:
@@ -195,7 +195,7 @@ def test_lora_configuration() -> Dict:
         
         model_name = "skt/kogpt2-base-v2"
         
-        # LoRA 설정 생성
+        # LoRA ?�정 ?�성
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=16,
@@ -209,7 +209,7 @@ def test_lora_configuration() -> Dict:
         logger.info(f"LoRA alpha: {lora_config.lora_alpha}")
         logger.info(f"Target modules: {lora_config.target_modules}")
         
-        # 모델 로딩 및 LoRA 적용 테스트
+        # 모델 로딩 �?LoRA ?�용 ?�스??
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -222,7 +222,7 @@ def test_lora_configuration() -> Dict:
         
         logger.info("LoRA model created successfully")
         
-        # 파라미터 수 확인
+        # ?�라미터 ???�인
         trainable_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in peft_model.parameters())
         
@@ -247,7 +247,7 @@ def test_lora_configuration() -> Dict:
         return {"status": "error", "error": str(e)}
 
 def run_environment_check() -> Dict:
-    """전체 환경 검사 실행"""
+    """?�체 ?�경 검???�행"""
     logger = setup_logging()
     logger.info("Starting LoRA fine-tuning environment check...")
     
@@ -256,7 +256,7 @@ def run_environment_check() -> Dict:
         "checks": {}
     }
     
-    # 각 라이브러리 확인
+    # �??�이브러�??�인
     checks = [
         ("pytorch", check_pytorch_installation),
         ("transformers", check_transformers_installation),
@@ -271,7 +271,7 @@ def run_environment_check() -> Dict:
         logger.info(f"Running {check_name} check...")
         results["checks"][check_name] = check_func()
     
-    # 전체 상태 요약
+    # ?�체 ?�태 ?�약
     success_count = sum(1 for check in results["checks"].values() if check.get("status") == "success")
     total_count = len(results["checks"])
     
@@ -287,7 +287,7 @@ def run_environment_check() -> Dict:
     return results
 
 def save_check_report(results: Dict, output_file: str = "logs/lora_environment_check.json"):
-    """검사 결과 보고서 저장"""
+    """검??결과 보고???�??""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -297,7 +297,7 @@ def save_check_report(results: Dict, output_file: str = "logs/lora_environment_c
     logger.info(f"Environment check report saved to {output_file}")
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     import argparse
     
     parser = argparse.ArgumentParser(description="LoRA Fine-tuning Environment Check")
@@ -309,10 +309,10 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # 환경 검사 실행
+    # ?�경 검???�행
     results = run_environment_check()
     
-    # 보고서 저장
+    # 보고???�??
     save_check_report(results, args.output)
     
     # 결과 출력
@@ -324,11 +324,11 @@ def main():
     print(f"Overall status: {summary['overall_status']}")
     
     if summary['overall_status'] == 'success':
-        print("\n✅ All checks passed! LoRA fine-tuning environment is ready.")
+        print("\n??All checks passed! LoRA fine-tuning environment is ready.")
     elif summary['overall_status'] == 'partial':
-        print("\n⚠️ Some checks failed. Please review the report for details.")
+        print("\n?�️ Some checks failed. Please review the report for details.")
     else:
-        print("\n❌ Environment check failed. Please install missing dependencies.")
+        print("\n??Environment check failed. Please install missing dependencies.")
 
 if __name__ == "__main__":
     main()

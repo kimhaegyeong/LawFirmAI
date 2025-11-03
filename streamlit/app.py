@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-LawFirmAI - Streamlit 애플리케이션
-LangGraph 기반 간소화된 버전
+LawFirmAI - Streamlit ?�플리�??�션
+LangGraph 기반 간소?�된 버전
 """
 
 import asyncio
@@ -13,20 +13,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-# 프로젝트 루트 경로 추가
+# ?�로?�트 루트 경로 추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-# LangGraph 활성화 설정
+# LangGraph ?�성???�정
 os.environ["USE_LANGGRAPH"] = "true"
 
 import streamlit as st
 
-# LangGraph 워크플로우 서비스만 사용
-from core.agents.workflow_service import LangGraphWorkflowService
+# LangGraph ?�크?�로???�비?�만 ?�용
+from source.agents.workflow_service import LangGraphWorkflowService
 from infrastructure.utils.langgraph_config import LangGraphConfig
 
-# 로깅 설정
+# 로깅 ?�정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 class StreamlitApp:
-    """Streamlit 전용 LawFirmAI 애플리케이션 - LangGraph 기반"""
+    """Streamlit ?�용 LawFirmAI ?�플리�??�션 - LangGraph 기반"""
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -51,16 +51,16 @@ class StreamlitApp:
         self.current_user_id = "streamlit_user"
 
     def initialize_components(self) -> bool:
-        """컴포넌트 초기화"""
+        """컴포?�트 초기??""
         try:
             self.logger.info("Initializing LawFirmAI with LangGraph...")
             start_time = time.time()
 
-            # LangGraph 설정 로드
+            # LangGraph ?�정 로드
             self.config = LangGraphConfig.from_env()
             self.logger.info("LangGraph config loaded")
 
-            # LangGraph 워크플로우 서비스 초기화
+            # LangGraph ?�크?�로???�비??초기??
             self.workflow = LangGraphWorkflowService(self.config)
             self.logger.info("LangGraph workflow service initialized")
 
@@ -76,15 +76,15 @@ class StreamlitApp:
             return False
 
     def process_query(self, query: str, session_id: str = None, user_id: str = None) -> Dict[str, Any]:
-        """질의 처리 - LangGraph 사용"""
+        """질의 처리 - LangGraph ?�용"""
         if not self.is_initialized:
             return {
-                "answer": "시스템이 아직 초기화되지 않았습니다. 잠시 후 다시 시도해주세요.",
+                "answer": "?�스?�이 ?�직 초기?�되지 ?�았?�니?? ?�시 ???�시 ?�도?�주?�요.",
                 "error": "System not initialized",
                 "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"}
             }
 
-        # 세션 ID 설정
+        # ?�션 ID ?�정
         if not session_id:
             session_id = self.current_session_id
         if not user_id:
@@ -93,7 +93,7 @@ class StreamlitApp:
         start_time = time.time()
 
         try:
-            # LangGraph를 통해 질문 처리
+            # LangGraph�??�해 질문 처리
             if self.workflow:
                 result = asyncio.run(self.workflow.process_query(query, session_id))
             else:
@@ -102,7 +102,7 @@ class StreamlitApp:
             response_time = time.time() - start_time
 
             return {
-                "answer": result.get("answer", "죄송합니다. 답변을 생성할 수 없습니다."),
+                "answer": result.get("answer", "죄송?�니?? ?��????�성?????�습?�다."),
                 "confidence": {
                     "confidence": result.get("confidence", 0.0),
                     "reliability_level": "HIGH" if result.get("confidence", 0) > 0.7 else "MEDIUM" if result.get("confidence", 0) > 0.4 else "LOW"
@@ -122,7 +122,7 @@ class StreamlitApp:
             self.logger.error(f"Error processing query: {e}")
 
             return {
-                "answer": "죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해주세요.",
+                "answer": "죄송?�니?? 처리 �??�류가 발생?�습?�다. ?�시 ?�도?�주?�요.",
                 "error": str(e),
                 "confidence": {"confidence": 0, "reliability_level": "VERY_LOW"},
                 "processing_time": response_time
@@ -131,7 +131,7 @@ class StreamlitApp:
 
 @st.cache_resource
 def initialize_app():
-    """Streamlit 캐시를 사용한 앱 초기화"""
+    """Streamlit 캐시�??�용????초기??""
     app = StreamlitApp()
     if not app.initialize_components():
         logger.error("Failed to initialize components")
@@ -139,45 +139,45 @@ def initialize_app():
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     st.set_page_config(
-        page_title="LawFirmAI - 법률 AI 어시스턴트",
-        page_icon="⚖️",
+        page_title="LawFirmAI - 법률 AI ?�시?�턴??,
+        page_icon="?�️",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
-    st.title("⚖️ LawFirmAI - 법률 AI 어시스턴트")
-    st.markdown("### LangGraph 기반 법률 질의응답 시스템")
+    st.title("?�️ LawFirmAI - 법률 AI ?�시?�턴??)
+    st.markdown("### LangGraph 기반 법률 질의?�답 ?�스??)
 
-    # 시스템 초기화
+    # ?�스??초기??
     if 'app' not in st.session_state:
-        with st.spinner('시스템을 초기화하는 중...'):
+        with st.spinner('?�스?�을 초기?�하??�?..'):
             st.session_state.app = initialize_app()
 
     app = st.session_state.app
 
-    # 사이드바
+    # ?�이?�바
     with st.sidebar:
-        st.header("⚙️ 설정")
-        st.subheader("시스템 정보")
+        st.header("?�️ ?�정")
+        st.subheader("?�스???�보")
         if app.is_initialized:
-            st.success("✅ 시스템이 정상적으로 초기화되었습니다.")
-            st.info(f"세션 ID: {app.current_session_id[:20]}...")
-            st.info(f"사용자 ID: {app.current_user_id}")
+            st.success("???�스?�이 ?�상?�으�?초기?�되?�습?�다.")
+            st.info(f"?�션 ID: {app.current_session_id[:20]}...")
+            st.info(f"?�용??ID: {app.current_user_id}")
         else:
-            st.error("❌ 시스템 초기화 실패")
+            st.error("???�스??초기???�패")
             if app.initialization_error:
-                st.error(f"오류: {app.initialization_error}")
+                st.error(f"?�류: {app.initialization_error}")
 
-    # 채팅 인터페이스
-    st.markdown("### 법률 관련 질문에 정확하고 신뢰할 수 있는 답변을 제공합니다.")
+    # 채팅 ?�터?�이??
+    st.markdown("### 법률 관??질문???�확?�고 ?�뢰?????�는 ?��????�공?�니??")
 
-    # 채팅 히스토리 초기화
+    # 채팅 ?�스?�리 초기??
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-    # 채팅 표시
+    # 채팅 ?�시
     chat_container = st.container()
 
     with chat_container:
@@ -187,33 +187,33 @@ def main():
             else:
                 st.chat_message("assistant").write(msg["content"])
 
-                # 신뢰도 정보 표시
+                # ?�뢰???�보 ?�시
                 if "confidence" in msg:
                     conf_info = msg["confidence"]
                     st.caption(
-                        f"신뢰도: {conf_info.get('confidence', 0):.1%} | "
-                        f"수준: {conf_info.get('reliability_level', 'Unknown')} | "
-                        f"처리 시간: {msg.get('processing_time', 0):.2f}초"
+                        f"?�뢰?? {conf_info.get('confidence', 0):.1%} | "
+                        f"?��?: {conf_info.get('reliability_level', 'Unknown')} | "
+                        f"처리 ?�간: {msg.get('processing_time', 0):.2f}�?
                     )
 
-    # 질문 입력
-    user_input = st.chat_input("법률 관련 질문을 입력하세요...")
+    # 질문 ?�력
+    user_input = st.chat_input("법률 관??질문???�력?�세??..")
 
     if user_input:
-        # 사용자 메시지 추가
+        # ?�용??메시지 추�?
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         st.rerun()
 
-    # 답변 생성
+    # ?��? ?�성
     if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "user":
         last_msg = st.session_state.chat_history[-1]["content"]
 
-        with st.spinner('답변을 생성하는 중...'):
+        with st.spinner('?��????�성?�는 �?..'):
             result = app.process_query(last_msg)
 
-            answer = result.get("answer", "죄송합니다. 답변을 생성할 수 없습니다.")
+            answer = result.get("answer", "죄송?�니?? ?��????�성?????�습?�다.")
 
-            # 답변 추가
+            # ?��? 추�?
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": answer,

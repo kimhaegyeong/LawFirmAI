@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-데이터 수집 전용 스크립트 (JSON 저장)
+?�이???�집 ?�용 ?�크립트 (JSON ?�??
 
-국가법령정보센터 OpenAPI에서 법률 데이터를 수집하여 JSON 파일로 저장합니다.
-벡터DB 구축은 별도의 스크립트에서 처리합니다.
+�??법령?�보?�터 OpenAPI?�서 법률 ?�이?��? ?�집?�여 JSON ?�일�??�?�합?�다.
+벡터DB 구축?� 별도???�크립트?�서 처리?�니??
 
-사용법:
+?�용�?
     python scripts/collect_data_only.py --mode collect --oc your_email_id
     python scripts/collect_data_only.py --mode laws --oc your_email_id --query "민법"
-    python scripts/collect_data_only.py --mode precedents --oc your_email_id --query "계약 해지"
+    python scripts/collect_data_only.py --mode precedents --oc your_email_id --query "계약 ?��?"
 """
 
 import os
@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import logging
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# ?�로?�트 루트 ?�렉?�리�?Python 경로??추�?
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
@@ -33,17 +33,17 @@ logger = get_logger(__name__)
 
 
 class DataCollector:
-    """데이터 수집 전용 클래스"""
+    """?�이???�집 ?�용 ?�래??""
     
     def __init__(self, oc: str, base_url: str = "http://www.law.go.kr/DRF"):
-        """초기화"""
+        """초기??""
         self.oc = oc
         self.config = LawOpenAPIConfig(oc=oc, base_url=base_url)
         self.client = LawOpenAPIClient(self.config)
         self.output_dir = Path("./data/raw")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 수집 통계
+        # ?�집 ?�계
         self.collection_stats = {
             'start_time': datetime.now().isoformat(),
             'laws_collected': 0,
@@ -60,7 +60,7 @@ class DataCollector:
         }
     
     def _save_data(self, data: List[Dict], doc_type: str, query: str = None) -> str:
-        """데이터를 JSON 파일로 저장"""
+        """?�이?��? JSON ?�일�??�??""
         if not data:
             return None
         
@@ -81,7 +81,7 @@ class DataCollector:
             return None
     
     def collect_laws(self, query: str = "민법", display: int = 100) -> bool:
-        """법령 데이터 수집"""
+        """법령 ?�이???�집"""
         try:
             logger.info(f"Collecting laws for query: {query}")
             
@@ -96,10 +96,10 @@ class DataCollector:
                 try:
                     law_id = law_summary.get('법령ID')
                     if law_id:
-                        # 법령 상세 정보 조회
+                        # 법령 ?�세 ?�보 조회
                         law_detail = self.client.get_law_detail_effective(law_id=law_id)
                         if law_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_law = {
                                 **law_summary,
                                 **law_detail,
@@ -126,12 +126,12 @@ class DataCollector:
             self.collection_stats['errors'].append(f"Laws collection error: {e}")
             return False
     
-    def collect_precedents(self, query: str = "계약 해지", display: int = 100) -> bool:
-        """판례 데이터 수집"""
+    def collect_precedents(self, query: str = "계약 ?��?", display: int = 100) -> bool:
+        """?��? ?�이???�집"""
         try:
             logger.info(f"Collecting precedents for query: {query}")
             
-            # 판례 목록 조회
+            # ?��? 목록 조회
             prec_list = self.client.search_precedent_list(query=query, display=display)
             if not prec_list:
                 logger.warning(f"No precedents found for query: {query}")
@@ -140,12 +140,12 @@ class DataCollector:
             detailed_precedents = []
             for prec_summary in prec_list:
                 try:
-                    prec_id = prec_summary.get('판례일련번호')
+                    prec_id = prec_summary.get('?��??�련번호')
                     if prec_id:
-                        # 판례 상세 정보 조회
+                        # ?��? ?�세 ?�보 조회
                         prec_detail = self.client.get_precedent_detail(precedent_id=prec_id)
                         if prec_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_prec = {
                                 **prec_summary,
                                 **prec_detail,
@@ -155,7 +155,7 @@ class DataCollector:
                             detailed_precedents.append(integrated_prec)
                             
                 except Exception as e:
-                    logger.error(f"Error collecting precedent {prec_summary.get('판례일련번호', 'unknown')}: {e}")
+                    logger.error(f"Error collecting precedent {prec_summary.get('?��??�련번호', 'unknown')}: {e}")
                     continue
             
             if detailed_precedents:
@@ -172,12 +172,12 @@ class DataCollector:
             self.collection_stats['errors'].append(f"Precedents collection error: {e}")
             return False
     
-    def collect_constitutional_decisions(self, query: str = "헌법", display: int = 100) -> bool:
-        """헌재결정례 데이터 수집"""
+    def collect_constitutional_decisions(self, query: str = "?�법", display: int = 100) -> bool:
+        """?�재결정례 ?�이???�집"""
         try:
             logger.info(f"Collecting constitutional decisions for query: {query}")
             
-            # 헌재결정례 목록 조회
+            # ?�재결정례 목록 조회
             const_list = self.client.search_constitutional_decision_list(query=query, display=display)
             if not const_list:
                 logger.warning(f"No constitutional decisions found for query: {query}")
@@ -186,12 +186,12 @@ class DataCollector:
             detailed_decisions = []
             for const_summary in const_list:
                 try:
-                    const_id = const_summary.get('헌재결정례일련번호')
+                    const_id = const_summary.get('?�재결정례?�련번호')
                     if const_id:
-                        # 헌재결정례 상세 정보 조회
+                        # ?�재결정례 ?�세 ?�보 조회
                         const_detail = self.client.get_constitutional_decision_detail(const_id=const_id)
                         if const_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_const = {
                                 **const_summary,
                                 **const_detail,
@@ -201,7 +201,7 @@ class DataCollector:
                             detailed_decisions.append(integrated_const)
                             
                 except Exception as e:
-                    logger.error(f"Error collecting constitutional decision {const_summary.get('헌재결정례일련번호', 'unknown')}: {e}")
+                    logger.error(f"Error collecting constitutional decision {const_summary.get('?�재결정례?�련번호', 'unknown')}: {e}")
                     continue
             
             if detailed_decisions:
@@ -218,12 +218,12 @@ class DataCollector:
             self.collection_stats['errors'].append(f"Constitutional decisions collection error: {e}")
             return False
     
-    def collect_legal_interpretations(self, query: str = "법령해석", display: int = 100) -> bool:
-        """법령해석례 데이터 수집"""
+    def collect_legal_interpretations(self, query: str = "법령?�석", display: int = 100) -> bool:
+        """법령?�석례 ?�이???�집"""
         try:
             logger.info(f"Collecting legal interpretations for query: {query}")
             
-            # 법령해석례 목록 조회
+            # 법령?�석례 목록 조회
             interp_list = self.client.search_legal_interpretation_list(query=query, display=display)
             if not interp_list:
                 logger.warning(f"No legal interpretations found for query: {query}")
@@ -232,12 +232,12 @@ class DataCollector:
             detailed_interpretations = []
             for interp_summary in interp_list:
                 try:
-                    interp_id = interp_summary.get('법령해석례일련번호')
+                    interp_id = interp_summary.get('법령?�석례?�련번호')
                     if interp_id:
-                        # 법령해석례 상세 정보 조회
+                        # 법령?�석례 ?�세 ?�보 조회
                         interp_detail = self.client.get_legal_interpretation_detail(interp_id=interp_id)
                         if interp_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_interp = {
                                 **interp_summary,
                                 **interp_detail,
@@ -247,7 +247,7 @@ class DataCollector:
                             detailed_interpretations.append(integrated_interp)
                             
                 except Exception as e:
-                    logger.error(f"Error collecting legal interpretation {interp_summary.get('법령해석례일련번호', 'unknown')}: {e}")
+                    logger.error(f"Error collecting legal interpretation {interp_summary.get('법령?�석례?�련번호', 'unknown')}: {e}")
                     continue
             
             if detailed_interpretations:
@@ -264,12 +264,12 @@ class DataCollector:
             self.collection_stats['errors'].append(f"Legal interpretations collection error: {e}")
             return False
     
-    def collect_administrative_rules(self, query: str = "행정규칙", display: int = 100) -> bool:
-        """행정규칙 데이터 수집"""
+    def collect_administrative_rules(self, query: str = "?�정규칙", display: int = 100) -> bool:
+        """?�정규칙 ?�이???�집"""
         try:
             logger.info(f"Collecting administrative rules for query: {query}")
             
-            # 행정규칙 목록 조회
+            # ?�정규칙 목록 조회
             admin_list = self.client.search_administrative_rule_list(query=query, display=display)
             if not admin_list:
                 logger.warning(f"No administrative rules found for query: {query}")
@@ -278,12 +278,12 @@ class DataCollector:
             detailed_rules = []
             for admin_summary in admin_list:
                 try:
-                    admin_id = admin_summary.get('행정규칙일련번호')
+                    admin_id = admin_summary.get('?�정규칙?�련번호')
                     if admin_id:
-                        # 행정규칙 상세 정보 조회
+                        # ?�정규칙 ?�세 ?�보 조회
                         admin_detail = self.client.get_administrative_rule_detail(rule_id=admin_id)
                         if admin_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_admin = {
                                 **admin_summary,
                                 **admin_detail,
@@ -293,7 +293,7 @@ class DataCollector:
                             detailed_rules.append(integrated_admin)
                             
                 except Exception as e:
-                    logger.error(f"Error collecting administrative rule {admin_summary.get('행정규칙일련번호', 'unknown')}: {e}")
+                    logger.error(f"Error collecting administrative rule {admin_summary.get('?�정규칙?�련번호', 'unknown')}: {e}")
                     continue
             
             if detailed_rules:
@@ -310,12 +310,12 @@ class DataCollector:
             self.collection_stats['errors'].append(f"Administrative rules collection error: {e}")
             return False
     
-    def collect_local_ordinances(self, query: str = "자치법규", display: int = 100) -> bool:
-        """자치법규 데이터 수집"""
+    def collect_local_ordinances(self, query: str = "?�치법규", display: int = 100) -> bool:
+        """?�치법규 ?�이???�집"""
         try:
             logger.info(f"Collecting local ordinances for query: {query}")
             
-            # 자치법규 목록 조회
+            # ?�치법규 목록 조회
             local_list = self.client.search_local_ordinance_list(query=query, display=display)
             if not local_list:
                 logger.warning(f"No local ordinances found for query: {query}")
@@ -324,12 +324,12 @@ class DataCollector:
             detailed_ordinances = []
             for local_summary in local_list:
                 try:
-                    local_id = local_summary.get('자치법규일련번호')
+                    local_id = local_summary.get('?�치법규?�련번호')
                     if local_id:
-                        # 자치법규 상세 정보 조회
+                        # ?�치법규 ?�세 ?�보 조회
                         local_detail = self.client.get_local_ordinance_detail(ordinance_id=local_id)
                         if local_detail:
-                            # 통합 데이터 생성
+                            # ?�합 ?�이???�성
                             integrated_local = {
                                 **local_summary,
                                 **local_detail,
@@ -339,7 +339,7 @@ class DataCollector:
                             detailed_ordinances.append(integrated_local)
                             
                 except Exception as e:
-                    logger.error(f"Error collecting local ordinance {local_summary.get('자치법규일련번호', 'unknown')}: {e}")
+                    logger.error(f"Error collecting local ordinance {local_summary.get('?�치법규?�련번호', 'unknown')}: {e}")
                     continue
             
             if detailed_ordinances:
@@ -357,38 +357,38 @@ class DataCollector:
             return False
     
     def collect_all_data(self) -> bool:
-        """모든 데이터 수집"""
+        """모든 ?�이???�집"""
         try:
             logger.info("Starting comprehensive data collection...")
             
             success_count = 0
             total_tasks = 6
             
-            # 1. 법령 수집
+            # 1. 법령 ?�집
             if self.collect_laws(query="민법", display=50):
                 success_count += 1
             
-            # 2. 판례 수집
-            if self.collect_precedents(query="손해배상", display=50):
+            # 2. ?��? ?�집
+            if self.collect_precedents(query="?�해배상", display=50):
                 success_count += 1
             
-            # 3. 헌재결정례 수집
-            if self.collect_constitutional_decisions(query="헌법", display=50):
+            # 3. ?�재결정례 ?�집
+            if self.collect_constitutional_decisions(query="?�법", display=50):
                 success_count += 1
             
-            # 4. 법령해석례 수집
-            if self.collect_legal_interpretations(query="법령해석", display=50):
+            # 4. 법령?�석례 ?�집
+            if self.collect_legal_interpretations(query="법령?�석", display=50):
                 success_count += 1
             
-            # 5. 행정규칙 수집
-            if self.collect_administrative_rules(query="행정규칙", display=50):
+            # 5. ?�정규칙 ?�집
+            if self.collect_administrative_rules(query="?�정규칙", display=50):
                 success_count += 1
             
-            # 6. 자치법규 수집
-            if self.collect_local_ordinances(query="자치법규", display=50):
+            # 6. ?�치법규 ?�집
+            if self.collect_local_ordinances(query="?�치법규", display=50):
                 success_count += 1
             
-            # 최종 통계 생성
+            # 최종 ?�계 ?�성
             self._generate_collection_report()
             
             logger.info(f"Data collection completed: {success_count}/{total_tasks} tasks successful")
@@ -399,7 +399,7 @@ class DataCollector:
             return False
     
     def _generate_collection_report(self):
-        """수집 보고서 생성"""
+        """?�집 보고???�성"""
         try:
             self.collection_stats['end_time'] = datetime.now().isoformat()
             self.collection_stats['total_duration'] = (
@@ -407,12 +407,12 @@ class DataCollector:
                 datetime.fromisoformat(self.collection_stats['start_time'])
             ).total_seconds()
             
-            # API 사용 통계
+            # API ?�용 ?�계
             if self.client:
                 api_stats = self.client.get_request_stats()
                 self.collection_stats['api_stats'] = api_stats
             
-            # 보고서 저장
+            # 보고???�??
             report_file = self.output_dir / "collection_report.json"
             with open(report_file, 'w', encoding='utf-8') as f:
                 json.dump(self.collection_stats, f, ensure_ascii=False, indent=2)
@@ -424,7 +424,7 @@ class DataCollector:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description="LawFirmAI Data Collection Script (JSON only)")
     parser.add_argument("--mode", type=str, choices=["collect", "laws", "precedents", "constitutional", "interpretations", "administrative", "local", "multiple"], 
                         default="collect", help="Collection mode")
@@ -437,18 +437,18 @@ def main():
     
     args = parser.parse_args()
     
-    # 로그 디렉토리 생성
+    # 로그 ?�렉?�리 ?�성
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
-    # 데이터 수집 실행
+    # ?�이???�집 ?�행
     collector = DataCollector(args.oc)
     
     success = False
     if args.mode == "collect":
         success = collector.collect_all_data()
     elif args.mode == "multiple":
-        # 여러 타입 수집
+        # ?�러 ?�???�집
         if not args.types:
             logger.error("--types parameter is required when using --mode multiple")
             logger.info("Example: python scripts/collect_data_only.py --mode multiple --oc your_email_id --types laws precedents")
@@ -458,14 +458,14 @@ def main():
         for data_type in args.types:
             logger.info(f"Collecting {data_type} data...")
             
-            # 기본 쿼리 설정
+            # 기본 쿼리 ?�정
             default_queries = {
                 "laws": "민법",
-                "precedents": "계약 해지",
-                "constitutional": "헌법",
-                "interpretations": "법령해석",
-                "administrative": "행정규칙",
-                "local": "자치법규"
+                "precedents": "계약 ?��?",
+                "constitutional": "?�법",
+                "interpretations": "법령?�석",
+                "administrative": "?�정규칙",
+                "local": "?�치법규"
             }
             
             search_query = args.query or default_queries.get(data_type, data_type)
@@ -498,15 +498,15 @@ def main():
     elif args.mode == "laws":
         success = collector.collect_laws(query=args.query or "민법", display=args.display)
     elif args.mode == "precedents":
-        success = collector.collect_precedents(query=args.query or "계약 해지", display=args.display)
+        success = collector.collect_precedents(query=args.query or "계약 ?��?", display=args.display)
     elif args.mode == "constitutional":
-        success = collector.collect_constitutional_decisions(query=args.query or "헌법", display=args.display)
+        success = collector.collect_constitutional_decisions(query=args.query or "?�법", display=args.display)
     elif args.mode == "interpretations":
-        success = collector.collect_legal_interpretations(query=args.query or "법령해석", display=args.display)
+        success = collector.collect_legal_interpretations(query=args.query or "법령?�석", display=args.display)
     elif args.mode == "administrative":
-        success = collector.collect_administrative_rules(query=args.query or "행정규칙", display=args.display)
+        success = collector.collect_administrative_rules(query=args.query or "?�정규칙", display=args.display)
     elif args.mode == "local":
-        success = collector.collect_local_ordinances(query=args.query or "자치법규", display=args.display)
+        success = collector.collect_local_ordinances(query=args.query or "?�치법규", display=args.display)
     
     if success:
         logger.info("Data collection completed successfully!")

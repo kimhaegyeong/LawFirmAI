@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-generate_and_validate_answer에서 검색 결과가 프롬프트 작성에 사용되는지 검토
+generate_and_validate_answer?�서 검??결과가 ?�롬?�트 ?�성???�용?�는지 검??
 """
 
 import sys
@@ -12,88 +12,88 @@ sys.path.insert(0, str(project_root))
 
 
 def analyze_search_results_in_prompt():
-    """generate_and_validate_answer에서 검색 결과 사용 여부 분석"""
+    """generate_and_validate_answer?�서 검??결과 ?�용 ?��? 분석"""
     print("=" * 80)
-    print("generate_and_validate_answer 검색 결과 사용 여부 검토")
+    print("generate_and_validate_answer 검??결과 ?�용 ?��? 검??)
     print("=" * 80)
 
     try:
-        from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from source.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 
-        # legal_workflow_enhanced.py 파일 읽기
+        # legal_workflow_enhanced.py ?�일 ?�기
         workflow_file = project_root / "core" / "agents" / "legal_workflow_enhanced.py"
         with open(workflow_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        print("\n📋 검토 항목:")
+        print("\n?�� 검????��:")
         print("-" * 80)
 
-        # 1. generate_and_validate_answer 메서드 구조 확인
-        print("\n1️⃣ generate_and_validate_answer 메서드 구조:")
+        # 1. generate_and_validate_answer 메서??구조 ?�인
+        print("\n1️⃣ generate_and_validate_answer 메서??구조:")
         if "def generate_and_validate_answer" in content:
-            print("   ✅ generate_and_validate_answer 메서드 존재")
+            print("   ??generate_and_validate_answer 메서??존재")
             if "generate_answer_enhanced" in content.split("def generate_and_validate_answer")[1].split("\n    def ")[0]:
-                print("   ✅ generate_answer_enhanced 메서드를 호출함")
+                print("   ??generate_answer_enhanced 메서?��? ?�출??)
 
-        # 2. generate_answer_enhanced에서 retrieved_docs 사용 확인
-        print("\n2️⃣ generate_answer_enhanced에서 retrieved_docs 사용:")
+        # 2. generate_answer_enhanced?�서 retrieved_docs ?�용 ?�인
+        print("\n2️⃣ generate_answer_enhanced?�서 retrieved_docs ?�용:")
         generate_answer_section = content.split("def generate_answer_enhanced")[1].split("\n    def ")[0]
 
         checks = [
-            ("retrieved_docs = self._get_state_value", "state에서 retrieved_docs 가져오기"),
-            ("context_dict", "context_dict 생성"),
-            ("structured_documents", "structured_documents 포함"),
+            ("retrieved_docs = self._get_state_value", "state?�서 retrieved_docs 가?�오�?),
+            ("context_dict", "context_dict ?�성"),
+            ("structured_documents", "structured_documents ?�함"),
             ("retrieved_docs", "retrieved_docs 참조"),
-            ("unified_prompt_manager.get_optimized_prompt", "unified_prompt_manager에 context_dict 전달"),
-            ("SEARCH RESULTS INJECTION", "검색 결과 강제 주입 로직"),
-            ("SEARCH RESULTS ENFORCED", "검색 결과 강제 보강 로직"),
+            ("unified_prompt_manager.get_optimized_prompt", "unified_prompt_manager??context_dict ?�달"),
+            ("SEARCH RESULTS INJECTION", "검??결과 강제 주입 로직"),
+            ("SEARCH RESULTS ENFORCED", "검??결과 강제 보강 로직"),
         ]
 
         for check_str, description in checks:
             if check_str in generate_answer_section:
-                print(f"   ✅ {description}")
+                print(f"   ??{description}")
             else:
-                print(f"   ⚠️ {description} - 확인 필요")
+                print(f"   ?�️ {description} - ?�인 ?�요")
 
-        # 3. context_dict에 검색 결과 포함 여부 확인
-        print("\n3️⃣ context_dict에 검색 결과 포함:")
+        # 3. context_dict??검??결과 ?�함 ?��? ?�인
+        print("\n3️⃣ context_dict??검??결과 ?�함:")
         context_dict_checks = [
-            ("structured_documents", "structured_documents 필드"),
-            ("legal_references", "legal_references 필드"),
-            ("document_count", "document_count 필드"),
-            ("docs_included", "docs_included 필드"),
+            ("structured_documents", "structured_documents ?�드"),
+            ("legal_references", "legal_references ?�드"),
+            ("document_count", "document_count ?�드"),
+            ("docs_included", "docs_included ?�드"),
         ]
 
         for check_str, description in context_dict_checks:
             count = generate_answer_section.count(check_str)
             if count > 0:
-                print(f"   ✅ {description} (사용 {count}회)")
+                print(f"   ??{description} (?�용 {count}??")
             else:
-                print(f"   ⚠️ {description} - 사용 안 됨")
+                print(f"   ?�️ {description} - ?�용 ????)
 
-        # 4. retrieved_docs → structured_documents 변환 로직 확인
-        print("\n4️⃣ retrieved_docs → structured_documents 변환 로직:")
+        # 4. retrieved_docs ??structured_documents 변??로직 ?�인
+        print("\n4️⃣ retrieved_docs ??structured_documents 변??로직:")
         if "normalized_documents" in generate_answer_section:
-            print("   ✅ normalized_documents 변환 로직 존재")
+            print("   ??normalized_documents 변??로직 존재")
             if "SEARCH RESULTS INJECTION" in generate_answer_section:
-                print("   ✅ 검색 결과 강제 주입 로직 존재")
+                print("   ??검??결과 강제 주입 로직 존재")
 
-        # 5. 프롬프트 검증 로직 확인
-        print("\n5️⃣ 프롬프트에 검색 결과 포함 여부 검증:")
+        # 5. ?�롬?�트 검�?로직 ?�인
+        print("\n5️⃣ ?�롬?�트??검??결과 ?�함 ?��? 검�?")
         validation_checks = [
-            ("PROMPT VALIDATION", "프롬프트 검증 로직"),
-            ("has_documents_section", "문서 섹션 확인"),
-            ("검색된 법률 문서", "문서 섹션 키워드 확인"),
+            ("PROMPT VALIDATION", "?�롬?�트 검�?로직"),
+            ("has_documents_section", "문서 ?�션 ?�인"),
+            ("검?�된 법률 문서", "문서 ?�션 ?�워???�인"),
         ]
 
         for check_str, description in validation_checks:
             if check_str in generate_answer_section:
-                print(f"   ✅ {description}")
+                print(f"   ??{description}")
             else:
-                print(f"   ⚠️ {description} - 확인 필요")
+                print(f"   ?�️ {description} - ?�인 ?�요")
 
-        # 6. unified_prompt_manager에서 structured_documents 사용 확인
-        print("\n6️⃣ unified_prompt_manager에서 structured_documents 사용:")
+        # 6. unified_prompt_manager?�서 structured_documents ?�용 ?�인
+        print("\n6️⃣ unified_prompt_manager?�서 structured_documents ?�용:")
         try:
             from source.services.unified_prompt_manager import UnifiedPromptManager
             prompt_manager_file = project_root / "source" / "services" / "unified_prompt_manager.py"
@@ -101,88 +101,88 @@ def analyze_search_results_in_prompt():
                 prompt_manager_content = f.read()
 
             if "structured_documents" in prompt_manager_content:
-                print("   ✅ structured_documents 사용")
+                print("   ??structured_documents ?�용")
                 if "prompt_optimized_text" in prompt_manager_content:
-                    print("   ✅ prompt_optimized_text 사용")
+                    print("   ??prompt_optimized_text ?�용")
                     if "_optimize_context" in prompt_manager_content:
                         optimize_section = prompt_manager_content.split("def _optimize_context")[1].split("\n    def ")[0]
                         if "structured_documents" in optimize_section:
-                            print("   ✅ _optimize_context에서 structured_documents 처리")
+                            print("   ??_optimize_context?�서 structured_documents 처리")
                         else:
-                            print("   ⚠️ _optimize_context에서 structured_documents 미사용 가능")
+                            print("   ?�️ _optimize_context?�서 structured_documents 미사??가??)
         except Exception as e:
-            print(f"   ⚠️ unified_prompt_manager 확인 중 오류: {e}")
+            print(f"   ?�️ unified_prompt_manager ?�인 �??�류: {e}")
 
         # 7. 최종 결론
         print("\n" + "=" * 80)
-        print("📊 최종 결론")
+        print("?�� 최종 결론")
         print("=" * 80)
         print("""
-검색 결과가 프롬프트 작성에 사용되는 경로:
+검??결과가 ?�롬?�트 ?�성???�용?�는 경로:
 
-1. generate_and_validate_answer (1087번 라인)
-   └─> generate_answer_enhanced 호출 (1111번 라인)
+1. generate_and_validate_answer (1087�??�인)
+   ?��?> generate_answer_enhanced ?�출 (1111�??�인)
 
-2. generate_answer_enhanced (5219번 라인)
-   ├─> retrieved_docs 가져오기 (5250번 라인)
-   ├─> context_dict 생성 (5386-5395번 라인)
-   │   ├─ structured_documents 포함
-   │   ├─ legal_references 포함
-   │   └─ document_count, docs_included 포함
-   ├─> retrieved_docs → structured_documents 변환 (5533-5620번 라인)
-   │   └─ 검색 결과가 없으면 강제로 변환하여 포함
-   ├─> unified_prompt_manager.get_optimized_prompt 호출 (5638번 라인)
-   │   └─ context_dict 전달 (structured_documents 포함)
-   └─> 프롬프트 검증 (5670-5716번 라인)
-       └─ 문서 섹션 포함 여부 확인
+2. generate_answer_enhanced (5219�??�인)
+   ?��?> retrieved_docs 가?�오�?(5250�??�인)
+   ?��?> context_dict ?�성 (5386-5395�??�인)
+   ??  ?��? structured_documents ?�함
+   ??  ?��? legal_references ?�함
+   ??  ?��? document_count, docs_included ?�함
+   ?��?> retrieved_docs ??structured_documents 변??(5533-5620�??�인)
+   ??  ?��? 검??결과가 ?�으�?강제�?변?�하???�함
+   ?��?> unified_prompt_manager.get_optimized_prompt ?�출 (5638�??�인)
+   ??  ?��? context_dict ?�달 (structured_documents ?�함)
+   ?��?> ?�롬?�트 검�?(5670-5716�??�인)
+       ?��? 문서 ?�션 ?�함 ?��? ?�인
 
 3. unified_prompt_manager.get_optimized_prompt
-   └─> _optimize_context 메서드에서 structured_documents 처리
-       └─ prompt_optimized_text가 있어도 structured_documents 강제 포함 (443-447번 라인)
+   ?��?> _optimize_context 메서?�에??structured_documents 처리
+       ?��? prompt_optimized_text가 ?�어??structured_documents 강제 ?�함 (443-447�??�인)
 
-✅ 결론: 검색된 결과(retrieved_docs)는 프롬프트 작성에 사용됩니다.
-   - retrieved_docs → structured_documents 변환
-   - context_dict에 포함
-   - unified_prompt_manager에 전달
-   - 최종 프롬프트에 문서 섹션으로 포함
+??결론: 검?�된 결과(retrieved_docs)???�롬?�트 ?�성???�용?�니??
+   - retrieved_docs ??structured_documents 변??
+   - context_dict???�함
+   - unified_prompt_manager???�달
+   - 최종 ?�롬?�트??문서 ?�션?�로 ?�함
         """)
 
-        # 8. 잠재적 문제점 확인
+        # 8. ?�재??문제???�인
         print("\n" + "=" * 80)
-        print("⚠️ 잠재적 문제점")
+        print("?�️ ?�재??문제??)
         print("=" * 80)
 
         warnings = []
 
-        # retrieved_docs가 없을 때 처리
+        # retrieved_docs가 ?�을 ??처리
         if "retrieved_docs is empty" in generate_answer_section:
-            print("   ✅ retrieved_docs가 없을 때 경고 로깅 존재")
+            print("   ??retrieved_docs가 ?�을 ??경고 로깅 존재")
         else:
-            warnings.append("retrieved_docs가 없을 때 경고 로깅 없음")
+            warnings.append("retrieved_docs가 ?�을 ??경고 로깅 ?�음")
 
-        # context_dict 검증
+        # context_dict 검�?
         if "CONTEXT VALIDATION" in generate_answer_section:
-            print("   ✅ context_dict 검증 로직 존재")
+            print("   ??context_dict 검�?로직 존재")
         else:
-            warnings.append("context_dict 검증 로직 없음")
+            warnings.append("context_dict 검�?로직 ?�음")
 
-        # 프롬프트에 문서 포함 여부 검증
+        # ?�롬?�트??문서 ?�함 ?��? 검�?
         if "PROMPT VALIDATION ERROR" in generate_answer_section:
-            print("   ✅ 프롬프트 검증 에러 처리 존재")
+            print("   ???�롬?�트 검�??�러 처리 존재")
         else:
-            warnings.append("프롬프트 검증 에러 처리 없음")
+            warnings.append("?�롬?�트 검�??�러 처리 ?�음")
 
         if warnings:
-            print("\n   ⚠️ 발견된 문제:")
+            print("\n   ?�️ 발견??문제:")
             for warning in warnings:
                 print(f"      - {warning}")
         else:
-            print("   ✅ 발견된 문제 없음")
+            print("   ??발견??문제 ?�음")
 
         return True
 
     except Exception as e:
-        print(f"\n❌ 분석 중 오류 발생: {e}")
+        print(f"\n??분석 �??�류 발생: {e}")
         import traceback
         traceback.print_exc()
         return False

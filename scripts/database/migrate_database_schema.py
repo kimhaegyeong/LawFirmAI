@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-데이터베이스 스키마 마이그레이션 스크립트
-ML 강화 파싱 결과를 지원하는 새로운 필드를 추가합니다.
+?�이?�베?�스 ?�키�?마이그레?�션 ?�크립트
+ML 강화 ?�싱 결과�?지?�하???�로???�드�?추�??�니??
 
 Usage:
   python scripts/migrate_database_schema.py --db-path data/lawfirm.db
@@ -31,24 +31,24 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseSchemaMigrator:
-    """데이터베이스 스키마 마이그레이션 클래스"""
+    """?�이?�베?�스 ?�키�?마이그레?�션 ?�래??""
     
     def __init__(self, db_path: str, backup_dir: Optional[str] = None):
         """
-        마이그레이션 초기화
+        마이그레?�션 초기??
         
         Args:
-            db_path: 데이터베이스 파일 경로
-            backup_dir: 백업 디렉토리 경로
+            db_path: ?�이?�베?�스 ?�일 경로
+            backup_dir: 백업 ?�렉?�리 경로
         """
         self.db_path = Path(db_path)
         self.backup_dir = Path(backup_dir) if backup_dir else self.db_path.parent / "backups"
         if self.backup_dir.is_file():
-            # 파일인 경우 부모 디렉토리 사용
+            # ?�일??경우 부�??�렉?�리 ?�용
             self.backup_dir = self.backup_dir.parent
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         
-        # 마이그레이션 통계
+        # 마이그레?�션 ?�계
         self.migration_stats = {
             'start_time': None,
             'end_time': None,
@@ -62,7 +62,7 @@ class DatabaseSchemaMigrator:
         logger.info(f"Backup directory: {self.backup_dir}")
     
     def create_backup(self) -> bool:
-        """데이터베이스 백업 생성"""
+        """?�이?�베?�스 백업 ?�성"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = self.backup_dir / f"lawfirm_backup_{timestamp}.db"
@@ -81,7 +81,7 @@ class DatabaseSchemaMigrator:
             return False
     
     def check_column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
-        """컬럼 존재 여부 확인"""
+        """컬럼 존재 ?��? ?�인"""
         try:
             cursor = conn.cursor()
             cursor.execute(f"PRAGMA table_info({table_name})")
@@ -93,7 +93,7 @@ class DatabaseSchemaMigrator:
     
     def add_column_if_not_exists(self, conn: sqlite3.Connection, table_name: str, 
                                 column_name: str, column_definition: str) -> bool:
-        """컬럼이 존재하지 않으면 추가"""
+        """컬럼??존재?��? ?�으�?추�?"""
         try:
             if not self.check_column_exists(conn, table_name, column_name):
                 cursor = conn.cursor()
@@ -113,10 +113,10 @@ class DatabaseSchemaMigrator:
             return False
     
     def migrate_assembly_laws_table(self, conn: sqlite3.Connection) -> bool:
-        """assembly_laws 테이블 마이그레이션"""
+        """assembly_laws ?�이�?마이그레?�션"""
         logger.info("Migrating assembly_laws table...")
         
-        # ML 강화 관련 컬럼들
+        # ML 강화 관??컬럼??
         columns_to_add = [
             ("ml_enhanced", "BOOLEAN DEFAULT 0"),
             ("parsing_quality_score", "REAL"),
@@ -139,10 +139,10 @@ class DatabaseSchemaMigrator:
             return True
     
     def migrate_assembly_articles_table(self, conn: sqlite3.Connection) -> bool:
-        """assembly_articles 테이블 마이그레이션"""
+        """assembly_articles ?�이�?마이그레?�션"""
         logger.info("Migrating assembly_articles table...")
         
-        # ML 강화 관련 컬럼들
+        # ML 강화 관??컬럼??
         columns_to_add = [
             ("is_supplementary", "BOOLEAN DEFAULT 0"),
             ("ml_confidence_score", "REAL"),
@@ -164,13 +164,13 @@ class DatabaseSchemaMigrator:
             return True
     
     def create_ml_enhanced_indices(self, conn: sqlite3.Connection) -> bool:
-        """ML 강화 관련 인덱스 생성"""
+        """ML 강화 관???�덱???�성"""
         logger.info("Creating ML enhanced indices...")
         
         try:
             cursor = conn.cursor()
             
-            # ML 강화 관련 인덱스들
+            # ML 강화 관???�덱?�들
             indices = [
                 "CREATE INDEX IF NOT EXISTS idx_assembly_laws_ml_enhanced ON assembly_laws(ml_enhanced)",
                 "CREATE INDEX IF NOT EXISTS idx_assembly_laws_quality_score ON assembly_laws(parsing_quality_score)",
@@ -194,7 +194,7 @@ class DatabaseSchemaMigrator:
             return False
     
     def verify_migration(self, conn: sqlite3.Connection) -> Dict[str, Any]:
-        """마이그레이션 결과 검증"""
+        """마이그레?�션 결과 검�?""
         logger.info("Verifying migration results...")
         
         verification_results = {
@@ -207,22 +207,22 @@ class DatabaseSchemaMigrator:
         try:
             cursor = conn.cursor()
             
-            # assembly_laws 테이블 컬럼 확인
+            # assembly_laws ?�이�?컬럼 ?�인
             cursor.execute("PRAGMA table_info(assembly_laws)")
             assembly_laws_columns = [row[1] for row in cursor.fetchall()]
             verification_results['assembly_laws_columns'] = assembly_laws_columns
             
-            # assembly_articles 테이블 컬럼 확인
+            # assembly_articles ?�이�?컬럼 ?�인
             cursor.execute("PRAGMA table_info(assembly_articles)")
             assembly_articles_columns = [row[1] for row in cursor.fetchall()]
             verification_results['assembly_articles_columns'] = assembly_articles_columns
             
-            # 인덱스 확인
+            # ?�덱???�인
             cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%ml%'")
             ml_indices = [row[0] for row in cursor.fetchall()]
             verification_results['indices_created'] = ml_indices
             
-            # 레코드 수 확인
+            # ?�코?????�인
             cursor.execute("SELECT COUNT(*) FROM assembly_laws")
             verification_results['total_records']['assembly_laws'] = cursor.fetchone()[0]
             
@@ -239,31 +239,31 @@ class DatabaseSchemaMigrator:
             return verification_results
     
     def migrate(self) -> bool:
-        """전체 마이그레이션 실행"""
+        """?�체 마이그레?�션 ?�행"""
         logger.info("Starting database schema migration...")
         self.migration_stats['start_time'] = datetime.now()
         
         try:
-            # 1. 백업 생성
+            # 1. 백업 ?�성
             if not self.create_backup():
                 logger.error("Failed to create backup. Migration aborted.")
                 return False
             
-            # 2. 데이터베이스 연결
+            # 2. ?�이?�베?�스 ?�결
             conn = sqlite3.connect(self.db_path)
             conn.execute("PRAGMA foreign_keys=ON")
             
-            # 3. 테이블 마이그레이션
+            # 3. ?�이�?마이그레?�션
             self.migrate_assembly_laws_table(conn)
             self.migrate_assembly_articles_table(conn)
             
-            # 4. 인덱스 생성
+            # 4. ?�덱???�성
             self.create_ml_enhanced_indices(conn)
             
-            # 5. 검증
+            # 5. 검�?
             verification_results = self.verify_migration(conn)
             
-            # 6. 마이그레이션 완료
+            # 6. 마이그레?�션 ?�료
             conn.close()
             self.migration_stats['end_time'] = datetime.now()
             
@@ -281,7 +281,7 @@ class DatabaseSchemaMigrator:
             return False
     
     def print_migration_summary(self, verification_results: Dict[str, Any]):
-        """마이그레이션 결과 요약 출력"""
+        """마이그레?�션 결과 ?�약 출력"""
         print("\n" + "="*80)
         print("DATABASE SCHEMA MIGRATION SUMMARY")
         print("="*80)
@@ -324,7 +324,7 @@ class DatabaseSchemaMigrator:
 
 
 def main():
-    """메인 함수"""
+    """메인 ?�수"""
     parser = argparse.ArgumentParser(description="Database Schema Migration for ML Enhanced Law Data")
     parser.add_argument("--db-path", default="data/lawfirm.db", 
                        help="Database file path (default: data/lawfirm.db)")
@@ -335,17 +335,17 @@ def main():
     
     args = parser.parse_args()
     
-    # 데이터베이스 파일 존재 확인
+    # ?�이?�베?�스 ?�일 존재 ?�인
     if not Path(args.db_path).exists():
         logger.error(f"Database file not found: {args.db_path}")
         return 1
     
-    # 마이그레이션 실행
+    # 마이그레?�션 ?�행
     migrator = DatabaseSchemaMigrator(args.db_path, args.backup_dir)
     
     if args.dry_run:
         logger.info("Dry run mode - no changes will be made")
-        # TODO: 드라이 런 로직 구현
+        # TODO: ?�라????로직 구현
         return 0
     
     success = migrator.migrate()

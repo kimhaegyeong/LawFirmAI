@@ -18,27 +18,27 @@ class ArticleParser:
     
     def __init__(self):
         """Initialize the article parser with improved patterns for Korean legal structure"""
-        # Article patterns (조)
-        self.article_pattern = re.compile(r'제(\d+)조\s*\(([^)]+)\)')
-        self.article_pattern_no_title = re.compile(r'제(\d+)조')
+        # Article patterns (�?
+        self.article_pattern = re.compile(r'??\d+)�?s*\(([^)]+)\)')
+        self.article_pattern_no_title = re.compile(r'??\d+)�?)
         
-        # Paragraph patterns (항) - Korean legal format
+        # Paragraph patterns (?? - Korean legal format
         self.paragraph_patterns = {
-            'numbered': re.compile(r'①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩|⑪|⑫|⑬|⑭|⑮|⑯|⑰|⑱|⑲|⑳'),
-            'numbered_alt': re.compile(r'(\d+)\s*항'),
-            'numbered_alt2': re.compile(r'제(\d+)\s*항')
+            'numbered': re.compile(r'????????????????????????????????????????),
+            'numbered_alt': re.compile(r'(\d+)\s*??),
+            'numbered_alt2': re.compile(r'??\d+)\s*??)
         }
         
-        # Sub-paragraph patterns (호) - Korean legal format
+        # Sub-paragraph patterns (?? - Korean legal format
         self.subparagraph_patterns = {
             'numbered': re.compile(r'(\d+)\s*\.'),
-            'numbered_alt': re.compile(r'제(\d+)\s*호')
+            'numbered_alt': re.compile(r'??\d+)\s*??)
         }
         
-        # Item patterns (목) - Korean legal format
+        # Item patterns (�? - Korean legal format
         self.item_patterns = {
-            'lettered': re.compile(r'([가-힣])\s*\.'),
-            'lettered_alt': re.compile(r'제([가-힣])\s*목')
+            'lettered': re.compile(r'([가-??)\s*\.'),
+            'lettered_alt': re.compile(r'??[가-??)\s*�?)
         }
         
         # Amendment patterns
@@ -109,7 +109,7 @@ class ArticleParser:
             # Method 1: Find articles by looking for numbered articles in text
             for text_node in soup.find_all(text=True):
                 text = text_node.strip()
-                if re.search(r'제\d+조', text) and len(text) > 20:
+                if re.search(r'??d+�?, text) and len(text) > 20:
                     # Get the parent element that contains this text
                     parent = text_node.parent
                     if parent:
@@ -122,9 +122,9 @@ class ArticleParser:
             
             # Method 2: Look for specific HTML classes or IDs that might contain articles
             article_selectors = [
-                'article', '조', 'article-content', 'law-article', 'legal-article',
-                '.article', '.조', '.article-content', '.law-article', '.legal-article',
-                '[class*="article"]', '[class*="조"]', '[id*="article"]', '[id*="조"]'
+                'article', '�?, 'article-content', 'law-article', 'legal-article',
+                '.article', '.�?, '.article-content', '.law-article', '.legal-article',
+                '[class*="article"]', '[class*="�?]', '[id*="article"]', '[id*="�?]'
             ]
             
             for selector in article_selectors:
@@ -134,7 +134,7 @@ class ArticleParser:
                         text = element.get_text(strip=True)
                         # Clean UI elements from the extracted text
                         text = self._clean_ui_elements_from_text(text)
-                        if re.search(r'제\d+조', text) and len(text) > 50:
+                        if re.search(r'??d+�?, text) and len(text) > 50:
                             article_texts.append(text)
                 except Exception:
                     continue
@@ -145,7 +145,7 @@ class ArticleParser:
                 text = div.get_text(strip=True)
                 # Clean UI elements from the extracted text
                 text = self._clean_ui_elements_from_text(text)
-                if re.search(r'제\d+조', text) and len(text) > 50:
+                if re.search(r'??d+�?, text) and len(text) > 50:
                     article_texts.append(text)
             
             # Method 4: Look for paragraph elements with article content
@@ -154,7 +154,7 @@ class ArticleParser:
                 text = p.get_text(strip=True)
                 # Clean UI elements from the extracted text
                 text = self._clean_ui_elements_from_text(text)
-                if re.search(r'제\d+조', text) and len(text) > 50:
+                if re.search(r'??d+�?, text) and len(text) > 50:
                     article_texts.append(text)
             
             # If we found article texts, parse them
@@ -168,7 +168,7 @@ class ArticleParser:
             # If no articles found, try alternative HTML structure detection
             if not articles:
                 # Look for div elements with article-related classes
-                article_elements = soup.find_all(['div', 'p'], class_=re.compile(r'article|조|law'))
+                article_elements = soup.find_all(['div', 'p'], class_=re.compile(r'article|�?law'))
                 
                 for element in article_elements:
                     article_text = element.get_text(strip=True)
@@ -200,11 +200,11 @@ class ArticleParser:
             return False
         
         # Check for article number pattern
-        if re.search(r'제\d+조', text):
+        if re.search(r'??d+�?, text):
             return True
         
         # Check for Korean legal structure patterns
-        if re.search(r'[①②③④⑤⑥⑦⑧⑨⑩]', text):
+        if re.search(r'[?�②?�④?�⑥?�⑧?�⑩]', text):
             return True
         
         return False
@@ -306,30 +306,30 @@ class ArticleParser:
             str: Content with UI elements removed
         """
         ui_patterns = [
-            r'조문버튼선택체크',
-            r'펼치기접기',
-            r'선택체크',
-            r'펼치기',
-            r'접기',
+            r'조문버튼?�택체크',
+            r'?�치기접�?,
+            r'?�택체크',
+            r'?�치�?,
+            r'?�기',
             r'버튼',
-            r'선택',
+            r'?�택',
             r'체크',
-            r'조문 버튼 소개',
-            r'조문연혁',
-            r'조문판례',
-            r'\[펼치기\]',
-            r'\[접기\]',
-            r'\[선택\]',
+            r'조문 버튼 ?�개',
+            r'조문?�혁',
+            r'조문?��?',
+            r'\[?�치�?]',
+            r'\[?�기\]',
+            r'\[?�택\]',
             r'\[체크\]',
             r'\[조문\]',
-            r'▶',
-            r'◀',
-            r'▼',
-            r'▲',
-            r'☑',
-            r'☐',
-            r'✓',
-            r'✗'
+            r'??,
+            r'?�',
+            r'??,
+            r'??,
+            r'??,
+            r'??,
+            r'??,
+            r'??
         ]
         
         clean_content = content
@@ -380,7 +380,7 @@ class ArticleParser:
                 if not article_match:
                     return None
             
-            article_number = f"제{article_match.group(1)}조"
+            article_number = f"??article_match.group(1)}�?
             article_title = article_match.group(2) if len(article_match.groups()) > 1 else ""
             
             # Validate article number (should be reasonable range)
@@ -392,7 +392,7 @@ class ArticleParser:
             # Extract main content - get the entire article content
             main_content = self._extract_complete_article_content_v8(article_text, article_match.end())
             
-            # Special handling for definition articles (제2조 등) - temporarily disabled
+            # Special handling for definition articles (??�??? - temporarily disabled
             # if self._is_definition_article(article_number, article_title, main_content):
             #     # For definition articles, use more aggressive content extraction
             #     # Use the content-only version of the method
@@ -404,17 +404,17 @@ class ArticleParser:
             # Extract references
             references = self._extract_references(article_text)
             
-            # Create complete article content with all paragraphs (항 정보 포함)
+            # Create complete article content with all paragraphs (???�보 ?�함)
             # Use the original main_content instead of creating from sub_articles
             complete_content = f"{article_number}({article_title})"
             if main_content.strip():
                 complete_content += f"\n{main_content.strip()}"
             
-            # Validate content quality (더 관대한 기준 적용)
+            # Validate content quality (??관?�??기�? ?�용)
             if len(complete_content.strip()) < self.min_content_length:
-                # 짧은 조문도 유효할 수 있으므로 경고만 표시하고 계속 진행
+                # 짧�? 조문???�효?????�으므�?경고�??�시?�고 계속 진행
                 logger.debug(f"Article {article_number} has minimal content ({len(complete_content.strip())} chars)")
-                # return None  # 주석 처리하여 짧은 조문도 처리하도록 함
+                # return None  # 주석 처리?�여 짧�? 조문??처리?�도�???
             
             return {
                 'article_number': article_number,
@@ -440,8 +440,8 @@ class ArticleParser:
             str: Complete article content
         """
         # Use a more sophisticated approach to find article boundaries
-        # Look for complete article patterns: "제숫자조(제목)" at the beginning of lines
-        article_pattern = re.compile(r'^제\d+조(?:\([^)]*\))?', re.MULTILINE)
+        # Look for complete article patterns: "?�숫?�조(?�목)" at the beginning of lines
+        article_pattern = re.compile(r'^??d+�??:\([^)]*\))?', re.MULTILINE)
         
         # Find all article positions
         article_matches = list(article_pattern.finditer(article_text))
@@ -490,8 +490,8 @@ class ArticleParser:
         # Strategy 1: Look for next article with line-based detection
         remaining_text = article_text[start_pos:]
         
-        # Find the next "제숫자조" that appears at the beginning of a line
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        # Find the next "?�숫?�조" that appears at the beginning of a line
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -525,8 +525,8 @@ class ArticleParser:
         # Strategy 1: Look for next article with enhanced pattern matching
         remaining_text = article_text[start_pos:]
         
-        # Enhanced pattern to find next article - look for "제숫자조" at line start
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        # Enhanced pattern to find next article - look for "?�숫?�조" at line start
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -566,7 +566,7 @@ class ArticleParser:
         remaining_text = article_text[start_pos:]
         
         # More aggressive pattern to find next article
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -637,14 +637,14 @@ class ArticleParser:
         # Look for patterns that indicate the end of a definition article
         end_patterns = [
             # Look for the next article with more specific patterns
-            r'^제3조\s*\([^)]+\)',     # 제3조(다른 법률과의 관계)
-            r'^제3조\s*[가-힣]',       # 제3조 다른
-            r'^제3조',                 # 제3조
+            r'^??�?s*\([^)]+\)',     # ??�??�른 법률과의 관�?
+            r'^??�?s*[가-??',       # ??�??�른
+            r'^??�?,                 # ??�?
             
             # Look for other structural boundaries
-            r'^제\d+조\s*\([^)]+\)',  # Any article with parentheses
-            r'^제\d+조\s*[가-힣]',    # Any article with Korean text
-            r'^제\d+조',              # Any article
+            r'^??d+�?s*\([^)]+\)',  # Any article with parentheses
+            r'^??d+�?s*[가-??',    # Any article with Korean text
+            r'^??d+�?,              # Any article
         ]
         
         best_end = len(remaining_text)
@@ -690,16 +690,16 @@ class ArticleParser:
         numbered_items = len(re.findall(r'\d+\.', content))
         score += numbered_items * 5
         
-        # Bonus for having sub-items (가., 나., 다., etc.)
-        sub_items = len(re.findall(r'[가-힣]\.', content))
+        # Bonus for having sub-items (가., ??, ??, etc.)
+        sub_items = len(re.findall(r'[가-??\.', content))
         score += sub_items * 3
         
-        # Bonus for having paragraph numbers (①, ②, ③, etc.)
-        paragraph_numbers = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        # Bonus for having paragraph numbers (?? ?? ?? etc.)
+        paragraph_numbers = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_numbers * 4
         
-        # Bonus for having multiple paragraphs (②, ③, etc.)
-        multiple_paragraphs = len(re.findall(r'②|③|④|⑤|⑥|⑦|⑧|⑨|⑩', content))
+        # Bonus for having multiple paragraphs (?? ?? etc.)
+        multiple_paragraphs = len(re.findall(r'??????????????????, content))
         score += multiple_paragraphs * 6
         
         # Bonus for content length (definition articles are typically long)
@@ -710,18 +710,18 @@ class ArticleParser:
         elif len(content) > 500:
             score += 10
         
-        # Bonus for having "다음과 같다" pattern
-        if re.search(r'다음과\s*같다', content):
+        # Bonus for having "?�음�?같다" pattern
+        if re.search(r'?�음�?s*같다', content):
             score += 10
         
-        # Bonus for having "이 법에서 사용하는 용어" pattern
-        if re.search(r'이\s*법에서\s*사용하는\s*용어', content):
+        # Bonus for having "??법에???�용?�는 ?�어" pattern
+        if re.search(r'??s*법에??s*?�용?�는\s*?�어', content):
             score += 15
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 20
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 20
         
         return score
@@ -737,7 +737,7 @@ class ArticleParser:
             bool: True if content appears complete
         """
         # Check if content has proper definition structure
-        if not re.search(r'용어의\s*뜻|용어의\s*정의', content):
+        if not re.search(r'?�어??s*???�어??s*?�의', content):
             return False
         
         # Check if content has numbered items
@@ -749,7 +749,7 @@ class ArticleParser:
             return False
         
         # Check if content ends properly
-        if re.search(r'다음과\s*같다\s*$', content.strip()):
+        if re.search(r'?�음�?s*같다\s*$', content.strip()):
             return False  # Incomplete
         
         return True
@@ -772,11 +772,11 @@ class ArticleParser:
         
         # Look for patterns that typically end definition articles
         end_patterns = [
-            r'②\s*이\s*법에서\s*사용하는\s*용어의\s*뜻은\s*제\d+항에서\s*규정한\s*것을\s*제외하고는',
-            r'②\s*이\s*법에서\s*사용하는\s*용어의\s*뜻은\s*제\d+항에서\s*규정한\s*것을\s*제외하고는',
-            r'제\d+항에서\s*규정한\s*것을\s*제외하고는',
-            r'축산법.*위생관리법.*따른다',
-            r'따른다\s*$',
+            r'??s*??s*법에??s*?�용?�는\s*?�어??s*?��?\s*??d+??��??s*규정??s*것을\s*?�외?�고??,
+            r'??s*??s*법에??s*?�용?�는\s*?�어??s*?��?\s*??d+??��??s*규정??s*것을\s*?�외?�고??,
+            r'??d+??��??s*규정??s*것을\s*?�외?�고??,
+            r'축산�?*?�생관리법.*?�른??,
+            r'?�른??s*$',
         ]
         
         best_end = len(remaining_text)
@@ -807,9 +807,9 @@ class ArticleParser:
         """
         # Check for definition article patterns
         definition_patterns = [
-            r'용어의\s*뜻은\s*다음과\s*같다',
-            r'용어의\s*정의는\s*다음과\s*같다',
-            r'이\s*법에서\s*사용하는\s*용어',
+            r'?�어??s*?��?\s*?�음�?s*같다',
+            r'?�어??s*?�의??s*?�음�?s*같다',
+            r'??s*법에??s*?�용?�는\s*?�어',
         ]
         
         for pattern in definition_patterns:
@@ -836,21 +836,21 @@ class ArticleParser:
         
         # Look for patterns that typically end definition articles more aggressively
         end_patterns = [
-            # Look for the next article (제3조)
-            r'제3조\s*\([^)]+\)',
-            r'제3조\s*[가-힣]',
-            r'제3조',
+            # Look for the next article (??�?
+            r'??�?s*\([^)]+\)',
+            r'??�?s*[가-??',
+            r'??�?,
             
             # Look for other articles
-            r'제\d+조\s*\([^)]+\)',
-            r'제\d+조\s*[가-힣]',
-            r'제\d+조',
+            r'??d+�?s*\([^)]+\)',
+            r'??d+�?s*[가-??',
+            r'??d+�?,
             
             # Look for specific ending patterns
-            r'②\s*이\s*법에서\s*사용하는\s*용어의\s*뜻은\s*제\d+항에서\s*규정한\s*것을\s*제외하고는',
-            r'제\d+항에서\s*규정한\s*것을\s*제외하고는',
-            r'축산법.*위생관리법.*따른다',
-            r'따른다\s*$',
+            r'??s*??s*법에??s*?�용?�는\s*?�어??s*?��?\s*??d+??��??s*규정??s*것을\s*?�외?�고??,
+            r'??d+??��??s*규정??s*것을\s*?�외?�고??,
+            r'축산�?*?�생관리법.*?�른??,
+            r'?�른??s*$',
         ]
         
         best_end = len(remaining_text)
@@ -881,16 +881,16 @@ class ArticleParser:
         """
         # Look for patterns that suggest incomplete content in original text
         incomplete_patterns = [
-            r'①.*?$',  # Ends with incomplete first paragraph
-            r'②.*?$',  # Ends with incomplete second paragraph
-            r'③.*?$',  # Ends with incomplete third paragraph
-            r'④.*?$',  # Ends with incomplete fourth paragraph
-            r'⑤.*?$',  # Ends with incomplete fifth paragraph
-            r'⑥.*?$',  # Ends with incomplete sixth paragraph
-            r'⑦.*?$',  # Ends with incomplete seventh paragraph
-            r'⑧.*?$',  # Ends with incomplete eighth paragraph
-            r'⑨.*?$',  # Ends with incomplete ninth paragraph
-            r'⑩.*?$',  # Ends with incomplete tenth paragraph
+            r'??*?$',  # Ends with incomplete first paragraph
+            r'??*?$',  # Ends with incomplete second paragraph
+            r'??*?$',  # Ends with incomplete third paragraph
+            r'??*?$',  # Ends with incomplete fourth paragraph
+            r'??*?$',  # Ends with incomplete fifth paragraph
+            r'??*?$',  # Ends with incomplete sixth paragraph
+            r'??*?$',  # Ends with incomplete seventh paragraph
+            r'??*?$',  # Ends with incomplete eighth paragraph
+            r'??*?$',  # Ends with incomplete ninth paragraph
+            r'??*?$',  # Ends with incomplete tenth paragraph
             r'1\.\s*$',  # Ends with incomplete first item
             r'2\.\s*$',  # Ends with incomplete second item
             r'3\.\s*$',  # Ends with incomplete third item
@@ -901,15 +901,15 @@ class ArticleParser:
             r'8\.\s*$',  # Ends with incomplete eighth item
             r'9\.\s*$',  # Ends with incomplete ninth item
             r'10\.\s*$', # Ends with incomplete tenth item
-            r'다음\s*$',  # Ends with "다음" (incomplete)
-            r'각\s*$',   # Ends with "각" (incomplete)
-            r'호의\s*$', # Ends with "호의" (incomplete)
-            r'사항\s*$', # Ends with "사항" (incomplete)
+            r'?�음\s*$',  # Ends with "?�음" (incomplete)
+            r'�?s*$',   # Ends with "�? (incomplete)
+            r'?�의\s*$', # Ends with "?�의" (incomplete)
+            r'?�항\s*$', # Ends with "?�항" (incomplete)
             r'경우\s*$', # Ends with "경우" (incomplete)
             r'목의\s*$', # Ends with "목의" (incomplete)
             r'가\.\s*$', # Ends with "가." (incomplete)
-            r'나\.\s*$', # Ends with "나." (incomplete)
-            r'다\.\s*$', # Ends with "다." (incomplete)
+            r'??.\s*$', # Ends with "??" (incomplete)
+            r'??.\s*$', # Ends with "??" (incomplete)
         ]
         
         for pattern in incomplete_patterns:
@@ -917,17 +917,17 @@ class ArticleParser:
                 return True
         
         # Check for paragraph number sequences that suggest missing content
-        paragraph_numbers = re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content)
+        paragraph_numbers = re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content)
         if len(paragraph_numbers) > 0:
             # If we have paragraph numbers but content seems incomplete
-            if not re.search(r'한다\.\s*$|규정한다\.\s*$|시행한다\.\s*$|본다\.\s*$', content.strip()):
+            if not re.search(r'?�다\.\s*$|규정?�다\.\s*$|?�행?�다\.\s*$|본다\.\s*$', content.strip()):
                 return True
         
         # Check for numbered list sequences that suggest missing content
         numbered_items = re.findall(r'\d+\.', content)
         if len(numbered_items) > 0:
             # If we have numbered items but content seems incomplete
-            if not re.search(r'한다\.\s*$|규정한다\.\s*$|시행한다\.\s*$|본다\.\s*$', content.strip()):
+            if not re.search(r'?�다\.\s*$|규정?�다\.\s*$|?�행?�다\.\s*$|본다\.\s*$', content.strip()):
                 return True
         
         return False
@@ -950,9 +950,9 @@ class ArticleParser:
         
         # Look for patterns that typically end paragraphs in original text
         paragraph_end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -989,11 +989,11 @@ class ArticleParser:
         score = 0
         
         # Bonus for proper endings
-        if re.search(r'한다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$', content.strip()):
             score += 20
-        elif re.search(r'규정한다\.\s*$', content.strip()):
+        elif re.search(r'규정?�다\.\s*$', content.strip()):
             score += 20
-        elif re.search(r'시행한다\.\s*$', content.strip()):
+        elif re.search(r'?�행?�다\.\s*$', content.strip()):
             score += 20
         elif re.search(r'본다\.\s*$', content.strip()):
             score += 20
@@ -1001,19 +1001,19 @@ class ArticleParser:
             score += 15
         
         # Bonus for complete paragraph structure
-        paragraph_count = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        paragraph_count = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_count * 6
         
         # Bonus for complete numbered lists
         numbered_list_count = len(re.findall(r'\d+\.', content))
         score += numbered_list_count * 4
         
-        # Bonus for complete alphabet lists (가, 나, 다, etc.)
-        alphabet_list_count = len(re.findall(r'[가-힣]\.', content))
+        # Bonus for complete alphabet lists (가, ?? ?? etc.)
+        alphabet_list_count = len(re.findall(r'[가-??\.', content))
         score += alphabet_list_count * 3
         
-        # Bonus for "다음 각 호" pattern completion
-        if re.search(r'다음\s+각\s+호', content):
+        # Bonus for "?�음 �??? pattern completion
+        if re.search(r'?�음\s+�?s+??, content):
             score += 10
         
         # Bonus for content length (longer content is generally more complete)
@@ -1027,13 +1027,13 @@ class ArticleParser:
             score += 5
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 20
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 20
-        if re.search(r'호의\s*$', content.strip()):
+        if re.search(r'?�의\s*$', content.strip()):
             score -= 20
-        if re.search(r'사항\s*$', content.strip()):
+        if re.search(r'?�항\s*$', content.strip()):
             score -= 15
         if re.search(r'경우\s*$', content.strip()):
             score -= 15
@@ -1083,16 +1083,16 @@ class ArticleParser:
             return False
         
         # Check if content contains meaningful Korean text
-        korean_chars = len(re.findall(r'[가-힣]', content))
+        korean_chars = len(re.findall(r'[가-??', content))
         if korean_chars < 5:
             return False
         
         # Check if content has proper structure
-        if re.search(r'제\d+조', content):
+        if re.search(r'??d+�?, content):
             return True
         
         # Check if content has paragraph structure
-        if re.search(r'[①②③④⑤⑥⑦⑧⑨⑩]', content):
+        if re.search(r'[?�②?�④?�⑥?�⑧?�⑩]', content):
             return True
         
         # Check if content has numbered list structure
@@ -1100,7 +1100,7 @@ class ArticleParser:
             return True
         
         # Check if content has alphabet list structure
-        if re.search(r'[가-힣]\.', content):
+        if re.search(r'[가-??\.', content):
             return True
         
         return True
@@ -1121,9 +1121,9 @@ class ArticleParser:
         
         # Look for patterns that typically end articles in original text
         end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -1160,7 +1160,7 @@ class ArticleParser:
         remaining_text = article_text[start_pos:]
         
         # Look for next article with more sophisticated pattern matching
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -1272,7 +1272,7 @@ class ArticleParser:
             if div.get_text().strip():
                 # Check if this div contains article-like content
                 text = div.get_text()
-                if re.search(r'제\d+조', text):
+                if re.search(r'??d+�?, text):
                     return div
         
         # Look for paragraph elements
@@ -1280,7 +1280,7 @@ class ArticleParser:
         for p in paragraphs:
             if p.get_text().strip():
                 text = p.get_text()
-                if re.search(r'제\d+조', text):
+                if re.search(r'??d+�?, text):
                     return p
         
         return None
@@ -1315,7 +1315,7 @@ class ArticleParser:
             bool: True if content is structurally complete
         """
         # Check for proper endings
-        if re.search(r'한다\.\s*$|규정한다\.\s*$|시행한다\.\s*$|본다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$|규정?�다\.\s*$|?�행?�다\.\s*$|본다\.\s*$', content.strip()):
             return True
         
         # Check for complete numbered lists (1. 2. 3. etc.)
@@ -1328,14 +1328,14 @@ class ArticleParser:
                 if numbers == list(range(min(numbers), max(numbers) + 1)):
                     return True
         
-        # Check for complete paragraph structure (①②③④⑤⑥⑦⑧⑨⑩)
-        paragraph_numbers = re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content)
+        # Check for complete paragraph structure (?�②?�④?�⑥?�⑧?�⑩)
+        paragraph_numbers = re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content)
         if len(paragraph_numbers) > 0:
             # Check if paragraphs seem complete
             return True
         
-        # Check for "다음 각 호" pattern completion
-        if re.search(r'다음\s+각\s+호', content):
+        # Check for "?�음 �??? pattern completion
+        if re.search(r'?�음\s+�?s+??, content):
             # Look for numbered items after this pattern
             if re.search(r'\d+\.', content):
                 return True
@@ -1364,9 +1364,9 @@ class ArticleParser:
         
         # Look for structural patterns that indicate article completion
         structural_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -1403,11 +1403,11 @@ class ArticleParser:
         score = 0
         
         # Bonus for proper endings
-        if re.search(r'한다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$', content.strip()):
             score += 25
-        elif re.search(r'규정한다\.\s*$', content.strip()):
+        elif re.search(r'규정?�다\.\s*$', content.strip()):
             score += 25
-        elif re.search(r'시행한다\.\s*$', content.strip()):
+        elif re.search(r'?�행?�다\.\s*$', content.strip()):
             score += 25
         elif re.search(r'본다\.\s*$', content.strip()):
             score += 25
@@ -1415,15 +1415,15 @@ class ArticleParser:
             score += 20
         
         # Bonus for complete paragraph structure
-        paragraph_count = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        paragraph_count = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_count * 6
         
         # Bonus for complete numbered lists
         numbered_list_count = len(re.findall(r'\d+\.', content))
         score += numbered_list_count * 4
         
-        # Bonus for "다음 각 호" pattern completion
-        if re.search(r'다음\s+각\s+호', content):
+        # Bonus for "?�음 �??? pattern completion
+        if re.search(r'?�음\s+�?s+??, content):
             score += 10
         
         # Bonus for content length (longer content is generally more complete)
@@ -1437,13 +1437,13 @@ class ArticleParser:
             score += 5
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 20
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 20
-        if re.search(r'호의\s*$', content.strip()):
+        if re.search(r'?�의\s*$', content.strip()):
             score -= 20
-        if re.search(r'사항\s*$', content.strip()):
+        if re.search(r'?�항\s*$', content.strip()):
             score -= 15
         if re.search(r'경우\s*$', content.strip()):
             score -= 15
@@ -1461,7 +1461,7 @@ class ArticleParser:
             bool: True if content is likely complete
         """
         # Check for proper endings
-        if re.search(r'한다\.\s*$|규정한다\.\s*$|시행한다\.\s*$|본다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$|규정?�다\.\s*$|?�행?�다\.\s*$|본다\.\s*$', content.strip()):
             return True
         
         # Check for complete numbered lists
@@ -1473,7 +1473,7 @@ class ArticleParser:
                 return True
         
         # Check for paragraph completeness
-        paragraph_numbers = re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content)
+        paragraph_numbers = re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content)
         if len(paragraph_numbers) > 0:
             # If we have paragraph numbers, check if they seem complete
             return True
@@ -1502,9 +1502,9 @@ class ArticleParser:
         
         # Look for patterns that typically end articles more aggressively
         end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -1541,11 +1541,11 @@ class ArticleParser:
         score = 0
         
         # Bonus for proper endings
-        if re.search(r'한다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$', content.strip()):
             score += 20
-        elif re.search(r'규정한다\.\s*$', content.strip()):
+        elif re.search(r'규정?�다\.\s*$', content.strip()):
             score += 20
-        elif re.search(r'시행한다\.\s*$', content.strip()):
+        elif re.search(r'?�행?�다\.\s*$', content.strip()):
             score += 20
         elif re.search(r'본다\.\s*$', content.strip()):
             score += 20
@@ -1553,7 +1553,7 @@ class ArticleParser:
             score += 15
         
         # Bonus for complete paragraph structure
-        paragraph_count = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        paragraph_count = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_count * 5
         
         # Bonus for complete numbered lists
@@ -1569,13 +1569,13 @@ class ArticleParser:
             score += 5
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 15
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 15
-        if re.search(r'호의\s*$', content.strip()):
+        if re.search(r'?�의\s*$', content.strip()):
             score -= 15
-        if re.search(r'사항\s*$', content.strip()):
+        if re.search(r'?�항\s*$', content.strip()):
             score -= 10
         if re.search(r'경우\s*$', content.strip()):
             score -= 10
@@ -1594,20 +1594,20 @@ class ArticleParser:
         """
         # Look for patterns that suggest incomplete content
         incomplete_patterns = [
-            r'①.*?$',  # Ends with incomplete first paragraph
-            r'②.*?$',  # Ends with incomplete second paragraph
-            r'③.*?$',  # Ends with incomplete third paragraph
-            r'④.*?$',  # Ends with incomplete fourth paragraph
-            r'⑤.*?$',  # Ends with incomplete fifth paragraph
-            r'⑥.*?$',  # Ends with incomplete sixth paragraph
-            r'⑦.*?$',  # Ends with incomplete seventh paragraph
-            r'⑧.*?$',  # Ends with incomplete eighth paragraph
-            r'⑨.*?$',  # Ends with incomplete ninth paragraph
-            r'⑩.*?$',  # Ends with incomplete tenth paragraph
-            r'다음\s*$',  # Ends with "다음" (incomplete)
-            r'각\s*$',   # Ends with "각" (incomplete)
-            r'호의\s*$', # Ends with "호의" (incomplete)
-            r'사항\s*$', # Ends with "사항" (incomplete)
+            r'??*?$',  # Ends with incomplete first paragraph
+            r'??*?$',  # Ends with incomplete second paragraph
+            r'??*?$',  # Ends with incomplete third paragraph
+            r'??*?$',  # Ends with incomplete fourth paragraph
+            r'??*?$',  # Ends with incomplete fifth paragraph
+            r'??*?$',  # Ends with incomplete sixth paragraph
+            r'??*?$',  # Ends with incomplete seventh paragraph
+            r'??*?$',  # Ends with incomplete eighth paragraph
+            r'??*?$',  # Ends with incomplete ninth paragraph
+            r'??*?$',  # Ends with incomplete tenth paragraph
+            r'?�음\s*$',  # Ends with "?�음" (incomplete)
+            r'�?s*$',   # Ends with "�? (incomplete)
+            r'?�의\s*$', # Ends with "?�의" (incomplete)
+            r'?�항\s*$', # Ends with "?�항" (incomplete)
             r'경우\s*$', # Ends with "경우" (incomplete)
         ]
         
@@ -1616,10 +1616,10 @@ class ArticleParser:
                 return True
         
         # Check for paragraph number sequences that suggest missing content
-        paragraph_numbers = re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content)
+        paragraph_numbers = re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content)
         if len(paragraph_numbers) > 0:
             # If we have paragraph numbers but content seems incomplete
-            if not re.search(r'한다\.\s*$|규정한다\.\s*$|시행한다\.\s*$|본다\.\s*$', content.strip()):
+            if not re.search(r'?�다\.\s*$|규정?�다\.\s*$|?�행?�다\.\s*$|본다\.\s*$', content.strip()):
                 return True
         
         return False
@@ -1642,9 +1642,9 @@ class ArticleParser:
         
         # Look for patterns that typically end paragraphs
         paragraph_end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -1681,11 +1681,11 @@ class ArticleParser:
         score = 0
         
         # Bonus for proper endings
-        if re.search(r'한다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$', content.strip()):
             score += 15
-        elif re.search(r'규정한다\.\s*$', content.strip()):
+        elif re.search(r'규정?�다\.\s*$', content.strip()):
             score += 15
-        elif re.search(r'시행한다\.\s*$', content.strip()):
+        elif re.search(r'?�행?�다\.\s*$', content.strip()):
             score += 15
         elif re.search(r'본다\.\s*$', content.strip()):
             score += 15
@@ -1693,7 +1693,7 @@ class ArticleParser:
             score += 10
         
         # Bonus for complete paragraph structure
-        paragraph_count = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        paragraph_count = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_count * 3
         
         # Bonus for complete numbered lists
@@ -1701,13 +1701,13 @@ class ArticleParser:
         score += numbered_list_count * 2
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 10
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 10
-        if re.search(r'호의\s*$', content.strip()):
+        if re.search(r'?�의\s*$', content.strip()):
             score -= 10
-        if re.search(r'사항\s*$', content.strip()):
+        if re.search(r'?�항\s*$', content.strip()):
             score -= 5
         if re.search(r'경우\s*$', content.strip()):
             score -= 5
@@ -1734,8 +1734,8 @@ class ArticleParser:
         # Strategy 1: Look for next article with enhanced pattern matching
         remaining_text = article_text[start_pos:]
         
-        # Enhanced pattern to find next article - look for "제숫자조" at line start
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        # Enhanced pattern to find next article - look for "?�숫?�조" at line start
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -1772,14 +1772,14 @@ class ArticleParser:
         """
         # Look for patterns that suggest incomplete content
         incomplete_patterns = [
-            r'①.*?$',  # Ends with incomplete first paragraph
-            r'②.*?$',  # Ends with incomplete second paragraph
-            r'③.*?$',  # Ends with incomplete third paragraph
-            r'④.*?$',  # Ends with incomplete fourth paragraph
-            r'⑤.*?$',  # Ends with incomplete fifth paragraph
-            r'다음\s*$',  # Ends with "다음" (incomplete)
-            r'각\s*$',   # Ends with "각" (incomplete)
-            r'호의\s*$', # Ends with "호의" (incomplete)
+            r'??*?$',  # Ends with incomplete first paragraph
+            r'??*?$',  # Ends with incomplete second paragraph
+            r'??*?$',  # Ends with incomplete third paragraph
+            r'??*?$',  # Ends with incomplete fourth paragraph
+            r'??*?$',  # Ends with incomplete fifth paragraph
+            r'?�음\s*$',  # Ends with "?�음" (incomplete)
+            r'�?s*$',   # Ends with "�? (incomplete)
+            r'?�의\s*$', # Ends with "?�의" (incomplete)
         ]
         
         for pattern in incomplete_patterns:
@@ -1806,9 +1806,9 @@ class ArticleParser:
         
         # Look for patterns that typically end paragraphs
         paragraph_end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'본다\.\s*$',         # Ends with "본다."
             r'\.\s*$',             # Ends with period
         ]
@@ -1845,11 +1845,11 @@ class ArticleParser:
         score = 0
         
         # Bonus for proper endings
-        if re.search(r'한다\.\s*$', content.strip()):
+        if re.search(r'?�다\.\s*$', content.strip()):
             score += 10
-        elif re.search(r'규정한다\.\s*$', content.strip()):
+        elif re.search(r'규정?�다\.\s*$', content.strip()):
             score += 10
-        elif re.search(r'시행한다\.\s*$', content.strip()):
+        elif re.search(r'?�행?�다\.\s*$', content.strip()):
             score += 10
         elif re.search(r'본다\.\s*$', content.strip()):
             score += 10
@@ -1857,15 +1857,15 @@ class ArticleParser:
             score += 5
         
         # Bonus for complete paragraph structure
-        paragraph_count = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        paragraph_count = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_count * 2
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 5
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 5
-        if re.search(r'호의\s*$', content.strip()):
+        if re.search(r'?�의\s*$', content.strip()):
             score -= 5
         
         return score
@@ -1885,10 +1885,10 @@ class ArticleParser:
         
         # Look for common document boundaries
         boundary_patterns = [
-            r'^부칙',              # Supplementary provisions
+            r'^부�?,              # Supplementary provisions
             r'^별표',              # Attached tables
-            r'^별지',              # Attached forms
-            r'^제\d+조',           # Next article (fallback)
+            r'^별�?',              # Attached forms
+            r'^??d+�?,           # Next article (fallback)
         ]
         
         for pattern in boundary_patterns:
@@ -1916,9 +1916,9 @@ class ArticleParser:
         
         # Look for patterns that typically end articles
         end_patterns = [
-            r'한다\.\s*$',         # Ends with "한다."
-            r'규정한다\.\s*$',     # Ends with "규정한다."
-            r'시행한다\.\s*$',     # Ends with "시행한다."
+            r'?�다\.\s*$',         # Ends with "?�다."
+            r'규정?�다\.\s*$',     # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',     # Ends with "?�행?�다."
             r'\.\s*$',             # Ends with period
         ]
         
@@ -1951,13 +1951,13 @@ class ArticleParser:
         
         # Check for common incomplete patterns
         incomplete_patterns = [
-            r'「[^」]*$',           # Unclosed quotation marks
+            r'??^??*$',           # Unclosed quotation marks
             r'\([^)]*$',            # Unclosed parentheses
             r'\d+\.\s*$',           # Ends with incomplete numbered list
-            r'다음\s*$',            # Ends with "다음" (incomplete)
-            r'각\s*$',              # Ends with "각" (incomplete)
-            r'호의\s*$',            # Ends with "호의" (incomplete)
-            r'사항\s*$',            # Ends with "사항" (incomplete)
+            r'?�음\s*$',            # Ends with "?�음" (incomplete)
+            r'�?s*$',              # Ends with "�? (incomplete)
+            r'?�의\s*$',            # Ends with "?�의" (incomplete)
+            r'?�항\s*$',            # Ends with "?�항" (incomplete)
         ]
         
         for pattern in incomplete_patterns:
@@ -1966,9 +1966,9 @@ class ArticleParser:
         
         # Check for proper ending patterns
         proper_endings = [
-            r'한다\.\s*$',          # Ends with "한다."
-            r'규정한다\.\s*$',      # Ends with "규정한다."
-            r'시행한다\.\s*$',      # Ends with "시행한다."
+            r'?�다\.\s*$',          # Ends with "?�다."
+            r'규정?�다\.\s*$',      # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',      # Ends with "?�행?�다."
             r'\.\s*$',              # Ends with period
         ]
         
@@ -1993,8 +1993,8 @@ class ArticleParser:
         # Look for the next article with more context
         remaining_text = article_text[start_pos:]
         
-        # Find the next "제숫자조" pattern that appears at the beginning of a line
-        next_article_pattern = re.compile(r'^제\d+조', re.MULTILINE)
+        # Find the next "?�숫?�조" pattern that appears at the beginning of a line
+        next_article_pattern = re.compile(r'^??d+�?, re.MULTILINE)
         next_match = next_article_pattern.search(remaining_text[1:])  # Skip first character
         
         if next_match:
@@ -2022,11 +2022,11 @@ class ArticleParser:
         
         # Check for common truncation patterns
         truncation_patterns = [
-            r'「[^」]*$',  # Unclosed quotation marks
+            r'??^??*$',  # Unclosed quotation marks
             r'\([^)]*$',   # Unclosed parentheses
             r'\d+\.\s*$',  # Ends with incomplete numbered list
-            r'다음\s*$',   # Ends with "다음" (incomplete)
-            r'각\s*$',     # Ends with "각" (incomplete)
+            r'?�음\s*$',   # Ends with "?�음" (incomplete)
+            r'�?s*$',     # Ends with "�? (incomplete)
         ]
         
         for pattern in truncation_patterns:
@@ -2050,10 +2050,10 @@ class ArticleParser:
         # Look for common article endings
         ending_patterns = [
             r'\.\s*$',           # Ends with period
-            r'한다\.\s*$',       # Ends with "한다."
-            r'한다\s*$',         # Ends with "한다"
-            r'규정한다\.\s*$',   # Ends with "규정한다."
-            r'시행한다\.\s*$',   # Ends with "시행한다."
+            r'?�다\.\s*$',       # Ends with "?�다."
+            r'?�다\s*$',         # Ends with "?�다"
+            r'규정?�다\.\s*$',   # Ends with "규정?�다."
+            r'?�행?�다\.\s*$',   # Ends with "?�행?�다."
         ]
         
         # Search backwards from the current end to find a better boundary
@@ -2064,10 +2064,10 @@ class ArticleParser:
         
         # Find patterns that typically indicate end of article
         end_patterns = [
-            r'제\d+조',           # Next article
-            r'부칙',              # Supplementary provisions
+            r'??d+�?,           # Next article
+            r'부�?,              # Supplementary provisions
             r'별표',              # Attached tables
-            r'별지',              # Attached forms
+            r'별�?',              # Attached forms
         ]
         
         for pattern in end_patterns:
@@ -2090,9 +2090,9 @@ class ArticleParser:
         """
         # Remove common prefixes that might interfere
         prefixes_to_remove = [
-            r'^이\s+',
-            r'^다음\s+',
-            r'^다음과\s+같다\s*',
+            r'^??s+',
+            r'^?�음\s+',
+            r'^?�음�?s+같다\s*',
         ]
         
         for prefix in prefixes_to_remove:
@@ -2139,7 +2139,7 @@ class ArticleParser:
         Create complete article content with all paragraphs, sub-paragraphs, and items properly formatted
         
         Args:
-            article_number (str): Article number (e.g., "제2조")
+            article_number (str): Article number (e.g., "??�?)
             article_title (str): Article title
             main_content (str): Main content
             sub_articles (List[Dict[str, Any]]): List of sub-articles
@@ -2151,9 +2151,9 @@ class ArticleParser:
         complete_content = f"{article_number}({article_title})"
         
         # Group sub_articles by type and number for hierarchical structure
-        hang_items = [item for item in sub_articles if item.get('type') == '항']
-        ho_items = [item for item in sub_articles if item.get('type') == '호']
-        mok_items = [item for item in sub_articles if item.get('type') == '목']
+        hang_items = [item for item in sub_articles if item.get('type') == '??]
+        ho_items = [item for item in sub_articles if item.get('type') == '??]
+        mok_items = [item for item in sub_articles if item.get('type') == '�?]
         
         # Sort by position to maintain order
         hang_items.sort(key=lambda x: x.get('position', 0))
@@ -2164,37 +2164,37 @@ class ArticleParser:
         if not hang_items and not ho_items and not mok_items and main_content.strip():
             complete_content += f"\n{main_content.strip()}"
         
-        # Add all paragraphs (항)
+        # Add all paragraphs (??
         for hang_item in hang_items:
             paragraph_number = hang_item.get('number', 1)
             paragraph_content = hang_item.get('content', '')
             
             # Convert number to Korean symbol
-            korean_symbols = ['', '①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', 
-                            '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳']
+            korean_symbols = ['', '??, '??, '??, '??, '??, '??, '??, '??, '??, '??, 
+                            '??, '??, '??, '??, '??, '??, '??, '??, '??, '??]
             symbol = korean_symbols[paragraph_number] if paragraph_number <= 20 else f"{paragraph_number}."
             
             # Add amendment info if present
             amendment_info = hang_item.get('amendment_info', {})
             if amendment_info.get('has_amendment'):
-                if amendment_info.get('amendment_type') == '삭제':
-                    complete_content += f"\n{symbol} 삭제<{amendment_info.get('amendment_date', '')}>"
+                if amendment_info.get('amendment_type') == '??��':
+                    complete_content += f"\n{symbol} ??��<{amendment_info.get('amendment_date', '')}>"
                 else:
                     complete_content += f"\n{symbol} {paragraph_content} <개정 {amendment_info.get('amendment_date', '')}>"
             else:
                 complete_content += f"\n{symbol} {paragraph_content}"
             
-            # Add 호 items that belong to this 항
+            # Add ??items that belong to this ??
             hang_position = hang_item.get('position', 0)
             related_ho_items = [ho for ho in ho_items if ho.get('position', 0) > hang_position]
             
-            # Find the next 항 to determine the boundary
+            # Find the next ??to determine the boundary
             next_hang_position = float('inf')
             for next_hang in hang_items:
                 if next_hang.get('position', 0) > hang_position:
                     next_hang_position = min(next_hang_position, next_hang.get('position', 0))
             
-            # Add 호 items that are between current 항 and next 항
+            # Add ??items that are between current ??and next ??
             for ho_item in related_ho_items:
                 ho_position = ho_item.get('position', 0)
                 if ho_position < next_hang_position:
@@ -2204,23 +2204,23 @@ class ArticleParser:
                     # Add amendment info if present
                     ho_amendment_info = ho_item.get('amendment_info', {})
                     if ho_amendment_info.get('has_amendment'):
-                        if ho_amendment_info.get('amendment_type') == '삭제':
-                            complete_content += f"\n  {ho_number}. 삭제<{ho_amendment_info.get('amendment_date', '')}>"
+                        if ho_amendment_info.get('amendment_type') == '??��':
+                            complete_content += f"\n  {ho_number}. ??��<{ho_amendment_info.get('amendment_date', '')}>"
                         else:
                             complete_content += f"\n  {ho_number}. {ho_content} <개정 {ho_amendment_info.get('amendment_date', '')}>"
                     else:
                         complete_content += f"\n  {ho_number}. {ho_content}"
                     
-                    # Add 목 items that belong to this 호
+                    # Add �?items that belong to this ??
                     related_mok_items = [mok for mok in mok_items if mok.get('position', 0) > ho_position]
                     
-                    # Find the next 호 to determine the boundary
+                    # Find the next ??to determine the boundary
                     next_ho_position = float('inf')
                     for next_ho in ho_items:
                         if next_ho.get('position', 0) > ho_position:
                             next_ho_position = min(next_ho_position, next_ho.get('position', 0))
                     
-                    # Add 목 items that are between current 호 and next 호
+                    # Add �?items that are between current ??and next ??
                     for mok_item in related_mok_items:
                         mok_position = mok_item.get('position', 0)
                         if mok_position < next_ho_position:
@@ -2230,22 +2230,22 @@ class ArticleParser:
                             # Add amendment info if present
                             mok_amendment_info = mok_item.get('amendment_info', {})
                             if mok_amendment_info.get('has_amendment'):
-                                if mok_amendment_info.get('amendment_type') == '삭제':
-                                    complete_content += f"\n    {mok_letter}. 삭제<{mok_amendment_info.get('amendment_date', '')}>"
+                                if mok_amendment_info.get('amendment_type') == '??��':
+                                    complete_content += f"\n    {mok_letter}. ??��<{mok_amendment_info.get('amendment_date', '')}>"
                                 else:
                                     complete_content += f"\n    {mok_letter}. {mok_content} <개정 {mok_amendment_info.get('amendment_date', '')}>"
                             else:
                                 complete_content += f"\n    {mok_letter}. {mok_content}"
         
-        # Add standalone 호 items (not under any 항)
+        # Add standalone ??items (not under any ??
         standalone_ho_items = []
         for ho_item in ho_items:
             ho_position = ho_item.get('position', 0)
-            # Check if this 호 is not under any 항
+            # Check if this ??is not under any ??
             is_standalone = True
             for hang_item in hang_items:
                 hang_position = hang_item.get('position', 0)
-                # Find next 항 position
+                # Find next ??position
                 next_hang_position = float('inf')
                 for next_hang in hang_items:
                     if next_hang.get('position', 0) > hang_position:
@@ -2265,22 +2265,22 @@ class ArticleParser:
             # Add amendment info if present
             ho_amendment_info = ho_item.get('amendment_info', {})
             if ho_amendment_info.get('has_amendment'):
-                if ho_amendment_info.get('amendment_type') == '삭제':
-                    complete_content += f"\n{ho_number}. 삭제<{ho_amendment_info.get('amendment_date', '')}>"
+                if ho_amendment_info.get('amendment_type') == '??��':
+                    complete_content += f"\n{ho_number}. ??��<{ho_amendment_info.get('amendment_date', '')}>"
                 else:
                     complete_content += f"\n{ho_number}. {ho_content} <개정 {ho_amendment_info.get('amendment_date', '')}>"
             else:
                 complete_content += f"\n{ho_number}. {ho_content}"
         
-        # Add standalone 목 items (not under any 호)
+        # Add standalone �?items (not under any ??
         standalone_mok_items = []
         for mok_item in mok_items:
             mok_position = mok_item.get('position', 0)
-            # Check if this 목 is not under any 호
+            # Check if this �?is not under any ??
             is_standalone = True
             for ho_item in ho_items:
                 ho_position = ho_item.get('position', 0)
-                # Find next 호 position
+                # Find next ??position
                 next_ho_position = float('inf')
                 for next_ho in ho_items:
                     if next_ho.get('position', 0) > ho_position:
@@ -2300,8 +2300,8 @@ class ArticleParser:
             # Add amendment info if present
             mok_amendment_info = mok_item.get('amendment_info', {})
             if mok_amendment_info.get('has_amendment'):
-                if mok_amendment_info.get('amendment_type') == '삭제':
-                    complete_content += f"\n{mok_letter}. 삭제<{mok_amendment_info.get('amendment_date', '')}>"
+                if mok_amendment_info.get('amendment_type') == '??��':
+                    complete_content += f"\n{mok_letter}. ??��<{mok_amendment_info.get('amendment_date', '')}>"
                 else:
                     complete_content += f"\n{mok_letter}. {mok_content} <개정 {mok_amendment_info.get('amendment_date', '')}>"
             else:
@@ -2324,10 +2324,10 @@ class ArticleParser:
         
         # Remove common prefixes
         prefixes_to_remove = [
-            r'^이\s+',
-            r'^다음\s+',
-            r'^다음과\s+같다\s*',
-            r'^다음\s+각\s+호와\s+같다\s*',
+            r'^??s+',
+            r'^?�음\s+',
+            r'^?�음�?s+같다\s*',
+            r'^?�음\s+�?s+?��?\s+같다\s*',
         ]
         
         for prefix in prefixes_to_remove:
@@ -2371,7 +2371,7 @@ class ArticleParser:
     
     def _extract_sub_articles(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract sub-articles (항, 호, 목) from content with improved validation
+        Extract sub-articles (?? ?? �? from content with improved validation
         
         Args:
             content (str): Article content
@@ -2383,16 +2383,16 @@ class ArticleParser:
         logger.debug(f"First 200 chars: {repr(content[:200])}")
         sub_articles = []
         
-        # Extract paragraphs (항) - Korean legal format only
+        # Extract paragraphs (?? - Korean legal format only
         paragraphs = self._extract_paragraphs_korean(content)
         sub_articles.extend(paragraphs)
         
-        # Extract sub-paragraphs (호) - 1., 2., 3. etc.
+        # Extract sub-paragraphs (?? - 1., 2., 3. etc.
         sub_paragraphs = self._extract_sub_paragraphs_korean(content)
-        logger.debug(f"Found {len(sub_paragraphs)} sub-paragraphs (호) in content")
+        logger.debug(f"Found {len(sub_paragraphs)} sub-paragraphs (?? in content")
         sub_articles.extend(sub_paragraphs)
         
-        # Extract items (목) - 가., 나., 다. etc.
+        # Extract items (�? - 가., ??, ?? etc.
         items = self._extract_items_korean(content)
         sub_articles.extend(items)
         
@@ -2426,7 +2426,7 @@ class ArticleParser:
     
     def _extract_paragraphs_korean(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract paragraphs (항) using improved Korean legal format parsing
+        Extract paragraphs (?? using improved Korean legal format parsing
         
         Args:
             content (str): Article content
@@ -2437,7 +2437,7 @@ class ArticleParser:
         paragraphs = []
         
         # Use only the Korean paragraph symbols pattern to avoid duplicates
-        paragraph_pattern = re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]')
+        paragraph_pattern = re.compile(r'[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]')
         
         for match in paragraph_pattern.finditer(content):
             paragraph_number = self._extract_paragraph_number_enhanced(match)
@@ -2445,7 +2445,7 @@ class ArticleParser:
             
             if self._validate_paragraph_content(paragraph_content):
                 paragraph_data = {
-                    'type': '항',
+                    'type': '??,
                     'number': paragraph_number,
                     'content': paragraph_content,
                     'position': match.start()
@@ -2470,7 +2470,7 @@ class ArticleParser:
     
     def _extract_sub_paragraphs_korean(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract sub-paragraphs (호) using Korean legal format parsing
+        Extract sub-paragraphs (?? using Korean legal format parsing
         Pattern: 1., 2., 3. etc.
         
         Args:
@@ -2483,22 +2483,22 @@ class ArticleParser:
         logger.debug(f"First 200 chars: {repr(content[:200])}")
         sub_paragraphs = []
         
-        # Enhanced patterns for 호 (號) - 1., 2., 3. etc.
+        # Enhanced patterns for ??(?? - 1., 2., 3. etc.
         ho_patterns = [
             # Pattern 1: 1. "content" (with quotes) - most common in definition articles
             re.compile(r'(\d+)\.\s*"([^"]+)"', re.MULTILINE),
             
             # Pattern 2: 1. content (without quotes, until next number or end) - improved
-            re.compile(r'(\d+)\.\s*([^0-9①②③④⑤⑥⑦⑧⑨⑩가-힣]+?)(?=\d+\.|$)', re.MULTILINE | re.DOTALL),
+            re.compile(r'(\d+)\.\s*([^0-9?�②?�④?�⑥?�⑧?�⑩가-??+?)(?=\d+\.|$)', re.MULTILINE | re.DOTALL),
             
             # Pattern 3: 1. content (more flexible, until next pattern) - improved
-            re.compile(r'(\d+)\.\s*([^①②③④⑤⑥⑦⑧⑨⑩가-힣]+?)(?=[①②③④⑤⑥⑦⑧⑨⑩가-힣]|$)', re.MULTILINE | re.DOTALL),
+            re.compile(r'(\d+)\.\s*([^?�②?�④?�⑥?�⑧?�⑩가-??+?)(?=[?�②?�④?�⑥?�⑧?�⑩가-??|$)', re.MULTILINE | re.DOTALL),
             
             # Pattern 4: Enhanced pattern for Korean legal documents - more permissive
-            re.compile(r'(\d+)\.\s*([^①②③④⑤⑥⑦⑧⑨⑩가-힣\d]+?)(?=\d+\.|$|다음|각|호의|사항|경우|목의)', re.MULTILINE | re.DOTALL),
+            re.compile(r'(\d+)\.\s*([^?�②?�④?�⑥?�⑧?�⑩가-??d]+?)(?=\d+\.|$|?�음|�??�의|?�항|경우|목의)', re.MULTILINE | re.DOTALL),
             
             # Pattern 5: Pattern for content with Korean characters mixed
-            re.compile(r'(\d+)\.\s*([^①②③④⑤⑥⑦⑧⑨⑩\d]+?)(?=\d+\.|$)', re.MULTILINE | re.DOTALL),
+            re.compile(r'(\d+)\.\s*([^?�②?�④?�⑥?�⑧?�⑩\d]+?)(?=\d+\.|$)', re.MULTILINE | re.DOTALL),
             
             # Pattern 6: Very permissive pattern - captures until next number or end of content
             re.compile(r'(\d+)\.\s*([^0-9]+?)(?=\d+\.|$)', re.MULTILINE | re.DOTALL),
@@ -2508,7 +2508,7 @@ class ArticleParser:
         ]
         
         for pattern_idx, pattern in enumerate(ho_patterns):
-            logger.debug(f"Testing pattern {pattern_idx + 1} for 호 (號)")
+            logger.debug(f"Testing pattern {pattern_idx + 1} for ??(??")
             matches = list(pattern.finditer(content))
             logger.debug(f"Pattern {pattern_idx + 1} found {len(matches)} matches")
             
@@ -2520,16 +2520,16 @@ class ArticleParser:
                 ho_content = re.sub(r'^\s*["\']|["\']\s*$', '', ho_content)
                 ho_content = ho_content.strip()
                 
-                logger.debug(f"Processing 호 {ho_number}: '{ho_content[:50]}...' (length: {len(ho_content)})")
+                logger.debug(f"Processing ??{ho_number}: '{ho_content[:50]}...' (length: {len(ho_content)})")
                 
-                # Enhanced validation for 호 (號) items
+                # Enhanced validation for ??(?? items
                 if self._validate_ho_number_and_content(ho_number, ho_content):
                     # Check if this is not already captured
                     if not any(sp['number'] == ho_number and sp['position'] == match.start() for sp in sub_paragraphs):
-                        logger.debug(f"Adding 호 {ho_number} to results")
+                        logger.debug(f"Adding ??{ho_number} to results")
                         
                         ho_data = {
-                            'type': '호',
+                            'type': '??,
                             'number': ho_number,
                             'content': ho_content,
                             'position': match.start()
@@ -2545,16 +2545,16 @@ class ArticleParser:
                         
                         sub_paragraphs.append(ho_data)
                     else:
-                        logger.debug(f"호 {ho_number} already captured, skipping")
+                        logger.debug(f"??{ho_number} already captured, skipping")
                 else:
-                    logger.debug(f"호 {ho_number} failed validation (number: {ho_number}, content: '{ho_content[:30]}...')")
+                    logger.debug(f"??{ho_number} failed validation (number: {ho_number}, content: '{ho_content[:30]}...')")
         
         return sub_paragraphs
     
     def _extract_items_korean(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract items (목) using Korean legal format parsing
-        Pattern: 가., 나., 다. etc.
+        Extract items (�? using Korean legal format parsing
+        Pattern: 가., ??, ?? etc.
         
         Args:
             content (str): Article content
@@ -2564,10 +2564,10 @@ class ArticleParser:
         """
         items = []
         
-        # Pattern for 목 (目) - 가., 나., 다. etc. - More strict pattern
-        mok_pattern = re.compile(r'^([가-힣])\.\s+(.+?)(?=\n[가-힣]\.|\n\d+\.|\n[①②③④⑤⑥⑦⑧⑨⑩]|$)', re.MULTILINE | re.DOTALL)
+        # Pattern for �?(?? - 가., ??, ?? etc. - More strict pattern
+        mok_pattern = re.compile(r'^([가-??)\.\s+(.+?)(?=\n[가-??\.|\n\d+\.|\n[?�②?�④?�⑥?�⑧?�⑩]|$)', re.MULTILINE | re.DOTALL)
         
-        # First pass: find all potential 목 items
+        # First pass: find all potential �?items
         potential_items = []
         for match in mok_pattern.finditer(content):
             mok_letter = match.group(1)
@@ -2583,37 +2583,37 @@ class ArticleParser:
                 'position': match.start()
             })
         
-        # Strict validation for 목 sequence
+        # Strict validation for �?sequence
         if potential_items:
-            # Additional check: reject if content contains "각 호" (호 items)
-            if "각 호" in content or "호와" in content or "각목" in content:
-                logger.debug("Content contains '각 호', '호와', or '각목', rejecting as 목 items")
+            # Additional check: reject if content contains "�??? (??items)
+            if "�??? in content or "?��?" in content or "각목" in content:
+                logger.debug("Content contains '�???, '?��?', or '각목', rejecting as �?items")
                 return items
             
-            # Additional check: reject if content contains 호 patterns (1., 2., etc.)
+            # Additional check: reject if content contains ??patterns (1., 2., etc.)
             ho_pattern = re.compile(r'\d+\.\s+')
             if ho_pattern.search(content):
-                logger.debug("Content contains 호 patterns (1., 2., etc.), rejecting as 목 items")
+                logger.debug("Content contains ??patterns (1., 2., etc.), rejecting as �?items")
                 return items
             
-            # Additional check: reject if content contains 항 patterns (①, ②, etc.)
-            hang_pattern = re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]')
+            # Additional check: reject if content contains ??patterns (?? ?? etc.)
+            hang_pattern = re.compile(r'[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]')
             if hang_pattern.search(content):
-                logger.debug("Content contains 항 patterns (①, ②, etc.), rejecting as 목 items")
+                logger.debug("Content contains ??patterns (?? ?? etc.), rejecting as �?items")
                 return items
             
-            # Must have 가. to be considered valid 목 items
+            # Must have 가. to be considered valid �?items
             has_ga = any(item['letter'] == '가' for item in potential_items)
             
             if not has_ga:
-                # No 가. found, reject all 목 items
-                logger.debug("No 가. found in potential 목 items, rejecting all 목 items")
+                # No 가. found, reject all �?items
+                logger.debug("No 가. found in potential �?items, rejecting all �?items")
                 return items
             
             # Additional validation: Check for proper Korean legal sequence
-            # Korean legal documents must follow 가. -> 나. -> 다. sequence
+            # Korean legal documents must follow 가. -> ?? -> ?? sequence
             letters = [item['letter'] for item in potential_items]
-            expected_sequence = ['가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하']
+            expected_sequence = ['가', '??, '??, '??, '�?, '�?, '??, '??, '??, '�?, '�?, '?�', '??, '??]
             
             # Check if we have a proper sequence starting from 가
             is_proper_sequence = True
@@ -2623,17 +2623,17 @@ class ArticleParser:
                     break
             
             if not is_proper_sequence:
-                logger.debug(f"Invalid 목 sequence: {letters}, rejecting all 목 items")
+                logger.debug(f"Invalid �?sequence: {letters}, rejecting all �?items")
                 return items
             
-            # Additional check: reject if only "다." is found without "가." and "나."
-            if len(letters) == 1 and letters[0] == '다':
-                logger.debug("Only '다.' found without '가.' and '나.', rejecting as invalid 목 sequence")
+            # Additional check: reject if only "??" is found without "가." and "??"
+            if len(letters) == 1 and letters[0] == '??:
+                logger.debug("Only '??' found without '가.' and '??', rejecting as invalid �?sequence")
                 return items
             
-            # Additional check: reject if "다." appears before "가." or "나."
-            if '다' in letters and ('가' not in letters or '나' not in letters):
-                logger.debug(f"'다.' found without proper preceding '가.' and '나.', rejecting as invalid 목 sequence. Letters: {letters}")
+            # Additional check: reject if "??" appears before "가." or "??"
+            if '?? in letters and ('가' not in letters or '?? not in letters):
+                logger.debug(f"'??' found without proper preceding '가.' and '??', rejecting as invalid �?sequence. Letters: {letters}")
                 return items
             
             # Sort by position to maintain order
@@ -2646,28 +2646,28 @@ class ArticleParser:
                 
                 # Reject very short content or just punctuation
                 if len(content_clean) < 5:
-                    logger.debug(f"Rejecting 목 item '{item['letter']}.' - content too short: '{content_clean}'")
+                    logger.debug(f"Rejecting �?item '{item['letter']}.' - content too short: '{content_clean}'")
                     continue
                 
                 # Reject content that's just punctuation or single characters
-                if content_clean in ['다.', '다', '', '가.', '나.', '라.', '마.', '바.', '사.', '아.', '자.', '차.', '카.', '타.', '파.', '하.']:
-                    logger.debug(f"Rejecting 목 item '{item['letter']}.' - content is just punctuation: '{content_clean}'")
+                if content_clean in ['??', '??, '', '가.', '??', '??', '�?', '�?', '??', '??', '??', '�?', '�?', '?�.', '??', '??']:
+                    logger.debug(f"Rejecting �?item '{item['letter']}.' - content is just punctuation: '{content_clean}'")
                     continue
                 
                 # Reject UI elements
-                if '조문버튼선택체크' in content_clean or '펼치기접기' in content_clean:
-                    logger.debug(f"Rejecting 목 item '{item['letter']}.' - contains UI elements")
+                if '조문버튼?�택체크' in content_clean or '?�치기접�? in content_clean:
+                    logger.debug(f"Rejecting �?item '{item['letter']}.' - contains UI elements")
                     continue
                 
                 # Check for meaningful content
-                meaningful_chars = re.sub(r'[^\w가-힣]', '', content_clean)
+                meaningful_chars = re.sub(r'[^\w가-??', '', content_clean)
                 if len(meaningful_chars) < 3:
-                    logger.debug(f"Rejecting 목 item '{item['letter']}.' - not enough meaningful characters: '{content_clean}'")
+                    logger.debug(f"Rejecting �?item '{item['letter']}.' - not enough meaningful characters: '{content_clean}'")
                     continue
                 
                 # Additional check: reject if content ends with just punctuation and is short
                 if len(content_clean) <= 5 and content_clean.endswith('.'):
-                    logger.debug(f"Rejecting 목 item '{item['letter']}.' - ends with punctuation and too short: '{content_clean}'")
+                    logger.debug(f"Rejecting �?item '{item['letter']}.' - ends with punctuation and too short: '{content_clean}'")
                     continue
                 
                 valid_items.append(item)
@@ -2676,7 +2676,7 @@ class ArticleParser:
             if len(valid_items) >= 2:
                 for item in valid_items:
                     mok_data = {
-                        'type': '목',
+                        'type': '�?,
                         'number': item['number'],
                         'letter': item['letter'],
                         'content': item['content'],
@@ -2693,38 +2693,38 @@ class ArticleParser:
                     
                     items.append(mok_data)
             else:
-                logger.debug(f"Not enough valid 목 items ({len(valid_items)}), rejecting all 목 items")
+                logger.debug(f"Not enough valid �?items ({len(valid_items)}), rejecting all �?items")
         
         return items
     
     def _is_definition_article(self, article_number: str, article_title: str, content: str) -> bool:
         """
-        Check if this is a definition article (정의 조문)
+        Check if this is a definition article (?�의 조문)
         
         Args:
-            article_number (str): Article number (e.g., "제2조")
+            article_number (str): Article number (e.g., "??�?)
             article_title (str): Article title
             content (str): Article content
             
         Returns:
             bool: True if this is a definition article
         """
-        # Check article number (제2조 is commonly used for definitions)
-        if article_number == "제2조":
+        # Check article number (??�?is commonly used for definitions)
+        if article_number == "??�?:
             return True
         
         # Check title patterns
-        definition_titles = ["정의", "용어의 정의", "정의 및 명칭", "용어의 뜻"]
+        definition_titles = ["?�의", "?�어???�의", "?�의 �?명칭", "?�어????]
         if any(title in article_title for title in definition_titles):
             return True
         
         # Check content patterns
         definition_patterns = [
-            r'용어의\s*뜻은\s*다음과\s*같다',
-            r'용어의\s*정의는\s*다음과\s*같다',
-            r'이\s*법에서\s*사용하는\s*용어',
-            r'정의',
-            r'용어의\s*뜻',
+            r'?�어??s*?��?\s*?�음�?s*같다',
+            r'?�어??s*?�의??s*?�음�?s*같다',
+            r'??s*법에??s*?�용?�는\s*?�어',
+            r'?�의',
+            r'?�어??s*??,
         ]
         
         for pattern in definition_patterns:
@@ -2733,7 +2733,7 @@ class ArticleParser:
         
         return False
         """
-        Extract sub-paragraphs (호) using Korean legal format
+        Extract sub-paragraphs (?? using Korean legal format
         
         Args:
             content (str): Article content
@@ -2750,7 +2750,7 @@ class ArticleParser:
             
             if len(subparagraph_content.strip()) >= self.min_content_length:
                 subparagraphs.append({
-                    'type': '호',
+                    'type': '??,
                     'number': subparagraph_number,
                     'content': subparagraph_content,
                     'position': match.start()
@@ -2760,7 +2760,7 @@ class ArticleParser:
     
     def _extract_items_korean(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract items (목) using Korean legal format
+        Extract items (�? using Korean legal format
         
         Args:
             content (str): Article content
@@ -2770,14 +2770,14 @@ class ArticleParser:
         """
         items = []
         
-        # Extract lettered items (가., 나., 다., etc.)
+        # Extract lettered items (가., ??, ??, etc.)
         for match in self.item_patterns['lettered'].finditer(content):
             item_letter = match.group(1)
             item_content = self._extract_sub_content(content, match.start())
             
             if len(item_content.strip()) >= self.min_content_length:
                 items.append({
-                    'type': '목',
+                    'type': '�?,
                     'number': item_letter,
                     'content': item_content,
                     'position': match.start()
@@ -2790,16 +2790,16 @@ class ArticleParser:
         Convert Korean paragraph symbol to number
         
         Args:
-            paragraph_symbol (str): Korean paragraph symbol (①, ②, etc.)
+            paragraph_symbol (str): Korean paragraph symbol (?? ?? etc.)
             
         Returns:
             int: Paragraph number
         """
         symbol_map = {
-            '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5,
-            '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10,
-            '⑪': 11, '⑫': 12, '⑬': 13, '⑭': 14, '⑮': 15,
-            '⑯': 16, '⑰': 17, '⑱': 18, '⑲': 19, '⑳': 20
+            '??: 1, '??: 2, '??: 3, '??: 4, '??: 5,
+            '??: 6, '??: 7, '??: 8, '??: 9, '??: 10,
+            '??: 11, '??: 12, '??: 13, '??: 14, '??: 15,
+            '??: 16, '??: 17, '??: 18, '??: 19, '??: 20
         }
         return symbol_map.get(paragraph_symbol, 1)
     
@@ -2817,16 +2817,16 @@ class ArticleParser:
         
         # Korean symbol to number mapping
         symbol_map = {
-            '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5,
-            '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10,
-            '⑪': 11, '⑫': 12, '⑬': 13, '⑭': 14, '⑮': 15,
-            '⑯': 16, '⑰': 17, '⑱': 18, '⑲': 19, '⑳': 20
+            '??: 1, '??: 2, '??: 3, '??: 4, '??: 5,
+            '??: 6, '??: 7, '??: 8, '??: 9, '??: 10,
+            '??: 11, '??: 12, '??: 13, '??: 14, '??: 15,
+            '??: 16, '??: 17, '??: 18, '??: 19, '??: 20
         }
         
         if matched_text in symbol_map:
             return symbol_map[matched_text]
         
-        # Extract number from patterns like "1항", "제1항"
+        # Extract number from patterns like "1??, "????
         number_match = re.search(r'(\d+)', matched_text)
         if number_match:
             return int(number_match.group(1))
@@ -2847,9 +2847,9 @@ class ArticleParser:
         # Get the text starting from the current position
         remaining_text = content[start_pos:]
         
-        # Find the next Korean paragraph symbol (항) or next article
-        next_paragraph_pattern = re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]')
-        next_article_pattern = re.compile(r'제\d+조')
+        # Find the next Korean paragraph symbol (?? or next article
+        next_paragraph_pattern = re.compile(r'[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]')
+        next_article_pattern = re.compile(r'??d+�?)
         
         # Look for next paragraph symbol (skip the current one by starting from position 1)
         next_paragraph_match = next_paragraph_pattern.search(remaining_text[1:])
@@ -2879,7 +2879,7 @@ class ArticleParser:
         # Clean the content
         sub_content = self._clean_legal_content(sub_content)
         
-        # Remove 호(號) items from 항(項) content to prevent duplication
+        # Remove ???? items from ???? content to prevent duplication
         sub_content = self._remove_ho_items_from_hang_content(sub_content)
         
         return sub_content
@@ -2898,13 +2898,13 @@ class ArticleParser:
         # content = re.sub(r'<개정\s+[^>]+>', '', content)
         
         # Remove execution markers
-        content = re.sub(r'\[시행\s+[^\]]+\]', '', content)
+        content = re.sub(r'\[?�행\s+[^\]]+\]', '', content)
         
         # Remove paragraph markers at the beginning - but be more careful
         # Only remove if it's at the very beginning and not part of content
-        content = re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*', '', content)
-        # Don't remove "제1항" etc. as they are part of the content
-        # content = re.sub(r'^제?\d+[항호목]\s*', '', content)
+        content = re.sub(r'^[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]\s*', '', content)
+        # Don't remove "???? etc. as they are part of the content
+        # content = re.sub(r'^??\d+[??���?\s*', '', content)
         
         # Clean up whitespace
         content = re.sub(r'\s+', ' ', content).strip()
@@ -2929,7 +2929,7 @@ class ArticleParser:
         
         # Extract amendment markers (including deletion)
         amendment_match = re.search(r'<개정\s+([^>]+)>', content)
-        deletion_match = re.search(r'삭제<([^>]+)>', content)
+        deletion_match = re.search(r'??��<([^>]+)>', content)
         
         if amendment_match:
             amendment_info['has_amendment'] = True
@@ -2938,7 +2938,7 @@ class ArticleParser:
         elif deletion_match:
             amendment_info['has_amendment'] = True
             amendment_info['amendment_date'] = deletion_match.group(1)
-            amendment_info['amendment_type'] = '삭제'
+            amendment_info['amendment_type'] = '??��'
         
         return amendment_info
     
@@ -2960,7 +2960,7 @@ class ArticleParser:
             return True
         
         # Basic validation only
-        meaningful_chars = re.sub(r'[^\w가-힣]', '', content)
+        meaningful_chars = re.sub(r'[^\w가-??', '', content)
         if len(meaningful_chars) < 3:
             return False
         
@@ -2968,7 +2968,7 @@ class ArticleParser:
     
     def _validate_ho_content(self, content: str) -> bool:
         """
-        Validate 호 (號) content with enhanced rules to prevent date misclassification
+        Validate ??(?? content with enhanced rules to prevent date misclassification
         
         Args:
             content (str): Content to validate
@@ -2986,8 +2986,8 @@ class ArticleParser:
             r'\d{1,2}\.\d{1,2}\.\d{1,2}',  # 2.18.2007
             r'<개정',  # Amendment markers
             r'>$',  # Ending with >
-            r'조문버튼선택체크',  # UI elements
-            r'펼치기접기',  # UI elements
+            r'조문버튼?�택체크',  # UI elements
+            r'?�치기접�?,  # UI elements
         ]
         
         for pattern in date_patterns:
@@ -2999,16 +2999,16 @@ class ArticleParser:
             return False
         
         # Check for meaningful content
-        meaningful_chars = re.sub(r'[^\w가-힣]', '', content)
+        meaningful_chars = re.sub(r'[^\w가-??', '', content)
         if len(meaningful_chars) < 2:  # Require at least 2 meaningful characters
             return False
         
         # Check for common invalid patterns
         invalid_patterns = [
             r'^\s*$',  # Empty or whitespace only
-            r'^[^\w가-힣]*$',  # No meaningful characters
+            r'^[^\w가-??*$',  # No meaningful characters
             r'^[0-9]+$',  # Only numbers
-            r'^[①②③④⑤⑥⑦⑧⑨⑩]+$',  # Only paragraph markers
+            r'^[?�②?�④?�⑥?�⑧?�⑩]+$',  # Only paragraph markers
         ]
         
         for pattern in invalid_patterns:
@@ -3019,23 +3019,23 @@ class ArticleParser:
     
     def _validate_ho_number_and_content(self, number: int, content: str) -> bool:
         """
-        Enhanced validation for 호 (號) items to prevent date misclassification
+        Enhanced validation for ??(?? items to prevent date misclassification
         
         Args:
-            number (int): 호 번호
-            content (str): 호 내용
+            number (int): ??번호
+            content (str): ???�용
             
         Returns:
-            bool: True if valid 호 item, False otherwise
+            bool: True if valid ??item, False otherwise
         """
-        # Reject dates as 호 numbers (1900-2030 range)
+        # Reject dates as ??numbers (1900-2030 range)
         if 1900 <= number <= 2030:
-            logger.debug(f"Rejecting date as 호 number: {number}")
+            logger.debug(f"Rejecting date as ??number: {number}")
             return False
         
-        # Reject unreasonable 호 numbers
+        # Reject unreasonable ??numbers
         if number < 1 or number > 50:
-            logger.debug(f"Rejecting unreasonable 호 number: {number}")
+            logger.debug(f"Rejecting unreasonable ??number: {number}")
             return False
         
         # Use existing content validation
@@ -3043,24 +3043,24 @@ class ArticleParser:
     
     def _validate_mok_content(self, content: str) -> bool:
         """
-        Enhanced validation for 목 (目) items to prevent empty content
+        Enhanced validation for �?(?? items to prevent empty content
         
         Args:
-            content (str): 목 내용
+            content (str): �??�용
             
         Returns:
-            bool: True if valid 목 item, False otherwise
+            bool: True if valid �?item, False otherwise
         """
         # Reject very short content
         if len(content.strip()) < 5:  # Increased minimum length
             return False
         
         # Reject content that's just punctuation
-        if content.strip() in ['다.', '다', '']:
+        if content.strip() in ['??', '??, '']:
             return False
         
         # Reject UI elements
-        if '조문버튼선택체크' in content or '펼치기접기' in content:
+        if '조문버튼?�택체크' in content or '?�치기접�? in content:
             return False
         
         # Reject content that ends with just punctuation
@@ -3068,7 +3068,7 @@ class ArticleParser:
             return False
         
         # Check for meaningful content
-        meaningful_chars = re.sub(r'[^\w가-힣]', '', content)
+        meaningful_chars = re.sub(r'[^\w가-??', '', content)
         if len(meaningful_chars) < 3:  # Require at least 3 meaningful characters
             return False
         
@@ -3076,21 +3076,21 @@ class ArticleParser:
     
     def _remove_ho_items_from_hang_content(self, content: str) -> str:
         """
-        Remove 호(號) items from 항(項) content to prevent duplication
+        Remove ???? items from ???? content to prevent duplication
         
         Args:
-            content (str): 항(項) content
+            content (str): ???? content
             
         Returns:
-            str: Cleaned content without 호(號) items
+            str: Cleaned content without ???? items
         """
-        # Don't remove anything - let the sub_articles parsing handle 호 items
-        # Removing 호 items here was causing issues with legal references like "제2조제1항"
-        # which were being mistakenly identified as 호 items and removed
+        # Don't remove anything - let the sub_articles parsing handle ??items
+        # Removing ??items here was causing issues with legal references like "??조제1??
+        # which were being mistakenly identified as ??items and removed
         
         # Only clean up UI elements
-        cleaned_content = re.sub(r'조문버튼선택체크', '', content)
-        cleaned_content = re.sub(r'펼치기접기', '', cleaned_content)
+        cleaned_content = re.sub(r'조문버튼?�택체크', '', content)
+        cleaned_content = re.sub(r'?�치기접�?, '', cleaned_content)
         cleaned_content = re.sub(r'\s+', ' ', cleaned_content).strip()
         
         return cleaned_content
@@ -3127,9 +3127,9 @@ class ArticleParser:
         
         # Remove specific Korean legal document UI elements by text content
         ui_text_patterns = [
-            '조문 버튼 소개', '조문버튼선택체크', '선택체크', '선택',
-            '조문연혁', '조문판례', '펼치기접기', '펼치기', '접기',
-            '조문연혁', '조문판례'
+            '조문 버튼 ?�개', '조문버튼?�택체크', '?�택체크', '?�택',
+            '조문?�혁', '조문?��?', '?�치기접�?, '?�치�?, '?�기',
+            '조문?�혁', '조문?��?'
         ]
         
         # Find and remove elements containing UI text
@@ -3158,7 +3158,7 @@ class ArticleParser:
         img_elements = soup.find_all('img')
         for img in img_elements:
             alt_text = img.get('alt', '').lower()
-            if any(ui_text in alt_text for ui_text in ['선택체크', '연혁', '판례', 'button', 'btn', 'icon']):
+            if any(ui_text in alt_text for ui_text in ['?�택체크', '?�혁', '?��?', 'button', 'btn', 'icon']):
                 img.decompose()
         
         # Remove dl elements with article_icon class (Korean legal document specific)
@@ -3178,33 +3178,33 @@ class ArticleParser:
         """
         # UI element patterns to remove (Korean legal document specific)
         ui_patterns = [
-            r'조문버튼선택체크',
-            r'펼치기접기',
-            r'펼치기',
-            r'접기',
-            r'선택체크',
-            r'버튼선택',
+            r'조문버튼?�택체크',
+            r'?�치기접�?,
+            r'?�치�?,
+            r'?�기',
+            r'?�택체크',
+            r'버튼?�택',
             r'조문버튼',
-            r'조문 버튼 소개',
-            r'조문연혁',
-            r'조문판례',
-            r'\[펼치기\]',
-            r'\[접기\]',
-            r'\[선택\]',
+            r'조문 버튼 ?�개',
+            r'조문?�혁',
+            r'조문?��?',
+            r'\[?�치�?]',
+            r'\[?�기\]',
+            r'\[?�택\]',
             r'\[체크\]',
             r'\[조문\]',
-            r'▶',
-            r'◀',
-            r'▼',
-            r'▲',
-            r'☑',
-            r'☐',
-            r'✓',
-            r'✗',
+            r'??,
+            r'?�',
+            r'??,
+            r'??,
+            r'??,
+            r'??,
+            r'??,
+            r'??,
             # Additional patterns found in raw data
-            r'선택\s*$',  # "선택" at end of line
-            r'연혁\s*$',  # "연혁" at end of line
-            r'판례\s*$',  # "판례" at end of line
+            r'?�택\s*$',  # "?�택" at end of line
+            r'?�혁\s*$',  # "?�혁" at end of line
+            r'?��?\s*$',  # "?��?" at end of line
         ]
         
         cleaned_text = text
@@ -3216,9 +3216,9 @@ class ArticleParser:
         
         # Remove any remaining isolated UI text
         isolated_ui_patterns = [
-            r'^\s*선택\s*$',
-            r'^\s*연혁\s*$',
-            r'^\s*판례\s*$',
+            r'^\s*?�택\s*$',
+            r'^\s*?�혁\s*$',
+            r'^\s*?��?\s*$',
             r'^\s*체크\s*$',
             r'^\s*버튼\s*$',
         ]
@@ -3247,8 +3247,8 @@ class ArticleParser:
         
         # Use enhanced boundary detection
         next_patterns = [
-            re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]'),
-            re.compile(r'제\d+조'),
+            re.compile(r'[?�②?�④?�⑥?�⑧?�⑩?�⑫?�⑭??��?�⑱?�⑳]'),
+            re.compile(r'??d+�?),
             re.compile(r'<개정\s+[^>]+>'),
             re.compile(r'\[[^\]]+\]')
         ]
@@ -3278,24 +3278,24 @@ class ArticleParser:
         """
         references = []
         
-        # Pattern for quoted law names (실질적인 법률명만 추출)
-        quoted_pattern = re.compile(r'「([^」]+)」')
+        # Pattern for quoted law names (?�질?�인 법률명만 추출)
+        quoted_pattern = re.compile(r'??[^??+)??)
         quoted_matches = quoted_pattern.findall(text)
         
-        # 실질적인 법률명만 필터링
+        # ?�질?�인 법률명만 ?�터�?
         substantial_laws = []
         for match in quoted_matches:
             law_name = match.strip()
-            # 일반적인 참조가 아닌 구체적인 법률명만 포함
+            # ?�반?�인 참조가 ?�닌 구체?�인 법률명만 ?�함
             if (law_name and 
-                law_name not in ['이 법', '같은 법', '동법', '상법', '민법', '형법', '행정법'] and
-                len(law_name) > 2 and  # 너무 짧은 것은 제외
-                '법' in law_name):  # 법률명에 '법'이 포함되어야 함
+                law_name not in ['??�?, '같�? �?, '?�법', '?�법', '민법', '?�법', '?�정�?] and
+                len(law_name) > 2 and  # ?�무 짧�? 것�? ?�외
+                '�? in law_name):  # 법률명에 '�????�함?�어????
                 substantial_laws.append(law_name)
         
         references.extend(substantial_laws)
         
-        # 중복 제거 및 정렬
+        # 중복 ?�거 �??�렬
         references = list(set(ref.strip() for ref in references if ref.strip()))
         references.sort()
         
@@ -3324,7 +3324,7 @@ class ArticleParser:
             article_numbers = []
             for art in articles:
                 try:
-                    num = int(art['article_number'].replace('제', '').replace('조', ''))
+                    num = int(art['article_number'].replace('??, '').replace('�?, ''))
                     article_numbers.append(num)
                 except (ValueError, KeyError):
                     continue
@@ -3340,7 +3340,7 @@ class ArticleParser:
         # Check paragraph continuity within articles
         for article in articles:
             paragraphs = article.get('sub_articles', [])
-            paragraph_numbers = [p['number'] for p in paragraphs if p.get('type') == '항']
+            paragraph_numbers = [p['number'] for p in paragraphs if p.get('type') == '??]
             
             if len(paragraph_numbers) > 1:
                 max_para = max(paragraph_numbers)
@@ -3400,7 +3400,7 @@ class ArticleParser:
                 validation_results['empty_content'] += 1
             
             # Extract article number for validation
-            article_num_match = re.search(r'제(\d+)조', article['article_number'])
+            article_num_match = re.search(r'??\d+)�?, article['article_number'])
             if article_num_match:
                 article_num = int(article_num_match.group(1))
                 article_numbers.append(article_num)
@@ -3447,14 +3447,14 @@ class ArticleParser:
         # Look for patterns that indicate the end of a definition article
         end_patterns = [
             # Look for the next article with more specific patterns
-            r'^제3조\s*\([^)]+\)',     # 제3조(다른 법률과의 관계)
-            r'^제3조\s*[가-힣]',       # 제3조 다른
-            r'^제3조',                 # 제3조
+            r'^??�?s*\([^)]+\)',     # ??�??�른 법률과의 관�?
+            r'^??�?s*[가-??',       # ??�??�른
+            r'^??�?,                 # ??�?
             
             # Look for other structural boundaries
-            r'^제\d+조\s*\([^)]+\)',  # Any article with parentheses
-            r'^제\d+조\s*[가-힣]',    # Any article with Korean text
-            r'^제\d+조',              # Any article
+            r'^??d+�?s*\([^)]+\)',  # Any article with parentheses
+            r'^??d+�?s*[가-??',    # Any article with Korean text
+            r'^??d+�?,              # Any article
         ]
         
         best_end = len(content)
@@ -3477,7 +3477,7 @@ class ArticleParser:
         extracted_content = content[:best_end].strip()
         
         # Additional processing for definition articles
-        # Ensure we capture all numbered items (호)
+        # Ensure we capture all numbered items (??
         if self._has_definition_structure(extracted_content):
             extracted_content = self._extend_definition_content_aggressive(content, 0, extracted_content)
         
@@ -3499,16 +3499,16 @@ class ArticleParser:
         numbered_items = len(re.findall(r'\d+\.', content))
         score += numbered_items * 5
         
-        # Bonus for having sub-items (가., 나., 다., etc.)
-        sub_items = len(re.findall(r'[가-힣]\.', content))
+        # Bonus for having sub-items (가., ??, ??, etc.)
+        sub_items = len(re.findall(r'[가-??\.', content))
         score += sub_items * 3
         
-        # Bonus for having paragraph numbers (①, ②, ③, etc.)
-        paragraph_numbers = len(re.findall(r'[①②③④⑤⑥⑦⑧⑨⑩]', content))
+        # Bonus for having paragraph numbers (?? ?? ?? etc.)
+        paragraph_numbers = len(re.findall(r'[?�②?�④?�⑥?�⑧?�⑩]', content))
         score += paragraph_numbers * 4
         
-        # Bonus for having multiple paragraphs (②, ③, etc.)
-        multiple_paragraphs = len(re.findall(r'②|③|④|⑤|⑥|⑦|⑧|⑨|⑩', content))
+        # Bonus for having multiple paragraphs (?? ?? etc.)
+        multiple_paragraphs = len(re.findall(r'??????????????????, content))
         score += multiple_paragraphs * 6
         
         # Bonus for content length (definition articles are typically long)
@@ -3519,18 +3519,18 @@ class ArticleParser:
         elif len(content) > 500:
             score += 10
         
-        # Bonus for having "다음과 같다" pattern
-        if re.search(r'다음과\s*같다', content):
+        # Bonus for having "?�음�?같다" pattern
+        if re.search(r'?�음�?s*같다', content):
             score += 10
         
-        # Bonus for having "이 법에서 사용하는 용어" pattern
-        if re.search(r'이\s*법에서\s*사용하는\s*용어', content):
+        # Bonus for having "??법에???�용?�는 ?�어" pattern
+        if re.search(r'??s*법에??s*?�용?�는\s*?�어', content):
             score += 15
         
         # Penalty for incomplete patterns
-        if re.search(r'다음\s*$', content.strip()):
+        if re.search(r'?�음\s*$', content.strip()):
             score -= 20
-        if re.search(r'각\s*$', content.strip()):
+        if re.search(r'�?s*$', content.strip()):
             score -= 20
         
         return score
