@@ -138,10 +138,10 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         category=NodeCategory.CLASSIFICATION,
         description="전문가 라우팅 결정",
         required_input={
-            "query": "사용자 질문",
-            "query_type": "질문 유형"
+            "query": "사용자 질문"
         },
         optional_input={
+            "query_type": "질문 유형",  # optional로 변경 (State Reduction 후에도 여러 위치에서 찾을 수 있음)
             "legal_field": "법률 분야",
             "urgency_level": "긴급도"
         },
@@ -200,10 +200,10 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         category=NodeCategory.SEARCH,
         description="검색 쿼리 준비 및 최적화",
         required_input={
-            "query": "사용자 질문",
-            "query_type": "질문 유형"
+            "query": "사용자 질문"
         },
         optional_input={
+            "query_type": "질문 유형",  # optional로 변경 (State Reduction 후에도 여러 위치에서 찾을 수 있음)
             "legal_field": "법률 분야",
             "extracted_keywords": "추출된 키워드",
             "search_query": "기존 검색 쿼리"
@@ -414,11 +414,11 @@ NODE_SPECS: Dict[str, NodeIOSpec] = {
         category=NodeCategory.SEARCH,
         description="의미적 검색과 키워드 검색을 병렬로 실행",
         required_input={
-            "query": "사용자 질문",
-            "optimized_queries": "최적화된 검색 쿼리",
-            "search_params": "검색 파라미터"
+            "query": "사용자 질문"
         },
         optional_input={
+            "optimized_queries": "최적화된 검색 쿼리",  # optional로 변경 (여러 위치에서 찾을 수 있음)
+            "search_params": "검색 파라미터",  # optional로 변경 (여러 위치에서 찾을 수 있음)
             "query_type": "질문 유형",
             "legal_field": "법률 분야",
             "extracted_keywords": "추출된 키워드"

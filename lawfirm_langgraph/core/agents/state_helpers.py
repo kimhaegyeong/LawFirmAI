@@ -438,6 +438,8 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
         "urgency_reasoning": lambda s: (get_classification(s) or {}).get("urgency_reasoning", ""),
         "emergency_type": lambda s: (get_classification(s) or {}).get("emergency_type"),
         "complexity_level": lambda s: (get_classification(s) or {}).get("complexity_level", ""),
+        "query_complexity": lambda s: (get_classification(s) or {}).get("query_complexity", "") or (get_classification(s) or {}).get("complexity_level", ""),
+        "needs_search": lambda s: (get_classification(s) or {}).get("needs_search", True),
         "requires_expert": lambda s: (get_classification(s) or {}).get("requires_expert", False),
         "expert_subgraph": lambda s: (get_classification(s) or {}).get("expert_subgraph"),
 
@@ -449,6 +451,9 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
         "retrieved_docs": lambda s: get_retrieved_docs(s),
         "optimized_queries": lambda s: (get_search(s) or {}).get("optimized_queries") or {},
         "search_params": lambda s: (get_search(s) or {}).get("search_params") or {},
+        "is_retry_search": lambda s: (get_search(s) or {}).get("is_retry_search", False),
+        "search_start_time": lambda s: (get_search(s) or {}).get("search_start_time", 0.0),
+        "search_cache_hit": lambda s: (get_search(s) or {}).get("search_cache_hit", False),
         "semantic_results": lambda s: (get_search(s) or {}).get("semantic_results", []),
         "keyword_results": lambda s: (get_search(s) or {}).get("keyword_results", []),
         "semantic_count": lambda s: (get_search(s) or {}).get("semantic_count", 0),
@@ -525,13 +530,14 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
         state["input"][field_path] = value  # type: ignore
     elif field_path in ["query_type", "confidence", "legal_field", "legal_domain",
                         "urgency_level", "urgency_reasoning", "emergency_type",
-                        "complexity_level", "requires_expert", "expert_subgraph"]:
+                        "complexity_level", "query_complexity", "needs_search",
+                        "requires_expert", "expert_subgraph"]:
         update_classification(state, **{field_path: value})  # type: ignore
     elif field_path in ["search_query", "extracted_keywords", "ai_keyword_expansion",
                         "optimized_queries", "search_params", "semantic_results", "keyword_results",
                         "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
                         "prompt_optimized_context", "structured_documents", "search_metadata",
-                        "search_quality_evaluation"]:
+                        "search_quality_evaluation", "search_quality", "is_retry_search", "search_start_time", "search_cache_hit"]:
         set_search(state, {field_path: value})  # type: ignore
     elif field_path == "retrieved_docs":
         set_retrieved_docs(state, value)  # type: ignore
@@ -541,7 +547,7 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
         set_answer_text(state, value)  # type: ignore
     elif field_path in ["sources", "structure_confidence"]:
         set_answer(state, {field_path: value})  # type: ignore
-    elif field_path in ["document_type", "document_analysis", "key_clauses", "potential_issues"]:
+    elif field_path in ["document_type", "document_analysis", "key_clauses", "potential_issues", "uploaded_document"]:
         set_document(state, {field_path: value})  # type: ignore
     elif field_path in ["is_multi_turn", "multi_turn_confidence", "conversation_history", "conversation_context"]:
         set_multi_turn(state, {field_path: value})  # type: ignore
