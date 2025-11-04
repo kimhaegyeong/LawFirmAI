@@ -1866,6 +1866,14 @@ class EnhancedLegalQuestionWorkflow:
                 node_wrappers._global_search_results_cache["metadata"]["query_type"] = query_type_str
                 node_wrappers._global_search_results_cache["query_complexity"] = complexity.value
                 node_wrappers._global_search_results_cache["needs_search"] = needs_search
+                # 저장 후 즉시 검증 (개선: query_type 전달 문제 해결)
+                saved_query_type = node_wrappers._global_search_results_cache.get("common", {}).get("classification", {}).get("query_type") or \
+                                  node_wrappers._global_search_results_cache.get("metadata", {}).get("query_type") or \
+                                  node_wrappers._global_search_results_cache.get("query_type")
+                if saved_query_type == query_type_str:
+                    self.logger.info(f"✅ [QUERY TYPE] Saved to global cache and verified: {query_type_str}")
+                else:
+                    self.logger.warning(f"⚠️ [QUERY TYPE] Saved to global cache but verification failed: expected={query_type_str}, found={saved_query_type}")
             except Exception as e:
                 self.logger.warning(f"Global cache 저장 실패: {e}")
 
@@ -3352,29 +3360,39 @@ class EnhancedLegalQuestionWorkflow:
                     elif "classification" in state["common"] and isinstance(state["common"]["classification"], dict):
                         query_type = state["common"]["classification"].get("query_type", "")
             
-            # query_type이 여전히 없으면 전역 캐시에서 시도 (개선: 여러 위치 확인)
+            # query_type이 여전히 없으면 전역 캐시에서 시도 (개선: 여러 위치 확인 및 디버깅 로그 추가)
             if not query_type:
                 try:
                     from core.agents.node_wrappers import _global_search_results_cache
+                    self.logger.debug(f"[QUESTION TYPE] Searching global cache. Cache exists: {_global_search_results_cache is not None}, type: {type(_global_search_results_cache)}")
                     if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                        self.logger.debug(f"[QUESTION TYPE] Global cache keys: {list(_global_search_results_cache.keys())}")
                         # common.classification 그룹에서 찾기 (우선순위 1)
                         if "common" in _global_search_results_cache and isinstance(_global_search_results_cache["common"], dict):
                             if "classification" in _global_search_results_cache["common"] and isinstance(_global_search_results_cache["common"]["classification"], dict):
                                 query_type = _global_search_results_cache["common"]["classification"].get("query_type", "")
                                 if query_type:
                                     self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (common.classification): {query_type}")
+                                else:
+                                    self.logger.debug(f"[QUESTION TYPE] common.classification exists but query_type is empty. Keys: {list(_global_search_results_cache['common']['classification'].keys())}")
                         # metadata에서 찾기 (우선순위 2)
                         if not query_type and "metadata" in _global_search_results_cache and isinstance(_global_search_results_cache["metadata"], dict):
                             query_type = _global_search_results_cache["metadata"].get("query_type", "")
                             if query_type:
                                 self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (metadata): {query_type}")
+                            else:
+                                self.logger.debug(f"[QUESTION TYPE] metadata exists but query_type is empty. Keys: {list(_global_search_results_cache['metadata'].keys())}")
                         # 최상위 레벨에서 찾기 (우선순위 3)
                         if not query_type:
                             query_type = _global_search_results_cache.get("query_type", "")
                             if query_type:
                                 self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (top-level): {query_type}")
+                            else:
+                                self.logger.debug(f"[QUESTION TYPE] Top-level cache exists but query_type not found. Available keys: {list(_global_search_results_cache.keys())}")
+                    else:
+                        self.logger.debug(f"[QUESTION TYPE] Global cache is None or not a dict: {_global_search_results_cache}")
                 except Exception as e:
-                    self.logger.debug(f"Failed to get query_type from global cache: {e}")
+                    self.logger.warning(f"Failed to get query_type from global cache: {e}", exc_info=True)
             
             # query_type이 여전히 없으면 기본값 사용
             if not query_type:
