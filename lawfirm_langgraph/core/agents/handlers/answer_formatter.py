@@ -810,7 +810,7 @@ class AnswerFormatterHandler:
         in_reference_section = False
         in_disclaimer_section = False
 
-        for line in lines:
+        for i, line in enumerate(lines):
             # 신뢰도 정보 섹션 시작
             if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
                 in_confidence_section = True
@@ -821,8 +821,19 @@ class AnswerFormatterHandler:
                 in_reference_section = True
                 continue
 
-            # 면책 조항 섹션 시작 (--- 또는 💼)
-            if line.strip() == '---' or re.match(r'^\s*💼\s*\*\*면책\s*조항\*\*', line, re.IGNORECASE):
+            # 면책 조항 섹션 시작 (--- 또는 💼, 단 "---" 다음에 실제 면책 조항이 있는 경우만)
+            # "---" 다음에 "본 답변은", "면책", "변호사" 같은 키워드가 있으면 면책 조항으로 간주
+            if line.strip() == '---':
+                # 다음 몇 줄을 확인하여 면책 조항인지 판단
+                next_line_idx = i + 1
+                if next_line_idx < len(lines):
+                    next_line = lines[next_line_idx]
+                    if re.search(r'면책|본 답변은.*일반적인|변호사와.*상담|개별.*사안', next_line, re.IGNORECASE):
+                        in_disclaimer_section = True
+                        continue
+                # 면책 조항이 아니면 "---" 줄만 건너뛰고 계속 진행
+                continue
+            elif re.match(r'^\s*💼\s*\*\*면책\s*조항\*\*', line, re.IGNORECASE):
                 in_disclaimer_section = True
                 continue
 
@@ -846,7 +857,12 @@ class AnswerFormatterHandler:
                 continue
 
             if in_disclaimer_section:
-                # 면책 조항 섹션은 끝까지 모두 건너뛰기
+                # 면책 조항 섹션 종료 확인 (### 헤더가 나오면 종료, 또는 답변 내용이 다시 시작되면 종료)
+                if re.match(r'^###\s+', line) or re.match(r'^##\s+', line):
+                    in_disclaimer_section = False
+                    # 이 줄은 포함하지 않음
+                    continue
+                # 면책 조항 섹션 내부는 모두 건너뛰기
                 continue
 
             # 남아있는 메타 정보 패턴 제거 (상세 점수, 설명 등)
@@ -956,8 +972,10 @@ class AnswerFormatterHandler:
                 if re.match(r'^\s*[•\-\*]\s*\[.*?\].*?', line):
                     continue
 
-                # "안녕하세요" 같은 인사말 뒤에 오는 불필요한 텍스트도 제거
-                if re.match(r'^안녕하세요.*?궁금하시군요', line, re.IGNORECASE):
+                # "안녕하세요" 인사말은 유지하되, 단독 라인만 제거 (내용은 유지)
+                # 주의: 인사말이 포함된 라인은 내용이 있을 수 있으므로 제거하지 않음
+                if re.match(r'^안녕하세요.*?궁금하시군요\.?\s*$', line, re.IGNORECASE):
+                    # 단독 라인으로만 있는 경우만 제거 (내용이 있는 경우 유지)
                     continue
 
                 # 섹션 내부의 다른 줄들은 모두 건너뛰기
@@ -1200,24 +1218,75 @@ class AnswerFormatterHandler:
         else:
             final_confidence = existing_confidence
 
-        # 기본 신뢰도 보장
-        min_confidence = 0.25 if (answer_value and sources_list) else (0.15 if answer_value else 0.05)
-        final_confidence = max(final_confidence, min_confidence)
+        # 기본 신뢰도 보장 (개선: 검색 품질 점수 반영)
+        # search_quality를 여러 위치에서 찾기 (개선: search 그룹과 common 그룹도 확인)
+        search_quality_score = 0.0
+        search_quality_dict = state.get("search_quality", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            # search 그룹에서 찾기
+            if "search" in state and isinstance(state.get("search"), dict):
+                search_quality_dict = state["search"].get("search_quality", {}) or state["search"].get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            # common.search 그룹에서 찾기
+            if "common" in state and isinstance(state.get("common"), dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    search_quality_dict = state["common"]["search"].get("search_quality", {}) or state["common"]["search"].get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            # search_quality_evaluation에서 찾기
+            search_quality_dict = state.get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            # metadata에서 찾기
+            metadata = state.get("metadata", {})
+            if isinstance(metadata, dict):
+                search_quality_dict = metadata.get("search_quality", {}) or metadata.get("search_quality_evaluation", {})
+        
+        # 전역 캐시에서도 찾기 (개선)
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                    if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                        search_quality_dict = _global_search_results_cache["search"].get("search_quality", {}) or _global_search_results_cache["search"].get("search_quality_evaluation", {})
+            except Exception as e:
+                self.logger.debug(f"Failed to get search_quality from global cache: {e}")
+        
+        if search_quality_dict and isinstance(search_quality_dict, dict):
+            search_quality_score = search_quality_dict.get("overall_quality", 0.0)
+        
+        # 로깅 추가
+        self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f} (from search_quality dict: {bool(search_quality_dict)}, keys: {list(search_quality_dict.keys()) if search_quality_dict else []})")
+        
+        quality_boost = search_quality_score * 0.3  # 검색 품질 점수 30% 반영 (20% -> 30%로 상향)
+        
+        # 검색 결과가 있고 품질이 좋으면 기본 신뢰도 상향
+        # 검색 결과가 없을 때도 기본 신뢰도 보장 (개선)
+        search_failed = state.get("search_failed", False)
+        if search_failed:
+            # 검색 실패(데이터베이스 문제 등)인 경우 기본 신뢰도 낮게 설정
+            base_min_confidence = 0.20 if answer_value else 0.10
+            self.logger.warning(f"[CONFIDENCE CALC] Search failed, using lower base confidence: {base_min_confidence}")
+        else:
+            # 정상적인 경우
+            base_min_confidence = 0.30 if (answer_value and sources_list and len(sources_list) >= 3 and search_quality_score > 0.3) else \
+                                   0.25 if (answer_value and sources_list) else \
+                                   0.20 if answer_value else 0.10  # 검색 결과가 없어도 답변이 있으면 최소 20%
+        
+        final_confidence = max(final_confidence, base_min_confidence) + quality_boost
 
         # 키워드 포함도 기반 보정
         keyword_coverage = self.calculate_keyword_coverage(state, answer_value)
         keyword_boost = keyword_coverage * 0.3
         adjusted_confidence = min(0.95, final_confidence + keyword_boost)
 
-        # 소스 개수 기반 추가 보정
+        # 소스 개수 기반 추가 보정 (개선: 더 많은 소스일수록 높은 보정)
         if sources_list:
             source_count = len(sources_list)
             if source_count >= 5:
-                adjusted_confidence = min(0.95, adjusted_confidence + 0.05)
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.08)  # 0.05 -> 0.08
             elif source_count >= 3:
-                adjusted_confidence = min(0.95, adjusted_confidence + 0.03)
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.05)  # 0.03 -> 0.05
             elif source_count >= 1:
-                adjusted_confidence = min(0.95, adjusted_confidence + 0.01)
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.02)  # 0.01 -> 0.02
 
         # 답변 길이 기반 추가 보정
         if answer_value:
@@ -1233,10 +1302,44 @@ class AnswerFormatterHandler:
         # 검색 결과 기반 검증 점수 가져오기 (있는 경우)
         grounding_score = state.get("grounding_score")
         source_coverage = state.get("source_coverage")
+        
+        # 문서 인용 점수 계산 (개선: 2개 이상 인용 시 보정 추가)
+        citation_count = 0
+        if answer_value:
+            import re
+            # 법령 조문 인용 패턴
+            citation_patterns = [
+                r'[가-힣]+법\s*제?\s*\d+\s*조',
+                r'\[법령:\s*[^\]]+\]',
+                r'제\d+조',
+            ]
+            unique_citations = set()
+            for pattern in citation_patterns:
+                matches = re.findall(pattern, answer_value)
+                for match in matches:
+                    unique_citations.add(match)
+            citation_count = len(unique_citations)
+        
+        # 문서 인용 점수 보정 (2개 이상 인용 시 +0.05)
+        citation_boost = 0.0
+        if citation_count >= 2:
+            citation_boost = 0.05
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
+        elif citation_count >= 1:
+            citation_boost = 0.02
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citation found (+{citation_boost})")
+        
+        # grounding_score를 신뢰도 계산에 반영 (10%)
+        grounding_boost = 0.0
+        if grounding_score is not None:
+            grounding_boost = float(grounding_score) * 0.1
+            self.logger.info(f"[CONFIDENCE CALC] Grounding boost applied: grounding_score={grounding_score:.3f} (+{grounding_boost:.3f})")
+        
+        adjusted_confidence_with_validation = min(0.95, adjusted_confidence + citation_boost + grounding_boost)
 
         # 일관된 신뢰도로 최종 조정
         final_adjusted_confidence = self._calculate_consistent_confidence(
-            base_confidence=adjusted_confidence,
+            base_confidence=adjusted_confidence_with_validation,
             query_type=query_type,
             query_complexity=query_complexity or "moderate",
             grounding_score=grounding_score,
@@ -1733,13 +1836,22 @@ class AnswerFormatterHandler:
                 metadata_sections = self._extract_metadata_sections(final_answer)
 
                 # answer에서 메타 정보 섹션 제거
+                before_metadata = len(final_answer)
                 clean_answer = self._remove_metadata_sections(final_answer)
+                after_metadata = len(clean_answer)
+                self.logger.debug(f"[ANSWER CLEANUP] After metadata removal: {before_metadata} -> {after_metadata} chars")
 
                 # 중간 생성 텍스트 제거 (STEP 0, 원본 답변, 질문 정보 등)
+                before_intermediate = len(clean_answer)
                 clean_answer = self._remove_intermediate_text(clean_answer)
+                after_intermediate = len(clean_answer)
+                self.logger.debug(f"[ANSWER CLEANUP] After intermediate removal: {before_intermediate} -> {after_intermediate} chars")
 
                 # '## 답변' 헤더 제거
+                before_header = len(clean_answer)
                 clean_answer = self._remove_answer_header(clean_answer)
+                after_header = len(clean_answer)
+                self.logger.debug(f"[ANSWER CLEANUP] After header removal: {before_header} -> {after_header} chars")
 
                 # 답변 길이 조절 (질의 유형에 맞게)
                 query_type = WorkflowUtils.get_state_value(state, "query_type", "general_question")

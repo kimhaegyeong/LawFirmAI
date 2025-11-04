@@ -128,12 +128,12 @@ class ContextBuilder:
                 extracted_keywords
             )
 
-            # 2. 고품질 문서 선별 (최소 3개 보장)
+            # 2. 고품질 문서 선별 (최소 3개 보장, 임계값 낮춤)
             high_value_docs = self.select_high_value_documents(
                 reranked_docs,
                 query,
-                min_relevance=0.5,
-                max_docs=8,
+                min_relevance=0.1,  # 0.5 -> 0.1로 낮춤
+                max_docs=10,  # 8 -> 10으로 증가
                 min_docs=3  # 최소 3개 문서 보장
             )
 
@@ -159,15 +159,24 @@ class ContextBuilder:
                     f"⚠️ [INTELLIGENT CONTEXT] context_parts is empty, "
                     f"creating minimal context from {len(high_value_docs)} docs"
                 )
-                # 최소한의 context 생성 (문서 요약)
+                # 최소한의 context 생성 (문서 요약) - 더 많은 내용 포함
                 context_parts = []
-                for doc in high_value_docs[:5]:
+                min_context_length = 1000  # 최소 1000자 목표
+                current_total = 0
+                
+                for doc in high_value_docs[:10]:  # 5개 -> 10개로 증가
                     content = doc.get("content", "") or doc.get("text", "") or doc.get("content_text", "")
                     source = doc.get("source", "Unknown")
                     if content and len(content.strip()) > 20:
-                        # 문서 내용 일부 포함
-                        content_preview = content[:500]
-                        context_parts.append(f"[문서: {source}]\n{content_preview}")
+                        # 문서 내용 일부 포함 (최소 300자, 최대 800자)
+                        remaining_needed = max(300, min_context_length - current_total)
+                        content_preview = content[:min(800, remaining_needed + 200)]
+                        context_part = f"[문서: {source}]\n{content_preview}"
+                        context_parts.append(context_part)
+                        current_total += len(context_part)
+                        
+                        if current_total >= min_context_length:
+                            break
 
                 if context_parts:
                     context_text = "\n\n".join(context_parts)
@@ -250,18 +259,37 @@ class ContextBuilder:
                 # 1. 의미적 유사도 재계산 (semantic_search 활용)
                 semantic_score = 0.0
                 try:
+                    # 기존 점수 가져오기 (여러 필드에서 시도)
+                    existing_score = (
+                        doc.get("final_weighted_score") or
+                        doc.get("relevance_score", 0.0) or
+                        doc.get("combined_score", 0.0) or
+                        doc.get("similarity", 0.0) or
+                        0.0
+                    )
+                    
+                    # 기존 점수가 0이면 최소값 보장
+                    if existing_score == 0:
+                        existing_score = 0.1
+                    
+                    semantic_score = existing_score
+                    
                     if self.semantic_search:
-                        existing_score = doc.get("relevance_score", 0.0) or doc.get("combined_score", 0.0)
-                        semantic_score = existing_score
-
                         # 직접 유사도 계산 시도
                         if hasattr(self.semantic_search, '_calculate_semantic_score'):
                             direct_score = self.semantic_search._calculate_semantic_score(query, doc_content)
                             # 기존 점수와 직접 계산 점수 가중 평균
                             semantic_score = 0.6 * existing_score + 0.4 * direct_score
+                        else:
+                            # 간단한 키워드 기반 점수 계산
+                            query_words = set(query.lower().split())
+                            content_words = set(doc_content.lower().split())
+                            if query_words and content_words:
+                                match_ratio = len(query_words.intersection(content_words)) / len(query_words)
+                                semantic_score = max(existing_score, match_ratio * 0.5)
                 except Exception as e:
                     self.logger.debug(f"Semantic score calculation failed: {e}")
-                    semantic_score = doc.get("relevance_score", 0.0) or doc.get("combined_score", 0.0)
+                    semantic_score = doc.get("relevance_score", 0.0) or doc.get("combined_score", 0.0) or 0.1
 
                 # 2. 키워드 매칭 점수 계산
                 keyword_score = 0.0
@@ -301,8 +329,13 @@ class ContextBuilder:
 
                 # 기존 점수와 새 점수 결합
                 final_relevance = 0.7 * max(existing_combined, new_relevance_score) + 0.3 * new_relevance_score
+                
+                # 최소 점수 보장 (0이 되지 않도록)
+                if final_relevance == 0:
+                    final_relevance = 0.1
 
                 doc["final_relevance_score"] = final_relevance
+                doc["rerank_score"] = final_relevance  # 재정렬 점수도 저장
                 doc["query_direct_similarity"] = semantic_score
                 doc["keyword_match_score"] = keyword_score
                 doc["legal_term_score"] = legal_term_score
@@ -343,8 +376,8 @@ class ContextBuilder:
             high_value_docs = []
 
             for doc in documents:
-                doc_content = doc.get("content", "")
-                if not doc_content or len(doc_content) < 20:
+                doc_content = doc.get("content", "") or doc.get("text", "")
+                if not doc_content or len(doc_content) < 10:  # 20자 -> 10자로 낮춤
                     continue
 
                 # 1. 법률 조항 인용 수 계산
@@ -378,7 +411,17 @@ class ContextBuilder:
                     keyword_coverage = len(query_words.intersection(content_words)) / max(1, len(query_words))
 
                 # 4. 정보 밀도 종합 점수
-                relevance_score = doc.get("final_relevance_score") or doc.get("combined_score", 0.0) or doc.get("relevance_score", 0.0)
+                relevance_score = (
+                    doc.get("final_relevance_score") or
+                    doc.get("final_weighted_score") or
+                    doc.get("combined_score", 0.0) or
+                    doc.get("relevance_score", 0.0) or
+                    0.0
+                )
+                
+                # relevance_score가 0이면 최소값 보장
+                if relevance_score == 0:
+                    relevance_score = 0.1
 
                 information_density = (
                     0.3 * citation_score +
@@ -394,10 +437,16 @@ class ContextBuilder:
                 # 관련성 점수와 정보 밀도 점수 가중 평균
                 combined_value_score = 0.6 * relevance_score + 0.4 * information_density
                 doc["combined_value_score"] = combined_value_score
+                doc["final_relevance_score"] = relevance_score  # 재정렬 점수 저장
 
-                # 임계값 체크
-                if combined_value_score >= min_relevance:
+                # 임계값 체크 (임계값을 낮춰서 더 많은 문서 포함)
+                min_relevance_adjusted = min(min_relevance, 0.1)  # 최대 0.1로 낮춤
+                if combined_value_score >= min_relevance_adjusted:
                     high_value_docs.append(doc)
+                else:
+                    # 임계값보다 낮아도 상위 문서는 포함
+                    if len(high_value_docs) < max_docs:
+                        high_value_docs.append(doc)
 
             # combined_value_score로 정렬
             high_value_docs.sort(key=lambda x: x.get("combined_value_score", 0.0), reverse=True)
@@ -467,8 +516,8 @@ class ContextBuilder:
             reserved_space = 500
 
             for doc in high_value_docs:
-                doc_content = doc.get("content", "")
-                if not doc_content:
+                doc_content = doc.get("content", "") or doc.get("text", "")
+                if not doc_content or len(doc_content.strip()) < 10:
                     continue
 
                 doc_length = len(doc_content)
@@ -476,9 +525,12 @@ class ContextBuilder:
 
                 available_space = max_length - current_length - reserved_space
 
-                if available_space <= 100:
+                # 최소 200자 이상 공간이 있어야 문서 포함
+                if available_space <= 200:
                     break
 
+                # 문서를 최소 200자 이상 포함하도록 보장
+                min_doc_length = min(200, doc_length)
                 if doc_length <= available_space:
                     context_part = f"[문서: {doc_source}]\n{doc_content}"
                     optimized_context["context_parts"].append(context_part)
