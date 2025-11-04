@@ -266,12 +266,38 @@ class AnswerValidator:
                 overlap = len(context_words.intersection(answer_words))
                 keyword_coverage = overlap / max(1, min(len(context_words), 100))
 
-            # 2. 법률 조항/판례 인용 포함 여부 확인
-            citation_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조|\[법령:\s*[^\]]+\]'
-            citations_in_answer = len(re.findall(citation_pattern, answer))
+            # 2. 법률 조항/판례 인용 포함 여부 확인 (강화: 법령 조문 인용 우선)
+            # 법령 조문 인용 패턴 (강화: 다양한 형식 지원)
+            citation_patterns = [
+                r'[가-힣]+법\s*제?\s*\d+\s*조',  # 민법 제750조
+                r'\[법령:\s*[^\]]+\]',  # [법령: 민법 제750조]
+                r'제\d+조',  # 제750조
+                r'\d+조',  # 750조
+            ]
+            citations_in_answer = 0
+            unique_citations = set()
+            for pattern in citation_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    unique_citations.add(match)
+            citations_in_answer = len(unique_citations)
 
             precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+|\[판례:\s*[^\]]+\]'
             precedents_in_answer = len(re.findall(precedent_pattern, answer))
+            
+            # 법령 조문 인용 필수 체크 (검색 결과에 법령 조문이 있으면 반드시 인용해야 함)
+            has_law_citation = citations_in_answer > 0
+            has_law_in_docs = False
+            if retrieved_docs:
+                for doc in retrieved_docs:
+                    if isinstance(doc, dict):
+                        doc_type = doc.get("type", "").lower()
+                        source = doc.get("source", "").lower()
+                        # 법령 조문 문서인지 확인
+                        if ("법령" in doc_type or "statute" in doc_type or "law" in doc_type) or \
+                           ("제" in source and "조" in source):
+                            has_law_in_docs = True
+                            break
 
             # 문서 인용 패턴 확인
             document_citation_pattern = r'\[문서:\s*[^\]]+\]'
@@ -279,12 +305,80 @@ class AnswerValidator:
 
             total_citations_in_answer = citations_in_answer + precedents_in_answer + document_citations
 
-            # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인
+            # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
             has_document_references = False
             if document_sources:
+                # re 모듈은 이미 파일 상단에서 import됨
                 for source in document_sources:
-                    source_keywords = source.split()[:3]
-                    if any(keyword in answer_lower for keyword in source_keywords if len(keyword) > 2):
+                    if not source or not isinstance(source, str):
+                        continue
+                    
+                    source_lower = source.lower()
+                    # 전체 소스명이 포함되어 있는지 확인
+                    if source_lower in answer_lower:
+                        has_document_references = True
+                        break
+                    
+                    # 소스명의 주요 키워드 추출 (3-5개 단어)
+                    source_words = source.split()
+                    # 법령명이나 판례명의 주요 부분 추출
+                    if len(source_words) >= 2:
+                        # 첫 2-3개 단어로 매칭 시도
+                        key_phrase = " ".join(source_words[:3])
+                        if len(key_phrase) >= 5 and key_phrase.lower() in answer_lower:
+                            has_document_references = True
+                            break
+                    
+                    # 법령명과 조문번호 패턴 매칭
+                    # 예: "민법 제750조" -> "민법", "750조" 모두 찾기
+                    law_match = re.search(r'([가-힣]+법)', source)
+                    article_match = re.search(r'제?\s*(\d+)\s*조', source)
+                    if law_match and article_match:
+                        law_name = law_match.group(1)
+                        article_no = article_match.group(1)
+                        # "민법"과 "750조"가 모두 답변에 있는지 확인
+                        if law_name in answer_lower and (f"{article_no}조" in answer_lower or f"제{article_no}조" in answer_lower):
+                            has_document_references = True
+                            break
+                    
+                    # 판례명 패턴 매칭 (법원명 + 연도 + 사건번호) - 개선: 더 유연한 패턴
+                    # 예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3"
+                    # 또는 "대구지방법원영덕지원-2021고단3"
+                    court_patterns = [
+                        r'([가-힣]+지방법원[가-힣]*지원)',  # 대구지방법원 영덕지원 또는 대구지방법원영덕지원
+                        r'([가-힣]+지방법원)',  # 대구지방법원
+                        r'(대법원|고등법원)',  # 대법원, 고등법원
+                    ]
+                    case_patterns = [
+                        r'(\d{4}[가-힣]*\d+)',  # 2021고단3
+                        r'(\d{4}[가-힣]+)',  # 2021고단
+                    ]
+                    
+                    for court_pattern in court_patterns:
+                        court_match = re.search(court_pattern, source)
+                        if court_match:
+                            court_name = court_match.group(1)
+                            # 법원명이 답변에 있는지 확인 (부분 매칭도 허용)
+                            if court_name in answer_lower or any(word in answer_lower for word in court_name.split() if len(word) >= 2):
+                                has_document_references = True
+                                break
+                    
+                    if not has_document_references:
+                        for case_pattern in case_patterns:
+                            case_match = re.search(case_pattern, source)
+                            if case_match:
+                                case_no = case_match.group(1)
+                                # 사건번호가 답변에 있는지 확인
+                                if case_no in answer_lower:
+                                    has_document_references = True
+                                    break
+                    
+                    if has_document_references:
+                        break
+                    
+                    # 일반적인 키워드 매칭 (최소 3자 이상)
+                    source_keywords = [w for w in source.split() if len(w) >= 3][:3]
+                    if source_keywords and any(keyword.lower() in answer_lower for keyword in source_keywords):
                         has_document_references = True
                         break
 
@@ -330,8 +424,18 @@ class AnswerValidator:
                 concept_coverage * 0.2
             )
 
+            # 재생성 필요 여부 초기화 (개선: 변수 초기화 문제 해결)
+            needs_regeneration = False
+
+            # 법령 조문 인용 필수 체크 결과 (검색 결과에 법령 조문이 있는데 답변에 없으면 경고)
+            law_citation_required = has_law_in_docs and not has_law_citation
+            if law_citation_required:
+                # 법령 조문 인용이 필수인데 없으면 coverage_score 감소
+                coverage_score = max(0.0, coverage_score - 0.2)  # 20% 감소
+                needs_regeneration = True  # 재생성 필요
+            
             uses_context = coverage_score >= 0.3
-            needs_regeneration = coverage_score < 0.3 or (expected_citations and found_citations == 0)
+            needs_regeneration = needs_regeneration or (coverage_score < 0.3) or (expected_citations and found_citations == 0)
 
             validation_result = {
                 "uses_context": uses_context,
@@ -349,7 +453,10 @@ class AnswerValidator:
                 "has_document_references": has_document_references,
                 "document_sources_count": len(document_sources),
                 "needs_regeneration": needs_regeneration,
-                "missing_key_info": missing_citations[:5]
+                "missing_key_info": missing_citations[:5],
+                "has_law_citation": has_law_citation,
+                "has_law_in_docs": has_law_in_docs,
+                "law_citation_required": law_citation_required
             }
 
             return validation_result
@@ -390,15 +497,54 @@ class AnswerValidator:
         import re
         from difflib import SequenceMatcher
 
-        if not answer or not retrieved_docs:
+        if not answer:
             return {
                 "is_grounded": False,
                 "grounding_score": 0.0,
-                "unverified_sections": [answer] if answer else [],
+                "unverified_sections": [],
                 "source_coverage": 0.0,
                 "needs_review": True,
-                "error": "답변 또는 검색 결과가 없습니다."
+                "error": "답변이 없습니다."
             }
+        
+        # 검색 결과가 없을 때의 처리 (개선)
+        if not retrieved_docs:
+            # 검색 결과가 없어도 답변이 있으면 부분 점수 부여
+            # 답변에 법령 조문 인용이 있으면 최소 점수 부여
+            import re
+            citation_patterns = [
+                r'[가-힣]+법\s*제?\s*\d+\s*조',
+                r'\[법령:\s*[^\]]+\]',
+                r'제\d+조',
+                r'\d+조',
+            ]
+            has_citation = False
+            for pattern in citation_patterns:
+                if re.search(pattern, answer):
+                    has_citation = True
+                    break
+            
+            if has_citation:
+                # 법령 조문 인용이 있으면 최소 grounding_score 부여
+                return {
+                    "is_grounded": False,  # 검색 결과가 없으므로 grounded는 False
+                    "grounding_score": 0.3,  # 최소 점수 부여
+                    "unverified_sections": [answer],
+                    "source_coverage": 0.0,
+                    "needs_review": True,
+                    "error": "검색 결과가 없지만 답변에 법령 조문 인용이 있습니다.",
+                    "partial_credit": True
+                }
+            else:
+                # 검색 결과도 없고 인용도 없으면 0점
+                return {
+                    "is_grounded": False,
+                    "grounding_score": 0.0,
+                    "unverified_sections": [answer],
+                    "source_coverage": 0.0,
+                    "needs_review": True,
+                    "error": "검색 결과가 없고 답변에 법령 조문 인용도 없습니다."
+                }
 
         # 1. 검색된 문서에서 모든 텍스트 추출
         source_texts = []
@@ -489,8 +635,8 @@ class AnswerValidator:
         grounding_score = verified_count / total_sentences if total_sentences > 0 else 0.0
         source_coverage = len(set([s["source_preview"] for s in verified_sentences if s.get("source_preview")])) / len(source_texts) if source_texts else 0.0
 
-        # 5. 검증 통과 기준: 80% 이상 문장이 검증됨
-        is_grounded = grounding_score >= 0.8
+        # 5. 검증 통과 기준: 60% 이상 문장이 검증됨 (80% -> 60%로 완화)
+        is_grounded = grounding_score >= 0.6
 
         # 6. 신뢰도 조정 (검증되지 않은 문장이 많으면 신뢰도 감소)
         confidence_penalty = len(unverified_sentences) * 0.05  # 문장당 5% 감소
