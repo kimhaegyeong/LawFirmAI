@@ -89,13 +89,40 @@ class SearchHandler:
 
             formatted_results = []
             for result in results:
+                # content 필드도 text로 매핑 (검색 결과 형식 통일)
+                text_content = (
+                    result.get('text', '') or
+                    result.get('content', '') or
+                    str(result.get('metadata', {}).get('content', '')) or
+                    str(result.get('metadata', {}).get('text', '')) or
+                    ''
+                )
+                
+                # content 필드가 비어있으면 경고 및 로깅
+                if not text_content or len(text_content.strip()) == 0:
+                    self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty content for result: {result.get('id', 'unknown')}, metadata: {result.get('metadata', {})}")
+                    # metadata에서 추가 시도
+                    metadata = result.get('metadata', {})
+                    if isinstance(metadata, dict):
+                        text_content = metadata.get('content') or metadata.get('text') or ''
+                    if not text_content:
+                        continue  # content가 없으면 건너뛰기
+                
+                # metadata에 content 필드 명시적으로 저장
+                metadata = result.get('metadata', {})
+                if not isinstance(metadata, dict):
+                    metadata = result if isinstance(result, dict) else {}
+                metadata['content'] = text_content
+                metadata['text'] = text_content
+                
                 formatted_results.append({
-                    'id': f"semantic_{result.get('metadata', {}).get('id', hash(result.get('text', '')))}",
-                    'content': result.get('text', ''),
+                    'id': f"semantic_{result.get('metadata', {}).get('id', hash(text_content))}",
+                    'content': text_content,  # content 필드 보장
+                    'text': text_content,  # text 필드도 추가 (호환성)
                     'source': result.get('source', 'Vector Search'),
                     'relevance_score': result.get('score', 0.8),
                     'type': result.get('type', 'unknown'),
-                    'metadata': result.get('metadata', {}),
+                    'metadata': metadata,  # content 필드가 포함된 metadata 저장
                     'search_type': 'semantic'
                 })
 

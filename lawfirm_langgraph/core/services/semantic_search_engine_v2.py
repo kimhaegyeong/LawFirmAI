@@ -240,7 +240,15 @@ class SemanticSearchEngineV2:
             return chunk_vectors
 
         except Exception as e:
-            self.logger.error(f"Error loading chunk vectors: {e}")
+            error_msg = str(e).lower()
+            if "no such table" in error_msg or "embeddings" in error_msg:
+                self.logger.error(
+                    f"❌ Embeddings table not found in database. "
+                    f"Semantic search will not work. "
+                    f"Please ensure embeddings are generated and stored in the database."
+                )
+            else:
+                self.logger.error(f"Error loading chunk vectors: {e}")
             return {}
 
     def _get_cached_query_vector(self, query: str) -> Optional[np.ndarray]:
@@ -392,7 +400,10 @@ class SemanticSearchEngineV2:
                 chunk_vectors = self._load_chunk_vectors(source_types=source_types)
 
                 if not chunk_vectors:
-                    self.logger.warning("No chunk vectors found")
+                    self.logger.warning(
+                        f"⚠️ No chunk vectors found for search. "
+                        f"This may indicate that embeddings need to be generated."
+                    )
                     return []
 
                 # 코사인 유사도 계산
@@ -412,17 +423,27 @@ class SemanticSearchEngineV2:
             for chunk_id, score in similarities[:k]:
                 # 청크 메타데이터 조회 (없으면 DB에서 조회)
                 if chunk_id not in self._chunk_metadata:
-                    # 메타데이터가 없으면 DB에서 직접 조회
+                    # 메타데이터가 없으면 DB에서 직접 조회 (전체 텍스트 가져오기)
                     cursor = conn.execute(
                         "SELECT source_type, source_id, text FROM text_chunks WHERE id = ?",
                         (chunk_id,)
                     )
                     row = cursor.fetchone()
                     if row:
+                        text_content = row['text'] if row['text'] else ""
+                        # text가 비어있거나 짧으면 원본 테이블에서 복원 시도
+                        if not text_content or len(text_content.strip()) < 100:
+                            source_type = row['source_type']
+                            source_id = row['source_id']
+                            restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                            if restored_text and len(restored_text.strip()) > len(text_content.strip()):
+                                text_content = restored_text
+                                self.logger.info(f"Restored longer text for chunk_id={chunk_id} (length: {len(text_content)} chars)")
+                        
                         self._chunk_metadata[chunk_id] = {
                             'source_type': row['source_type'],
                             'source_id': row['source_id'],
-                            'text': row['text']
+                            'text': text_content
                         }
 
                 metadata = self._chunk_metadata.get(chunk_id, {})
@@ -430,12 +451,55 @@ class SemanticSearchEngineV2:
                 source_id = metadata.get('source_id')
                 text = metadata.get('text', '')
 
+                # text가 비어있거나 짧으면 원본 테이블에서 복원 시도 (최소 100자 보장)
+                if not text or len(text.strip()) < 100:
+                    if not text or len(text.strip()) == 0:
+                        self.logger.warning(f"Empty text content for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}. Attempting to restore from source table...")
+                    else:
+                        self.logger.debug(f"Short text content for chunk_id={chunk_id} (length: {len(text)} chars), attempting to restore longer text from source table...")
+                    
+                    restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                    if restored_text:
+                        # 복원된 텍스트가 더 길면 사용
+                        if len(restored_text.strip()) > len(text.strip()) if text else True:
+                            text = restored_text
+                            # 복원된 text를 메타데이터에 저장
+                            self._chunk_metadata[chunk_id]['text'] = text
+                            self.logger.info(f"Successfully restored text for chunk_id={chunk_id} from source table (length: {len(text)} chars)")
+                        else:
+                            self.logger.debug(f"Restored text is not longer than existing text for chunk_id={chunk_id}")
+                    else:
+                        if not text or len(text.strip()) == 0:
+                            self.logger.error(f"Failed to restore text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
+                        else:
+                            self.logger.warning(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
+
                 # 소스별 상세 메타데이터 조회
                 source_meta = self._get_source_metadata(conn, source_type, source_id)
-
+                # content 필드가 비어있으면 경고 및 복원 시도
+                if not text or len(text.strip()) == 0:
+                    self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
+                    # 복원 시도
+                    if source_type and source_id:
+                        restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                        if restored_text:
+                            text = restored_text
+                            self.logger.info(f"✅ [SEMANTIC SEARCH] Restored text for chunk_id={chunk_id} (length: {len(text)} chars)")
+                        else:
+                            self.logger.error(f"❌ [SEMANTIC SEARCH] Failed to restore text for chunk_id={chunk_id}")
+                            continue  # text가 없으면 건너뛰기
+                
+                # 최소 길이 보장 (100자 이상)
+                if text and len(text.strip()) < 100:
+                    restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                    if restored_text and len(restored_text.strip()) > len(text.strip()):
+                        text = restored_text
+                        self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
+                
                 results.append({
                     "id": f"chunk_{chunk_id}",
                     "text": text,
+                    "content": text,  # content 필드 보장
                     "score": float(score),
                     "similarity": float(score),
                     "type": source_type,
@@ -444,6 +508,8 @@ class SemanticSearchEngineV2:
                         "chunk_id": chunk_id,
                         "source_type": source_type,
                         "source_id": source_id,
+                        "text": text,  # metadata에도 text 포함
+                        "content": text,  # metadata에도 content 저장
                         **source_meta
                     },
                     "relevance_score": float(score),
@@ -497,7 +563,11 @@ class SemanticSearchEngineV2:
             # 1. 벡터 로드
             chunk_vectors = self._load_chunk_vectors()
             if not chunk_vectors:
-                self.logger.warning("No chunk vectors found, cannot build index")
+                self.logger.error(
+                    f"❌ No chunk vectors found, cannot build FAISS index. "
+                    f"Semantic search will not work. "
+                    f"Please ensure embeddings are generated and stored in the database."
+                )
                 return False
 
             # 2. numpy 배열 생성
@@ -686,6 +756,93 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.warning(f"Error getting source metadata for {source_type} {source_id}: {e}")
             return {}
+
+    def _restore_text_from_source(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> str:
+        """
+        text_chunks 테이블의 text가 비어있을 때 원본 테이블에서 복원
+        
+        Args:
+            conn: 데이터베이스 연결
+            source_type: 소스 타입 (statute_article, case_paragraph 등)
+            source_id: 소스 ID
+            
+        Returns:
+            복원된 text 문자열 (없으면 빈 문자열)
+        """
+        try:
+            # row_factory를 설정하여 dict 형태로 접근
+            conn.row_factory = sqlite3.Row
+            
+            if source_type == "statute_article":
+                cursor = conn.execute(
+                    "SELECT text, article_no FROM statute_articles WHERE id = ?",
+                    (source_id,)
+                )
+            elif source_type == "case_paragraph":
+                cursor = conn.execute(
+                    "SELECT text FROM case_paragraphs WHERE id = ?",
+                    (source_id,)
+                )
+            elif source_type == "decision_paragraph":
+                cursor = conn.execute(
+                    "SELECT text FROM decision_paragraphs WHERE id = ?",
+                    (source_id,)
+                )
+            elif source_type == "interpretation_paragraph":
+                cursor = conn.execute(
+                    "SELECT text FROM interpretation_paragraphs WHERE id = ?",
+                    (source_id,)
+                )
+            else:
+                self.logger.warning(f"Unknown source_type for text restoration: {source_type}")
+                return ""
+            
+            row = cursor.fetchone()
+            if row:
+                # Row 객체에서 text 필드 접근
+                text = row['text'] if 'text' in row.keys() else None
+                if text and len(str(text).strip()) > 0:
+                    self.logger.info(f"Successfully restored text for {source_type} id={source_id} (length: {len(str(text))} chars)")
+                    return str(text)
+                else:
+                    self.logger.warning(f"Text field is empty or None for {source_type} id={source_id}")
+                    # text가 비어있으면 다른 방법 시도: text_chunks에서 직접 조회
+                    return self._restore_text_from_chunks(conn, source_type, source_id)
+            else:
+                self.logger.warning(f"No row found for {source_type} id={source_id}")
+                # 원본 테이블에 없으면 text_chunks에서 직접 조회
+                return self._restore_text_from_chunks(conn, source_type, source_id)
+            return ""
+        except sqlite3.Error as e:
+            self.logger.error(f"SQLite error restoring text from source table ({source_type}, {source_id}): {e}")
+            # 에러 발생 시 text_chunks에서 직접 조회 시도
+            return self._restore_text_from_chunks(conn, source_type, source_id)
+        except Exception as e:
+            self.logger.error(f"Error restoring text from source table ({source_type}, {source_id}): {e}")
+            # 에러 발생 시 text_chunks에서 직접 조회 시도
+            return self._restore_text_from_chunks(conn, source_type, source_id)
+    
+    def _restore_text_from_chunks(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> str:
+        """
+        text_chunks 테이블에서 직접 text 조회 (원본 테이블 조회 실패 시)
+        """
+        try:
+            conn.row_factory = sqlite3.Row
+            # 같은 source_type과 source_id를 가진 다른 chunk에서 text 가져오기
+            cursor = conn.execute(
+                "SELECT text FROM text_chunks WHERE source_type = ? AND source_id = ? AND text IS NOT NULL AND text != '' LIMIT 1",
+                (source_type, source_id)
+            )
+            row = cursor.fetchone()
+            if row:
+                text = row['text'] if 'text' in row.keys() else None
+                if text and len(str(text).strip()) > 0:
+                    self.logger.info(f"Restored text from text_chunks for {source_type} id={source_id} (length: {len(str(text))} chars)")
+                    return str(text)
+            return ""
+        except Exception as e:
+            self.logger.error(f"Error restoring text from text_chunks ({source_type}, {source_id}): {e}")
+            return ""
 
     def _format_source(self, source_type: str, metadata: Dict[str, Any]) -> str:
         """소스 정보 포맷팅"""
