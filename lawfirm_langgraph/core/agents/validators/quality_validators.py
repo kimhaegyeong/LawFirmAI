@@ -314,8 +314,12 @@ class AnswerValidator:
                         continue
                     
                     source_lower = source.lower()
-                    # 전체 소스명이 포함되어 있는지 확인
-                    if source_lower in answer_lower:
+                    # 공백 제거 버전 (개선: 답변에 공백이 들어간 경우 대비)
+                    source_no_spaces = source_lower.replace(" ", "").replace("-", "").replace("_", "")
+                    answer_no_spaces = answer_lower.replace(" ", "").replace("-", "").replace("_", "")
+                    
+                    # 전체 소스명이 포함되어 있는지 확인 (공백 포함 및 제거 버전 모두)
+                    if source_lower in answer_lower or source_no_spaces in answer_no_spaces:
                         has_document_references = True
                         break
                     
@@ -323,9 +327,10 @@ class AnswerValidator:
                     source_words = source.split()
                     # 법령명이나 판례명의 주요 부분 추출
                     if len(source_words) >= 2:
-                        # 첫 2-3개 단어로 매칭 시도
+                        # 첫 2-3개 단어로 매칭 시도 (공백 포함 및 제거 버전 모두)
                         key_phrase = " ".join(source_words[:3])
-                        if len(key_phrase) >= 5 and key_phrase.lower() in answer_lower:
+                        key_phrase_no_spaces = key_phrase.replace(" ", "").replace("-", "").replace("_", "")
+                        if len(key_phrase) >= 5 and (key_phrase.lower() in answer_lower or key_phrase_no_spaces in answer_no_spaces):
                             has_document_references = True
                             break
                     
@@ -341,7 +346,7 @@ class AnswerValidator:
                             has_document_references = True
                             break
                     
-                    # 판례명 패턴 매칭 (법원명 + 연도 + 사건번호) - 개선: 더 유연한 패턴
+                    # 판례명 패턴 매칭 (법원명 + 연도 + 사건번호) - 개선: 더 유연한 패턴 및 부분 매칭 강화
                     # 예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3"
                     # 또는 "대구지방법원영덕지원-2021고단3"
                     court_patterns = [
@@ -354,24 +359,47 @@ class AnswerValidator:
                         r'(\d{4}[가-힣]+)',  # 2021고단
                     ]
                     
+                    # 법원명과 사건번호 개별 확인 (개선: 부분 매칭 강화)
+                    court_found = False
+                    case_found = False
+                    
                     for court_pattern in court_patterns:
                         court_match = re.search(court_pattern, source)
                         if court_match:
                             court_name = court_match.group(1)
-                            # 법원명이 답변에 있는지 확인 (부분 매칭도 허용)
-                            if court_name in answer_lower or any(word in answer_lower for word in court_name.split() if len(word) >= 2):
-                                has_document_references = True
+                            # 법원명의 주요 부분이 답변에 있는지 확인 (개선: 단어 단위 매칭)
+                            court_words = [w for w in court_name.split() if len(w) >= 2]
+                            if court_words:
+                                # 법원명의 주요 단어들이 답변에 포함되는지 확인
+                                matched_words = sum(1 for word in court_words if word.lower() in answer_lower)
+                                if matched_words >= min(2, len(court_words)):  # 최소 2개 단어 매칭 또는 전체 단어의 대부분
+                                    court_found = True
+                                    break
+                            # 전체 법원명이 포함되어 있는지도 확인 (공백 제거 버전도 확인)
+                            court_name_lower = court_name.lower()
+                            court_name_no_spaces = court_name_lower.replace(" ", "").replace("-", "").replace("_", "")
+                            if court_name_lower in answer_lower or court_name_no_spaces in answer_no_spaces:
+                                court_found = True
                                 break
                     
-                    if not has_document_references:
-                        for case_pattern in case_patterns:
-                            case_match = re.search(case_pattern, source)
-                            if case_match:
-                                case_no = case_match.group(1)
-                                # 사건번호가 답변에 있는지 확인
-                                if case_no in answer_lower:
-                                    has_document_references = True
-                                    break
+                    # 사건번호 확인 (개선: 더 유연한 패턴)
+                    for case_pattern in case_patterns:
+                        case_match = re.search(case_pattern, source)
+                        if case_match:
+                            case_no = case_match.group(1)
+                            # 사건번호가 답변에 있는지 확인 (부분 매칭도 허용, 공백 제거 버전도 확인)
+                            case_no_lower = case_no.lower()
+                            case_no_no_spaces = case_no_lower.replace(" ", "").replace("-", "").replace("_", "")
+                            if (case_no_lower in answer_lower or case_no_no_spaces in answer_no_spaces or 
+                                any(case_no_lower[i:i+4] in answer_lower for i in range(len(case_no_lower)-3)) or
+                                any(case_no_no_spaces[i:i+4] in answer_no_spaces for i in range(len(case_no_no_spaces)-3))):
+                                case_found = True
+                                break
+                    
+                    # 법원명 또는 사건번호가 하나라도 있으면 참조로 인정 (개선)
+                    if court_found or case_found:
+                        has_document_references = True
+                        break
                     
                     if has_document_references:
                         break
