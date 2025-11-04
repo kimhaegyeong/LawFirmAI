@@ -52,22 +52,64 @@ class ResultMerger:
         for search_type, results in exact_results.items():
             for result in results:
                 if isinstance(result, dict):
+                    # content 필드도 text로 매핑 (검색 결과가 content 필드를 사용하는 경우)
+                    text_content = (
+                        result.get('text', '') or
+                        result.get('content', '') or
+                        str(result.get('metadata', {}).get('content', '')) or
+                        str(result.get('metadata', {}).get('text', '')) or
+                        ''
+                    )
+                    
+                    # text가 비어있으면 건너뛰기 (필터링)
+                    if not text_content or len(text_content.strip()) == 0:
+                        self.logger.warning(f"Skipping MergedResult with empty text from exact_{search_type} (id: {result.get('id', 'unknown')})")
+                        continue
+                    
+                    # metadata에 content 필드 명시적으로 저장 (향후 딕셔너리 변환 시 복원용)
+                    metadata = result.get('metadata', {})
+                    if not isinstance(metadata, dict):
+                        metadata = result if isinstance(result, dict) else {}
+                    metadata['content'] = text_content
+                    metadata['text'] = text_content
+                    
                     merged_result = MergedResult(
-                        text=result.get('text', ''),
-                        score=result.get('similarity', result.get('score', 0.0)) * weights["exact"],
+                        text=text_content,
+                        score=result.get('similarity', result.get('relevance_score', result.get('score', 0.0))) * weights["exact"],
                         source=f"exact_{search_type}",
-                        metadata=result.get('metadata', result)
+                        metadata=metadata
                     )
                     merged_results.append(merged_result)
         
         # 의미적 검색 결과 처리 (리스트 형태)
         for result in semantic_results:
             if isinstance(result, dict):
+                # content 필드도 text로 매핑
+                text_content = (
+                    result.get('text', '') or
+                    result.get('content', '') or
+                    str(result.get('metadata', {}).get('content', '')) or
+                    str(result.get('metadata', {}).get('text', '')) or
+                    ''
+                )
+                
+                # text가 비어있으면 건너뛰기 (필터링)
+                if not text_content or len(text_content.strip()) == 0:
+                    self.logger.warning(f"Skipping MergedResult with empty text from semantic (id: {result.get('id', 'unknown')})")
+                    continue
+                
+                # metadata에 content 필드 명시적으로 저장 (향후 딕셔너리 변환 시 복원용)
+                metadata = result.get('metadata', {})
+                if not isinstance(metadata, dict):
+                    metadata = result if isinstance(result, dict) else {}
+                metadata['content'] = text_content
+                metadata['text'] = text_content
+                
                 merged_result = MergedResult(
-                    text=result.get('text', ''),
-                    score=result.get('similarity', result.get('score', 0.0)) * weights["semantic"],
+                    text=text_content,
+                    score=result.get('similarity', result.get('relevance_score', result.get('score', 0.0))) * weights["semantic"],
                     source="semantic",
-                    metadata=result.get('metadata', result)
+                    metadata=metadata
                 )
                 merged_results.append(merged_result)
         
