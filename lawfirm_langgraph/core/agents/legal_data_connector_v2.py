@@ -11,6 +11,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .keyword_extractor import KeywordExtractor
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,16 +68,13 @@ class LegalDataConnectorV2:
             # FTS 테이블 존재 여부 확인
             self._check_fts_tables()
         
-        # KoNLPy 형태소 분석기 초기화 (선택적)
-        self._okt = None
-        try:
-            from konlpy.tag import Okt
-            self._okt = Okt()
-            self.logger.debug("KoNLPy Okt initialized successfully")
-        except ImportError:
-            self.logger.debug("KoNLPy not available, will use fallback method")
-        except Exception as e:
-            self.logger.warning(f"Error initializing KoNLPy: {e}, will use fallback method")
+        # 키워드 추출기 초기화 (형태소 분석 포함)
+        self.keyword_extractor = KeywordExtractor(
+            use_morphology=True,
+            logger_instance=self.logger
+        )
+        # 하위 호환성을 위해 _okt도 유지 (기존 코드에서 사용 중)
+        self._okt = self.keyword_extractor._okt
 
     def _check_fts_tables(self):
         """FTS 테이블 존재 여부 확인 및 초기화 필요 여부 안내"""
@@ -205,6 +204,7 @@ class LegalDataConnectorV2:
     def _optimize_fts5_query_morphological(self, query: str) -> str:
         """
         형태소 분석 기반 FTS5 쿼리 최적화
+        KeywordExtractor 클래스를 사용합니다.
         
         Args:
             query: 원본 쿼리
@@ -212,74 +212,19 @@ class LegalDataConnectorV2:
         Returns:
             최적화된 쿼리
         """
-        import re
-        
-        # 형태소 분석으로 품사 태깅
-        pos_tags = self._okt.pos(query)
-        
-        # 허용된 품사 태그
-        # 조사: JKS, JKO, JKB, JKG, JKI, JKQ, JX, JC
-        # 어미: EP, EF, EC, ETM, ETN
-        # 보조용언: VX
-        allowed_pos = [
-            'NNG', 'NNP', 'NNB', 'NR', 'NP',  # 명사류 (일반명사, 고유명사, 의존명사, 수사, 대명사)
-            'VV', 'VA', 'VX', 'VCP', 'VCN',   # 용언 (동사, 형용사, 보조용언, 긍정지정사, 부정지정사)
-            'MM', 'MDT', 'MDN',                # 관형사, 수 관형사, 명사 관형사
-            'SL', 'SH', 'SN', 'XR'             # 외국어, 한자, 숫자, 어근
-        ]
-        
-        core_keywords = []
-        
-        # 법령명 추출 (우선순위 최고)
-        law_match = re.search(r'([가-힣]+법|민법|형법|상법|행정법|헌법|노동법|가족법|특허법|상표법|저작권법)', query)
-        if law_match:
-            law_name = law_match.group(1)
-            if law_name not in core_keywords:
-                core_keywords.append(law_name)
-        
-        # 조문 번호 추출 (우선순위 높음)
-        article_patterns = [
-            r'제\s*\d+\s*조',  # 제750조
-            r'제\s*\d+\s*조\s*제',  # 제750조 제
-            r'\d+\s*조',  # 750조
-        ]
-        for pattern in article_patterns:
-            article_match = re.search(pattern, query)
-            if article_match:
-                article_text = article_match.group().replace(' ', '').strip()
-                if not article_text.startswith('제'):
-                    article_text = '제' + article_text
-                if article_text not in core_keywords:
-                    core_keywords.append(article_text)
-                break
-        
-        # 형태소 분석으로 핵심 단어 추출
-        for word, pos in pos_tags:
-            # 허용된 품사이거나 법률 관련 용어인 경우
-            if (pos in allowed_pos or 
-                word.endswith('법') or 
-                re.match(r'^제\d+조$', word)):
-                
-                # 길이 체크 및 중복 방지
-                if len(word) >= 2 and word not in core_keywords:
-                    # 한글/영문 포함 단어만 (조문 번호는 이미 처리됨)
-                    if re.match(r'^[가-힣a-zA-Z]+$', word) or re.match(r'^제\d+조$', word):
-                        core_keywords.append(word)
-                        if len(core_keywords) >= 5:  # 최대 5개
-                            break
+        # KeywordExtractor를 사용하여 키워드 추출 (형태소 분석 우선)
+        optimized = self.keyword_extractor.optimize_query(query, max_keywords=5)
         
         # 핵심 키워드가 없으면 폴백 방식 사용
-        if not core_keywords:
+        if not optimized or optimized == query:
             return self._optimize_fts5_query_fallback(query)
         
-        optimized = " ".join(core_keywords)
         self.logger.debug(f"Query optimized (morphological): '{query}' -> '{optimized}'")
-        
         return optimized
     
     def _optimize_fts5_query_fallback(self, query: str) -> str:
         """
-        FTS5 쿼리 최적화 (폴백 방식: 기존 방식)
+        FTS5 쿼리 최적화 (폴백 방식: KeywordExtractor 사용)
         
         Args:
             query: 원본 쿼리
@@ -287,76 +232,43 @@ class LegalDataConnectorV2:
         Returns:
             최적화된 쿼리
         """
-        import re
-        
-        words = query.split()
-        
-        # 불용어 목록 (set으로 변환하여 빠른 조회)
-        stopwords = {
-            '에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은', 
-            '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고', 
-            '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등', 
-            '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문', 
-            '답변', '알려주세요', '알려주시기', '바랍니다'
-        }
-        
-        # 조사 패턴 (정규식으로 한 번에 제거)
-        josa_pattern = re.compile(r'(에|에서|에게|한테|께|으로|로|의|을|를|이|가|는|은|와|과|도|만|부터|까지)$')
-        
-        core_keywords = []
-        
-        # 법령명 추출
-        law_match = re.search(r'([가-힣]+법|민법|형법|상법|행정법|헌법|노동법|가족법|특허법|상표법|저작권법)', query)
-        if law_match:
-            law_name = law_match.group(1)
-            if law_name not in core_keywords:
-                core_keywords.append(law_name)
-        
-        # 조문 번호 추출
-        article_patterns = [
-            r'제\s*\d+\s*조',
-            r'제\s*\d+\s*조\s*제',
-            r'\d+\s*조',
-        ]
-        for pattern in article_patterns:
-            article_match = re.search(pattern, query)
-            if article_match:
-                article_text = article_match.group().replace(' ', '').strip()
-                if not article_text.startswith('제'):
-                    article_text = '제' + article_text
-                if article_text not in core_keywords:
-                    core_keywords.append(article_text)
-                break
-        
-        # 나머지 키워드 처리
-        for w in words:
-            w_clean = josa_pattern.sub('', w.strip())  # 조사 제거
-            
-            if not w_clean or len(w_clean) < 2:
-                continue
-            
-            if w_clean in stopwords or w_clean in core_keywords:
-                continue
-            
-            # 한글/영문 포함 단어만
-            if re.match(r'^[가-힣a-zA-Z]+$', w_clean) or re.match(r'^제\d+조$', w_clean):
-                core_keywords.append(w_clean)
-                if len(core_keywords) >= 5:
-                    break
-        
-        # 핵심 키워드가 없으면 원본 단어 사용 (불용어만 제거)
-        if not core_keywords:
-            for w in words:
-                w_clean = josa_pattern.sub('', w.strip())
-                if w_clean and len(w_clean) >= 2 and w_clean not in stopwords:
-                    core_keywords.append(w_clean)
-                    if len(core_keywords) >= 5:
-                        break
-        
-        optimized = " ".join(core_keywords) if core_keywords else query
+        # KeywordExtractor를 사용하여 키워드 추출 (폴백 방식)
+        optimized = self.keyword_extractor.optimize_query(query, max_keywords=5)
         self.logger.debug(f"Query optimized (fallback): '{query}' -> '{optimized}'")
-        
         return optimized
+    
+    def _extract_keywords_with_morphology(self, words: List[str], max_keywords: int = 3) -> List[str]:
+        """
+        형태소 분석을 사용한 키워드 추출 (조사/어미 자동 제거)
+        KeywordExtractor 클래스를 사용합니다.
+        
+        Args:
+            words: 추출할 단어 리스트
+            max_keywords: 최대 키워드 수
+            
+        Returns:
+            추출된 키워드 리스트
+        """
+        return self.keyword_extractor.extract_keywords_from_words(words, max_keywords=max_keywords)
+    
+    def _extract_keywords_fallback(self, words: List[str], max_keywords: int = 3) -> List[str]:
+        """
+        폴백 방식: 정규식 기반 키워드 추출
+        KeywordExtractor 클래스의 폴백 방식을 사용합니다.
+        
+        Args:
+            words: 추출할 단어 리스트
+            max_keywords: 최대 키워드 수
+            
+        Returns:
+            추출된 키워드 리스트
+        """
+        query_text = " ".join(words)
+        return self.keyword_extractor.extract_keywords(
+            query_text,
+            max_keywords=max_keywords,
+            prefer_morphology=False  # 폴백 방식 강제
+        )
 
     def _sanitize_fts5_query(self, query: str) -> str:
         """
@@ -381,21 +293,26 @@ class LegalDataConnectorV2:
         # 단어 개수 확인
         words = query.split()
 
-        # 특수 문자가 포함되어 있는지 확인
+        # 특수 문자가 포함되어 있는지 확인 (AND, OR, NOT 등 FTS5 연산자)
         has_special = any(char in query for char in special_chars)
+        
+        # AND, OR, NOT 연산자가 포함되어 있는지 확인 (개선: FTS5 연산자 처리)
+        has_operator = any(op in query.upper() for op in [' AND ', ' OR ', ' NOT ', ' AND', 'OR ', 'NOT '])
 
-        if has_special:
+        if has_special or has_operator:
             # 특수 문자가 있으면 제거하고 단어만 추출
             import re
+            # FTS5 연산자 제거 (AND, OR, NOT)
+            query_cleaned = re.sub(r'\s+(AND|OR|NOT)\s+', ' ', query, flags=re.IGNORECASE)
             # 한글, 영문, 숫자만 추출
-            clean_words = re.findall(r'[가-힣a-zA-Z0-9]+', query)
+            clean_words = re.findall(r'[가-힣a-zA-Z0-9]+', query_cleaned)
             if not clean_words:
                 # 단어가 없으면 빈 문자열 반환
                 return ""
             # 최대 5개 단어만 사용
             clean_words = clean_words[:5]
-            # OR 조건으로 연결 (검색 범위 확장)
-            sanitized = " OR ".join(clean_words)
+            # 공백으로 연결 (FTS5 기본 AND 동작)
+            sanitized = " ".join(clean_words)
             # SQL injection 방지: 작은따옴표 이스케이프
             sanitized = sanitized.replace("'", "''")
             return sanitized
@@ -602,17 +519,16 @@ class LegalDataConnectorV2:
                     self.logger.info(f"Fallback 1 found {len(fallback_results)} results")
                     return fallback_results[:limit]
             
-            # 전략 2: 핵심 키워드만으로 검색 (법령명 또는 주요 키워드)
+            # 전략 2: 핵심 키워드만으로 검색 (법령명 또는 주요 키워드) - 개선: 형태소 분석 활용
             if not fallback_results and words:
-                # 법령명이 있으면 법령명으로, 없으면 첫 번째 핵심 키워드로
+                # 법령명이 있으면 법령명으로, 없으면 핵심 키워드로
                 if law_match:
                     keyword_query = law_match.group()
                 else:
-                    # 핵심 키워드 추출 (2자 이상, 불용어 제외)
-                    stopwords = ['에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은']
-                    keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                    # 형태소 분석을 사용한 키워드 추출 (조사/어미 자동 제거)
+                    keywords = self._extract_keywords_with_morphology(words, max_keywords=3)
                     if keywords:
-                        keyword_query = keywords[0]  # 첫 번째 핵심 키워드만
+                        keyword_query = " ".join(keywords)  # 여러 키워드를 공백으로 연결 (FTS5 기본 AND 동작)
                     else:
                         return []
                 
