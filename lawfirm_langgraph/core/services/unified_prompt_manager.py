@@ -1156,25 +1156,118 @@ class UnifiedPromptManager:
                 doc_list_str = ', '.join(doc_list[:5])
                 # 🔴 개선: 실제 제공된 문서 조문을 예시로 사용
                 example_doc = doc_list[0] if doc_list else "법령명 제XX조"
+                # 판례명 예시 찾기
+                example_precedent = None
+                for doc in doc_list:
+                    if '법원' in doc or '판례' in doc or '-' in doc:
+                        example_precedent = doc
+                        break
+                
+                # 법령 조문 예시 찾기
+                example_law = None
+                for doc in doc_list:
+                    if '제' in doc and '조' in doc:
+                        example_law = doc
+                        break
+                
+                examples_text = f"""  * 예시 1: "{example_doc}에 따르면..."
+  * 예시 2: "[법령: {example_doc}]"
+  * 예시 3: "위 검색 결과 문서 중 {example_doc}에 명시된 바와 같이..."
+  * 예시 4: "민법 제750조에 따르면..." (법령 조문 인용 형식)"""
+                
+                if example_precedent:
+                    examples_text += f"\n  * 예시 5: \"{example_precedent} 판결에 의하면...\" (판례 인용 형식)"
+                else:
+                    examples_text += f"\n  * 예시 5: \"대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...\" (판례 인용 형식)"
+                
                 final_instruction_section = f"""
-## 검색 결과 활용 지침
+## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
 - 다음 문서 중 질문과 관련성이 높은 것을 우선 활용하세요: {doc_list_str}
 - 관련도가 낮은 문서는 무리하게 인용하지 마세요
 - 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
-- 각 인용에 명확한 출처 표기: "[법령: {example_doc}]" 또는 "{example_doc}에 따르면..."
+- **⚠️ 각 인용에 반드시 명확한 출처 표기 (필수)**:
+{examples_text}
+- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
+- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
+- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요 (예: "민법 제750조에 따르면...")
+- 판례 인용 시 구체적인 판례명과 사건번호를 포함하세요 (예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...")
+- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
+- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
+- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
 """
             else:
                 # doc_list가 비어있을 때만 기본 예시 사용
-                final_instruction_section = """
-## 검색 결과 활용 지침
+                # 실제 문서 형식 예시 추가
+                example_doc = doc_list[0] if doc_list else "민법 제750조"
+                example_law = None
+                example_precedent = None
+                for doc in doc_list[:3]:
+                    if isinstance(doc, str):
+                        if "제" in doc and "조" in doc:
+                            example_law = doc
+                            break
+                        elif "법원" in doc or "판결" in doc:
+                            example_precedent = doc
+                
+                examples_text = f"""  * 예시 1: "{example_doc}에 따르면..."
+  * 예시 2: "[법령: {example_doc}]"
+  * 예시 3: "위 검색 결과 문서 중 {example_doc}에 명시된 바와 같이..."
+  * 예시 4: "민법 제750조에 따르면..." (법령 조문 인용 형식)"""
+                if example_precedent:
+                    examples_text += f"\n  * 예시 5: \"{example_precedent} 판결에 의하면...\" (판례 인용 형식)"
+                elif example_law:
+                    examples_text += f"\n  * 예시 5: \"{example_law}에 명시된 바와 같이...\" (법령 조문 인용 형식)"
+                
+                final_instruction_section = f"""
+## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
 - 위 검색 결과 문서에서 질문과 관련성이 높은 문서를 우선 활용하세요
-- 각 인용에 명확한 출처 표기: "[법령: 법령명 제XX조]" 또는 "법령명 제XX조에 따르면..."
+- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
+- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요
+- **각 인용에 반드시 명확한 출처 표기 (필수)**:
+{examples_text}
+- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
+- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
+- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
+- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
 - 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
 """
         else:
-            final_instruction_section = """
+            # 검색 결과가 없을 때 명확한 제한사항 명시
+            search_failed = documents.get("search_failed", False) if isinstance(documents, dict) else False
+            search_failure_reason = documents.get("search_failure_reason", "unknown") if isinstance(documents, dict) else "unknown"
+            
+            if search_failed:
+                failure_details = ""
+                if "no_results_from_both_semantic_and_keyword" in search_failure_reason:
+                    failure_details = (
+                        "\n\n**⚠️ 중요: 검색 시스템 오류**\n"
+                        "- 의미 검색(semantic)과 키워드 검색(keyword) 모두 결과를 반환하지 못했습니다.\n"
+                        "- 이는 데이터베이스가 초기화되지 않았거나, FTS 테이블이 없거나, embeddings가 생성되지 않았을 수 있습니다.\n"
+                        "- 일반적인 법률 정보를 제공하되, 반드시 다음 사항을 명시하세요:\n"
+                        "  1. 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점\n"
+                        "  2. 제공되는 정보는 일반적인 법률 원칙에 기반한 것이며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점\n"
+                        "  3. 가능한 경우 질문과 관련된 법령명과 조문번호를 언급하되, 구체적인 내용은 확인이 필요하다는 점"
+                    )
+                
+                final_instruction_section = f"""
+## ⚠️ 참고사항 (중요)
+현재 관련 법률 문서를 찾지 못했습니다.{failure_details}
+
+**답변 작성 시 주의사항**:
+- 일반적인 법률 정보를 제공하되, 반드시 한계를 명시하세요
+- 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점을 명확히 밝히세요
+- 가능한 경우 관련 법령명과 조문번호를 언급하되, 구체적인 내용 확인이 필요하다는 점을 명시하세요
+- 모든 답변은 일반적인 법률 정보 제공에 그치며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점을 강조하세요
+"""
+            else:
+                final_instruction_section = """
 ## ⚠️ 참고사항
 현재 관련 법률 문서를 찾지 못했습니다. 일반적인 법률 정보를 제공하되, 한계를 명시하세요.
+
+**답변 작성 시 주의사항**:
+- 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점을 명확히 밝히세요
+- 가능한 경우 관련 법령명과 조문번호를 언급하되, 구체적인 내용 확인이 필요하다는 점을 명시하세요
+- 모든 답변은 일반적인 법률 정보 제공에 그치며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점을 강조하세요
 """
 
         final_prompt = f"""{simplified_base}{mandatory_section}{documents_section}{usage_guide}
