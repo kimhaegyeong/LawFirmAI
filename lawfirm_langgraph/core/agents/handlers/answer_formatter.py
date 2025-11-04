@@ -1240,13 +1240,17 @@ class AnswerFormatterHandler:
             if isinstance(metadata, dict):
                 search_quality_dict = metadata.get("search_quality", {}) or metadata.get("search_quality_evaluation", {})
         
-        # 전역 캐시에서도 찾기 (개선)
+        # 전역 캐시에서도 찾기 (우선순위 높임 - 개선)
         if not search_quality_dict or not isinstance(search_quality_dict, dict):
             try:
                 from core.agents.node_wrappers import _global_search_results_cache
                 if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
                     if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
-                        search_quality_dict = _global_search_results_cache["search"].get("search_quality", {}) or _global_search_results_cache["search"].get("search_quality_evaluation", {})
+                        cached_quality = _global_search_results_cache["search"].get("search_quality", {}) or \
+                                        _global_search_results_cache["search"].get("search_quality_evaluation", {})
+                        if cached_quality and isinstance(cached_quality, dict):
+                            search_quality_dict = cached_quality
+                            self.logger.info(f"✅ [CONFIDENCE CALC] Found search_quality in global cache: {list(cached_quality.keys())}")
             except Exception as e:
                 self.logger.debug(f"Failed to get search_quality from global cache: {e}")
         
@@ -1266,10 +1270,10 @@ class AnswerFormatterHandler:
             base_min_confidence = 0.20 if answer_value else 0.10
             self.logger.warning(f"[CONFIDENCE CALC] Search failed, using lower base confidence: {base_min_confidence}")
         else:
-            # 정상적인 경우
-            base_min_confidence = 0.30 if (answer_value and sources_list and len(sources_list) >= 3 and search_quality_score > 0.3) else \
-                                   0.25 if (answer_value and sources_list) else \
-                                   0.20 if answer_value else 0.10  # 검색 결과가 없어도 답변이 있으면 최소 20%
+            # 정상적인 경우 (기본 신뢰도 상향)
+            base_min_confidence = 0.35 if (answer_value and sources_list and len(sources_list) >= 3 and search_quality_score > 0.3) else \
+                                   0.30 if (answer_value and sources_list) else \
+                                   0.25 if answer_value else 0.15  # 검색 결과가 없어도 답변이 있으면 최소 25% (0.20 -> 0.25)
         
         final_confidence = max(final_confidence, base_min_confidence) + quality_boost
 
@@ -1320,19 +1324,22 @@ class AnswerFormatterHandler:
                     unique_citations.add(match)
             citation_count = len(unique_citations)
         
-        # 문서 인용 점수 보정 (2개 이상 인용 시 +0.05)
+        # 문서 인용 점수 보정 증가 (개선: 2개 이상 인용 시 +0.08)
         citation_boost = 0.0
-        if citation_count >= 2:
-            citation_boost = 0.05
+        if citation_count >= 3:
+            citation_boost = 0.10  # 0.05 -> 0.10
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
+        elif citation_count >= 2:
+            citation_boost = 0.08  # 0.05 -> 0.08
             self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
         elif citation_count >= 1:
-            citation_boost = 0.02
+            citation_boost = 0.03  # 0.02 -> 0.03
             self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citation found (+{citation_boost})")
         
-        # grounding_score를 신뢰도 계산에 반영 (10%)
+        # grounding_score 반영 비율 증가 (개선: 10% -> 15%)
         grounding_boost = 0.0
         if grounding_score is not None:
-            grounding_boost = float(grounding_score) * 0.1
+            grounding_boost = float(grounding_score) * 0.15  # 0.10 -> 0.15
             self.logger.info(f"[CONFIDENCE CALC] Grounding boost applied: grounding_score={grounding_score:.3f} (+{grounding_boost:.3f})")
         
         adjusted_confidence_with_validation = min(0.95, adjusted_confidence + citation_boost + grounding_boost)
