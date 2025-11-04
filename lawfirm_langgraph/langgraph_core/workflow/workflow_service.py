@@ -271,7 +271,10 @@ class LangGraphWorkflowService:
 
             # 워크플로우 실행 설정 (체크포인터 활성화 시 thread_id 설정)
             config = {}
-            if enable_checkpoint and self.checkpoint_manager and self.checkpoint_manager.is_enabled():
+            # 체크포인터가 워크플로우에 설정되어 있으면 thread_id가 필요함
+            # enable_checkpoint가 False여도 이미 컴파일된 워크플로우에 체크포인터가 있으면 필요
+            if (enable_checkpoint and self.checkpoint_manager and self.checkpoint_manager.is_enabled()) or \
+               (self.app and hasattr(self.app, 'checkpointer') and self.app.checkpointer is not None):
                 config = {"configurable": {"thread_id": session_id}}
                 self.logger.debug(f"Using checkpoint with thread_id: {session_id}")
 
