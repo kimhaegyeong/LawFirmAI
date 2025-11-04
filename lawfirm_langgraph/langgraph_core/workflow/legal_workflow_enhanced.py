@@ -6265,6 +6265,19 @@ class EnhancedLegalQuestionWorkflow:
             state["common"]["search"]["search_quality"] = quality_evaluation
             state["common"]["search"]["search_quality_evaluation"] = quality_evaluation
 
+            # 전역 캐시에도 저장 (개선: answer_formatter에서 찾을 수 있도록)
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if not _global_search_results_cache:
+                    _global_search_results_cache = {}
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["search_quality"] = quality_evaluation
+                _global_search_results_cache["search"]["search_quality_evaluation"] = quality_evaluation
+                self.logger.info(f"✅ [SEARCH QUALITY] Saved to global cache: overall_quality={overall_quality:.3f}, semantic={semantic_quality['score']:.3f}, keyword={keyword_quality['score']:.3f}")
+            except Exception as e:
+                self.logger.debug(f"Failed to save search_quality to global cache: {e}")
+
             # 2. 조건부 재검색 (기존 conditional_retry_search 로직)
             if needs_retry and overall_quality < 0.6 and semantic_count + keyword_count < 10:
                 self.logger.info(f"검색 품질 낮음 (점수: {overall_quality:.2f}), 재검색 수행...")
