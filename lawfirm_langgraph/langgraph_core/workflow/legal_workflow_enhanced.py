@@ -57,6 +57,8 @@ from core.agents.optimizers.performance_optimizer import PerformanceOptimizer
 from core.agents.extractors.reasoning_extractor import ReasoningExtractor
 from core.agents.handlers.search_handler import SearchHandler
 from core.agents.handlers.context_builder import ContextBuilder
+from core.agents.prompt_builders import QueryBuilder
+from core.agents.prompt_chain_executor import PromptChainExecutor
 
 # 실제 사용되는 컴포넌트 import (static 메서드 호출)
 from core.agents.extractors import (
@@ -1782,6 +1784,19 @@ class EnhancedLegalQuestionWorkflow:
             self._set_state_value(state, "confidence", confidence)
             self._set_state_value(state, "legal_field", legal_field)
             self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
+            
+            # analysis 그룹에도 저장
+            if "analysis" not in state:
+                state["analysis"] = {}
+            state["analysis"]["query_type"] = query_type_str
+            state["analysis"]["confidence"] = confidence
+            state["analysis"]["legal_field"] = legal_field
+            
+            # metadata에도 저장
+            if "metadata" not in state:
+                state["metadata"] = {}
+            state["metadata"]["query_type"] = query_type_str
+            state["metadata"]["confidence"] = confidence
 
             self._update_processing_time(state, query_start_time)
             self._add_step(state, "질문 분류 완료",
@@ -1799,6 +1814,18 @@ class EnhancedLegalQuestionWorkflow:
             # State에 저장 (모든 위치에)
             self._set_state_value(state, "query_complexity", complexity.value)
             self._set_state_value(state, "needs_search", needs_search)
+            
+            # analysis 그룹에도 저장
+            if "analysis" not in state:
+                state["analysis"] = {}
+            state["analysis"]["query_complexity"] = complexity.value
+            state["analysis"]["needs_search"] = needs_search
+            
+            # metadata에도 저장
+            if "metadata" not in state:
+                state["metadata"] = {}
+            state["metadata"]["query_complexity"] = complexity.value
+            state["metadata"]["needs_search"] = needs_search
 
             # 최상위 레벨에도 직접 저장
             if "classification" not in state:
@@ -1820,11 +1847,23 @@ class EnhancedLegalQuestionWorkflow:
             state["metadata"]["query_complexity"] = complexity.value
             state["metadata"]["needs_search"] = needs_search
 
-            # Global cache에도 저장
+            # Global cache에도 저장 (query_type 포함)
             try:
                 from core.agents import node_wrappers
                 if not hasattr(node_wrappers, '_global_search_results_cache') or node_wrappers._global_search_results_cache is None:
                     node_wrappers._global_search_results_cache = {}
+                # query_type 정보도 저장 (개선: query_type 전달 문제 해결)
+                if "common" not in node_wrappers._global_search_results_cache:
+                    node_wrappers._global_search_results_cache["common"] = {}
+                if "classification" not in node_wrappers._global_search_results_cache["common"]:
+                    node_wrappers._global_search_results_cache["common"]["classification"] = {}
+                node_wrappers._global_search_results_cache["common"]["classification"]["query_type"] = query_type_str
+                node_wrappers._global_search_results_cache["common"]["classification"]["query_complexity"] = complexity.value
+                node_wrappers._global_search_results_cache["common"]["classification"]["needs_search"] = needs_search
+                # metadata에도 저장
+                if "metadata" not in node_wrappers._global_search_results_cache:
+                    node_wrappers._global_search_results_cache["metadata"] = {}
+                node_wrappers._global_search_results_cache["metadata"]["query_type"] = query_type_str
                 node_wrappers._global_search_results_cache["query_complexity"] = complexity.value
                 node_wrappers._global_search_results_cache["needs_search"] = needs_search
             except Exception as e:
@@ -2850,7 +2889,13 @@ class EnhancedLegalQuestionWorkflow:
         return self.search_handler.check_cache(state, query, query_type_str, start_time)
 
     def _semantic_search(self, query: str, k: Optional[int] = None) -> Tuple[List[Dict[str, Any]], int]:
-        """SearchHandler.semantic_search 래퍼"""
+        """SearchHandler.semantic_search 래퍼 (지연 로딩 지원)"""
+        # semantic_search property를 통해 지연 로딩된 엔진 사용
+        semantic_engine = self.semantic_search
+        if semantic_engine:
+            # SearchHandler에 지연 로딩된 엔진 주입
+            self.search_handler.semantic_search_engine = semantic_engine
+        
         return self.search_handler.semantic_search(query, k)
 
     def _keyword_search(
@@ -2903,6 +2948,22 @@ class EnhancedLegalQuestionWorkflow:
                 self.logger.debug(f"_keyword_search: Category {category} returned {len(category_docs)} documents")
 
                 for doc in category_docs:
+                    # content 필드 보장 (개선: content 필드 누락 문제 해결)
+                    if not doc.get('content') and doc.get('text'):
+                        doc['content'] = doc['text']
+                    elif not doc.get('text') and doc.get('content'):
+                        doc['text'] = doc['content']
+                    elif not doc.get('content') and not doc.get('text'):
+                        # content와 text가 모두 없으면 metadata에서 시도
+                        metadata = doc.get('metadata', {})
+                        if isinstance(metadata, dict):
+                            content_from_meta = metadata.get('content') or metadata.get('text', '')
+                            if content_from_meta:
+                                doc['content'] = content_from_meta
+                                doc['text'] = content_from_meta
+                            else:
+                                self.logger.warning(f"⚠️ [KEYWORD SEARCH] Empty content for doc: {doc.get('id', 'unknown')}, source: {doc.get('source', 'unknown')}")
+                    
                     doc['search_type'] = 'keyword'
                     doc['category'] = category
                     # 카테고리 일치도 점수 추가
@@ -3269,7 +3330,57 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
 
+            # query_type을 여러 위치에서 찾기
             query_type = self._get_state_value(state, "query_type", "")
+            if not query_type:
+                # analysis 그룹에서 시도
+                if "analysis" in state and isinstance(state["analysis"], dict):
+                    query_type = state["analysis"].get("query_type", "")
+            if not query_type:
+                # classification 그룹에서 시도
+                if "classification" in state and isinstance(state["classification"], dict):
+                    query_type = state["classification"].get("query_type", "")
+            if not query_type:
+                # metadata에서 시도
+                if "metadata" in state and isinstance(state["metadata"], dict):
+                    query_type = state["metadata"].get("query_type", "")
+            if not query_type:
+                # common 그룹에서 시도
+                if "common" in state and isinstance(state["common"], dict):
+                    if "analysis" in state["common"] and isinstance(state["common"]["analysis"], dict):
+                        query_type = state["common"]["analysis"].get("query_type", "")
+                    elif "classification" in state["common"] and isinstance(state["common"]["classification"], dict):
+                        query_type = state["common"]["classification"].get("query_type", "")
+            
+            # query_type이 여전히 없으면 전역 캐시에서 시도 (개선: 여러 위치 확인)
+            if not query_type:
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                        # common.classification 그룹에서 찾기 (우선순위 1)
+                        if "common" in _global_search_results_cache and isinstance(_global_search_results_cache["common"], dict):
+                            if "classification" in _global_search_results_cache["common"] and isinstance(_global_search_results_cache["common"]["classification"], dict):
+                                query_type = _global_search_results_cache["common"]["classification"].get("query_type", "")
+                                if query_type:
+                                    self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (common.classification): {query_type}")
+                        # metadata에서 찾기 (우선순위 2)
+                        if not query_type and "metadata" in _global_search_results_cache and isinstance(_global_search_results_cache["metadata"], dict):
+                            query_type = _global_search_results_cache["metadata"].get("query_type", "")
+                            if query_type:
+                                self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (metadata): {query_type}")
+                        # 최상위 레벨에서 찾기 (우선순위 3)
+                        if not query_type:
+                            query_type = _global_search_results_cache.get("query_type", "")
+                            if query_type:
+                                self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache (top-level): {query_type}")
+                except Exception as e:
+                    self.logger.debug(f"Failed to get query_type from global cache: {e}")
+            
+            # query_type이 여전히 없으면 기본값 사용
+            if not query_type:
+                query_type = "general_question"
+                self.logger.warning(f"⚠️ [QUESTION TYPE] query_type not found in state or global cache, using default: {query_type}")
+            
             query = self._get_state_value(state, "query", "")
             question_type, domain = self._get_question_type_and_domain(query_type, query)
             model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA
@@ -4164,10 +4275,12 @@ class EnhancedLegalQuestionWorkflow:
 
         try:
             high_value_docs = []
+            # min_relevance를 낮춰서 더 많은 문서 포함 (0.7 -> 0.1)
+            min_relevance = min(min_relevance, 0.1)
 
             for doc in documents:
-                doc_content = doc.get("content", "")
-                if not doc_content or len(doc_content) < 20:
+                doc_content = doc.get("content", "") or doc.get("text", "")
+                if not doc_content or len(doc_content) < 10:  # 20자 -> 10자로 낮춤
                     continue
 
                 # 1. 법률 조항 인용 수 계산
@@ -4201,7 +4314,16 @@ class EnhancedLegalQuestionWorkflow:
                     keyword_coverage = len(query_words.intersection(content_words)) / max(1, len(query_words))
 
                 # 4. 정보 밀도 종합 점수
-                relevance_score = doc.get("final_relevance_score") or doc.get("combined_score", 0.0) or doc.get("relevance_score", 0.0)
+                relevance_score = (
+                    doc.get("final_weighted_score") or
+                    doc.get("final_relevance_score") or
+                    doc.get("combined_score", 0.0) or
+                    doc.get("relevance_score", 0.0) or
+                    0.0
+                )
+                # relevance_score가 0이어도 최소값 보장
+                if relevance_score == 0:
+                    relevance_score = 0.1  # 최소값 설정
 
                 information_density = (
                     0.3 * citation_score +
@@ -4217,16 +4339,33 @@ class EnhancedLegalQuestionWorkflow:
                 # 관련성 점수와 정보 밀도 점수 가중 평균
                 combined_value_score = 0.6 * relevance_score + 0.4 * information_density
                 doc["combined_value_score"] = combined_value_score
+                doc["final_relevance_score"] = relevance_score  # 재정렬 점수 저장
 
-                # 임계값 체크
+                # 임계값 체크 (임계값을 낮춰서 더 많은 문서 포함)
                 if combined_value_score >= min_relevance:
                     high_value_docs.append(doc)
+                else:
+                    # 임계값보다 낮아도 상위 문서는 포함
+                    if len(high_value_docs) < max_docs:
+                        high_value_docs.append(doc)
 
             # combined_value_score로 정렬
             high_value_docs.sort(key=lambda x: x.get("combined_value_score", 0.0), reverse=True)
 
-            # 최대 문서 수 제한
-            selected_docs = high_value_docs[:max_docs]
+            # 최대 문서 수 제한 (더 많은 문서 포함)
+            max_docs_adjusted = max(max_docs, min(5, len(documents)))  # 최소 5개 또는 전체 문서
+            selected_docs = high_value_docs[:max_docs_adjusted]
+            
+            # 임계값을 통과하지 못한 문서도 포함 (최소 3개 보장)
+            if len(selected_docs) < 3 and len(documents) >= 3:
+                # 상위 문서를 추가로 포함
+                for doc in documents:
+                    if doc not in selected_docs:
+                        doc_content = doc.get("content", "") or doc.get("text", "")
+                        if doc_content and len(doc_content) >= 10:
+                            selected_docs.append(doc)
+                            if len(selected_docs) >= 3:
+                                break
 
             self.logger.info(
                 f"📚 [HIGH VALUE SELECTION] Selected {len(selected_docs)}/{len(documents)} documents. "
@@ -5811,9 +5950,26 @@ class EnhancedLegalQuestionWorkflow:
                 self._set_answer_safely(state, "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
                 return state
 
-            # query_type 정규화
+            # query_type 정규화 (여러 위치에서 시도)
             query_type_raw = self._get_state_value(state, "query_type", "")
+            if not query_type_raw:
+                # analysis 그룹에서 시도
+                if "analysis" in state and isinstance(state["analysis"], dict):
+                    query_type_raw = state["analysis"].get("query_type", "")
+            if not query_type_raw:
+                # metadata에서 시도
+                if "metadata" in state and isinstance(state["metadata"], dict):
+                    query_type_raw = state["metadata"].get("query_type", "")
+            if not query_type_raw:
+                # common 그룹에서 시도
+                if "common" in state and isinstance(state["common"], dict):
+                    if "analysis" in state["common"] and isinstance(state["common"]["analysis"], dict):
+                        query_type_raw = state["common"]["analysis"].get("query_type", "")
+            
             query_type_str = self._get_query_type_str(query_type_raw)
+            # query_type을 State에 다시 저장하여 다음 노드에서 사용 가능하도록 보장
+            if query_type_str and query_type_str != "general_question":
+                self._set_state_value(state, "query_type", query_type_str)
             # 프롬프트용으로 한번 더 정규화
             query_type_str = self._normalize_query_type_for_prompt(query_type_str)
 
@@ -5874,8 +6030,35 @@ class EnhancedLegalQuestionWorkflow:
             )
 
             # 최적화된 쿼리와 파라미터를 state에 저장
+            # optimized_queries와 search_params를 여러 위치에 저장하여 보존
             self._set_state_value(state, "optimized_queries", optimized_queries)
             self._set_state_value(state, "search_params", search_params)
+            
+            # search 그룹에도 저장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["optimized_queries"] = optimized_queries
+            state["search"]["search_params"] = search_params
+            
+            # common 그룹에도 저장 (State Reduction 후에도 유지)
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["optimized_queries"] = optimized_queries
+            state["common"]["search"]["search_params"] = search_params
+            
+            # 전역 캐시에도 저장
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if not _global_search_results_cache:
+                    _global_search_results_cache = {}
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["optimized_queries"] = optimized_queries
+                _global_search_results_cache["search"]["search_params"] = search_params
+            except Exception as e:
+                self.logger.debug(f"Failed to save optimized_queries to global cache: {e}")
             self._set_state_value(state, "is_retry_search", is_retry)
             self._set_state_value(state, "search_start_time", start_time)
 
@@ -6014,7 +6197,32 @@ class EnhancedLegalQuestionWorkflow:
                 min_results=search_params.get("keyword_limit", WorkflowConstants.CATEGORY_SEARCH_LIMIT) // 2
             )
 
-            overall_quality = (semantic_quality["score"] + keyword_quality["score"]) / 2.0
+            # 전체 품질 점수 계산 (개선: 검색 결과가 있는 경우와 없는 경우 구분)
+            total_results = len(semantic_results) + len(keyword_results)
+            if total_results == 0:
+                # 검색 결과가 없을 때: 데이터베이스 초기화 상태 확인
+                search_failed = self._get_state_value(state, "search_failed", False)
+                if search_failed:
+                    # 검색 실패(데이터베이스 문제 등)인 경우 품질 점수 0 유지
+                    overall_quality = 0.0
+                else:
+                    # 검색은 실행되었지만 결과가 없는 경우 (쿼리 문제 등) 최소 점수 부여
+                    overall_quality = 0.05  # 최소 점수 부여 (0.0 -> 0.05)
+                    self.logger.debug(f"Search executed but returned 0 results, assigning minimum quality score: {overall_quality}")
+            else:
+                # 검색 결과가 있으면 평균 계산
+                if len(semantic_results) > 0 and len(keyword_results) > 0:
+                    # 둘 다 있으면 평균
+                    overall_quality = (semantic_quality["score"] + keyword_quality["score"]) / 2.0
+                elif len(semantic_results) > 0:
+                    # semantic만 있으면 semantic 점수 사용
+                    overall_quality = semantic_quality["score"]
+                else:
+                    # keyword만 있으면 keyword 점수 사용
+                    overall_quality = keyword_quality["score"]
+                # 검색 결과가 있으면 최소 점수 보장
+                if overall_quality == 0:
+                    overall_quality = 0.1
             needs_retry = semantic_quality["needs_retry"] or keyword_quality["needs_retry"]
 
             quality_evaluation = {
@@ -6025,6 +6233,19 @@ class EnhancedLegalQuestionWorkflow:
             }
 
             self._set_state_value(state, "search_quality_evaluation", quality_evaluation)
+            # search_quality에도 저장 (answer_formatter에서 사용)
+            self._set_state_value(state, "search_quality", quality_evaluation)
+            # search 그룹과 common 그룹에도 저장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["search_quality"] = quality_evaluation
+            state["search"]["search_quality_evaluation"] = quality_evaluation
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["search_quality"] = quality_evaluation
+            state["common"]["search"]["search_quality_evaluation"] = quality_evaluation
 
             # 2. 조건부 재검색 (기존 conditional_retry_search 로직)
             if needs_retry and overall_quality < 0.6 and semantic_count + keyword_count < 10:
@@ -6099,28 +6320,67 @@ class EnhancedLegalQuestionWorkflow:
                         print(warning_msg, flush=True, file=sys.stdout)
                         self.logger.warning(warning_msg)
 
+                    # MergedResult 객체에서 content 필드 복원 (metadata에서 추출) - 개선: content 필드 보장 강화
+                    metadata = getattr(merged_result, 'metadata', {}) if hasattr(merged_result, 'metadata') else {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    
+                    # content_value 확보 (우선순위: metadata.content > text_value > metadata.text)
+                    content_value = text_value
+                    if isinstance(metadata, dict):
+                        content_from_meta = metadata.get('content') or metadata.get('text', '')
+                        if content_from_meta:
+                            content_value = content_from_meta
+                    
+                    # 최종 content와 text 보장 (개선: 항상 둘 다 보장)
+                    final_content = str(content_value) if content_value else str(text_value) if text_value else ""
+                    final_text = str(text_value) if text_value else str(content_value) if content_value else ""
+                    
+                    # metadata에도 content와 text 명시적으로 저장
+                    if isinstance(metadata, dict):
+                        metadata['content'] = final_content
+                        metadata['text'] = final_text
+                    
                     merged_docs.append({
-                        "content": str(text_value) if text_value else "",
-                        "text": str(text_value) if text_value else "",
+                        "content": final_content,  # content 필드 보장
+                        "text": final_text,  # text 필드 보장
                         "relevance_score": getattr(merged_result, 'score', 0.0),
                         "source": getattr(merged_result, 'source', 'Unknown'),
-                        "metadata": getattr(merged_result, 'metadata', {}) if hasattr(merged_result, 'metadata') else {}
+                        "metadata": metadata
                     })
                 elif isinstance(merged_result, dict):
                     # 개선 1: dict 형태의 문서도 content/text 필드 보장
                     doc = merged_result.copy()
+                    # metadata에서 content/text 추출 시도
+                    metadata = doc.get('metadata', {})
+                    if isinstance(metadata, dict):
+                        if not doc.get("content") and metadata.get('content'):
+                            doc["content"] = metadata['content']
+                        if not doc.get("text") and metadata.get('text'):
+                            doc["text"] = metadata['text']
+                    
                     # content 또는 text 필드가 없으면 추가
-                    if "content" not in doc and "text" in doc:
-                        doc["content"] = doc["text"]
-                    elif "text" not in doc and "content" in doc:
-                        doc["text"] = doc["content"]
-                    elif "content" not in doc and "text" not in doc:
-                        # content와 text가 모두 없으면 빈 문자열로 설정
-                        doc["content"] = ""
-                        doc["text"] = ""
+                    if "content" not in doc or not doc.get("content"):
+                        if "text" in doc and doc.get("text"):
+                            doc["content"] = doc["text"]
+                        else:
+                            doc["content"] = ""
+                    if "text" not in doc or not doc.get("text"):
+                        if "content" in doc and doc.get("content"):
+                            doc["text"] = doc["content"]
+                        else:
+                            doc["text"] = ""
+                    
+                    # content와 text가 모두 비어있으면 metadata에서 재시도
+                    if (not doc.get("content") or not doc.get("text")) and isinstance(metadata, dict):
+                        content_from_meta = metadata.get('content') or metadata.get('text', '')
+                        if content_from_meta:
+                            doc["content"] = content_from_meta
+                            doc["text"] = content_from_meta
+                    
                     merged_docs.append(doc)
 
-            # 개선 1: merged_docs 문서 구조 검증 및 로깅
+            # 개선 1: merged_docs 문서 구조 검증 및 로깅 (전체 문서 검사)
             doc_structure_stats = {
                 "total": len(merged_docs),
                 "has_content": 0,
@@ -6128,10 +6388,26 @@ class EnhancedLegalQuestionWorkflow:
                 "has_both": 0,
                 "content_lengths": []
             }
-            for doc in merged_docs[:5]:  # 상위 5개만 검사
-                has_content = bool(doc.get("content", ""))
-                has_text = bool(doc.get("text", ""))
-                content_len = len(doc.get("content", "") or doc.get("text", "") or "")
+            for doc in merged_docs:  # 전체 문서 검사 (개선: 5개 -> 전체)
+                # MergedResult 객체인 경우 처리
+                if hasattr(doc, 'text'):
+                    text_value = getattr(doc, 'text', '')
+                    content_value = text_value  # MergedResult는 text 속성만 있음
+                    # metadata에서 content 추출 시도
+                    metadata = getattr(doc, 'metadata', {})
+                    if isinstance(metadata, dict):
+                        content_from_meta = metadata.get('content') or metadata.get('text', '')
+                        if content_from_meta:
+                            content_value = content_from_meta
+                    has_content = bool(content_value)
+                    has_text = bool(text_value)
+                    content_len = len(content_value or text_value or "")
+                else:
+                    # dict 형태인 경우
+                    has_content = bool(doc.get("content", ""))
+                    has_text = bool(doc.get("text", ""))
+                    content_len = len(doc.get("content", "") or doc.get("text", "") or "")
+                
                 if has_content:
                     doc_structure_stats["has_content"] += 1
                 if has_text:
@@ -6222,8 +6498,8 @@ class EnhancedLegalQuestionWorkflow:
                 if not isinstance(content, str):
                     content = str(content) if content else ""
 
-                # 개선 1: 필터링 조건 완화 (10자 → 5자로 낮춤)
-                if not content or len(content.strip()) < 5:  # 10자에서 5자로 낮춤
+                # 개선 1: 필터링 조건 완화 (10자 → 3자로 낮춤)
+                if not content or len(content.strip()) < 3:  # 5자에서 3자로 더 낮춤
                     skipped_content += 1
                     # 디버깅: 첫 3개만 상세 정보 수집
                     if skipped_content <= 3:
@@ -6236,9 +6512,9 @@ class EnhancedLegalQuestionWorkflow:
                         })
                     continue
 
-                # 관련성 점수 확인 (Phase 1: 임계값 0.1 → 0.05로 조정)
+                # 관련성 점수 확인 (Phase 1: 임계값 0.05 → 0.01로 더 낮춤)
                 score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
-                if score < 0.05:  # 개선: 임계값을 0.05로 낮춤 (더 많은 문서 포함)
+                if score < 0.01:  # 개선: 임계값을 0.01로 더 낮춤 (더 많은 문서 포함)
                     skipped_score += 1
                     continue
 
@@ -6269,15 +6545,27 @@ class EnhancedLegalQuestionWorkflow:
 
                 # 폴백: 낮은 점수라도 문서가 있으면 사용 (최소 1개라도 제공)
                 if weighted_docs:
-                    # 점수 순으로 정렬되어 있으므로, 상위 3개를 선택 (점수가 낮아도)
+                    # 점수 순으로 정렬되어 있으므로, 상위 5개를 선택 (점수가 낮아도)
                     fallback_docs = []
-                    for doc in weighted_docs[:3]:
+                    for doc in weighted_docs[:5]:
                         content = doc.get("content", "") or doc.get("text", "")
-                        if content and len(content.strip()) >= 10:
-                            # 점수가 낮아도 최소 임계값(0.05) 이상이면 사용
+                        # content 길이 조건 완화: 10자 → 5자
+                        if content and len(content.strip()) >= 5:
+                            # 점수 조건 완화: 최소 임계값 없이도 사용 (점수가 0보다 크면)
                             score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-                            if score >= 0.05:
+                            if score > 0:  # 0보다 크면 사용
                                 fallback_docs.append(doc)
+                                if len(fallback_docs) >= 3:  # 최소 3개까지만
+                                    break
+
+                    # 최소 1개라도 보장: 점수 조건 없이도 사용
+                    if not fallback_docs and weighted_docs:
+                        for doc in weighted_docs[:3]:
+                            content = doc.get("content", "") or doc.get("text", "")
+                            if content and len(content.strip()) >= 5:
+                                fallback_docs.append(doc)
+                                if len(fallback_docs) >= 1:  # 최소 1개
+                                    break
 
                     if fallback_docs:
                         final_docs = fallback_docs
@@ -6475,72 +6763,72 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
 
-            optimized_queries = self._get_state_value(state, "optimized_queries", {})
-            search_params = self._get_state_value(state, "search_params", {})
             query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
             legal_field = self._get_state_value(state, "legal_field", "")
 
-            # 디버깅: state에서 직접 확인
-            from .state_helpers import get_field
-            optimized_queries_raw = get_field(state, "optimized_queries")
-            search_params_raw = get_field(state, "search_params")
-
-            self.logger.debug(f"execute_searches_parallel: START")
-            self.logger.debug(f"  - optimized_queries (via _get_state_value): {type(optimized_queries).__name__}, exists={bool(optimized_queries)}")
-            self.logger.debug(f"  - optimized_queries (via get_field): {type(optimized_queries_raw).__name__}, is None={optimized_queries_raw is None}")
-            self.logger.debug(f"  - search_params (via _get_state_value): {type(search_params).__name__}, exists={bool(search_params)}")
-            self.logger.debug(f"  - search_params (via get_field): {type(search_params_raw).__name__}, is None={search_params_raw is None}")
-
-            # state 구조 확인
-            if "search" in state:
-                self.logger.debug(f"  - state has 'search' key: {type(state['search']).__name__}")
-                if isinstance(state.get("search"), dict):
-                    self.logger.debug(f"  - search keys: {list(state['search'].keys())}")
-
-            # state["search"]에서 직접 읽기 (get_field가 빈 딕셔너리를 반환하는 경우 대비)
-            if "search" in state and isinstance(state["search"], dict):
-                direct_optimized = state["search"].get("optimized_queries")
-                if direct_optimized and isinstance(direct_optimized, dict) and len(direct_optimized) > 0:
-                    optimized_queries = direct_optimized
-                    extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    self.logger.debug(f"  - Using direct state['search']['optimized_queries'], keys: {list(optimized_queries.keys())}")
-                    self.logger.debug(f"  - semantic_query: '{optimized_queries.get('semantic_query', 'N/A')[:50]}...'")
-                    self.logger.debug(f"  - keyword_queries: {len(optimized_queries.get('keyword_queries', []))} queries")
-                elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
-                    optimized_queries = optimized_queries_raw
-                    extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    self.logger.debug(f"  - Using optimized_queries_raw (direct was empty), keys: {list(optimized_queries.keys())}")
-                else:
-                    optimized_queries = {}
-                    extracted_keywords = []
-                    self.logger.debug(f"  - Both direct and raw are empty/None")
-            elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
-                optimized_queries = optimized_queries_raw
-                extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                self.logger.debug(f"  - Using optimized_queries_raw (no direct access), keys: {list(optimized_queries.keys())}")
-            else:
+            # optimized_queries와 search_params를 여러 위치에서 찾기 (개선: 빈 딕셔너리도 체크)
+            optimized_queries = None
+            search_params = None
+            
+            # 1단계: 최상위 레벨에서 찾기
+            optimized_queries = self._get_state_value(state, "optimized_queries", None)
+            search_params = self._get_state_value(state, "search_params", None)
+            
+            # 2단계: search 그룹에서 찾기
+            if (optimized_queries is None or (isinstance(optimized_queries, dict) and len(optimized_queries) == 0)) and \
+               "search" in state and isinstance(state["search"], dict):
+                optimized_queries = state["search"].get("optimized_queries", None)
+            if (search_params is None or (isinstance(search_params, dict) and len(search_params) == 0)) and \
+               "search" in state and isinstance(state["search"], dict):
+                search_params = state["search"].get("search_params", None)
+            
+            # 3단계: common 그룹에서 찾기
+            if (optimized_queries is None or (isinstance(optimized_queries, dict) and len(optimized_queries) == 0)) and \
+               "common" in state and isinstance(state["common"], dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    optimized_queries = state["common"]["search"].get("optimized_queries", None)
+            if (search_params is None or (isinstance(search_params, dict) and len(search_params) == 0)) and \
+               "common" in state and isinstance(state["common"], dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    search_params = state["common"]["search"].get("search_params", None)
+            
+            # 4단계: 전역 캐시에서 찾기
+            if optimized_queries is None or (isinstance(optimized_queries, dict) and len(optimized_queries) == 0):
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                        if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                            cached_queries = _global_search_results_cache["search"].get("optimized_queries", None)
+                            if cached_queries and isinstance(cached_queries, dict) and len(cached_queries) > 0:
+                                optimized_queries = cached_queries
+                                self.logger.info("✅ [EXECUTE SEARCHES] Found optimized_queries in global cache")
+                except Exception as e:
+                    self.logger.debug(f"Failed to get optimized_queries from global cache: {e}")
+            
+            if search_params is None or (isinstance(search_params, dict) and len(search_params) == 0):
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                        if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                            cached_params = _global_search_results_cache["search"].get("search_params", None)
+                            if cached_params and isinstance(cached_params, dict) and len(cached_params) > 0:
+                                search_params = cached_params
+                                self.logger.info("✅ [EXECUTE SEARCHES] Found search_params in global cache")
+                except Exception as e:
+                    self.logger.debug(f"Failed to get search_params from global cache: {e}")
+            
+            # 기본값 설정 (None이면 빈 딕셔너리로)
+            if optimized_queries is None:
                 optimized_queries = {}
-                extracted_keywords = []
-                self.logger.debug(f"  - optimized_queries not found anywhere")
-
-            # search_params_raw도 확인
-            if search_params_raw is not None and len(search_params_raw) > 0:
-                search_params = search_params_raw
-                self.logger.debug(f"  - Using search_params_raw, keys: {list(search_params.keys())}")
-            elif search_params_raw is not None:
-                # 빈 딕셔너리인 경우 - 직접 state["search"]에서 확인
-                self.logger.debug(f"  - search_params_raw is empty dict, checking state['search'] directly")
-                if "search" in state and isinstance(state["search"], dict):
-                    direct_params = state["search"].get("search_params")
-                    if direct_params and len(direct_params) > 0:
-                        search_params = direct_params
-                        self.logger.debug(f"  - Found in state['search'], keys: {list(search_params.keys())}")
-                    else:
-                        search_params = {}
-                else:
-                    search_params = {}
-            else:
+            if search_params is None:
                 search_params = {}
+            
+            # extracted_keywords 추출
+            extracted_keywords = optimized_queries.get("expanded_keywords", []) if optimized_queries else []
+            
+            # 디버깅: 찾은 값 로깅
+            self.logger.debug(f"[EXECUTE SEARCHES] optimized_queries found: {optimized_queries is not None and len(optimized_queries) > 0}, keys: {list(optimized_queries.keys()) if optimized_queries else []}")
+            self.logger.debug(f"[EXECUTE SEARCHES] search_params found: {search_params is not None and len(search_params) > 0}, keys: {list(search_params.keys()) if search_params else []}")
 
             # 검증: optimized_queries와 search_params가 None이 아니고, 필수 키가 있는지 확인
             semantic_query_value = optimized_queries.get("semantic_query", "") if optimized_queries else ""
@@ -6561,6 +6849,8 @@ class EnhancedLegalQuestionWorkflow:
                 query = self._get_state_value(state, "query", "")
                 if query:
                     self.logger.warning(f"keyword_queries is empty in execute_searches_parallel, using base query")
+                    if optimized_queries is None:
+                        optimized_queries = {}
                     optimized_queries["keyword_queries"] = [query]
                     keyword_queries_value = [query]
 
@@ -6570,9 +6860,11 @@ class EnhancedLegalQuestionWorkflow:
             self.logger.debug(f"  - Validation: keyword_queries={len(keyword_queries_value) if keyword_queries_value else 0}, has_keyword_queries={has_keyword_queries}")
             self.logger.debug(f"  - Validation: search_params is None={search_params is None}, is empty={search_params == {}}, keys={list(search_params.keys()) if search_params else []}")
 
-            if optimized_queries_raw is None or search_params_raw is None or not has_semantic_query:
-                self.logger.warning("Optimized queries or search params not found")
+            # 검증: optimized_queries와 search_params가 유효한지 확인
+            if not optimized_queries or len(optimized_queries) == 0 or not has_semantic_query:
+                self.logger.warning(f"Optimized queries or search params not found or invalid. optimized_queries={bool(optimized_queries)}, has_semantic_query={has_semantic_query}")
                 self.logger.debug(f"PARALLEL SEARCH SKIP: optimized_queries={optimized_queries is not None}, search_params={search_params is not None}")
+                # 검색 결과가 없으면 빈 결과 반환하되, 기본 쿼리로 재검색은 시도하지 않음
                 self._set_state_value(state, "semantic_results", [])
                 self._set_state_value(state, "keyword_results", [])
                 self._set_state_value(state, "semantic_count", 0)
@@ -6632,15 +6924,54 @@ class EnhancedLegalQuestionWorkflow:
 
             # 결과 저장
             # 중요: search 그룹이 확실히 존재하도록 ensure_state_group 호출
-            from .state_helpers import ensure_state_group
+            # state_helpers 모듈은 존재하지 않으므로 직접 구현
+            # from .state_helpers import ensure_state_group
+            def ensure_state_group(state, group_name):
+                """State 그룹 보장"""
+                if group_name not in state:
+                    state[group_name] = {}
+                return state[group_name]
             ensure_state_group(state, "search")
 
             self.logger.debug(f"PARALLEL SEARCH: Before save - semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}")
 
+            # 검색 결과를 여러 위치에 저장하여 보존
             self._set_state_value(state, "semantic_results", semantic_results)
             self._set_state_value(state, "keyword_results", keyword_results)
             self._set_state_value(state, "semantic_count", semantic_count)
             self._set_state_value(state, "keyword_count", keyword_count)
+            
+            # search 그룹에도 저장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["semantic_results"] = semantic_results
+            state["search"]["keyword_results"] = keyword_results
+            state["search"]["semantic_count"] = semantic_count
+            state["search"]["keyword_count"] = keyword_count
+            
+            # common 그룹에도 저장 (State Reduction 후에도 유지)
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["semantic_results"] = semantic_results
+            state["common"]["search"]["keyword_results"] = keyword_results
+            state["common"]["search"]["semantic_count"] = semantic_count
+            state["common"]["search"]["keyword_count"] = keyword_count
+            
+            # 전역 캐시에도 저장
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if not _global_search_results_cache:
+                    _global_search_results_cache = {}
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["semantic_results"] = semantic_results
+                _global_search_results_cache["search"]["keyword_results"] = keyword_results
+                _global_search_results_cache["search"]["semantic_count"] = semantic_count
+                _global_search_results_cache["search"]["keyword_count"] = keyword_count
+            except Exception as e:
+                self.logger.debug(f"Failed to save search results to global cache: {e}")
 
             # 저장 확인 로그
             stored_semantic = self._get_state_value(state, "semantic_results", [])
@@ -7006,13 +7337,20 @@ class EnhancedLegalQuestionWorkflow:
         query_match = match_count / len(semantic_results) if semantic_results else 0.0
         quality["query_match"] = query_match
 
-        # 종합 품질 점수 계산
+        # 종합 품질 점수 계산 (최소값 보장)
         quality_score = (
             result_count_score * 0.25 +
             avg_relevance * 0.30 +
             diversity_ratio * 0.20 +
             query_match * 0.25
         )
+        # 최소 점수 보장 (결과가 있으면 최소 0.1)
+        if len(semantic_results) > 0:
+            quality_score = max(quality_score, 0.1)
+        # 평균 관련성 점수가 0이면 최소값 적용
+        if avg_relevance == 0 and len(semantic_results) > 0:
+            # 결과가 있으면 최소 관련성 점수 부여
+            quality_score = max(quality_score, 0.15)
         quality["score"] = quality_score
 
         # 재검색 필요 여부 판단
@@ -7085,13 +7423,19 @@ class EnhancedLegalQuestionWorkflow:
         legal_citation_ratio = legal_citation_count / len(keyword_results) if keyword_results else 0.0
         quality["legal_citation_ratio"] = legal_citation_ratio
 
-        # 종합 품질 점수 계산
+        # 종합 품질 점수 계산 (최소값 보장)
         quality_score = (
             result_count_score * 0.25 +
             avg_relevance * 0.25 +
             category_match * 0.25 +
             legal_citation_ratio * 0.25
         )
+        # 최소 점수 보장 (결과가 있으면 최소 0.1)
+        if len(keyword_results) > 0:
+            quality_score = max(quality_score, 0.1)
+        # 평균 관련성 점수가 0이면 최소값 적용
+        if avg_relevance == 0 and len(keyword_results) > 0:
+            quality_score = max(quality_score, 0.15)
         quality["score"] = quality_score
 
         # 재검색 필요 여부 판단
@@ -7583,40 +7927,54 @@ class EnhancedLegalQuestionWorkflow:
         keyword_match = keyword_scores.get("weighted_keyword_score", 0.0)
 
         search_type = document.get("search_type", "")
-        type_weight = 1.2 if search_type == "semantic" else 1.0
+        # semantic 검색 결과에 더 높은 가중치 부여 (점수 차이 확대)
+        type_weight = 1.4 if search_type == "semantic" else 0.9  # 1.2/1.0 -> 1.4/0.9로 차이 확대
 
         # 문서 타입별 가중치 (강화)
         doc_type = document.get("type", "").lower() if document.get("type") else ""
         doc_type_weight = 1.0
         if "법령" in doc_type or "law" in doc_type:
-            doc_type_weight = 1.2  # 법령 우선
+            doc_type_weight = 1.3  # 법령 우선 (1.2 -> 1.3)
         elif "판례" in doc_type or "precedent" in doc_type:
-            doc_type_weight = 1.1  # 판례 차순
+            doc_type_weight = 1.15  # 판례 차순 (1.1 -> 1.15)
         else:
-            doc_type_weight = 0.9
+            doc_type_weight = 0.85  # 기타 (0.9 -> 0.85)
 
         # 질문 유형별 가중치 (강화)
         query_type_weight = 1.0
         if query_type:
             if query_type == "precedent_search" and ("판례" in doc_type or "precedent" in doc_type):
-                query_type_weight = 1.3  # 판례 검색에서 판례 문서
+                query_type_weight = 1.4  # 판례 검색에서 판례 문서 (1.3 -> 1.4)
             elif query_type == "law_inquiry" and ("법령" in doc_type or "law" in doc_type):
-                query_type_weight = 1.3  # 법령 문의에서 법령 문서
+                query_type_weight = 1.4  # 법령 문의에서 법령 문서 (1.3 -> 1.4)
 
         category_boost = document.get("category_boost", 1.0)
         field_match_score = document.get("field_match_score", 0.5)
         category_bonus = (category_boost * 0.7 + field_match_score * 0.3)
 
-        # 최종 점수 계산 (강화된 가중치 적용)
+        # base_relevance 점수 범위 확대 (정규화 개선)
+        # base_relevance가 0.0-1.0 범위가 아닐 수 있으므로 정규화
+        # 하지만 너무 낮은 점수는 최소값 보장
+        normalized_relevance = base_relevance
+        if normalized_relevance < 0:
+            normalized_relevance = 0.0
+        elif normalized_relevance > 1.0:
+            # 1.0을 초과하는 점수는 log 스케일로 정규화 (점수 차이 확대)
+            import math
+            normalized_relevance = 1.0 + (math.log1p(normalized_relevance - 1.0) / 10.0)  # log 스케일 정규화
+            normalized_relevance = min(1.5, normalized_relevance)  # 최대 1.5로 제한
+
+        # 최종 점수 계산 (강화된 가중치 적용, 점수 범위 확대)
         final_score = (
-            base_relevance * 0.50 +  # 기본 점수 비중 증가 (40% → 50%)
-            keyword_match * 0.30 +  # 키워드 점수 비중 감소 (35% → 30%)
-            (base_relevance * doc_type_weight * query_type_weight) * 0.10 +  # 문서/질문 타입 가중치 추가
-            type_weight * 0.05 +  # 검색 타입 가중치 감소 (15% → 5%)
-            category_bonus * 0.05  # 카테고리 보너스 감소 (10% → 5%)
+            normalized_relevance * 0.45 +  # 기본 점수 비중 (50% -> 45%)
+            keyword_match * 0.30 +  # 키워드 점수 비중 유지
+            (normalized_relevance * doc_type_weight * query_type_weight) * 0.15 +  # 문서/질문 타입 가중치 증가 (10% -> 15%)
+            (type_weight - 1.0) * 0.05 +  # 검색 타입 가중치 (semantic: +0.02, keyword: -0.005)
+            category_bonus * 0.05  # 카테고리 보너스 유지
         )
 
-        return min(1.0, max(0.0, final_score))
+        # 점수 범위 확대 (0.0-1.5 범위로 확장)
+        return min(1.5, max(0.0, final_score))
 
     def _validate_search_quality(
         self,
@@ -8007,6 +8365,25 @@ class EnhancedLegalQuestionWorkflow:
 
             # State에 저장
             self._set_state_value(state, "prompt_optimized_context", prompt_optimized_context)
+            # search 그룹과 common 그룹에도 저장 (State Reduction 후에도 유지)
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["prompt_optimized_context"] = prompt_optimized_context
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["prompt_optimized_context"] = prompt_optimized_context
+            # 전역 캐시에도 저장
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if not _global_search_results_cache:
+                    _global_search_results_cache = {}
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["prompt_optimized_context"] = prompt_optimized_context
+            except Exception as e:
+                self.logger.debug(f"Failed to save prompt_optimized_context to global cache: {e}")
 
             self._save_metadata_safely(state, "_last_executed_node", "prepare_document_context_for_prompt")
             self._update_processing_time(state, start_time)
@@ -8066,7 +8443,28 @@ class EnhancedLegalQuestionWorkflow:
             # ========== Part 1: prepare_document_context_for_prompt 로직 ==========
             context_start_time = time.time()
 
+            # retrieved_docs 가져오기 (여러 위치에서 시도)
             retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            if not retrieved_docs:
+                # search 그룹에서 시도
+                if "search" in state and isinstance(state["search"], dict):
+                    retrieved_docs = state["search"].get("retrieved_docs", [])
+            if not retrieved_docs:
+                # common 그룹에서 시도
+                if "common" in state and isinstance(state["common"], dict):
+                    if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                        retrieved_docs = state["common"]["search"].get("retrieved_docs", [])
+            if not retrieved_docs:
+                # 전역 캐시에서 시도
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache:
+                        retrieved_docs = _global_search_results_cache.get("retrieved_docs", [])
+                        if not retrieved_docs and "search" in _global_search_results_cache:
+                            retrieved_docs = _global_search_results_cache["search"].get("retrieved_docs", [])
+                except Exception as e:
+                    self.logger.debug(f"Failed to get retrieved_docs from global cache: {e}")
+            
             query = self._get_state_value(state, "query", "")
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
             query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
@@ -8075,16 +8473,25 @@ class EnhancedLegalQuestionWorkflow:
             # retrieved_docs 검증
             has_valid_docs = False
             if not retrieved_docs:
-                self.logger.warning(
+                search_failed = self._get_state_value(state, "search_failed", False)
+                search_failure_reason = self._get_state_value(state, "search_failure_reason", "unknown")
+                
+                warning_msg = (
                     f"⚠️ [PREPARE CONTEXT] No retrieved_docs to prepare for prompt. "
                     f"Query: '{query[:50]}...', Query type: {query_type_str}. "
                     f"Skipping document context preparation and term extraction."
                 )
+                if search_failed:
+                    warning_msg += f" Search failed: {search_failure_reason}"
+                self.logger.warning(warning_msg)
+                
                 self._set_state_value(state, "prompt_optimized_context", {
                     "prompt_optimized_text": "",
                     "structured_documents": {},
                     "document_count": 0,
-                    "total_context_length": 0
+                    "total_context_length": 0,
+                    "search_failed": search_failed,
+                    "search_failure_reason": search_failure_reason
                 })
             elif not isinstance(retrieved_docs, list):
                 self.logger.error(
@@ -8149,8 +8556,31 @@ class EnhancedLegalQuestionWorkflow:
                         legal_field=legal_field
                     )
 
-                    # State에 저장
+                    # State에 저장 (여러 위치에 저장하여 State Reduction 후에도 유지)
                     self._set_state_value(state, "prompt_optimized_context", prompt_optimized_context)
+                    
+                    # search 그룹에도 저장
+                    if "search" not in state:
+                        state["search"] = {}
+                    state["search"]["prompt_optimized_context"] = prompt_optimized_context
+                    
+                    # common 그룹에도 저장 (State Reduction 후에도 유지)
+                    if "common" not in state:
+                        state["common"] = {}
+                    if "search" not in state["common"]:
+                        state["common"]["search"] = {}
+                    state["common"]["search"]["prompt_optimized_context"] = prompt_optimized_context
+                    
+                    # 전역 캐시에도 저장
+                    try:
+                        from core.agents.node_wrappers import _global_search_results_cache
+                        if not _global_search_results_cache:
+                            _global_search_results_cache = {}
+                        if "search" not in _global_search_results_cache:
+                            _global_search_results_cache["search"] = {}
+                        _global_search_results_cache["search"]["prompt_optimized_context"] = prompt_optimized_context
+                    except Exception as e:
+                        self.logger.debug(f"Failed to save prompt_optimized_context to global cache: {e}")
 
                     # 상세 로깅
                     doc_count = prompt_optimized_context.get("document_count", 0)
@@ -8327,10 +8757,10 @@ class EnhancedLegalQuestionWorkflow:
             # 문서 검증: content 필드와 관련도 점수 기준 필터링 (검색 타입 고려)
             valid_docs = []
             invalid_docs_count = 0
-            # 검색 타입별 다른 관련도 기준 적용
+            # 검색 타입별 다른 관련도 기준 적용 (임계값 완화)
             # 키워드 검색 결과는 관련도가 낮아도 키워드 매칭이 있으면 포함
-            min_relevance_score_semantic = 0.3  # 의미적 검색: 0.3 이상
-            min_relevance_score_keyword = 0.15  # 키워드 검색: 0.15 이상 (키워드 매칭 시)
+            min_relevance_score_semantic = 0.1  # 의미적 검색: 0.1 이상 (0.3 -> 0.1로 낮춤)
+            min_relevance_score_keyword = 0.05  # 키워드 검색: 0.05 이상 (0.15 -> 0.05로 낮춤)
 
             for doc in retrieved_docs:
                 if not isinstance(doc, dict):
