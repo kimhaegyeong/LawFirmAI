@@ -6,7 +6,6 @@ LawFirmAI의 성능을 최적화하고 메모리 사용량을 관리합니다.
 
 import logging
 import time
-import psutil
 import gc
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
@@ -16,6 +15,14 @@ import threading
 import asyncio
 from functools import wraps, lru_cache
 import weakref
+
+# psutil 선택적 import
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +81,18 @@ class PerformanceMonitor:
         """성능 메트릭 기록"""
         try:
             # 시스템 리소스 사용량 조회
-            cpu_usage = psutil.cpu_percent(interval=0.1)
-            memory = psutil.virtual_memory()
+            if not PSUTIL_AVAILABLE:
+                cpu_usage = 0.0
+                memory_percent = 0.0
+            else:
+                cpu_usage = psutil.cpu_percent(interval=0.1)
+                memory = psutil.virtual_memory()
+                memory_percent = memory.percent
             
             metrics = PerformanceMetrics(
                 timestamp=datetime.now(),
                 cpu_usage=cpu_usage,
-                memory_usage=memory.percent,
+                memory_usage=memory_percent,
                 response_time=response_time,
                 active_sessions=active_sessions,
                 cache_hit_rate=cache_hit_rate,
@@ -146,6 +158,13 @@ class PerformanceMonitor:
     def get_system_health(self) -> Dict[str, Any]:
         """시스템 건강 상태 조회"""
         try:
+            if not PSUTIL_AVAILABLE:
+                return {
+                    "status": "unavailable",
+                    "error": "psutil not available",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
             # 현재 시스템 상태
             cpu_usage = psutil.cpu_percent(interval=0.1)
             memory = psutil.virtual_memory()
@@ -303,6 +322,9 @@ class MemoryOptimizer:
     def get_memory_usage(self) -> MemoryUsage:
         """메모리 사용량 조회"""
         try:
+            if not PSUTIL_AVAILABLE:
+                return MemoryUsage(0, 0, 0, 0, 0, 0)
+            
             memory = psutil.virtual_memory()
             process = psutil.Process()
             process_memory = process.memory_info().rss
@@ -363,6 +385,8 @@ class MemoryOptimizer:
     def _get_memory_usage(self) -> int:
         """현재 메모리 사용량 조회 (바이트)"""
         try:
+            if not PSUTIL_AVAILABLE:
+                return 0
             process = psutil.Process()
             return process.memory_info().rss
         except Exception:
@@ -575,22 +599,31 @@ def memory_optimized(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         # 함수 실행 전 메모리 상태
-        before_memory = psutil.Process().memory_info().rss
+        before_memory = 0
+        if PSUTIL_AVAILABLE:
+            try:
+                before_memory = psutil.Process().memory_info().rss
+            except Exception:
+                pass
         
         try:
             result = func(*args, **kwargs)
             return result
         finally:
-            # 함수 실행 후 메모리 상태
-            after_memory = psutil.Process().memory_info().rss
-            memory_diff = after_memory - before_memory
-            
-            if memory_diff > 10 * 1024 * 1024:  # 10MB 이상 증가
-                logger.warning(f"{func.__name__} used {memory_diff / 1024 / 1024:.1f}MB memory")
-            
-            # 메모리 사용량이 높으면 가비지 컬렉션 실행
-            if psutil.virtual_memory().percent > 80:
-                gc.collect()
+            if PSUTIL_AVAILABLE:
+                try:
+                    # 함수 실행 후 메모리 상태
+                    after_memory = psutil.Process().memory_info().rss
+                    memory_diff = after_memory - before_memory
+                    
+                    if memory_diff > 10 * 1024 * 1024:  # 10MB 이상 증가
+                        logger.warning(f"{func.__name__} used {memory_diff / 1024 / 1024:.1f}MB memory")
+                    
+                    # 메모리 사용량이 높으면 가비지 컬렉션 실행
+                    if psutil.virtual_memory().percent > 80:
+                        gc.collect()
+                except Exception:
+                    pass
     
     return wrapper
 

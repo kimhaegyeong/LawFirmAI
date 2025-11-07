@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 
 # 한글 출력을 위한 인코딩 설정
@@ -36,6 +36,8 @@ if sys.platform == "win32":
 
 class Config(BaseSettings):
     """설정 관리 클래스"""
+    
+    model_config = ConfigDict(protected_namespaces=('settings_',))
 
     # LAW OPEN API Configuration
     law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
@@ -88,7 +90,13 @@ class Config(BaseSettings):
 
     # Security Configuration
     secret_key: str = Field(default="your-secret-key-here", env="SECRET_KEY")
-    cors_origins: list = Field(default=["http://localhost:3000", "http://localhost:7860"], env="CORS_ORIGINS")
+    cors_origins: list = Field(
+        default=["http://localhost:3000", "http://localhost:7860"], 
+        env="CORS_ORIGINS",
+        json_schema_extra={
+            "description": "CORS allowed origins (JSON array or comma-separated string)"
+        }
+    )
 
     # Monitoring Configuration
     enable_metrics: bool = Field(default=True, env="ENABLE_METRICS")
@@ -139,6 +147,37 @@ class Config(BaseSettings):
         """초기화 시 환경변수 파일 로딩"""
         # 환경변수 파일 로딩
         self.Settings._load_env_file(".env")
+        
+        # CORS_ORIGINS 환경 변수 처리 (빈 문자열이거나 잘못된 형식인 경우 기본값 사용)
+        cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
+        if cors_origins_env:
+            try:
+                import json
+                # JSON 형식으로 파싱 시도
+                parsed = json.loads(cors_origins_env)
+                if isinstance(parsed, list):
+                    # 유효한 리스트인 경우 환경 변수 유지
+                    pass
+                else:
+                    # 리스트가 아니면 환경 변수 제거하여 기본값 사용
+                    os.environ.pop("CORS_ORIGINS", None)
+            except (json.JSONDecodeError, ValueError):
+                # JSON 파싱 실패 시 쉼표로 구분된 문자열로 처리
+                try:
+                    origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+                    if origins:
+                        # 쉼표로 구분된 문자열을 JSON 배열로 변환
+                        os.environ["CORS_ORIGINS"] = json.dumps(origins)
+                    else:
+                        # 빈 리스트인 경우 환경 변수 제거하여 기본값 사용
+                        os.environ.pop("CORS_ORIGINS", None)
+                except Exception:
+                    # 모든 파싱 실패 시 환경 변수 제거하여 기본값 사용
+                    os.environ.pop("CORS_ORIGINS", None)
+        else:
+            # 환경 변수가 없으면 기본값 사용 (이미 설정되지 않았으므로 아무것도 하지 않음)
+            pass
+        
         super().__init__(**kwargs)
 
         # 데이터베이스 경로 검증 및 기본값 설정
