@@ -37,49 +37,148 @@ except ImportError:
         """Fallback embedder using sentence-transformers"""
         def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
             self.model_name = model_name
+            import logging
+            logger = logging.getLogger(__name__)
+            
             try:
                 # sentence-transformers를 사용하여 모델 로딩
-                # meta tensor 문제 방지를 위해 CPU에 먼저 로드
+                # meta tensor 문제 방지를 위해 CPU에 먼저 로드하는 방식 사용
                 import torch
+                import os
                 device = "cuda" if torch.cuda.is_available() else "cpu"
                 
-                # CPU에 먼저 로드한 후 디바이스로 이동
-                # device_map을 사용하지 않고 단계별 로딩
+                # meta tensor 오류 방지를 위한 환경 변수 설정
+                # (HuggingFace Hub 관련 환경 변수는 제거 - 로컬 배포용)
+                original_env = {}
                 try:
-                    # 먼저 CPU에 로드 시도
-                    self.model = SentenceTransformer(model_name, device="cpu")
-                    # CPU에서 디바이스로 이동
+                    # device_map 사용 방지
+                    original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
+                    if 'HF_DEVICE_MAP' in os.environ:
+                        del os.environ['HF_DEVICE_MAP']
+                except Exception:
+                    pass
+                
+                # 방법 1: CPU에 먼저 로드 (가장 안전한 방법)
+                # meta tensor 오류를 방지하기 위해 항상 CPU에 먼저 로드하고 CPU에 유지
+                try:
+                    logger.debug(f"Loading SentenceTransformer model {model_name} on CPU first...")
+                    # meta tensor 오류 방지를 위한 추가 옵션 설정
+                    # device_map=None: device_map 사용 안 함 (meta device 방지)
+                    # low_cpu_mem_usage=False: 메모리 효율적 로딩 비활성화 (meta device 방지)
+                    # torch_dtype=torch.float32: 명시적 dtype 설정
+                    # use_safetensors=False: safetensors 사용 안 함 (일부 모델에서 meta tensor 문제 발생)
+                    # ignore_mismatched_sizes=True: 크기 불일치 무시
+                    self.model = SentenceTransformer(
+                        model_name, 
+                        device="cpu",
+                        model_kwargs={
+                            "low_cpu_mem_usage": False,  # meta device 사용 방지
+                            "device_map": None,  # device_map 사용 안 함
+                            "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                            "use_safetensors": False,  # safetensors 사용 안 함 (meta tensor 문제 방지)
+                            "ignore_mismatched_sizes": True,  # 크기 불일치 무시
+                        }
+                    )
+                    
+                    # Meta tensor 문제를 완전히 회피하기 위해 CPU에 유지
+                    # GPU가 있어도 안정성을 위해 CPU 사용
                     if device != "cpu":
-                        self.model = self.model.to(device)
+                        logger.info(f"Model loaded on CPU (GPU available but keeping on CPU for stability to avoid meta tensor errors)")
+                    else:
+                        logger.debug(f"Model loaded on CPU")
+                    
                     self.dim = self.model.get_sentence_embedding_dimension()
+                    logger.info(f"Successfully loaded SentenceTransformer model {model_name} on CPU (dim={self.dim})")
+                    
                 except Exception as cpu_error:
-                    # CPU 로딩 실패 시 직접 디바이스 로딩 시도
-                    self.model = SentenceTransformer(model_name, device=device)
-                    self.dim = self.model.get_sentence_embedding_dimension()
+                    # meta tensor 오류 발생 시 대체 방법 시도
+                    if "meta tensor" in str(cpu_error).lower() or "to_empty" in str(cpu_error).lower():
+                        logger.warning(f"Meta tensor error detected, trying alternative loading method: {cpu_error}")
+                        # 대체 방법: 더 강력한 옵션으로 재시도
+                        try:
+                            # 환경 변수를 더 적극적으로 설정
+                            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                            os.environ['TRANSFORMERS_OFFLINE'] = '0'
+                            
+                            # SentenceTransformer를 다시 시도 (더 강력한 옵션)
+                            logger.debug(f"Trying alternative loading method with stronger options...")
+                            self.model = SentenceTransformer(
+                                model_name, 
+                                device="cpu",  # 항상 CPU에 먼저 로드
+                                model_kwargs={
+                                    "low_cpu_mem_usage": False,
+                                    "device_map": None,
+                                    "torch_dtype": torch.float32,
+                                    "trust_remote_code": True,
+                                    "use_safetensors": False,  # safetensors 사용 안 함
+                                    "ignore_mismatched_sizes": True,  # 크기 불일치 무시
+                                    "local_files_only": False,  # 로컬 파일만 사용 안 함
+                                }
+                            )
+                            self.dim = self.model.get_sentence_embedding_dimension()
+                            logger.info(f"Successfully loaded SentenceTransformer model {model_name} on CPU (alternative method, dim={self.dim})")
+                        except Exception as alt_error:
+                            # 모든 방법 실패 시 원래 오류 전파
+                            logger.error(f"All loading methods failed. Original error: {cpu_error}, Alternative error: {alt_error}")
+                            raise cpu_error
+                    else:
+                        # 다른 오류는 그대로 전파
+                        logger.error(f"Failed to load SentenceTransformer model {model_name} on CPU: {cpu_error}")
+                        raise cpu_error
                     
             except Exception as e:
                 # 모델 로딩 실패 시 에러 로깅 및 재시도
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"Failed to load SentenceTransformer model {model_name}: {e}")
                 
-                # 대체 모델 시도 (CPU 먼저 로드)
+                # 대체 모델 시도
                 try:
                     fallback_model = "jhgan/ko-sroberta-multitask"
                     logger.warning(f"Trying fallback model: {fallback_model}")
                     import torch
                     device = "cuda" if torch.cuda.is_available() else "cpu"
                     
+                    # 대체 모델도 CPU에 먼저 로드 (meta tensor 오류 방지)
                     try:
-                        # CPU에 먼저 로드
-                        self.model = SentenceTransformer(fallback_model, device="cpu")
-                        if device != "cpu":
-                            self.model = self.model.to(device)
-                    except Exception:
-                        # CPU 로딩 실패 시 직접 디바이스 로딩
-                        self.model = SentenceTransformer(fallback_model, device=device)
+                        # meta tensor 오류 방지를 위한 추가 옵션 설정
+                        self.model = SentenceTransformer(
+                            fallback_model, 
+                            device="cpu",
+                            model_kwargs={
+                                "low_cpu_mem_usage": False,  # meta device 사용 방지
+                                "device_map": None,  # device_map 사용 안 함
+                                "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                            }
+                        )
+                        # CPU 유지 (안정성 우선, meta tensor 오류 방지)
+                        logger.info(f"Fallback model {fallback_model} loaded on CPU")
+                        self.dim = self.model.get_sentence_embedding_dimension()
+                    except Exception as fallback_error:
+                        # meta tensor 오류 발생 시 대체 방법 시도
+                        if "meta tensor" in str(fallback_error).lower() or "to_empty" in str(fallback_error).lower():
+                            logger.warning(f"Meta tensor error detected in fallback model, trying alternative loading method: {fallback_error}")
+                            # 대체 방법: 더 명시적인 옵션으로 로드
+                            try:
+                                self.model = SentenceTransformer(
+                                    fallback_model, 
+                                    device="cpu",  # 항상 CPU에 먼저 로드
+                                    model_kwargs={
+                                        "low_cpu_mem_usage": False,
+                                        "device_map": None,
+                                        "torch_dtype": torch.float32,
+                                        "trust_remote_code": True,  # 원격 코드 신뢰
+                                    }
+                                )
+                                self.dim = self.model.get_sentence_embedding_dimension()
+                                logger.info(f"Fallback model {fallback_model} loaded on CPU (alternative method, dim={self.dim})")
+                            except Exception as alt_fallback_error:
+                                # 대체 방법도 실패 시 원래 오류 전파
+                                logger.error(f"Failed to load fallback model with alternative method: {alt_fallback_error}")
+                                raise fallback_error
+                        else:
+                            # 다른 오류는 그대로 전파
+                            logger.error(f"Failed to load fallback model: {fallback_error}")
+                            raise fallback_error
                     
-                    self.dim = self.model.get_sentence_embedding_dimension()
                     self.model_name = fallback_model
                 except Exception as e2:
                     logger.error(f"Failed to load fallback model: {e2}")
