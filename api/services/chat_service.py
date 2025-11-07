@@ -360,26 +360,67 @@ class ChatService:
                         llm_stream_count += 1
                         logger.debug(f"{event_type} 이벤트 발견: name={event_name}, 전체 이벤트 키: {list(event.keys())}")
                         
-                        # 답변 생성 노드 내부의 LLM 호출만 스트리밍
-                        # ChatGoogleGenerativeAI인 경우, 답변 생성 노드가 시작되었으면 스트리밍
-                        is_answer_node = (
-                            "generate_answer" in event_name.lower() or 
-                            "generate_and_validate" in event_name.lower() or
-                            event_name in ["generate_answer_enhanced", "generate_and_validate_answer", "direct_answer"] or
-                            (event_name == "ChatGoogleGenerativeAI" and answer_generation_started)
-                        )
+                        # 이벤트의 상위 노드 정보 확인
+                        event_tags = event.get("tags", [])
+                        event_metadata = event.get("metadata", {})
+                        event_parent = event.get("parent", {})
+                        
+                        # 상위 노드 이름 확인
+                        parent_node_name = None
+                        if isinstance(event_parent, dict):
+                            parent_node_name = event_parent.get("name", "")
+                        elif isinstance(event_tags, list):
+                            # tags에서 노드 이름 찾기
+                            for tag in event_tags:
+                                if isinstance(tag, str) and ("generate_answer" in tag.lower() or "generate_and_validate" in tag.lower()):
+                                    parent_node_name = tag
+                                    break
+                        
+                        # 답변 생성 노드 내부의 LLM 호출인지 확인
+                        is_answer_node = False
+                        
+                        # 방법 1: 이벤트 이름으로 직접 판단
+                        if "generate_answer" in event_name.lower() or \
+                           "generate_and_validate" in event_name.lower() or \
+                           event_name in ["generate_answer_enhanced", "generate_and_validate_answer", "direct_answer"]:
+                            is_answer_node = True
+                        
+                        # 방법 2: 상위 노드가 답변 생성 노드인지 확인
+                        elif parent_node_name and (
+                            "generate_answer" in parent_node_name.lower() or 
+                            "generate_and_validate" in parent_node_name.lower() or
+                            parent_node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]
+                        ):
+                            is_answer_node = True
+                        
+                        # 방법 3: ChatGoogleGenerativeAI인 경우, 마지막으로 실행된 노드가 답변 생성 노드인지 확인
+                        elif event_name == "ChatGoogleGenerativeAI" and answer_generation_started:
+                            # last_node_name이 답변 생성 노드인지 확인
+                            if last_node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
+                                is_answer_node = True
+                            # 또는 executed_nodes에 답변 생성 노드가 포함되어 있고, 아직 완료되지 않았는지 확인
+                            elif "generate_answer_enhanced" in executed_nodes or "generate_and_validate_answer" in executed_nodes:
+                                # 답변 생성 노드가 실행 중이면 스트리밍
+                                is_answer_node = True
                         
                         # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 10개만)
                         if llm_stream_count <= 10:
-                            logger.debug(f"{event_type} 이벤트 #{llm_stream_count}: name={event_name}, is_answer_node={is_answer_node}, answer_generation_started={answer_generation_started}")
+                            logger.debug(
+                                f"{event_type} 이벤트 #{llm_stream_count}: "
+                                f"name={event_name}, parent={parent_node_name}, "
+                                f"is_answer_node={is_answer_node}, "
+                                f"answer_generation_started={answer_generation_started}, "
+                                f"last_node={last_node_name}, "
+                                f"tags={event_tags}, metadata={event_metadata}"
+                            )
                         
                         if not is_answer_node:
                             # 답변 생성 노드가 아니면 무시
                             if llm_stream_count <= 5:
-                                logger.debug(f"답변 생성 노드가 아님: {event_name} (무시)")
+                                logger.debug(f"답변 생성 노드가 아님: {event_name}, parent={parent_node_name} (무시)")
                             continue
                         
-                        logger.info(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
+                        logger.info(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}, parent={parent_node_name}")
                         
                         if is_answer_node:
                             logger.debug(f"LLM 스트리밍 이벤트 감지: {event_name} (총 {llm_stream_count}개)")
