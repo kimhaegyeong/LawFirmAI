@@ -5,9 +5,7 @@ Logging Configuration
 """
 
 import logging
-import sys
 import threading
-from pathlib import Path
 from typing import Optional
 
 # structlog 선택적 import
@@ -172,6 +170,34 @@ def setup_logging(config: Optional[Config] = None) -> None:
 
 
 def get_logger(name: str):
-    """로거 반환 - 로거 문제 해결을 위해 기본 로거 사용"""
+    """
+    로거 반환 - 환경 변수 LOG_LEVEL을 읽어서 로거 레벨 설정
+    
+    Args:
+        name: 로거 이름
+        
+    Returns:
+        설정된 로거
+    """
     import logging
-    return logging.getLogger(name)
+    import os
+    
+    logger = logging.getLogger(name)
+    
+    # 환경 변수에서 LOG_LEVEL 읽기 (기본값: INFO)
+    log_level_str = os.getenv("LOG_LEVEL", "info").upper()
+    log_level_map = {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "INFO": logging.INFO,
+        "DEBUG": logging.DEBUG,
+    }
+    log_level = log_level_map.get(log_level_str, logging.INFO)
+    
+    # 로거 레벨 설정
+    logger.setLevel(log_level)
+    logger.disabled = False
+    logger.propagate = True  # 루트 로거로 전파
+    
+    return logger
