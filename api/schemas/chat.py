@@ -2,15 +2,95 @@
 채팅 관련 스키마
 """
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
+import re
 
 
 class ChatRequest(BaseModel):
     """채팅 요청 스키마"""
-    message: str = Field(..., description="사용자 메시지")
+    message: str = Field(
+        ..., 
+        description="사용자 메시지",
+        min_length=1,
+        max_length=10000
+    )
     session_id: Optional[str] = Field(None, description="세션 ID")
-    context: Optional[str] = Field(None, description="추가 컨텍스트")
+    context: Optional[str] = Field(None, max_length=5000, description="추가 컨텍스트")
     enable_checkpoint: bool = Field(True, description="체크포인트 사용 여부")
+    image_base64: Optional[str] = Field(None, description="Base64 인코딩된 이미지 (OCR 처리용)")
+    file_base64: Optional[str] = Field(None, description="Base64 인코딩된 파일 (이미지, 텍스트, PDF, DOCX)")
+    filename: Optional[str] = Field(None, max_length=255, description="파일명")
+    
+    @validator('message')
+    def validate_message(cls, v):
+        if not v or not v.strip():
+            raise ValueError('메시지는 비어있을 수 없습니다')
+        dangerous_patterns = [
+            r'(\bOR\b|\bAND\b)\s*[\'"]?\d+[\'"]?\s*=\s*[\'"]?\d+[\'"]?',
+            r'(\bOR\b|\bAND\b)\s*[\'"]?[\w]+[\'"]?\s*=\s*[\'"]?[\w]+[\'"]?',
+            r';\s*(DROP|DELETE|UPDATE|INSERT|CREATE|ALTER)',
+            r'(\bUNION\b|\bSELECT\b).*(\bFROM\b|\bWHERE\b)',
+        ]
+        for pattern in dangerous_patterns:
+            if re.search(pattern, v, re.IGNORECASE):
+                raise ValueError('잘못된 입력 형식입니다')
+        
+        # XSS 패턴 검사
+        xss_patterns = [
+            r'<script[^>]*>.*?</script>',
+            r'javascript:',
+            r'on\w+\s*=',
+            r'<iframe[^>]*>',
+            r'<object[^>]*>',
+            r'<embed[^>]*>',
+        ]
+        for pattern in xss_patterns:
+            if re.search(pattern, v, re.IGNORECASE):
+                raise ValueError('잘못된 입력 형식입니다')
+        
+        return v.strip()
+    
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        if v:
+            uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            if not re.match(uuid_pattern, v, re.IGNORECASE):
+                raise ValueError('유효하지 않은 세션 ID 형식입니다')
+        return v
+    
+    @validator('context')
+    def validate_context(cls, v):
+        if v:
+            if len(v) > 5000:
+                raise ValueError('컨텍스트는 5000자를 초과할 수 없습니다')
+        return v
+    
+    @validator('file_base64')
+    def validate_file_base64(cls, v):
+        if v:
+            # Base64 크기 제한 (10MB로 축소)
+            max_base64_size = 10 * 1024 * 1024  # 10MB
+            if len(v) > max_base64_size:
+                raise ValueError('파일 크기가 너무 큽니다. 최대 10MB까지 업로드 가능합니다.')
+            # Base64 형식 검증
+            import base64
+            try:
+                if v.startswith('data:'):
+                    v = v.split(',', 1)[1]
+                base64.b64decode(v, validate=True)
+            except Exception:
+                raise ValueError('유효하지 않은 Base64 형식입니다.')
+        return v
+    
+    @validator('filename')
+    def validate_filename(cls, v):
+        if v:
+            # 파일명 검증
+            from api.services.file_validator import validate_filename
+            is_valid, error_msg = validate_filename(v)
+            if not is_valid:
+                raise ValueError(error_msg)
+        return v
 
 
 class ChatResponse(BaseModel):
@@ -30,7 +110,86 @@ class ChatResponse(BaseModel):
 
 class StreamingChatRequest(BaseModel):
     """스트리밍 채팅 요청 스키마"""
-    message: str = Field(..., description="사용자 메시지")
+    message: str = Field(
+        ..., 
+        description="사용자 메시지",
+        min_length=1,
+        max_length=10000
+    )
     session_id: Optional[str] = Field(None, description="세션 ID")
-    context: Optional[str] = Field(None, description="추가 컨텍스트")
+    context: Optional[str] = Field(None, max_length=5000, description="추가 컨텍스트")
+    image_base64: Optional[str] = Field(None, description="Base64 인코딩된 이미지 (OCR 처리용)")
+    file_base64: Optional[str] = Field(None, description="Base64 인코딩된 파일 (이미지, 텍스트, PDF, DOCX)")
+    filename: Optional[str] = Field(None, max_length=255, description="파일명")
+    
+    @validator('message')
+    def validate_message(cls, v):
+        if not v or not v.strip():
+            raise ValueError('메시지는 비어있을 수 없습니다')
+        dangerous_patterns = [
+            r'(\bOR\b|\bAND\b)\s*[\'"]?\d+[\'"]?\s*=\s*[\'"]?\d+[\'"]?',
+            r'(\bOR\b|\bAND\b)\s*[\'"]?[\w]+[\'"]?\s*=\s*[\'"]?[\w]+[\'"]?',
+            r';\s*(DROP|DELETE|UPDATE|INSERT|CREATE|ALTER)',
+            r'(\bUNION\b|\bSELECT\b).*(\bFROM\b|\bWHERE\b)',
+        ]
+        for pattern in dangerous_patterns:
+            if re.search(pattern, v, re.IGNORECASE):
+                raise ValueError('잘못된 입력 형식입니다')
+        
+        # XSS 패턴 검사
+        xss_patterns = [
+            r'<script[^>]*>.*?</script>',
+            r'javascript:',
+            r'on\w+\s*=',
+            r'<iframe[^>]*>',
+            r'<object[^>]*>',
+            r'<embed[^>]*>',
+        ]
+        for pattern in xss_patterns:
+            if re.search(pattern, v, re.IGNORECASE):
+                raise ValueError('잘못된 입력 형식입니다')
+        
+        return v.strip()
+    
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        if v:
+            uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            if not re.match(uuid_pattern, v, re.IGNORECASE):
+                raise ValueError('유효하지 않은 세션 ID 형식입니다')
+        return v
+    
+    @validator('context')
+    def validate_context(cls, v):
+        if v:
+            if len(v) > 5000:
+                raise ValueError('컨텍스트는 5000자를 초과할 수 없습니다')
+        return v
+    
+    @validator('file_base64')
+    def validate_file_base64(cls, v):
+        if v:
+            # Base64 크기 제한 (10MB로 축소)
+            max_base64_size = 10 * 1024 * 1024  # 10MB
+            if len(v) > max_base64_size:
+                raise ValueError('파일 크기가 너무 큽니다. 최대 10MB까지 업로드 가능합니다.')
+            # Base64 형식 검증
+            import base64
+            try:
+                if v.startswith('data:'):
+                    v = v.split(',', 1)[1]
+                base64.b64decode(v, validate=True)
+            except Exception:
+                raise ValueError('유효하지 않은 Base64 형식입니다.')
+        return v
+    
+    @validator('filename')
+    def validate_filename(cls, v):
+        if v:
+            # 파일명 검증
+            from api.services.file_validator import validate_filename
+            is_valid, error_msg = validate_filename(v)
+            if not is_valid:
+                raise ValueError(error_msg)
+        return v
 

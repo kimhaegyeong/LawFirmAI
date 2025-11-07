@@ -1,7 +1,8 @@
 """
 히스토리 관리 엔드포인트
 """
-from fastapi import APIRouter, HTTPException, Query
+import logging
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import Response
 from typing import Optional
 import json
@@ -9,12 +10,15 @@ import json
 from api.schemas.history import HistoryQuery, HistoryResponse, MessageResponse, ExportRequest
 from api.services.session_service import session_service
 from api.services.history_service import history_service
+from api.middleware.auth_middleware import require_auth
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/history", response_model=HistoryResponse)
 async def get_history(
+    current_user: dict = Depends(require_auth),
     session_id: Optional[str] = Query(None, description="세션 ID 필터"),
     category: Optional[str] = Query(None, description="카테고리 필터"),
     search: Optional[str] = Query(None, description="검색어"),
@@ -24,10 +28,7 @@ async def get_history(
     sort_order: str = Query("desc", regex="^(asc|desc)$", description="정렬 순서 (asc 또는 desc)")
 ):
     """히스토리 조회"""
-    import logging
     from datetime import datetime
-    
-    logger = logging.getLogger(__name__)
     
     try:
         result = history_service.get_history(
@@ -111,13 +112,19 @@ async def get_history(
             page=page,
             page_size=page_size
         )
+    except ValueError as e:
+        logger.warning(f"Validation error in get_history: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
         logger.error(f"Error in get_history: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="히스토리 조회 중 오류가 발생했습니다")
 
 
 @router.post("/history/export")
-async def export_history(request: ExportRequest):
+async def export_history(
+    request: ExportRequest,
+    current_user: dict = Depends(require_auth)
+):
     """히스토리 내보내기"""
     try:
         export_data = []
@@ -170,6 +177,10 @@ async def export_history(request: ExportRequest):
             raise HTTPException(status_code=400, detail="Invalid format. Use 'json' or 'txt'")
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in export_history: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in export_history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="히스토리 내보내기 중 오류가 발생했습니다")
 

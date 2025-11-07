@@ -1,18 +1,24 @@
 """
 피드백 엔드포인트
 """
+import logging
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from api.schemas.feedback import FeedbackRequest, FeedbackResponse
 from api.services.session_service import session_service
+from api.middleware.auth_middleware import require_auth
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/feedback", response_model=FeedbackResponse)
-async def submit_feedback(feedback: FeedbackRequest):
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    current_user: dict = Depends(require_auth)
+):
     """피드백 제출"""
     try:
         # 피드백 ID 생성
@@ -48,6 +54,10 @@ async def submit_feedback(feedback: FeedbackRequest):
         )
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in submit_feedback: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in submit_feedback: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="피드백 제출 중 오류가 발생했습니다")
 
