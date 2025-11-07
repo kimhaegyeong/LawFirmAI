@@ -55,6 +55,7 @@ REM Environment variables (defaults)
 if not defined API_HOST set "API_HOST=0.0.0.0"
 if not defined API_PORT set "API_PORT=8000"
 if not defined LOG_LEVEL set "LOG_LEVEL=debug"
+if not defined DEBUG_STREAM set "DEBUG_STREAM=true"
 
 REM Start server
 echo [INFO] Starting server...

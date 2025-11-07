@@ -6,6 +6,18 @@ import logging
 import os
 from pathlib import Path
 
+# HuggingFace 로깅 비활성화 (가장 먼저 실행)
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+
+# HuggingFace 관련 로거 비활성화
+logging.getLogger('transformers').setLevel(logging.ERROR)
+logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
+logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
+logging.getLogger('torch').setLevel(logging.ERROR)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+
 # 로그 레벨 환경 변수 읽기 (기본값: INFO)
 log_level_str = os.getenv("LOG_LEVEL", "info").upper()
 log_level_map = {
@@ -182,16 +194,20 @@ if api_config.debug:
             cors_origins.append(origin)
 
 # 와일드카드 처리: allow_credentials=True일 때는 "*" 사용 불가
-# "*"가 포함된 경우 credentials를 False로 설정
+# 프로덕션 환경에서 와일드카드 사용 금지
 allow_credentials = True
 if "*" in cors_origins:
-    allow_credentials = False
-    # 개발 환경에서만 와일드카드 허용
-    if not api_config.debug:
+    if api_config.debug:
+        # 개발 환경에서만 와일드카드 허용 (credentials는 False)
+        allow_credentials = False
+        logger.warning("개발 환경에서 CORS 와일드카드(*) 사용 중. allow_credentials가 False로 설정됩니다.")
+    else:
         # 프로덕션에서는 와일드카드 제거
+        logger.warning("프로덕션 환경에서 CORS 와일드카드(*) 사용은 보안상 위험합니다. 제거합니다.")
         cors_origins = [origin for origin in cors_origins if origin != "*"]
         if not cors_origins:
             cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+            logger.warning("CORS origins가 비어있어 기본값을 사용합니다.")
 
 # 최종 확인 및 출력
 print(f"[CORS Debug] Final cors_origins: {cors_origins}", flush=True)
@@ -206,13 +222,14 @@ else:
     logger.info(f"CORS 설정 완료: {len(cors_origins)} origins configured")
 
 # FastAPI CORSMiddleware 추가 (가장 먼저 추가되어야 함)
+# allow_credentials=True일 때는 allow_methods=["*"]를 사용할 수 없으므로 명시적으로 메서드 지정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+    allow_headers=["*"],  # 모든 헤더 허용
+    expose_headers=["*"],  # 모든 헤더 노출
     max_age=600,  # preflight 캐시 시간
 )
 
@@ -224,7 +241,7 @@ async def add_cors_headers_middleware(request: Request, call_next):
     """CORS 헤더를 명시적으로 추가하는 미들웨어"""
     origin = request.headers.get("origin")
     
-    # 요청 처리
+    # 일반 요청 처리
     response = await call_next(request)
     
     # CORS 헤더가 이미 있는지 확인
@@ -241,23 +258,66 @@ async def add_cors_headers_middleware(request: Request, call_next):
                 print(f"[CORS Debug] Added CORS headers for origin: {origin}", flush=True)
         else:
             print(f"[CORS Debug] Origin {origin} not in allowed origins: {cors_origins}", flush=True)
+    elif not has_cors_header:
+        # origin이 없어도 CORS 헤더가 없으면 기본값 추가 (개발 환경)
+        if api_config.debug:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Credentials"] = "false"
+            print(f"[CORS Debug] Added default CORS headers (debug mode)", flush=True)
     
-    # OPTIONS 요청에 대한 추가 헤더
+    # OPTIONS 요청에 대한 추가 헤더 (CORSMiddleware가 처리했지만, 백업으로 추가)
     if request.method == "OPTIONS" and origin and origin in cors_origins:
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Max-Age"] = "600"
+        if "Access-Control-Allow-Methods" not in response.headers:
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD"
+        if "Access-Control-Allow-Headers" not in response.headers:
+            response.headers["Access-Control-Allow-Headers"] = "*"
+        if "Access-Control-Max-Age" not in response.headers:
+            response.headers["Access-Control-Max-Age"] = "600"
     
     return response
 
 # 로깅 설정
 setup_logging(app)
 
+# 보안 헤더 미들웨어 추가
+from api.middleware.security_headers import SecurityHeadersMiddleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate Limiting 설정
+from api.middleware.rate_limit import limiter, is_rate_limit_enabled, create_rate_limit_response
+from slowapi.errors import RateLimitExceeded
+
+if is_rate_limit_enabled():
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, create_rate_limit_response)
+    logger.info("Rate Limiting이 활성화되었습니다.")
+else:
+    logger.info("Rate Limiting이 비활성화되었습니다.")
+
+# CSRF 보호 설정
+from api.middleware.csrf import setup_csrf_protection
+setup_csrf_protection(app)
+
 # FastAPI startup 이벤트에서 로깅 설정 강화
 # uvicorn이 app을 import할 때 실행됨
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 로깅 설정 강화"""
+    # HuggingFace 로깅 비활성화 (가장 먼저 실행)
+    try:
+        from lawfirm_langgraph.core.utils.safe_logging import disable_external_logging
+        disable_external_logging()
+    except ImportError:
+        # fallback: 직접 비활성화
+        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+        os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+        logging.getLogger('transformers').setLevel(logging.ERROR)
+        logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
+        logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
+        logging.getLogger('torch').setLevel(logging.ERROR)
+        logging.getLogger('asyncio').setLevel(logging.WARNING)
+    
     # 로깅 설정을 다시 강제로 적용
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)

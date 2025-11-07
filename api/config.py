@@ -28,6 +28,17 @@ class APIConfig(BaseSettings):
     # 세션 관리
     session_ttl_hours: int = 24
     
+    # 인증 설정
+    auth_enabled: bool = False
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_hours: int = 24
+    api_key_header: str = "X-API-Key"
+    
+    # Rate Limiting 설정
+    rate_limit_enabled: bool = False
+    rate_limit_per_minute: int = 10
+    
     def get_cors_origins(self) -> List[str]:
         """CORS origins 리스트 반환"""
         import json
@@ -40,9 +51,13 @@ class APIConfig(BaseSettings):
         # 문자열 처리
         cors_origins_str = str(self.cors_origins).strip()
         
-        # "*"인 경우
+        # 프로덕션 환경에서 "*" 사용 금지
         if cors_origins_str == "*":
-            return ["*"]
+            if self.debug:
+                return ["*"]
+            else:
+                logger.warning("프로덕션 환경에서 CORS 와일드카드(*) 사용은 보안상 위험합니다. 기본값을 사용합니다.")
+                return ["http://localhost:3000", "http://127.0.0.1:3000"]
         
         # JSON 리스트 형태인 경우 (예: '["http://localhost:3000", "http://localhost:7860"]')
         if cors_origins_str.startswith("[") and cors_origins_str.endswith("]"):
@@ -71,6 +86,8 @@ class APIConfig(BaseSettings):
         protected_namespaces = ('settings_',)
         # 환경 변수에서 값을 가져올 때 우선순위 설정
         # api/.env > root/.env > lawfirm_langgraph/.env
+        # 추가 환경 변수 허용 (extra='ignore')
+        extra = "ignore"
 
 
 # 전역 설정 인스턴스

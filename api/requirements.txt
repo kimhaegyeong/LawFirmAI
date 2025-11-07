@@ -25,3 +25,22 @@ colorama>=0.4.6,<0.5.0
 # tqdm 4.66.0+ has better Python 3.11+ compatibility
 tqdm>=4.66.0
 
+# OCR dependencies
+easyocr>=1.7.0
+Pillow>=10.0.0
+
+# File processing dependencies
+pdfplumber>=0.10.0
+python-docx>=1.1.0
+filetype>=1.2.0
+
+# Security dependencies
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+slowapi>=0.1.9
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0
+

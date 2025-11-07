@@ -7,6 +7,7 @@ import time
 import os
 from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from api.utils.logging_security import setup_secure_logging
 
 # 로그 레벨 환경 변수 읽기 (기본값: INFO)
 log_level_str = os.getenv("LOG_LEVEL", "info").upper()
@@ -101,4 +102,5 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 def setup_logging(app: FastAPI):
     """로깅 미들웨어 설정"""
     app.add_middleware(LoggingMiddleware)
+    setup_secure_logging()
 
