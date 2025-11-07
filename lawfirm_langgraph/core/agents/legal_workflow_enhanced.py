@@ -1753,10 +1753,26 @@ class EnhancedLegalQuestionWorkflow:
             legal_field = self._extract_legal_field(query_type_str, query)
 
             # State에 저장 (질문 유형)
+            # stream_mode="updates" 사용 시 여러 위치에 저장하여 다음 노드로 전달 보장
             self._set_state_value(state, "query_type", query_type_str)
             self._set_state_value(state, "confidence", confidence)
             self._set_state_value(state, "legal_field", legal_field)
             self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
+            
+            # classification 그룹에 저장 (필수 - direct_answer 노드에서 사용)
+            if "classification" not in state:
+                state["classification"] = {}
+            state["classification"]["query_type"] = query_type_str
+            state["classification"]["confidence"] = confidence
+            state["classification"]["legal_field"] = legal_field
+            
+            # common 그룹에도 저장 (reducer가 보존하는 그룹)
+            if "common" not in state:
+                state["common"] = {}
+            if "classification" not in state["common"]:
+                state["common"]["classification"] = {}
+            state["common"]["classification"]["query_type"] = query_type_str
+            state["common"]["classification"]["confidence"] = confidence
 
             self._update_processing_time(state, query_start_time)
             self._add_step(state, "질문 분류 완료",
