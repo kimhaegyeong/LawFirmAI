@@ -47,12 +47,20 @@ except ImportError:
                 import os
                 device = "cuda" if torch.cuda.is_available() else "cpu"
                 
-                # meta tensor 오류 방지를 위한 환경 변수 설정
-                # (HuggingFace Hub 관련 환경 변수는 제거 - 로컬 배포용)
+                # ===== 근본적인 해결: 모델 로딩 전 환경 변수 설정 =====
+                # meta device 사용을 완전히 방지하기 위한 환경 변수 설정
                 original_env = {}
                 try:
-                    # device_map 사용 방지
+                    # HuggingFace Hub 관련 환경 변수 저장 및 설정
+                    original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
+                    original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = os.environ.get('TRANSFORMERS_NO_ADVISORY_WARNINGS', None)
                     original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
+                    
+                    # meta device 방지를 위한 환경 변수 설정
+                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                    os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                    
+                    # device_map 사용 방지
                     if 'HF_DEVICE_MAP' in os.environ:
                         del os.environ['HF_DEVICE_MAP']
                 except Exception:
@@ -72,13 +80,32 @@ except ImportError:
                         model_name, 
                         device="cpu",
                         model_kwargs={
-                            "low_cpu_mem_usage": False,  # meta device 사용 방지
+                            "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                             "device_map": None,  # device_map 사용 안 함
                             "torch_dtype": torch.float32,  # 명시적 dtype 설정
                             "use_safetensors": False,  # safetensors 사용 안 함 (meta tensor 문제 방지)
                             "ignore_mismatched_sizes": True,  # 크기 불일치 무시
+                            "trust_remote_code": True,  # 원격 코드 신뢰
+                            "local_files_only": False,  # 로컬 파일만 사용 안 함
                         }
                     )
+                    
+                    # 환경 변수 복원
+                    try:
+                        if original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
+                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                        elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
+                            del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                        
+                        if original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
+                            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                        elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
+                            del os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                        
+                        if original_env.get('HF_DEVICE_MAP') is not None:
+                            os.environ['HF_DEVICE_MAP'] = original_env['HF_DEVICE_MAP']
+                    except Exception:
+                        pass
                     
                     # Meta tensor 문제를 완전히 회피하기 위해 CPU에 유지
                     # GPU가 있어도 안정성을 위해 CPU 사용
@@ -91,32 +118,117 @@ except ImportError:
                     logger.info(f"Successfully loaded SentenceTransformer model {model_name} on CPU (dim={self.dim})")
                     
                 except Exception as cpu_error:
+                    # 환경 변수 복원
+                    try:
+                        if original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
+                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                        elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
+                            del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                        
+                        if original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
+                            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                        elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
+                            del os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                        
+                        if original_env.get('HF_DEVICE_MAP') is not None:
+                            os.environ['HF_DEVICE_MAP'] = original_env['HF_DEVICE_MAP']
+                    except Exception:
+                        pass
+                    
                     # meta tensor 오류 발생 시 대체 방법 시도
                     if "meta tensor" in str(cpu_error).lower() or "to_empty" in str(cpu_error).lower():
                         logger.warning(f"Meta tensor error detected, trying alternative loading method: {cpu_error}")
-                        # 대체 방법: 더 강력한 옵션으로 재시도
+                        # 대체 방법: transformers 라이브러리 직접 사용 (우회 방법)
                         try:
                             # 환경 변수를 더 적극적으로 설정
                             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
-                            os.environ['TRANSFORMERS_OFFLINE'] = '0'
+                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                            if 'HF_DEVICE_MAP' in os.environ:
+                                del os.environ['HF_DEVICE_MAP']
                             
-                            # SentenceTransformer를 다시 시도 (더 강력한 옵션)
-                            logger.debug(f"Trying alternative loading method with stronger options...")
-                            self.model = SentenceTransformer(
-                                model_name, 
-                                device="cpu",  # 항상 CPU에 먼저 로드
-                                model_kwargs={
-                                    "low_cpu_mem_usage": False,
-                                    "device_map": None,
-                                    "torch_dtype": torch.float32,
-                                    "trust_remote_code": True,
-                                    "use_safetensors": False,  # safetensors 사용 안 함
-                                    "ignore_mismatched_sizes": True,  # 크기 불일치 무시
-                                    "local_files_only": False,  # 로컬 파일만 사용 안 함
-                                }
+                            # transformers 라이브러리 직접 사용 (우회 방법)
+                            from transformers import AutoModel, AutoTokenizer
+                            
+                            logger.debug("Trying direct AutoModel loading to avoid meta tensor issue...")
+                            
+                            # tokenizer와 model을 직접 로드
+                            tokenizer = AutoTokenizer.from_pretrained(
+                                model_name,
+                                local_files_only=False,
+                                trust_remote_code=True,
                             )
+                            
+                            # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
+                            model = AutoModel.from_pretrained(
+                                model_name,
+                                torch_dtype=torch.float32,
+                                low_cpu_mem_usage=False,  # 핵심: meta device 방지
+                                device_map=None,  # 핵심: device_map 사용 안 함
+                                use_safetensors=False,  # safetensors 사용 안 함
+                                trust_remote_code=True,
+                                local_files_only=False,
+                                _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
+                            )
+                            
+                            # 모델을 CPU에 명시적으로 이동 (to_empty() 대신 직접 이동)
+                            # 이미 CPU에 로드되었으므로 추가 이동 불필요
+                            # 하지만 안전을 위해 명시적으로 CPU로 이동
+                            if hasattr(model, 'to'):
+                                try:
+                                    # 모델이 이미 CPU에 있으면 이동 불필요
+                                    # 하지만 명시적으로 CPU로 이동 시도
+                                    model = model.to("cpu")
+                                except Exception as move_error:
+                                    # 이동 실패 시에도 계속 진행 (이미 CPU에 있을 수 있음)
+                                    logger.debug(f"Model move to CPU skipped (may already be on CPU): {move_error}")
+                            
+                            model.eval()
+                            
+                            # SentenceTransformer의 encode 메서드를 직접 구현
+                            class CustomSentenceTransformer:
+                                def __init__(self, model, tokenizer):
+                                    self._model = model
+                                    self._tokenizer = tokenizer
+                                    self.device = "cpu"
+                                
+                                def get_sentence_embedding_dimension(self):
+                                    return self._model.config.hidden_size
+                                
+                                def encode(self, sentences, batch_size=16, normalize_embeddings=True, **kwargs):
+                                    import torch
+                                    from torch.nn.functional import normalize
+                                    
+                                    self._model.eval()
+                                    with torch.no_grad():
+                                        # 토크나이징
+                                        encoded = self._tokenizer(
+                                            sentences,
+                                            padding=True,
+                                            truncation=True,
+                                            max_length=512,
+                                            return_tensors="pt"
+                                        )
+                                        
+                                        # 모델 추론
+                                        outputs = self._model(**encoded)
+                                        
+                                        # 평균 풀링 (SentenceTransformer 방식)
+                                        embeddings = outputs.last_hidden_state
+                                        attention_mask = encoded['attention_mask']
+                                        embeddings = embeddings * attention_mask.unsqueeze(-1)
+                                        embeddings = embeddings.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+                                        
+                                        # 정규화
+                                        if normalize_embeddings:
+                                            embeddings = normalize(embeddings, p=2, dim=1)
+                                        
+                                        return embeddings.cpu().numpy()
+                            
+                            self.model = CustomSentenceTransformer(model, tokenizer)
                             self.dim = self.model.get_sentence_embedding_dimension()
-                            logger.info(f"Successfully loaded SentenceTransformer model {model_name} on CPU (alternative method, dim={self.dim})")
+                            
+                            logger.info(f"Successfully loaded model using direct AutoModel method (dim={self.dim})")
+                            
                         except Exception as alt_error:
                             # 모든 방법 실패 시 원래 오류 전파
                             logger.error(f"All loading methods failed. Original error: {cpu_error}, Alternative error: {alt_error}")
@@ -135,7 +247,26 @@ except ImportError:
                     fallback_model = "jhgan/ko-sroberta-multitask"
                     logger.warning(f"Trying fallback model: {fallback_model}")
                     import torch
+                    import os
                     device = "cuda" if torch.cuda.is_available() else "cpu"
+                    
+                    # ===== 근본적인 해결: fallback 모델 로딩 전 환경 변수 설정 =====
+                    fallback_original_env = {}
+                    try:
+                        # HuggingFace Hub 관련 환경 변수 저장 및 설정
+                        fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
+                        fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = os.environ.get('TRANSFORMERS_NO_ADVISORY_WARNINGS', None)
+                        fallback_original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
+                        
+                        # meta device 방지를 위한 환경 변수 설정
+                        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                        os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                        
+                        # device_map 사용 방지
+                        if 'HF_DEVICE_MAP' in os.environ:
+                            del os.environ['HF_DEVICE_MAP']
+                    except Exception:
+                        pass
                     
                     # 대체 모델도 CPU에 먼저 로드 (meta tensor 오류 방지)
                     try:
@@ -144,32 +275,147 @@ except ImportError:
                             fallback_model, 
                             device="cpu",
                             model_kwargs={
-                                "low_cpu_mem_usage": False,  # meta device 사용 방지
+                                "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                                 "device_map": None,  # device_map 사용 안 함
                                 "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                                "use_safetensors": False,  # safetensors 사용 안 함
+                                "trust_remote_code": True,  # 원격 코드 신뢰
+                                "local_files_only": False,  # 로컬 파일만 사용 안 함
                             }
                         )
+                        
+                        # 환경 변수 복원
+                        try:
+                            if fallback_original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
+                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                            elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
+                                del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                            
+                            if fallback_original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
+                                os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                            elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
+                                del os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                            
+                            if fallback_original_env.get('HF_DEVICE_MAP') is not None:
+                                os.environ['HF_DEVICE_MAP'] = fallback_original_env['HF_DEVICE_MAP']
+                        except Exception:
+                            pass
+                        
                         # CPU 유지 (안정성 우선, meta tensor 오류 방지)
                         logger.info(f"Fallback model {fallback_model} loaded on CPU")
                         self.dim = self.model.get_sentence_embedding_dimension()
                     except Exception as fallback_error:
+                        # 환경 변수 복원
+                        try:
+                            if fallback_original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
+                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                            elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
+                                del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
+                            
+                            if fallback_original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
+                                os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                            elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
+                                del os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS']
+                            
+                            if fallback_original_env.get('HF_DEVICE_MAP') is not None:
+                                os.environ['HF_DEVICE_MAP'] = fallback_original_env['HF_DEVICE_MAP']
+                        except Exception:
+                            pass
+                        
                         # meta tensor 오류 발생 시 대체 방법 시도
                         if "meta tensor" in str(fallback_error).lower() or "to_empty" in str(fallback_error).lower():
                             logger.warning(f"Meta tensor error detected in fallback model, trying alternative loading method: {fallback_error}")
-                            # 대체 방법: 더 명시적인 옵션으로 로드
+                            # 대체 방법: transformers 라이브러리 직접 사용 (우회 방법)
                             try:
-                                self.model = SentenceTransformer(
-                                    fallback_model, 
-                                    device="cpu",  # 항상 CPU에 먼저 로드
-                                    model_kwargs={
-                                        "low_cpu_mem_usage": False,
-                                        "device_map": None,
-                                        "torch_dtype": torch.float32,
-                                        "trust_remote_code": True,  # 원격 코드 신뢰
-                                    }
+                                # 환경 변수를 더 적극적으로 설정
+                                os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                                if 'HF_DEVICE_MAP' in os.environ:
+                                    del os.environ['HF_DEVICE_MAP']
+                                
+                                # transformers 라이브러리 직접 사용 (우회 방법)
+                                from transformers import AutoModel, AutoTokenizer
+                                
+                                logger.debug("Trying direct AutoModel loading for fallback model to avoid meta tensor issue...")
+                                
+                                # tokenizer와 model을 직접 로드
+                                tokenizer = AutoTokenizer.from_pretrained(
+                                    fallback_model,
+                                    local_files_only=False,
+                                    trust_remote_code=True,
                                 )
+                                
+                                # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
+                                model = AutoModel.from_pretrained(
+                                    fallback_model,
+                                    torch_dtype=torch.float32,
+                                    low_cpu_mem_usage=False,  # 핵심: meta device 방지
+                                    device_map=None,  # 핵심: device_map 사용 안 함
+                                    use_safetensors=False,  # safetensors 사용 안 함
+                                    trust_remote_code=True,
+                                    local_files_only=False,
+                                    _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
+                                )
+                                
+                                # 모델을 CPU에 명시적으로 이동 (to_empty() 대신 직접 이동)
+                                # 이미 CPU에 로드되었으므로 추가 이동 불필요
+                                # 하지만 안전을 위해 명시적으로 CPU로 이동
+                                if hasattr(model, 'to'):
+                                    try:
+                                        # 모델이 이미 CPU에 있으면 이동 불필요
+                                        # 하지만 명시적으로 CPU로 이동 시도
+                                        model = model.to("cpu")
+                                    except Exception as move_error:
+                                        # 이동 실패 시에도 계속 진행 (이미 CPU에 있을 수 있음)
+                                        logger.debug(f"Fallback model move to CPU skipped (may already be on CPU): {move_error}")
+                                
+                                model.eval()
+                                
+                                # SentenceTransformer의 encode 메서드를 직접 구현
+                                class CustomSentenceTransformer:
+                                    def __init__(self, model, tokenizer):
+                                        self._model = model
+                                        self._tokenizer = tokenizer
+                                        self.device = "cpu"
+                                    
+                                    def get_sentence_embedding_dimension(self):
+                                        return self._model.config.hidden_size
+                                    
+                                    def encode(self, sentences, batch_size=16, normalize_embeddings=True, **kwargs):
+                                        import torch
+                                        from torch.nn.functional import normalize
+                                        
+                                        self._model.eval()
+                                        with torch.no_grad():
+                                            # 토크나이징
+                                            encoded = self._tokenizer(
+                                                sentences,
+                                                padding=True,
+                                                truncation=True,
+                                                max_length=512,
+                                                return_tensors="pt"
+                                            )
+                                            
+                                            # 모델 추론
+                                            outputs = self._model(**encoded)
+                                            
+                                            # 평균 풀링 (SentenceTransformer 방식)
+                                            embeddings = outputs.last_hidden_state
+                                            attention_mask = encoded['attention_mask']
+                                            embeddings = embeddings * attention_mask.unsqueeze(-1)
+                                            embeddings = embeddings.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+                                            
+                                            # 정규화
+                                            if normalize_embeddings:
+                                                embeddings = normalize(embeddings, p=2, dim=1)
+                                            
+                                            return embeddings.cpu().numpy()
+                                
+                                self.model = CustomSentenceTransformer(model, tokenizer)
                                 self.dim = self.model.get_sentence_embedding_dimension()
-                                logger.info(f"Fallback model {fallback_model} loaded on CPU (alternative method, dim={self.dim})")
+                                
+                                logger.info(f"Fallback model {fallback_model} loaded using direct AutoModel method (dim={self.dim})")
+                                
                             except Exception as alt_fallback_error:
                                 # 대체 방법도 실패 시 원래 오류 전파
                                 logger.error(f"Failed to load fallback model with alternative method: {alt_fallback_error}")

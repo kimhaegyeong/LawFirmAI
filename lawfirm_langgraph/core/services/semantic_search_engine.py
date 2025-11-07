@@ -85,8 +85,53 @@ class SemanticSearchEngine:
 
             # 모델 로드
             try:
-                self.model = SentenceTransformer(self.model_name)
-                self.logger.info(f"Model loaded: {self.model_name}")
+                # meta tensor 오류 방지를 위한 추가 옵션 설정
+                import torch
+                import os
+                
+                # meta device 사용 방지
+                original_env = {}
+                try:
+                    original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
+                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                    if 'HF_DEVICE_MAP' in os.environ:
+                        original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
+                        del os.environ['HF_DEVICE_MAP']
+                except Exception:
+                    pass
+                
+                try:
+                    # 방법 1: CPU에 먼저 로드 (가장 안전한 방법)
+                    self.logger.debug(f"Loading SentenceTransformer model {self.model_name} on CPU first (to avoid meta tensor errors)...")
+                    self.model = SentenceTransformer(
+                        self.model_name,
+                        device="cpu",
+                        model_kwargs={
+                            "low_cpu_mem_usage": False,  # meta device 사용 방지
+                            "device_map": None,  # device_map 사용 안 함
+                            "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                        }
+                    )
+                    self.logger.info(f"Model loaded: {self.model_name} on CPU")
+                except Exception as load_error:
+                    # meta tensor 오류 발생 시 대체 방법 시도
+                    if "meta tensor" in str(load_error).lower() or "to_empty" in str(load_error).lower():
+                        self.logger.warning(f"Meta tensor error detected, trying alternative loading method: {load_error}")
+                        # 대체 방법: 더 명시적인 옵션으로 로드
+                        self.model = SentenceTransformer(
+                            self.model_name,
+                            device="cpu",  # 항상 CPU에 먼저 로드
+                            model_kwargs={
+                                "low_cpu_mem_usage": False,
+                                "device_map": None,
+                                "torch_dtype": torch.float32,
+                                "trust_remote_code": True,  # 원격 코드 신뢰
+                            }
+                        )
+                        self.logger.info(f"Model loaded: {self.model_name} on CPU (alternative method)")
+                    else:
+                        # 다른 오류는 그대로 전파
+                        raise
             except Exception as e:
                 self.logger.warning(f"Failed to load model {self.model_name}: {e}")
                 self.model = None

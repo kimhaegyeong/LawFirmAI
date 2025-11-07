@@ -6,10 +6,13 @@ Search Service (ML Enhanced)
 
 import logging
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models.model_manager import LegalModelManager
+
 from ..data.database import DatabaseManager
 from ..data.vector_store import LegalVectorStore as VectorStore
-from ..models.model_manager import LegalModelManager
 from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -19,7 +22,7 @@ class MLEnhancedSearchService:
     """ML 강화 검색 서비스 클래스"""
     
     def __init__(self, config: Config, database: DatabaseManager, 
-                 vector_store: VectorStore, model_manager: LegalModelManager):
+                 vector_store: VectorStore, model_manager: Optional["LegalModelManager"] = None):
         """ML 강화 검색 서비스 초기화"""
         self.config = config
         self.database = database
@@ -461,7 +464,7 @@ class SearchService(MLEnhancedSearchService):
     """레거시 호환성을 위한 검색 서비스 클래스"""
     
     def __init__(self, config: Config, database: DatabaseManager, 
-                 vector_store: VectorStore, model_manager: LegalModelManager):
+                 vector_store: VectorStore, model_manager: Optional["LegalModelManager"] = None):
         """레거시 검색 서비스 초기화"""
         super().__init__(config, database, vector_store, model_manager)
         self.logger.info("Legacy SearchService initialized (using MLEnhancedSearchService)")
