@@ -26,10 +26,13 @@ class SessionResponse(BaseModel):
     created_at: Optional[str] = Field(None, description="생성 시간")
     updated_at: Optional[str] = Field(None, description="수정 시간")
     message_count: int = Field(0, description="메시지 개수")
+    user_id: Optional[str] = Field(None, description="사용자 ID")
+    ip_address: Optional[str] = Field(None, description="IP 주소")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="메타데이터")
     
     class Config:
         from_attributes = True
+        extra = "ignore"  # 추가 필드는 무시
 
 
 class SessionListResponse(BaseModel):

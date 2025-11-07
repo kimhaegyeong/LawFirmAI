@@ -1,6 +1,7 @@
 """
 세션 관리 서비스
 """
+import os
 import uuid
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -40,9 +41,22 @@ class SessionService:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     message_count INTEGER DEFAULT 0,
+                    user_id TEXT,
+                    ip_address TEXT,
                     metadata TEXT
                 )
             """)
+            
+            # 기존 테이블에 컬럼 추가 (마이그레이션)
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # 컬럼이 이미 존재하는 경우
+            
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
+            except sqlite3.OperationalError:
+                pass  # 컬럼이 이미 존재하는 경우
             
             # 메시지 테이블 생성
             cursor.execute("""
@@ -71,10 +85,31 @@ class SessionService:
             conn.commit()
             conn.close()
             logger.info("Database initialized successfully")
+            self._set_database_permissions()
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
     
-    def create_session(self, title: Optional[str] = None, category: Optional[str] = None) -> str:
+    def _set_database_permissions(self):
+        """데이터베이스 파일 권한 설정"""
+        try:
+            if self.db_path.exists():
+                if os.name == 'posix':
+                    os.chmod(self.db_path, 0o600)
+                    logger.info(f"Database file permissions set to 600: {self.db_path}")
+                elif os.name == 'nt':
+                    import stat
+                    os.chmod(self.db_path, stat.S_IREAD | stat.S_IWRITE)
+                    logger.info(f"Database file permissions set (Windows): {self.db_path}")
+        except Exception as e:
+            logger.warning(f"Failed to set database permissions: {e}")
+    
+    def create_session(
+        self,
+        title: Optional[str] = None,
+        category: Optional[str] = None,
+        user_id: Optional[str] = None,
+        ip_address: Optional[str] = None
+    ) -> str:
         """세션 생성"""
         session_id = str(uuid.uuid4())
         
@@ -83,9 +118,9 @@ class SessionService:
             cursor = conn.cursor()
             
             cursor.execute("""
-                INSERT INTO sessions (session_id, title, category, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (session_id, title, category, datetime.now(), datetime.now()))
+                INSERT INTO sessions (session_id, title, category, created_at, updated_at, user_id, ip_address)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (session_id, title, category, datetime.now(), datetime.now(), user_id, ip_address))
             
             conn.commit()
             conn.close()
@@ -95,7 +130,7 @@ class SessionService:
             logger.error(f"Failed to create session: {e}")
             raise
     
-    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def get_session(self, session_id: str, check_expiry: bool = True) -> Optional[Dict[str, Any]]:
         """세션 조회"""
         try:
             conn = sqlite3.connect(self.db_path)
@@ -107,7 +142,6 @@ class SessionService:
             """, (session_id,))
             
             row = cursor.fetchone()
-            conn.close()
             
             if row:
                 session_dict = dict(row)
@@ -116,7 +150,38 @@ class SessionService:
                     session_dict["created_at"] = session_dict["created_at"].isoformat()
                 if isinstance(session_dict.get("updated_at"), datetime):
                     session_dict["updated_at"] = session_dict["updated_at"].isoformat()
+                
+                # metadata가 JSON 문자열인 경우 파싱
+                if session_dict.get("metadata"):
+                    if isinstance(session_dict["metadata"], str):
+                        try:
+                            import json
+                            session_dict["metadata"] = json.loads(session_dict["metadata"])
+                        except (json.JSONDecodeError, TypeError):
+                            session_dict["metadata"] = {}
+                    elif not isinstance(session_dict["metadata"], dict):
+                        session_dict["metadata"] = {}
+                else:
+                    session_dict["metadata"] = {}
+                
+                # 세션 만료 시간 확인
+                if check_expiry:
+                    updated_at = session_dict.get("updated_at")
+                    if updated_at:
+                        if isinstance(updated_at, str):
+                            updated_at = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                        if isinstance(updated_at, datetime):
+                            expiry_hours = api_config.session_ttl_hours
+                            expiry_time = updated_at + timedelta(hours=expiry_hours)
+                            if datetime.now() > expiry_time:
+                                logger.warning(f"Session expired: {session_id}")
+                                conn.close()
+                                return None
+                
+                conn.close()
                 return session_dict
+            
+            conn.close()
             return None
         except Exception as e:
             logger.error(f"Failed to get session: {e}")
@@ -152,7 +217,7 @@ class SessionService:
             params.append(datetime.now())
             params.append(session_id)
             
-            query = f"UPDATE sessions SET {', '.join(updates)} WHERE session_id = ?"
+            query = "UPDATE sessions SET " + ", ".join(updates) + " WHERE session_id = ?"
             cursor.execute(query, params)
             
             conn.commit()
@@ -163,11 +228,25 @@ class SessionService:
             logger.error(f"Failed to update session: {e}")
             return False
     
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """세션 삭제"""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            
+            # 세션 소유자 확인
+            if user_id:
+                cursor.execute("""
+                    SELECT user_id FROM sessions WHERE session_id = ?
+                """, (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    session_user_id = row["user_id"]
+                    if session_user_id and session_user_id != user_id:
+                        conn.close()
+                        logger.warning(f"Session ownership mismatch: {session_id}, user: {user_id}")
+                        return False
             
             # 메시지도 함께 삭제
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
@@ -245,24 +324,21 @@ class SessionService:
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
-            # 정렬
+            # 정렬 필드 검증 (SQL Injection 방지)
             valid_sort_fields = ["created_at", "updated_at", "title", "message_count"]
             sort_field = sort_by if sort_by in valid_sort_fields else "updated_at"
             sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
             
-            # 전체 개수 조회
-            count_query = f"SELECT COUNT(*) FROM sessions WHERE {where_sql}"
+            # 전체 개수 조회 (파라미터화된 쿼리 사용)
+            count_query = "SELECT COUNT(*) FROM sessions WHERE " + where_sql
             cursor.execute(count_query, params)
             total = cursor.fetchone()[0]
             
             # 페이지네이션
             offset = (page - 1) * page_size
-            query = f"""
-                SELECT * FROM sessions 
-                WHERE {where_sql}
-                ORDER BY {sort_field} {sort_dir}
-                LIMIT ? OFFSET ?
-            """
+            # 파라미터화된 쿼리 사용 (정렬 필드는 화이트리스트로 검증됨)
+            # 정렬 필드는 화이트리스트로 검증되었으므로 안전하게 사용 가능
+            query = "SELECT * FROM sessions WHERE " + where_sql + " ORDER BY " + sort_field + " " + sort_dir + " LIMIT ? OFFSET ?"
             params.extend([page_size, offset])
             
             cursor.execute(query, params)
@@ -278,6 +354,20 @@ class SessionService:
                     session_dict["created_at"] = session_dict["created_at"].isoformat()
                 if isinstance(session_dict.get("updated_at"), datetime):
                     session_dict["updated_at"] = session_dict["updated_at"].isoformat()
+                
+                # metadata가 JSON 문자열인 경우 파싱
+                if session_dict.get("metadata"):
+                    if isinstance(session_dict["metadata"], str):
+                        try:
+                            import json
+                            session_dict["metadata"] = json.loads(session_dict["metadata"])
+                        except (json.JSONDecodeError, TypeError):
+                            session_dict["metadata"] = {}
+                    elif not isinstance(session_dict["metadata"], dict):
+                        session_dict["metadata"] = {}
+                else:
+                    session_dict["metadata"] = {}
+                
                 sessions.append(session_dict)
             
             return sessions, total

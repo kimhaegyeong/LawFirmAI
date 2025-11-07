@@ -1,7 +1,8 @@
 """
 세션 관리 엔드포인트
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import Request
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 import logging
@@ -13,8 +14,11 @@ from api.schemas.session import (
     SessionListResponse
 )
 from api.services.session_service import session_service
+from api.middleware.auth_middleware import require_auth
+from api.config import api_config
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # KST 시간대 (UTC+9)
 KST = timezone(timedelta(hours=9))
@@ -32,6 +36,7 @@ def get_kst_date() -> datetime.date:
 
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(
+    current_user: dict = Depends(require_auth),
     category: Optional[str] = Query(None, description="카테고리 필터"),
     search: Optional[str] = Query(None, description="검색어"),
     page: int = Query(1, ge=1, description="페이지 번호"),
@@ -75,14 +80,22 @@ async def list_sessions(
             page=page,
             page_size=page_size
         )
+    except ValueError as e:
+        logger.warning(f"Validation error in list_sessions: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        import logging
-        logging.error(f"Error in list_sessions: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in list_sessions: {e}", exc_info=True)
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Traceback: {error_traceback}")
+        error_detail = f"{str(e)}\n\n{error_traceback}"
+        print(f"[ERROR] list_sessions failed: {error_detail}", flush=True)
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/sessions/by-date", response_model=SessionListResponse)
 async def get_sessions_by_date(
+    current_user: dict = Depends(require_auth),
     date_group: str = Query(..., description="날짜 그룹: today, yesterday, week, month, older"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(20, ge=1, le=100, description="페이지 크기"),
@@ -159,18 +172,40 @@ async def get_sessions_by_date(
         )
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in get_sessions_by_date: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        logging.error(f"Error in get_sessions_by_date: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in get_sessions_by_date: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="세션 조회 중 오류가 발생했습니다")
 
 
 @router.post("/sessions", response_model=SessionResponse)
-async def create_session(session: SessionCreate):
+async def create_session(
+    session: SessionCreate,
+    request: Request,
+    current_user: dict = Depends(require_auth)
+):
     """새 세션 생성"""
     try:
+        # 클라이언트 IP 주소 가져오기
+        client_ip = request.client.host if request.client else None
+        if not client_ip:
+            # X-Forwarded-For 헤더 확인 (프록시 뒤에 있는 경우)
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                client_ip = forwarded_for.split(",")[0].strip()
+            else:
+                client_ip = "unknown"
+        
+        # 사용자 ID 가져오기
+        user_id = current_user.get("user_id") if current_user else None
+        
         session_id = session_service.create_session(
             title=session.title,
-            category=session.category
+            category=session.category,
+            user_id=user_id,
+            ip_address=client_ip
         )
         
         created_session = session_service.get_session(session_id)
@@ -186,13 +221,25 @@ async def create_session(session: SessionCreate):
         return SessionResponse(**created_session)
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in create_session: {e}")
+        raise HTTPException(status_code=400, detail=f"입력 데이터가 올바르지 않습니다: {str(e)}")
     except Exception as e:
-        logging.error(f"Error in create_session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in create_session: {e}", exc_info=True)
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Traceback: {error_traceback}")
+        # 항상 상세한 오류 메시지 반환 (개발 중이므로)
+        error_detail = f"{str(e)}\n\n{error_traceback}"
+        print(f"[ERROR] create_session failed: {error_detail}", flush=True)
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(
+    session_id: str,
+    current_user: dict = Depends(require_auth)
+):
     """세션 상세 조회"""
     try:
         session = session_service.get_session(session_id)
@@ -208,19 +255,28 @@ async def get_session(session_id: str):
         return SessionResponse(**session)
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in get_session: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        logging.error(f"Error in get_session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in get_session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="세션 조회 중 오류가 발생했습니다")
 
 
 @router.put("/sessions/{session_id}", response_model=SessionResponse)
-async def update_session(session_id: str, session: SessionUpdate):
+async def update_session(
+    session_id: str,
+    session: SessionUpdate,
+    current_user: dict = Depends(require_auth)
+):
     """세션 업데이트"""
     try:
+        user_id = current_user.get("user_id", "anonymous") if current_user else "anonymous"
         success = session_service.update_session(
             session_id=session_id,
             title=session.title,
-            category=session.category
+            category=session.category,
+            user_id=user_id
         )
         
         if not success:
@@ -239,28 +295,42 @@ async def update_session(session_id: str, session: SessionUpdate):
         return SessionResponse(**updated_session)
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in update_session: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        logging.error(f"Error in update_session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in update_session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="세션 업데이트 중 오류가 발생했습니다")
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(
+    session_id: str,
+    current_user: dict = Depends(require_auth)
+):
     """세션 삭제"""
     try:
-        success = session_service.delete_session(session_id)
+        user_id = current_user.get("user_id", "anonymous") if current_user else "anonymous"
+        success = session_service.delete_session(session_id, user_id=user_id)
         if not success:
             raise HTTPException(status_code=404, detail="Session not found")
         
         return {"message": "Session deleted successfully"}
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in delete_session: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in delete_session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="세션 삭제 중 오류가 발생했습니다")
 
 
 @router.post("/sessions/{session_id}/generate-title", response_model=SessionResponse)
-async def generate_session_title(session_id: str):
+async def generate_session_title(
+    session_id: str,
+    current_user: dict = Depends(require_auth)
+):
     """
     세션의 첫 번째 질문과 답변을 기반으로 Gemini를 사용하여 제목 생성
     
@@ -300,7 +370,10 @@ async def generate_session_title(session_id: str):
         
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning(f"Validation error in generate_session_title: {e}")
+        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
-        logging.error(f"Error in generate_session_title: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in generate_session_title: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="제목 생성 중 오류가 발생했습니다")
 
