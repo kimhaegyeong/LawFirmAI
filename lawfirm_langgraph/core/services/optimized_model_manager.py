@@ -90,14 +90,134 @@ class OptimizedModelManager:
             self.logger.error("SentenceTransformers not available")
             return None
         
+        # 모델 로딩 전에 HuggingFace 로깅 비활성화
+        import os
+        import warnings
+        
+        # 환경 변수 설정
+        original_verbosity = os.environ.get('TRANSFORMERS_VERBOSITY', None)
+        original_progress_bars = os.environ.get('HF_HUB_DISABLE_PROGRESS_BARS', None)
+        
+        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+        os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+        
+        # 로깅 레벨 임시 변경
+        transformers_logger = logging.getLogger('transformers')
+        sentence_transformers_logger = logging.getLogger('sentence_transformers')
+        hf_hub_logger = logging.getLogger('huggingface_hub')
+        
+        original_levels = {
+            'transformers': transformers_logger.level,
+            'sentence_transformers': sentence_transformers_logger.level,
+            'huggingface_hub': hf_hub_logger.level,
+        }
+        
+        # 로깅 레벨을 ERROR로 설정
+        transformers_logger.setLevel(logging.ERROR)
+        sentence_transformers_logger.setLevel(logging.ERROR)
+        hf_hub_logger.setLevel(logging.ERROR)
+        
         # 로딩 플래그 설정
         self._loading_flags[cache_key] = True
         
         try:
             start_time = time.time()
             
-            # 모델 로딩
-            model = SentenceTransformer(model_name, device=device)
+            # meta tensor 오류 방지를 위한 환경 변수 설정
+            import os
+            original_env = {}
+            try:
+                # meta device 사용 방지
+                original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
+                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                
+                # device_map 사용 방지
+                original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
+                if 'HF_DEVICE_MAP' in os.environ:
+                    del os.environ['HF_DEVICE_MAP']
+            except Exception:
+                pass
+            
+            # 경고 메시지 비활성화하고 모델 로딩
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # 모델 로딩 (로깅이 비활성화된 상태)
+                # meta tensor 오류 방지를 위한 추가 옵션 설정
+                try:
+                    # torch dtype 설정 (torch가 사용 가능한 경우)
+                    torch_dtype = None
+                    if TORCH_AVAILABLE:
+                        torch_dtype = torch.float32
+                    
+                    # 방법 1: CPU에 먼저 로드 (가장 안전한 방법)
+                    if device != "cpu":
+                        # GPU가 있어도 안정성을 위해 CPU에 먼저 로드
+                        self.logger.debug(f"Loading SentenceTransformer model {model_name} on CPU first (to avoid meta tensor errors)...")
+                        model_kwargs = {
+                            "low_cpu_mem_usage": False,  # meta device 사용 방지
+                            "device_map": None,  # device_map 사용 안 함
+                        }
+                        if torch_dtype is not None:
+                            model_kwargs["torch_dtype"] = torch_dtype
+                        
+                        model = SentenceTransformer(
+                            model_name, 
+                            device="cpu",
+                            model_kwargs=model_kwargs
+                        )
+                        # CPU에서 GPU로 이동 (필요한 경우)
+                        if device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
+                            try:
+                                # 모델을 GPU로 이동
+                                model = model.to(device)
+                                self.logger.info(f"Model moved from CPU to {device}")
+                            except Exception as move_error:
+                                # GPU 이동 실패 시 CPU에 유지
+                                self.logger.warning(f"Failed to move model to {device}, keeping on CPU: {move_error}")
+                                device = "cpu"
+                    else:
+                        # CPU 사용
+                        model_kwargs = {
+                            "low_cpu_mem_usage": False,  # meta device 사용 방지
+                            "device_map": None,  # device_map 사용 안 함
+                        }
+                        if torch_dtype is not None:
+                            model_kwargs["torch_dtype"] = torch_dtype
+                        
+                        model = SentenceTransformer(
+                            model_name, 
+                            device="cpu",
+                            model_kwargs=model_kwargs
+                        )
+                except Exception as load_error:
+                    # meta tensor 오류 발생 시 대체 방법 시도
+                    if "meta tensor" in str(load_error).lower() or "to_empty" in str(load_error).lower():
+                        self.logger.warning(f"Meta tensor error detected, trying alternative loading method: {load_error}")
+                        # 대체 방법: 더 명시적인 옵션으로 로드
+                        model_kwargs = {
+                            "low_cpu_mem_usage": False,
+                            "device_map": None,
+                            "trust_remote_code": True,  # 원격 코드 신뢰
+                        }
+                        if TORCH_AVAILABLE:
+                            model_kwargs["torch_dtype"] = torch.float32
+                        
+                        model = SentenceTransformer(
+                            model_name, 
+                            device="cpu",  # 항상 CPU에 먼저 로드
+                            model_kwargs=model_kwargs
+                        )
+                        # CPU에서 GPU로 이동 (필요한 경우)
+                        if device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_available():
+                            try:
+                                model = model.to(device)
+                            except Exception:
+                                # GPU 이동 실패 시 CPU에 유지
+                                device = "cpu"
+                    else:
+                        # 다른 오류는 그대로 전파
+                        raise
             
             # 양자화 적용
             if enable_quantization and TORCH_AVAILABLE:
@@ -124,6 +244,22 @@ class OptimizedModelManager:
             return None
         finally:
             self._loading_flags[cache_key] = False
+            
+            # 환경 변수 복원
+            if original_verbosity is not None:
+                os.environ['TRANSFORMERS_VERBOSITY'] = original_verbosity
+            else:
+                os.environ.pop('TRANSFORMERS_VERBOSITY', None)
+            
+            if original_progress_bars is not None:
+                os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = original_progress_bars
+            else:
+                os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+            
+            # 로깅 레벨 복원
+            transformers_logger.setLevel(original_levels['transformers'])
+            sentence_transformers_logger.setLevel(original_levels['sentence_transformers'])
+            hf_hub_logger.setLevel(original_levels['huggingface_hub'])
     
     @lru_cache(maxsize=128)
     def get_cached_model(self, model_name: str, device: str = "cpu") -> Optional[SentenceTransformer]:
