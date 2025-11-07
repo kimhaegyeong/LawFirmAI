@@ -176,7 +176,36 @@ def setup_test_environment(monkeypatch):
     monkeypatch.setenv("USE_AGENTIC_MODE", "false")
     monkeypatch.setenv("GOOGLE_API_KEY", "test_key")
     
-    # 로깅 레벨 설정
+    # 로깅 레벨 설정 (환경 변수로 제어 가능)
     import logging
-    logging.getLogger().setLevel(logging.WARNING)
+    import os
+    
+    # 환경 변수에서 로깅 레벨 읽기 (기본값: WARNING)
+    log_level_str = os.getenv("LOG_LEVEL", "WARNING").upper()
+    log_level_map = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+        "critical": logging.CRITICAL,
+    }
+    log_level = log_level_map.get(log_level_str, logging.WARNING)
+    
+    # 루트 로거 설정
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # 핸들러가 없으면 추가
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(log_level)
+        handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        )
+        root_logger.addHandler(handler)
+    
+    # lawfirm_langgraph 로거 설정
+    langgraph_logger = logging.getLogger("lawfirm_langgraph")
+    langgraph_logger.setLevel(log_level)
+    langgraph_logger.propagate = True
 
