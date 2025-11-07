@@ -80,7 +80,7 @@ class WorkflowUtils:
             ensure_state_group(state, "classification")
         # Search 필드인 경우 그룹 초기화
         elif key in ["search_query", "extracted_keywords", "ai_keyword_expansion", "retrieved_docs",
-                     "optimized_queries", "search_params", "semantic_results", "keyword_results",
+                     "optimized_queries", "search_params", "expanded_queries", "semantic_results", "keyword_results",
                      "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
                      "prompt_optimized_context"]:
             ensure_state_group(state, "search")

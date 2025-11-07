@@ -63,6 +63,7 @@ class SearchState(TypedDict, total=False):
     # LangGraph reducer가 이 필드들을 보존하도록 명시적으로 정의
     optimized_queries: Optional[Dict[str, Any]]
     search_params: Optional[Dict[str, Any]]
+    expanded_queries: Optional[Dict[str, Any]]  # 쿼리 확장 결과 (query_expansion_subnode 출력)
     semantic_results: Optional[List[Dict[str, Any]]]  # 의미적 검색 결과
     keyword_results: Optional[List[Dict[str, Any]]]  # 키워드 검색 결과
     semantic_count: Optional[int]

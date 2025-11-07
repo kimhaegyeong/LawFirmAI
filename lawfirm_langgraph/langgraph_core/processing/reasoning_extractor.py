@@ -8,10 +8,19 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+# 순환 import 방지를 위해 직접 core.agents에서 import
 try:
-    from langgraph_core.utils.workflow_constants import AnswerExtractionPatterns
-except ImportError:
     from core.agents.workflow_constants import AnswerExtractionPatterns
+except ImportError:
+    # 폴백: langgraph_core.utils에서 시도 (순환 참조 가능성 있음)
+    try:
+        from langgraph_core.utils.workflow_constants import AnswerExtractionPatterns
+    except (ImportError, AttributeError):
+        # 최종 폴백: 기본값 사용
+        class AnswerExtractionPatterns:
+            ANSWER_START = r"(?:답변|결론|요약|결과|정리|마무리|답|해결|결정|판단|의견)"
+            ANSWER_END = r"(?:\.|!|\?|$)"
+            REASONING_MARKERS = [r"생각|추론|분석|고려|판단|결정"]
 
 
 class ReasoningExtractor:

@@ -64,15 +64,90 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# 안전한 로깅 유틸리티 import (멀티스레딩 안전)
+# 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
+def _safe_log_fallback_debug(logger, message):
+    """폴백 디버그 로깅 함수"""
+    try:
+        logger.debug(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_info(logger, message):
+    """폴백 정보 로깅 함수"""
+    try:
+        logger.info(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_warning(logger, message):
+    """폴백 경고 로깅 함수"""
+    try:
+        logger.warning(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_error(logger, message):
+    """폴백 오류 로깅 함수"""
+    try:
+        logger.error(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+# 여러 경로 시도하여 safe_log_* 함수 import
+SAFE_LOGGING_AVAILABLE = False
+try:
+    from core.utils.safe_logging_utils import (
+        safe_log_debug,
+        safe_log_info,
+        safe_log_warning,
+        safe_log_error
+    )
+    SAFE_LOGGING_AVAILABLE = True
+except ImportError:
+    try:
+        # lawfirm_langgraph 경로에서 시도
+        from lawfirm_langgraph.core.utils.safe_logging_utils import (
+            safe_log_debug,
+            safe_log_info,
+            safe_log_warning,
+            safe_log_error
+        )
+        SAFE_LOGGING_AVAILABLE = True
+    except ImportError:
+        # Import 실패 시 폴백 함수 사용
+        safe_log_debug = _safe_log_fallback_debug
+        safe_log_info = _safe_log_fallback_info
+        safe_log_warning = _safe_log_fallback_warning
+        safe_log_error = _safe_log_fallback_error
+
+# 최종 확인: safe_log_debug가 정의되지 않았다면 폴백 함수 사용
+try:
+    _ = safe_log_debug
+except NameError:
+    safe_log_debug = _safe_log_fallback_debug
+try:
+    _ = safe_log_info
+except NameError:
+    safe_log_info = _safe_log_fallback_info
+try:
+    _ = safe_log_warning
+except NameError:
+    safe_log_warning = _safe_log_fallback_warning
+try:
+    _ = safe_log_error
+except NameError:
+    safe_log_error = _safe_log_fallback_error
+
 if not LANGFUSE_CLIENT_AVAILABLE:
-    logger.warning("LangfuseClient not available for LangGraph workflow tracking")
+    safe_log_warning(logger, "LangfuseClient not available for LangGraph workflow tracking")
 
 # CheckpointManager import
 try:
     from core.agents.checkpoint_manager import CheckpointManager
 except ImportError:
     CheckpointManager = None
-    logger.warning("CheckpointManager not available")
+    safe_log_warning(logger, "CheckpointManager not available")
 
 # state_definitions import (상대 import 사용 - 같은 패키지 내부)
 try:
@@ -116,18 +191,18 @@ class LangGraphWorkflowService:
                     db_path=db_path
                 )
                 if self.checkpoint_manager.is_enabled():
-                    self.logger.info(f"Checkpoint manager initialized with {storage_type} storage")
+                    safe_log_info(self.logger, f"Checkpoint manager initialized with {storage_type} storage")
                 else:
-                    self.logger.warning("Checkpoint manager initialization failed, continuing without checkpoint")
+                    safe_log_warning(self.logger, "Checkpoint manager initialization failed, continuing without checkpoint")
                     self.checkpoint_manager = None
             except Exception as e:
-                self.logger.warning(f"Failed to initialize checkpoint manager: {e}, continuing without checkpoint")
+                safe_log_warning(self.logger, f"Failed to initialize checkpoint manager: {e}, continuing without checkpoint")
                 self.checkpoint_manager = None
         else:
             if not self.config.enable_checkpoint:
-                self.logger.info("Checkpoint is disabled in configuration")
+                safe_log_info(self.logger, "Checkpoint is disabled in configuration")
             else:
-                self.logger.warning("CheckpointManager class not available")
+                safe_log_warning(self.logger, "CheckpointManager class not available")
         
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
 
@@ -151,9 +226,9 @@ class LangGraphWorkflowService:
                 checkpointer = None
                 if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                     checkpointer = self.checkpoint_manager.get_checkpointer()
-                    self.logger.info(f"Using checkpoint: {self.config.checkpoint_storage.value}")
+                    safe_log_info(self.logger, f"Using checkpoint: {self.config.checkpoint_storage.value}")
                 else:
-                    self.logger.info("Compiling workflow without checkpoint")
+                    safe_log_info(self.logger, "Compiling workflow without checkpoint")
                 
                 # 워크플로우 컴파일
                 self.app = self.legal_workflow.graph.compile(
@@ -163,9 +238,9 @@ class LangGraphWorkflowService:
                     debug=False,
                 )
                 if checkpointer:
-                    self.logger.info(f"워크플로우가 체크포인트({self.config.checkpoint_storage.value})와 함께 컴파일되었습니다 (LangSmith 비활성화됨)")
+                    safe_log_info(self.logger, f"워크플로우가 체크포인트({self.config.checkpoint_storage.value})와 함께 컴파일되었습니다 (LangSmith 비활성화됨)")
                 else:
-                    self.logger.info("워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
+                    safe_log_info(self.logger, "워크플로우가 체크포인트 없이 컴파일되었습니다 (LangSmith 비활성화됨)")
             finally:
                 # 환경 변수 복원
                 if original_tracing:
@@ -190,10 +265,10 @@ class LangGraphWorkflowService:
                 debug=False,
             )
             checkpoint_info = f" with checkpoint({self.config.checkpoint_storage.value})" if checkpointer else " without checkpoint"
-            self.logger.info(f"워크플로우가 LangSmith 추적으로 컴파일되었습니다{checkpoint_info} (State Reduction 적용됨)")
+            safe_log_info(self.logger, f"워크플로우가 LangSmith 추적으로 컴파일되었습니다{checkpoint_info} (State Reduction 적용됨)")
 
         if self.app is None:
-            self.logger.error("Failed to compile workflow")
+            safe_log_error(self.logger, "Failed to compile workflow")
             raise RuntimeError("워크플로우 컴파일에 실패했습니다")
 
         # LangfuseClient 초기화 (답변 품질 추적)
@@ -203,12 +278,12 @@ class LangGraphWorkflowService:
                 from core.services.langfuse_client import LangfuseClient
                 self.langfuse_client_service = LangfuseClient(self.config)
                 if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
-                    self.logger.info("LangfuseClient initialized for answer quality tracking")
+                    safe_log_info(self.logger, "LangfuseClient initialized for answer quality tracking")
             except Exception as e:
-                self.logger.warning(f"Failed to initialize LangfuseClient: {e}")
+                safe_log_warning(self.logger, f"Failed to initialize LangfuseClient: {e}")
                 self.langfuse_client_service = None
 
-        self.logger.info("LangGraphWorkflowService initialized successfully")
+        safe_log_info(self.logger, "LangGraphWorkflowService initialized successfully")
 
     async def process_query(
         self,
@@ -346,26 +421,50 @@ class LangGraphWorkflowService:
                 else:
                     self.logger.debug(f"Preserved initial input: query length={len(self._initial_input.get('query', ''))}")
 
-                async for event in self.app.astream(initial_state, enhanced_config):
+                # 성능 프로파일링을 위한 노드 실행 시간 추적
+                node_start_times = {}  # 각 노드의 시작 시간 저장
+                node_durations = {}  # 각 노드의 실행 시간 저장
+                total_start_time = time.time()
+                
+                async for event in self.app.astream(initial_state, enhanced_config, stream_mode="updates"):
                     # 각 이벤트는 {node_name: updated_state} 형태
                     for node_name, node_state in event.items():
                         # 새로 실행된 노드인 경우에만 카운트
                         if node_name not in executed_nodes:
                             node_count += 1
                             executed_nodes.append(node_name)
+                            
+                            # 노드 시작 시간 기록 (이벤트가 발생하면 해당 노드가 완료된 것으로 간주)
+                            current_time = time.time()
+                            if node_name in node_start_times:
+                                # 노드 실행 시간 계산 (시작 시간부터 현재까지)
+                                node_duration = current_time - node_start_times[node_name]
+                                node_durations[node_name] = node_duration
+                            else:
+                                # 첫 실행 시 이전 노드 완료 시간으로 계산
+                                node_duration = current_time - last_node_time if node_count > 1 else 0
+                                node_durations[node_name] = node_duration
+                            
+                            # 다음 노드 시작 시간 기록 (이벤트 발생 시점)
+                            node_start_times[node_name] = current_time
+                            last_node_time = current_time
 
-                            # 노드 실행 시간 계산
-                            node_duration = time.time() - last_node_time if node_count > 1 else 0
-                            last_node_time = time.time()
-
-                            # 진행상황 표시
+                            # 진행상황 표시 (실행 시간 포함)
                             if node_count == 1:
                                 progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
                             else:
-                                progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (이전 노드 완료: {node_duration:.2f}초)"
+                                progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
 
                             self.logger.info(progress_msg)
                             print(progress_msg, flush=True)
+                            
+                            # 병목 지점 감지: 느린 노드에 대한 경고
+                            SLOW_NODE_THRESHOLD = 5.0  # 5초 이상 실행 시 경고
+                            if node_duration > SLOW_NODE_THRESHOLD:
+                                self.logger.warning(
+                                    f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
+                                    f"(임계값: {SLOW_NODE_THRESHOLD}초)"
+                                )
 
                             # 노드 이름을 한국어로 변환하여 더 명확하게 표시
                             node_display_name = self._get_node_display_name(node_name)
@@ -375,38 +474,52 @@ class LangGraphWorkflowService:
                                 print(detail_msg, flush=True)
 
                             # 디버깅: node_state의 query 확인
-                            if node_name == "classify_query":
-                                # 중요: node_state.get("input")이 None일 수 있으므로 안전하게 처리
-                                node_input = node_state.get("input") if isinstance(node_state, dict) else None
+                            # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
+                            if node_name == "classify_query_and_complexity" and isinstance(node_state, dict):
+                                # classification 그룹을 캐시에 저장 (stream_mode="updates" 사용 시 다음 노드로 전달 보장)
+                                if "classification" in node_state and isinstance(node_state["classification"], dict):
+                                    if not self._search_results_cache:
+                                        self._search_results_cache = {}
+                                    self._search_results_cache["classification"] = node_state["classification"].copy()
+                                    # common 그룹에도 저장
+                                    if "common" not in self._search_results_cache:
+                                        self._search_results_cache["common"] = {}
+                                    if "classification" not in self._search_results_cache["common"]:
+                                        self._search_results_cache["common"]["classification"] = {}
+                                    self._search_results_cache["common"]["classification"].update(node_state["classification"])
+                                    self.logger.debug(f"astream: Cached classification group for future nodes")
+                                
                                 node_query = ""
-                                if node_input and isinstance(node_input, dict):
-                                    node_query = node_input.get("query", "")
-                                elif isinstance(node_state, dict):
-                                    node_query = node_state.get("query", "")
-                                self.logger.debug(f"astream: event[{node_name}] query='{node_query[:50] if node_query else 'EMPTY'}...', keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                                # input 그룹이 변경되었는지 확인
+                                if "input" in node_state and isinstance(node_state["input"], dict):
+                                    node_query = node_state["input"].get("query", "")
+                                # classification 그룹도 확인
+                                elif "classification" in node_state and isinstance(node_state["classification"], dict):
+                                    node_query = self._initial_input.get("query", "") if self._initial_input else ""
+                                self.logger.debug(f"astream: event[{node_name}] query='{node_query[:50] if node_query else 'EMPTY'}...', keys={list(node_state.keys())}")
 
                         # processing_steps 추적 (state reduction으로 손실 방지, 개선)
+                        # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
                         if isinstance(node_state, dict):
-                            # 1. common 그룹에서 processing_steps 확인
-                            node_common = node_state.get("common", {})
-                            if isinstance(node_common, dict):
-                                common_steps = node_common.get("processing_steps", [])
+                            # 1. common 그룹에서 processing_steps 확인 (변경된 경우에만 포함)
+                            if "common" in node_state and isinstance(node_state["common"], dict):
+                                common_steps = node_state["common"].get("processing_steps", [])
                                 if isinstance(common_steps, list) and len(common_steps) > 0:
                                     for step in common_steps:
                                         if isinstance(step, str) and step not in tracked_processing_steps:
                                             tracked_processing_steps.append(step)
 
-                            # 2. 최상위 레벨에서도 확인
-                            top_steps = node_state.get("processing_steps", [])
-                            if isinstance(top_steps, list) and len(top_steps) > 0:
-                                for step in top_steps:
-                                    if isinstance(step, str) and step not in tracked_processing_steps:
-                                        tracked_processing_steps.append(step)
+                            # 2. 최상위 레벨에서도 확인 (변경된 경우에만 포함)
+                            if "processing_steps" in node_state:
+                                top_steps = node_state["processing_steps"]
+                                if isinstance(top_steps, list) and len(top_steps) > 0:
+                                    for step in top_steps:
+                                        if isinstance(step, str) and step not in tracked_processing_steps:
+                                            tracked_processing_steps.append(step)
 
-                            # 3. metadata에서도 확인 (개선)
-                            metadata = node_state.get("metadata", {})
-                            if isinstance(metadata, dict):
-                                metadata_steps = metadata.get("processing_steps", [])
+                            # 3. metadata에서도 확인 (변경된 경우에만 포함)
+                            if "metadata" in node_state and isinstance(node_state["metadata"], dict):
+                                metadata_steps = node_state["metadata"].get("processing_steps", [])
                                 if isinstance(metadata_steps, list) and len(metadata_steps) > 0:
                                     for step in metadata_steps:
                                         if isinstance(step, str) and step not in tracked_processing_steps:
@@ -425,30 +538,38 @@ class LangGraphWorkflowService:
                         # 해결책: 보존된 초기 input을 항상 복원
 
                         # 디버깅: node_state의 query 확인 (모든 노드에 대해)
-                        if node_name in ["classify_query", "prepare_search_query", "execute_searches_parallel"]:
-                            # 중요: node_state.get("input")이 None일 수 있으므로 안전하게 처리
-                            node_input = node_state.get("input") if isinstance(node_state, dict) else None
+                        # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
+                        if node_name in ["classify_query", "prepare_search_query", "execute_searches_parallel"] and isinstance(node_state, dict):
                             node_query = ""
-                            if node_input and isinstance(node_input, dict):
-                                node_query = node_input.get("query", "")
-                            elif isinstance(node_state, dict):
-                                node_query = node_state.get("query", "")
-                            self.logger.debug(f"astream: event[{node_name}] - node_state query='{node_query[:50] if node_query else 'EMPTY'}...'")
-                            self.logger.debug(f"astream: event[{node_name}] - node_state keys={list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                            # input 그룹이 변경되었는지 확인
+                            if "input" in node_state and isinstance(node_state["input"], dict):
+                                node_query = node_state["input"].get("query", "")
+                            # query가 최상위 레벨에 직접 있는 경우 (legacy 호환)
+                            elif "query" in node_state:
+                                node_query = node_state["query"] if isinstance(node_state["query"], str) else ""
+                            # input이 변경되지 않았으면 초기 input에서 가져오기
+                            if not node_query and self._initial_input:
+                                node_query = self._initial_input.get("query", "")
+                            self.logger.debug(f"astream: event[{node_name}] - node_state query='{node_query[:50] if node_query else 'EMPTY'}...', keys={list(node_state.keys())}")
 
                             # execute_searches_parallel의 경우 search 그룹 확인 및 캐시
-                            # semantic_results를 retrieved_docs로 변환하여 저장
+                            # stream_mode="updates" 사용 시 search 그룹이 변경된 경우에만 포함됨
                             if node_name == "execute_searches_parallel" and isinstance(node_state, dict):
-                                # semantic_results를 retrieved_docs로 변환하여 저장
-                                search_group_for_cache = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
-                                semantic_results_for_cache = search_group_for_cache.get("semantic_results", [])
-                                keyword_results_for_cache = search_group_for_cache.get("keyword_results", [])
-
-                                # 최상위 레벨에서도 확인
-                                if not semantic_results_for_cache:
-                                    semantic_results_for_cache = node_state.get("semantic_results", [])
-                                if not keyword_results_for_cache:
-                                    keyword_results_for_cache = node_state.get("keyword_results", [])
+                                # search 그룹이 변경되었는지 확인
+                                search_group_for_cache = {}
+                                semantic_results_for_cache = []
+                                keyword_results_for_cache = []
+                                
+                                if "search" in node_state and isinstance(node_state["search"], dict):
+                                    search_group_for_cache = node_state["search"]
+                                    semantic_results_for_cache = search_group_for_cache.get("semantic_results", [])
+                                    keyword_results_for_cache = search_group_for_cache.get("keyword_results", [])
+                                
+                                # 최상위 레벨에서도 확인 (legacy 호환)
+                                if not semantic_results_for_cache and "semantic_results" in node_state:
+                                    semantic_results_for_cache = node_state["semantic_results"] if isinstance(node_state["semantic_results"], list) else []
+                                if not keyword_results_for_cache and "keyword_results" in node_state:
+                                    keyword_results_for_cache = node_state["keyword_results"] if isinstance(node_state["keyword_results"], list) else []
 
                                 # semantic_results와 keyword_results를 retrieved_docs로 변환
                                 combined_docs = []
@@ -477,13 +598,15 @@ class LangGraphWorkflowService:
                                     self._search_results_cache["search"]["retrieved_docs"] = unique_docs
                                     self._search_results_cache["search"]["merged_documents"] = unique_docs
                                     self.logger.debug(f"astream: Converted semantic_results to retrieved_docs: {len(unique_docs)} docs")
-                                search_group = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
-                                semantic_count = len(search_group.get("semantic_results", []))
-                                keyword_count = len(search_group.get("keyword_results", []))
+                                
+                                # search 그룹에서 카운트 확인 (변경된 경우에만 포함)
+                                search_group = search_group_for_cache if search_group_for_cache else {}
+                                semantic_count = len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0
+                                keyword_count = len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0
 
-                                # 최상위 레벨에서도 확인 (node_wrappers에서 추가했을 수 있음)
-                                top_semantic = node_state.get("semantic_results", [])
-                                top_keyword = node_state.get("keyword_results", [])
+                                # 최상위 레벨에서도 확인 (legacy 호환)
+                                top_semantic = node_state.get("semantic_results", []) if "semantic_results" in node_state else []
+                                top_keyword = node_state.get("keyword_results", []) if "keyword_results" in node_state else []
                                 if isinstance(top_semantic, list):
                                     semantic_count = max(semantic_count, len(top_semantic))
                                 if isinstance(top_keyword, list):
@@ -493,16 +616,16 @@ class LangGraphWorkflowService:
 
                                 # search 그룹 또는 최상위 레벨에 결과가 있으면 캐시에 저장
                                 if (semantic_count > 0 or keyword_count > 0):
-                                    # search 그룹이 있으면 그걸 우선, 없으면 최상위 레벨 값으로 구성
+                                    # search 그룹이 있으면 그걸 우선
                                     if search_group and (len(search_group.get("semantic_results", [])) > 0 or len(search_group.get("keyword_results", [])) > 0):
                                         self._search_results_cache = search_group.copy()
-                                    elif isinstance(top_semantic, list) or isinstance(top_keyword, list):
-                                        # 최상위 레벨에서 캐시 구성
+                                    # 최상위 레벨 값으로 구성 (legacy 호환)
+                                    elif ("semantic_results" in node_state or "keyword_results" in node_state):
                                         self._search_results_cache = {
-                                            "semantic_results": top_semantic if isinstance(top_semantic, list) else [],
-                                            "keyword_results": top_keyword if isinstance(top_keyword, list) else [],
-                                            "semantic_count": len(top_semantic) if isinstance(top_semantic, list) else 0,
-                                            "keyword_count": len(top_keyword) if isinstance(top_keyword, list) else 0
+                                            "semantic_results": node_state.get("semantic_results", []) if isinstance(node_state.get("semantic_results"), list) else [],
+                                            "keyword_results": node_state.get("keyword_results", []) if isinstance(node_state.get("keyword_results"), list) else [],
+                                            "semantic_count": semantic_count,
+                                            "keyword_count": keyword_count
                                         }
                                     self.logger.debug(f"astream: Cached search results - semantic={semantic_count}, keyword={keyword_count}")
                                 # search 그룹이 없거나 비어있으면 캐시에서 복원 시도
@@ -520,43 +643,62 @@ class LangGraphWorkflowService:
                                     keyword_restored = len(node_state["search"].get("keyword_results", []))
                                     self.logger.debug(f"astream: Restored search results - semantic={semantic_restored}, keyword={keyword_restored}")
 
+                        # input 그룹 복원 (stream_mode="updates" 사용 시 input이 변경되지 않은 노드에는 포함되지 않을 수 있음)
                         if isinstance(node_state, dict) and self._initial_input:
-                            # 중요: node_state.get("input")이 None일 수 있으므로 안전하게 처리
-                            node_input = node_state.get("input")
-                            node_has_input = node_input is not None and isinstance(node_input, dict)
-                            node_has_query = node_has_input and bool(node_input.get("query"))
-
-                            # node_state에 input이 없거나 query가 없으면 보존된 초기 input에서 복원
-                            if not node_has_input or not node_has_query:
-                                if self._initial_input.get("query"):
-                                    if "input" not in node_state or not isinstance(node_state.get("input"), dict):
-                                        node_state["input"] = {}
+                            # stream_mode="updates" 사용 시 input 그룹이 변경된 경우에만 포함됨
+                            # input이 변경되지 않은 노드에서는 초기 input을 복원해야 함
+                            if "input" not in node_state:
+                                # input 그룹이 없으면 초기 input에서 복원
+                                node_state["input"] = self._initial_input.copy()
+                                if node_name == "classify_query":
+                                    self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
+                            elif isinstance(node_state.get("input"), dict):
+                                # input 그룹이 있지만 query가 없으면 복원
+                                node_input = node_state["input"]
+                                if not node_input.get("query") and self._initial_input.get("query"):
                                     node_state["input"]["query"] = self._initial_input["query"]
                                     if self._initial_input.get("session_id"):
                                         node_state["input"]["session_id"] = self._initial_input["session_id"]
                                     if node_name == "classify_query":
                                         self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
-
-                            # 모든 노드 결과에 항상 input 그룹 포함 (LangGraph 병합 보장)
-                            # 초기 input이 있으면 항상 포함
-                            node_input_check = node_state.get("input")
-                            if node_input_check is None or not isinstance(node_input_check, dict):
-                                node_state["input"] = self._initial_input.copy()
-                            elif not node_input_check.get("query") and self._initial_input.get("query"):
-                                # query가 비어있으면 복원
-                                node_state["input"]["query"] = self._initial_input["query"]
-                                if self._initial_input.get("session_id"):
-                                    node_state["input"]["session_id"] = self._initial_input["session_id"]
+                        
+                        # classification 그룹 보존 (stream_mode="updates" 사용 시 direct_answer 노드 등에서 필요)
+                        # direct_answer 노드는 required_state_groups={"input", "classification"}를 필요로 함
+                        if isinstance(node_state, dict):
+                            # classification 그룹이 필요한 노드들
+                            nodes_requiring_classification = ["direct_answer", "generate_and_validate_answer"]
+                            if node_name in nodes_requiring_classification:
+                                # classification 그룹이 없으면 이전 노드에서 가져오기
+                                if "classification" not in node_state:
+                                    # 이전 노드에서 classification 정보를 찾아야 함
+                                    # classify_query_and_complexity 노드에서 저장한 정보를 보존해야 함
+                                    # 이 정보는 캐시나 초기 상태에서 가져올 수 있음
+                                    if self._search_results_cache and isinstance(self._search_results_cache, dict):
+                                        cached_classification = (
+                                            self._search_results_cache.get("classification") or
+                                            self._search_results_cache.get("common", {}).get("classification") or
+                                            {}
+                                        )
+                                        if isinstance(cached_classification, dict) and cached_classification:
+                                            node_state["classification"] = cached_classification.copy()
+                                            self.logger.debug(f"astream: Restored classification group from cache for {node_name}")
 
                         # 중요: merge_and_rerank_with_keyword_weights 이후 retrieved_docs 캐시 업데이트
+                        # stream_mode="updates" 사용 시 search 그룹이 변경된 경우에만 포함됨
                         if node_name == "merge_and_rerank_with_keyword_weights" and isinstance(node_state, dict):
-                            search_group = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
-                            retrieved_docs = search_group.get("retrieved_docs", [])
-                            merged_documents = search_group.get("merged_documents", [])
+                            search_group = {}
+                            retrieved_docs = []
+                            merged_documents = []
+                            
+                            # search 그룹이 변경되었는지 확인
+                            if "search" in node_state and isinstance(node_state["search"], dict):
+                                search_group = node_state["search"]
+                                retrieved_docs = search_group.get("retrieved_docs", [])
+                                merged_documents = search_group.get("merged_documents", [])
 
-                            # 최상위 레벨에서도 확인
-                            top_retrieved_docs = node_state.get("retrieved_docs", [])
-                            top_merged_docs = node_state.get("merged_documents", [])
+                            # 최상위 레벨에서도 확인 (legacy 호환)
+                            top_retrieved_docs = node_state.get("retrieved_docs", []) if "retrieved_docs" in node_state else []
+                            top_merged_docs = node_state.get("merged_documents", []) if "merged_documents" in node_state else []
 
                             # retrieved_docs 또는 merged_documents가 있으면 캐시 업데이트
                             final_retrieved_docs = (retrieved_docs if isinstance(retrieved_docs, list) and len(retrieved_docs) > 0 else
@@ -585,13 +727,18 @@ class LangGraphWorkflowService:
                                 self.logger.debug(f"astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}")
 
                         # 중요: execute_searches_parallel 이후 노드들에 대해 캐시된 search 결과 복원
-                        # LangGraph reducer가 search 그룹을 제거하는 문제를 우회하기 위해 캐시에서 복원
+                        # stream_mode="updates" 사용 시 search 그룹이 변경되지 않은 노드에는 포함되지 않을 수 있음
                         if node_name in ["merge_and_rerank_with_keyword_weights", "filter_and_validate_results", "update_search_metadata", "prepare_document_context_for_prompt"]:
                             if self._search_results_cache and isinstance(node_state, dict):
-                                # node_state에 search 그룹이 없거나 비어있으면 캐시에서 복원
-                                search_group = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
-                                top_semantic = node_state.get("semantic_results", [])
-                                top_keyword = node_state.get("keyword_results", [])
+                                # node_state에 search 그룹이 변경되었는지 확인
+                                search_group = {}
+                                if "search" in node_state and isinstance(node_state["search"], dict):
+                                    search_group = node_state["search"]
+                                
+                                # 최상위 레벨에서도 확인 (legacy 호환)
+                                top_semantic = node_state.get("semantic_results", []) if "semantic_results" in node_state else []
+                                top_keyword = node_state.get("keyword_results", []) if "keyword_results" in node_state else []
+                                
                                 has_results = (len(search_group.get("semantic_results", [])) > 0 or
                                              len(search_group.get("keyword_results", [])) > 0 or
                                              (isinstance(top_semantic, list) and len(top_semantic) > 0) or
@@ -616,17 +763,19 @@ class LangGraphWorkflowService:
                                     self.logger.debug(f"astream: Restored for {node_name} - semantic={semantic_restored}, keyword={keyword_restored}, top_level_semantic={len(node_state.get('semantic_results', []))}")
 
                         # 중요: merge_and_rerank_with_keyword_weights 또는 process_search_results_combined 이후 retrieved_docs 캐시 업데이트
-                        # flat_result 업데이트 전에 캐시 업데이트 (node_state에서 직접 읽기)
+                        # stream_mode="updates" 사용 시 search 그룹이 변경된 경우에만 포함됨
                         if node_name in ["merge_and_rerank_with_keyword_weights", "process_search_results_combined"] and isinstance(node_state, dict):
                             self.logger.debug(f"astream: Checking merge_and_rerank node_state for retrieved_docs")
-                            # node_state 업데이트 후 다시 읽기
-                            search_group_updated = node_state.get("search", {}) if isinstance(node_state.get("search"), dict) else {}
+                            # search 그룹이 변경되었는지 확인
+                            search_group_updated = {}
+                            if "search" in node_state and isinstance(node_state["search"], dict):
+                                search_group_updated = node_state["search"]
                             retrieved_docs_updated = search_group_updated.get("retrieved_docs", [])
                             merged_documents_updated = search_group_updated.get("merged_documents", [])
 
-                            # 최상위 레벨에서도 확인
-                            top_retrieved_docs_updated = node_state.get("retrieved_docs", [])
-                            top_merged_docs_updated = node_state.get("merged_documents", [])
+                            # 최상위 레벨에서도 확인 (legacy 호환)
+                            top_retrieved_docs_updated = node_state.get("retrieved_docs", []) if "retrieved_docs" in node_state else []
+                            top_merged_docs_updated = node_state.get("merged_documents", []) if "merged_documents" in node_state else []
 
                             self.logger.debug(f"astream: merge_and_rerank - search_group retrieved_docs={len(retrieved_docs_updated) if isinstance(retrieved_docs_updated, list) else 0}, merged_documents={len(merged_documents_updated) if isinstance(merged_documents_updated, list) else 0}, top_retrieved_docs={len(top_retrieved_docs_updated) if isinstance(top_retrieved_docs_updated, list) else 0}, top_merged_docs={len(top_merged_docs_updated) if isinstance(top_merged_docs_updated, list) else 0}")
 
@@ -664,16 +813,41 @@ class LangGraphWorkflowService:
 
                 # 모든 노드 실행 완료 표시
                 total_nodes = len(executed_nodes)
-                self.logger.info(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행)")
-                print(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행)", flush=True)
-
-                # 실행된 노드 목록 표시
+                total_execution_time = time.time() - total_start_time
+                
                 if total_nodes > 0:
-                    nodes_list = ", ".join(executed_nodes[:5])
-                    if total_nodes > 5:
-                        nodes_list += f" 외 {total_nodes - 5}개"
-                    self.logger.info(f"  실행된 노드: {nodes_list}")
-                    print(f"  실행된 노드: {nodes_list}", flush=True)
+                    self.logger.info(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
+                    print(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)", flush=True)
+                    
+                    # 성능 요약 출력 (느린 노드 순서대로 정렬)
+                    if node_durations:
+                        sorted_nodes = sorted(node_durations.items(), key=lambda x: x[1], reverse=True)
+                        self.logger.info("📊 [PERFORMANCE] 노드 실행 시간 요약:")
+                        print("📊 [PERFORMANCE] 노드 실행 시간 요약:", flush=True)
+                        
+                        for node_name, duration in sorted_nodes[:5]:  # 상위 5개만 표시
+                            percentage = (duration / total_execution_time * 100) if total_execution_time > 0 else 0
+                            node_display_name = self._get_node_display_name(node_name)
+                            summary_msg = f"  - {node_display_name}: {duration:.2f}초 ({percentage:.1f}%)"
+                            self.logger.info(summary_msg)
+                            print(summary_msg, flush=True)
+                        
+                        # 가장 느린 노드 경고
+                        SLOW_NODE_THRESHOLD = 5.0
+                        if sorted_nodes and sorted_nodes[0][1] > SLOW_NODE_THRESHOLD:
+                            slowest_node = sorted_nodes[0]
+                            self.logger.warning(
+                                f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node[0]} "
+                                f"({slowest_node[1]:.2f}초, 전체의 {slowest_node[1]/total_execution_time*100:.1f}%)"
+                            )
+                    
+                    # 실행된 노드 목록 표시
+                    if total_nodes > 0:
+                        nodes_list = ", ".join(executed_nodes[:5])
+                        if total_nodes > 5:
+                            nodes_list += f" 외 {total_nodes - 5}개"
+                        self.logger.info(f"  실행된 노드: {nodes_list}")
+                        print(f"  실행된 노드: {nodes_list}", flush=True)
 
                 # 최종 결과가 없으면 초기 상태 사용
                 if flat_result is None:

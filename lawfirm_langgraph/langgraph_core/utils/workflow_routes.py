@@ -15,6 +15,81 @@ from core.agents.workflow_constants import (
 )
 from core.agents.workflow_utils import WorkflowUtils
 
+# 안전한 로깅 유틸리티 import (멀티스레딩 안전)
+# 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
+def _safe_log_fallback_debug(logger, message):
+    """폴백 디버그 로깅 함수"""
+    try:
+        logger.debug(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_info(logger, message):
+    """폴백 정보 로깅 함수"""
+    try:
+        logger.info(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_warning(logger, message):
+    """폴백 경고 로깅 함수"""
+    try:
+        logger.warning(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_error(logger, message):
+    """폴백 오류 로깅 함수"""
+    try:
+        logger.error(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+# 여러 경로 시도하여 safe_log_* 함수 import
+SAFE_LOGGING_AVAILABLE = False
+try:
+    from core.utils.safe_logging_utils import (
+        safe_log_debug,
+        safe_log_info,
+        safe_log_warning,
+        safe_log_error
+    )
+    SAFE_LOGGING_AVAILABLE = True
+except ImportError:
+    try:
+        # lawfirm_langgraph 경로에서 시도
+        from lawfirm_langgraph.core.utils.safe_logging_utils import (
+            safe_log_debug,
+            safe_log_info,
+            safe_log_warning,
+            safe_log_error
+        )
+        SAFE_LOGGING_AVAILABLE = True
+    except ImportError:
+        # Import 실패 시 폴백 함수 사용
+        safe_log_debug = _safe_log_fallback_debug
+        safe_log_info = _safe_log_fallback_info
+        safe_log_warning = _safe_log_fallback_warning
+        safe_log_error = _safe_log_fallback_error
+
+# 최종 확인: safe_log_debug가 정의되지 않았다면 폴백 함수 사용
+try:
+    _ = safe_log_debug
+except NameError:
+    safe_log_debug = _safe_log_fallback_debug
+try:
+    _ = safe_log_info
+except NameError:
+    safe_log_info = _safe_log_fallback_info
+try:
+    _ = safe_log_warning
+except NameError:
+    safe_log_warning = _safe_log_fallback_warning
+try:
+    _ = safe_log_error
+except NameError:
+    safe_log_error = _safe_log_fallback_error
+
 
 class QueryComplexity:
     """질문 복잡도 Enum 대체 클래스"""
@@ -363,8 +438,9 @@ class WorkflowRoutes:
         quality_check_passed = quality_meta["quality_check_passed"]
         quality_score = quality_meta["quality_score"]
 
-        # 품질 메타데이터 상세 로깅 (디버깅용)
-        self.logger.debug(
+        # 품질 메타데이터 상세 로깅 (디버깅용, 안전한 로깅 사용)
+        safe_log_debug(
+            self.logger,
             f"🔍 [QUALITY METADATA READ] From _should_retry_validation:\n"
             f"   quality_check_passed: {quality_check_passed}\n"
             f"   quality_score: {quality_score:.2f}\n"
