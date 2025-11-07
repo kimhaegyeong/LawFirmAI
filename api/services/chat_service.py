@@ -486,6 +486,21 @@ class ChatService:
                                 
                                 # 토큰이 있으면 즉시 전송
                                 if chunk and isinstance(chunk, str):
+                                    # JSON 형식 출력 감지 및 필터링 (중간 노드의 JSON 출력 제거)
+                                    chunk_stripped = chunk.strip()
+                                    
+                                    # JSON 형식 시작 패턴 감지
+                                    is_json_output = False
+                                    if chunk_stripped.startswith("{") or chunk_stripped.startswith("```json"):
+                                        is_json_output = True
+                                    elif chunk_stripped.startswith("```") and "json" in chunk_stripped[:20].lower():
+                                        is_json_output = True
+                                    
+                                    # JSON 형식이면 무시 (중간 노드의 JSON 출력)
+                                    if is_json_output:
+                                        logger.debug(f"JSON 형식 출력 감지 및 무시: {chunk_stripped[:100]}...")
+                                        continue
+                                    
                                     # 공백 토큰도 포함 (실제 토큰 스트리밍)
                                     # 단, 완전히 빈 문자열은 제외
                                     if len(chunk) > 0:
