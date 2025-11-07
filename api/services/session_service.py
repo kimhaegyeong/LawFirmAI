@@ -1,0 +1,510 @@
+"""
+세션 관리 서비스
+"""
+import uuid
+import sqlite3
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any
+from pathlib import Path
+import logging
+
+from api.config import api_config
+
+logger = logging.getLogger(__name__)
+
+# KST 시간대 (UTC+9)
+KST = timezone(timedelta(hours=9))
+
+
+class SessionService:
+    """세션 관리 서비스"""
+    
+    def __init__(self):
+        """초기화"""
+        self.db_path = Path(api_config.database_url.replace("sqlite:///", ""))
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_database()
+    
+    def _init_database(self):
+        """데이터베이스 초기화"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 세션 테이블 생성
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    category TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    message_count INTEGER DEFAULT 0,
+                    metadata TEXT
+                )
+            """)
+            
+            # 메시지 테이블 생성
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    message_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+            
+            # 인덱스 생성
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_messages_session_id 
+                ON messages(session_id)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sessions_updated_at 
+                ON sessions(updated_at)
+            """)
+            
+            conn.commit()
+            conn.close()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+    
+    def create_session(self, title: Optional[str] = None, category: Optional[str] = None) -> str:
+        """세션 생성"""
+        session_id = str(uuid.uuid4())
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO sessions (session_id, title, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (session_id, title, category, datetime.now(), datetime.now()))
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Session created: {session_id}")
+            return session_id
+        except Exception as e:
+            logger.error(f"Failed to create session: {e}")
+            raise
+    
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """세션 조회"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM sessions WHERE session_id = ?
+            """, (session_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                session_dict = dict(row)
+                # datetime 객체를 ISO 형식 문자열로 변환
+                if isinstance(session_dict.get("created_at"), datetime):
+                    session_dict["created_at"] = session_dict["created_at"].isoformat()
+                if isinstance(session_dict.get("updated_at"), datetime):
+                    session_dict["updated_at"] = session_dict["updated_at"].isoformat()
+                return session_dict
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get session: {e}")
+            return None
+    
+    def update_session(
+        self,
+        session_id: str,
+        title: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> bool:
+        """세션 업데이트"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            updates = []
+            params = []
+            
+            if title is not None:
+                updates.append("title = ?")
+                params.append(title)
+            
+            if category is not None:
+                updates.append("category = ?")
+                params.append(category)
+            
+            if not updates:
+                conn.close()
+                return False
+            
+            updates.append("updated_at = ?")
+            params.append(datetime.now())
+            params.append(session_id)
+            
+            query = f"UPDATE sessions SET {', '.join(updates)} WHERE session_id = ?"
+            cursor.execute(query, params)
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Session updated: {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update session: {e}")
+            return False
+    
+    def delete_session(self, session_id: str) -> bool:
+        """세션 삭제"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 메시지도 함께 삭제
+            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Session deleted: {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete session: {e}")
+            return False
+    
+    def list_sessions(
+        self,
+        category: Optional[str] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 10,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """세션 목록 조회"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # WHERE 절 구성
+            where_clauses = []
+            params = []
+            
+            if category:
+                where_clauses.append("category = ?")
+                params.append(category)
+            
+            if search:
+                where_clauses.append("(title LIKE ? OR session_id LIKE ?)")
+                params.append(f"%{search}%")
+                params.append(f"%{search}%")
+            
+            # 날짜 필터 추가 (KST 기준)
+            # SQLite에서 타임스탬프를 KST로 변환하여 날짜 비교
+            # datetime.now()로 저장된 값은 서버 로컬 시간대를 사용하므로,
+            # KST 기준으로 비교하려면 타임스탬프를 KST로 변환한 후 날짜를 추출해야 함
+            # datetime(updated_at, '+9 hours')를 사용하여 타임스탬프에 9시간을 더한 후 날짜 추출
+            if date_from:
+                try:
+                    # 날짜 형식 검증
+                    datetime.strptime(date_from, "%Y-%m-%d")
+                    # SQLite에서 타임스탬프를 KST로 변환한 후 날짜 비교
+                    # datetime(updated_at, '+9 hours')는 타임스탬프에 9시간을 더하여 KST로 변환
+                    where_clauses.append("DATE(datetime(updated_at, '+9 hours')) >= ?")
+                    params.append(date_from)
+                except ValueError:
+                    # 날짜 형식이 잘못된 경우 기존 방식 사용
+                    logger.warning(f"Invalid date_from format: {date_from}, using DATE() function")
+                    where_clauses.append("DATE(updated_at) >= ?")
+                    params.append(date_from)
+            
+            if date_to:
+                try:
+                    # 날짜 형식 검증
+                    datetime.strptime(date_to, "%Y-%m-%d")
+                    # SQLite에서 타임스탬프를 KST로 변환한 후 날짜 비교
+                    where_clauses.append("DATE(datetime(updated_at, '+9 hours')) <= ?")
+                    params.append(date_to)
+                except ValueError:
+                    # 날짜 형식이 잘못된 경우 기존 방식 사용
+                    logger.warning(f"Invalid date_to format: {date_to}, using DATE() function")
+                    where_clauses.append("DATE(updated_at) <= ?")
+                    params.append(date_to)
+            
+            where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+            # 정렬
+            valid_sort_fields = ["created_at", "updated_at", "title", "message_count"]
+            sort_field = sort_by if sort_by in valid_sort_fields else "updated_at"
+            sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+            
+            # 전체 개수 조회
+            count_query = f"SELECT COUNT(*) FROM sessions WHERE {where_sql}"
+            cursor.execute(count_query, params)
+            total = cursor.fetchone()[0]
+            
+            # 페이지네이션
+            offset = (page - 1) * page_size
+            query = f"""
+                SELECT * FROM sessions 
+                WHERE {where_sql}
+                ORDER BY {sort_field} {sort_dir}
+                LIMIT ? OFFSET ?
+            """
+            params.extend([page_size, offset])
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            conn.close()
+            
+            sessions = []
+            for row in rows:
+                session_dict = dict(row)
+                # datetime 객체를 ISO 형식 문자열로 변환
+                if isinstance(session_dict.get("created_at"), datetime):
+                    session_dict["created_at"] = session_dict["created_at"].isoformat()
+                if isinstance(session_dict.get("updated_at"), datetime):
+                    session_dict["updated_at"] = session_dict["updated_at"].isoformat()
+                sessions.append(session_dict)
+            
+            return sessions, total
+        except Exception as e:
+            logger.error(f"Failed to list sessions: {e}")
+            return [], 0
+    
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """메시지 추가"""
+        message_id = str(uuid.uuid4())
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            import json
+            metadata_str = json.dumps(metadata) if metadata else None
+            
+            cursor.execute("""
+                INSERT INTO messages (message_id, session_id, role, content, timestamp, metadata)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (message_id, session_id, role, content, datetime.now(), metadata_str))
+            
+            # 메시지 개수 업데이트
+            cursor.execute("""
+                UPDATE sessions 
+                SET message_count = message_count + 1, updated_at = ?
+                WHERE session_id = ?
+            """, (datetime.now(), session_id))
+            
+            conn.commit()
+            conn.close()
+            return message_id
+        except Exception as e:
+            logger.error(f"Failed to add message: {e}")
+            raise
+    
+    def get_messages(
+        self,
+        session_id: str,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """메시지 조회"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            query = "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC"
+            params = [session_id]
+            
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            conn.close()
+            
+            messages = []
+            for row in rows:
+                msg = dict(row)
+                
+                # timestamp 처리: SQLite에서 문자열로 반환될 수 있으므로 그대로 유지
+                # (API 레이어에서 datetime으로 변환)
+                if msg.get("timestamp"):
+                    # datetime 객체인 경우 ISO 형식 문자열로 변환
+                    if isinstance(msg["timestamp"], datetime):
+                        msg["timestamp"] = msg["timestamp"].isoformat()
+                    # 이미 문자열이면 그대로 유지
+                    elif isinstance(msg["timestamp"], str):
+                        pass  # 그대로 유지
+                    else:
+                        # 다른 타입이면 문자열로 변환
+                        msg["timestamp"] = str(msg["timestamp"])
+                
+                # metadata 파싱
+                if msg.get("metadata"):
+                    import json
+                    try:
+                        if isinstance(msg["metadata"], str):
+                            msg["metadata"] = json.loads(msg["metadata"])
+                        # 이미 dict이면 그대로 유지
+                    except Exception as e:
+                        logger.warning(f"Failed to parse metadata: {e}")
+                        msg["metadata"] = {}
+                else:
+                    msg["metadata"] = {}
+                
+                # 필수 필드 확인
+                if not msg.get("message_id"):
+                    logger.warning(f"Message missing message_id: {msg}")
+                    continue
+                if not msg.get("session_id"):
+                    logger.warning(f"Message missing session_id: {msg}")
+                    continue
+                if not msg.get("role"):
+                    logger.warning(f"Message missing role: {msg}")
+                    continue
+                if not msg.get("content"):
+                    msg["content"] = ""  # 빈 내용은 허용
+                
+                messages.append(msg)
+            
+            return messages
+        except Exception as e:
+            logger.error(f"Failed to get messages: {e}", exc_info=True)
+            return []
+    
+    def generate_session_title(self, session_id: str) -> Optional[str]:
+        """
+        첫 번째 질문과 답변을 기반으로 Gemini를 사용하여 세션 제목 생성
+        
+        Args:
+            session_id: 세션 ID
+            
+        Returns:
+            생성된 제목 또는 None (실패 시)
+        """
+        try:
+            # 세션 존재 확인
+            session = self.get_session(session_id)
+            if not session:
+                logger.warning(f"Session not found: {session_id}")
+                return None
+            
+            # 첫 번째 메시지 2개 가져오기 (질문 + 답변)
+            messages = self.get_messages(session_id, limit=2)
+            
+            if len(messages) < 2:
+                logger.warning(f"Not enough messages for title generation in session {session_id}")
+                return None
+            
+            user_message = None
+            assistant_message = None
+            
+            for msg in messages:
+                if msg["role"] == "user" and not user_message:
+                    user_message = msg["content"]
+                elif msg["role"] == "assistant" and not assistant_message:
+                    assistant_message = msg["content"]
+            
+            if not user_message or not assistant_message:
+                logger.warning(f"Missing user or assistant message for title generation")
+                return None
+            
+            # Gemini 클라이언트 생성 및 사용
+            import sys
+            from pathlib import Path
+            
+            # lawfirm_langgraph 경로 추가
+            project_root = Path(__file__).parent.parent.parent
+            lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
+            if lawfirm_langgraph_path.exists():
+                sys.path.insert(0, str(lawfirm_langgraph_path))
+            
+            try:
+                from core.services.gemini_client import GeminiClient
+                gemini_client = GeminiClient()
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini client: {e}")
+                # 대체: 첫 질문의 일부를 제목으로 사용
+                fallback_title = user_message[:20] + "..." if len(user_message) > 20 else user_message
+                self.update_session(session_id, title=fallback_title)
+                return fallback_title
+            
+            # 시스템 프롬프트 구성
+            system_prompt = """당신은 법률 대화의 제목을 생성하는 전문가입니다. 
+사용자의 질문과 AI의 답변을 간결하게 요약하여 10-20자 이내의 제목을 생성해주세요.
+제목은 대화의 핵심 내용을 잘 반영해야 하며, 법률 용어를 정확하게 사용해야 합니다.
+제목만 출력하고 다른 설명이나 문장은 하지 마세요."""
+            
+            # 프롬프트 구성
+            prompt = f"""다음 대화를 기반으로 간결한 제목을 생성해주세요.
+
+질문: {user_message[:300]}
+
+답변: {assistant_message[:500]}
+
+위 대화의 핵심을 담은 10-20자 이내의 제목만 생성해주세요. 제목만 출력하고 다른 설명은 하지 마세요."""
+            
+            # Gemini를 사용하여 제목 생성
+            gemini_response = gemini_client.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,
+                max_tokens=50
+            )
+            
+            # 응답 안전하게 처리
+            if not gemini_response or not hasattr(gemini_response, 'response'):
+                logger.warning("Invalid Gemini response structure")
+                title = user_message[:20] + "..." if len(user_message) > 20 else user_message
+            else:
+                title = gemini_response.response.strip() if gemini_response.response else ""
+            
+            # 제목 정제 (따옴표, 불필요한 문자 제거)
+            title = title.strip().strip('"').strip("'").strip()
+            
+            # 제목이 비어있거나 너무 길면 처리
+            if not title:
+                # 대체: 첫 질문의 일부를 제목으로 사용
+                title = user_message[:20] + "..." if len(user_message) > 20 else user_message
+            elif len(title) > 30:
+                # 30자 초과 시 앞부분만 사용
+                title = title[:30].rstrip() + "..."
+            
+            # 제목 업데이트
+            if title:
+                self.update_session(session_id, title=title)
+                logger.info(f"Generated title for session {session_id}: {title}")
+                return title
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to generate session title: {e}", exc_info=True)
+            return None
+
+
+# 전역 서비스 인스턴스
+session_service = SessionService()
+
