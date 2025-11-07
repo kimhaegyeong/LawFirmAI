@@ -77,7 +77,6 @@ class Config(BaseSettings):
 
     # HuggingFace Spaces Configuration
     hf_space_id: Optional[str] = Field(default=None, env="HF_SPACE_ID")
-    hf_token: Optional[str] = Field(default=None, env="HF_TOKEN")
 
     # Performance Configuration
     max_workers: int = Field(default=4, env="MAX_WORKERS")
