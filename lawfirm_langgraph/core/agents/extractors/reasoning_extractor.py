@@ -157,6 +157,7 @@ class ReasoningExtractor:
         # 추론 과정 섹션 찾기 (여러 곳에 분산된 경우도 처리)
         reasoning_sections = []  # 모든 추론 섹션을 저장
 
+        # 개선 사항 6: 추론 과정 추출 로직 개선 - 더 유연한 패턴 매칭
         # 모든 추론 섹션 찾기 (search_text 사용)
         reasoning_found = False
         for compiled_pattern in self._compiled_reasoning_patterns:
@@ -178,6 +179,7 @@ class ReasoningExtractor:
                         reasoning_end_idx = reasoning_start_idx + next_match.start()
                         break
 
+                # 개선 사항 6: 다음 섹션을 찾지 못한 경우 더 유연하게 처리
                 if reasoning_end_idx is None:
                     # 다음 섹션을 찾지 못한 경우, 추론 섹션 끝까지 전체 포함
                     # search_text 기준이므로 원본 answer 길이로 조정
@@ -185,6 +187,12 @@ class ReasoningExtractor:
                         # 대용량 응답에서 검색 범위를 벗어난 경우 원본 끝까지
                         reasoning_end_idx = answer_length
                     else:
+                        # 개선: 추론 섹션이 전체 답변의 50% 이상이면 추론 과정으로 간주하지 않음
+                        potential_reasoning_length = answer_length - reasoning_start_idx if reasoning_start_idx < answer_length else len(search_text) - reasoning_start_idx
+                        if potential_reasoning_length > answer_length * 0.5:
+                            # 추론 섹션이 너무 길면 추론 과정이 아닐 수 있음
+                            self.logger.debug(f"Potential reasoning section too long ({potential_reasoning_length} chars, {potential_reasoning_length/answer_length*100:.1f}% of answer), skipping")
+                            continue
                         reasoning_end_idx = answer_length if reasoning_start_idx < answer_length else len(search_text)
 
                 # 중복 체크 (이미 포함된 섹션인지 확인)

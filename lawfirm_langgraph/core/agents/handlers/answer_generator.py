@@ -163,7 +163,7 @@ class AnswerGenerator:
                 recommendations = validation_result.get("recommendations", [])
                 quality_score = validation_result.get("quality_score", 1.0)
 
-                if quality_score >= 0.75:  # 품질이 충분히 높으면 건너뛰기
+                if quality_score >= 0.80:  # 품질이 충분히 높으면 건너뛰기 (0.75 -> 0.80로 상향)
                     return None
 
                 improvement_prompt = f"""
@@ -206,7 +206,7 @@ class AnswerGenerator:
                 "output_parser": lambda response, prev: AnswerParser.parse_improvement_instructions(response),
                 "validator": lambda output: output is None or (isinstance(output, dict) and output.get("needs_improvement")),
                 "required": False,  # 선택 단계 (문제가 없으면 건너뛰기)
-                "skip_if": lambda prev: prev is None or (isinstance(prev, dict) and prev.get("is_valid", True) and prev.get("quality_score", 1.0) >= 0.75)
+                "skip_if": lambda prev: prev is None or (isinstance(prev, dict) and prev.get("is_valid", True) and prev.get("quality_score", 1.0) >= 0.80)  # 0.75 -> 0.80로 상향
             })
 
             # Step 4: 개선된 답변 생성 (Step 3가 있는 경우)
