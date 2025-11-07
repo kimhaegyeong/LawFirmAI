@@ -8,9 +8,11 @@ Services Module
 try:
     from .chat_service import ChatService
 except ImportError as e:
-    # langgraph 모듈이 없는 경우는 정상 (선택적 기능)
-    if "langgraph" not in str(e).lower():
-        print(f"Warning: Could not import ChatService: {e}")
+    # psutil 관련 경고는 무시 (선택적 의존성)
+    if "psutil" not in str(e).lower():
+        # langgraph 모듈이 없는 경우는 정상 (선택적 기능)
+        if "langgraph" not in str(e).lower():
+            print(f"Warning: Could not import ChatService: {e}")
     ChatService = None
 
 # RAGService removed - use HybridSearchEngine or other search services instead
@@ -18,7 +20,9 @@ except ImportError as e:
 try:
     from .search_service import SearchService
 except ImportError as e:
-    print(f"Warning: Could not import SearchService: {e}")
+    # psutil 관련 경고는 무시 (선택적 의존성)
+    if "psutil" not in str(e).lower():
+        print(f"Warning: Could not import SearchService: {e}")
     SearchService = None
 
 # AnalysisService removed - not implemented yet
@@ -52,7 +56,9 @@ except ImportError as e:
 try:
     from .hybrid_search_engine import HybridSearchEngine
 except ImportError as e:
-    print(f"Warning: Could not import HybridSearchEngine: {e}")
+    # psutil 관련 경고는 무시 (선택적 의존성)
+    if "psutil" not in str(e).lower():
+        print(f"Warning: Could not import HybridSearchEngine: {e}")
     HybridSearchEngine = None
 
 __all__ = [

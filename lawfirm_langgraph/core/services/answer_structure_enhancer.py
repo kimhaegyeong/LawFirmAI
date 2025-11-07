@@ -23,6 +23,81 @@ except ImportError:
 from .legal_basis_validator import LegalBasisValidator
 from .legal_citation_enhancer import LegalCitationEnhancer
 
+# 안전한 로깅 유틸리티 import (멀티스레딩 안전)
+# 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
+def _safe_log_fallback_debug(logger, message):
+    """폴백 디버그 로깅 함수"""
+    try:
+        logger.debug(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_info(logger, message):
+    """폴백 정보 로깅 함수"""
+    try:
+        logger.info(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_warning(logger, message):
+    """폴백 경고 로깅 함수"""
+    try:
+        logger.warning(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_error(logger, message, exc_info=False):
+    """폴백 오류 로깅 함수"""
+    try:
+        logger.error(message, exc_info=exc_info)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+# 여러 경로 시도하여 safe_log_* 함수 import
+SAFE_LOGGING_AVAILABLE = False
+try:
+    from core.utils.safe_logging_utils import (
+        safe_log_debug,
+        safe_log_info,
+        safe_log_warning,
+        safe_log_error
+    )
+    SAFE_LOGGING_AVAILABLE = True
+except ImportError:
+    try:
+        # lawfirm_langgraph 경로에서 시도
+        from lawfirm_langgraph.core.utils.safe_logging_utils import (
+            safe_log_debug,
+            safe_log_info,
+            safe_log_warning,
+            safe_log_error
+        )
+        SAFE_LOGGING_AVAILABLE = True
+    except ImportError:
+        # Import 실패 시 폴백 함수 사용
+        safe_log_debug = _safe_log_fallback_debug
+        safe_log_info = _safe_log_fallback_info
+        safe_log_warning = _safe_log_fallback_warning
+        safe_log_error = _safe_log_fallback_error
+
+# 최종 확인: safe_log_debug가 정의되지 않았다면 폴백 함수 사용
+try:
+    _ = safe_log_debug
+except NameError:
+    safe_log_debug = _safe_log_fallback_debug
+try:
+    _ = safe_log_info
+except NameError:
+    safe_log_info = _safe_log_fallback_info
+try:
+    _ = safe_log_warning
+except NameError:
+    safe_log_warning = _safe_log_fallback_warning
+try:
+    _ = safe_log_error
+except NameError:
+    safe_log_error = _safe_log_fallback_error
+
 # 로거 설정
 logger = logging.getLogger(__name__)
 
@@ -353,7 +428,7 @@ class AnswerStructureEnhancer:
             return QuestionType.GENERAL_QUESTION
 
         except Exception as e:
-            logger.error(f"Error in classify_question_type: {e}", exc_info=True)
+            safe_log_error(logger, f"Error in classify_question_type: {e}")
             return QuestionType.GENERAL_QUESTION
 
     def _load_structure_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
@@ -491,7 +566,7 @@ class AnswerStructureEnhancer:
             return templates
 
         except Exception as e:
-            logger.error(f"Failed to load templates: {e}", exc_info=True)
+            safe_log_error(logger, f"Failed to load templates: {e}")
             return self._get_fallback_templates()
 
     def _get_fallback_templates(self) -> Dict[QuestionType, Dict[str, Any]]:
@@ -559,15 +634,15 @@ class AnswerStructureEnhancer:
                     examples = json.load(f)
                     # 캐시에 저장
                     self._few_shot_examples_cache = examples
-                    logger.debug(f"Few-shot examples loaded and cached: {len(examples)} question types")
+                    safe_log_debug(logger, f"Few-shot examples loaded and cached: {len(examples)} question types")
                     return examples
             else:
                 # 파일이 없으면 빈 딕셔너리 반환
-                logger.warning(f"Few-shot examples file not found: {examples_file}")
+                safe_log_warning(logger, f"Few-shot examples file not found: {examples_file}")
                 return {}
         except Exception as e:
             # 에러 발생 시 빈 딕셔너리 반환
-            logger.warning(f"Failed to load few-shot examples: {e}", exc_info=True)
+            safe_log_warning(logger, f"Failed to load few-shot examples: {e}")
             return {}
 
     def _get_few_shot_examples(self, question_type: QuestionType, question: str = "") -> List[Dict[str, Any]]:
@@ -612,7 +687,7 @@ class AnswerStructureEnhancer:
         # 검증 실패한 예시가 있으면 경고
         if len(valid_examples) < len(examples):
             invalid_count = len(examples) - len(valid_examples)
-            logger.warning(f"{question_type_str}: {invalid_count}개 예시가 검증 실패했습니다.")
+            safe_log_warning(logger, f"{question_type_str}: {invalid_count}개 예시가 검증 실패했습니다.")
 
         # 질문이 제공되고 예시가 여러 개인 경우 유사도 기반 정렬 시도
         if question and len(valid_examples) > 1:
@@ -620,7 +695,7 @@ class AnswerStructureEnhancer:
                 if hasattr(self, '_sort_examples_by_similarity'):
                     valid_examples = self._sort_examples_by_similarity(valid_examples, question)
             except Exception as e:
-                logger.debug(f"Failed to sort examples by similarity: {e}")
+                safe_log_debug(logger, f"Failed to sort examples by similarity: {e}")
 
         # 설정된 최대 개수까지만 반환 (프롬프트 길이 제한)
         max_examples = getattr(self, 'max_few_shot_examples', 2)
@@ -685,7 +760,7 @@ class AnswerStructureEnhancer:
                         retrieved_docs, legal_references, legal_citations
                     )
                 except Exception as e:
-                    logger.warning(f"LLM 기반 구조화 실패, 템플릿 방식으로 폴백: {e}", exc_info=True)
+                    safe_log_warning(logger, f"LLM 기반 구조화 실패, 템플릿 방식으로 폴백: {e}")
                     # 폴백: 템플릿 기반 구조화
 
             # 템플릿 기반 구조화 (폴백)
@@ -695,7 +770,7 @@ class AnswerStructureEnhancer:
             )
 
         except Exception as e:
-            logger.error(f"답변 구조화 향상 실패: {e}", exc_info=True)
+            safe_log_error(logger, f"답변 구조화 향상 실패: {e}")
             return {"error": str(e)}
 
     def _map_question_type(self, question_type: any, question: str) -> QuestionType:
@@ -797,13 +872,13 @@ class AnswerStructureEnhancer:
                         num_predict=4000,
                         timeout=30
                     )
-                    logger.info(f"LLM initialized: Ollama ({config.ollama_model})")
+                    safe_log_info(logger, f"LLM initialized: Ollama ({config.ollama_model})")
                     return llm
                 except Exception as e:
-                    logger.error(f"Failed to initialize Ollama: {e}", exc_info=True)
+                    safe_log_error(logger, f"Failed to initialize Ollama: {e}")
 
         except Exception as e:
-            logger.error(f"LLM initialization error: {e}", exc_info=True)
+            safe_log_error(logger, f"LLM initialization error: {e}")
 
         return None
 

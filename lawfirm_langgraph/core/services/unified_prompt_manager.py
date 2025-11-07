@@ -49,7 +49,7 @@ class ModelType(Enum):
 class UnifiedPromptManager:
     """통합 프롬프트 관리 시스템"""
 
-    def __init__(self, prompts_dir: str = "streamlit/prompts"):
+    def __init__(self, prompts_dir: str = "data/prompts"):
         """통합 프롬프트 매니저 초기화"""
         self.prompts_dir = Path(prompts_dir)
         # 성능 최적화: 디렉토리 생성은 실제 사용 시점으로 지연
@@ -223,6 +223,13 @@ class UnifiedPromptManager:
                 "key_laws": ["형사소송법", "수사절차법"],
                 "recent_changes": "2024년 형사소송법 개정사항",
                 "template": self._get_criminal_procedure_template()
+            },
+            # 개선 사항 9: Domain Template 추가 - "기타/일반" 도메인 템플릿 추가
+            LegalDomain.GENERAL: {
+                "focus": "일반 법률 질문, 법률 용어 설명, 기타 법률 상담",
+                "key_laws": ["민법", "형법", "상법", "행정법", "기타 법령"],
+                "recent_changes": "2024년 법령 개정사항 반영",
+                "template": self._get_general_template()
             }
         }
 
@@ -2016,25 +2023,51 @@ class UnifiedPromptManager:
             # 3. result_text에 "문서", "document", "content" 등의 키워드가 거의 없는 경우
             has_doc_content = document_contents and len(document_contents) > 0
             has_doc_keywords = any(keyword in result_text.lower() for keyword in ["문서", "document", "content", "법률", "판례"])
-            text_too_short = len(result_text) < 500
+            # 개선 사항 3: Context Structure 문제 해결 - 문서 내용 검증 기준 개선
+            # text 길이만으로 판단하지 않고, 실제 문서 내용이 포함되었는지 확인
+            text_too_short = len(result_text) < 100  # 300 -> 100으로 추가 완화
+            has_minimum_text = len(result_text) > 0
             
-            if has_doc_content and (text_too_short or not has_doc_keywords):
+            # 문서 내용이 포함되었는지 더 정확하게 확인
+            # result_text에 document_contents의 내용이 실제로 포함되어 있는지 검증
+            doc_content_included = False
+            if has_doc_content and document_contents:
+                # 상위 5개 문서의 핵심 키워드가 result_text에 포함되어 있는지 확인 (3개 -> 5개로 증가)
+                sample_docs = document_contents[:5]
+                for doc in sample_docs:
+                    doc_text = doc.get("content", "")[:200] if isinstance(doc, dict) else str(doc)[:200]
+                    if doc_text:
+                        # 정확한 일치 외에도 부분 일치도 확인 (개선 사항 3)
+                        if doc_text in result_text or any(word in result_text for word in doc_text.split()[:5] if len(word) > 3):
+                            doc_content_included = True
+                            break
+            
+            # 문서 내용이 포함되지 않았거나 텍스트가 너무 짧으면 강제 추가
+            # 개선 사항 5: 검증 기준 추가 완화 및 문서 내용 포함 로직 개선
+            # 문서 내용이 포함되지 않았거나 텍스트가 너무 짧으면 강제 추가
+            # 검증 기준을 더 완화하여 문서 내용이 포함되도록 개선
+            should_force_add = (
+                has_doc_content and 
+                (not doc_content_included or (text_too_short and len(result_text) < 300))  # 200 -> 300으로 완화
+            )
+            
+            if should_force_add:
                 # 문서 내용이 추가되지 않은 경우 강제 추가
-                logger.warning(
+                logger.debug(  # warning -> debug로 변경 (너무 자주 발생하여)
                     f"⚠️ [CONTEXT STRUCTURE] Document contents not properly included in structured context. "
-                    f"Force adding {len(document_contents)} documents. (text_len={len(result_text)}, has_keywords={has_doc_keywords})"
+                    f"Force adding {min(8, len(document_contents))} documents. (text_len={len(result_text)}, has_keywords={has_doc_keywords}, doc_included={doc_content_included})"
                 )
                 doc_section = "\n## 검색된 법률 문서\n"
                 doc_section += "다음은 질문에 대한 답변을 위해 검색된 관련 법률 문서입니다.\n\n"
                 
-                # 상위 5개 문서 추가 (관련도 순)
+                # 상위 8개 문서 추가 (관련도 순) - 5개 -> 8개로 증가
                 sorted_docs = sorted(
                     document_contents,
                     key=lambda x: x.get("score", 0.0) if isinstance(x, dict) else 0.0,
                     reverse=True
                 )
                 
-                for idx, doc in enumerate(sorted_docs[:5], 1):
+                for idx, doc in enumerate(sorted_docs[:8], 1):  # 5개 -> 8개로 증가
                     content = doc.get("content", "")[:2000] if len(doc.get("content", "")) > 2000 else doc.get("content", "")
                     if content and len(content.strip()) > 10:
                         doc_source = doc.get("source", "Unknown")
@@ -2764,6 +2797,24 @@ class UnifiedPromptManager:
 ## 법률 용어 설명 지침
 - 정의 → 법적 근거 → 예시 → 유사개념 비교 순으로 간결하게.
 """
+
+    def _get_general_template(self) -> str:
+        """개선 사항 9: 일반 도메인 템플릿"""
+        return """당신은 법률 전문가입니다. 다음 질문에 대해 정확하고 전문적인 답변을 제공해주세요.
+
+질문: {query}
+
+답변 시 다음 사항을 고려해주세요:
+1. 관련 법령과 판례를 정확히 인용
+2. 실무적 관점에서 실행 가능한 조언 제공
+3. 불확실한 부분은 명확히 표시
+4. 전문가 상담 권유
+5. 검색된 문서를 적극 활용하여 답변 구성
+
+검색된 문서:
+{document_context}
+
+답변을 한국어로 작성해주세요."""
 
     def _get_general_question_template(self) -> str:
         """일반 질문 템플릿"""

@@ -242,7 +242,7 @@ class ConfidenceCalculator:
         return min(quality_score, 1.0)
     
     def _calculate_source_quality_confidence(self, sources: List[Dict[str, Any]]) -> float:
-        """소스 품질 기반 신뢰도 (개선된 버전)"""
+        """소스 품질 기반 신뢰도 (개선된 버전 - relevance_score 반영)"""
         if not sources:
             return 0.3  # 소스가 없어도 기본 신뢰도 제공
         
@@ -251,31 +251,47 @@ class ConfidenceCalculator:
         for source in sources:
             score = 0.0
             
-            # 소스 타입별 가중치
-            source_type = source.get('search_type', 'unknown')
-            type_weights = {
-                'exact_law': 1.0,
-                'exact_precedent': 0.9,
-                'fts_optimized': 0.8,
-                'vector_search': 0.7,
-                'exact_assembly_law': 0.9,
-                'exact_constitutional': 0.8,
-                'unknown': 0.5
-            }
-            score += type_weights.get(source_type, 0.5)
+            # 개선: relevance_score 또는 final_weighted_score를 우선적으로 사용
+            relevance_score = source.get('final_weighted_score') or source.get('relevance_score', 0.0)
+            if relevance_score > 0:
+                # relevance_score를 직접 반영 (0.0-1.0 범위를 0.3-1.0 범위로 매핑)
+                # 낮은 relevance_score도 최소 0.3 신뢰도 보장
+                score = max(0.3, min(1.0, 0.3 + relevance_score * 0.7))
+            else:
+                # relevance_score가 없으면 기존 방식 사용
+                # 소스 타입별 가중치
+                source_type = source.get('search_type', 'unknown')
+                type_weights = {
+                    'exact_law': 1.0,
+                    'exact_precedent': 0.9,
+                    'semantic': 0.8,  # 추가: 의미적 검색
+                    'keyword': 0.75,  # 추가: 키워드 검색
+                    'fts_optimized': 0.8,
+                    'vector_search': 0.7,
+                    'exact_assembly_law': 0.9,
+                    'exact_constitutional': 0.8,
+                    'unknown': 0.5
+                }
+                score += type_weights.get(source_type, 0.5)
+                
+                # 소스 신뢰성 평가
+                if 'case_number' in source or 'law_name' in source or 'case_id' in source:
+                    score += 0.2  # 구체적인 식별자 있음
+                
+                # 소스 완성도 평가
+                if 'full_text' in source and source['full_text']:
+                    score += 0.1  # 전체 텍스트 있음
+                
+                if 'summary' in source and source['summary']:
+                    score += 0.1  # 요약 있음
+                
+                score = min(score, 1.0)
             
-            # 소스 신뢰성 평가
-            if 'case_number' in source or 'law_name' in source or 'case_id' in source:
-                score += 0.2  # 구체적인 식별자 있음
+            # 폴백 전략으로 찾은 문서는 약간 감점 (하지만 relevance_score가 있으면 그대로 사용)
+            if source.get('fallback_strategy') and not relevance_score:
+                score *= 0.9  # 폴백 전략 문서는 10% 감점
             
-            # 소스 완성도 평가
-            if 'full_text' in source and source['full_text']:
-                score += 0.1  # 전체 텍스트 있음
-            
-            if 'summary' in source and source['summary']:
-                score += 0.1  # 요약 있음
-            
-            quality_scores.append(min(score, 1.0))
+            quality_scores.append(score)
         
         return sum(quality_scores) / len(quality_scores)
     
@@ -382,16 +398,27 @@ class ConfidenceCalculator:
         return min(score, 1.0)
     
     def _apply_confidence_boost(self, base_confidence: float, answer: str, sources: List[Dict[str, Any]]) -> float:
-        """신뢰도 보정 메커니즘"""
+        """신뢰도 보정 메커니즘 (개선: 소스 품질 기반 보정 강화)"""
         boosted_confidence = base_confidence
         
         # 법률 전문성 보정
         if self._has_high_legal_expertise(answer):
             boosted_confidence += 0.1
         
-        # 소스 품질 보정
+        # 소스 품질 보정 (개선: relevance_score 기반 보정)
         if self._has_high_quality_sources(sources):
             boosted_confidence += 0.1
+        
+        # 개선: 평균 relevance_score가 높으면 추가 보정
+        if sources:
+            avg_relevance = sum(
+                (s.get('final_weighted_score') or s.get('relevance_score', 0.0))
+                for s in sources
+            ) / len(sources)
+            if avg_relevance >= 0.7:
+                boosted_confidence += 0.05  # 높은 평균 relevance_score 보정
+            elif avg_relevance >= 0.5:
+                boosted_confidence += 0.02  # 중간 평균 relevance_score 보정
         
         # 답변 완성도 보정
         if self._is_complete_answer(answer):
@@ -405,14 +432,23 @@ class ConfidenceCalculator:
         return sum(1 for indicator in legal_indicators if indicator in answer) >= 3
     
     def _has_high_quality_sources(self, sources: List[Dict[str, Any]]) -> bool:
-        """높은 품질의 소스 여부 판단"""
+        """높은 품질의 소스 여부 판단 (개선: relevance_score 기반 평가)"""
         if not sources:
             return False
         
+        # 개선: relevance_score 기반 평가 추가
+        high_relevance_count = sum(
+            1 for s in sources
+            if (s.get('final_weighted_score') or s.get('relevance_score', 0.0)) >= 0.6
+        )
+        if high_relevance_count >= len(sources) * 0.5:
+            return True
+        
+        # 소스 타입별 평가 (기존 방식)
         high_quality_count = 0
         for source in sources:
             source_type = source.get('search_type', 'unknown')
-            if source_type in ['exact_law', 'exact_precedent', 'exact_assembly_law']:
+            if source_type in ['exact_law', 'exact_precedent', 'exact_assembly_law', 'semantic']:
                 high_quality_count += 1
         
         return high_quality_count >= len(sources) * 0.5

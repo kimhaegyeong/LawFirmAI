@@ -37,8 +37,53 @@ except ImportError:
         """Fallback embedder using sentence-transformers"""
         def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
             self.model_name = model_name
-            self.model = SentenceTransformer(model_name)
-            self.dim = self.model.get_sentence_embedding_dimension()
+            try:
+                # sentence-transformers를 사용하여 모델 로딩
+                # meta tensor 문제 방지를 위해 CPU에 먼저 로드
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                
+                # CPU에 먼저 로드한 후 디바이스로 이동
+                # device_map을 사용하지 않고 단계별 로딩
+                try:
+                    # 먼저 CPU에 로드 시도
+                    self.model = SentenceTransformer(model_name, device="cpu")
+                    # CPU에서 디바이스로 이동
+                    if device != "cpu":
+                        self.model = self.model.to(device)
+                    self.dim = self.model.get_sentence_embedding_dimension()
+                except Exception as cpu_error:
+                    # CPU 로딩 실패 시 직접 디바이스 로딩 시도
+                    self.model = SentenceTransformer(model_name, device=device)
+                    self.dim = self.model.get_sentence_embedding_dimension()
+                    
+            except Exception as e:
+                # 모델 로딩 실패 시 에러 로깅 및 재시도
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to load SentenceTransformer model {model_name}: {e}")
+                
+                # 대체 모델 시도 (CPU 먼저 로드)
+                try:
+                    fallback_model = "jhgan/ko-sroberta-multitask"
+                    logger.warning(f"Trying fallback model: {fallback_model}")
+                    import torch
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    
+                    try:
+                        # CPU에 먼저 로드
+                        self.model = SentenceTransformer(fallback_model, device="cpu")
+                        if device != "cpu":
+                            self.model = self.model.to(device)
+                    except Exception:
+                        # CPU 로딩 실패 시 직접 디바이스 로딩
+                        self.model = SentenceTransformer(fallback_model, device=device)
+                    
+                    self.dim = self.model.get_sentence_embedding_dimension()
+                    self.model_name = fallback_model
+                except Exception as e2:
+                    logger.error(f"Failed to load fallback model: {e2}")
+                    raise
 
         def encode(self, texts, batch_size=16, normalize=True):
             import numpy as np
@@ -91,14 +136,9 @@ class SemanticSearchEngineV2:
         self._cache_max_size = 128  # 최대 캐시 크기
 
         # 임베딩 모델 로드
-        try:
-            self.embedder = SentenceEmbedder(model_name)
-            self.dim = self.embedder.dim
-            self.logger.info(f"Embedding model loaded: {model_name}, dim={self.dim}")
-        except Exception as e:
-            self.logger.error(f"Failed to load embedding model: {e}")
-            self.embedder = None
-            self.dim = None
+        self.embedder = None
+        self.dim = None
+        self._initialize_embedder(model_name)
 
         if not Path(db_path).exists():
             self.logger.warning(f"Database {db_path} not found")
@@ -109,6 +149,63 @@ class SemanticSearchEngineV2:
                 self._load_faiss_index()
             else:
                 self.logger.info("FAISS index not found, will build on first search")
+    
+    def _initialize_embedder(self, model_name: str, retry_count: int = 0, max_retries: int = 2) -> bool:
+        """
+        Embedder 초기화 (재시도 로직 포함)
+        
+        Args:
+            model_name: 임베딩 모델명
+            retry_count: 현재 재시도 횟수
+            max_retries: 최대 재시도 횟수
+        
+        Returns:
+            초기화 성공 여부
+        """
+        try:
+            self.embedder = SentenceEmbedder(model_name)
+            self.dim = self.embedder.dim
+            self.logger.info(f"Embedding model loaded: {model_name}, dim={self.dim}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to load embedding model (attempt {retry_count + 1}/{max_retries + 1}): {e}")
+            
+            # 재시도 로직
+            if retry_count < max_retries:
+                self.logger.info(f"Retrying embedder initialization...")
+                import time
+                time.sleep(0.5)  # 짧은 대기 후 재시도
+                return self._initialize_embedder(model_name, retry_count + 1, max_retries)
+            else:
+                self.logger.error(f"Failed to initialize embedder after {max_retries + 1} attempts")
+                self.embedder = None
+                self.dim = None
+                return False
+    
+    def _ensure_embedder_initialized(self) -> bool:
+        """
+        Embedder 초기화 상태 확인 및 필요시 재초기화
+        
+        Returns:
+            초기화 성공 여부
+        """
+        if self.embedder is not None:
+            # embedder가 있으면 정상
+            try:
+                # embedder가 실제로 작동하는지 확인
+                if hasattr(self.embedder, 'model') and self.embedder.model is not None:
+                    return True
+            except Exception:
+                # 확인 실패 시 재초기화 필요
+                pass
+        
+        # embedder가 None이거나 작동하지 않으면 재초기화 시도
+        if self.model_name:
+            self.logger.warning("Embedder not initialized or invalid, attempting re-initialization...")
+            return self._initialize_embedder(self.model_name)
+        else:
+            self.logger.error("Cannot re-initialize embedder: model_name is not set")
+            return False
 
     def _detect_model_from_database(self) -> Optional[str]:
         """
@@ -332,11 +429,54 @@ class SemanticSearchEngineV2:
 
         return float(dot_product / (norm1 * norm2))
 
+    def _calculate_hybrid_score(self,
+                               similarity: float,
+                               ml_confidence: float = 0.5,
+                               quality_score: float = 0.5,
+                               weights: Optional[Dict[str, float]] = None) -> float:
+        """
+        하이브리드 점수 계산 (유사도 + ML 신뢰도 + 품질 점수)
+        
+        Args:
+            similarity: 유사도 점수 (0-1)
+            ml_confidence: ML 신뢰도 점수 (0-1)
+            quality_score: 품질 점수 (0-1)
+            weights: 가중치 딕셔너리 (None이면 기본값 사용)
+        
+        Returns:
+            하이브리드 점수 (0-1)
+        """
+        if weights is None:
+            # 기본 가중치: 유사도 60%, ML 신뢰도 25%, 품질 점수 15%
+            weights = {
+                "similarity": 0.6,
+                "ml_confidence": 0.25,
+                "quality": 0.15
+            }
+        
+        # 가중치 합이 1이 되도록 정규화
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            weights = {k: v / total_weight for k, v in weights.items()}
+        
+        hybrid_score = (
+            weights.get("similarity", 0.6) * similarity +
+            weights.get("ml_confidence", 0.25) * ml_confidence +
+            weights.get("quality", 0.15) * quality_score
+        )
+        
+        return float(max(0.0, min(1.0, hybrid_score)))  # 0-1 범위로 제한
+
     def search(self,
                query: str,
                k: int = 10,
                source_types: Optional[List[str]] = None,
-               similarity_threshold: float = 0.5) -> List[Dict[str, Any]]:
+               similarity_threshold: float = 0.5,
+               min_results: int = 5,
+               disable_retry: bool = False,
+               min_ml_confidence: Optional[float] = None,
+               min_quality_score: Optional[float] = None,
+               filter_by_confidence: bool = False) -> List[Dict[str, Any]]:
         """
         의미적 벡터 검색 수행
 
@@ -345,21 +485,131 @@ class SemanticSearchEngineV2:
             k: 반환할 최대 결과 수
             source_types: 필터링할 소스 타입 목록
             similarity_threshold: 최소 유사도 임계값
+            min_results: 최소 결과 수 (이보다 적으면 임계값을 낮춰 재시도)
+            disable_retry: 재시도 로직 비활성화 (높은 신뢰도만 원할 때 True)
+            min_ml_confidence: 최소 ML 신뢰도 점수 (None이면 필터링 안 함)
+            min_quality_score: 최소 품질 점수 (None이면 필터링 안 함)
+            filter_by_confidence: 신뢰도 기반 필터링 활성화
 
         Returns:
             검색 결과 리스트 [{text, score, metadata, ...}]
         """
-        if not self.embedder:
-            self.logger.error("Embedder not initialized")
-            return []
+        # Embedder 초기화 상태 확인 및 필요시 재초기화
+        if not self._ensure_embedder_initialized():
+            self.logger.error("Embedder not initialized and re-initialization failed")
+            # 폴백: 유사도 임계값을 매우 낮춰서 재시도 (최후의 수단)
+            self.logger.warning("Attempting search with fallback strategy...")
+            # 재초기화 실패 시에도 최소한의 결과라도 반환 시도
+            try:
+                # 임시로 embedder를 다시 초기화 시도
+                if self.model_name:
+                    if self._initialize_embedder(self.model_name):
+                        self.logger.info("Embedder re-initialized successfully")
+                    else:
+                        self.logger.error("All embedder initialization attempts failed")
+                        return []
+                else:
+                    self.logger.error("Cannot initialize embedder: model_name is not set")
+                    return []
+            except Exception as e:
+                self.logger.error(f"Final embedder initialization attempt failed: {e}")
+                return []
 
+        # 재시도 로직 비활성화 옵션
+        if disable_retry:
+            # 높은 신뢰도만 원할 때는 첫 번째 임계값만 사용
+            results = self._search_with_threshold(
+                query, k, source_types, similarity_threshold,
+                min_ml_confidence=min_ml_confidence,
+                min_quality_score=min_quality_score,
+                filter_by_confidence=filter_by_confidence
+            )
+            return results
+
+        # 재시도 로직: 결과가 부족하면 임계값을 낮춰 재시도
+        # 개선: 결과가 없을 때 더 공격적으로 임계값을 낮춤
+        thresholds_to_try = [
+            similarity_threshold,
+            max(0.3, similarity_threshold - 0.1),
+            max(0.2, similarity_threshold - 0.2),
+            0.15,
+            0.1,
+            0.05  # 최후의 수단: 매우 낮은 임계값
+        ]
+        
+        for attempt, current_threshold in enumerate(thresholds_to_try):
+            try:
+                results = self._search_with_threshold(
+                    query, k, source_types, current_threshold,
+                    min_ml_confidence=min_ml_confidence,
+                    min_quality_score=min_quality_score,
+                    filter_by_confidence=filter_by_confidence
+                )
+                
+                # 최소 결과 수를 만족하면 반환
+                if len(results) >= min_results or attempt == len(thresholds_to_try) - 1:
+                    if attempt > 0:
+                        self.logger.info(
+                            f"Semantic search: Found {len(results)} results "
+                            f"(threshold lowered from {similarity_threshold:.2f} to {current_threshold:.2f})"
+                        )
+                    return results
+                    
+            except Exception as e:
+                self.logger.warning(f"Semantic search attempt {attempt + 1} failed: {e}")
+                if attempt == len(thresholds_to_try) - 1:
+                    # 마지막 시도 실패 시에도 빈 결과 반환
+                    self.logger.error("All semantic search attempts failed")
+                    return []
+                continue
+        
+        return []
+
+    def _search_with_threshold(self,
+                               query: str,
+                               k: int,
+                               source_types: Optional[List[str]],
+                               similarity_threshold: float,
+                               min_ml_confidence: Optional[float] = None,
+                               min_quality_score: Optional[float] = None,
+                               filter_by_confidence: bool = False) -> List[Dict[str, Any]]:
+        """
+        임계값을 사용한 실제 검색 수행
+        
+        Args:
+            query: 검색 쿼리
+            k: 반환할 최대 결과 수
+            source_types: 필터링할 소스 타입 목록
+            similarity_threshold: 최소 유사도 임계값
+            min_ml_confidence: 최소 ML 신뢰도 점수
+            min_quality_score: 최소 품질 점수
+            filter_by_confidence: 신뢰도 기반 필터링 활성화
+        """
         try:
             # 1. 쿼리 임베딩 생성 (캐시 사용)
             query_vec = self._get_cached_query_vector(query)
             if query_vec is None:
+                # Embedder 초기화 상태 재확인
+                if not self._ensure_embedder_initialized():
+                    self.logger.error("Cannot generate query embedding: embedder not initialized")
+                    return []
+                
                 # 캐시에 없으면 생성
-                query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
-                self._cache_query_vector(query, query_vec)
+                try:
+                    query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
+                    self._cache_query_vector(query, query_vec)
+                except Exception as e:
+                    self.logger.error(f"Failed to encode query: {e}")
+                    # 재초기화 후 재시도
+                    if self.model_name and self._initialize_embedder(self.model_name):
+                        try:
+                            query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
+                            self._cache_query_vector(query, query_vec)
+                        except Exception as e2:
+                            self.logger.error(f"Failed to encode query after re-initialization: {e2}")
+                            return []
+                    else:
+                        return []
 
             # 2. FAISS 인덱스 사용 또는 전체 벡터 로드
             if FAISS_AVAILABLE and self.index is not None:
@@ -496,7 +746,35 @@ class SemanticSearchEngineV2:
                         text = restored_text
                         self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
                 
-                results.append({
+                # text가 비어있으면 건너뛰기
+                if not text or len(text.strip()) == 0:
+                    continue
+                
+                # ML 신뢰도 및 품질 점수 추출
+                ml_confidence = source_meta.get("ml_confidence_score") or source_meta.get("ml_confidence", 0.5)
+                quality_score = source_meta.get("parsing_quality_score") or source_meta.get("quality_score", 0.5)
+                
+                # 필터링: ML 신뢰도 및 품질 점수 체크
+                if min_ml_confidence is not None and ml_confidence < min_ml_confidence:
+                    self.logger.debug(
+                        f"Filtered chunk {chunk_id}: ml_confidence {ml_confidence:.2f} < {min_ml_confidence:.2f}"
+                    )
+                    continue
+                
+                if min_quality_score is not None and quality_score < min_quality_score:
+                    self.logger.debug(
+                        f"Filtered chunk {chunk_id}: quality_score {quality_score:.2f} < {min_quality_score:.2f}"
+                    )
+                    continue
+                
+                # 하이브리드 점수 계산 (유사도 + 품질 + 신뢰도)
+                hybrid_score = self._calculate_hybrid_score(
+                    similarity=float(score),
+                    ml_confidence=ml_confidence,
+                    quality_score=quality_score
+                )
+                
+                result = {
                     "id": f"chunk_{chunk_id}",
                     "text": text,
                     "content": text,  # content 필드 보장
@@ -510,11 +788,29 @@ class SemanticSearchEngineV2:
                         "source_id": source_id,
                         "text": text,  # metadata에도 text 포함
                         "content": text,  # metadata에도 content 저장
+                        "ml_confidence_score": ml_confidence,
+                        "quality_score": quality_score,
                         **source_meta
                     },
                     "relevance_score": float(score),
+                    "hybrid_score": hybrid_score,
+                    "ml_confidence": ml_confidence,
+                    "quality_score": quality_score,
                     "search_type": "semantic"
-                })
+                }
+                
+                # 신뢰도 기반 필터링
+                if filter_by_confidence:
+                    # relevance_score와 hybrid_score를 모두 고려
+                    confidence_threshold = 0.6
+                    if result["relevance_score"] < confidence_threshold and result["hybrid_score"] < confidence_threshold:
+                        self.logger.debug(
+                            f"Filtered chunk {chunk_id} by confidence: "
+                            f"relevance={result['relevance_score']:.2f}, hybrid={result['hybrid_score']:.2f}"
+                        )
+                        continue
+                
+                results.append(result)
 
             conn.close()
             self.logger.info(f"Semantic search found {len(results)} results for query: {query[:50]}")
@@ -855,3 +1151,232 @@ class SemanticSearchEngineV2:
         elif source_type == "interpretation_paragraph":
             return f"{metadata.get('org', '')} {metadata.get('title', '')}"
         return "Unknown"
+
+    def get_high_confidence_documents(self,
+                                      query: str,
+                                      min_similarity: float = 0.7,
+                                      min_ml_confidence: float = 0.8,
+                                      min_quality_score: float = 0.8,
+                                      max_results: int = 5,
+                                      source_types: Optional[List[str]] = None,
+                                      sort_by: str = "hybrid_score") -> List[Dict[str, Any]]:
+        """
+        신뢰도 높은 문서만 조회
+        
+        Args:
+            query: 검색 쿼리
+            min_similarity: 최소 유사도 임계값
+            min_ml_confidence: 최소 ML 신뢰도
+            min_quality_score: 최소 품질 점수
+            max_results: 최대 결과 수
+            source_types: 필터링할 소스 타입 목록
+            sort_by: 정렬 기준 ("hybrid_score", "relevance_score", "similarity")
+        
+        Returns:
+            필터링된 문서 리스트
+        """
+        self.logger.info(
+            f"High confidence search: query='{query[:50]}...', "
+            f"min_similarity={min_similarity:.2f}, "
+            f"min_ml_confidence={min_ml_confidence:.2f}, "
+            f"min_quality_score={min_quality_score:.2f}"
+        )
+        
+        # 1. 높은 임계값으로 검색 (재시도 비활성화)
+        results = self.search(
+            query=query,
+            k=max_results * 3,  # 여유 있게 검색 후 필터링
+            source_types=source_types,
+            similarity_threshold=min_similarity,
+            min_results=1,  # 재시도 최소화
+            disable_retry=True,  # 재시도 비활성화
+            min_ml_confidence=min_ml_confidence,
+            min_quality_score=min_quality_score,
+            filter_by_confidence=True  # 신뢰도 기반 필터링 활성화
+        )
+        
+        # 2. 추가 필터링: relevance_score와 hybrid_score 모두 체크
+        filtered = []
+        for r in results:
+            relevance = r.get("relevance_score", 0.0)
+            hybrid = r.get("hybrid_score", 0.0)
+            similarity = r.get("similarity", 0.0)
+            ml_conf = r.get("ml_confidence", 0.0)
+            quality = r.get("quality_score", 0.0)
+            
+            # 모든 조건 만족 체크
+            if (relevance >= min_similarity and
+                hybrid >= min_similarity * 0.8 and  # hybrid는 약간 낮은 임계값
+                similarity >= min_similarity and
+                ml_conf >= min_ml_confidence and
+                quality >= min_quality_score):
+                filtered.append(r)
+        
+        # 3. 정렬 기준에 따라 정렬
+        if sort_by == "hybrid_score":
+            filtered.sort(key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
+        elif sort_by == "relevance_score":
+            filtered.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        elif sort_by == "similarity":
+            filtered.sort(key=lambda x: x.get("similarity", 0.0), reverse=True)
+        else:
+            # 기본: hybrid_score 우선, 동일하면 relevance_score
+            filtered.sort(
+                key=lambda x: (x.get("hybrid_score", 0.0), x.get("relevance_score", 0.0)),
+                reverse=True
+            )
+        
+        # 4. 상위 N개 반환
+        final_results = filtered[:max_results]
+        
+        self.logger.info(
+            f"High confidence search: {len(final_results)}/{len(results)} results "
+            f"(filtered from {len(results)} total)"
+        )
+        
+        return final_results
+
+    def search_with_query_expansion(self,
+                                    query: str,
+                                    k: int = 10,
+                                    source_types: Optional[List[str]] = None,
+                                    similarity_threshold: float = 0.5,
+                                    expanded_keywords: Optional[List[str]] = None,
+                                    use_query_variations: bool = True) -> List[Dict[str, Any]]:
+        """
+        쿼리 확장 및 변형을 통한 향상된 검색
+        
+        Args:
+            query: 원본 검색 쿼리
+            k: 반환할 최대 결과 수
+            source_types: 필터링할 소스 타입 목록
+            similarity_threshold: 최소 유사도 임계값
+            expanded_keywords: 확장된 키워드 목록 (QueryEnhancer에서 제공)
+            use_query_variations: 쿼리 변형 사용 여부
+        
+        Returns:
+            통합된 검색 결과 리스트
+        """
+        # Embedder 초기화 상태 확인 및 필요시 재초기화
+        if not self._ensure_embedder_initialized():
+            self.logger.error("Embedder not initialized and re-initialization failed")
+            # 폴백: 기존 search 메서드 사용 (재시도 로직 포함)
+            self.logger.warning("Falling back to standard search method...")
+            return self.search(
+                query=query,
+                k=k,
+                source_types=source_types,
+                similarity_threshold=similarity_threshold
+            )
+        
+        if not use_query_variations or not expanded_keywords:
+            # 기존 방식 사용 (하위 호환성)
+            return self.search(
+                query=query,
+                k=k,
+                source_types=source_types,
+                similarity_threshold=similarity_threshold
+            )
+        
+        # 1. 쿼리 변형 생성
+        query_variations = self._generate_simple_query_variations(query, expanded_keywords)
+        
+        # 2. 각 변형으로 검색
+        all_results = []
+        seen_chunk_ids = set()
+        
+        for variation in query_variations:
+            var_query = variation["query"]
+            var_weight = variation.get("weight", 1.0)
+            
+            results = self.search(
+                query=var_query,
+                k=k * 2,  # 여유 있게 검색
+                source_types=source_types,
+                similarity_threshold=similarity_threshold,
+                disable_retry=True  # 빠른 검색
+            )
+            
+            # 중복 제거 및 가중치 적용
+            for result in results:
+                chunk_id = result.get("metadata", {}).get("chunk_id")
+                if chunk_id and chunk_id not in seen_chunk_ids:
+                    result["relevance_score"] *= var_weight
+                    result["query_variation"] = variation.get("type", "unknown")
+                    result["query_weight"] = var_weight
+                    all_results.append(result)
+                    seen_chunk_ids.add(chunk_id)
+        
+        # 3. relevance_score 기준 정렬
+        all_results.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        
+        # 4. 상위 K개 반환
+        return all_results[:k]
+
+    def _generate_simple_query_variations(self,
+                                         query: str,
+                                         expanded_keywords: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """간단한 쿼리 변형 생성 (기존 코드와의 호환성 유지)"""
+        variations = []
+        
+        # 1. 원본 쿼리 (최고 가중치)
+        variations.append({
+            "query": query,
+            "type": "original",
+            "weight": 1.0,
+            "priority": 1
+        })
+        
+        # 2. 키워드 확장 쿼리
+        if expanded_keywords and len(expanded_keywords) >= 2:
+            # 상위 3개 키워드만 추가
+            top_keywords = expanded_keywords[:3]
+            expanded_query = f"{query} {' '.join(top_keywords)}"
+            variations.append({
+                "query": expanded_query,
+                "type": "keyword_expanded",
+                "weight": 0.9,
+                "priority": 2
+            })
+            
+            # 키워드만으로 검색 (원본 쿼리가 너무 길 때)
+            if len(query) > 50:
+                keyword_only_query = " ".join(top_keywords)
+                variations.append({
+                    "query": keyword_only_query,
+                    "type": "keyword_only",
+                    "weight": 0.8,
+                    "priority": 3
+                })
+        
+        # 3. 핵심 키워드 추출 쿼리
+        core_keywords = self._extract_core_keywords_simple(query)
+        if core_keywords and len(core_keywords) >= 2:
+            core_query = " ".join(core_keywords)
+            if core_query != query:
+                variations.append({
+                    "query": core_query,
+                    "type": "core_keywords",
+                    "weight": 0.85,
+                    "priority": 2
+                })
+        
+        # 우선순위 및 가중치 기준 정렬
+        variations.sort(key=lambda x: (x["priority"], -x["weight"]))
+        
+        return variations
+
+    def _extract_core_keywords_simple(self, query: str) -> List[str]:
+        """핵심 키워드 추출 (간단한 구현)"""
+        import re
+        
+        # 불용어 제거
+        stopwords = ["이", "가", "을", "를", "의", "에", "에서", "로", "으로", "와", "과", "는", "은", "도", "만", "란", "이란"]
+        
+        # 한글 단어 추출
+        words = re.findall(r'[가-힣]+', query)
+        
+        # 불용어 제거 및 길이 필터링
+        core_keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+        
+        return core_keywords[:5]  # 상위 5개

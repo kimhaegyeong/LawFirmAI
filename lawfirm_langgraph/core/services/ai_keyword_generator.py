@@ -51,20 +51,30 @@ class AIKeywordGenerator:
     async def expand_domain_keywords(self, domain: str, base_keywords: List[str], 
                                    target_count: int = 50) -> KeywordExpansionResult:
         """도메인별 키워드 확장"""
+        # 키워드 검증 및 정제
+        validated_base_keywords = self._validate_keywords(base_keywords)
+        
+        if not validated_base_keywords:
+            self.logger.warning(f"No valid keywords found after validation, using original keywords")
+            validated_base_keywords = base_keywords[:5]  # 최대 5개만 사용
+        
         if not self.gemini_client:
             return KeywordExpansionResult(
                 domain=domain,
-                base_keywords=base_keywords,
-                expanded_keywords=base_keywords,
+                base_keywords=validated_base_keywords,
+                expanded_keywords=validated_base_keywords,
                 confidence=0.0,
                 expansion_method="fallback",
                 api_call_success=False
             )
         
         try:
-            prompt = self._create_expansion_prompt(domain, base_keywords, target_count)
+            prompt = self._create_expansion_prompt(domain, validated_base_keywords, target_count)
             response = await self._call_gemini_api(prompt)
             expanded_keywords = self._parse_gemini_response(response)
+            
+            # 확장된 키워드도 검증
+            validated_expanded_keywords = self._validate_keywords(expanded_keywords)
             
             return KeywordExpansionResult(
                 domain=domain,
@@ -79,19 +89,60 @@ class AIKeywordGenerator:
             self.logger.error(f"키워드 확장 실패 ({domain}): {e}")
             return KeywordExpansionResult(
                 domain=domain,
-                base_keywords=base_keywords,
-                expanded_keywords=base_keywords,
+                base_keywords=validated_base_keywords,
+                expanded_keywords=validated_base_keywords,
                 confidence=0.0,
                 expansion_method="error",
                 api_call_success=False
             )
     
+    def _validate_keywords(self, keywords: List[str]) -> List[str]:
+        """키워드 검증 및 정제 (깨진 문자, 잘못된 키워드 제거)"""
+        valid_keywords = []
+        
+        for keyword in keywords:
+            if not keyword or not isinstance(keyword, str):
+                continue
+                
+            keyword = keyword.strip()
+            
+            # 최소 길이 검증
+            if len(keyword) < 2:
+                continue
+            
+            # 깨진 문자 패턴 감지 (한글 범위 밖의 문자가 많으면 제거)
+            garbled_chars = sum(1 for c in keyword if ord(c) > 0xFF and (ord(c) < 0xAC00 or ord(c) > 0xD7A3))
+            garbled_ratio = garbled_chars / max(len(keyword), 1)
+            
+            if garbled_ratio > 0.3:  # 30% 이상 깨진 문자면 제거
+                self.logger.warning(f"Skipping garbled keyword: {keyword[:50]}...")
+                continue
+            
+            # '?' 문자가 많으면 제거 (깨진 문자 표시)
+            if keyword.count('?') > len(keyword) * 0.2:
+                self.logger.warning(f"Skipping keyword with too many '?' characters: {keyword[:50]}...")
+                continue
+            
+            valid_keywords.append(keyword)
+        
+        return valid_keywords
+    
     def _create_expansion_prompt(self, domain: str, base_keywords: List[str], target_count: int) -> str:
         """키워드 확장을 위한 프롬프트 생성"""
+        # 키워드 검증
+        validated_keywords = self._validate_keywords(base_keywords)
+        
+        if not validated_keywords:
+            # 검증된 키워드가 없으면 원본 키워드 사용 (하지만 경고)
+            self.logger.warning(f"All keywords failed validation, using original keywords")
+            validated_keywords = base_keywords[:5]  # 최대 5개만 사용
+        
         return f"""
 당신은 한국 법률 분야의 전문가입니다. 주어진 {domain} 분야의 기본 키워드들을 바탕으로 관련 키워드를 확장해주세요.
 
-**기본 키워드**: {', '.join(base_keywords[:10])}
+**기본 키워드**: {', '.join(validated_keywords[:10])}
+
+**중요**: 기본 키워드가 질문과 직접적으로 관련이 있어야 합니다. 관련 없는 키워드는 확장하지 마세요.
 
 다음 조건을 만족하는 키워드를 생성해주세요:
 

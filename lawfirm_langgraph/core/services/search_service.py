@@ -30,6 +30,7 @@ class MLEnhancedSearchService:
         # ML 강화 검색 설정
         self.use_ml_enhanced_search = True
         self.quality_threshold = 0.7
+        self.confidence_threshold = 0.6  # 신뢰도 60% 미만 필터링
         self.supplementary_weight = 0.8
         self.hybrid_weights = {
             'semantic': 0.6,
@@ -115,6 +116,9 @@ class MLEnhancedSearchService:
             ml_filters = []
             if self.use_ml_enhanced_search:
                 ml_filters.append("ml_enhanced = 1")
+            
+            # 신뢰도 필터링 추가 (60% 미만 제외)
+            ml_filters.append(f"ml_confidence_score >= {self.confidence_threshold}")
             
             # 추가 필터 적용
             if filters:
@@ -264,6 +268,7 @@ class MLEnhancedSearchService:
         """ML 강화 문서 필터링 및 스코어링"""
         try:
             filtered_docs = []
+            filtered_count = 0
             
             for doc in documents:
                 metadata = doc.get("metadata", {})
@@ -271,6 +276,14 @@ class MLEnhancedSearchService:
                 # 품질 필터링
                 quality_score = metadata.get("parsing_quality_score", 0.0)
                 if quality_score < self.quality_threshold:
+                    filtered_count += 1
+                    continue
+                
+                # 신뢰도 필터링 (60% 미만 제외)
+                ml_confidence = metadata.get("ml_confidence_score")
+                if ml_confidence is not None and ml_confidence < self.confidence_threshold:
+                    filtered_count += 1
+                    self.logger.debug(f"Filtered document with confidence {ml_confidence:.2f} < {self.confidence_threshold}")
                     continue
                 
                 # 부칙 가중치 적용
@@ -279,11 +292,13 @@ class MLEnhancedSearchService:
                     doc["score"] *= self.supplementary_weight
                 
                 # ML 신뢰도 점수 고려
-                ml_confidence = metadata.get("ml_confidence_score")
                 if ml_confidence is not None:
                     doc["score"] *= (0.5 + 0.5 * ml_confidence)
                 
                 filtered_docs.append(doc)
+            
+            if filtered_count > 0:
+                self.logger.info(f"Filtered out {filtered_count} documents with low confidence or quality")
             
             # 스코어 기준으로 정렬
             filtered_docs.sort(key=lambda x: x.get("score", 0.0), reverse=True)
@@ -430,6 +445,7 @@ class MLEnhancedSearchService:
             return {
                 "ml_enhanced": True,
                 "quality_threshold": self.quality_threshold,
+                "confidence_threshold": self.confidence_threshold,
                 "supplementary_weight": self.supplementary_weight,
                 "hybrid_weights": self.hybrid_weights,
                 "use_ml_enhanced_search": self.use_ml_enhanced_search
