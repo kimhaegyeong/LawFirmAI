@@ -302,6 +302,18 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
     Returns:
         초기화된 LegalWorkflowState
     """
+    # 쿼리 인코딩 정규화 (UTF-8 보장)
+    if query:
+        try:
+            # UTF-8로 인코딩 후 다시 디코딩하여 정규화
+            if isinstance(query, str):
+                query = query.encode('utf-8', errors='replace').decode('utf-8')
+            elif isinstance(query, bytes):
+                query = query.decode('utf-8', errors='replace')
+        except Exception:
+            # 인코딩 오류가 발생하면 원본 사용
+            pass
+    
     return LegalWorkflowState(
         input=create_default_input(query, session_id),
         classification=create_default_classification(),

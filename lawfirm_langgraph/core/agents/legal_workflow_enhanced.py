@@ -5481,6 +5481,14 @@ class EnhancedLegalQuestionWorkflow:
                 query_from_top = state.get("query", "")
                 session_id_from_top = state.get("session_id", "")
                 if query_from_top:
+                    # 쿼리 인코딩 정규화 (UTF-8 보장)
+                    try:
+                        if isinstance(query_from_top, str):
+                            query_from_top = query_from_top.encode('utf-8', errors='replace').decode('utf-8')
+                        elif isinstance(query_from_top, bytes):
+                            query_from_top = query_from_top.decode('utf-8', errors='replace')
+                    except Exception:
+                        pass
                     state["input"]["query"] = query_from_top
                     if session_id_from_top:
                         state["input"]["session_id"] = session_id_from_top
@@ -5488,7 +5496,26 @@ class EnhancedLegalQuestionWorkflow:
                 elif "search" in state and isinstance(state["search"], dict):
                     search_query = state["search"].get("search_query", "")
                     if search_query:
+                        # 쿼리 인코딩 정규화 (UTF-8 보장)
+                        try:
+                            if isinstance(search_query, str):
+                                search_query = search_query.encode('utf-8', errors='replace').decode('utf-8')
+                            elif isinstance(search_query, bytes):
+                                search_query = search_query.decode('utf-8', errors='replace')
+                        except Exception:
+                            pass
                         state["input"]["query"] = search_query
+            
+            # 현재 쿼리도 정규화 (이미 있는 경우)
+            if current_query:
+                try:
+                    if isinstance(current_query, str):
+                        current_query = current_query.encode('utf-8', errors='replace').decode('utf-8')
+                    elif isinstance(current_query, bytes):
+                        current_query = current_query.decode('utf-8', errors='replace')
+                    state["input"]["query"] = current_query
+                except Exception:
+                    pass
 
             # 재시도 카운터 관리
             metadata = state.get("metadata", {}) if isinstance(state.get("metadata"), dict) else {}

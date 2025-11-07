@@ -494,9 +494,18 @@ class AnswerGenerator:
 
         Returns:
             LLM 응답 문자열
+        
+        Note:
+            LangChain의 ChatGoogleGenerativeAI와 Ollama는 invoke() 호출 시에도
+            내부적으로 스트리밍을 사용합니다. LangGraph의 astream_events()가 이를
+            감지하여 on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
+            따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.
         """
         for attempt in range(max_retries):
             try:
+                # LLM 호출 (스트리밍 지원)
+                # invoke() 호출 시에도 내부적으로 스트리밍이 사용되므로
+                # LangGraph의 astream_events()가 이를 캡처할 수 있습니다.
                 response = self.llm.invoke(prompt)
                 return WorkflowUtils.extract_response_content(response)
             except Exception as e:

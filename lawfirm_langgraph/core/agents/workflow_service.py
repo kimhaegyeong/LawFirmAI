@@ -244,6 +244,17 @@ class LangGraphWorkflowService:
         """
         try:
             start_time = time.time()
+            
+            # 쿼리 인코딩 정규화 (UTF-8 보장)
+            if query:
+                try:
+                    # UTF-8로 인코딩 후 다시 디코딩하여 정규화
+                    if isinstance(query, str):
+                        query = query.encode('utf-8', errors='replace').decode('utf-8')
+                    elif isinstance(query, bytes):
+                        query = query.decode('utf-8', errors='replace')
+                except Exception as e:
+                    self.logger.warning(f"Query encoding normalization failed: {e}, using original query")
 
             # 세션 ID 생성
             if not session_id:

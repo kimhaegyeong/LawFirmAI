@@ -461,6 +461,16 @@ class PromptChainExecutor:
                         f"🔄 [CHAIN STEP] '{step_name}' - Attempt {attempt + 1}/{max_iterations}"
                     )
 
+                    # LLM 호출 (스트리밍 지원)
+                    # 
+                    # 중요: LangChain의 ChatGoogleGenerativeAI와 Ollama는
+                    # invoke() 호출 시에도 내부적으로 스트리밍을 사용합니다.
+                    # LangGraph의 astream_events()가 이를 감지하여 
+                    # on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
+                    # 
+                    # 따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.
+                    # 명시적으로 astream()을 사용하려면 이 메서드를 async로 변경하고
+                    # async for chunk in self.llm.astream(prompt) 형태로 수정해야 합니다.
                     llm_response = self.llm.invoke(prompt)
 
                     # 응답 추출
