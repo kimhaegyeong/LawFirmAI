@@ -13,7 +13,7 @@ async def test_stream_api():
     
     # 테스트 요청 데이터
     payload = {
-        "message": "전세금 반환 보증에 대해 알려주세요",
+        "message": "임대차 분쟁 시 해결 방법은?",
         "session_id": "435a63d5-0adb-475b-8ddf-8b4dde98b51d"
     }
     
