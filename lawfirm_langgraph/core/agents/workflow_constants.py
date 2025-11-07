@@ -55,7 +55,7 @@ class QualityThresholds:
 class AnswerExtractionPatterns:
     """답변 추출을 위한 정규식 패턴 상수"""
 
-    # 추론 과정 섹션 패턴
+    # 추론 과정 섹션 패턴 (개선: 더 많은 패턴 추가)
     REASONING_SECTION_PATTERNS = [
         r'##\s*🧠\s*추론\s*과정\s*작성',
         r'##\s*🧠\s*추론\s*과정',
@@ -64,6 +64,10 @@ class AnswerExtractionPatterns:
         r'##\s*Chain-of-Thought',
         r'##\s*CoT',
         r'###\s*🧠\s*추론',
+        r'##\s*추론',  # 추가: 간단한 추론 패턴
+        r'###\s*추론',  # 추가: 3단계 추론 패턴
+        r'##\s*사고\s*과정',  # 추가: 사고 과정 패턴
+        r'##\s*분석\s*과정',  # 추가: 분석 과정 패턴
     ]
 
     # 출력 섹션 패턴 (실제 답변)

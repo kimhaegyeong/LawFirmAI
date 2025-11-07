@@ -14,7 +14,7 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .modular_states import (
     AnalysisState,
@@ -69,7 +69,8 @@ def set_classification(state: LegalWorkflowState, data: Dict[str, Any]):
 
 def update_classification(state: LegalWorkflowState, **kwargs):
     """분류 결과 업데이트 (keyword arguments)"""
-    if state["classification"] is None:
+    # classification 키가 없거나 None인 경우 기본값 생성
+    if "classification" not in state or state["classification"] is None:
         from .modular_states import create_default_classification
         state["classification"] = create_default_classification()
 
@@ -506,7 +507,18 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
     if field_path in path_mapping:
         return path_mapping[field_path](state)
 
-    logger.warning(f"Unknown field path: {field_path}")
+    # 개선 사항 5: Optional 필드 안전 접근 로직 추가
+    # category와 uploaded_document는 optional 필드이므로 경고 레벨을 낮춤
+    optional_fields = ["category", "uploaded_document"]
+    if field_path in optional_fields:
+        logger.debug(f"Optional field path accessed: {field_path} (not in path_mapping)")
+        # Optional 필드에 대한 기본값 반환
+        if field_path == "category":
+            return None
+        elif field_path == "uploaded_document":
+            return None
+    else:
+        logger.warning(f"Unknown field path: {field_path}")
     return None
 
 

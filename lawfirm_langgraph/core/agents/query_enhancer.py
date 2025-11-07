@@ -60,6 +60,11 @@ class QueryEnhancer:
     ) -> Dict[str, Any]:
         """
         검색 쿼리 최적화 (LLM 강화 포함, 폴백 지원)
+        
+        성능 최적화:
+        - 간단한 쿼리는 LLM 호출 스킵
+        - 캐시 우선 확인
+        - llm_fast 우선 사용
 
         Returns:
             {
@@ -69,17 +74,28 @@ class QueryEnhancer:
                 "llm_enhanced": bool  # LLM 강화 사용 여부
             }
         """
-        # LLM 쿼리 강화 시도 (실패해도 계속 진행)
+        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵
+        # 쿼리가 짧고 키워드가 충분하면 LLM 강화 생략
+        should_skip_llm = (
+            len(query) < 30 and  # 짧은 쿼리
+            len(extracted_keywords) >= 3 and  # 키워드가 충분
+            query_type in ["general_question", "definition_question"]  # 간단한 질문 유형
+        )
+        
+        # LLM 쿼리 강화 시도 (간단한 쿼리는 스킵)
         llm_enhanced = None
-        try:
-            llm_enhanced = self.enhance_query_with_llm(
-                query=query,
-                query_type=query_type,
-                extracted_keywords=extracted_keywords,
-                legal_field=legal_field
-            )
-        except Exception as e:
-            self.logger.debug(f"LLM query enhancement skipped: {e}")
+        if not should_skip_llm:
+            try:
+                llm_enhanced = self.enhance_query_with_llm(
+                    query=query,
+                    query_type=query_type,
+                    extracted_keywords=extracted_keywords,
+                    legal_field=legal_field
+                )
+            except Exception as e:
+                self.logger.debug(f"LLM query enhancement skipped: {e}")
+        else:
+            self.logger.debug(f"Skipping LLM enhancement for simple query: '{query[:50]}...'")
 
         # LLM 강화 결과 사용 또는 원본 사용
         if llm_enhanced and isinstance(llm_enhanced, dict):
@@ -229,9 +245,15 @@ class QueryEnhancer:
                     legal_field=legal_field
                 )
 
+                # 성능 최적화: llm_fast 우선 사용 (더 빠른 응답)
+                llm_to_use = self.llm_fast if self.llm_fast else self.llm
+                if not llm_to_use:
+                    self.logger.warning("No LLM available for query enhancement")
+                    return None
+                
                 # LLM 호출 (짧은 응답만 필요하므로 토큰 수 제한)
                 try:
-                    response = self.llm.invoke(prompt)
+                    response = llm_to_use.invoke(prompt)
                     if isinstance(response, str):
                         llm_output = response
                     elif hasattr(response, 'content'):
@@ -287,8 +309,13 @@ class QueryEnhancer:
             Optional[Dict[str, Any]]: 강화된 쿼리 결과 또는 None
         """
         try:
-            # PromptChainExecutor 인스턴스 생성
+            # 성능 최적화: llm_fast 우선 사용 (더 빠른 응답)
+            # llm_fast가 없으면 메인 LLM 사용
             llm = self.llm_fast if self.llm_fast else self.llm
+            if not llm:
+                self.logger.warning("No LLM available for chain enhancement")
+                return None
+            
             chain_executor = PromptChainExecutor(llm, self.logger)
 
             # 체인 스텝 정의

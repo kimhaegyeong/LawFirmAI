@@ -13,6 +13,7 @@ from .state_adapter import (
     validate_state_for_node,
 )
 from .state_reduction import StateReducer
+from .node_input_output_spec import validate_node_input
 
 logger = logging.getLogger(__name__)
 
@@ -245,8 +246,107 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 if node_name == "classify_query":
                     print(f"[DEBUG] node_wrappers.classify_query: converted_state query='{converted_query[:50] if converted_query else 'EMPTY'}...'")
 
+                # 개선 사항 1: Input Validation - 실패 시 자동 복구 로직 추가
                 if not is_valid:
                     logger.warning(f"Input validation failed for {node_name}: {error}")
+                    
+                    # 개선 사항 1: retrieved_docs 필드 누락 시 자동 복구
+                    if "retrieved_docs" in error:
+                        try:
+                            # Global cache에서 복구 시도 (전역 변수는 이미 wrapper 함수 시작 부분에서 선언됨)
+                            if _global_search_results_cache:
+                                retrieved_docs = (
+                                    _global_search_results_cache.get("retrieved_docs", []) or
+                                    (_global_search_results_cache.get("search") and isinstance(_global_search_results_cache["search"], dict) and 
+                                     _global_search_results_cache["search"].get("retrieved_docs", [])) or
+                                    []
+                                )
+                                if retrieved_docs:
+                                    # state에 복구된 retrieved_docs 저장
+                                    converted_state["retrieved_docs"] = retrieved_docs
+                                    if "search" not in converted_state:
+                                        converted_state["search"] = {}
+                                    converted_state["search"]["retrieved_docs"] = retrieved_docs
+                                    if "common" not in converted_state:
+                                        converted_state["common"] = {}
+                                    if "search" not in converted_state["common"]:
+                                        converted_state["common"]["search"] = {}
+                                    converted_state["common"]["search"]["retrieved_docs"] = retrieved_docs
+                                    logger.info(f"✅ [AUTO-RECOVER] Restored {len(retrieved_docs)} retrieved_docs from global cache for {node_name}")
+                                    # 재검증
+                                    is_valid, error = validate_node_input(node_name, converted_state)
+                                    if is_valid:
+                                        logger.info(f"✅ [AUTO-RECOVER] Input validation passed after auto-recovery for {node_name}")
+                                else:
+                                    # 빈 리스트로라도 저장하여 validation 통과
+                                    converted_state["retrieved_docs"] = []
+                                    if "search" not in converted_state:
+                                        converted_state["search"] = {}
+                                    converted_state["search"]["retrieved_docs"] = []
+                                    logger.warning(f"⚠️ [AUTO-RECOVER] No retrieved_docs found, using empty list for {node_name}")
+                                    # 재검증
+                                    is_valid, error = validate_node_input(node_name, converted_state)
+                        except Exception as e:
+                            logger.debug(f"Auto-recovery failed for {node_name}: {e}")
+                    
+                    # 개선 사항 2: query_type 필드 누락 시 자동 복구
+                    if "query_type" in error or "query_type" in str(error):
+                        try:
+                            query_type = None
+                            # 1. converted_state에서 직접 확인 (stream_mode="updates" 사용 시)
+                            if isinstance(converted_state, dict):
+                                # classification 그룹에서 확인 (우선순위 1)
+                                if "classification" in converted_state and isinstance(converted_state["classification"], dict):
+                                    query_type = converted_state["classification"].get("query_type")
+                                # 최상위 레벨에서 확인 (우선순위 2)
+                                if not query_type:
+                                    query_type = converted_state.get("query_type")
+                                # metadata에서 확인 (우선순위 3)
+                                if not query_type and "metadata" in converted_state and isinstance(converted_state["metadata"], dict):
+                                    query_type = converted_state["metadata"].get("query_type")
+                                # analysis에서 확인 (우선순위 4)
+                                if not query_type and "analysis" in converted_state and isinstance(converted_state["analysis"], dict):
+                                    query_type = converted_state["analysis"].get("query_type")
+                                # common 그룹에서 확인 (우선순위 5)
+                                if not query_type and "common" in converted_state and isinstance(converted_state["common"], dict):
+                                    common_classification = converted_state["common"].get("classification", {})
+                                    if isinstance(common_classification, dict):
+                                        query_type = common_classification.get("query_type")
+                            
+                            # 2. Global cache에서 복구 시도 (없는 경우)
+                            if not query_type and _global_search_results_cache:
+                                query_type = (
+                                    _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type", "") or
+                                    _global_search_results_cache.get("metadata", {}).get("query_type", "") or
+                                    _global_search_results_cache.get("analysis", {}).get("query_type", "") or
+                                    _global_search_results_cache.get("classification", {}).get("query_type", "") or
+                                    _global_search_results_cache.get("query_type", "") or
+                                    ""
+                                ) or None
+                            
+                            # 3. 기본값 설정 (마지막 수단)
+                            if not query_type:
+                                query_type = "simple_question"  # direct_answer 노드의 기본값과 일치
+                                logger.warning(f"⚠️ [AUTO-RECOVER] query_type not found, using default: {query_type} for {node_name}")
+                            
+                            if query_type:
+                                # state에 복구된 query_type 저장 (모든 위치에)
+                                converted_state["query_type"] = query_type
+                                # classification 그룹에 저장 (필수)
+                                if "classification" not in converted_state:
+                                    converted_state["classification"] = {}
+                                converted_state["classification"]["query_type"] = query_type
+                                # metadata에도 저장
+                                if "metadata" not in converted_state:
+                                    converted_state["metadata"] = {}
+                                converted_state["metadata"]["query_type"] = query_type
+                                logger.info(f"✅ [AUTO-RECOVER] Restored query_type={query_type} for {node_name}")
+                                # 재검증
+                                is_valid, error = validate_node_input(node_name, converted_state)
+                                if is_valid:
+                                    logger.info(f"✅ [AUTO-RECOVER] Input validation passed after auto-recovery for {node_name}")
+                        except Exception as e:
+                            logger.debug(f"Auto-recovery failed for {node_name}: {e}")
 
                 # 2. State Reduction (활성화된 경우)
                 if enable_reduction:

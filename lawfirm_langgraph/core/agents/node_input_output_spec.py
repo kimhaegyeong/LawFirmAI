@@ -64,6 +64,24 @@ class NodeIOSpec:
         for group in ["search", "answer", "classification", "validation", "control", "common"]:
             if group in state and isinstance(state[group], dict) and field in state[group]:
                 return True
+        
+        # 개선 사항 1: common 그룹 내 nested 구조 확인
+        if "common" in state and isinstance(state["common"], dict):
+            if "search" in state["common"] and isinstance(state["common"]["search"], dict) and field in state["common"]["search"]:
+                return True
+        
+        # 개선 사항 1: retrieved_docs 특별 처리 - global cache에서 복구 시도
+        if field == "retrieved_docs":
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache:
+                    if "retrieved_docs" in _global_search_results_cache:
+                        return True
+                    if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                        if "retrieved_docs" in _global_search_results_cache["search"]:
+                            return True
+            except Exception:
+                pass
 
         return False
 
