@@ -2,6 +2,7 @@
 채팅 서비스 (lawfirm_langgraph 래퍼)
 """
 import sys
+import re
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, AsyncGenerator
@@ -282,6 +283,7 @@ class ChatService:
             last_node_name = None
             executed_nodes = set()  # 실행된 노드 추적
             answer_generation_started = False  # 답변 생성 노드 시작 플래그
+            json_output_detected = False  # JSON 출력 감지 플래그
             
             # 노드 이름을 사용자 친화적인 메시지로 매핑
             node_name_mapping = {
@@ -308,13 +310,25 @@ class ChatService:
                     """버전 호환성을 위한 스트리밍 이벤트 래퍼"""
                     try:
                         # version="v2" 시도 (LangGraph 최신 버전)
+                        # include_names로 generate_and_validate_answer 노드의 이벤트만 필터링 시도
                         logger.info("스트리밍 시작: astream_events(version='v2') 사용")
-                        async for event in self.workflow_service.app.astream_events(
-                            initial_state, 
-                            config,
-                            version="v2"
-                        ):
-                            yield event
+                        try:
+                            # include_names 파라미터로 특정 노드만 필터링 시도
+                            async for event in self.workflow_service.app.astream_events(
+                                initial_state, 
+                                config,
+                                version="v2",
+                                include_names=["generate_and_validate_answer", "generate_answer_enhanced"]
+                            ):
+                                yield event
+                        except (TypeError, AttributeError):
+                            # include_names가 지원되지 않는 경우 모든 이벤트 처리
+                            async for event in self.workflow_service.app.astream_events(
+                                initial_state, 
+                                config,
+                                version="v2"
+                            ):
+                                yield event
                     except (TypeError, AttributeError) as ve:
                         # version 파라미터가 지원되지 않는 경우 (구버전)
                         logger.debug(f"astream_events에서 version 파라미터 미지원: {ve}, 기본 버전 사용")
@@ -351,10 +365,11 @@ class ChatService:
                     elif event_type in ["on_llm_stream", "on_chat_model_stream"]:
                         # 답변 생성 노드가 시작되었는지 확인
                         if not answer_generation_started:
-                            # 답변 생성 노드가 시작되지 않았으면 무시
+                            # 답변 생성 노드가 시작되지 않았으면 모든 LLM 출력 무시
                             llm_stream_count += 1
                             if llm_stream_count <= 5:
-                                logger.debug(f"답변 생성 노드가 시작되지 않음: {event_name} (무시)")
+                                logger.debug(f"답변 생성 노드가 시작되지 않음: {event_name} (모든 출력 무시)")
+                            # JSON 출력이든 아니든 모두 무시
                             continue
                         
                         llm_stream_count += 1
@@ -395,13 +410,17 @@ class ChatService:
                         
                         # 방법 3: ChatGoogleGenerativeAI인 경우, 마지막으로 실행된 노드가 답변 생성 노드인지 확인
                         elif event_name == "ChatGoogleGenerativeAI" and answer_generation_started:
-                            # last_node_name이 답변 생성 노드인지 확인
-                            if last_node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
+                            # last_node_name이 정확히 generate_and_validate_answer인지 확인
+                            if last_node_name == "generate_and_validate_answer":
                                 is_answer_node = True
-                            # 또는 executed_nodes에 답변 생성 노드가 포함되어 있고, 아직 완료되지 않았는지 확인
-                            elif "generate_answer_enhanced" in executed_nodes or "generate_and_validate_answer" in executed_nodes:
-                                # 답변 생성 노드가 실행 중이면 스트리밍
-                                is_answer_node = True
+                            # generate_answer_enhanced도 허용 (generate_and_validate_answer 내부에서 호출)
+                            elif last_node_name == "generate_answer_enhanced":
+                                # generate_and_validate_answer 노드가 실행 중인지 확인
+                                if "generate_and_validate_answer" in executed_nodes:
+                                    is_answer_node = True
+                            else:
+                                # 다른 노드는 무시
+                                is_answer_node = False
                         
                         # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 10개만)
                         if llm_stream_count <= 10:
@@ -489,17 +508,95 @@ class ChatService:
                                     # JSON 형식 출력 감지 및 필터링 (중간 노드의 JSON 출력 제거)
                                     chunk_stripped = chunk.strip()
                                     
+                                    # 이전에 JSON 출력이 감지되었으면 계속 무시
+                                    if json_output_detected:
+                                        logger.debug(f"이전에 JSON 출력이 감지되어 계속 무시: {chunk_stripped[:50]}...")
+                                        continue
+                                    
                                     # JSON 형식 시작 패턴 감지
                                     is_json_output = False
-                                    if chunk_stripped.startswith("{") or chunk_stripped.startswith("```json"):
+                                    
+                                    # 방법 1: 청크 시작 부분이 JSON 형식인지 확인 (가장 강력한 필터)
+                                    # {로 시작하는 모든 청크는 JSON으로 간주
+                                    if chunk_stripped.startswith("{") or chunk.startswith("{"):
                                         is_json_output = True
+                                        json_output_detected = True
+                                    elif chunk_stripped.startswith("```json") or chunk.startswith("```json"):
+                                        is_json_output = True
+                                        json_output_detected = True
                                     elif chunk_stripped.startswith("```") and "json" in chunk_stripped[:20].lower():
                                         is_json_output = True
+                                        json_output_detected = True
+                                    # ```로 시작하는 경우도 JSON일 가능성 높음 (코드 블록)
+                                    elif chunk_stripped.startswith("```") or chunk.startswith("```"):
+                                        is_json_output = True
+                                        json_output_detected = True
+                                    # 청크 자체에 ```json이 포함되어 있으면 JSON
+                                    elif "```json" in chunk or "``` json" in chunk:
+                                        is_json_output = True
+                                        json_output_detected = True
+                                    
+                                    # 방법 2: 누적된 답변과 현재 청크를 합쳐서 JSON 형식인지 확인
+                                    if not is_json_output:
+                                        # full_answer가 비어있지 않으면 누적 텍스트 확인
+                                        if full_answer:
+                                            combined_text = (full_answer + chunk).strip()
+                                            # {로 시작하는 모든 텍스트는 JSON으로 간주
+                                            if combined_text.startswith("{") or combined_text.startswith("```json"):
+                                                is_json_output = True
+                                                json_output_detected = True
+                                            elif combined_text.startswith("```") and "json" in combined_text[:20].lower():
+                                                is_json_output = True
+                                                json_output_detected = True
+                                            elif combined_text.startswith("```"):
+                                                is_json_output = True
+                                                json_output_detected = True
+                                            elif "```json" in combined_text or "``` json" in combined_text:
+                                                is_json_output = True
+                                                json_output_detected = True
+                                        # full_answer가 비어있고 현재 청크가 { 또는 ```로 시작하면 JSON
+                                        elif chunk_stripped.startswith("{") or chunk.startswith("{") or chunk_stripped.startswith("```") or chunk.startswith("```"):
+                                            is_json_output = True
+                                            json_output_detected = True
+                                    
+                                    # 방법 3: JSON 키워드 패턴 감지 (중간 노드의 JSON 출력 특징)
+                                    if not is_json_output:
+                                        json_keywords = ['"complexity"', '"confidence"', '"reasoning"', '"core_keywords"', 
+                                                         '"query_intent"', '"is_valid"', '"quality_score"', '"final_score"',
+                                                         '"score"', '"issues"', '"strengths"', '"recommendations"',
+                                                         '"needs_improvement"', '"improvement_instructions"', '"preserve_content"',
+                                                         '"focus_areas"', '"meets_quality_threshold"', '"summary"']
+                                        # 청크 자체에 키워드가 있거나, 누적 텍스트에 키워드가 있는지 확인
+                                        if any(keyword in chunk for keyword in json_keywords):
+                                            is_json_output = True
+                                            json_output_detected = True
+                                        elif full_answer:
+                                            combined_text = full_answer + chunk
+                                            if any(keyword in combined_text for keyword in json_keywords):
+                                                is_json_output = True
+                                                json_output_detected = True
+                                    
+                                    # 방법 4: JSON 구조 패턴 감지 (큰따옴표로 시작하는 키-값 쌍)
+                                    if not is_json_output:
+                                        # "key": 형태의 패턴이 있으면 JSON일 가능성 높음
+                                        # re 모듈은 파일 상단에서 import됨
+                                        json_pattern = r'^\s*"[^"]+"\s*:\s*'
+                                        if re.match(json_pattern, chunk_stripped) or re.match(json_pattern, chunk):
+                                            is_json_output = True
+                                            json_output_detected = True
                                     
                                     # JSON 형식이면 무시 (중간 노드의 JSON 출력)
                                     if is_json_output:
                                         logger.debug(f"JSON 형식 출력 감지 및 무시: {chunk_stripped[:100]}...")
+                                        # JSON 출력은 full_answer에 누적하지 않음
                                         continue
+                                    
+                                    # JSON 출력이 아닌 실제 답변이 시작되면 JSON 출력 플래그 리셋
+                                    if not is_json_output and json_output_detected and len(chunk_stripped) > 0:
+                                        # 실제 답변이 시작된 것으로 간주 (JSON이 아닌 텍스트)
+                                        if not any(keyword in chunk for keyword in ['"complexity"', '"confidence"', '"reasoning"']):
+                                            json_output_detected = False
+                                            logger.debug("실제 답변이 시작되어 JSON 출력 플래그 리셋")
                                     
                                     # 공백 토큰도 포함 (실제 토큰 스트리밍)
                                     # 단, 완전히 빈 문자열은 제외
@@ -567,29 +664,90 @@ class ChatService:
                         # 답변 생성 노드 시작 시 플래그 설정
                         if node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
                             answer_generation_started = True
+                            json_output_detected = False  # 답변 생성 노드 시작 시 JSON 출력 플래그 리셋
                             if not answer_found:
                                 yield "[진행상황]답변 생성 중...\n"
                                 last_node_name = node_name
-                                logger.debug(f"답변 생성 노드 시작: {node_name}, answer_generation_started=True")
+                                logger.debug(f"답변 생성 노드 시작: {node_name}, answer_generation_started=True, json_output_detected=False")
                     
-                    # 노드 완료 이벤트 (포맷팅된 답변은 사용하지 않음)
+                    # 노드 완료 이벤트 (generate_and_validate_answer 노드의 answer 필드만 확인)
                     elif event_type == "on_chain_end":
-                        # 포맷팅된 답변은 원본이 변경될 수 있으므로 사용하지 않음
-                        # 스트리밍된 원시 답변만 사용
                         node_name = event.get("name", "")
-                        if node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
+                        if node_name == "generate_and_validate_answer":
                             # 답변 생성 노드가 완료되면 플래그 해제
                             answer_generation_started = False
                             logger.debug(f"답변 생성 노드 완료: {node_name}, answer_generation_started=False")
                             
+                            # generate_and_validate_answer 노드의 output에서 answer 필드만 추출
+                            try:
+                                event_data = event.get("data", {})
+                                if isinstance(event_data, dict):
+                                    output = event_data.get("output")
+                                    if output is not None:
+                                        # answer 필드 추출 (다양한 구조 지원)
+                                        answer_text = None
+                                        
+                                        if isinstance(output, dict):
+                                            # 최상위 레벨
+                                            answer_text = output.get("answer", "")
+                                            
+                                            # answer 그룹 (dict인 경우)
+                                            if not answer_text and "answer" in output:
+                                                answer_group = output.get("answer", {})
+                                                if isinstance(answer_group, dict):
+                                                    answer_text = answer_group.get("answer", "")
+                                                elif isinstance(answer_group, str):
+                                                    answer_text = answer_group
+                                            
+                                            # common 그룹
+                                            if not answer_text and "common" in output:
+                                                common = output.get("common", {})
+                                                if isinstance(common, dict):
+                                                    answer_text = common.get("answer", "")
+                                        
+                                        # answer 필드가 있고, JSON 형식이 아니면 확인
+                                        if answer_text and isinstance(answer_text, str) and len(answer_text) > 0:
+                                            # JSON 형식 필터링
+                                            answer_stripped = answer_text.strip()
+                                            is_json_answer = (
+                                                answer_stripped.startswith("{") or 
+                                                answer_stripped.startswith("```json") or
+                                                (answer_stripped.startswith("```") and "json" in answer_stripped[:20].lower())
+                                            )
+                                            
+                                            if not is_json_answer:
+                                                # 스트리밍된 답변과 비교하여 누락된 부분만 전송
+                                                if len(answer_text) > len(full_answer):
+                                                    missing_part = answer_text[len(full_answer):]
+                                                    if missing_part:
+                                                        logger.debug(f"누락된 부분 전송: {len(missing_part)}자")
+                                                        yield missing_part
+                                                        full_answer = answer_text
+                                                        answer_found = True
+                                                elif not answer_found:
+                                                    # 스트리밍이 없었던 경우 전체 답변 전송
+                                                    logger.debug(f"전체 답변 전송 (스트리밍 없음): {len(answer_text)}자")
+                                                    yield answer_text
+                                                    full_answer = answer_text
+                                                    answer_found = True
+                                                else:
+                                                    logger.debug("스트리밍된 답변이 이미 있습니다.")
+                                            else:
+                                                logger.debug("answer 필드가 JSON 형식이므로 무시합니다.")
+                                        else:
+                                            logger.debug("answer 필드를 찾을 수 없거나 비어있습니다.")
+                            except (AttributeError, TypeError, KeyError) as e:
+                                logger.debug(f"on_chain_end에서 answer 추출 실패: {e}")
+                            
                             if not answer_found:
                                 # 스트리밍 이벤트가 전혀 발생하지 않은 경우
-                                logger.warning("스트리밍 이벤트가 발생하지 않았습니다. 포맷팅된 답변은 사용하지 않습니다.")
+                                logger.warning("스트리밍 이벤트가 발생하지 않았습니다.")
                                 yield "[오류] 스트리밍 응답을 생성할 수 없습니다. 다시 시도해주세요."
                                 answer_found = True
-                            else:
-                                # 스트리밍이 있었을 때: 포맷팅된 답변은 완전히 무시
-                                logger.debug("스트리밍된 답변이 있습니다. 포맷팅된 답변은 무시됩니다.")
+                        elif node_name == "generate_answer_enhanced":
+                            # generate_answer_enhanced 노드는 generate_and_validate_answer 내부에서 호출되므로
+                            # 여기서는 플래그만 확인하고 answer는 generate_and_validate_answer에서 처리
+                            logger.debug(f"generate_answer_enhanced 노드 완료: {node_name}")
                 
                 # 스트리밍 완료 후 최종 확인
                 logger.info(f"스트리밍 이벤트 처리 완료: 총 {event_count}개 이벤트, LLM 스트리밍 이벤트 {llm_stream_count}개, 토큰 수신 {tokens_received}개")
