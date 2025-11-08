@@ -1,32 +1,80 @@
 /**
  * 메인 App 컴포넌트
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MainLayout } from './components/layout/MainLayout';
 import { SidebarContent } from './components/sidebar/SidebarContent';
 import { WelcomeScreen } from './components/welcome/WelcomeScreen';
 import { ChatHistory } from './components/chat/ChatHistory';
 import { ChatInput } from './components/chat/ChatInput';
-import { LoadingSpinner } from './components/common/LoadingSpinner';
+import { Toast } from './components/common/Toast';
 import { useChat } from './hooks/useChat';
 import { useSession } from './hooks/useSession';
 import { getHistory, exportHistory, downloadHistory } from './services/historyService';
 import { createSession } from './services/sessionService';
+import { parseStreamChunk } from './utils/streamParser';
+import { classifyStreamError, StreamError } from './types/error';
+import logger from './utils/logger';
+import { convertImageToBase64, convertFileToBase64, isImageFile, isDocumentFile } from './utils/fileUtils';
 import type { ChatMessage, FileAttachment } from './types/chat';
 import type { Session } from './types/session';
+
+interface ToastItem {
+  id: string;
+  message: string;
+  type: 'error' | 'success' | 'info' | 'warning';
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
+}
 
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentProgress, setCurrentProgress] = useState<string | null>(null);
+  const [progressHistory, setProgressHistory] = useState<string[]>([]);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null); // 현재 스트리밍 중인 메시지 ID
+  const [inputResetTrigger, setInputResetTrigger] = useState(0); // 입력창 초기화 트리거
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [streamErrors, setStreamErrors] = useState<Map<string, StreamError>>(new Map());
+  const [messageBuffers, setMessageBuffers] = useState<Map<string, string>>(new Map()); // 메시지별 버퍼 관리
+  
+  // 토큰 배치 업데이트를 위한 ref
+  const tokenBufferRef = useRef<Map<string, string>>(new Map()); // 메시지별 토큰 버퍼
+  const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map()); // 메시지별 타이머 (setTimeout 반환값)
 
-  const { currentSession, sessions, isLoading, loadSessions, newSession, loadSession, updateSession, removeSession, clearSession } = useSession();
-  const { sendMessage, sendStreamingMessage, isLoading: isSending, isStreaming } = useChat({
+  const { currentSession, isLoading, loadSessions, newSession, loadSession, updateSession, removeSession, clearSession } = useSession();
+  const { sendStreamingMessage, isLoading: isSending, isStreaming } = useChat({
     onMessage: (message) => {
       setMessages((prev) => [...prev, message]);
+      // 에러 메시지가 있으면 제거
+      if (streamErrors.has(message.id)) {
+        setStreamErrors((prev) => {
+          const newMap = new Map(prev);
+          newMap.delete(message.id);
+          return newMap;
+        });
+      }
     },
     onError: (error) => {
-      console.error('Chat error:', error);
-      alert(`에러가 발생했습니다: ${error.message}`);
+      logger.error('Chat error:', error);
+      const streamError = classifyStreamError(error instanceof Error ? error : new Error(String(error)));
+      
+      // Toast 표시
+      const toastId = `toast-${Date.now()}`;
+      setToasts((prev) => [...prev, {
+        id: toastId,
+        message: streamError.message,
+        type: 'error',
+        action: streamError.canRetry ? {
+          label: '다시 시도',
+          onClick: () => {
+            setToasts((prev) => prev.filter(t => t.id !== toastId));
+            // 재시도 로직은 필요시 구현
+          }
+        } : undefined,
+      }]);
     },
   });
 
@@ -58,7 +106,7 @@ function App() {
             setMessages(chatMessages);
           }
         } catch (error) {
-          console.error('Failed to load session messages:', error);
+          logger.error('Failed to load session messages:', error);
           // 에러 발생 시에도 현재 메시지를 유지 (빈 배열로 덮어쓰지 않음)
         }
       } else {
@@ -70,14 +118,16 @@ function App() {
   }, [currentSession]);
 
   const handleNewSession = async () => {
-    console.log('[DEBUG] handleNewSession called');
+    logger.debug('[DEBUG] handleNewSession called');
     try {
       // 웰컴 화면을 표시하기 위해 세션을 초기화하고 메시지도 초기화
       clearSession();
       setMessages([]);
-      console.log('[DEBUG] Session and messages cleared for welcome screen');
+      // 입력창 초기화
+      setInputResetTrigger((prev) => prev + 1);
+      logger.debug('[DEBUG] Session and messages cleared for welcome screen');
     } catch (error) {
-      console.error('[ERROR] Failed to reset session:', error);
+      logger.error('[ERROR] Failed to reset session:', error);
       const errorMessage = error instanceof Error 
         ? error.message 
         : '새 상담을 시작할 수 없습니다. 다시 시도해주세요.';
@@ -89,7 +139,7 @@ function App() {
     try {
       await loadSession(session.session_id);
     } catch (error) {
-      console.error('Failed to load session:', error);
+      logger.error('Failed to load session:', error);
     }
   };
 
@@ -99,7 +149,7 @@ function App() {
       try {
         await updateSession(session.session_id, { title: newTitle });
       } catch (error) {
-        console.error('Failed to rename session:', error);
+        logger.error('Failed to rename session:', error);
       }
     }
   };
@@ -112,8 +162,8 @@ function App() {
         category: session.category,
       });
       
-      // 기존 세션의 메시지 가져오기
-      const history = await getHistory({ session_id: session.session_id });
+      // 기존 세션의 메시지 가져오기 (현재는 사용하지 않음)
+      // const history = await getHistory({ session_id: session.session_id });
       
       // 새 세션에 메시지 복사 (백엔드 API를 통해 메시지 추가)
       // 주의: 현재 백엔드 API는 메시지 추가를 POST /api/chat을 통해서만 지원
@@ -128,7 +178,7 @@ function App() {
       
       alert('세션이 복사되었습니다. 메시지는 새 대화에서 다시 전송해야 합니다.');
     } catch (error) {
-      console.error('Failed to copy session:', error);
+      logger.error('Failed to copy session:', error);
       alert('세션 복사에 실패했습니다.');
     }
   };
@@ -143,7 +193,7 @@ function App() {
       const filename = `세션_${session.title || session.session_id}_${new Date().toISOString().split('T')[0]}.txt`;
       downloadHistory(blob, filename);
     } catch (error) {
-      console.error('Failed to export session:', error);
+      logger.error('Failed to export session:', error);
       alert('세션 내보내기에 실패했습니다.');
     }
   };
@@ -156,20 +206,48 @@ function App() {
           setMessages([]);
         }
       } catch (error) {
-        console.error('Failed to delete session:', error);
+        logger.error('Failed to delete session:', error);
       }
     }
   };
 
   const handleSendMessage = async (message: string, attachments?: FileAttachment[]) => {
+    // 파일이 있으면 Base64로 변환
+    let imageBase64: string | undefined;
+    let fileBase64: string | undefined;
+    let filename: string | undefined;
+    
+    if (attachments && attachments.length > 0) {
+      // 첫 번째 파일만 처리
+      const attachment = attachments[0];
+      if (attachment?.file) {
+        try {
+          if (isImageFile(attachment.type)) {
+            // 이미지 파일: image_base64 사용 (하위 호환성)
+            imageBase64 = await convertImageToBase64(attachment.file);
+            logger.debug('Image converted to Base64:', imageBase64.substring(0, 50) + '...');
+          } else if (isDocumentFile(attachment.type) || attachment.type === 'text/plain') {
+            // 텍스트, PDF, DOCX 파일: file_base64 사용
+            fileBase64 = await convertFileToBase64(attachment.file);
+            filename = attachment.name;
+            logger.debug('File converted to Base64:', fileBase64.substring(0, 50) + '...', 'filename:', filename);
+          } else {
+            logger.warn('Unsupported file type:', attachment.type);
+          }
+        } catch (error) {
+          logger.error('Failed to convert file to Base64:', error);
+        }
+      }
+    }
+
     if (!currentSession) {
       // 세션이 없으면 새로 생성
       const session = await newSession();
       if (session) {
-        await handleStreamingMessage(message, session.session_id, attachments);
+        await handleStreamingMessage(message, session.session_id, attachments, imageBase64, fileBase64, filename);
       }
     } else {
-      await handleStreamingMessage(message, currentSession.session_id, attachments);
+      await handleStreamingMessage(message, currentSession.session_id, attachments, imageBase64, fileBase64, filename);
     }
   };
 
@@ -177,6 +255,9 @@ function App() {
     message: string,
     sessionId: string,
     attachments?: FileAttachment[],
+    imageBase64?: string,
+    fileBase64?: string,
+    filename?: string,
     skipUserMessage: boolean = false
   ) => {
     // 사용자 메시지 추가 (skipUserMessage가 false일 때만)
@@ -200,74 +281,328 @@ function App() {
       timestamp: new Date(),
     };
     
+    // 스트리밍 시작 시 메시지 ID는 첫 번째 chunk를 받았을 때 설정
+    // (type: "stream" 이벤트를 받았을 때 설정하여 안전성 보장)
+    
     // 첫 번째 chunk를 받았는지 추적
     let isFirstChunk = true;
 
     // 스트리밍 메시지 전송
     let fullContent = '';
     try {
+      // 진행 상황 초기화 (기존 코드와의 호환성을 위해 유지, 나중에 제거 예정)
+      setCurrentProgress(null);
+      setProgressHistory([]);
+      
       await sendStreamingMessage(
         message,
         sessionId,
         (chunk) => {
           if (import.meta.env.DEV) {
-            console.log('[Stream] Chunk received:', JSON.stringify(chunk));
+            logger.debug('[Stream] Chunk received:', JSON.stringify(chunk));
           }
-          fullContent += chunk;
-          if (import.meta.env.DEV) {
-            console.log('[Stream] Full content so far length:', fullContent.length);
-          }
-          // 함수형 업데이트로 항상 최신 상태 참조
-          setMessages((prev) => {
-            const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-            
-            // 첫 번째 chunk를 받았을 때만 메시지 추가
-            if (isFirstChunk && messageIndex === -1) {
-              isFirstChunk = false;
-              if (import.meta.env.DEV) {
-                console.log('[Stream] First chunk received, adding assistant message:', assistantMessageId);
+          
+          // 스트림 청크 파싱
+          const parsed = parseStreamChunk(chunk);
+          
+          if (parsed.type === 'progress') {
+            // 진행 상황을 메시지 배열에 추가
+            setMessages((prev) => {
+              // 마지막 진행 상황 메시지 찾기 (역순으로 검색)
+              let lastProgressIndex = -1;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].role === 'progress') {
+                  lastProgressIndex = i;
+                  break;
+                }
               }
-              // 첫 번째 chunk와 함께 메시지 추가
-              return [...prev, { ...assistantMessage, content: fullContent }];
-            }
-            
-            // 이미 메시지가 있으면 업데이트
-            if (messageIndex !== -1) {
-              const updated = [...prev];
-              updated[messageIndex] = { ...updated[messageIndex], content: fullContent };
-              if (import.meta.env.DEV) {
-                console.log('[Stream] Message updated at index:', messageIndex, 'Content length:', fullContent.length);
+              
+              if (lastProgressIndex !== -1) {
+                // 기존 진행 상황 메시지 업데이트
+                const updated = [...prev];
+                updated[lastProgressIndex] = {
+                  ...updated[lastProgressIndex],
+                  content: parsed.content,
+                  timestamp: new Date(),
+                  metadata: parsed.metadata ? {
+                    ...updated[lastProgressIndex].metadata,
+                    ...parsed.metadata,
+                  } : updated[lastProgressIndex].metadata,
+                };
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Progress message updated:', parsed.content);
+                }
+                return updated;
+              } else {
+                // 새로운 진행 상황 메시지 추가
+                const progressMessage: ChatMessage = {
+                  id: `progress-${Date.now()}`,
+                  role: 'progress',
+                  content: parsed.content,
+                  timestamp: new Date(),
+                  metadata: parsed.metadata ? {
+                    ...parsed.metadata,
+                  } : undefined,
+                };
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Progress message added:', parsed.content);
+                }
+                return [...prev, progressMessage];
               }
-              return updated;
-            }
+            });
             
-            // 메시지가 없으면 추가 (fallback - 첫 번째 chunk가 아닌 경우)
+            // 기존 코드와의 호환성을 위해 currentProgress도 업데이트 (나중에 제거 예정)
+            setCurrentProgress(parsed.content);
+          } else if (parsed.type === 'stream') {
+            // 실시간 스트리밍 (토큰 단위로 도착하는 데이터를 즉시 업데이트)
+            // 받은 청크를 fullContent에 누적
+            fullContent += parsed.content;
             if (import.meta.env.DEV) {
-              console.warn('[Stream] Message not found, adding as fallback:', assistantMessageId);
+              logger.debug('[Stream] Token received, full content so far length:', fullContent.length);
             }
-            return [...prev, { ...assistantMessage, content: fullContent }];
-          });
-        }
+            
+            // streamingMessageId를 첫 번째 chunk를 받기 전에 미리 설정
+            if (isFirstChunk) {
+              setStreamingMessageId(assistantMessageId);
+              if (import.meta.env.DEV) {
+                logger.debug('[Stream] First chunk received, setting streamingMessageId:', assistantMessageId);
+              }
+            }
+            
+            // 배치 업데이트 제거, 즉시 업데이트
+            setMessageBuffers(prev => {
+              const newMap = new Map(prev);
+              const currentBuffer = newMap.get(assistantMessageId) || '';
+              const updatedBuffer = currentBuffer + parsed.content;
+              newMap.set(assistantMessageId, updatedBuffer);
+              
+              // 버퍼 업데이트 후 메시지도 즉시 업데이트
+              setMessages((prevMessages) => {
+                const messageIndex = prevMessages.findIndex((msg) => msg.id === assistantMessageId);
+                
+                // 첫 번째 chunk를 받았을 때만 메시지 추가
+                if (isFirstChunk && messageIndex === -1) {
+                  if (import.meta.env.DEV) {
+                    logger.debug('[Stream] First chunk received, adding assistant message:', assistantMessageId, 'Content length:', updatedBuffer.length);
+                  }
+                  return [...prevMessages, { ...assistantMessage, content: updatedBuffer }];
+                }
+                
+                // 이미 메시지가 있으면 실시간 업데이트
+                if (messageIndex !== -1) {
+                  const updated = [...prevMessages];
+                  updated[messageIndex] = { ...updated[messageIndex], content: updatedBuffer };
+                  if (import.meta.env.DEV && updatedBuffer.length % 50 === 0) {
+                    logger.debug('[Stream] Message updated at index:', messageIndex, 'Content length:', updatedBuffer.length);
+                  }
+                  return updated;
+                }
+                
+                // 메시지가 없으면 추가 (fallback)
+                if (import.meta.env.DEV) {
+                  logger.warn('[Stream] Message not found, adding as fallback:', assistantMessageId);
+                }
+                return [...prevMessages, { ...assistantMessage, content: updatedBuffer }];
+              });
+              
+              return newMap;
+            });
+            
+            // 첫 번째 chunk 플래그 업데이트
+            if (isFirstChunk) {
+              isFirstChunk = false;
+            }
+          } else if (parsed.type === 'final') {
+            // 최종 완료 처리
+            // 남아있는 토큰 버퍼 처리 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
+            const remainingTokens = tokenBufferRef.current.get(assistantMessageId) || '';
+            if (remainingTokens) {
+              fullContent += remainingTokens;
+              tokenBufferRef.current.delete(assistantMessageId);
+            }
+            
+            // 기존 타이머 취소 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
+            if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
+              clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
+              tokenBufferTimeoutRef.current.delete(assistantMessageId);
+            }
+            
+            // final 이벤트의 content가 더 길면 누락된 부분이 있을 수 있으므로 확인
+            if (parsed.content && parsed.content.length > fullContent.length) {
+              fullContent = parsed.content;
+            }
+            
+            if (import.meta.env.DEV) {
+              logger.debug('[Stream] Final content received, length:', fullContent.length);
+              if (parsed.metadata) {
+                logger.debug('[Stream] Final metadata:', parsed.metadata);
+              }
+            }
+            
+            // 버퍼에 최종 내용 저장
+            setMessageBuffers(prev => {
+              const newMap = new Map(prev);
+              newMap.set(assistantMessageId, fullContent);
+              return newMap;
+            });
+            
+            // 스트리밍 완료 (메시지 ID 초기화)
+            // streamingMessageId를 null로 설정하여 isStreaming: false로 만들어
+            // ChatMessage에서 Markdown 렌더링 활성화
+            setStreamingMessageId(null);
+            
+            // 최종 메시지 업데이트 (누적된 fullContent 사용)
+            // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
+            setMessages((prev) => {
+              const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+              
+              if (messageIndex !== -1) {
+                // 기존 메시지 업데이트 (누적된 fullContent 사용)
+                // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
+                const updated = [...prev];
+                updated[messageIndex] = {
+                  ...updated[messageIndex],
+                  content: fullContent,  // 이미 누적된 내용 사용
+                  metadata: parsed.metadata ? {
+                    ...updated[messageIndex].metadata,
+                    ...parsed.metadata,
+                  } : updated[messageIndex].metadata,
+                };
+                return updated;
+              } else {
+                // 메시지가 없으면 추가
+                // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
+                return [...prev, {
+                  ...assistantMessage,
+                  content: fullContent,  // 이미 누적된 내용 사용
+                  metadata: parsed.metadata ? {
+                    ...parsed.metadata,
+                  } : undefined,
+                }];
+              }
+            });
+          } else if (parsed.type === 'answer') {
+            // 기존 'answer' 타입 지원 (하위 호환성)
+            fullContent += parsed.content;
+            if (import.meta.env.DEV) {
+              logger.debug('[Stream] Full content so far length:', fullContent.length);
+            }
+            
+            // 실시간으로 메시지 업데이트
+            setMessages((prev) => {
+              const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+              
+              if (isFirstChunk && messageIndex === -1) {
+                isFirstChunk = false;
+                return [...prev, { ...assistantMessage, content: fullContent }];
+              }
+              
+              if (messageIndex !== -1) {
+                const updated = [...prev];
+                updated[messageIndex] = { ...updated[messageIndex], content: fullContent };
+                return updated;
+              }
+              
+              return [...prev, { ...assistantMessage, content: fullContent }];
+            });
+          }
+        },
+        imageBase64,
+        fileBase64,
+        filename
       );
+      
+      // 스트리밍 완료 시 현재 진행 상황만 초기화 (히스토리는 유지)
+      setCurrentProgress(null);
       if (import.meta.env.DEV) {
-        console.log('[Stream] Streaming completed. Final content length:', fullContent.length);
+        logger.debug('[Stream] Streaming completed. Final content length:', fullContent.length);
       }
     } catch (error) {
-      console.error('[Stream] Streaming error:', error);
+      logger.error('[Stream] Streaming error:', error);
+      
+      // 남아있는 토큰 버퍼 처리
+      const remainingTokens = tokenBufferRef.current.get(assistantMessageId) || '';
+      if (remainingTokens) {
+        fullContent += remainingTokens;
+        tokenBufferRef.current.delete(assistantMessageId);
+      }
+      
+      // 기존 타이머 취소
+      if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
+        clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
+        tokenBufferTimeoutRef.current.delete(assistantMessageId);
+      }
+      
+      // 에러 발생 시 현재 진행 상황만 초기화 (히스토리는 유지)
+      setCurrentProgress(null);
+      
+      const streamError = classifyStreamError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+      
       // 에러 발생 시 메시지 업데이트 (내용이 있거나 에러 메시지가 있는 경우에만)
       if (fullContent || error) {
         setMessages((prev) => {
           const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-          const errorContent = fullContent || '스트리밍 중 오류가 발생했습니다.';
+          const errorContent = fullContent || streamError.message;
           
           if (messageIndex === -1) {
-            return [...prev, { ...assistantMessage, content: errorContent }];
+            return [...prev, { 
+              ...assistantMessage, 
+              content: errorContent,
+              metadata: {
+                ...assistantMessage.metadata,
+                error: true,
+                error_type: streamError.type,
+              }
+            }];
           }
           const updated = [...prev];
-          updated[messageIndex] = { ...updated[messageIndex], content: errorContent };
+          updated[messageIndex] = { 
+            ...updated[messageIndex], 
+            content: errorContent,
+            metadata: {
+              ...updated[messageIndex].metadata,
+              error: true,
+              error_type: streamError.type,
+            }
+          };
           return updated;
         });
       }
+      
+      // 에러 상태 저장 (재시도용)
+      setStreamErrors((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(assistantMessageId, streamError);
+        return newMap;
+      });
+      
+      // Toast 표시
+      const toastId = `toast-${Date.now()}`;
+      setToasts((prev) => [...prev, {
+        id: toastId,
+        message: streamError.message,
+        type: 'error',
+        action: streamError.canRetry ? {
+          label: '다시 시도',
+          onClick: () => {
+            // 재시도 로직
+            setStreamErrors((prev) => {
+              const newMap = new Map(prev);
+              const error = newMap.get(assistantMessageId);
+              if (error) {
+                error.retryCount = (error.retryCount || 0) + 1;
+                newMap.set(assistantMessageId, error);
+              }
+              return newMap;
+            });
+            // 메시지 재전송
+            handleStreamingMessage(message, sessionId, attachments, undefined, undefined, undefined, true);
+            setToasts((prev) => prev.filter(t => t.id !== toastId));
+          }
+        } : undefined,
+      }]);
     }
   };
 
@@ -287,10 +622,10 @@ function App() {
         const session = await newSession(undefined, true); // skipLoadSessions: true
         if (session) {
           // 스트리밍 메시지 처리 (사용자 메시지는 이미 추가했으므로 skip)
-          await handleStreamingMessage(question, session.session_id, undefined, true);
+          await handleStreamingMessage(question, session.session_id, undefined, undefined, undefined, undefined, true);
         }
       } catch (error) {
-        console.error('[ERROR] Failed to create session:', error);
+        logger.error('[ERROR] Failed to create session:', error);
         // 에러 발생 시 메시지 제거하고 웰컴 화면으로 복귀
         setMessages([]);
         const errorMessage = error instanceof Error 
@@ -299,7 +634,7 @@ function App() {
         alert(errorMessage);
       }
     } else {
-      await handleStreamingMessage(question, currentSession.session_id);
+      await handleStreamingMessage(question, currentSession.session_id, undefined, undefined, undefined, undefined);
     }
   };
 
@@ -323,6 +658,20 @@ function App() {
         />
       }
     >
+      {/* Toast 컨테이너 */}
+      <div className="fixed top-4 right-4 z-50 space-y-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div key={toast.id} className="pointer-events-auto">
+            <Toast
+              message={toast.message}
+              type={toast.type}
+              onClose={() => setToasts((prev) => prev.filter(t => t.id !== toast.id))}
+              action={toast.action}
+            />
+          </div>
+        ))}
+      </div>
+
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {/* 콘텐츠 영역 - 스크롤 가능 */}
         <div className="flex-1 overflow-y-auto min-h-0">
@@ -333,13 +682,39 @@ function App() {
               messages={messages}
               sessionId={currentSession?.session_id}
               isLoading={isSending || isStreaming}
+              currentProgress={currentProgress}
+              progressHistory={progressHistory}
               onQuestionClick={handleRelatedQuestionClick}
+              streamingMessageId={streamingMessageId}
+              streamErrors={streamErrors}
+              onRetryMessage={(messageId) => {
+                const error = streamErrors.get(messageId);
+                if (error && error.canRetry && currentSession) {
+                  // 재시도 로직
+                  const message = messages.find(m => m.id === messageId);
+                  if (message && message.role === 'assistant') {
+                    // 이전 사용자 메시지 찾기
+                    const messageIndex = messages.findIndex(m => m.id === messageId);
+                    if (messageIndex > 0) {
+                      const userMessage = messages[messageIndex - 1];
+                      if (userMessage && userMessage.role === 'user') {
+                        handleStreamingMessage(userMessage.content, currentSession.session_id, userMessage.attachments, undefined, undefined, undefined, true);
+                      }
+                    }
+                  }
+                }
+              }}
             />
           )}
         </div>
         {/* 입력창 - 하단 고정 */}
         <div className="flex-shrink-0">
-          <ChatInput onSend={handleSendMessage} disabled={isSending || isStreaming} isLoading={isSending || isStreaming} />
+          <ChatInput 
+            onSend={handleSendMessage} 
+            disabled={isSending || isStreaming} 
+            isLoading={isSending || isStreaming}
+            resetTrigger={inputResetTrigger}
+          />
         </div>
       </div>
     </MainLayout>
