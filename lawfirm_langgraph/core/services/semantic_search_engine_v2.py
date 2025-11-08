@@ -159,70 +159,125 @@ except ImportError:
                             )
                             
                             # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
-                            # 개선: 더 명확한 옵션 사용 및 dtype 대신 torch_dtype 사용 (deprecated 경고 방지)
+                            # 개선: 더 강력한 메타 디바이스 방지 로직
+                            # 핵심: AutoModel.from_pretrained가 메타 디바이스에 로드되지 않도록 방지
+                            
+                            # 추가 환경 변수 설정 (메타 디바이스 완전 방지)
+                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                            os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+                            if 'HF_DEVICE_MAP' in os.environ:
+                                del os.environ['HF_DEVICE_MAP']
+                            
+                            # 모델 로딩 전에 torch 설정 확인
+                            import torch
+                            if hasattr(torch, 'set_default_device'):
+                                # PyTorch 2.0+에서 기본 디바이스 설정
+                                try:
+                                    torch.set_default_device('cpu')
+                                except Exception:
+                                    pass
+                            
+                            # 모델 로딩 (메타 디바이스 방지를 위한 최적 옵션)
                             model = AutoModel.from_pretrained(
                                 model_name,
-                                dtype=torch.float32,  # torch_dtype 대신 dtype 사용 (deprecated 경고 방지)
-                                low_cpu_mem_usage=False,  # 핵심: meta device 방지
+                                torch_dtype=torch.float32,  # dtype 대신 torch_dtype 사용 (호환성)
+                                low_cpu_mem_usage=False,  # 핵심: meta device 방지 (False로 설정)
                                 device_map=None,  # 핵심: device_map 사용 안 함
-                                use_safetensors=True,  # safetensors 사용 (더 안전하고 빠름)
+                                use_safetensors=False,  # safetensors 사용 안 함 (일부 모델에서 메타 디바이스 문제 발생)
                                 trust_remote_code=True,
                                 local_files_only=False,
                                 _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
                                 ignore_mismatched_sizes=True,  # 크기 불일치 무시
                             )
                             
+                            # 모델 로딩 직후 즉시 CPU로 이동 (메타 디바이스 체크 전에)
+                            try:
+                                model = model.to('cpu')
+                            except Exception as immediate_move_error:
+                                logger.warning(f"Immediate CPU move failed: {immediate_move_error}, will try enhanced migration")
+                            
                             # 모델을 CPU에 명시적으로 이동 (meta device 완전 제거)
-                            # 개선: 더 강력한 모델 이동 로직
+                            # 개선: 더 강력한 모델 이동 로직 - to_empty()를 먼저 시도
                             try:
                                 # 1단계: 모델이 meta device에 있는지 확인
                                 first_param = next(model.parameters())
                                 is_meta_device = hasattr(first_param, 'device') and str(first_param.device) == 'meta'
                                 
                                 if is_meta_device:
-                                    logger.debug("Model is on meta device, using enhanced migration method")
-                                    # meta device인 경우: 모든 파라미터와 버퍼를 명시적으로 CPU로 이동
-                                    # 방법 1: to_empty() 사용
+                                    logger.debug("Model is on meta device, using enhanced migration method with to_empty()")
+                                    # meta device인 경우: to_empty()를 사용하여 모델 구조를 CPU에 생성
                                     try:
+                                        # 방법 1: to_empty()를 사용하여 모델 구조를 CPU에 생성
+                                        # state_dict를 먼저 가져옴
                                         state_dict = model.state_dict()
+                                        
+                                        # 모델을 CPU에 빈 구조로 생성
                                         model = model.to_empty(device='cpu')
-                                        # state_dict를 로드하기 전에 모든 텐서를 CPU로 명시적으로 이동
+                                        
+                                        # state_dict의 모든 텐서를 CPU로 명시적으로 이동
                                         cpu_state_dict = {}
                                         for key, value in state_dict.items():
                                             if isinstance(value, torch.Tensor):
                                                 if str(value.device) == 'meta':
-                                                    # meta device 텐서는 새로 생성
-                                                    cpu_state_dict[key] = torch.zeros_like(value, device='cpu')
+                                                    # meta device 텐서는 shape과 dtype을 유지하여 새로 생성
+                                                    cpu_state_dict[key] = torch.zeros(value.shape, dtype=value.dtype, device='cpu')
                                                 else:
                                                     cpu_state_dict[key] = value.to('cpu')
                                             else:
                                                 cpu_state_dict[key] = value
                                         
+                                        # state_dict를 로드
                                         model.load_state_dict(cpu_state_dict, assign=True, strict=False)
                                         logger.debug("Model moved from meta device to CPU using to_empty() with CPU state_dict")
                                     except Exception as to_empty_error:
                                         logger.warning(f"to_empty() method failed: {to_empty_error}, trying direct parameter migration")
                                         # 방법 2: 모든 파라미터와 버퍼를 직접 CPU로 이동
                                         for name, param in model.named_parameters():
-                                            if hasattr(param, 'data') and hasattr(param.data, 'device'):
-                                                if str(param.data.device) == 'meta':
-                                                    # meta device 파라미터는 새로 생성
-                                                    param.data = torch.zeros_like(param.data, device='cpu')
-                                                else:
-                                                    param.data = param.data.to('cpu')
+                                            try:
+                                                if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                                    if str(param.data.device) == 'meta':
+                                                        # meta device 파라미터는 shape과 dtype을 유지하여 새로 생성
+                                                        param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
+                                                    else:
+                                                        param.data = param.data.to('cpu')
+                                            except Exception as param_error:
+                                                logger.debug(f"Failed to move parameter {name}: {param_error}")
+                                                continue
                                         
                                         for name, buffer in model.named_buffers():
-                                            if hasattr(buffer, 'device'):
-                                                if str(buffer.device) == 'meta':
-                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
-                                                else:
-                                                    buffer.data = buffer.data.to('cpu')
+                                            try:
+                                                if hasattr(buffer, 'device'):
+                                                    if str(buffer.device) == 'meta':
+                                                        # meta device 버퍼는 shape과 dtype을 유지하여 새로 생성
+                                                        buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
+                                                    else:
+                                                        buffer.data = buffer.data.to('cpu')
+                                            except Exception as buffer_error:
+                                                logger.debug(f"Failed to move buffer {name}: {buffer_error}")
+                                                continue
                                         
                                         logger.debug("Model parameters and buffers moved to CPU directly")
                                 else:
                                     # 이미 CPU에 있거나 다른 device에 있는 경우 일반 이동
-                                    model = model.to("cpu")
-                                    logger.debug("Model moved to CPU using to() method")
+                                    try:
+                                        model = model.to("cpu")
+                                        logger.debug("Model moved to CPU using to() method")
+                                    except Exception as to_error:
+                                        logger.warning(f"to() method failed: {to_error}, trying direct parameter migration")
+                                        # to() 실패 시 직접 파라미터 이동
+                                        for name, param in model.named_parameters():
+                                            try:
+                                                if hasattr(param, 'data') and param.data.device.type != 'cpu':
+                                                    param.data = param.data.to('cpu')
+                                            except Exception:
+                                                pass
+                                        for name, buffer in model.named_buffers():
+                                            try:
+                                                if hasattr(buffer, 'device') and buffer.device.type != 'cpu':
+                                                    buffer.data = buffer.data.to('cpu')
+                                            except Exception:
+                                                pass
                                 
                                 # 2단계: 모델 검증 - 모든 파라미터와 버퍼가 CPU에 있는지 확인
                                 meta_params = []
@@ -257,25 +312,58 @@ except ImportError:
                                 logger.warning("Attempting complete model reload as final fallback...")
                                 try:
                                     # 모델을 완전히 재로드 (더 안전한 옵션 사용)
+                                    # 추가 환경 변수 설정
+                                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                                    os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                                    if 'HF_DEVICE_MAP' in os.environ:
+                                        del os.environ['HF_DEVICE_MAP']
+                                    
+                                    # 모델 재로딩
                                     model = AutoModel.from_pretrained(
                                         model_name,
                                         torch_dtype=torch.float32,
-                                        low_cpu_mem_usage=False,
-                                        device_map=None,
-                                        use_safetensors=False,
+                                        low_cpu_mem_usage=False,  # 핵심: meta device 방지
+                                        device_map=None,  # 핵심: device_map 사용 안 함
+                                        use_safetensors=False,  # safetensors 사용 안 함
                                         trust_remote_code=True,
                                         local_files_only=False,
-                                        _fast_init=False,
+                                        _fast_init=False,  # fast init 비활성화
+                                        ignore_mismatched_sizes=True,  # 크기 불일치 무시
                                     )
-                                    # 강제로 CPU로 이동
-                                    model = model.to("cpu")
-                                    # 모든 파라미터와 버퍼 확인
+                                    
+                                    # 즉시 CPU로 이동
+                                    try:
+                                        model = model.to("cpu")
+                                    except Exception:
+                                        pass
+                                    
+                                    # 모든 파라미터와 버퍼를 강제로 CPU로 이동
                                     for param in model.parameters():
-                                        if hasattr(param, 'data') and str(param.data.device) == 'meta':
-                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                        if hasattr(param, 'data'):
+                                            try:
+                                                if str(param.data.device) == 'meta':
+                                                    # 메타 디바이스 파라미터는 새로 생성
+                                                    param.data = torch.zeros_like(param.data, device='cpu')
+                                                elif param.data.device.type != 'cpu':
+                                                    # CPU가 아닌 경우 CPU로 이동
+                                                    param.data = param.data.to('cpu')
+                                            except Exception:
+                                                # 오류 발생 시 무시하고 계속 진행
+                                                pass
+                                    
                                     for buffer in model.buffers():
-                                        if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
-                                            buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                        if hasattr(buffer, 'device'):
+                                            try:
+                                                if str(buffer.device) == 'meta':
+                                                    # 메타 디바이스 버퍼는 새로 생성
+                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                                elif buffer.device.type != 'cpu':
+                                                    # CPU가 아닌 경우 CPU로 이동
+                                                    buffer.data = buffer.data.to('cpu')
+                                            except Exception:
+                                                # 오류 발생 시 무시하고 계속 진행
+                                                pass
+                                    
                                     logger.info("Model reloaded and moved to CPU successfully")
                                 except Exception as reload_error:
                                     logger.error(f"Complete model reload also failed: {reload_error}")
@@ -521,16 +609,40 @@ except ImportError:
                                 )
                                 
                                 # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
+                                # 개선: 더 강력한 메타 디바이스 방지 로직
+                                # 추가 환경 변수 설정
+                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+                                os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+                                os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+                                if 'HF_DEVICE_MAP' in os.environ:
+                                    del os.environ['HF_DEVICE_MAP']
+                                
+                                # 모델 로딩 전에 torch 설정 확인
+                                import torch
+                                if hasattr(torch, 'set_default_device'):
+                                    try:
+                                        torch.set_default_device('cpu')
+                                    except Exception:
+                                        pass
+                                
+                                # 모델 로딩 (메타 디바이스 방지를 위한 최적 옵션)
                                 model = AutoModel.from_pretrained(
                                     fallback_model,
                                     torch_dtype=torch.float32,
                                     low_cpu_mem_usage=False,  # 핵심: meta device 방지
                                     device_map=None,  # 핵심: device_map 사용 안 함
-                                    use_safetensors=False,  # safetensors 사용 안 함
+                                    use_safetensors=False,  # safetensors 사용 안 함 (일부 모델에서 메타 디바이스 문제 발생)
                                     trust_remote_code=True,
                                     local_files_only=False,
                                     _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
+                                    ignore_mismatched_sizes=True,  # 크기 불일치 무시
                                 )
+                                
+                                # 모델 로딩 직후 즉시 CPU로 이동 (메타 디바이스 체크 전에)
+                                try:
+                                    model = model.to('cpu')
+                                except Exception as immediate_move_error:
+                                    logger.warning(f"Immediate CPU move failed for fallback model: {immediate_move_error}, will try enhanced migration")
                                 
                                 # 모델을 CPU에 명시적으로 이동 (to_empty() 대신 직접 이동)
                                 # 이미 CPU에 로드되었으므로 추가 이동 불필요

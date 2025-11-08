@@ -17,13 +17,13 @@ from core.agents.validators.quality_validators import AnswerValidator
 # Constants for processing steps
 MAX_PROCESSING_STEPS = 50
 
-# 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 증가
+# 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 추가 증가
 ANSWER_LENGTH_TARGETS = {
-    "simple_question": (500, 2000),      # 간단한 질의: 500-2000자 (1000 -> 2000)
-    "term_explanation": (800, 2500),     # 용어 설명: 800-2500자 (1500 -> 2500)
-    "legal_analysis": (1500, 4000),      # 법률 분석: 1500-4000자 (2500 -> 4000)
-    "complex_question": (2000, 5000),    # 복잡한 질의: 2000-5000자 (3500 -> 5000)
-    "default": (800, 3000)               # 기본값: 800-3000자 (2000 -> 3000)
+    "simple_question": (500, 3000),      # 간단한 질의: 500-3000자 (2000 -> 3000)
+    "term_explanation": (800, 3500),     # 용어 설명: 800-3500자 (2500 -> 3500)
+    "legal_analysis": (1500, 5000),      # 법률 분석: 1500-5000자 (4000 -> 5000)
+    "complex_question": (2000, 8000),    # 복잡한 질의: 2000-8000자 (5000 -> 8000)
+    "default": (800, 4000)               # 기본값: 800-4000자 (3000 -> 4000)
 }
 
 
@@ -1007,7 +1007,9 @@ class AnswerFormatterHandler:
         self,
         answer: str,
         query_type: str,
-        query_complexity: str
+        query_complexity: str,
+        grounding_score: Optional[float] = None,
+        quality_score: Optional[float] = None
     ) -> str:
         """
         답변 길이를 질의 유형에 맞게 조절
@@ -1016,6 +1018,8 @@ class AnswerFormatterHandler:
             answer: 원본 답변
             query_type: 질의 유형
             query_complexity: 질의 복잡도
+            grounding_score: 검증 점수 (선택적, 품질 기반 길이 조정에 사용)
+            quality_score: 품질 점수 (선택적, 품질 기반 길이 조정에 사용)
 
         Returns:
             조절된 답변
@@ -1027,14 +1031,32 @@ class AnswerFormatterHandler:
 
         current_length = len(answer)
 
-        # 목표 길이 결정
+        # 목표 길이 결정 (개선: 기본값 수정)
         if query_complexity == "simple":
-            min_len, max_len = ANSWER_LENGTH_TARGETS.get("simple_question", (500, 1000))
+            min_len, max_len = ANSWER_LENGTH_TARGETS.get("simple_question", ANSWER_LENGTH_TARGETS["default"])
+        elif query_complexity == "moderate":
+            # moderate는 기본적으로 더 긴 답변 허용 (개선: moderate 복잡도 처리)
+            min_len, max_len = ANSWER_LENGTH_TARGETS.get("legal_analysis", ANSWER_LENGTH_TARGETS["default"])
         elif query_complexity == "complex":
-            min_len, max_len = ANSWER_LENGTH_TARGETS.get("complex_question", (2000, 3500))
+            min_len, max_len = ANSWER_LENGTH_TARGETS.get("complex_question", ANSWER_LENGTH_TARGETS["default"])
         else:
             targets = ANSWER_LENGTH_TARGETS.get(query_type, ANSWER_LENGTH_TARGETS["default"])
             min_len, max_len = targets
+
+        # 답변 품질에 따른 길이 조정 (개선: 품질 기반 동적 조정)
+        original_max_len = max_len
+        if grounding_score is not None and grounding_score >= 0.7:
+            # 높은 Grounding Score면 더 긴 답변 허용 (최대 50% 증가)
+            max_len = int(max_len * 1.5)
+            self.logger.info(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (grounding_score: {grounding_score:.2f})")
+        elif quality_score is not None and quality_score >= 0.8:
+            # 높은 품질 점수면 더 긴 답변 허용 (최대 30% 증가)
+            max_len = int(max_len * 1.3)
+            self.logger.info(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (quality_score: {quality_score:.2f})")
+        elif grounding_score is not None and grounding_score >= 0.5:
+            # 중간 Grounding Score면 약간 더 긴 답변 허용 (최대 20% 증가)
+            max_len = int(max_len * 1.2)
+            self.logger.debug(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (grounding_score: {grounding_score:.2f})")
 
         # 길이가 적절한 경우 그대로 반환
         if min_len <= current_length <= max_len:
@@ -1926,9 +1948,17 @@ class AnswerFormatterHandler:
                 self.logger.debug(f"[ANSWER CLEANUP] After header removal: {before_header} -> {after_header} chars")
 
                 # 답변 길이 조절 (질의 유형에 맞게)
+                # 개선: grounding_score와 quality_score를 전달하여 품질 기반 동적 조정
                 query_type = WorkflowUtils.get_state_value(state, "query_type", "general_question")
                 query_complexity = WorkflowUtils.get_state_value(state, "complexity_level", "moderate")
-                clean_answer = self._adjust_answer_length(clean_answer, query_type, query_complexity)
+                # grounding_score는 나중에 계산되므로, 이전 검증 결과가 있으면 사용
+                grounding_score = state.get("grounding_score")
+                if grounding_score is None:
+                    # 이전 검증 결과가 없으면 None으로 전달 (품질 기반 조정 없음)
+                    grounding_score = None
+                # quality_score는 현재 사용하지 않지만, 향후 확장 가능
+                quality_score = None
+                clean_answer = self._adjust_answer_length(clean_answer, query_type, query_complexity, grounding_score, quality_score)
 
                 # 디버깅 로그
                 self.logger.info(f"[ANSWER CLEANUP] Original length: {len(final_answer)}, Clean length: {len(clean_answer)}")
@@ -2031,6 +2061,55 @@ class AnswerFormatterHandler:
                     # 검증 결과를 state에 저장 (신뢰도 계산에 사용)
                     state["grounding_score"] = source_verification_result.get("grounding_score", 0.0)
                     state["source_coverage"] = source_verification_result.get("source_coverage", 0.0)
+
+                    # 개선: grounding_score 계산 후 답변 길이 재조정 (품질이 높으면 더 긴 답변 허용)
+                    # 개선: _adjust_answer_length 함수를 재사용하여 섹션 기반 스마트 트렁케이션 적용
+                    calculated_grounding_score = state.get("grounding_score")
+                    if calculated_grounding_score is not None and calculated_grounding_score >= 0.5:
+                        # grounding_score가 높으면 답변 길이를 재조정하여 더 긴 답변 허용
+                        original_clean_length = len(clean_answer)
+                        # 원본 답변(final_answer)이 더 길면, grounding_score에 따라 더 긴 답변 허용
+                        if len(final_answer) > len(clean_answer):
+                            # 개선: _adjust_answer_length 함수를 재사용하여 섹션 기반 스마트 트렁케이션 적용
+                            # grounding_score에 따라 더 긴 길이로 재조정
+                            if calculated_grounding_score >= 0.7:
+                                # 높은 grounding_score: 원본 답변의 최대 150%까지 허용
+                                # _adjust_answer_length 함수를 재사용하여 섹션 기반 스마트 트렁케이션 적용
+                                re_adjusted_answer = self._adjust_answer_length(
+                                    final_answer,
+                                    query_type,
+                                    query_complexity,
+                                    calculated_grounding_score,
+                                    None
+                                )
+                                # 재조정된 답변이 원본보다 길면 사용
+                                if len(re_adjusted_answer) > len(clean_answer):
+                                    clean_answer = re_adjusted_answer
+                                    self.logger.info(f"[ANSWER LENGTH] Re-adjusted after grounding_score calculation: {original_clean_length} -> {len(clean_answer)} chars (grounding_score: {calculated_grounding_score:.2f}, using smart truncation)")
+                                else:
+                                    # 재조정이 효과가 없으면 원본 답변 사용
+                                    clean_answer = final_answer
+                                    self.logger.info(f"[ANSWER LENGTH] Re-adjusted after grounding_score calculation: {original_clean_length} -> {len(clean_answer)} chars (grounding_score: {calculated_grounding_score:.2f})")
+                            elif calculated_grounding_score >= 0.5:
+                                # 중간 grounding_score: 원본 답변의 최대 120%까지 허용
+                                # _adjust_answer_length 함수를 재사용하여 섹션 기반 스마트 트렁케이션 적용
+                                re_adjusted_answer = self._adjust_answer_length(
+                                    final_answer,
+                                    query_type,
+                                    query_complexity,
+                                    calculated_grounding_score,
+                                    None
+                                )
+                                # 재조정된 답변이 원본보다 길면 사용
+                                if len(re_adjusted_answer) > len(clean_answer):
+                                    clean_answer = re_adjusted_answer
+                                    self.logger.debug(f"[ANSWER LENGTH] Re-adjusted after grounding_score calculation: {original_clean_length} -> {len(clean_answer)} chars (grounding_score: {calculated_grounding_score:.2f}, using smart truncation)")
+                                else:
+                                    # 재조정이 효과가 없으면 원본 답변 사용
+                                    clean_answer = final_answer
+                                    self.logger.debug(f"[ANSWER LENGTH] Re-adjusted after grounding_score calculation: {original_clean_length} -> {len(clean_answer)} chars (grounding_score: {calculated_grounding_score:.2f})")
+                        # 재조정된 답변을 state에 저장
+                        state["answer"] = clean_answer.strip()
 
                 # 기존 답변 검증 수행
                 validation_result = self._validate_final_answer(clean_answer, retrieved_docs, query)
