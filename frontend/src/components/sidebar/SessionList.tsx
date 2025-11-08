@@ -7,6 +7,7 @@ import { DateGroup } from '../../utils/dateUtils';
 import { SessionItem } from './SessionItem';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { getSessionsByDate } from '../../services/sessionService';
+import logger from '../../utils/logger';
 import type { Session } from '../../types/session';
 
 interface SessionListProps {
@@ -112,7 +113,7 @@ export function SessionList({
         },
       }));
     } catch (error) {
-      console.error(`Failed to load ${group} sessions:`, error);
+      logger.error(`Failed to load ${group} sessions:`, error);
       setGroupData(prev => ({
         ...prev,
         [group]: { ...prev[group], isLoading: false },

@@ -11,6 +11,7 @@ import {
   generateSessionTitle,
   getSessionsByDate,
 } from '../services/sessionService';
+import logger from '../utils/logger';
 import type {
   Session,
   SessionCreate,
@@ -60,7 +61,7 @@ export function useSession() {
       if (skipLoadSessions) {
         // 백그라운드에서 세션 목록 새로고침 (await 없이)
         loadSessions().catch(err => {
-          console.error('Failed to refresh session list:', err);
+          logger.error('Failed to refresh session list:', err);
         });
       } else {
         await loadSessions();
