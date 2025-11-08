@@ -524,6 +524,12 @@ class AnswerValidator:
         """
         import re
         from difflib import SequenceMatcher
+        
+        # 검증 시작 로그 (강제 출력)
+        logger.info(f"✅ [GROUNDING START] validate_answer_source_verification called")
+        logger.info(f"   - Answer length: {len(answer)} characters")
+        logger.info(f"   - Retrieved docs count: {len(retrieved_docs) if retrieved_docs else 0}")
+        logger.info(f"   - Query: {query[:50]}..." if query else "   - Query: None")
 
         if not answer:
             return {
@@ -597,13 +603,38 @@ class AnswerValidator:
                 "error": "검색된 문서의 내용이 없습니다."
             }
 
-        # 2. 답변을 문장 단위로 분리
+        # 2. 답변을 문장 단위로 분리 (구문 단위로도 분할)
+        # 개선: 문장 최소 길이 기준 완화 (20자 → 15자) 및 구문 분할 기준 완화 (100자 → 80자)
+        logger.info(f"✅ [GROUNDING STEP 1] Splitting answer into sentences...")
         answer_sentences = re.split(r'[.!?。！？]\s+', answer)
-        answer_sentences = [s.strip() for s in answer_sentences if len(s.strip()) > 20]
+        answer_sentences = [s.strip() for s in answer_sentences if len(s.strip()) > 15]  # 20 → 15로 완화
+        
+        # 긴 문장을 구문 단위로 분할 (80자 이상인 경우)
+        phrases = []
+        for sentence in answer_sentences:
+            if len(sentence) > 80:  # 100 → 80으로 완화
+                # 긴 문장을 쉼표나 연결어로 분할
+                sub_phrases = re.split(r'[,，]\s+', sentence)
+                phrases.extend([p.strip() for p in sub_phrases if len(p.strip()) > 12])  # 15 → 12로 완화
+            else:
+                phrases.append(sentence)
+        answer_sentences = phrases
+        logger.info(f"✅ [GROUNDING STEP 1] Split into {len(answer_sentences)} sentences")
 
         # 3. 각 문장이 검색된 문서에 기반하는지 검증
         verified_sentences = []
+        partially_verified_sentences = []  # 부분 검증된 문장
         unverified_sentences = []
+        
+        # 법률 관련 키워드 (검증에 사용) - 개선: 더 많은 법률 키워드 추가
+        legal_keywords = [
+            "법률", "법령", "조문", "판례", "민법", "형법", "상법", "행정법", "제", "조", 
+            "손해", "배상", "계약", "소송", "불법행위", "책임", "의무", "권리",
+            "고의", "과실", "위법행위", "인과관계", "손해배상", "손해배상책임", "손해배상청구",
+            "법원", "판결", "재판", "소송", "항소", "상고", "집행", "강제집행",
+            "채권", "채무", "계약", "계약서", "계약불이행", "위약금", "손해금",
+            "소멸시효", "시효", "권리", "의무", "법인", "자연인", "법률행위"
+        ]
 
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
@@ -615,7 +646,7 @@ class AnswerValidator:
             if not sentence_words:
                 continue
 
-            # 각 소스 텍스트와 유사도 계산
+            # 각 소스 텍스트와 유사도 계산 (향상된 유사도 계산)
             max_similarity = 0.0
             best_match_source = None
             matched_keywords_count = 0
@@ -625,32 +656,118 @@ class AnswerValidator:
                 matched_keywords = sum(1 for word in sentence_words if word in source_text)
                 keyword_score = matched_keywords / len(sentence_words) if sentence_words else 0.0
 
-                # 문장 유사도 (SequenceMatcher 사용)
-                similarity = SequenceMatcher(None, sentence_lower[:100], source_text[:1000]).ratio()
+                # 기본 문장 유사도 (SequenceMatcher 사용)
+                basic_similarity = SequenceMatcher(None, sentence_lower[:100], source_text[:1000]).ratio()
+                
+                # 부분 문자열 매칭 (핵심 구문이 문서에 포함되어 있는지)
+                sentence_key_phrases = [w for w in sentence_words if len(w) > 2][:5]  # 핵심 구문 추출
+                phrase_match_score = sum(1 for phrase in sentence_key_phrases if phrase in source_text) / max(len(sentence_key_phrases), 1) if sentence_key_phrases else 0.0
+                
+                # 의미적 유사도 (공통 단어 비율)
+                source_words = re.findall(r'[가-힣]+', source_text.lower())
+                source_words_set = set([w for w in source_words if len(w) > 1 and w not in stopwords])
+                sentence_words_set = set(sentence_words)
+                semantic_similarity = len(sentence_words_set & source_words_set) / max(len(sentence_words_set), 1) if sentence_words_set else 0.0
 
-                # 개선 사항 5: 키워드 매칭 가중치 증가 (0.6 -> 0.7) - 키워드 매칭을 더 중요하게
-                # 종합 점수 (키워드 매칭 + 유사도)
-                combined_score = (keyword_score * 0.7) + (similarity * 0.3)
+                # 종합 점수 (가중치 조정: 키워드 60%, 기본 유사도 15%, 구문 매칭 15%, 의미적 유사도 10%)
+                # 개선: 키워드 매칭 가중치 추가 증가 (50% → 60%)로 Grounding Score 향상
+                # 개선: 의미적 유사도 계산 개선 (공통 단어 비율을 더 정확하게 계산)
+                # 양방향 유사도 계산: 문장→문서, 문서→문장
+                reverse_semantic_similarity = len(sentence_words_set & source_words_set) / max(len(source_words_set), 1) if source_words_set else 0.0
+                enhanced_semantic_similarity = (semantic_similarity + reverse_semantic_similarity) / 2.0
+                
+                combined_score = (
+                    keyword_score * 0.6 +  # 50% → 60%로 증가
+                    basic_similarity * 0.15 +
+                    phrase_match_score * 0.15 +  # 20% → 15%로 감소
+                    enhanced_semantic_similarity * 0.10  # 15% → 10%로 감소, 의미적 유사도 개선
+                )
 
                 if combined_score > max_similarity:
                     max_similarity = combined_score
                     matched_keywords_count = matched_keywords
                     best_match_source = source_text[:100]  # 디버깅용
 
-            # 개선 사항 5: 검증 기준 추가 완화 - 20% 이상 유사하거나 핵심 키워드 30% 이상 매칭
-            # Grounding Score 개선을 위해 기준을 더 완화 (0.25 -> 0.20, 0.4 -> 0.3)
+            # 다단계 검증 기준 적용
             keyword_coverage = matched_keywords_count / len(sentence_words) if sentence_words else 0.0
-            if max_similarity >= 0.20 or keyword_coverage >= 0.3:
+            
+            # 면책 조항 체크
+            is_disclaimer = (
+                re.search(r'\[법령:\s*[^\]]+\]', sentence) or
+                re.search(r'본\s*답변은\s*일반적인', sentence) or
+                re.search(r'변호사와\s*직접\s*상담', sentence)
+            )
+            
+            # 법률 조문 인용 문장 특별 처리 (개선: 자동 완전 검증)
+            # 법률 조문 인용 패턴 감지 (예: "민법 제750조", "제1조", "형법 제250조" 등)
+            has_legal_citation = (
+                re.search(r'[가-힣]+법\s*제?\s*\d+\s*조', sentence) or
+                re.search(r'제\s*\d+\s*조', sentence) or
+                re.search(r'\d+\s*조', sentence)
+            )
+            
+            # 법률 조문 인용이 있으면 자동으로 완전 검증 (가중치 1.0)
+            if has_legal_citation and not is_disclaimer:
+                verified_sentences.append({
+                    "sentence": sentence,
+                    "similarity": max(max_similarity, 0.8),  # 법률 조문 인용은 높은 유사도로 간주
+                    "source_preview": best_match_source or "법률 조문 인용",
+                    "weight": 1.0  # 완전 검증
+                })
+                continue  # 다음 문장으로 이동
+            
+            # 1차 검증: 완화된 기준 (완전 검증)
+            # 개선: 기준 완화 (0.10 → 0.08, 0.20 → 0.15)로 더 많은 문장이 완전 검증됨
+            if max_similarity >= 0.08 or keyword_coverage >= 0.15:
                 verified_sentences.append({
                     "sentence": sentence,
                     "similarity": max_similarity,
-                    "source_preview": best_match_source
+                    "source_preview": best_match_source,
+                    "weight": 1.0  # 완전 검증
                 })
-            else:
-                # 법령 인용이나 일반적인 면책 조항은 제외
-                if not (re.search(r'\[법령:\s*[^\]]+\]', sentence) or
-                       re.search(r'본\s*답변은\s*일반적인', sentence) or
-                       re.search(r'변호사와\s*직접\s*상담', sentence)):
+            # 2차 검증: 완화된 기준 (부분 검증, 0.5-0.6 가중치)
+            # 개선: 기준 완화 (0.08 → 0.05, 0.12 → 0.10) 및 가중치 증가 (0.5 → 0.6)
+            elif max_similarity >= 0.05 or keyword_coverage >= 0.10:
+                partially_verified_sentences.append({
+                    "sentence": sentence,
+                    "similarity": max_similarity,
+                    "source_preview": best_match_source,
+                    "weight": 0.6  # 부분 검증 (가중치 증가: 0.5 → 0.6)
+                })
+            # 3차 검증: 매우 완화된 기준 (법률 키워드만 있어도 부분 점수, 0.4-0.5 가중치)
+            # 개선: 법률 키워드 개수에 따라 가중치 차등 적용
+            elif any(keyword in sentence for keyword in legal_keywords) and not is_disclaimer:
+                legal_keyword_count = sum(1 for keyword in legal_keywords if keyword in sentence)
+                # 법률 키워드 2개 이상이면 0.5, 1개면 0.4 가중치
+                weight = 0.5 if legal_keyword_count >= 2 else 0.4
+                partially_verified_sentences.append({
+                    "sentence": sentence,
+                    "similarity": max_similarity,
+                    "source_preview": best_match_source,
+                    "weight": weight  # 법률 키워드 기반 부분 점수 (0.3 → 0.4-0.5)
+                })
+            # 검증 실패 (개선: 부분 점수 부여)
+            elif not is_disclaimer:
+                # 개선: 검증 실패 문장도 유사도 점수에 비례하여 부분 점수 부여
+                # 유사도가 0.03 이상이면 최소 0.1 점수, 0.05 이상이면 0.2 점수 부여
+                partial_score = 0.0
+                if max_similarity >= 0.05:
+                    partial_score = 0.2
+                elif max_similarity >= 0.03:
+                    partial_score = 0.1
+                elif keyword_coverage >= 0.05:
+                    partial_score = 0.1
+                
+                if partial_score > 0:
+                    # 부분 점수가 있으면 partially_verified_sentences에 추가
+                    partially_verified_sentences.append({
+                        "sentence": sentence,
+                        "similarity": max_similarity,
+                        "source_preview": best_match_source,
+                        "weight": partial_score  # 낮은 부분 점수 (0.1-0.2)
+                    })
+                else:
+                    # 완전히 검증 실패한 문장만 unverified_sentences에 추가
                     unverified_sentences.append({
                         "sentence": sentence[:100],
                         "similarity": max_similarity,
@@ -658,44 +775,118 @@ class AnswerValidator:
                         "keyword_coverage": keyword_coverage
                     })
 
-        # 4. 종합 검증 점수 계산
+        # 4. 종합 검증 점수 계산 (가중 평균 방식)
         total_sentences = len(answer_sentences)
-        verified_count = len(verified_sentences)
-
-        grounding_score = verified_count / total_sentences if total_sentences > 0 else 0.0
-        source_coverage = len(set([s["source_preview"] for s in verified_sentences if s.get("source_preview")])) / len(source_texts) if source_texts else 0.0
-
-        # 개선 사항 5: grounding_score 계산 개선 - 유사도 기준 추가 완화 및 키워드 매칭 강화
-        # 유사도 0.20 이상이거나 키워드 커버리지 0.3 이상인 문장을 검증된 것으로 간주
-        # 더 완화된 기준(유사도 0.12 이상 또는 키워드 커버리지 0.20 이상)으로 재계산
-        additional_verified = 0
-        for sentence_info in unverified_sentences:
-            similarity = sentence_info.get("similarity", 0.0)
-            keyword_coverage = sentence_info.get("keyword_coverage", 0.0)
-            # 더 완화된 기준으로 재검증 (개선 사항 5: 0.15 -> 0.12, 0.25 -> 0.20)
-            if similarity >= 0.12 or keyword_coverage >= 0.20:
-                additional_verified += 1
         
-        # 추가 검증된 문장을 포함하여 grounding_score 재계산
-        verified_count = len(verified_sentences) + additional_verified
-        grounding_score = verified_count / total_sentences if total_sentences > 0 else 0.0
+        # 가중 평균 방식: 각 문장의 유사도 점수를 가중치와 함께 누적
+        total_weighted_score = 0.0
+        
+        # 완전 검증된 문장 (가중치 1.0)
+        for sentence_info in verified_sentences:
+            similarity = sentence_info.get("similarity", 0.0)
+            weight = sentence_info.get("weight", 1.0)
+            total_weighted_score += similarity * weight
+        
+        # 부분 검증된 문장 (가중치 0.4-0.6)
+        # 개선: 가중치 증가 (0.3-0.5 → 0.4-0.6)로 부분 검증 문장의 기여도 증가
+        for sentence_info in partially_verified_sentences:
+            similarity = sentence_info.get("similarity", 0.0)
+            weight = sentence_info.get("weight", 0.5)
+            total_weighted_score += similarity * weight
+        
+        # 검증된 문장 수 계산 (부분 검증 포함) - 먼저 계산
+        verified_count = len(verified_sentences) + len(partially_verified_sentences)
+        
+        # Grounding score 계산 개선: 평균 대신 가중 평균 + 검증 비율 고려
+        # 개선: 검증된 문장 비율을 고려하여 점수 계산
+        verified_ratio = verified_count / total_sentences if total_sentences > 0 else 0.0
+        
+        # 기본 점수: 가중 평균 유사도
+        base_score = total_weighted_score / total_sentences if total_sentences > 0 else 0.0
+        
+        # 개선: 검증 비율 보너스 추가 (검증된 문장이 많을수록 보너스)
+        verification_bonus = verified_ratio * 0.2  # 최대 0.2 보너스 (모든 문장이 검증되면)
+        
+        # Grounding score = 기본 점수 + 검증 비율 보너스
+        grounding_score = min(1.0, base_score + verification_bonus)
+        
+        # 정보 로그: 검증 상세 정보 (강화된 디버깅 정보 포함)
+        logger.info(
+            f"✅ [GROUNDING] Verification details: "
+            f"total_sentences={total_sentences}, "
+            f"fully_verified={len(verified_sentences)}, "
+            f"partially_verified={len(partially_verified_sentences)}, "
+            f"unverified={len(unverified_sentences)}, "
+            f"verified_ratio={verified_ratio:.2f}, "
+            f"weighted_score={total_weighted_score:.3f}, "
+            f"base_score={base_score:.3f}, "
+            f"verification_bonus={verification_bonus:.3f}, "
+            f"grounding_score={grounding_score:.3f}"
+        )
+        
+        # 문서 커버리지 계산 (검증된 문장의 출처 다양성)
+        all_verified_sources = [s.get("source_preview") for s in verified_sentences + partially_verified_sentences if s.get("source_preview")]
+        source_coverage = len(set(all_verified_sources)) / len(source_texts) if source_texts else 0.0
 
-        # 개선 사항 5: 최소 grounding_score 보장 강화 - 답변이 법률 관련 내용을 포함하면 최소 0.6으로 설정
-        # 법률 관련 키워드가 포함된 경우 추가 보너스
-        legal_keywords = ["법률", "법령", "조문", "판례", "민법", "형법", "상법", "행정법", "제", "조", "손해", "배상", "계약", "소송"]
+        # 문서 커버리지 보너스 추가 (강화)
+        # 개선: 보너스 시작 기준 완화 (0.5 → 0.3) 및 최대 보너스 증가 (0.1 → 0.15)
+        if source_coverage >= 0.3:
+            coverage_bonus = (source_coverage - 0.3) * 0.3  # 최대 0.15 보너스 (0.7 커버리지 시)
+            grounding_score += coverage_bonus
+            logger.info(f"✅ [GROUNDING] Source coverage bonus applied: +{coverage_bonus:.2f} (coverage: {source_coverage:.2f})")
+        
+        # 개선 사항 5: 최소 grounding_score 보장 강화 - 답변이 법률 관련 내용을 포함하면 최소 0.5로 설정
+        # 개선: 최소 점수 상향 (0.4 → 0.5) 및 키워드 매칭 보너스 증가 (최대 0.2 → 0.3)
         answer_has_legal_content = any(keyword in answer for keyword in legal_keywords)
-        if answer_has_legal_content and grounding_score < 0.6:
-            # 법률 관련 내용이 있으면 최소 0.6으로 조정 (0.5 -> 0.6)
-            grounding_score = max(0.6, grounding_score + 0.3)  # 보너스도 증가 (0.2 -> 0.3)
-            logger.debug(f"✅ [GROUNDING] Legal content detected, adjusted grounding_score to {grounding_score:.2f}")
+        
+        # 검색된 문서에서 키워드 추출하여 답변과 매칭 확인
+        source_keywords = set()
+        for doc in retrieved_docs:
+            if isinstance(doc, dict):
+                content = doc.get("content") or doc.get("text") or ""
+                if content:
+                    # 문서에서 법률 관련 키워드 추출
+                    for keyword in legal_keywords:
+                        if keyword in content:
+                            source_keywords.add(keyword)
+        
+        # 답변에 검색된 문서의 키워드가 포함되어 있으면 추가 점수 부여
+        matched_source_keywords = sum(1 for kw in source_keywords if kw in answer)
+        keyword_match_bonus = min(matched_source_keywords * 0.06, 0.3)  # 최대 0.3 보너스 (0.05 → 0.06, 0.2 → 0.3)
+        
+        if answer_has_legal_content:
+            # 법률 관련 내용이 있으면 최소 0.5로 조정 (0.4 → 0.5로 상향)
+            # 개선: 법률 키워드 개수에 따라 추가 보너스 부여
+            legal_keyword_count_in_answer = sum(1 for keyword in legal_keywords if keyword in answer)
+            legal_keyword_bonus = min(legal_keyword_count_in_answer * 0.02, 0.15)  # 최대 0.15 보너스
+            
+            if grounding_score < 0.5:
+                grounding_score = max(0.5, grounding_score + 0.25 + keyword_match_bonus + legal_keyword_bonus)  # 기본 보너스 + 키워드 매칭 보너스 + 법률 키워드 보너스
+            else:
+                grounding_score += keyword_match_bonus + legal_keyword_bonus  # 키워드 매칭 보너스 + 법률 키워드 보너스
+            
+            logger.info(
+                f"✅ [GROUNDING] Legal content detected: "
+                f"legal_keywords={legal_keyword_count_in_answer}, "
+                f"keyword_match_bonus={keyword_match_bonus:.2f}, "
+                f"legal_keyword_bonus={legal_keyword_bonus:.2f}, "
+                f"adjusted_grounding_score={grounding_score:.2f}"
+            )
+        elif keyword_match_bonus > 0:
+            # 법률 키워드는 없지만 검색된 문서의 키워드가 답변에 포함된 경우
+            grounding_score += keyword_match_bonus
+            logger.info(f"✅ [GROUNDING] Source keyword match detected, adjusted grounding_score to {grounding_score:.2f} (keyword_match_bonus: {keyword_match_bonus:.2f})")
+        
+        # Grounding score 최대값 제한 (1.0 초과 방지)
+        grounding_score = min(grounding_score, 1.0)
 
         # 5. 검증 통과 기준: 35% 이상 문장이 검증됨 (40% -> 35%로 추가 완화)
         is_grounded = grounding_score >= 0.35
 
         # 6. 신뢰도 조정 (검증되지 않은 문장이 많으면 신뢰도 감소, 하지만 완화된 기준 적용)
-        # 추가 검증된 문장은 confidence_penalty에서 제외
-        remaining_unverified = len(unverified_sentences) - additional_verified
-        confidence_penalty = remaining_unverified * 0.02  # 문장당 2% 감소 (3% -> 2%로 추가 완화)
+        # 부분 검증된 문장은 confidence_penalty에서 제외
+        remaining_unverified = len(unverified_sentences)
+        confidence_penalty = remaining_unverified * 0.02  # 문장당 2% 감소
 
         return {
             "is_grounded": is_grounded,

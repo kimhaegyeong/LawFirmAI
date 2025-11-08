@@ -17,13 +17,13 @@ from core.agents.validators.quality_validators import AnswerValidator
 # Constants for processing steps
 MAX_PROCESSING_STEPS = 50
 
-# 답변 길이 목표 (질의 유형별)
+# 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 증가
 ANSWER_LENGTH_TARGETS = {
-    "simple_question": (500, 1000),      # 간단한 질의: 500-1000자
-    "term_explanation": (800, 1500),     # 용어 설명: 800-1500자
-    "legal_analysis": (1500, 2500),      # 법률 분석: 1500-2500자
-    "complex_question": (2000, 3500),    # 복잡한 질의: 2000-3500자
-    "default": (800, 2000)               # 기본값: 800-2000자
+    "simple_question": (500, 2000),      # 간단한 질의: 500-2000자 (1000 -> 2000)
+    "term_explanation": (800, 2500),     # 용어 설명: 800-2500자 (1500 -> 2500)
+    "legal_analysis": (1500, 4000),      # 법률 분석: 1500-4000자 (2500 -> 4000)
+    "complex_question": (2000, 5000),    # 복잡한 질의: 2000-5000자 (3500 -> 5000)
+    "default": (800, 3000)               # 기본값: 800-3000자 (2000 -> 3000)
 }
 
 
@@ -1946,7 +1946,35 @@ class AnswerFormatterHandler:
 
                 # 최종 답변 검증 (개선: 테스트 및 검증 로직 추가)
                 # 검색 결과 기반 검증 추가 (Hallucination 방지)
+                # 개선: retrieved_docs를 여러 위치에서 검색
                 retrieved_docs = state.get("retrieved_docs", [])
+                if not retrieved_docs:
+                    # search 그룹에서 확인
+                    if "search" in state and isinstance(state["search"], dict):
+                        retrieved_docs = state["search"].get("retrieved_docs", [])
+                if not retrieved_docs:
+                    # common.search 그룹에서 확인
+                    if "common" in state and isinstance(state["common"], dict):
+                        if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                            retrieved_docs = state["common"]["search"].get("retrieved_docs", [])
+                if not retrieved_docs:
+                    # state_helpers의 get_retrieved_docs 사용
+                    try:
+                        from core.agents.state_helpers import get_retrieved_docs
+                        retrieved_docs = get_retrieved_docs(state)
+                    except (ImportError, AttributeError):
+                        pass
+                if not retrieved_docs:
+                    # global cache에서 확인
+                    try:
+                        from core.agents.node_wrappers import _global_search_results_cache
+                        if _global_search_results_cache:
+                            retrieved_docs = _global_search_results_cache.get("retrieved_docs", [])
+                    except (ImportError, AttributeError):
+                        pass
+                
+                self.logger.info(f"[GROUNDING VERIFICATION] Retrieved docs count: {len(retrieved_docs) if retrieved_docs else 0}")
+                
                 query = WorkflowUtils.get_state_value(state, "query", "")
                 
                 # needs_search 확인 (direct_answer 노드의 경우 검색이 없음)
@@ -1965,8 +1993,12 @@ class AnswerFormatterHandler:
                     state["source_coverage"] = None  # None으로 설정하여 패널티 방지
                 else:
                     # 검색 결과가 있는 경우 정상적인 검증 수행
+                    # 개선: 원본 답변(final_answer)로 검증하여 잘린 답변으로 인한 grounding_score 저하 방지
+                    verification_answer = final_answer if len(final_answer) > len(clean_answer) else clean_answer
+                    self.logger.debug(f"[GROUNDING VERIFICATION] Using {'original' if verification_answer == final_answer else 'cleaned'} answer for verification (length: {len(verification_answer)})")
+                    
                     source_verification_result = AnswerValidator.validate_answer_source_verification(
-                        answer=clean_answer,
+                        answer=verification_answer,
                         retrieved_docs=retrieved_docs,
                         query=query
                     )

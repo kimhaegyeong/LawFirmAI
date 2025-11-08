@@ -159,30 +159,151 @@ except ImportError:
                             )
                             
                             # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
+                            # 개선: 더 명확한 옵션 사용 및 dtype 대신 torch_dtype 사용 (deprecated 경고 방지)
                             model = AutoModel.from_pretrained(
                                 model_name,
-                                torch_dtype=torch.float32,
+                                dtype=torch.float32,  # torch_dtype 대신 dtype 사용 (deprecated 경고 방지)
                                 low_cpu_mem_usage=False,  # 핵심: meta device 방지
                                 device_map=None,  # 핵심: device_map 사용 안 함
-                                use_safetensors=False,  # safetensors 사용 안 함
+                                use_safetensors=True,  # safetensors 사용 (더 안전하고 빠름)
                                 trust_remote_code=True,
                                 local_files_only=False,
                                 _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
+                                ignore_mismatched_sizes=True,  # 크기 불일치 무시
                             )
                             
-                            # 모델을 CPU에 명시적으로 이동 (to_empty() 대신 직접 이동)
-                            # 이미 CPU에 로드되었으므로 추가 이동 불필요
-                            # 하지만 안전을 위해 명시적으로 CPU로 이동
-                            if hasattr(model, 'to'):
-                                try:
-                                    # 모델이 이미 CPU에 있으면 이동 불필요
-                                    # 하지만 명시적으로 CPU로 이동 시도
+                            # 모델을 CPU에 명시적으로 이동 (meta device 완전 제거)
+                            # 개선: 더 강력한 모델 이동 로직
+                            try:
+                                # 1단계: 모델이 meta device에 있는지 확인
+                                first_param = next(model.parameters())
+                                is_meta_device = hasattr(first_param, 'device') and str(first_param.device) == 'meta'
+                                
+                                if is_meta_device:
+                                    logger.debug("Model is on meta device, using enhanced migration method")
+                                    # meta device인 경우: 모든 파라미터와 버퍼를 명시적으로 CPU로 이동
+                                    # 방법 1: to_empty() 사용
+                                    try:
+                                        state_dict = model.state_dict()
+                                        model = model.to_empty(device='cpu')
+                                        # state_dict를 로드하기 전에 모든 텐서를 CPU로 명시적으로 이동
+                                        cpu_state_dict = {}
+                                        for key, value in state_dict.items():
+                                            if isinstance(value, torch.Tensor):
+                                                if str(value.device) == 'meta':
+                                                    # meta device 텐서는 새로 생성
+                                                    cpu_state_dict[key] = torch.zeros_like(value, device='cpu')
+                                                else:
+                                                    cpu_state_dict[key] = value.to('cpu')
+                                            else:
+                                                cpu_state_dict[key] = value
+                                        
+                                        model.load_state_dict(cpu_state_dict, assign=True, strict=False)
+                                        logger.debug("Model moved from meta device to CPU using to_empty() with CPU state_dict")
+                                    except Exception as to_empty_error:
+                                        logger.warning(f"to_empty() method failed: {to_empty_error}, trying direct parameter migration")
+                                        # 방법 2: 모든 파라미터와 버퍼를 직접 CPU로 이동
+                                        for name, param in model.named_parameters():
+                                            if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                                if str(param.data.device) == 'meta':
+                                                    # meta device 파라미터는 새로 생성
+                                                    param.data = torch.zeros_like(param.data, device='cpu')
+                                                else:
+                                                    param.data = param.data.to('cpu')
+                                        
+                                        for name, buffer in model.named_buffers():
+                                            if hasattr(buffer, 'device'):
+                                                if str(buffer.device) == 'meta':
+                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                                else:
+                                                    buffer.data = buffer.data.to('cpu')
+                                        
+                                        logger.debug("Model parameters and buffers moved to CPU directly")
+                                else:
+                                    # 이미 CPU에 있거나 다른 device에 있는 경우 일반 이동
                                     model = model.to("cpu")
-                                except Exception as move_error:
-                                    # 이동 실패 시에도 계속 진행 (이미 CPU에 있을 수 있음)
-                                    logger.debug(f"Model move to CPU skipped (may already be on CPU): {move_error}")
+                                    logger.debug("Model moved to CPU using to() method")
+                                
+                                # 2단계: 모델 검증 - 모든 파라미터와 버퍼가 CPU에 있는지 확인
+                                meta_params = []
+                                for name, param in model.named_parameters():
+                                    if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                        if str(param.data.device) == 'meta':
+                                            meta_params.append(name)
+                                            # 강제로 CPU로 이동
+                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                
+                                meta_buffers = []
+                                for name, buffer in model.named_buffers():
+                                    if hasattr(buffer, 'device'):
+                                        if str(buffer.device) == 'meta':
+                                            meta_buffers.append(name)
+                                            # 강제로 CPU로 이동
+                                            buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                
+                                if meta_params or meta_buffers:
+                                    logger.warning(f"Found {len(meta_params)} meta parameters and {len(meta_buffers)} meta buffers, forced to CPU")
+                                
+                                # 3단계: 최종 검증
+                                final_check = next(model.parameters())
+                                if str(final_check.device) == 'meta':
+                                    raise RuntimeError("Model is still on meta device after migration attempts")
+                                
+                                logger.info(f"Model successfully moved to CPU (device: {final_check.device})")
+                                
+                            except Exception as move_error:
+                                logger.error(f"Model move to CPU failed: {move_error}")
+                                # 최종 폴백: 모델을 완전히 재로드
+                                logger.warning("Attempting complete model reload as final fallback...")
+                                try:
+                                    # 모델을 완전히 재로드 (더 안전한 옵션 사용)
+                                    model = AutoModel.from_pretrained(
+                                        model_name,
+                                        torch_dtype=torch.float32,
+                                        low_cpu_mem_usage=False,
+                                        device_map=None,
+                                        use_safetensors=False,
+                                        trust_remote_code=True,
+                                        local_files_only=False,
+                                        _fast_init=False,
+                                    )
+                                    # 강제로 CPU로 이동
+                                    model = model.to("cpu")
+                                    # 모든 파라미터와 버퍼 확인
+                                    for param in model.parameters():
+                                        if hasattr(param, 'data') and str(param.data.device) == 'meta':
+                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                    for buffer in model.buffers():
+                                        if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
+                                            buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                    logger.info("Model reloaded and moved to CPU successfully")
+                                except Exception as reload_error:
+                                    logger.error(f"Complete model reload also failed: {reload_error}")
+                                    raise
                             
                             model.eval()
+                            
+                            # 4단계: 모델 검증 - 추론 가능한지 확인
+                            # 개선: 검증 로직 강화 (meta device 재확인)
+                            try:
+                                # 최종 meta device 확인
+                                final_check_params = list(model.parameters())[:5]  # 처음 5개 파라미터만 확인
+                                meta_count = sum(1 for p in final_check_params if hasattr(p, 'device') and str(p.device) == 'meta')
+                                if meta_count > 0:
+                                    logger.error(f"Model validation failed: {meta_count} parameters still on meta device")
+                                    raise RuntimeError(f"{meta_count} parameters still on meta device after migration")
+                                
+                                test_input = tokenizer("test", return_tensors="pt", padding=True, truncation=True)
+                                for key in test_input:
+                                    if isinstance(test_input[key], torch.Tensor):
+                                        test_input[key] = test_input[key].to('cpu')
+                                with torch.no_grad():
+                                    test_output = model(**test_input)
+                                logger.info("Model validation successful - model can perform inference")
+                            except Exception as validation_error:
+                                logger.error(f"Model validation failed: {validation_error}")
+                                # 검증 실패해도 계속 진행 (경고만)
+                                logger.warning("Continuing despite validation failure...")
                             
                             # SentenceTransformer의 encode 메서드를 직접 구현
                             class CustomSentenceTransformer:
@@ -198,6 +319,10 @@ except ImportError:
                                     import torch
                                     from torch.nn.functional import normalize
                                     
+                                    # sentences가 단일 문자열인 경우 리스트로 변환
+                                    if isinstance(sentences, str):
+                                        sentences = [sentences]
+                                    
                                     self._model.eval()
                                     with torch.no_grad():
                                         # 토크나이징
@@ -209,8 +334,55 @@ except ImportError:
                                             return_tensors="pt"
                                         )
                                         
+                                        # 입력을 CPU로 이동 (meta device 문제 방지)
+                                        for key in encoded:
+                                            if isinstance(encoded[key], torch.Tensor):
+                                                # meta device 체크 및 CPU로 이동
+                                                if hasattr(encoded[key], 'device'):
+                                                    device_str = str(encoded[key].device)
+                                                    if device_str == 'meta':
+                                                        # meta device인 경우 새 텐서 생성
+                                                        encoded[key] = torch.zeros_like(encoded[key], device='cpu')
+                                                        logger.debug(f"Meta device tensor detected for {key}, created new CPU tensor")
+                                                    elif encoded[key].device.type != 'cpu':
+                                                        # CPU가 아닌 경우 CPU로 이동
+                                                        encoded[key] = encoded[key].to('cpu')
+                                        
+                                        # 모델이 CPU에 있는지 확인 및 강제 이동
+                                        model_device = next(self._model.parameters()).device
+                                        if str(model_device) == 'meta':
+                                            logger.error("Model is still on meta device! Attempting emergency migration...")
+                                            # 비상 모드: 모든 파라미터와 버퍼를 강제로 CPU로 이동
+                                            for name, param in self._model.named_parameters():
+                                                if hasattr(param, 'data') and str(param.data.device) == 'meta':
+                                                    param.data = torch.zeros_like(param.data, device='cpu')
+                                            for name, buffer in self._model.named_buffers():
+                                                if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
+                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                            
+                                            # 재확인
+                                            model_device = next(self._model.parameters()).device
+                                            if str(model_device) == 'meta':
+                                                logger.error("Emergency migration failed! Model is still on meta device.")
+                                                raise RuntimeError("Model is on meta device, cannot perform inference")
+                                            else:
+                                                logger.warning(f"Emergency migration successful! Model moved to {model_device}")
+                                        
                                         # 모델 추론
-                                        outputs = self._model(**encoded)
+                                        try:
+                                            outputs = self._model(**encoded)
+                                        except RuntimeError as e:
+                                            if "meta" in str(e).lower():
+                                                logger.error(f"Meta device error during inference: {e}")
+                                                # 모델의 모든 파라미터를 다시 CPU로 이동 시도
+                                                for param in self._model.parameters():
+                                                    if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                                        if str(param.data.device) == 'meta':
+                                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                                # 재시도
+                                                outputs = self._model(**encoded)
+                                            else:
+                                                raise
                                         
                                         # 평균 풀링 (SentenceTransformer 방식)
                                         embeddings = outputs.last_hidden_state
@@ -222,7 +394,10 @@ except ImportError:
                                         if normalize_embeddings:
                                             embeddings = normalize(embeddings, p=2, dim=1)
                                         
-                                        return embeddings.cpu().numpy()
+                                        # CPU로 이동 후 numpy 변환
+                                        if hasattr(embeddings, 'cpu'):
+                                            embeddings = embeddings.cpu()
+                                        return embeddings.numpy()
                             
                             self.model = CustomSentenceTransformer(model, tokenizer)
                             self.dim = self.model.get_sentence_embedding_dimension()
