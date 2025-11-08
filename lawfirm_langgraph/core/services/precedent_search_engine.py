@@ -7,6 +7,7 @@
 import logging
 import json
 import sqlite3
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 from ..data.database import DatabaseManager
 from ..data.vector_store import LegalVectorStore
 from ..utils.config import Config
+from ..services.ai_keyword_generator import AIKeywordGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,11 @@ class PrecedentSearchEngine:
             self.logger.error(f"Failed to initialize vector store: {e}")
             self.vector_store = None
 
+        # LLM 기반 키워드 확장기 초기화
+        self.ai_keyword_generator = AIKeywordGenerator()
+        self._keyword_cache = {}  # 키워드 확장 캐시
+        self._max_cache_size = 100  # 최대 캐시 크기
+        
         # 검색 설정
         self.search_config = {
             "max_results": 20,
@@ -141,37 +148,37 @@ class PrecedentSearchEngine:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
 
-                # FTS5 검색 쿼리 (안전한 파라미터 바인딩)
+                # FTS5 검색 쿼리 (안전한 파라미터 바인딩, bm25 사용)
                 fts_query = """
                 SELECT
                     case_id,
                     case_name,
                     case_number,
-                    rank
+                    bm25(fts_precedent_cases) as rank_score
                 FROM fts_precedent_cases
                 WHERE fts_precedent_cases MATCH ?
-                ORDER BY rank
+                ORDER BY rank_score
                 LIMIT ?
                 """
 
                 # FTS5 쿼리 실행 (사용자 입력을 안전하게 처리)
                 try:
-                    # 사용자 입력을 FTS5 안전 쿼리로 변환
-                    safe_query = self._make_fts5_safe_query(query)
+                    # 사용자 입력을 FTS5 안전 쿼리로 변환 (LLM 키워드 확장 포함)
+                    safe_query = self._make_fts5_safe_query(query, category)
                     cursor.execute(fts_query, (safe_query, top_k * 2))
                 except Exception as e:
                     # FTS5 파라미터 바인딩 실패 시 대안 방법 사용
                     self.logger.warning(f"FTS5 parameter binding failed: {e}, trying alternative method")
-                    safe_query = self._make_fts5_safe_query(query)
+                    safe_query = self._make_fts5_safe_query(query, category)
                     alternative_query = f"""
                     SELECT
                         case_id,
                         case_name,
                         case_number,
-                        rank
+                        bm25(fts_precedent_cases) as rank_score
                     FROM fts_precedent_cases
                     WHERE fts_precedent_cases MATCH '{safe_query}'
-                    ORDER BY rank
+                    ORDER BY rank_score
                     LIMIT {top_k * 2}
                     """
                     cursor.execute(alternative_query)
@@ -199,7 +206,7 @@ class PrecedentSearchEngine:
                             decision_date=case_info['decision_date'],
                             field=case_info['field'],
                             summary=self._extract_summary(case_info['full_text']),
-                            similarity=self._normalize_fts_score(row['rank']),
+                            similarity=self._normalize_fts_score(row.get('rank_score', -100.0)),
                             search_type="fts_optimized"
                         )
 
@@ -336,41 +343,180 @@ class PrecedentSearchEngine:
 
         return full_text[:max_length] + "..." if len(full_text) > max_length else full_text
 
-    def _make_fts5_safe_query(self, query: str) -> str:
-        """FTS5 안전 쿼리 변환"""
+    def _extract_base_keywords(self, query: str) -> List[str]:
+        """기본 키워드 추출 (조사 제거, 불용어 제거)"""
+        import re
+        
+        if not query or not query.strip():
+            return []
+        
+        query = query.strip()
+        
+        # FTS5 특수 문자 제거
+        fts5_special_chars = ['"', '*', '^', '(', ')']
+        for char in fts5_special_chars:
+            query = query.replace(char, ' ')
+        
+        # 키워드 추출 (한글, 영문, 숫자만)
+        keywords = re.findall(r'[가-힣a-zA-Z0-9]+', query)
+        
+        if not keywords:
+            return []
+        
+        # 조사 제거 패턴 (한글 조사)
+        josa_pattern = r'(에|에서|로|으로|와|과|의|을|를|이|가|은|는|도|만|부터|까지|대해|관련)$'
+        
+        # 키워드 정리 (1글자 제외, 불용어 제거, 조사 제거)
+        stopwords = {'의', '을', '를', '이', '가', '은', '는', '에', '에서', '로', '으로', 
+                     '와', '과', '도', '만', '부터', '까지', '에', '대해', '관련', '질문'}
+        
+        filtered_keywords = []
+        for kw in keywords:
+            # 조사 제거
+            cleaned_kw = re.sub(josa_pattern, '', kw)
+            if cleaned_kw and len(cleaned_kw) > 1 and cleaned_kw not in stopwords:
+                filtered_keywords.append(cleaned_kw)
+        
+        return filtered_keywords if filtered_keywords else keywords[:3]
+    
+    async def _expand_keywords_with_llm(self, query: str, base_keywords: List[str], 
+                                       category: str = 'civil') -> List[str]:
+        """LLM을 사용한 키워드 확장 (판례 검색용)"""
+        try:
+            if not base_keywords:
+                return []
+            
+            # 캐시 키 생성
+            cache_key = f"{query}:{category}:{':'.join(sorted(base_keywords))}"
+            if cache_key in self._keyword_cache:
+                cached_value = self._keyword_cache.pop(cache_key)
+                self._keyword_cache[cache_key] = cached_value
+                return cached_value
+            
+            # 도메인 매핑 (category -> domain)
+            domain_map = {
+                'civil': '민사법',
+                'criminal': '형사법',
+                'family': '가족법'
+            }
+            domain = domain_map.get(category, 'general')
+            
+            # 키워드가 너무 적으면 LLM 호출 스킵
+            if len(base_keywords) < 2:
+                return base_keywords
+            
+            # LLM 키워드 확장 (타임아웃 5초)
+            try:
+                expansion_result = await asyncio.wait_for(
+                    self.ai_keyword_generator.expand_domain_keywords(
+                        domain=domain,
+                        base_keywords=base_keywords,
+                        target_count=20
+                    ),
+                    timeout=5.0
+                )
+                
+                if expansion_result.api_call_success and expansion_result.expanded_keywords:
+                    expanded = base_keywords + expansion_result.expanded_keywords
+                    expanded = list(dict.fromkeys(expanded))[:25]
+                    self._add_to_cache(cache_key, expanded)
+                    return expanded
+                else:
+                    # 폴백 확장
+                    fallback_keywords = self.ai_keyword_generator.expand_keywords_with_fallback(
+                        domain, base_keywords
+                    )
+                    expanded = list(dict.fromkeys(base_keywords + fallback_keywords))[:25]
+                    self._add_to_cache(cache_key, expanded)
+                    return expanded
+                    
+            except asyncio.TimeoutError:
+                self.logger.warning(f"판례 검색 LLM 키워드 확장 타임아웃")
+                return base_keywords
+            except Exception as e:
+                self.logger.error(f"판례 검색 LLM 키워드 확장 오류: {e}")
+                return base_keywords
+                
+        except Exception as e:
+            self.logger.error(f"판례 검색 키워드 확장 중 오류: {e}")
+            return base_keywords
+    
+    def _add_to_cache(self, cache_key: str, value: List[str]):
+        """캐시에 추가 (LRU 방식)"""
+        try:
+            if len(self._keyword_cache) >= self._max_cache_size:
+                oldest_key = next(iter(self._keyword_cache))
+                del self._keyword_cache[oldest_key]
+            self._keyword_cache[cache_key] = value
+        except Exception as e:
+            self.logger.error(f"캐시 추가 중 오류: {e}")
+    
+    def _make_fts5_safe_query(self, query: str, category: str = 'civil') -> str:
+        """FTS5 안전 쿼리 변환 (LLM 키워드 확장 포함)"""
         if not query or not query.strip():
             return '""'
-
-        # 특수 문자 제거 및 이스케이핑
-        safe_query = query.strip()
-
-        # FTS5 특수 문자들 이스케이핑
-        fts5_special_chars = ['"', '*', '^', '(', ')', 'AND', 'OR', 'NOT']
-
-        # 단순 키워드 검색으로 변환 (따옴표로 감싸기)
-        if any(char in safe_query for char in fts5_special_chars):
-            # 특수 문자가 있으면 단순 키워드로 변환
-            safe_query = safe_query.replace('"', '""')  # 따옴표 이스케이핑
-            safe_query = f'"{safe_query}"'
+        
+        # 기본 키워드 추출
+        base_keywords = self._extract_base_keywords(query)
+        if not base_keywords:
+            return '""'
+        
+        # LLM 키워드 확장 (동기 래퍼)
+        expanded_keywords = base_keywords
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    expanded_keywords = asyncio.run(
+                        self._expand_keywords_with_llm(query, base_keywords, category)
+                    )
+                else:
+                    expanded_keywords = loop.run_until_complete(
+                        self._expand_keywords_with_llm(query, base_keywords, category)
+                    )
+            except RuntimeError:
+                expanded_keywords = asyncio.run(
+                    self._expand_keywords_with_llm(query, base_keywords, category)
+                )
+        except Exception as e:
+            self.logger.warning(f"판례 검색 LLM 키워드 확장 실패, 기본 키워드 사용: {e}")
+            expanded_keywords = base_keywords
+        
+        if not expanded_keywords:
+            expanded_keywords = base_keywords
+        
+        # FTS5 쿼리 생성 (최대 5개 키워드)
+        selected_keywords = expanded_keywords[:5]
+        
+        if len(selected_keywords) == 1:
+            safe_query = f'"{selected_keywords[0]}"'
         else:
-            # 특수 문자가 없으면 그대로 사용하되 따옴표로 감싸기
-            safe_query = f'"{safe_query}"'
-
+            quoted_keywords = [f'"{kw}"' for kw in selected_keywords]
+            safe_query = ' OR '.join(quoted_keywords)
+        
         return safe_query
 
-    def _normalize_fts_score(self, rank: float) -> float:
-        """FTS 점수를 0-1 범위로 정규화"""
-        # FTS rank는 낮을수록 좋은 점수이므로 역정규화
-        if rank <= 0:
-            return 1.0
-        elif rank <= 1:
-            return 0.9
-        elif rank <= 5:
-            return 0.7
-        elif rank <= 10:
+    def _normalize_fts_score(self, rank_score: float) -> float:
+        """FTS BM25 점수를 0-1 범위로 정규화"""
+        # BM25 rank_score는 음수이므로 절댓값 사용
+        if rank_score is None:
             return 0.5
+        
+        abs_score = abs(rank_score)
+        
+        # BM25 점수를 0-1 범위로 정규화
+        if abs_score <= 1:
+            return 1.0
+        elif abs_score <= 5:
+            return 0.9
+        elif abs_score <= 10:
+            return 0.8
+        elif abs_score <= 20:
+            return 0.7
+        elif abs_score <= 50:
+            return 0.6
         else:
-            return 0.3
+            return max(0.3, 1.0 / (1.0 + abs_score / 100.0))
 
     def _merge_and_deduplicate_results(self, results: List[PrecedentSearchResult]) -> List[PrecedentSearchResult]:
         """결과 통합 및 중복 제거"""
