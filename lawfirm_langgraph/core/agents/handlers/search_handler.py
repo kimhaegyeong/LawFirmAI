@@ -470,6 +470,36 @@ class SearchHandler:
             # Step 3: 순위 결정
             ranked = self.result_ranker.rank_results(merged, top_k=20)
 
+            # Step 3.5: Citation 포함 문서 우선순위 부여
+            import re
+            law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
+            precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+            
+            citation_boosted = []
+            non_citation = []
+            
+            for result in ranked:
+                content = result.text if hasattr(result, 'text') else str(result)
+                has_law = bool(re.search(law_pattern, content))
+                has_precedent = bool(re.search(precedent_pattern, content))
+                
+                if has_law or has_precedent:
+                    # Citation이 있는 문서는 점수 부스트
+                    if hasattr(result, 'score'):
+                        result.score *= 1.2  # 20% 부스트
+                    citation_boosted.append(result)
+                else:
+                    non_citation.append(result)
+            
+            # Citation이 있는 문서를 먼저 배치
+            ranked = citation_boosted + non_citation
+            
+            if citation_boosted:
+                self.logger.info(
+                    f"🔍 [SEARCH FILTERING] Citation boost applied: "
+                    f"{len(citation_boosted)} documents with citations prioritized"
+                )
+
             # Step 4: 다양성 필터 적용
             filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
 

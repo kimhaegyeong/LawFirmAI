@@ -792,25 +792,60 @@ class ContextBuilder:
 
             # 1. 누락된 키워드 확인
             if extracted_keywords:
+                total_keywords = len(extracted_keywords)
+                missing_keywords = []
+                
                 for kw in extracted_keywords:
-                    if isinstance(kw, str) and kw.lower() not in context_text:
-                        missing.append(kw)
+                    if isinstance(kw, str):
+                        kw_lower = kw.lower()
+                        # 정확 매칭
+                        if kw_lower in context_text:
+                            continue
+                        # 부분 매칭 체크 (예: "계약서"와 "계약")
+                        if len(kw_lower) >= 2:
+                            # 키워드의 일부가 컨텍스트에 있는지 확인
+                            found_partial = any(
+                                kw_lower[:i] in context_text or kw_lower[i:] in context_text
+                                for i in range(2, len(kw_lower))
+                            )
+                            if found_partial:
+                                continue
+                        missing_keywords.append(kw)
+                
+                # 누락 키워드 비율이 50% 이상일 때만 누락으로 판단
+                missing_ratio = len(missing_keywords) / max(1, total_keywords)
+                if missing_ratio >= 0.5:  # 50% 이상 누락
+                    missing.extend(missing_keywords[:3])  # 최대 3개만 추가
 
             # 2. 질문 유형별 필수 정보 누락 확인
             type_lower = query_type.lower() if query_type else ""
 
             if "precedent" in type_lower or "판례" in type_lower:
-                if not any(c.get("type") == "precedent" for c in citations if isinstance(c, dict)):
-                    if "판례" not in context_text and "대법원" not in context_text:
-                        missing.append("판례 정보")
+                # 판례 관련 키워드 목록 확장
+                precedent_keywords = ["판례", "대법원", "대법", "판결", "선례", "사례", "재판"]
+                has_precedent = (
+                    any(c.get("type") == "precedent" for c in citations if isinstance(c, dict)) or
+                    any(kw in context_text for kw in precedent_keywords)
+                )
+                if not has_precedent:
+                    missing.append("판례 정보")
 
             elif "law" in type_lower or "법령" in type_lower:
-                if not legal_references and not any(c.get("type") == "law_article" for c in citations if isinstance(c, dict)):
-                    if "법" not in context_text or "조" not in context_text:
-                        missing.append("법률 조문")
+                # 법령 관련 키워드 목록 확장
+                law_keywords = ["법", "조", "항", "규정", "법령", "법률"]
+                has_law = (
+                    (legal_references and len(legal_references) > 0) or
+                    any(c.get("type") == "law_article" for c in citations if isinstance(c, dict)) or
+                    any(kw in context_text for kw in law_keywords)
+                )
+                if not has_law:
+                    missing.append("법률 조문")
 
             elif "advice" in type_lower or "조언" in type_lower:
-                if not any(word in context_text for word in ["해야", "권장", "주의", "방법", "절차"]):
+                # 실무 조언 관련 키워드 목록 확장
+                advice_keywords = ["해야", "권장", "주의", "방법", "절차", "방안", "대응", "처리", "검토"]
+                has_advice = any(word in context_text for word in advice_keywords)
+                if not has_advice:
                     missing.append("실무 조언")
 
             return missing[:5]  # 최대 5개
