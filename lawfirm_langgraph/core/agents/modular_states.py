@@ -314,7 +314,8 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
             # 인코딩 오류가 발생하면 원본 사용
             pass
     
-    return LegalWorkflowState(
+    # LegalWorkflowState 생성
+    state = LegalWorkflowState(
         input=create_default_input(query, session_id),
         classification=create_default_classification(),
         search=create_default_search(query),
@@ -326,3 +327,11 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
         control=create_default_control(),
         common=create_default_common()
     )
+    
+    # 최상위 레벨에도 query와 session_id 저장 (호환성 보장)
+    # TypedDict는 dict로 변환하여 추가 필드 저장
+    state_dict = dict(state)
+    state_dict["query"] = query
+    state_dict["session_id"] = session_id
+    
+    return state_dict

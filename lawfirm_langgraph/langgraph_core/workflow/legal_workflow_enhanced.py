@@ -2035,11 +2035,12 @@ class EnhancedLegalQuestionWorkflow:
             state["analysis"]["confidence"] = confidence
             state["analysis"]["legal_field"] = legal_field
             
-            # metadata에도 저장
+            # metadata에도 저장 (개선: 추가 저장 위치)
             if "metadata" not in state:
                 state["metadata"] = {}
             state["metadata"]["query_type"] = query_type_str
             state["metadata"]["confidence"] = confidence
+            state["metadata"]["legal_field"] = legal_field
             
             # common 그룹에도 저장 (reducer가 보존하는 그룹)
             if "common" not in state:
@@ -2048,6 +2049,12 @@ class EnhancedLegalQuestionWorkflow:
                 state["common"]["classification"] = {}
             state["common"]["classification"]["query_type"] = query_type_str
             state["common"]["classification"]["confidence"] = confidence
+            
+            # common.metadata 그룹에도 저장 (개선: 추가 저장 위치)
+            if "metadata" not in state["common"]:
+                state["common"]["metadata"] = {}
+            state["common"]["metadata"]["query_type"] = query_type_str
+            state["common"]["metadata"]["confidence"] = confidence
 
             self._update_processing_time(state, query_start_time)
             self._add_step(state, "질문 분류 완료",
@@ -3720,9 +3727,10 @@ class EnhancedLegalQuestionWorkflow:
                 except Exception as e:
                     self.logger.warning(f"Failed to get query_type from global cache: {e}", exc_info=True)
             
-            # query_type이 여전히 없으면 state에서 직접 확인 및 복구 시도
+            # query_type이 여전히 없으면 state에서 직접 확인 및 복구 시도 (개선: 여러 위치에서 검색)
             if not query_type:
-                # state의 모든 위치에서 query_type 확인
+                self.logger.warning("⚠️ [QUESTION TYPE] query_type not found via _get_state_value, trying direct search...")
+                # state의 모든 위치에서 query_type 확인 (개선: 더 많은 위치 검색)
                 query_type = (
                     state.get("query_type") or
                     (state.get("classification") and isinstance(state["classification"], dict) and state["classification"].get("query_type")) or
@@ -3731,13 +3739,28 @@ class EnhancedLegalQuestionWorkflow:
                      state["common"].get("classification") and isinstance(state["common"]["classification"], dict) and 
                      state["common"]["classification"].get("query_type")) or
                     (state.get("metadata") and isinstance(state["metadata"], dict) and state["metadata"].get("query_type")) or
+                    (state.get("common") and isinstance(state["common"], dict) and 
+                     state["common"].get("metadata") and isinstance(state["common"]["metadata"], dict) and 
+                     state["common"]["metadata"].get("query_type")) or
                     ""
                 )
                 
                 if query_type:
-                    self.logger.info(f"✅ [QUESTION TYPE] Found query_type in state: {query_type}")
+                    self.logger.info(f"✅ [QUESTION TYPE] Found query_type in state via direct search: {query_type}")
                     # state에 명시적으로 저장하여 다음 노드에서 사용 가능하도록
                     self._set_state_value(state, "query_type", query_type)
+                    # 여러 위치에 저장하여 보존
+                    if "classification" not in state:
+                        state["classification"] = {}
+                    state["classification"]["query_type"] = query_type
+                    if "common" not in state:
+                        state["common"] = {}
+                    if "classification" not in state["common"]:
+                        state["common"]["classification"] = {}
+                    state["common"]["classification"]["query_type"] = query_type
+                    if "metadata" not in state:
+                        state["metadata"] = {}
+                    state["metadata"]["query_type"] = query_type
             
             # query_type이 여전히 없으면 기본값 사용
             if not query_type:

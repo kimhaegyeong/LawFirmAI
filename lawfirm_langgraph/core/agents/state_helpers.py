@@ -518,7 +518,12 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
         elif field_path == "uploaded_document":
             return None
     else:
-        logger.warning(f"Unknown field path: {field_path}")
+        # expanded_queries는 SearchState에 정의되어 있지만 LangGraph reducer가 인식하지 못할 수 있음
+        # 이는 경고가 아닌 정상적인 동작일 수 있으므로 DEBUG 레벨로 변경
+        if field_path == "expanded_queries":
+            logger.debug(f"Unknown field path (expected for expanded_queries): {field_path}")
+        else:
+            logger.debug(f"Unknown field path: {field_path}")
     return None
 
 
@@ -546,7 +551,7 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
                         "requires_expert", "expert_subgraph"]:
         update_classification(state, **{field_path: value})  # type: ignore
     elif field_path in ["search_query", "extracted_keywords", "ai_keyword_expansion",
-                        "optimized_queries", "search_params", "semantic_results", "keyword_results",
+                        "optimized_queries", "search_params", "expanded_queries", "semantic_results", "keyword_results",
                         "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
                         "prompt_optimized_context", "structured_documents", "search_metadata",
                         "search_quality_evaluation", "search_quality", "is_retry_search", "search_start_time", "search_cache_hit"]:
@@ -584,4 +589,9 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
             state["common"]["metadata"] = {}
         state["common"]["metadata"]["quality_metrics"] = value
     else:
-        logger.warning(f"Unknown field path for setting: {field_path}")
+        # expanded_queries는 SearchState에 정의되어 있지만 LangGraph reducer가 인식하지 못할 수 있음
+        # 이는 경고가 아닌 정상적인 동작일 수 있으므로 DEBUG 레벨로 변경
+        if field_path == "expanded_queries":
+            logger.debug(f"Unknown field path for setting (expected for expanded_queries): {field_path}")
+        else:
+            logger.debug(f"Unknown field path for setting: {field_path}")

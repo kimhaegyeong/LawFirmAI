@@ -53,12 +53,13 @@ source venv/bin/activate
 ### 3. 의존성 설치
 
 ```bash
-# Streamlit 앱 의존성 설치
-cd streamlit
+# API 서버 의존성 설치
+cd api
 pip install -r requirements.txt
 
-# 또는 프로젝트 루트에서 전체 의존성 설치
-pip install -r requirements.txt
+# React 프론트엔드 의존성 설치
+cd ../frontend
+npm install
 ```
 
 ### 4. 환경 변수 설정
@@ -106,12 +107,16 @@ python -c "from source.data.database import DatabaseManager; db = DatabaseManage
 ### 6. 애플리케이션 실행
 
 ```bash
-# Streamlit 앱 실행
-cd streamlit
-streamlit run app.py
+# API 서버 실행
+cd api
+python main.py
+
+# React 프론트엔드 실행 (새 터미널)
+cd frontend
+npm run dev
 ```
 
-웹 브라우저에서 `http://localhost:8501`에 접속하여 LawFirmAI를 사용할 수 있습니다.
+웹 브라우저에서 `http://localhost:3000`에 접속하여 LawFirmAI를 사용할 수 있습니다.
 
 ## HuggingFace Spaces 배포 (권장)
 

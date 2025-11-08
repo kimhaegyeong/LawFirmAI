@@ -82,10 +82,14 @@ def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
     # 로거 설정
     logger = logging.getLogger("lawfirm_langgraph.tests")
     logger.setLevel(level)
-    logger.propagate = True
+    logger.propagate = False  # 중복 로그 방지를 위해 False로 설정
     
     # 기존 핸들러 제거 (중복 방지)
-    logger.handlers.clear()
+    for handler in list(logger.handlers):
+        try:
+            logger.removeHandler(handler)
+        except Exception:
+            pass
     
     # 콘솔 핸들러 추가
     # Windows에서 sys.stdout 재설정 후 버퍼 분리 문제 방지를 위해
@@ -152,33 +156,58 @@ def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
                     try:
                         # 원본 emit 시도
                         super().emit(record)
-                    except (ValueError, AttributeError, OSError):
+                    except (ValueError, AttributeError, OSError) as e:
                         # 버퍼 분리 오류 발생 시 대체 방법 시도
                         try:
                             # 포맷된 메시지를 직접 출력 시도
                             msg = self.format(record) + self.terminator
-                            # 원본 stdout에 직접 쓰기 시도
-                            if self._original_stdout is not None:
-                                try:
-                                    self._original_stdout.write(msg)
-                                    self._original_stdout.flush()
-                                except (ValueError, AttributeError, OSError):
-                                    # 원본 stdout 실패 시 현재 stdout 시도
+                            
+                            # 스트림이 유효한지 확인
+                            stream = self.stream
+                            if stream is None:
+                                stream = sys.stderr
+                            
+                            # 스트림에 직접 쓰기 시도
+                            try:
+                                if hasattr(stream, 'write'):
+                                    stream.write(msg)
+                                    if hasattr(stream, 'flush'):
+                                        stream.flush()
+                            except (ValueError, AttributeError, OSError):
+                                # 원본 stdout에 직접 쓰기 시도
+                                if self._original_stdout is not None:
                                     try:
-                                        sys.stdout.write(msg)
-                                        sys.stdout.flush()
+                                        if hasattr(self._original_stdout, 'write'):
+                                            self._original_stdout.write(msg)
+                                            if hasattr(self._original_stdout, 'flush'):
+                                                self._original_stdout.flush()
                                     except (ValueError, AttributeError, OSError):
-                                        # 모든 시도 실패 시 stderr 사용
-                                        sys.stderr.write(msg)
-                                        sys.stderr.flush()
-                            else:
-                                # 원본이 없는 경우 현재 stdout 사용
-                                try:
-                                    sys.stdout.write(msg)
-                                    sys.stdout.flush()
-                                except (ValueError, AttributeError, OSError):
-                                    sys.stderr.write(msg)
-                                    sys.stderr.flush()
+                                        # 원본 stdout 실패 시 현재 stdout 시도
+                                        try:
+                                            if hasattr(sys.stdout, 'write'):
+                                                sys.stdout.write(msg)
+                                                if hasattr(sys.stdout, 'flush'):
+                                                    sys.stdout.flush()
+                                        except (ValueError, AttributeError, OSError):
+                                            # 모든 시도 실패 시 stderr 사용
+                                            try:
+                                                sys.stderr.write(msg)
+                                                sys.stderr.flush()
+                                            except Exception:
+                                                pass
+                                else:
+                                    # 원본이 없는 경우 현재 stdout 시도
+                                    try:
+                                        if hasattr(sys.stdout, 'write'):
+                                            sys.stdout.write(msg)
+                                            if hasattr(sys.stdout, 'flush'):
+                                                sys.stdout.flush()
+                                    except (ValueError, AttributeError, OSError):
+                                        try:
+                                            sys.stderr.write(msg)
+                                            sys.stderr.flush()
+                                        except Exception:
+                                            pass
                         except Exception:
                             # 모든 로깅 시도 실패 시 무시 (안전한 실패)
                             # 테스트가 중단되지 않도록 함
@@ -194,6 +223,98 @@ def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
         # 안전한 핸들러 생성 및 추가
         safe_handler = create_safe_handler(console_handler, original_stdout_ref)
         logger.addHandler(safe_handler)
+        
+        # 전역 로깅 설정: 모든 로거에 안전한 핸들러 적용 (멀티스레드 환경 대비)
+        # transformers, sentence_transformers 등 외부 라이브러리 로거에도 적용
+        
+        # 로깅 예외 무시 설정 (멀티스레드 환경에서 버퍼 분리 오류 방지)
+        logging.raiseExceptions = False
+        
+        root_logger = logging.getLogger()
+        root_logger.setLevel(level)
+        
+        # 기존 핸들러 중 버퍼 분리 문제가 있는 핸들러 제거
+        handlers_to_remove = []
+        for handler in list(root_logger.handlers):
+            if isinstance(handler, logging.StreamHandler):
+                try:
+                    # 버퍼 분리 문제가 있는 핸들러 확인
+                    if hasattr(handler, 'stream'):
+                        stream = handler.stream
+                        if stream is not None:
+                            try:
+                                # 버퍼 접근 테스트
+                                if hasattr(stream, 'buffer'):
+                                    _ = stream.buffer
+                            except (ValueError, AttributeError, OSError):
+                                # 버퍼 분리 문제가 있는 핸들러 제거
+                                handlers_to_remove.append(handler)
+                                continue
+                except Exception:
+                    handlers_to_remove.append(handler)
+        
+        # 안전하게 핸들러 제거
+        for handler in handlers_to_remove:
+            try:
+                root_logger.removeHandler(handler)
+            except Exception:
+                pass
+        
+        # root logger에 안전한 핸들러 추가 (없는 경우에만)
+        has_safe_handler = any(
+            isinstance(h, type(safe_handler)) for h in root_logger.handlers
+        )
+        if not has_safe_handler:
+            root_safe_handler = create_safe_handler(console_handler, original_stdout_ref)
+            root_logger.addHandler(root_safe_handler)
+        
+        # transformers 라이브러리 로거에도 안전한 핸들러 적용
+        transformers_logger = logging.getLogger("transformers")
+        transformers_logger.setLevel(logging.WARNING)  # WARNING 이상만 출력
+        transformers_logger.propagate = False  # root logger로 전파 방지
+        
+        # 기존 핸들러 제거 (중복 방지)
+        for handler in list(transformers_logger.handlers):
+            try:
+                transformers_logger.removeHandler(handler)
+            except Exception:
+                pass
+        
+        # 안전한 핸들러 추가
+        transformers_safe_handler = create_safe_handler(console_handler, original_stdout_ref)
+        transformers_logger.addHandler(transformers_safe_handler)
+        
+        # sentence_transformers 라이브러리 로거에도 안전한 핸들러 적용
+        sentence_transformers_logger = logging.getLogger("sentence_transformers")
+        sentence_transformers_logger.setLevel(logging.WARNING)  # WARNING 이상만 출력
+        sentence_transformers_logger.propagate = False  # root logger로 전파 방지
+        
+        # 기존 핸들러 제거 (중복 방지)
+        for handler in list(sentence_transformers_logger.handlers):
+            try:
+                sentence_transformers_logger.removeHandler(handler)
+            except Exception:
+                pass
+        
+        # 안전한 핸들러 추가
+        st_safe_handler = create_safe_handler(console_handler, original_stdout_ref)
+        sentence_transformers_logger.addHandler(st_safe_handler)
+        
+        # transformers.utils.logging 로거에도 적용
+        transformers_utils_logger = logging.getLogger("transformers.utils.logging")
+        transformers_utils_logger.setLevel(logging.WARNING)
+        transformers_utils_logger.propagate = False
+        
+        # 기존 핸들러 제거 (중복 방지)
+        for handler in list(transformers_utils_logger.handlers):
+            try:
+                transformers_utils_logger.removeHandler(handler)
+            except Exception:
+                pass
+        
+        # 안전한 핸들러 추가
+        transformers_utils_safe_handler = create_safe_handler(console_handler, original_stdout_ref)
+        transformers_utils_logger.addHandler(transformers_utils_safe_handler)
     
     # 파일 핸들러 추가 (옵션)
     if log_to_file:
@@ -452,8 +573,8 @@ async def run_single_query_test_streaming(query: str):
                 if event_name:
                     node_names_seen.add(event_name)
                 
-                # 디버깅: 이벤트 타입 로깅 (처음 30개만)
-                if event_count <= 30:
+                # 디버깅: 이벤트 타입 로깅 (처음 10개만, DEBUG 레벨)
+                if event_count <= 10:
                     test_logger.debug(f"스트리밍 이벤트 #{event_count}: type={event_type}, name={event_name}")
                 
                 # LLM 스트리밍 이벤트 감지 (답변 생성 노드에서만)
@@ -472,23 +593,27 @@ async def run_single_query_test_streaming(query: str):
                         event_type == "on_chat_model_stream"  # on_chat_model_stream은 항상 처리
                     )
                     
-                    # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 20개만)
-                    if llm_stream_count <= 20:
-                        test_logger.info(f"{event_type} 이벤트 #{llm_stream_count}: name={event_name}, is_answer_node={is_answer_node}")
-                        # 이벤트 구조 상세 로깅 (처음 5개만)
-                        if llm_stream_count <= 5:
+                    # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 5개만, DEBUG 레벨)
+                    if llm_stream_count <= 5:
+                        test_logger.debug(f"{event_type} 이벤트 #{llm_stream_count}: name={event_name}, is_answer_node={is_answer_node}")
+                        # 이벤트 구조 상세 로깅 (처음 3개만)
+                        if llm_stream_count <= 3:
                             event_data = event.get("data", {})
-                            test_logger.info(f"  이벤트 구조: event_data type={type(event_data)}, event_data keys={list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
+                            test_logger.debug(f"  이벤트 구조: event_data type={type(event_data)}, event_data keys={list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
                             if isinstance(event_data, dict):
                                 chunk_obj = event_data.get("chunk")
                                 if chunk_obj is not None:
-                                    test_logger.info(f"  chunk_obj type={type(chunk_obj)}, chunk_obj={chunk_obj}")
+                                    test_logger.debug(f"  chunk_obj type={type(chunk_obj)}, chunk_obj={chunk_obj}")
                     
                     if is_answer_node:
-                        test_logger.info(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
+                        # 첫 번째 이벤트만 INFO 레벨로 로깅
+                        if llm_stream_count == 1:
+                            test_logger.info(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
+                        else:
+                            test_logger.debug(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
                     else:
-                        # 답변 생성 노드가 아닌 경우에도 로깅 (디버깅용)
-                        if llm_stream_count <= 10:
+                        # 답변 생성 노드가 아닌 경우에도 로깅 (디버깅용, DEBUG 레벨)
+                        if llm_stream_count <= 5:
                             test_logger.debug(f"답변 생성 노드가 아님: {event_name} (무시)")
                     
                     # 노드 이름 필터링 없이 모든 on_chat_model_stream 이벤트에서 토큰 추출 시도
@@ -496,9 +621,9 @@ async def run_single_query_test_streaming(query: str):
                     if event_type == "on_chat_model_stream":
                         # 모든 on_chat_model_stream 이벤트에서 토큰 추출 시도
                         if not is_answer_node:
-                            # 답변 생성 노드가 아니어도 일단 토큰 추출 시도 (디버깅용)
-                            if llm_stream_count <= 5:
-                                test_logger.info(f"⚠️ 답변 생성 노드가 아니지만 토큰 추출 시도: {event_name}")
+                            # 답변 생성 노드가 아니어도 일단 토큰 추출 시도 (디버깅용, DEBUG 레벨)
+                            if llm_stream_count <= 3:
+                                test_logger.debug(f"⚠️ 답변 생성 노드가 아니지만 토큰 추출 시도: {event_name}")
                     
                     if is_answer_node or (event_type == "on_chat_model_stream" and llm_stream_count <= 10):
                         # 토큰 추출
@@ -563,6 +688,13 @@ async def run_single_query_test_streaming(query: str):
                             
                             # 토큰이 있으면 즉시 출력
                             if chunk and isinstance(chunk, str) and len(chunk) > 0:
+                                # JSON 응답 필터링 (검증 결과 등)
+                                if chunk.strip().startswith('{') or chunk.strip().startswith('```json'):
+                                    # JSON 응답은 로깅만 하고 출력하지 않음
+                                    if tokens_received <= 5:
+                                        test_logger.debug(f"JSON 응답 필터링: {chunk[:100]}...")
+                                    continue
+                                
                                 full_answer += chunk
                                 tokens_received += 1
                                 answer_found = True
@@ -570,16 +702,16 @@ async def run_single_query_test_streaming(query: str):
                                 print(chunk, end='', flush=True)
                                 # 디버깅: 토큰 추출 성공 로깅 (처음 10개만)
                                 if tokens_received <= 10:
-                                    test_logger.info(f"✅ 토큰 추출 성공 #{tokens_received}: chunk='{chunk[:50]}...', length={len(chunk)}")
+                                    test_logger.debug(f"✅ 토큰 추출 성공 #{tokens_received}: chunk='{chunk[:50]}...', length={len(chunk)}")
                             else:
-                                # 토큰 추출 실패 로깅 (처음 5개만)
-                                if llm_stream_count <= 5:
-                                    test_logger.warning(f"⚠️ 토큰 추출 실패: chunk={chunk}, chunk type={type(chunk) if chunk else 'None'}")
-                                    test_logger.warning(f"  event_data keys: {list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
+                                # 토큰 추출 실패 로깅 (처음 3개만, DEBUG 레벨)
+                                if llm_stream_count <= 3:
+                                    test_logger.debug(f"⚠️ 토큰 추출 실패: chunk={chunk}, chunk type={type(chunk) if chunk else 'None'}")
+                                    test_logger.debug(f"  event_data keys: {list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
                                     if isinstance(event_data, dict):
                                         chunk_obj = event_data.get("chunk")
                                         if chunk_obj is not None:
-                                            test_logger.warning(f"  chunk_obj type={type(chunk_obj)}, chunk_obj={chunk_obj}")
+                                            test_logger.debug(f"  chunk_obj type={type(chunk_obj)}, chunk_obj={chunk_obj}")
                                 
                         except (AttributeError, TypeError, KeyError) as e:
                             # 이벤트 구조가 예상과 다를 경우 로깅만 하고 계속 진행

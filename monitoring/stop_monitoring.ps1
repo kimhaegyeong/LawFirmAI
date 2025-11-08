@@ -1,15 +1,15 @@
 # stop_monitoring.ps1
-# Windows PowerShell 스크립트
+# Windows PowerShell script
 
 Write-Host "🛑 Stopping Grafana + Prometheus monitoring stack..." -ForegroundColor Red
 
-# 현재 디렉토리 확인
+# Check current directory
 if (-not (Test-Path "docker-compose.yml")) {
     Write-Host "❌ Error: docker-compose.yml not found. Please run this script from the monitoring directory." -ForegroundColor Red
     exit 1
 }
 
-# Docker Compose로 모니터링 스택 중지
+# Stop monitoring stack with Docker Compose
 Write-Host "📦 Stopping Docker containers..." -ForegroundColor Yellow
 docker-compose down
 

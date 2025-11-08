@@ -34,6 +34,7 @@ class WorkflowUtils:
         State에서 값을 안전하게 가져오기 (flat/nested 모두 지원)
 
         state_helpers의 get_field를 사용하여 일관된 접근 제공
+        개선: query_type 전용 검색 로직 추가
 
         Args:
             state: State 객체 (flat 또는 nested)
@@ -43,8 +44,97 @@ class WorkflowUtils:
         Returns:
             State에서 가져온 값 또는 기본값
         """
+        # query_type 전용 검색 로직 (개선: 여러 위치에서 검색)
+        if key == "query_type":
+            return WorkflowUtils._get_query_type_enhanced(state, default)
+        
         result = get_field(state, key)
         return result if result is not None else default
+    
+    @staticmethod
+    def _get_query_type_enhanced(state: LegalWorkflowState, default: Any = None) -> Any:
+        """
+        query_type을 여러 위치에서 검색 (개선된 로직)
+        
+        검색 순서:
+        1. 최상위 레벨: state.get("query_type")
+        2. classification 그룹: state["classification"]["query_type"]
+        3. common.classification 그룹: state["common"]["classification"]["query_type"]
+        4. metadata 그룹: state["metadata"]["query_type"]
+        5. common.metadata 그룹: state["common"]["metadata"]["query_type"]
+        6. Global cache: _global_classification_cache
+        
+        Args:
+            state: LegalWorkflowState
+            default: 기본값
+            
+        Returns:
+            query_type 값 또는 기본값
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # 1. 최상위 레벨에서 검색
+        if "query_type" in state:
+            value = state.get("query_type")
+            if value:
+                logger.debug(f"[QUERY_TYPE] Found in top-level: {value}")
+                return value
+        
+        # 2. classification 그룹에서 검색
+        if "classification" in state and isinstance(state["classification"], dict):
+            value = state["classification"].get("query_type")
+            if value:
+                logger.debug(f"[QUERY_TYPE] Found in classification group: {value}")
+                return value
+        
+        # 3. common.classification 그룹에서 검색
+        if "common" in state and isinstance(state.get("common"), dict):
+            common = state["common"]
+            if "classification" in common and isinstance(common["classification"], dict):
+                value = common["classification"].get("query_type")
+                if value:
+                    logger.debug(f"[QUERY_TYPE] Found in common.classification group: {value}")
+                    return value
+        
+        # 4. metadata 그룹에서 검색
+        if "metadata" in state and isinstance(state.get("metadata"), dict):
+            value = state["metadata"].get("query_type")
+            if value:
+                logger.debug(f"[QUERY_TYPE] Found in metadata group: {value}")
+                return value
+        
+        # 5. common.metadata 그룹에서 검색
+        if "common" in state and isinstance(state.get("common"), dict):
+            common = state["common"]
+            if "metadata" in common and isinstance(common.get("metadata"), dict):
+                value = common["metadata"].get("query_type")
+                if value:
+                    logger.debug(f"[QUERY_TYPE] Found in common.metadata group: {value}")
+                    return value
+        
+        # 6. Global cache에서 검색
+        try:
+            from core.agents.node_wrappers import _global_search_results_cache
+            if _global_search_results_cache:
+                # 여러 위치에서 검색
+                cached_value = (
+                    _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type") or
+                    _global_search_results_cache.get("metadata", {}).get("query_type") or
+                    _global_search_results_cache.get("classification", {}).get("query_type") or
+                    _global_search_results_cache.get("query_type")
+                )
+                if cached_value:
+                    logger.debug(f"[QUERY_TYPE] Found in global cache: {cached_value}")
+                    # state에도 복원하여 다음 노드에서 사용 가능하도록
+                    WorkflowUtils.set_state_value(state, "query_type", cached_value)
+                    return cached_value
+        except (ImportError, AttributeError, TypeError) as e:
+            logger.debug(f"[QUERY_TYPE] Could not access global cache: {e}")
+        
+        # 모든 위치에서 찾지 못한 경우
+        logger.debug(f"[QUERY_TYPE] Not found in any location, using default: {default}")
+        return default
 
     @staticmethod
     def set_state_value(state: LegalWorkflowState, key: str, value: Any, logger: Optional[logging.Logger] = None) -> None:

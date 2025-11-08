@@ -303,7 +303,20 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
     Returns:
         초기화된 LegalWorkflowState
     """
-    return LegalWorkflowState(
+    # 쿼리 인코딩 정규화 (UTF-8 보장)
+    if query:
+        try:
+            # UTF-8로 인코딩 후 다시 디코딩하여 정규화
+            if isinstance(query, str):
+                query = query.encode('utf-8', errors='replace').decode('utf-8')
+            elif isinstance(query, bytes):
+                query = query.decode('utf-8', errors='replace')
+        except Exception:
+            # 인코딩 오류가 발생하면 원본 사용
+            pass
+    
+    # LegalWorkflowState 생성
+    state = LegalWorkflowState(
         input=create_default_input(query, session_id),
         classification=create_default_classification(),
         search=create_default_search(query),
@@ -315,3 +328,11 @@ def create_initial_legal_state(query: str, session_id: str) -> LegalWorkflowStat
         control=create_default_control(),
         common=create_default_common()
     )
+    
+    # 최상위 레벨에도 query와 session_id 저장 (호환성 보장)
+    # TypedDict는 dict로 변환하여 추가 필드 저장
+    state_dict = dict(state)
+    state_dict["query"] = query
+    state_dict["session_id"] = session_id
+    
+    return state_dict

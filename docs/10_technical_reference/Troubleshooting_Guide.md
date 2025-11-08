@@ -57,7 +57,8 @@ pip list | grep fastapi
 sudo kill -9 <PID>
 
 # 또는 다른 포트 사용
-streamlit run streamlit/app.py --server.port 8501
+cd frontend
+npm run dev -- --port 3001
 ```
 
 2. **Python 버전 문제**

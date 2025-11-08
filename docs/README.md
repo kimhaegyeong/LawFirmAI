@@ -13,6 +13,7 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 - [프로젝트 개요](01_getting_started/project_overview.md)
 - [프로젝트 구조](01_getting_started/project_structure.md)
 - [아키텍처](01_getting_started/architecture.md)
+- [프론트엔드 개발 가이드](01_getting_started/frontend_guide.md)
 
 ### 02. 데이터 (`02_data/`)
 데이터 수집, 처리, 임베딩 관련 문서
@@ -41,7 +42,6 @@ AI 모델 성능 최적화 및 벤치마크
 배포 가이드 및 운영 문서
 - [배포 가이드](06_deployment/Deployment_Guide.md)
 - [AWS 배포 가이드](06_deployment/aws_deployment_quickstart.md)
-- [AWS 프로덕션 아키텍처](06_deployment/aws_production_architecture_streamlit.md)
 - [HuggingFace Spaces 최적화](06_deployment/huggingface_spaces_optimization_plan.md)
 
 ### 07. API (`07_api/`)
@@ -78,6 +78,7 @@ API 문서 및 통합 가이드
 
 ### 개발자용
 - 프로젝트 구조: [01_getting_started/project_structure.md](01_getting_started/project_structure.md)
+- 프론트엔드 가이드: [01_getting_started/frontend_guide.md](01_getting_started/frontend_guide.md)
 - 개발 규칙: [10_technical_reference/development_rules.md](10_technical_reference/development_rules.md)
 - Core 모듈 가이드: [10_technical_reference/core_modules_guide.md](10_technical_reference/core_modules_guide.md)
 

@@ -21,8 +21,8 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 │                    LangGraph RAG System                     │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Client    │  │   API        │  │  Streamlit   │        │
-│  │  Request    │  │  (FastAPI)   │  │  Interface   │        │
+│  │   Client    │  │   API        │  │  React       │        │
+│  │  Request    │  │  (FastAPI)   │  │  Frontend   │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘        │
 │           │               │               │                │
 │           └───────────────┼───────────────┘                │
@@ -85,7 +85,7 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 
 ```bash
 pip install langchain langfuse faiss-cpu sentence-transformers
-pip install streamlit fastapi uvicorn
+pip install fastapi uvicorn
 ```
 
 ### 2. 환경 변수 설정
@@ -156,20 +156,21 @@ class LangChainConfig:
 
 ## 기본 사용법
 
-### 1. Streamlit 웹 인터페이스 실행
+### 1. React 프론트엔드 실행
 
 ```bash
-# Streamlit 서버 시작
-cd apps/streamlit
-streamlit run app.py
+# React 개발 서버 시작
+cd frontend
+npm install
+npm run dev
 ```
 
 ### 2. API 서버 실행
 
 ```bash
 # FastAPI 서버 시작
-cd apps/api
-uvicorn main:app --host 0.0.0.0 --port 8000
+cd api
+python main.py
 ```
 
 ## 데이터 플로우
@@ -177,7 +178,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ### 1. 쿼리 처리 플로우
 
 ```
-사용자 쿼리 (apps/streamlit 또는 apps/api)
+사용자 쿼리 (frontend 또는 api)
     ↓
 core/agents/workflow_service.py
     ↓

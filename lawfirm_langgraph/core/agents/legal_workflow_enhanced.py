@@ -1773,6 +1773,57 @@ class EnhancedLegalQuestionWorkflow:
                 state["common"]["classification"] = {}
             state["common"]["classification"]["query_type"] = query_type_str
             state["common"]["classification"]["confidence"] = confidence
+            
+            # metadata 그룹에도 저장 (개선: 추가 저장 위치)
+            if "metadata" not in state:
+                state["metadata"] = {}
+            state["metadata"]["query_type"] = query_type_str
+            state["metadata"]["confidence"] = confidence
+            state["metadata"]["legal_field"] = legal_field
+            
+            # common.metadata 그룹에도 저장 (개선: 추가 저장 위치)
+            if "metadata" not in state["common"]:
+                state["common"]["metadata"] = {}
+            state["common"]["metadata"]["query_type"] = query_type_str
+            state["common"]["metadata"]["confidence"] = confidence
+            
+            # Global cache에 명시적으로 저장 (개선: 명시적 저장)
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                # Global cache 초기화 (없으면 생성)
+                import core.agents.node_wrappers as node_wrappers_module
+                if node_wrappers_module._global_search_results_cache is None:
+                    node_wrappers_module._global_search_results_cache = {}
+                
+                # 여러 위치에 저장
+                if "common" not in _global_search_results_cache:
+                    _global_search_results_cache["common"] = {}
+                if "classification" not in _global_search_results_cache["common"]:
+                    _global_search_results_cache["common"]["classification"] = {}
+                _global_search_results_cache["common"]["classification"]["query_type"] = query_type_str
+                _global_search_results_cache["common"]["classification"]["confidence"] = confidence
+                
+                if "metadata" not in _global_search_results_cache:
+                    _global_search_results_cache["metadata"] = {}
+                _global_search_results_cache["metadata"]["query_type"] = query_type_str
+                _global_search_results_cache["metadata"]["confidence"] = confidence
+                
+                # 최상위 레벨에도 저장
+                _global_search_results_cache["query_type"] = query_type_str
+                _global_search_results_cache["confidence"] = confidence
+                
+                # 저장 검증
+                saved_query_type = (
+                    _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type") or
+                    _global_search_results_cache.get("metadata", {}).get("query_type") or
+                    _global_search_results_cache.get("query_type")
+                )
+                if saved_query_type == query_type_str:
+                    self.logger.info(f"✅ [QUERY_TYPE] Saved to global cache and verified: {query_type_str}")
+                else:
+                    self.logger.warning(f"⚠️ [QUERY_TYPE] Global cache save verification failed: expected {query_type_str}, got {saved_query_type}")
+            except (ImportError, AttributeError, TypeError) as e:
+                self.logger.debug(f"Could not save to global cache: {e}")
 
             self._update_processing_time(state, query_start_time)
             self._add_step(state, "질문 분류 완료",
@@ -3012,7 +3063,40 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
 
+            # query_type 검색 강화 (개선: 여러 위치에서 검색)
             query_type = self._get_state_value(state, "query_type", "")
+            
+            # query_type이 없으면 추가 검색 시도
+            if not query_type:
+                self.logger.warning("⚠️ [QUESTION TYPE] query_type not found in state, trying additional search...")
+                # Global cache에서 직접 확인
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache:
+                        cached_query_type = (
+                            _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type", "") or
+                            _global_search_results_cache.get("metadata", {}).get("query_type", "") or
+                            _global_search_results_cache.get("classification", {}).get("query_type", "") or
+                            _global_search_results_cache.get("query_type", "") or
+                            ""
+                        )
+                        if cached_query_type:
+                            query_type = cached_query_type
+                            self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache: {query_type}")
+                            # state에도 복원
+                            self._set_state_value(state, "query_type", query_type)
+                except (ImportError, AttributeError, TypeError) as e:
+                    self.logger.debug(f"Could not access global cache: {e}")
+            
+            # query_type이 여전히 없으면 기본값 사용
+            if not query_type:
+                query_type = "general_question"
+                self.logger.warning(f"⚠️ [QUESTION TYPE] query_type not found in state or global cache, using default: {query_type}")
+                # 기본값도 state에 저장
+                self._set_state_value(state, "query_type", query_type)
+            else:
+                self.logger.info(f"✅ [QUESTION TYPE] Using query_type: {query_type}")
+            
             query = self._get_state_value(state, "query", "")
             question_type, domain = self._get_question_type_and_domain(query_type, query)
             model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA

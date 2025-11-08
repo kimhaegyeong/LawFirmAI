@@ -65,9 +65,10 @@
 - **Pydantic**: 데이터 검증
 - **psutil**: 메모리 모니터링 및 시스템 리소스 관리
 
-### Frontend (선택적)
-- **Streamlit**: 웹 인터페이스 (선택적)
-- **HuggingFace Spaces**: 배포 플랫폼
+### Frontend
+- **React 18+ with TypeScript**: 모던 웹 인터페이스
+- **Vite**: 빠른 빌드 도구
+- **Tailwind CSS**: 유틸리티 기반 스타일링
 
 ### 모니터링
 - **Grafana**: 메트릭 시각화
