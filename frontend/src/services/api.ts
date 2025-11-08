@@ -1,12 +1,13 @@
 /**
  * API 기본 설정 및 Axios 인스턴스
  */
-import axios, { AxiosInstance, AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
+import logger from '../utils/logger';
 
-// 개발 환경에서는 Vite 프록시를 통해 요청 (상대 경로 사용)
-// 프로덕션 환경에서는 절대 URL 사용
+// 개발 환경에서는 명시적으로 localhost:8000 사용
+// 프로덕션 환경에서는 환경 변수 또는 기본값 사용
 const isDev = import.meta.env.DEV;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (isDev ? '' : 'http://localhost:8000');
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (isDev ? 'http://localhost:8000' : 'http://localhost:8000');
 const API_VERSION = '/api/v1'; // API 버전 prefix
 
 /**
@@ -27,13 +28,17 @@ api.interceptors.request.use(
   (config) => {
     // 요청 전 처리 (인증 토큰 등)
     // 디버깅: 요청 정보 로깅
+    const fullURL = `${config.baseURL || ''}${config.url || ''}`;
     if (import.meta.env.DEV) {
-      console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
-      console.log('[API Request] Full URL:', config.baseURL + config.url);
+      logger.debug(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
+      logger.debug('[API Request] Base URL:', config.baseURL);
+      logger.debug('[API Request] Full URL:', fullURL);
+      console.log('[API] Request URL:', fullURL);
     }
     return config;
   },
   (error) => {
+    logger.error('[API] Request interceptor error:', error);
     return Promise.reject(error);
   }
 );
@@ -45,13 +50,13 @@ api.interceptors.response.use(
   (response: AxiosResponse) => {
     // 디버깅: 응답 정보 로깅
     if (import.meta.env.DEV) {
-      console.log(`[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
+      logger.debug(`[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
       // CORS 헤더 확인
       const corsHeaders = {
         'Access-Control-Allow-Origin': response.headers['access-control-allow-origin'],
         'Access-Control-Allow-Credentials': response.headers['access-control-allow-credentials'],
       };
-      console.log('[API Response] CORS Headers:', corsHeaders);
+      logger.debug('[API Response] CORS Headers:', corsHeaders);
     }
     return response;
   },
@@ -64,29 +69,29 @@ api.interceptors.response.use(
       
       // CORS 에러 체크
       if (error.code === 'ERR_NETWORK' || error.message.includes('CORS')) {
-        console.error('CORS 에러: 서버에서 CORS 헤더가 올바르게 설정되지 않았습니다.');
-        console.error('응답 헤더:', error.response.headers);
+        logger.error('CORS 에러: 서버에서 CORS 헤더가 올바르게 설정되지 않았습니다.');
+        logger.error('응답 헤더:', error.response.headers);
       }
       
       switch (status) {
         case 401:
           // 인증 에러
-          console.error('인증이 필요합니다.');
+          logger.error('인증이 필요합니다.');
           break;
         case 403:
           // 권한 에러
-          console.error('접근 권한이 없습니다.');
+          logger.error('접근 권한이 없습니다.');
           break;
         case 404:
           // 리소스 없음
-          console.error('요청한 리소스를 찾을 수 없습니다.');
+          logger.error('요청한 리소스를 찾을 수 없습니다.');
           break;
         case 500:
           // 서버 에러
-          console.error('서버 오류가 발생했습니다.');
+          logger.error('서버 오류가 발생했습니다.');
           break;
         default:
-          console.error('에러가 발생했습니다:', data?.detail || error.message);
+          logger.error('에러가 발생했습니다:', data?.detail || error.message);
       }
     } else if (error.request) {
       // 요청은 보냈지만 응답이 없음
@@ -94,36 +99,63 @@ api.interceptors.response.use(
       const url = error.config?.url || '';
       const fullURL = baseURL + url;
       
-      console.error('서버에 연결할 수 없습니다.');
-      console.error('요청 URL:', url);
-      console.error('요청 BaseURL:', baseURL);
-      console.error('전체 URL:', fullURL);
+      console.error('[API] Connection failed:', {
+        baseURL,
+        url,
+        fullURL,
+        errorCode: error.code,
+        errorMessage: error.message,
+        timeout: error.config?.timeout,
+      });
+      
+      logger.error('서버에 연결할 수 없습니다.');
+      logger.error('요청 URL:', url);
+      logger.error('요청 BaseURL:', baseURL);
+      logger.error('전체 URL:', fullURL);
+      logger.error('에러 코드:', error.code || 'N/A');
+      logger.error('에러 메시지:', error.message);
       
       // 연결 거부 에러인 경우 더 자세한 안내 제공
-      if (error.code === 'ERR_NETWORK' || error.message.includes('ERR_CONNECTION_REFUSED')) {
-        console.error('');
-        console.error('========================================');
-        console.error('🔴 API 서버 연결 실패');
-        console.error('========================================');
-        console.error('가능한 원인:');
-        console.error('1. API 서버가 실행되지 않았습니다.');
-        console.error('   → API 서버를 시작하세요:');
-        console.error('      cd api');
-        console.error('      python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload');
-        console.error('   또는:');
-        console.error('      cd api');
-        console.error('      start_server.bat');
-        console.error('');
-        console.error('2. API 서버가 다른 포트에서 실행 중입니다.');
-        console.error('   → .env 파일에서 VITE_API_BASE_URL을 확인하세요.');
-        console.error('');
-        console.error('3. 방화벽이 연결을 차단하고 있습니다.');
-        console.error('   → 방화벽 설정을 확인하세요.');
-        console.error('========================================');
+      if (error.code === 'ERR_NETWORK' || 
+          error.code === 'ECONNREFUSED' ||
+          error.message.includes('ERR_CONNECTION_REFUSED') || 
+          error.message.includes('Failed to fetch') ||
+          error.message.includes('Network Error')) {
+        logger.error('');
+        logger.error('========================================');
+        logger.error('🔴 API 서버 연결 실패');
+        logger.error('========================================');
+        logger.error('요청 정보:');
+        logger.error(`  - Base URL: ${baseURL}`);
+        logger.error(`  - 요청 URL: ${url}`);
+        logger.error(`  - 전체 URL: ${fullURL}`);
+        logger.error(`  - 에러 코드: ${error.code || 'N/A'}`);
+        logger.error(`  - 에러 메시지: ${error.message}`);
+        logger.error(`  - 타임아웃: ${error.config?.timeout || 'N/A'}ms`);
+        logger.error('');
+        logger.error('가능한 원인:');
+        logger.error('1. API 서버가 실행되지 않았습니다.');
+        logger.error('   → API 서버를 시작하세요:');
+        logger.error('      cd api');
+        logger.error('      python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload');
+        logger.error('   또는:');
+        logger.error('      cd api');
+        logger.error('      start_server.bat');
+        logger.error('');
+        logger.error('2. API 서버가 다른 포트에서 실행 중입니다.');
+        logger.error(`   → 현재 설정: ${API_BASE_URL}`);
+        logger.error('   → .env 파일에서 VITE_API_BASE_URL을 확인하세요.');
+        logger.error('');
+        logger.error('3. CORS 또는 CSP 문제일 수 있습니다.');
+        logger.error('   → 브라우저 개발자 도구의 Network 탭에서 응답 헤더를 확인하세요.');
+        logger.error('');
+        logger.error('4. 방화벽이 연결을 차단하고 있습니다.');
+        logger.error('   → 방화벽 설정을 확인하세요.');
+        logger.error('========================================');
       }
     } else {
       // 요청 설정 중 에러
-      console.error('요청 설정 중 에러가 발생했습니다:', error.message);
+      logger.error('요청 설정 중 에러가 발생했습니다:', error.message);
     }
     
     return Promise.reject(error);
@@ -142,35 +174,56 @@ export interface ApiError {
 /**
  * API 에러 추출
  */
-export function extractApiError(error: any): ApiError {
+export function extractApiError(error: any): Error {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError;
     if (axiosError.response) {
       const data = axiosError.response.data as any;
-      return {
-        message: data?.detail || data?.message || '에러가 발생했습니다.',
-        status: axiosError.response.status,
-        detail: data?.detail,
-      };
+      let message = data?.detail || data?.message || '에러가 발생했습니다.';
+      
+      // 500 오류인 경우 더 자세한 정보 표시
+      if (axiosError.response.status === 500) {
+        console.error('[API] 500 Error Details:', {
+          status: axiosError.response.status,
+          data: data,
+          detail: data?.detail,
+          message: data?.message,
+        });
+        
+        // detail이 있으면 그대로 사용, 없으면 기본 메시지
+        if (data?.detail) {
+          message = data.detail;
+        } else {
+          message = '서버 오류가 발생했습니다. API 서버 로그를 확인하세요.';
+        }
+      }
+      
+      const apiError = new Error(message);
+      (apiError as any).status = axiosError.response.status;
+      (apiError as any).detail = data?.detail;
+      return apiError;
     } else if (axiosError.request) {
       // 연결 거부 에러인 경우 더 자세한 메시지 제공
       if (axiosError.code === 'ERR_NETWORK' || 
           axiosError.message.includes('ERR_CONNECTION_REFUSED') ||
           axiosError.message.includes('Failed to fetch')) {
-        return {
-          message: 'API 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.',
-          detail: `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`,
-        };
+        const message = 'API 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.';
+        const apiError = new Error(message);
+        (apiError as any).detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
+        return apiError;
       }
-      return {
-        message: '서버에 연결할 수 없습니다.',
-        detail: `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`,
-      };
+      const message = '서버에 연결할 수 없습니다.';
+      const apiError = new Error(message);
+      (apiError as any).detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
+      return apiError;
     }
   }
   
-  return {
-    message: error?.message || '알 수 없는 에러가 발생했습니다.',
-  };
+  if (error instanceof Error) {
+    return error;
+  }
+  
+  return new Error(error?.message || '알 수 없는 에러가 발생했습니다.');
 }
+
 
