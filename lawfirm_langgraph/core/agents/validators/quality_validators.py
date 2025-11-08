@@ -173,15 +173,19 @@ class ContextValidator:
 
             # 누락 정보 확인
             missing_info = []
-            if coverage_score < 0.5:
+            if coverage_score < 0.3:
                 missing_info.append("핵심 키워드 커버리지 부족")
-            if relevance_score < 0.5:
+            if relevance_score < 0.4:
                 missing_info.append("질문 관련성 부족")
             if sufficiency_score < 0.6:
                 missing_info.append("컨텍스트 충분성 부족")
 
             is_sufficient = overall_score >= 0.6
-            needs_expansion = overall_score < 0.6 or len(missing_info) > 0
+            needs_expansion = (
+                (overall_score < 0.5) or
+                (len(missing_info) >= 3) or
+                (overall_score < 0.55 and relevance_score < 0.4 and coverage_score < 0.4)
+            )
 
             validation_result = {
                 "relevance_score": relevance_score,
@@ -212,6 +216,203 @@ class ContextValidator:
 
 class AnswerValidator:
     """답변 품질 검증"""
+
+    @staticmethod
+    def _normalize_citation(citation: str) -> Dict[str, Any]:
+        """
+        Citation을 표준 형식으로 정규화
+        
+        입력 예시:
+        - "민법 제750조"
+        - "민법 750조"
+        - "[법령: 민법 제750조]"
+        - "민법 제750조에 따르면..."
+        
+        Returns:
+            {
+                "type": "law",  # "law" or "precedent"
+                "law_name": "민법",  # 법령명
+                "article_number": "750",  # 조문번호
+                "normalized": "민법 제750조",  # 표준 형식
+                "original": citation  # 원본
+            }
+        """
+        if not citation or not isinstance(citation, str):
+            return {
+                "type": "unknown",
+                "normalized": "",
+                "original": citation
+            }
+        
+        # 1. 법령 조문 패턴 (다양한 형식 지원)
+        law_patterns = [
+            (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조]
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
+            (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
+        ]
+        
+        for pattern, is_bracketed in law_patterns:
+            match = re.search(pattern, citation)
+            if match:
+                if is_bracketed:
+                    # [법령: ...] 형식
+                    inner = match.group(1)
+                    law_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner)
+                    if law_match:
+                        return {
+                            "type": "law",
+                            "law_name": law_match.group(1),
+                            "article_number": law_match.group(2),
+                            "normalized": f"{law_match.group(1)} 제{law_match.group(2)}조",
+                            "original": citation
+                        }
+                else:
+                    # 직접 매칭
+                    if len(match.groups()) >= 2:
+                        return {
+                            "type": "law",
+                            "law_name": match.group(1),
+                            "article_number": match.group(2),
+                            "normalized": f"{match.group(1)} 제{match.group(2)}조",
+                            "original": citation
+                        }
+        
+        # 2. 판례 패턴
+        precedent_pattern = r'(대법원|법원).*?(\d{4}[다나마]\d+)'
+        precedent_match = re.search(precedent_pattern, citation)
+        if precedent_match:
+            return {
+                "type": "precedent",
+                "court": precedent_match.group(1),
+                "case_number": precedent_match.group(2),
+                "normalized": f"{precedent_match.group(1)} {precedent_match.group(2)}",
+                "original": citation
+            }
+        
+        # 3. 매칭 실패 시 원본 반환
+        return {
+            "type": "unknown",
+            "normalized": citation.strip(),
+            "original": citation
+        }
+
+    @staticmethod
+    def _match_citations(normalized_expected: Dict[str, Any], 
+                         normalized_answer: Dict[str, Any]) -> bool:
+        """
+        정규화된 Citation 간 매칭
+        
+        매칭 규칙:
+        1. 타입이 다르면 False
+        2. 법령인 경우: 법령명과 조문번호가 모두 일치해야 함
+        3. 판례인 경우: 법원명과 사건번호가 모두 일치해야 함
+        4. 부분 매칭 허용 (예: "민법 제750조"와 "민법 750조")
+        """
+        # 타입이 다르면 매칭 실패
+        if normalized_expected.get("type") != normalized_answer.get("type"):
+            return False
+        
+        # 법령 매칭 (개선: 부분 매칭 지원)
+        if normalized_expected.get("type") == "law":
+            expected_law = normalized_expected.get("law_name", "")
+            expected_article = normalized_expected.get("article_number", "")
+            answer_law = normalized_answer.get("law_name", "")
+            answer_article = normalized_answer.get("article_number", "")
+            
+            # 법령명이 일치하는지 확인 (부분 매칭 지원)
+            law_match = expected_law == answer_law or expected_law in answer_law or answer_law in expected_law
+            
+            # 조문번호가 일치하는지 확인 (숫자 비교)
+            article_match = expected_article == answer_article
+            
+            # 법령명과 조문번호가 모두 일치해야 함
+            return law_match and article_match
+        
+        # 판례 매칭 (개선: 부분 매칭 지원)
+        elif normalized_expected.get("type") == "precedent":
+            expected_court = normalized_expected.get("court", "")
+            expected_case = normalized_expected.get("case_number", "")
+            answer_court = normalized_answer.get("court", "")
+            answer_case = normalized_answer.get("case_number", "")
+            
+            # 법원명이 일치하는지 확인 (부분 매칭 지원)
+            court_match = expected_court == answer_court or expected_court in answer_court or answer_court in expected_court
+            
+            # 사건번호가 일치하는지 확인 (부분 매칭 지원)
+            case_match = expected_case == answer_case or expected_case in answer_case or answer_case in expected_case
+            
+            # 법원명과 사건번호가 모두 일치해야 함
+            return court_match and case_match
+        
+        return False
+
+    @staticmethod
+    def _extract_and_normalize_citations_from_answer(answer: str) -> List[Dict[str, Any]]:
+        """
+        답변에서 Citation 추출 및 정규화
+        
+        Returns:
+            정규화된 Citation 리스트
+        """
+        if not answer:
+            return []
+        
+        normalized_citations = []
+        
+        # 법령 조문 패턴 (다양한 형식 지원 - 개선: 더 포괄적인 패턴 및 중복 제거)
+        law_patterns = [
+            (r'\[법령:\s*([^\]]+)\]', True),  # [법령: 민법 제750조] - 괄호 내부 추출
+            (r'([가-힣]+법)\s*제?\s*(\d+)\s*조', False),  # 민법 제750조, 민법 750조
+            (r'([가-힣]+법)\s*(\d+)\s*조', False),  # 민법 750조 (제 없음)
+        ]
+        law_matches = []
+        seen_laws = set()
+        
+        for pattern, extract_inner in law_patterns:
+            matches = re.finditer(pattern, answer)
+            for match in matches:
+                if extract_inner:
+                    # [법령: ...] 형식에서 내부 추출
+                    inner_text = match.group(1)
+                    # 내부에서 법령명과 조문번호 추출
+                    inner_match = re.search(r'([가-힣]+법)\s*제?\s*(\d+)\s*조', inner_text)
+                    if inner_match:
+                        law_key = f"{inner_match.group(1)} 제{inner_match.group(2)}조"
+                        if law_key not in seen_laws:
+                            seen_laws.add(law_key)
+                            law_matches.append(law_key)
+                else:
+                    # 직접 매칭
+                    if len(match.groups()) >= 2:
+                        law_key = f"{match.group(1)} 제{match.group(2)}조"
+                        if law_key not in seen_laws:
+                            seen_laws.add(law_key)
+                            law_matches.append(law_key)
+        
+        for match in law_matches:
+            normalized = AnswerValidator._normalize_citation(match)
+            if normalized.get("type") != "unknown":
+                normalized_citations.append(normalized)
+        
+        # 판례 패턴
+        precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+        precedent_matches = re.findall(precedent_pattern, answer)
+        
+        for match in precedent_matches:
+            normalized = AnswerValidator._normalize_citation(match)
+            if normalized.get("type") != "unknown":
+                normalized_citations.append(normalized)
+        
+        # 중복 제거 (normalized 기준)
+        seen = set()
+        unique_citations = []
+        for cit in normalized_citations:
+            normalized_str = cit.get("normalized", "")
+            if normalized_str and normalized_str not in seen:
+                seen.add(normalized_str)
+                unique_citations.append(cit)
+        
+        return unique_citations
 
     @staticmethod
     def validate_answer_uses_context(
@@ -302,8 +503,6 @@ class AnswerValidator:
             # 문서 인용 패턴 확인
             document_citation_pattern = r'\[문서:\s*[^\]]+\]'
             document_citations = len(re.findall(document_citation_pattern, answer))
-
-            total_citations_in_answer = citations_in_answer + precedents_in_answer + document_citations
 
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
             has_document_references = False
@@ -410,27 +609,125 @@ class AnswerValidator:
                         has_document_references = True
                         break
 
-            # 컨텍스트에서 추출한 인용 정보와 비교
-            expected_citations = []
+            # 컨텍스트에서 추출한 인용 정보와 비교 (개선: 정규화 및 유연한 매칭)
+            expected_citations_raw = []
             for ref in legal_references[:5]:
                 if isinstance(ref, str):
-                    expected_citations.append(ref)
+                    expected_citations_raw.append(ref)
 
             for cit in citations[:5]:
                 if isinstance(cit, dict):
-                    expected_citations.append(cit.get("text", ""))
+                    expected_citations_raw.append(cit.get("text", ""))
                 elif isinstance(cit, str):
-                    expected_citations.append(cit)
+                    expected_citations_raw.append(cit)
 
+            # retrieved_docs에서도 Citation 추출 (개선)
+            if retrieved_docs:
+                law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
+                precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+                for doc in retrieved_docs[:10]:
+                    content = doc.get("content", "") or doc.get("text", "")
+                    if not content:
+                        continue
+                    # 법령 조문 추출
+                    law_matches = re.findall(law_pattern, content)
+                    for law in law_matches:
+                        if law not in expected_citations_raw:
+                            expected_citations_raw.append(law)
+                    # 판례 추출
+                    precedent_matches = re.findall(precedent_pattern, content)
+                    for precedent in precedent_matches:
+                        if precedent not in expected_citations_raw:
+                            expected_citations_raw.append(precedent)
+
+            # 1. expected_citations 정규화
+            normalized_expected_citations = []
+            for expected in expected_citations_raw:
+                if not expected:
+                    continue
+                normalized = AnswerValidator._normalize_citation(expected)
+                if normalized.get("type") != "unknown":
+                    normalized_expected_citations.append(normalized)
+
+            # 디버깅 로그 추가
+            logger.debug(
+                f"[CITATION DEBUG] Expected citations (raw): {expected_citations_raw[:5]}, "
+                f"Normalized expected: {[c.get('normalized', '') for c in normalized_expected_citations[:5]]}"
+            )
+
+            # 2. 답변에서 Citation 추출 및 정규화
+            normalized_answer_citations = AnswerValidator._extract_and_normalize_citations_from_answer(answer)
+            
+            # 디버깅 로그 추가
+            logger.debug(
+                f"[CITATION DEBUG] Normalized answer citations: "
+                f"{[c.get('normalized', '') for c in normalized_answer_citations[:5]]}"
+            )
+            
+            # total_citations_in_answer 계산 (정규화된 Citation 사용)
+            total_citations_in_answer = len(normalized_answer_citations) + document_citations if normalized_answer_citations else document_citations
+
+            # 3. 매칭 수행
             found_citations = 0
             missing_citations = []
-            for expected in expected_citations:
-                if expected and any(keyword in answer for keyword in expected.split()[:3]):
-                    found_citations += 1
-                else:
-                    missing_citations.append(expected)
+            matched_answer_citations = set()
 
-            citation_coverage = found_citations / max(1, len(expected_citations)) if expected_citations else 0.5
+            for expected_cit in normalized_expected_citations:
+                matched = False
+                for i, answer_cit in enumerate(normalized_answer_citations):
+                    if i in matched_answer_citations:
+                        continue
+                    if AnswerValidator._match_citations(expected_cit, answer_cit):
+                        found_citations += 1
+                        matched = True
+                        matched_answer_citations.add(i)
+                        logger.debug(
+                            f"[CITATION DEBUG] Matched: {expected_cit.get('normalized', '')} "
+                            f"<-> {answer_cit.get('normalized', '')}"
+                        )
+                        break
+                
+                if not matched:
+                    missing_citations.append(expected_cit.get("original", ""))
+                    logger.debug(
+                        f"[CITATION DEBUG] Not matched: {expected_cit.get('normalized', '')} "
+                        f"(original: {expected_cit.get('original', '')})"
+                    )
+
+            # 4. Citation coverage 계산 개선
+            if normalized_expected_citations:
+                # expected_citations가 있을 때
+                citation_coverage = found_citations / len(normalized_expected_citations)
+                
+                # 답변에 Citation이 있지만 expected_citations와 매칭되지 않은 경우
+                # 부분 점수 부여 (최대 0.3까지)
+                unmatched_answer_citations = len(normalized_answer_citations) - found_citations
+                if unmatched_answer_citations > 0:
+                    bonus = min(0.3, unmatched_answer_citations * 0.1)
+                    citation_coverage = min(1.0, citation_coverage + bonus)
+                
+                # 매칭 실패 시 부분 점수 로직 개선
+                if found_citations == 0:
+                    # 답변에 Citation이 있으면 최소 0.2 점수 부여
+                    if normalized_answer_citations:
+                        citation_coverage = min(0.5, len(normalized_answer_citations) * 0.1)
+                        logger.debug(
+                            f"[CITATION DEBUG] No matches but answer has citations: "
+                            f"{len(normalized_answer_citations)}, coverage: {citation_coverage}"
+                        )
+                    else:
+                        citation_coverage = 0.0
+            elif normalized_answer_citations:
+                # expected_citations가 비어있을 때 답변에서 직접 추출한 Citation으로 coverage 계산
+                total_citations_in_answer = len(normalized_answer_citations)
+                if total_citations_in_answer > 0:
+                    # 최소 2개 기준으로 coverage 계산
+                    citation_coverage = min(1.0, total_citations_in_answer / 2.0)
+                else:
+                    citation_coverage = 0.0
+            else:
+                # expected_citations도 없고 답변에도 Citation이 없으면 0.0
+                citation_coverage = 0.0
 
             # 4. 핵심 개념 포함 여부
             context_key_concepts = []
@@ -445,12 +742,16 @@ class AnswerValidator:
                 found_concepts = sum(1 for concept in context_key_concepts if concept in answer_lower)
                 concept_coverage = found_concepts / len(context_key_concepts)
 
-            # 5. 종합 점수
+            # 5. 종합 점수 (가중치 조정)
             coverage_score = (
-                keyword_coverage * 0.4 +
-                citation_coverage * 0.4 +
+                keyword_coverage * 0.3 +      # 0.4 → 0.3
+                citation_coverage * 0.5 +      # 0.4 → 0.5 (증가)
                 concept_coverage * 0.2
             )
+            
+            # Citation이 없을 때 추가 페널티
+            if citation_coverage == 0.0 and normalized_expected_citations:
+                coverage_score = max(0.0, coverage_score - 0.2)  # 20% 추가 감점
 
             # 재생성 필요 여부 초기화 (개선: 변수 초기화 문제 해결)
             needs_regeneration = False
@@ -463,7 +764,7 @@ class AnswerValidator:
                 needs_regeneration = True  # 재생성 필요
             
             uses_context = coverage_score >= 0.3
-            needs_regeneration = needs_regeneration or (coverage_score < 0.3) or (expected_citations and found_citations == 0)
+            needs_regeneration = needs_regeneration or (coverage_score < 0.3) or (normalized_expected_citations and found_citations == 0)
 
             validation_result = {
                 "uses_context": uses_context,
@@ -472,8 +773,8 @@ class AnswerValidator:
                 "citation_coverage": citation_coverage,
                 "concept_coverage": concept_coverage,
                 "citations_found": found_citations,
-                "citations_expected": len(expected_citations),
-                "citation_count": total_citations_in_answer,
+                "citations_expected": len(normalized_expected_citations),
+                "citation_count": len(normalized_answer_citations) if normalized_answer_citations else 0,
                 "citations_in_answer": citations_in_answer,
                 "precedents_in_answer": precedents_in_answer,
                 "document_citations": document_citations,
@@ -491,11 +792,28 @@ class AnswerValidator:
 
         except Exception as e:
             logger.warning(f"Answer-context validation failed: {e}")
+            import traceback
+            logger.debug(f"Validation error traceback: {traceback.format_exc()}")
             return {
                 "uses_context": True,
                 "coverage_score": 0.5,
+                "keyword_coverage": 0.0,
+                "citation_coverage": 0.0,
+                "concept_coverage": 0.0,
+                "citations_found": 0,
+                "citations_expected": 0,
+                "citation_count": 0,
+                "citations_in_answer": 0,
+                "precedents_in_answer": 0,
+                "document_citations": 0,
+                "total_citations_in_answer": 0,
+                "has_document_references": False,
+                "document_sources_count": 0,
                 "needs_regeneration": False,
-                "missing_key_info": []
+                "missing_key_info": [],
+                "has_law_citation": False,
+                "has_law_in_docs": False,
+                "law_citation_required": False
             }
 
     @staticmethod
