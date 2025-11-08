@@ -1,7 +1,7 @@
 /**
  * 채팅 메시지 컴포넌트
  */
-import { Copy, Check, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -10,26 +10,88 @@ import { formatRelativeTime } from '../../utils/dateUtils';
 import { FileAttachment } from '../common/FileAttachment';
 import { CompactReferencesBadge } from './CompactReferencesBadge';
 import { RelatedQuestions } from './RelatedQuestions';
+import { ErrorMessage } from './ErrorMessage';
 import { sendFeedback, ratingToNumber } from '../../services/feedbackService';
+import { useTypingEffect } from '../../hooks/useTypingEffect';
+import logger from '../../utils/logger';
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
+import type { StreamError } from '../../types/error';
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
 interface ChatMessageProps {
   message: ChatMessageType;
   sessionId?: string;
   onQuestionClick?: (question: string) => void;
+  isStreaming?: boolean; // 스트리밍 중인지 여부
+  error?: StreamError; // 에러 상태
+  onRetry?: () => void; // 재시도 핸들러
 }
 
-export function ChatMessage({ message, sessionId, onQuestionClick }: ChatMessageProps) {
+export function ChatMessage({ 
+  message, 
+  sessionId, 
+  onQuestionClick, 
+  isStreaming = false,
+  error,
+  onRetry
+}: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
+  
+  // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
+  if (!message || !message.id) {
+    return null;
+  }
+  
+  // content가 없으면 빈 문자열로 처리
+  const content = message.content || '';
+  
+  // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
+  const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
+    content,
+    {
+      speed: 50, // 50ms마다 한 글자씩 표시 (더 느리게)
+      enabled: isStreaming // 스트리밍 중일 때만 타이핑 효과 활성화
+    }
+  );
+
+  // 타이핑 효과가 완료되고 스트리밍이 종료되었을 때만 마크다운 렌더링
+  const shouldRenderMarkdown = !isStreaming && isTypingComplete;
+
+  if (import.meta.env.DEV) {
+    if (isStreaming) {
+      logger.debug('[ChatMessage] Streaming:', {
+        messageId: message.id,
+        contentLength: content.length,
+        displayedLength: displayedContent.length,
+        isStreaming,
+        isTypingComplete,
+        displayedContent: displayedContent.substring(0, 50) + '...'
+      });
+    } else if (message.role === 'assistant' && content.length > 0) {
+      logger.debug('[ChatMessage] Not streaming:', {
+        messageId: message.id,
+        contentLength: content.length,
+        displayedLength: displayedContent.length,
+        isStreaming,
+        isTypingComplete,
+        shouldRenderMarkdown
+      });
+    }
+  }
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('Failed to copy:', err);
+      logger.error('Failed to copy:', err);
     }
   };
 
@@ -51,17 +113,35 @@ export function ChatMessage({ message, sessionId, onQuestionClick }: ChatMessage
         rating: ratingToNumber(rating),
       });
     } catch (error) {
-      console.error('Failed to send feedback:', error);
+      logger.error('Failed to send feedback:', error);
       setFeedback(null);
     }
   };
 
   const isUser = message.role === 'user';
+  const isProgress = message.role === 'progress';
   const metadata = message.metadata || {};
 
   // assistant 메시지이고 content가 비어있으면 렌더링하지 않음
-  if (!isUser && !message.content) {
+  if (!isUser && !isProgress && !content) {
     return null;
+  }
+
+  // progress 타입 메시지 처리
+  if (isProgress) {
+    return (
+      <div className="flex items-center justify-start py-2 px-4">
+        <div className="flex items-center gap-2 text-slate-400 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>{escapeHtml(content)}</span>
+          {metadata.step && (
+            <span className="text-xs text-slate-300">
+              ({metadata.step})
+            </span>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -97,26 +177,34 @@ export function ChatMessage({ message, sessionId, onQuestionClick }: ChatMessage
           className={`leading-relaxed ${isUser ? 'text-slate-800 whitespace-pre-wrap' : 'prose prose-slate max-w-none text-slate-800'}`}
         >
           {isUser ? (
-            // 사용자 메시지는 일반 텍스트로 표시
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            // 사용자 메시지는 일반 텍스트로 표시 (XSS 방지를 위해 이스케이프)
+            <div className="whitespace-pre-wrap">{escapeHtml(content)}</div>
+          ) : !shouldRenderMarkdown ? (
+            // 타이핑 효과가 완료되기 전까지는 타이핑 효과로 표시
+            <div className="whitespace-pre-wrap">{displayedContent}</div>
           ) : (
-            // AI 답변은 마크다운으로 렌더링
+            // 타이핑 효과 완료 후 마크다운으로 렌더링
             <ReactMarkdown
               components={{
                 // 코드 블록 스타일링
-                code: ({ node, inline, className, children, ...props }) => {
+                code: ({ className, children, ...props }: any) => {
                   const match = /language-(\w+)/.exec(className || '');
-                  return !inline && match ? (
-                    <SyntaxHighlighter
-                      style={vscDarkPlus}
-                      language={match[1]}
-                      PreTag="div"
-                      className="rounded-lg my-2"
-                      {...props}
-                    >
-                      {String(children).replace(/\n$/, '')}
-                    </SyntaxHighlighter>
-                  ) : (
+                  const isInline = !match;
+                  
+                  if (!isInline && match) {
+                    return (
+                      <SyntaxHighlighter
+                        style={vscDarkPlus as any}
+                        language={match[1]}
+                        PreTag="div"
+                        className="rounded-lg my-2"
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    );
+                  }
+                  
+                  return (
                     <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
                       {children}
                     </code>
@@ -176,10 +264,17 @@ export function ChatMessage({ message, sessionId, onQuestionClick }: ChatMessage
                 ),
               }}
             >
-              {message.content}
+              {content}
             </ReactMarkdown>
           )}
         </div>
+
+        {/* 에러 메시지 표시 */}
+        {error && !isUser && (
+          <div className="mt-3">
+            <ErrorMessage error={error} onRetry={onRetry} />
+          </div>
+        )}
 
         {!isUser && (
           <>
@@ -197,9 +292,20 @@ export function ChatMessage({ message, sessionId, onQuestionClick }: ChatMessage
 
         <div className="flex items-center justify-between mt-2">
           <span className="text-xs text-slate-500">
-            {formatRelativeTime(message.timestamp)}
+            {message.timestamp ? formatRelativeTime(message.timestamp) : '방금 전'}
           </span>
           <div className="flex items-center gap-2">
+            {/* 에러가 발생한 assistant 메시지에 재시도 버튼 표시 */}
+            {!isUser && error && error.canRetry && onRetry && (
+              <button
+                onClick={onRetry}
+                className="p-1 hover:bg-blue-100 rounded transition-colors text-blue-600"
+                title="다시 시도"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            )}
+            
             {!isUser && (
               <>
                 <button

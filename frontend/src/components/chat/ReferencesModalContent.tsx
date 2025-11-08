@@ -4,6 +4,7 @@
  */
 import { FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
 import { useState, useMemo } from 'react';
+import logger from '../../utils/logger';
 import type { LegalReferenceDetail } from '../../types/chat';
 
 interface ReferencesModalContentProps {
@@ -61,7 +62,7 @@ function parseReferences(
         });
       }
     } catch (error) {
-      console.warn(`Failed to parse legal reference: ${ref}`, error);
+      logger.warn(`Failed to parse legal reference: ${ref}`, error);
       // 에러가 발생해도 기본 정보는 추가
       allReferences.push({
         id: `legal-error-${idx}`,
@@ -108,7 +109,7 @@ function parseReferences(
         });
       }
     } catch (error) {
-      console.warn(`Failed to parse source: ${src}`, error);
+      logger.warn(`Failed to parse source: ${src}`, error);
       // 에러가 발생해도 기본 정보는 추가
       allReferences.push({
         id: `source-error-${idx}`,
@@ -157,7 +158,7 @@ function parseReferences(
         });
       }
     } catch (error) {
-      console.warn(`Failed to parse reference: ${ref}`, error);
+      logger.warn(`Failed to parse reference: ${ref}`, error);
       // 에러가 발생해도 기본 정보는 추가
       allReferences.push({
         id: `ref-error-${idx}`,

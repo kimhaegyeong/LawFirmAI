@@ -2,7 +2,7 @@
  * 채팅 입력 컴포넌트
  */
 import { Send, Paperclip } from 'lucide-react';
-import { useState, useRef, KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { FileAttachment } from '../common/FileAttachment';
 import { fileToFileInfo, formatFileSize } from '../../utils/fileUtils';
 import type { FileAttachment as FileAttachmentType } from '../../types/chat';
@@ -11,13 +11,32 @@ interface ChatInputProps {
   onSend: (message: string, attachments?: FileAttachmentType[]) => void;
   disabled?: boolean;
   isLoading?: boolean;
+  resetTrigger?: number;
 }
 
-export function ChatInput({ onSend, disabled = false, isLoading = false }: ChatInputProps) {
+export function ChatInput({ onSend, disabled = false, isLoading = false, resetTrigger }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<FileAttachmentType[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // resetTrigger가 변경되면 입력창 초기화
+  useEffect(() => {
+    if (resetTrigger !== undefined) {
+      setMessage('');
+      setAttachments([]);
+      
+      // 텍스트 영역 높이 초기화
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      
+      // 파일 입력 초기화
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  }, [resetTrigger]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -79,7 +98,7 @@ export function ChatInput({ onSend, disabled = false, isLoading = false }: ChatI
         )}
 
         {/* 입력 박스 */}
-        <div className="relative flex items-end gap-2 bg-white border-2 border-slate-300 rounded-2xl hover:border-slate-400 focus-within:border-blue-500 focus-within:shadow-lg transition-all">
+        <div className="relative flex items-center gap-2 bg-white border-2 border-slate-300 rounded-2xl hover:border-slate-400 focus-within:border-blue-500 focus-within:shadow-lg transition-all">
           <input
             ref={fileInputRef}
             type="file"
@@ -91,7 +110,7 @@ export function ChatInput({ onSend, disabled = false, isLoading = false }: ChatI
 
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="ml-3 mb-3 p-2.5 hover:bg-slate-100 rounded-lg transition-colors flex-shrink-0"
+            className="ml-3 p-2.5 hover:bg-slate-100 rounded-lg transition-colors flex-shrink-0"
             title="파일 첨부"
             disabled={disabled || isLoading}
           >
@@ -113,7 +132,7 @@ export function ChatInput({ onSend, disabled = false, isLoading = false }: ChatI
           <button
             onClick={handleSend}
             disabled={(!message.trim() && attachments.length === 0) || disabled || isLoading}
-            className="mr-3 mb-3 p-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors flex-shrink-0 shadow-sm"
+            className="mr-3 p-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors flex-shrink-0 shadow-sm"
             title="전송"
           >
             <Send className="w-5 h-5 text-white" />

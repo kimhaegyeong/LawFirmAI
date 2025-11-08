@@ -3,6 +3,7 @@
  */
 import { useState, useCallback } from 'react';
 import { sendChatMessage, sendStreamingChatMessage } from '../services/chatService';
+import logger from '../utils/logger';
 import type { ChatRequest, ChatResponse, ChatMessage, FileAttachment } from '../types/chat';
 
 interface UseChatOptions {
@@ -83,7 +84,10 @@ export function useChat(options?: UseChatOptions) {
     async (
       message: string,
       sessionId: string,
-      onChunk: (chunk: string) => void
+      onChunk: (chunk: string) => void,
+      imageBase64?: string,
+      fileBase64?: string,
+      filename?: string
     ): Promise<void> => {
       setIsStreaming(true);
       setError(null);
@@ -92,6 +96,9 @@ export function useChat(options?: UseChatOptions) {
         const request = {
           message,
           session_id: sessionId,
+          ...(imageBase64 && { image_base64: imageBase64 }),
+          ...(fileBase64 && { file_base64: fileBase64 }),
+          ...(filename && { filename: filename }),
         };
 
         let chunkCount = 0;
@@ -101,12 +108,12 @@ export function useChat(options?: UseChatOptions) {
         }
         
         if (chunkCount === 0) {
-          console.warn('[Stream] No chunks received from stream');
+          logger.warn('[Stream] No chunks received from stream');
         }
 
         // 스트리밍 완료 - 메시지는 App.tsx에서 이미 추가하고 있으므로 여기서는 추가하지 않음
       } catch (err) {
-        console.error('[Stream] Error in sendStreamingMessage:', err);
+        logger.error('[Stream] Error in sendStreamingMessage:', err);
         const error = err instanceof Error 
           ? err 
           : new Error(`스트리밍 중 오류가 발생했습니다: ${String(err)}`);
