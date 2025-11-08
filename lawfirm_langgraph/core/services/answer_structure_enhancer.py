@@ -2680,9 +2680,6 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
                     legal_basis_section += f"- {recommendation}\n"
                 legal_basis_section += "\n"
 
-            # 면책 조항
-            legal_basis_section += "> **면책 조항:** 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다.\n"
-
             return structured_answer + legal_basis_section
 
         except Exception as e:

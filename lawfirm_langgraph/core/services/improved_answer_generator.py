@@ -364,9 +364,6 @@ class ImprovedAnswerGenerator:
             elif question_type.question_type == QuestionType.LEGAL_ADVICE:
                 processed = self._enhance_advice_answer(processed, sources)
             
-            # 공통 후처리
-            processed = self._add_disclaimer(processed)
-            
             return processed
             
         except Exception as e:

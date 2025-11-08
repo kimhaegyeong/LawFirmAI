@@ -774,10 +774,6 @@ class AnswerFormatter:
                 content_parts.append(confidence_section)
                 content_parts.append("")
 
-            # 면책 조항 (신뢰도가 낮을 때만 표시 - 개선)
-            if template.get("disclaimer", False) and confidence.confidence < 0.5:
-                content_parts.append(self._get_disclaimer())
-
             return "\n".join(content_parts)
 
         except Exception as e:
