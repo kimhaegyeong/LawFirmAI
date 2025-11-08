@@ -7,6 +7,9 @@ export interface ChatRequest {
   session_id?: string;
   context?: string;
   enable_checkpoint?: boolean;
+  image_base64?: string;
+  file_base64?: string;
+  filename?: string;
 }
 
 export interface ChatResponse {
@@ -26,11 +29,14 @@ export interface StreamingChatRequest {
   message: string;
   session_id?: string;
   context?: string;
+  image_base64?: string;
+  file_base64?: string;
+  filename?: string;
 }
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'progress';
   content: string;
   timestamp: Date;
   attachments?: FileAttachment[];
@@ -40,6 +46,18 @@ export interface ChatMessage {
     confidence?: number;
     processing_steps?: string[];
     query_type?: string;
+    // Progress 메시지용 추가 필드
+    step?: number;
+    message?: string;
+    timestamp?: string;
+    node_name?: string;
+    tokens_received?: number;
+    length?: number;
+    answer_found?: boolean;
+    error?: boolean;
+    error_type?: string;
+    // 기타 필드 허용
+    [key: string]: any;
   };
 }
 
