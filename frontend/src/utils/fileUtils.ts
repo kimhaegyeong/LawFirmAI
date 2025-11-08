@@ -55,3 +55,47 @@ export function fileToFileInfo(file: File): FileInfo {
   };
 }
 
+/**
+ * 이미지 파일을 Base64로 변환
+ */
+export function convertImageToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // data:image/png;base64, 형태에서 base64 부분만 추출
+      if (result.startsWith('data:')) {
+        resolve(result);
+      } else {
+        resolve(result);
+      }
+    };
+    reader.onerror = (error) => {
+      reject(error);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * 파일을 Base64로 변환 (이미지, 텍스트, PDF, DOCX 등)
+ */
+export function convertFileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // data:image/png;base64, 형태
+      if (result.startsWith('data:')) {
+        resolve(result);
+      } else {
+        resolve(result);
+      }
+    };
+    reader.onerror = (error) => {
+      reject(error);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+

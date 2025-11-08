@@ -1,6 +1,7 @@
 /**
  * 날짜 유틸리티 함수
  */
+import logger from './logger';
 
 export type DateGroup = '오늘' | '어제' | '지난 7일' | '지난 30일' | '이전';
 
@@ -29,7 +30,7 @@ function parseDate(date: string | Date): Date {
     
     // 유효성 검증
     if (isNaN(parsed.getTime())) {
-      console.warn(`Invalid date string: ${date}`);
+      logger.warn(`Invalid date string: ${date}`);
       return new Date(0);
     }
     
