@@ -93,10 +93,19 @@ class ChatRequest(BaseModel):
         return v
 
 
+class SourceInfo(BaseModel):
+    """출처 정보 (상세)"""
+    name: str = Field(..., description="출처명")
+    type: str = Field(..., description="출처 타입 (statute_article, case_paragraph 등)")
+    url: Optional[str] = Field(None, description="출처 URL")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="추가 메타데이터")
+
+
 class ChatResponse(BaseModel):
     """채팅 응답 스키마"""
     answer: str = Field(..., description="AI 답변")
-    sources: List[str] = Field(default_factory=list, description="참고 출처")
+    sources: List[str] = Field(default_factory=list, description="참고 출처 (문자열 배열 - 하위 호환성)")
+    sources_detail: List[SourceInfo] = Field(default_factory=list, description="참고 출처 상세 정보 (신규)")
     confidence: float = Field(..., description="신뢰도 (0.0 ~ 1.0)")
     legal_references: List[str] = Field(default_factory=list, description="법률 참조")
     processing_steps: List[str] = Field(default_factory=list, description="처리 단계")

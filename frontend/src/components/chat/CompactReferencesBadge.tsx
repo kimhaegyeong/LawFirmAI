@@ -7,21 +7,25 @@ import { useState } from 'react';
 import { Modal } from '../common/Modal';
 import { ReferencesModalContent } from './ReferencesModalContent';
 
+import type { SourceInfo } from '../../types/chat';
+
 interface CompactReferencesBadgeProps {
   references?: string[];
   legalReferences?: string[];
   sources?: string[];
+  sourcesDetail?: SourceInfo[];
 }
 
 export function CompactReferencesBadge({
   references = [],
   legalReferences = [],
   sources = [],
+  sourcesDetail = [],
 }: CompactReferencesBadgeProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // 전체 참고자료 개수 계산
-  const totalCount = references.length + legalReferences.length + sources.length;
+  const totalCount = references.length + legalReferences.length + sources.length + sourcesDetail.length;
 
   // 참고자료가 없으면 렌더링하지 않음
   if (totalCount === 0) {
@@ -53,6 +57,7 @@ export function CompactReferencesBadge({
           references={references}
           legalReferences={legalReferences}
           sources={sources}
+          sourcesDetail={sourcesDetail}
         />
       </Modal>
     </>

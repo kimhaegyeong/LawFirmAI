@@ -12,9 +12,28 @@ export interface ChatRequest {
   filename?: string;
 }
 
+export interface SourceInfo {
+  name: string;
+  type: 'statute_article' | 'case_paragraph' | 'decision_paragraph' | 'interpretation_paragraph' | string;
+  url?: string;
+  metadata?: {
+    statute_name?: string;
+    article_no?: string;
+    clause_no?: string;
+    item_no?: string;
+    court?: string;
+    doc_id?: string;
+    casenames?: string;
+    org?: string;
+    title?: string;
+    [key: string]: any;
+  };
+}
+
 export interface ChatResponse {
   answer: string;
-  sources: string[];
+  sources: string[];  // 기존 호환성 유지
+  sources_detail?: SourceInfo[];  // 신규 필드
   confidence: number;
   legal_references: string[];
   processing_steps: string[];
@@ -42,6 +61,7 @@ export interface ChatMessage {
   attachments?: FileAttachment[];
   metadata?: {
     sources?: string[];
+    sources_detail?: SourceInfo[];  // 신규 필드
     legal_references?: string[];
     confidence?: number;
     processing_steps?: string[];

@@ -282,6 +282,7 @@ export function ChatMessage({
               references={metadata.sources}
               legalReferences={metadata.legal_references}
               sources={metadata.sources}
+              sourcesDetail={metadata.sources_detail}
             />
             <RelatedQuestions
               questions={metadata.related_questions}

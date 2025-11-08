@@ -54,6 +54,7 @@ export function useChat(options?: UseChatOptions) {
           timestamp: new Date(),
           metadata: {
             sources: response.sources,
+            sources_detail: response.sources_detail,
             legal_references: response.legal_references,
             confidence: response.confidence,
             processing_steps: response.processing_steps,

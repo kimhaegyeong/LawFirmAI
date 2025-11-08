@@ -5,12 +5,13 @@
 import { FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import logger from '../../utils/logger';
-import type { LegalReferenceDetail } from '../../types/chat';
+import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 
 interface ReferencesModalContentProps {
   references?: string[];
   legalReferences?: string[];
   sources?: string[];
+  sourcesDetail?: SourceInfo[];
 }
 
 type ReferenceType = 'all' | 'law' | 'precedent' | 'regulation';
@@ -378,7 +379,7 @@ function parseOtherReference(ref: string): Partial<LegalReferenceDetail> {
 /**
  * 법령 카드 컴포넌트
  */
-function LawCard({ law }: { law: LegalReferenceDetail }) {
+function LawCard({ law }: { law: LegalReferenceDetail & { url?: string } }) {
   return (
     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-3">
@@ -413,12 +414,24 @@ function LawCard({ law }: { law: LegalReferenceDetail }) {
             <p className="text-sm text-slate-600 mt-2">{law.content}</p>
           ) : null}
         </div>
-        <button
-          className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
-          title="상세 정보 보기"
-        >
-          <ExternalLink className="w-4 h-4" />
-        </button>
+        {law.url ? (
+          <a
+            href={law.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
+            title="원문 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : (
+          <button
+            className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
+            title="상세 정보 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -427,7 +440,7 @@ function LawCard({ law }: { law: LegalReferenceDetail }) {
 /**
  * 판례 카드 컴포넌트
  */
-function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail }) {
+function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail & { url?: string } }) {
   return (
     <div className="p-4 bg-green-50 border border-green-200 rounded-lg hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-3">
@@ -468,12 +481,24 @@ function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail }) {
             <p className="text-sm text-slate-700 mt-2">{precedent.content}</p>
           ) : null}
         </div>
-        <button
-          className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
-          title="상세 정보 보기"
-        >
-          <ExternalLink className="w-4 h-4" />
-        </button>
+        {precedent.url ? (
+          <a
+            href={precedent.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
+            title="원문 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : (
+          <button
+            className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
+            title="상세 정보 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );

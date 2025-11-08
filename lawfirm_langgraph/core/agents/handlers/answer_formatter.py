@@ -609,48 +609,135 @@ class AnswerFormatterHandler:
                 except Exception:
                     state["answer"] = str(current_answer) if current_answer else ""
 
-            # sources 추출 (개선: 메타데이터에서도 소스 정보 추출)
+            # sources 추출 (개선: source_type별 상세 정보 추출)
             final_sources_list = []
+            final_sources_detail = []
             seen_sources = set()
+
+            # 통일된 포맷터 및 검증기 초기화
+            try:
+                from ...services.unified_source_formatter import UnifiedSourceFormatter
+                from ...services.source_validator import SourceValidator
+                formatter = UnifiedSourceFormatter()
+                validator = SourceValidator()
+            except ImportError:
+                formatter = None
+                validator = None
 
             for doc in state.get("retrieved_docs", []):
                 if not isinstance(doc, dict):
                     continue
 
-                # 다양한 필드에서 소스 추출 시도
                 source = None
-
-                # 1. 직접 source 필드 확인 (단, "semantic", "keyword" 같은 검색 타입은 제외)
-                # 우선순위: statute_name > law_name > source_name > source
-                source_raw = (
-                    doc.get("statute_name") or
-                    doc.get("law_name") or
-                    doc.get("source_name") or
-                    doc.get("source")
-                )
-
-                # 검색 타입이 아닌 실제 소스명만 추출
-                if source_raw and isinstance(source_raw, str):
-                    source_lower = source_raw.lower().strip()
-                    # 검색 타입 필터링 (더 포괄적)
-                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
-                    if source_lower not in invalid_sources and len(source_lower) > 2:
-                        source = source_raw.strip()
-                    else:
-                        source = None
-                else:
-                    source = None
-
-                # law_name, statute_name도 별도로 확인 (위에서 확인했지만 재확인)
+                source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                
+                # 통일된 포맷터로 상세 정보 생성
+                source_info_detail = None
+                if formatter and source_type:
+                    try:
+                        # doc과 metadata를 병합하여 포맷터에 전달
+                        merged_metadata = {**metadata}
+                        for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                                   "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
+                            if key in doc:
+                                merged_metadata[key] = doc[key]
+                        
+                        source_info_detail = formatter.format_source(source_type, merged_metadata)
+                        
+                        # 검증 수행
+                        if validator:
+                            validation_result = validator.validate_source(source_type, merged_metadata)
+                            source_info_detail.validation = validation_result
+                    except Exception as e:
+                        self.logger.warning(f"Error formatting source detail: {e}")
+                
+                # 1. statute_article (법령 조문) 처리
+                if source_type == "statute_article":
+                    statute_name = (
+                        doc.get("statute_name") or
+                        doc.get("law_name") or
+                        metadata.get("statute_name") or
+                        metadata.get("law_name")
+                    )
+                    
+                    if statute_name:
+                        article_no = (
+                            doc.get("article_no") or
+                            doc.get("article_number") or
+                            metadata.get("article_no") or
+                            metadata.get("article_number")
+                        )
+                        clause_no = doc.get("clause_no") or metadata.get("clause_no")
+                        item_no = doc.get("item_no") or metadata.get("item_no")
+                        
+                        source_parts = [statute_name]
+                        if article_no:
+                            source_parts.append(article_no)
+                        if clause_no:
+                            source_parts.append(f"제{clause_no}항")
+                        if item_no:
+                            source_parts.append(f"제{item_no}호")
+                        
+                        source = " ".join(source_parts)
+                
+                # 2. case_paragraph (판례) 처리
+                elif source_type == "case_paragraph":
+                    court = doc.get("court") or metadata.get("court")
+                    casenames = doc.get("casenames") or metadata.get("casenames")
+                    doc_id = doc.get("doc_id") or metadata.get("doc_id")
+                    
+                    if court or casenames:
+                        source_parts = []
+                        if court:
+                            source_parts.append(court)
+                        if casenames:
+                            source_parts.append(casenames)
+                        if doc_id:
+                            source_parts.append(f"({doc_id})")
+                        source = " ".join(source_parts)
+                
+                # 3. decision_paragraph (결정례) 처리
+                elif source_type == "decision_paragraph":
+                    org = doc.get("org") or metadata.get("org")
+                    doc_id = doc.get("doc_id") or metadata.get("doc_id")
+                    
+                    if org:
+                        source_parts = [org]
+                        if doc_id:
+                            source_parts.append(f"({doc_id})")
+                        source = " ".join(source_parts)
+                
+                # 4. interpretation_paragraph (해석례) 처리
+                elif source_type == "interpretation_paragraph":
+                    org = doc.get("org") or metadata.get("org")
+                    title = doc.get("title") or metadata.get("title")
+                    
+                    if org or title:
+                        source_parts = []
+                        if org:
+                            source_parts.append(org)
+                        if title:
+                            source_parts.append(title)
+                        source = " ".join(source_parts)
+                
+                # 5. 기존 로직 (source_type이 없는 경우 또는 위에서 source를 찾지 못한 경우)
                 if not source:
-                    law_name = doc.get("law_name") or doc.get("statute_name")
-                    if law_name and isinstance(law_name, str) and law_name.strip() and len(law_name.strip()) > 2:
-                        source = law_name.strip()
-
-                # 2. metadata에서 소스 정보 추출
-                if not source:
-                    metadata = doc.get("metadata", {})
-                    if isinstance(metadata, dict):
+                    source_raw = (
+                        doc.get("statute_name") or
+                        doc.get("law_name") or
+                        doc.get("source_name") or
+                        doc.get("source")
+                    )
+                    
+                    if source_raw and isinstance(source_raw, str):
+                        source_lower = source_raw.lower().strip()
+                        invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                        # 한글 법령명은 2자 이상이면 유효 (예: "민법", "형법")
+                        if source_lower not in invalid_sources and len(source_lower) >= 2:
+                            source = source_raw.strip()
+                    
+                    if not source:
                         source = (
                             metadata.get("statute_name") or
                             metadata.get("statute_abbrv") or
@@ -659,16 +746,14 @@ class AnswerFormatterHandler:
                             metadata.get("org") or
                             metadata.get("title")
                         )
-
-                # 3. content나 text에서 법령명 추출 시도 (정규식 패턴)
-                if not source:
-                    content = doc.get("content", "") or doc.get("text", "")
-                    if isinstance(content, str) and content:
-                        import re
-                        # 법령명 패턴 찾기 (예: "민법 제550조", "형법 제257조" 등)
-                        law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
-                        if law_pattern:
-                            source = law_pattern.group(1)
+                    
+                    if not source:
+                        content = doc.get("content", "") or doc.get("text", "")
+                        if isinstance(content, str) and content:
+                            import re
+                            law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
+                            if law_pattern:
+                                source = law_pattern.group(1)
 
                 # 소스 문자열 변환 및 중복 제거
                 if source:
@@ -679,12 +764,28 @@ class AnswerFormatterHandler:
                             source_str = str(source).strip()
                         except Exception:
                             source_str = None
+                    
+                    # 검색 타입 필터링 (최종 검증)
+                    if source_str:
+                        source_lower = source_str.lower().strip()
+                        invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                        # 한글 법령명은 2자 이상이면 유효 (예: "민법", "형법")
+                        if source_lower not in invalid_sources and len(source_lower) >= 2:
+                            if source_str not in seen_sources and source_str != "Unknown":
+                                final_sources_list.append(source_str)
+                                seen_sources.add(source_str)
+                                
+                                # sources_detail 추가
+                                if source_info_detail:
+                                    final_sources_detail.append({
+                                        "name": source_info_detail.name,
+                                        "type": source_info_detail.type,
+                                        "url": source_info_detail.url or "",
+                                        "metadata": source_info_detail.metadata or {}
+                                    })
 
-                    if source_str and source_str not in seen_sources and source_str != "Unknown":
-                        final_sources_list.append(source_str)
-                        seen_sources.add(source_str)
-
-            state["sources"] = final_sources_list[:10]  # 최대 10개만
+            state["sources"] = final_sources_list[:10]  # 최대 10개만 (하위 호환성)
+            state["sources_detail"] = final_sources_detail[:10]  # 최대 10개만 (신규 필드)
 
             # 법적 참조 정보 추가
             if "legal_references" not in state:

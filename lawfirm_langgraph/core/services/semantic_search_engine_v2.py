@@ -1406,6 +1406,18 @@ class SemanticSearchEngineV2:
                     quality_score=quality_score
                 )
                 
+                # 통일된 포맷터로 출처 정보 생성
+                try:
+                    from ..services.unified_source_formatter import UnifiedSourceFormatter
+                    formatter = UnifiedSourceFormatter()
+                    source_info = formatter.format_source(source_type, source_meta)
+                    source_name = source_info.name
+                    source_url = source_info.url
+                except Exception as e:
+                    self.logger.warning(f"Error using UnifiedSourceFormatter: {e}, using fallback")
+                    source_name = self._format_source(source_type, source_meta)
+                    source_url = ""
+                
                 result = {
                     "id": f"chunk_{chunk_id}",
                     "text": text,
@@ -1413,7 +1425,20 @@ class SemanticSearchEngineV2:
                     "score": float(score),
                     "similarity": float(score),
                     "type": source_type,
-                    "source": self._format_source(source_type, source_meta),
+                    "source": source_name,
+                    "source_url": source_url,  # URL 필드 추가
+                    # 최상위 필드에 상세 정보 추가 (answer_formatter에서 쉽게 접근)
+                    "statute_name": source_meta.get("statute_name") if source_type == "statute_article" else None,
+                    "law_name": source_meta.get("statute_name") if source_type == "statute_article" else None,
+                    "article_no": source_meta.get("article_no") if source_type == "statute_article" else None,
+                    "article_number": source_meta.get("article_no") if source_type == "statute_article" else None,
+                    "clause_no": source_meta.get("clause_no") if source_type == "statute_article" else None,
+                    "item_no": source_meta.get("item_no") if source_type == "statute_article" else None,
+                    "court": source_meta.get("court") if source_type == "case_paragraph" else None,
+                    "doc_id": source_meta.get("doc_id") if source_type in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"] else None,
+                    "casenames": source_meta.get("casenames") if source_type == "case_paragraph" else None,
+                    "org": source_meta.get("org") if source_type in ["decision_paragraph", "interpretation_paragraph"] else None,
+                    "title": source_meta.get("title") if source_type == "interpretation_paragraph" else None,
                     "metadata": {
                         "chunk_id": chunk_id,
                         "source_type": source_type,
@@ -1773,15 +1798,87 @@ class SemanticSearchEngineV2:
             return ""
 
     def _format_source(self, source_type: str, metadata: Dict[str, Any]) -> str:
-        """소스 정보 포맷팅"""
+        """소스 정보 포맷팅 (통일된 포맷터 사용)"""
+        try:
+            from ..services.unified_source_formatter import UnifiedSourceFormatter
+            formatter = UnifiedSourceFormatter()
+            source_info = formatter.format_source(source_type, metadata)
+            return source_info.name
+        except ImportError:
+            self.logger.warning("UnifiedSourceFormatter not available, using fallback")
+            return self._format_source_fallback(source_type, metadata)
+        except Exception as e:
+            self.logger.warning(f"Error using UnifiedSourceFormatter: {e}, using fallback")
+            return self._format_source_fallback(source_type, metadata)
+    
+    def _format_source_fallback(self, source_type: str, metadata: Dict[str, Any]) -> str:
+        """소스 정보 포맷팅 (Fallback - 기존 로직)"""
         if source_type == "statute_article":
-            return metadata.get("statute_name", "법령")
+            statute_name = metadata.get("statute_name") or "법령"
+            article_no = metadata.get("article_no") or ""
+            clause_no = metadata.get("clause_no") or ""
+            item_no = metadata.get("item_no") or ""
+            
+            if article_no:
+                source = f"{statute_name} {article_no}"
+                if clause_no:
+                    source += f" 제{clause_no}항"
+                if item_no:
+                    source += f" 제{item_no}호"
+                return source
+            return statute_name
+            
         elif source_type == "case_paragraph":
-            return f"{metadata.get('court', '')} {metadata.get('doc_id', '')}"
+            court = metadata.get("court", "")
+            doc_id = metadata.get("doc_id", "")
+            casenames = metadata.get("casenames", "")
+            announce_date = metadata.get("announce_date", "")
+            
+            parts = []
+            if court:
+                parts.append(court)
+            if casenames:
+                parts.append(casenames)
+            if doc_id:
+                parts.append(f"({doc_id})")
+            if announce_date:
+                parts.append(f"[{announce_date}]")
+            
+            return " ".join(parts) if parts else "판례"
+            
         elif source_type == "decision_paragraph":
-            return f"{metadata.get('org', '')} {metadata.get('doc_id', '')}"
+            org = metadata.get("org", "")
+            doc_id = metadata.get("doc_id", "")
+            decision_date = metadata.get("decision_date", "")
+            
+            parts = []
+            if org:
+                parts.append(org)
+            if doc_id:
+                parts.append(f"({doc_id})")
+            if decision_date:
+                parts.append(f"[{decision_date}]")
+            
+            return " ".join(parts) if parts else "결정례"
+            
         elif source_type == "interpretation_paragraph":
-            return f"{metadata.get('org', '')} {metadata.get('title', '')}"
+            org = metadata.get("org", "")
+            title = metadata.get("title", "")
+            doc_id = metadata.get("doc_id", "")
+            response_date = metadata.get("response_date", "")
+            
+            parts = []
+            if org:
+                parts.append(org)
+            if title:
+                parts.append(title)
+            if doc_id:
+                parts.append(f"({doc_id})")
+            if response_date:
+                parts.append(f"[{response_date}]")
+            
+            return " ".join(parts) if parts else "해석례"
+            
         return "Unknown"
 
     def get_high_confidence_documents(self,
