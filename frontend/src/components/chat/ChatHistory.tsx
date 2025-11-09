@@ -17,6 +17,9 @@ interface ChatHistoryProps {
   streamingMessageId?: string | null; // 현재 스트리밍 중인 메시지 ID
   streamErrors?: Map<string, StreamError>; // 에러 상태 맵
   onRetryMessage?: (messageId: string) => void; // 재시도 핸들러
+  onDocumentClick?: (message: ChatMessageType, documentIndex: number) => void; // 문서 클릭 핸들러
+  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void; // 참고자료 사이드바 열기 핸들러
+  onContinueReading?: (sessionId: string, messageId: string, chunkIndex: number) => Promise<void>; // 계속 읽기 핸들러
 }
 
 export function ChatHistory({ 
@@ -28,7 +31,10 @@ export function ChatHistory({
   onQuestionClick, 
   streamingMessageId = null,
   streamErrors = new Map(),
-  onRetryMessage
+  onRetryMessage,
+  onDocumentClick,
+  onOpenReferencesSidebar,
+  onContinueReading
 }: ChatHistoryProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -87,9 +93,12 @@ export function ChatHistory({
                   message={message}
                   sessionId={sessionId}
                   onQuestionClick={onQuestionClick}
+                  onDocumentClick={onDocumentClick}
+                  onOpenReferencesSidebar={onOpenReferencesSidebar}
                   isStreaming={isStreaming}
                   error={error}
                   onRetry={error && error.canRetry && onRetryMessage ? () => onRetryMessage(message.id) : undefined}
+                  onContinueReading={onContinueReading}
                 />
               </ErrorBoundary>
             );

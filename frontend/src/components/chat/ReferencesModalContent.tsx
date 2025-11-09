@@ -3,7 +3,7 @@
  * 법령/판례를 카드 형태로 분류하여 표시합니다.
  */
 import { FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import logger from '../../utils/logger';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 
@@ -12,9 +12,11 @@ interface ReferencesModalContentProps {
   legalReferences?: string[];
   sources?: string[];
   sourcesDetail?: SourceInfo[];
+  initialSelectedType?: ReferenceType;
+  onReferenceClick?: (reference: LegalReferenceDetail, sourceDetail?: SourceInfo) => void;
 }
 
-type ReferenceType = 'all' | 'law' | 'precedent' | 'regulation';
+type ReferenceType = 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 
 /**
  * 참고자료 문자열을 구조화된 데이터로 변환
@@ -379,9 +381,14 @@ function parseOtherReference(ref: string): Partial<LegalReferenceDetail> {
 /**
  * 법령 카드 컴포넌트
  */
-function LawCard({ law }: { law: LegalReferenceDetail & { url?: string } }) {
+function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
   return (
-    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg hover:shadow-md transition-shadow">
+    <div 
+      className={`p-4 bg-blue-50 border border-blue-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
@@ -407,9 +414,19 @@ function LawCard({ law }: { law: LegalReferenceDetail & { url?: string } }) {
             </p>
           )}
           {law.article_content ? (
-            <p className="text-sm text-slate-600 line-clamp-3 mt-2">
-              {law.article_content}
-            </p>
+            <div className="mt-2">
+              <p className={`text-sm text-slate-600 ${!isExpanded ? 'line-clamp-3' : ''}`}>
+                {law.article_content}
+              </p>
+              {law.article_content.length > 200 && (
+                <button
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="text-xs text-blue-600 hover:text-blue-700 mt-1"
+                >
+                  {isExpanded ? '접기' : '더 보기'}
+                </button>
+              )}
+            </div>
           ) : law.content ? (
             <p className="text-sm text-slate-600 mt-2">{law.content}</p>
           ) : null}
@@ -440,9 +457,14 @@ function LawCard({ law }: { law: LegalReferenceDetail & { url?: string } }) {
 /**
  * 판례 카드 컴포넌트
  */
-function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail & { url?: string } }) {
+function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
   return (
-    <div className="p-4 bg-green-50 border border-green-200 rounded-lg hover:shadow-md transition-shadow">
+    <div 
+      className={`p-4 bg-green-50 border border-green-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
@@ -474,9 +496,19 @@ function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail & { url?
             )}
           </div>
           {precedent.summary ? (
-            <p className="text-sm text-slate-700 line-clamp-3 mt-2">
-              {precedent.summary}
-            </p>
+            <div className="mt-2">
+              <p className={`text-sm text-slate-700 ${!isExpanded ? 'line-clamp-3' : ''}`}>
+                {precedent.summary}
+              </p>
+              {precedent.summary.length > 200 && (
+                <button
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="text-xs text-green-600 hover:text-green-700 mt-1"
+                >
+                  {isExpanded ? '접기' : '더 보기'}
+                </button>
+              )}
+            </div>
           ) : precedent.content ? (
             <p className="text-sm text-slate-700 mt-2">{precedent.content}</p>
           ) : null}
@@ -505,11 +537,164 @@ function PrecedentCard({ precedent }: { precedent: LegalReferenceDetail & { url?
 }
 
 /**
+ * 결정례 카드 컴포넌트
+ */
+function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  return (
+    <div 
+      className={`p-4 bg-orange-50 border border-orange-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <Bookmark className="w-4 h-4 text-orange-600 flex-shrink-0" />
+            <span className="text-xs font-semibold text-orange-600">결정례</span>
+            {decision.relevance_score !== undefined && (
+              <span className="text-xs text-slate-500">
+                관련도: {Math.round(decision.relevance_score * 100)}%
+              </span>
+            )}
+          </div>
+          <h4 className="font-semibold text-slate-800 mb-1">
+            {decision.org || '결정례'}
+          </h4>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-600 mb-2">
+            {decision.decision_number && (
+              <span className="bg-white px-2 py-1 rounded">일련번호: {decision.decision_number}</span>
+            )}
+            {decision.decision_date && (
+              <span className="bg-white px-2 py-1 rounded">결정일: {decision.decision_date}</span>
+            )}
+            {decision.result && (
+              <span className="bg-white px-2 py-1 rounded">결과: {decision.result}</span>
+            )}
+          </div>
+          {decision.content ? (
+            <div className="mt-2">
+              <p className={`text-sm text-slate-700 ${!isExpanded ? 'line-clamp-3' : ''}`}>
+                {decision.content}
+              </p>
+              {decision.content.length > 200 && (
+                <button
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="text-xs text-orange-600 hover:text-orange-700 mt-1"
+                >
+                  {isExpanded ? '접기' : '더 보기'}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+        {decision.url ? (
+          <a
+            href={decision.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-orange-600 hover:text-orange-700 p-1 rounded hover:bg-orange-100 transition-colors"
+            title="원문 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : (
+          <button
+            className="text-orange-600 hover:text-orange-700 p-1 rounded hover:bg-orange-100 transition-colors"
+            title="상세 정보 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 해석례 카드 컴포넌트
+ */
+function InterpretationCard({ interpretation, onClick }: { interpretation: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  return (
+    <div 
+      className={`p-4 bg-indigo-50 border border-indigo-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <FileText className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+            <span className="text-xs font-semibold text-indigo-600">해석례</span>
+            {interpretation.relevance_score !== undefined && (
+              <span className="text-xs text-slate-500">
+                관련도: {Math.round(interpretation.relevance_score * 100)}%
+              </span>
+            )}
+          </div>
+          <h4 className="font-semibold text-slate-800 mb-1">
+            {interpretation.title || interpretation.org || '해석례'}
+          </h4>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-600 mb-2">
+            {interpretation.interpretation_number && (
+              <span className="bg-white px-2 py-1 rounded">일련번호: {interpretation.interpretation_number}</span>
+            )}
+            {interpretation.org && (
+              <span className="bg-white px-2 py-1 rounded">기관: {interpretation.org}</span>
+            )}
+            {interpretation.response_date && (
+              <span className="bg-white px-2 py-1 rounded">회신일: {interpretation.response_date}</span>
+            )}
+          </div>
+          {interpretation.content ? (
+            <div className="mt-2">
+              <p className={`text-sm text-slate-700 ${!isExpanded ? 'line-clamp-3' : ''}`}>
+                {interpretation.content}
+              </p>
+              {interpretation.content.length > 200 && (
+                <button
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="text-xs text-indigo-600 hover:text-indigo-700 mt-1"
+                >
+                  {isExpanded ? '접기' : '더 보기'}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+        {interpretation.url ? (
+          <a
+            href={interpretation.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-indigo-600 hover:text-indigo-700 p-1 rounded hover:bg-indigo-100 transition-colors"
+            title="원문 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : (
+          <button
+            className="text-indigo-600 hover:text-indigo-700 p-1 rounded hover:bg-indigo-100 transition-colors"
+            title="상세 정보 보기"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * 기타 참조 카드 컴포넌트
  */
-function RegulationCard({ regulation }: { regulation: LegalReferenceDetail }) {
+function RegulationCard({ regulation, onClick }: { regulation: LegalReferenceDetail; onClick?: () => void }) {
   return (
-    <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg hover:shadow-md transition-shadow">
+    <div 
+      className={`p-4 bg-purple-50 border border-purple-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
@@ -541,21 +726,142 @@ export function ReferencesModalContent({
   references = [],
   legalReferences = [],
   sources = [],
+  sourcesDetail = [],
+  initialSelectedType = 'all',
+  onReferenceClick,
 }: ReferencesModalContentProps) {
-  const [selectedType, setSelectedType] = useState<ReferenceType>('all');
-
-  // 참고자료 파싱 및 분류
-  const parsedReferences = useMemo(
-    () => parseReferences(references, legalReferences, sources),
-    [references, legalReferences, sources]
-  );
-
-  // 타입별 필터링
-  const filteredReferences = useMemo(() => {
-    if (selectedType === 'all') {
-      return parsedReferences;
+  const [selectedType, setSelectedType] = useState<ReferenceType>(initialSelectedType);
+  
+  // initialSelectedType이 변경되면 selectedType 업데이트
+  useEffect(() => {
+    if (initialSelectedType) {
+      setSelectedType(initialSelectedType);
     }
-    return parsedReferences.filter((ref) => ref.type === selectedType);
+  }, [initialSelectedType]);
+
+  // sourcesDetail을 LegalReferenceDetail로 변환 (sourceDetail 정보도 함께 저장)
+  const sourcesDetailReferences = useMemo(() => {
+    return sourcesDetail.map((detail, idx): LegalReferenceDetail & { sourceDetail?: SourceInfo } => {
+      const baseRef: LegalReferenceDetail & { sourceDetail?: SourceInfo } = {
+        id: `source-detail-${idx}`,
+        type: 'regulation',
+        content: detail.content || detail.name,
+        sourceDetail: detail,
+      };
+
+      // 법령 정보
+      if (detail.type === 'statute_article') {
+        return {
+          ...baseRef,
+          type: 'law',
+          law_name: detail.statute_name || detail.metadata?.statute_name,
+          article_number: detail.article_no 
+            ? `제${detail.article_no}조${detail.clause_no ? ` 제${detail.clause_no}항` : ''}${detail.item_no ? ` 제${detail.item_no}호` : ''}`
+            : detail.metadata?.article_no,
+          article_content: detail.content,
+          sourceDetail: detail,
+        };
+      }
+
+      // 판례 정보
+      if (detail.type === 'case_paragraph') {
+        return {
+          ...baseRef,
+          type: 'precedent',
+          case_name: detail.case_name || detail.metadata?.casenames,
+          case_number: detail.case_number || detail.metadata?.doc_id,
+          court: detail.court || detail.metadata?.court,
+          summary: detail.content,
+          sourceDetail: detail,
+        };
+      }
+
+      // 결정례 정보
+      if (detail.type === 'decision_paragraph') {
+        return {
+          ...baseRef,
+          type: 'decision',
+          decision_number: detail.decision_number || detail.metadata?.doc_id,
+          org: detail.org || detail.metadata?.org,
+          decision_date: detail.decision_date || detail.metadata?.decision_date,
+          result: detail.result || detail.metadata?.result,
+          content: detail.content || detail.name,
+          sourceDetail: detail,
+        };
+      }
+
+      // 해석례 정보
+      if (detail.type === 'interpretation_paragraph') {
+        return {
+          ...baseRef,
+          type: 'interpretation',
+          interpretation_number: detail.interpretation_number || detail.metadata?.doc_id,
+          org: detail.org || detail.metadata?.org,
+          title: detail.title || detail.metadata?.title,
+          response_date: detail.response_date || detail.metadata?.response_date,
+          content: detail.content || detail.name,
+          sourceDetail: detail,
+        };
+      }
+
+      return baseRef;
+    });
+  }, [sourcesDetail]);
+
+  // 참고자료 파싱 및 분류 (sourcesDetail 우선)
+  const parsedReferences = useMemo(() => {
+    const detailRefs = sourcesDetailReferences;
+    const stringRefs = parseReferences(references, legalReferences, sources);
+    
+    // sourcesDetail을 우선하고, 중복 제거
+    const seen = new Set<string>();
+    const result: LegalReferenceDetail[] = [];
+    
+    // sourcesDetail 먼저 추가
+    detailRefs.forEach(ref => {
+      // key 생성: case_number, article_number, law_name, content 순서로 시도
+      const key = ref.case_number || ref.article_number || ref.law_name || ref.content || ref.id || `detail-${result.length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(ref);
+      }
+    });
+    
+    // 문자열 참조 추가 (중복 제외)
+    stringRefs.forEach(ref => {
+      const key = ref.case_number || ref.article_number || ref.law_name || ref.content || ref.id || `string-${result.length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(ref);
+      }
+    });
+    
+    return result;
+  }, [sourcesDetailReferences, references, legalReferences, sources]);
+
+  // 타입별 필터링 및 상위 3개만 선택
+  const filteredReferences = useMemo(() => {
+    let filtered: LegalReferenceDetail[] = [];
+    
+    if (selectedType === 'all') {
+      filtered = parsedReferences;
+    } else {
+      filtered = parsedReferences.filter((ref) => ref.type === selectedType);
+    }
+    
+    // 관련도 점수로 정렬 (relevance_score 우선, 없으면 similarity 사용)
+    filtered.sort((a, b) => {
+      const scoreA = a.relevance_score ?? a.similarity ?? 0;
+      const scoreB = b.relevance_score ?? b.similarity ?? 0;
+      return scoreB - scoreA; // 내림차순 정렬
+    });
+    
+    // 상위 3개만 반환 (전체가 아닌 경우에만)
+    if (selectedType !== 'all') {
+      return filtered.slice(0, 3);
+    }
+    
+    return filtered;
   }, [parsedReferences, selectedType]);
 
   // 타입별 개수 계산
@@ -564,6 +870,8 @@ export function ReferencesModalContent({
       all: parsedReferences.length,
       law: parsedReferences.filter((r) => r.type === 'law').length,
       precedent: parsedReferences.filter((r) => r.type === 'precedent').length,
+      decision: parsedReferences.filter((r) => r.type === 'decision').length,
+      interpretation: parsedReferences.filter((r) => r.type === 'interpretation').length,
       regulation: parsedReferences.filter((r) => r.type === 'regulation').length,
     };
   }, [parsedReferences]);
@@ -614,6 +922,30 @@ export function ReferencesModalContent({
             판례 ({counts.precedent})
           </button>
         )}
+        {counts.decision > 0 && (
+          <button
+            onClick={() => setSelectedType('decision')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${
+              selectedType === 'decision'
+                ? 'bg-orange-100 text-orange-700 border border-orange-300'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            결정례 ({counts.decision})
+          </button>
+        )}
+        {counts.interpretation > 0 && (
+          <button
+            onClick={() => setSelectedType('interpretation')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${
+              selectedType === 'interpretation'
+                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            해석례 ({counts.interpretation})
+          </button>
+        )}
         {counts.regulation > 0 && (
           <button
             onClick={() => setSelectedType('regulation')}
@@ -635,18 +967,38 @@ export function ReferencesModalContent({
             선택한 타입의 참고자료가 없습니다.
           </div>
         ) : (
-          filteredReferences.map((ref) => {
-            switch (ref.type) {
-              case 'law':
-                return <LawCard key={ref.id} law={ref} />;
-              case 'precedent':
-                return <PrecedentCard key={ref.id} precedent={ref} />;
-              case 'regulation':
-                return <RegulationCard key={ref.id} regulation={ref} />;
-              default:
-                return null;
-            }
-          })
+          <>
+            {/* 상위 3개 제한 안내 (전체가 아닌 경우) */}
+            {selectedType !== 'all' && counts[selectedType] > 3 && (
+              <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                관련도가 높은 상위 3개만 표시됩니다. (전체 {counts[selectedType]}개)
+              </div>
+            )}
+            
+            {filteredReferences.map((ref) => {
+              const handleClick = () => {
+                if (onReferenceClick) {
+                  const sourceDetail = (ref as any).sourceDetail;
+                  onReferenceClick(ref, sourceDetail);
+                }
+              };
+
+              switch (ref.type) {
+                case 'law':
+                  return <LawCard key={ref.id} law={ref} onClick={handleClick} />;
+                case 'precedent':
+                  return <PrecedentCard key={ref.id} precedent={ref} onClick={handleClick} />;
+                case 'decision':
+                  return <DecisionCard key={ref.id} decision={ref} onClick={handleClick} />;
+                case 'interpretation':
+                  return <InterpretationCard key={ref.id} interpretation={ref} onClick={handleClick} />;
+                case 'regulation':
+                  return <RegulationCard key={ref.id} regulation={ref} onClick={handleClick} />;
+                default:
+                  return null;
+              }
+            })}
+          </>
         )}
       </div>
     </div>

@@ -8,6 +8,8 @@ import { WelcomeScreen } from './components/welcome/WelcomeScreen';
 import { ChatHistory } from './components/chat/ChatHistory';
 import { ChatInput } from './components/chat/ChatInput';
 import { Toast } from './components/common/Toast';
+import { DocumentSidebar } from './components/chat/DocumentSidebar';
+import { ReferencesSidebar } from './components/chat/ReferencesSidebar';
 import { useChat } from './hooks/useChat';
 import { useSession } from './hooks/useSession';
 import { getHistory, exportHistory, downloadHistory } from './services/historyService';
@@ -39,13 +41,22 @@ function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [streamErrors, setStreamErrors] = useState<Map<string, StreamError>>(new Map());
   const [messageBuffers, setMessageBuffers] = useState<Map<string, string>>(new Map()); // 메시지별 버퍼 관리
+  const [documentSidebarOpen, setDocumentSidebarOpen] = useState(false);
+  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState<number | null>(null);
+  const [selectedMessageForDocument, setSelectedMessageForDocument] = useState<ChatMessage | null>(null);
+  const [referencesSidebarOpen, setReferencesSidebarOpen] = useState(false);
+  const [selectedMessageForReferences, setSelectedMessageForReferences] = useState<ChatMessage | null>(null);
+  const [selectedReferenceType, setSelectedReferenceType] = useState<'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation'>('all');
   
   // 토큰 배치 업데이트를 위한 ref
   const tokenBufferRef = useRef<Map<string, string>>(new Map()); // 메시지별 토큰 버퍼
   const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map()); // 메시지별 타이머 (setTimeout 반환값)
+  
+  // 초기 마운트 여부 추적 (StrictMode 대응)
+  const isInitialMount = useRef(true);
 
   const { currentSession, isLoading, loadSessions, newSession, loadSession, updateSession, removeSession, clearSession } = useSession();
-  const { sendStreamingMessage, isLoading: isSending, isStreaming } = useChat({
+  const { sendStreamingMessage, isLoading: isSending, isStreaming, continueAnswer } = useChat({
     onMessage: (message) => {
       setMessages((prev) => [...prev, message]);
       // 에러 메시지가 있으면 제거
@@ -78,10 +89,13 @@ function App() {
     },
   });
 
-  // 초기 세션 목록 로드
+  // 초기 세션 목록 로드 (StrictMode 대응)
   useEffect(() => {
-    loadSessions();
-  }, []);
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      loadSessions();
+    }
+  }, [loadSessions]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {
@@ -412,6 +426,67 @@ function App() {
             if (isFirstChunk) {
               isFirstChunk = false;
             }
+          } else if (parsed.type === 'chunk') {
+            // chunk 타입 이벤트 처리 (첫 번째 청크)
+            fullContent = parsed.content;
+            
+            if (isFirstChunk) {
+              setStreamingMessageId(assistantMessageId);
+              if (import.meta.env.DEV) {
+                logger.debug('[Stream] First chunk received, setting streamingMessageId:', assistantMessageId);
+              }
+            }
+            
+            // 메시지 업데이트
+            setMessageBuffers(prev => {
+              const newMap = new Map(prev);
+              newMap.set(assistantMessageId, parsed.content);
+              return newMap;
+            });
+            
+            setMessages((prevMessages) => {
+              const messageIndex = prevMessages.findIndex((msg) => msg.id === assistantMessageId);
+              
+              if (isFirstChunk && messageIndex === -1) {
+                // 첫 번째 청크를 받았을 때 메시지 추가
+                return [...prevMessages, {
+                  ...assistantMessage,
+                  content: parsed.content,
+                  metadata: {
+                    chunk_info: parsed.metadata?.chunk_index !== undefined ? {
+                      chunk_index: parsed.metadata.chunk_index,
+                      total_chunks: parsed.metadata.total_chunks || 1,
+                      has_more: parsed.metadata.has_more || false,
+                      is_complete: !parsed.metadata.has_more,
+                    } : undefined,
+                    message_id: parsed.metadata?.message_id,
+                  },
+                }];
+              } else if (messageIndex !== -1) {
+                // 기존 메시지 업데이트
+                const updated = [...prevMessages];
+                updated[messageIndex] = {
+                  ...updated[messageIndex],
+                  content: parsed.content,
+                  metadata: {
+                    ...updated[messageIndex].metadata,
+                    chunk_info: parsed.metadata?.chunk_index !== undefined ? {
+                      chunk_index: parsed.metadata.chunk_index,
+                      total_chunks: parsed.metadata.total_chunks || 1,
+                      has_more: parsed.metadata.has_more || false,
+                      is_complete: !parsed.metadata.has_more,
+                    } : updated[messageIndex].metadata?.chunk_info,
+                    message_id: parsed.metadata?.message_id || updated[messageIndex].metadata?.message_id,
+                  },
+                };
+                return updated;
+              }
+              return prevMessages;
+            });
+            
+            if (isFirstChunk) {
+              isFirstChunk = false;
+            }
           } else if (parsed.type === 'final') {
             // 최종 완료 처리
             // 남아있는 토큰 버퍼 처리 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
@@ -453,6 +528,14 @@ function App() {
             
             // 최종 메시지 업데이트 (누적된 fullContent 사용)
             // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
+            // metadata에서 sources, legal_references, sources_detail, chunk_info, message_id 추출
+            const metadata = parsed.metadata || {};
+            const sources = metadata.sources || [];
+            const legalReferences = metadata.legal_references || [];
+            const sourcesDetail = metadata.sources_detail || [];
+            const chunkInfo = metadata.chunk_info;
+            const messageId = metadata.message_id;
+            
             setMessages((prev) => {
               const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
               
@@ -463,10 +546,15 @@ function App() {
                 updated[messageIndex] = {
                   ...updated[messageIndex],
                   content: fullContent,  // 이미 누적된 내용 사용
-                  metadata: parsed.metadata ? {
+                  metadata: {
                     ...updated[messageIndex].metadata,
-                    ...parsed.metadata,
-                  } : updated[messageIndex].metadata,
+                    ...metadata,
+                    sources: sources,
+                    legal_references: legalReferences,
+                    sources_detail: sourcesDetail,
+                    chunk_info: chunkInfo || updated[messageIndex].metadata?.chunk_info,
+                    message_id: messageId || updated[messageIndex].metadata?.message_id,
+                  },
                 };
                 return updated;
               } else {
@@ -475,12 +563,52 @@ function App() {
                 return [...prev, {
                   ...assistantMessage,
                   content: fullContent,  // 이미 누적된 내용 사용
-                  metadata: parsed.metadata ? {
-                    ...parsed.metadata,
-                  } : undefined,
+                  metadata: {
+                    ...metadata,
+                    sources: sources,
+                    legal_references: legalReferences,
+                    sources_detail: sourcesDetail,
+                    chunk_info: chunkInfo,
+                    message_id: messageId,
+                  },
                 }];
               }
             });
+            
+            // sources가 비어있으면 별도 API로 가져오기
+            if (sources.length === 0 && legalReferences.length === 0 && sourcesDetail.length === 0) {
+              // 비동기로 sources 가져오기 (UI 블로킹 방지)
+              import('./services/chatService').then(({ getChatSources }) => {
+                getChatSources(sessionId, assistantMessageId)
+                  .then((sourcesData) => {
+                    // 메시지 metadata 업데이트
+                    setMessages((prev) => {
+                      const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                      
+                      if (messageIndex !== -1) {
+                        const updated = [...prev];
+                        updated[messageIndex] = {
+                          ...updated[messageIndex],
+                          metadata: {
+                            ...updated[messageIndex].metadata,
+                            sources: sourcesData.sources,
+                            legal_references: sourcesData.legal_references,
+                            sources_detail: sourcesData.sources_detail,
+                          },
+                        };
+                        return updated;
+                      }
+                      return prev;
+                    });
+                  })
+                  .catch((error) => {
+                    if (import.meta.env.DEV) {
+                      logger.error('[App] Error fetching sources:', error);
+                    }
+                    // 에러가 발생해도 계속 진행 (sources 없이)
+                  });
+              });
+            }
           } else if (parsed.type === 'answer') {
             // 기존 'answer' 타입 지원 (하위 호환성)
             fullContent += parsed.content;
@@ -642,6 +770,56 @@ function App() {
     await handleQuestionClick(question);
   };
 
+  const handleDocumentClick = async (message: ChatMessage, documentIndex: number) => {
+    setSelectedMessageForDocument(message);
+    setSelectedDocumentIndex(documentIndex);
+    setDocumentSidebarOpen(true);
+    
+    // sources가 없으면 API로 가져오기
+    if (!message.metadata?.sources?.length && 
+        !message.metadata?.sources_detail?.length && 
+        currentSession?.session_id) {
+      try {
+        const { getChatSources } = await import('./services/chatService');
+        const sourcesData = await getChatSources(
+          currentSession.session_id,
+          message.id
+        );
+        
+        // 메시지 metadata 업데이트
+        setMessages((prev) => {
+          const messageIndex = prev.findIndex((msg) => msg.id === message.id);
+          if (messageIndex !== -1) {
+            const updated = [...prev];
+            updated[messageIndex] = {
+              ...updated[messageIndex],
+              metadata: {
+                ...updated[messageIndex].metadata,
+                sources: sourcesData.sources,
+                legal_references: sourcesData.legal_references,
+                sources_detail: sourcesData.sources_detail,
+              },
+            };
+            // selectedMessageForDocument도 업데이트
+            if (selectedMessageForDocument?.id === message.id) {
+              setSelectedMessageForDocument(updated[messageIndex]);
+            }
+            return updated;
+          }
+          return prev;
+        });
+      } catch (error) {
+        logger.error('[App] Error fetching sources for sidebar:', error);
+      }
+    }
+  };
+
+  const handleCloseDocumentSidebar = () => {
+    setDocumentSidebarOpen(false);
+    setSelectedDocumentIndex(null);
+    setSelectedMessageForDocument(null);
+  };
+
   return (
     <MainLayout
       sidebarContent={
@@ -672,7 +850,9 @@ function App() {
         ))}
       </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+      <div className={`flex-1 flex flex-col overflow-hidden min-h-0 transition-all duration-300 ease-in-out ${
+        (documentSidebarOpen || referencesSidebarOpen) ? 'mr-[28rem]' : 'mr-0'
+      }`}>
         {/* 콘텐츠 영역 - 스크롤 가능 */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {messages.length === 0 && !isSending && !currentSession ? (
@@ -687,6 +867,12 @@ function App() {
               onQuestionClick={handleRelatedQuestionClick}
               streamingMessageId={streamingMessageId}
               streamErrors={streamErrors}
+              onDocumentClick={handleDocumentClick}
+              onOpenReferencesSidebar={(message, selectedType) => {
+                setSelectedMessageForReferences(message);
+                setSelectedReferenceType(selectedType);
+                setReferencesSidebarOpen(true);
+              }}
               onRetryMessage={(messageId) => {
                 const error = streamErrors.get(messageId);
                 if (error && error.canRetry && currentSession) {
@@ -704,6 +890,42 @@ function App() {
                   }
                 }
               }}
+              onContinueReading={async (sessionId: string, messageId: string, chunkIndex: number) => {
+                if (!continueAnswer) return;
+                
+                const response = await continueAnswer(sessionId, messageId, chunkIndex);
+                if (response) {
+                  // 메시지 찾기
+                  setMessages((prev) => {
+                    const messageIndex = prev.findIndex((msg) => 
+                      msg.metadata?.message_id === messageId && msg.role === 'assistant'
+                    );
+                    
+                    if (messageIndex !== -1) {
+                      const updated = [...prev];
+                      const currentMessage = updated[messageIndex];
+                      const currentChunkInfo = currentMessage.metadata?.chunk_info;
+                      
+                      // 기존 내용에 새 청크 추가
+                      updated[messageIndex] = {
+                        ...currentMessage,
+                        content: currentMessage.content + '\n\n' + response.content,
+                        metadata: {
+                          ...currentMessage.metadata,
+                          chunk_info: {
+                            chunk_index: response.chunk_index,
+                            total_chunks: response.total_chunks,
+                            has_more: response.has_more,
+                            is_complete: !response.has_more,
+                          },
+                        },
+                      };
+                      return updated;
+                    }
+                    return prev;
+                  });
+                }
+              }}
             />
           )}
         </div>
@@ -717,6 +939,37 @@ function App() {
           />
         </div>
       </div>
+
+      {/* 문서 사이드바 */}
+      {selectedMessageForDocument && (
+        <DocumentSidebar
+          isOpen={documentSidebarOpen}
+          onClose={handleCloseDocumentSidebar}
+          documentIndex={selectedDocumentIndex}
+          sources={selectedMessageForDocument.metadata?.sources}
+          sourcesDetail={selectedMessageForDocument.metadata?.sources_detail}
+          metadata={selectedMessageForDocument.metadata}
+          sessionId={currentSession?.session_id}
+          messageId={selectedMessageForDocument.id}
+        />
+      )}
+
+      {/* 참고자료 사이드바 */}
+      {selectedMessageForReferences && (
+        <ReferencesSidebar
+          isOpen={referencesSidebarOpen}
+          onClose={() => {
+            setReferencesSidebarOpen(false);
+            setSelectedMessageForReferences(null);
+            setSelectedReferenceType('all');
+          }}
+          references={selectedMessageForReferences.metadata?.sources}
+          legalReferences={selectedMessageForReferences.metadata?.legal_references}
+          sources={selectedMessageForReferences.metadata?.sources}
+          sourcesDetail={selectedMessageForReferences.metadata?.sources_detail}
+          initialSelectedType={selectedReferenceType}
+        />
+      )}
     </MainLayout>
   );
 }

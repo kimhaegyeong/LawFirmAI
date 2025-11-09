@@ -1,8 +1,8 @@
 /**
  * 채팅 메시지 컴포넌트
  */
-import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
+import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -11,6 +11,7 @@ import { FileAttachment } from '../common/FileAttachment';
 import { CompactReferencesBadge } from './CompactReferencesBadge';
 import { RelatedQuestions } from './RelatedQuestions';
 import { ErrorMessage } from './ErrorMessage';
+import { DocumentReference } from './DocumentReference';
 import { sendFeedback, ratingToNumber } from '../../services/feedbackService';
 import { useTypingEffect } from '../../hooks/useTypingEffect';
 import logger from '../../utils/logger';
@@ -27,21 +28,28 @@ interface ChatMessageProps {
   message: ChatMessageType;
   sessionId?: string;
   onQuestionClick?: (question: string) => void;
+  onDocumentClick?: (message: ChatMessageType, documentIndex: number) => void; // 문서 클릭 핸들러
+  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void; // 참고자료 사이드바 열기 핸들러
   isStreaming?: boolean; // 스트리밍 중인지 여부
   error?: StreamError; // 에러 상태
   onRetry?: () => void; // 재시도 핸들러
+  onContinueReading?: (sessionId: string, messageId: string, chunkIndex: number) => Promise<void>; // 계속 읽기 핸들러
 }
 
 export function ChatMessage({ 
   message, 
   sessionId, 
-  onQuestionClick, 
+  onQuestionClick,
+  onDocumentClick,
+  onOpenReferencesSidebar,
   isStreaming = false,
   error,
-  onRetry
+  onRetry,
+  onContinueReading
 }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   
   // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
   if (!message || !message.id) {
@@ -51,17 +59,156 @@ export function ChatMessage({
   // content가 없으면 빈 문자열로 처리
   const content = message.content || '';
   
+  // 메시지 타입 확인 (먼저 정의)
+  const isUser = message.role === 'user';
+  const isProgress = message.role === 'progress';
+  const metadata = message.metadata || {};
+  
   // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
   const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
     content,
     {
-      speed: 50, // 50ms마다 한 글자씩 표시 (더 느리게)
+      speed: 50, // 50ms마다 한 글자씩 표시 (더 천천히)
       enabled: isStreaming // 스트리밍 중일 때만 타이핑 효과 활성화
     }
   );
 
-  // 타이핑 효과가 완료되고 스트리밍이 종료되었을 때만 마크다운 렌더링
-  const shouldRenderMarkdown = !isStreaming && isTypingComplete;
+  // 실시간 마크다운 렌더링을 위한 콘텐츠 결정
+  // 스트리밍 중이면 displayedContent 사용, 아니면 전체 content 사용
+  const markdownContent = useMemo(() => {
+    return isStreaming ? displayedContent : content;
+  }, [isStreaming, displayedContent, content]);
+  
+  // 마크다운 렌더링 여부: assistant 메시지이고 콘텐츠가 있으면 렌더링
+  const shouldRenderMarkdown = !isUser && markdownContent.length > 0;
+
+  // 마크다운 렌더링 전에 "문서 N" 패턴을 특별한 링크로 변환
+  const processedMarkdown = useMemo(() => {
+    if (!markdownContent || !metadata.sources || !onDocumentClick) return markdownContent;
+    
+    let processed = markdownContent;
+    const sources = metadata.sources || [];
+    const sourcesDetail = metadata.sources_detail || [];
+    
+    // "문서 1", "문서 2" 등을 특별한 링크 형식으로 변환
+    sources.forEach((source, index) => {
+      const docNum = index + 1;
+      // "문서 1", "문서1", "문서 1번" 등의 패턴 매칭
+      const pattern = new RegExp(`문서\\s*${docNum}(?!\\d)`, 'g');
+      
+      processed = processed.replace(
+        pattern,
+        `[문서 ${docNum}](#doc-${index} "${source || sourcesDetail[index]?.name || `문서 ${docNum}`}")`
+      );
+    });
+    
+    return processed;
+  }, [markdownContent, metadata.sources, metadata.sources_detail, onDocumentClick]);
+
+  // 마크다운 컴포넌트 메모이제이션
+  const markdownComponents = useMemo(() => ({
+    // 코드 블록 스타일링
+    code: ({ className, children, ...props }: any) => {
+      const match = /language-(\w+)/.exec(className || '');
+      const isInline = !match;
+      
+      if (!isInline && match) {
+        return (
+          <SyntaxHighlighter
+            style={vscDarkPlus as any}
+            language={match[1]}
+            PreTag="div"
+            className="rounded-lg my-2"
+          >
+            {String(children).replace(/\n$/, '')}
+          </SyntaxHighlighter>
+        );
+      }
+      
+      return (
+        <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
+          {children}
+        </code>
+      );
+    },
+    // 링크 스타일링 (문서 참조 링크 처리)
+    a: ({ node, href, title, children, ...props }: any) => {
+      // 문서 참조 링크인지 확인 (#doc-로 시작)
+      if (href?.startsWith('#doc-')) {
+        const docIndex = parseInt(href.replace('#doc-', ''), 10);
+        if (!isNaN(docIndex) && onDocumentClick) {
+          return (
+            <DocumentReference
+              documentIndex={docIndex}
+              onClick={() => onDocumentClick(message, docIndex)}
+            />
+          );
+        }
+      }
+      
+      // 일반 링크
+      return (
+        <a 
+          className="text-blue-600 hover:text-blue-800 underline" 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          href={href}
+          title={title}
+          {...props}
+        >
+          {children}
+        </a>
+      );
+    },
+    // 리스트 스타일링
+    ul: ({ node, ...props }: any) => (
+      <ul className="list-disc list-inside my-2 space-y-1" {...props} />
+    ),
+    ol: ({ node, ...props }: any) => (
+      <ol className="list-decimal list-inside my-2 space-y-1" {...props} />
+    ),
+    // 제목 스타일링
+    h1: ({ node, ...props }: any) => (
+      <h1 className="text-2xl font-bold mt-4 mb-2" {...props} />
+    ),
+    h2: ({ node, ...props }: any) => (
+      <h2 className="text-xl font-bold mt-3 mb-2" {...props} />
+    ),
+    h3: ({ node, ...props }: any) => (
+      <h3 className="text-lg font-semibold mt-2 mb-1" {...props} />
+    ),
+    // 강조 스타일링
+    strong: ({ node, ...props }: any) => (
+      <strong className="font-semibold" {...props} />
+    ),
+    em: ({ node, ...props }: any) => (
+      <em className="italic" {...props} />
+    ),
+    // 인용구 스타일링
+    blockquote: ({ node, ...props }: any) => (
+      <blockquote className="border-l-4 border-slate-300 pl-4 italic my-2 text-slate-600" {...props} />
+    ),
+    // 테이블 스타일링
+    table: ({ node, ...props }: any) => (
+      <div className="overflow-x-auto my-2">
+        <table className="min-w-full border-collapse border border-slate-300" {...props} />
+      </div>
+    ),
+    th: ({ node, ...props }: any) => (
+      <th className="border border-slate-300 px-4 py-2 bg-slate-100 font-semibold" {...props} />
+    ),
+    td: ({ node, ...props }: any) => (
+      <td className="border border-slate-300 px-4 py-2" {...props} />
+    ),
+    // 수평선 스타일링
+    hr: ({ node, ...props }: any) => (
+      <hr className="my-4 border-slate-300" {...props} />
+    ),
+    // 단락 스타일링
+    p: ({ node, ...props }: any) => (
+      <p className="my-2" {...props} />
+    ),
+  }), [message, onDocumentClick]);
 
   if (import.meta.env.DEV) {
     if (isStreaming) {
@@ -118,9 +265,27 @@ export function ChatMessage({
     }
   };
 
-  const isUser = message.role === 'user';
-  const isProgress = message.role === 'progress';
-  const metadata = message.metadata || {};
+  const handleContinueReading = async () => {
+    if (!onContinueReading || !sessionId || !message.metadata?.message_id || !message.metadata?.chunk_info) {
+      return;
+    }
+
+    const chunkInfo = message.metadata.chunk_info;
+    const nextChunkIndex = (chunkInfo.chunk_index || 0) + 1;
+
+    if (nextChunkIndex >= (chunkInfo.total_chunks || 1)) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    try {
+      await onContinueReading(sessionId, message.metadata.message_id, nextChunkIndex);
+    } catch (error) {
+      logger.error('Failed to continue reading:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   // assistant 메시지이고 content가 비어있으면 렌더링하지 않음
   if (!isUser && !isProgress && !content) {
@@ -179,93 +344,25 @@ export function ChatMessage({
           {isUser ? (
             // 사용자 메시지는 일반 텍스트로 표시 (XSS 방지를 위해 이스케이프)
             <div className="whitespace-pre-wrap">{escapeHtml(content)}</div>
-          ) : !shouldRenderMarkdown ? (
-            // 타이핑 효과가 완료되기 전까지는 타이핑 효과로 표시
-            <div className="whitespace-pre-wrap">{displayedContent}</div>
+          ) : shouldRenderMarkdown ? (
+            // 실시간 마크다운 렌더링 (스트리밍 중에도 적용)
+            <div className="relative">
+              <ReactMarkdown
+                components={markdownComponents}
+              >
+                {processedMarkdown}
+              </ReactMarkdown>
+              
+              {/* 스트리밍 중일 때 커서 표시 */}
+              {isStreaming && !isTypingComplete && (
+                <span className="inline-block w-0.5 h-4 bg-slate-600 ml-1 animate-blink">
+                  |
+                </span>
+              )}
+            </div>
           ) : (
-            // 타이핑 효과 완료 후 마크다운으로 렌더링
-            <ReactMarkdown
-              components={{
-                // 코드 블록 스타일링
-                code: ({ className, children, ...props }: any) => {
-                  const match = /language-(\w+)/.exec(className || '');
-                  const isInline = !match;
-                  
-                  if (!isInline && match) {
-                    return (
-                      <SyntaxHighlighter
-                        style={vscDarkPlus as any}
-                        language={match[1]}
-                        PreTag="div"
-                        className="rounded-lg my-2"
-                      >
-                        {String(children).replace(/\n$/, '')}
-                      </SyntaxHighlighter>
-                    );
-                  }
-                  
-                  return (
-                    <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
-                      {children}
-                    </code>
-                  );
-                },
-                // 링크 스타일링
-                a: ({ node, ...props }) => (
-                  <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />
-                ),
-                // 리스트 스타일링
-                ul: ({ node, ...props }) => (
-                  <ul className="list-disc list-inside my-2 space-y-1" {...props} />
-                ),
-                ol: ({ node, ...props }) => (
-                  <ol className="list-decimal list-inside my-2 space-y-1" {...props} />
-                ),
-                // 제목 스타일링
-                h1: ({ node, ...props }) => (
-                  <h1 className="text-2xl font-bold mt-4 mb-2" {...props} />
-                ),
-                h2: ({ node, ...props }) => (
-                  <h2 className="text-xl font-bold mt-3 mb-2" {...props} />
-                ),
-                h3: ({ node, ...props }) => (
-                  <h3 className="text-lg font-semibold mt-2 mb-1" {...props} />
-                ),
-                // 강조 스타일링
-                strong: ({ node, ...props }) => (
-                  <strong className="font-semibold" {...props} />
-                ),
-                em: ({ node, ...props }) => (
-                  <em className="italic" {...props} />
-                ),
-                // 인용구 스타일링
-                blockquote: ({ node, ...props }) => (
-                  <blockquote className="border-l-4 border-slate-300 pl-4 italic my-2 text-slate-600" {...props} />
-                ),
-                // 테이블 스타일링
-                table: ({ node, ...props }) => (
-                  <div className="overflow-x-auto my-2">
-                    <table className="min-w-full border-collapse border border-slate-300" {...props} />
-                  </div>
-                ),
-                th: ({ node, ...props }) => (
-                  <th className="border border-slate-300 px-4 py-2 bg-slate-100 font-semibold" {...props} />
-                ),
-                td: ({ node, ...props }) => (
-                  <td className="border border-slate-300 px-4 py-2" {...props} />
-                ),
-                // 수평선 스타일링
-                hr: ({ node, ...props }) => (
-                  <hr className="my-4 border-slate-300" {...props} />
-                ),
-                // 단락 스타일링
-                p: ({ node, ...props }) => (
-                  <p className="my-2" {...props} />
-                ),
-              }}
-            >
-              {content}
-            </ReactMarkdown>
+            // 콘텐츠가 없을 때 기본 표시
+            <div className="whitespace-pre-wrap">{displayedContent}</div>
           )}
         </div>
 
@@ -283,11 +380,33 @@ export function ChatMessage({
               legalReferences={metadata.legal_references}
               sources={metadata.sources}
               sourcesDetail={metadata.sources_detail}
+              onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(message, selectedType)}
             />
             <RelatedQuestions
               questions={metadata.related_questions}
               onQuestionClick={onQuestionClick}
             />
+            {metadata.chunk_info && metadata.chunk_info.has_more && metadata.message_id && sessionId && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  onClick={handleContinueReading}
+                  disabled={isLoadingMore}
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>로딩 중...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-4 h-4" />
+                      <span>계속 읽기 ({metadata.chunk_info.chunk_index + 1}/{metadata.chunk_info.total_chunks})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </>
         )}
 
