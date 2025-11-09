@@ -536,6 +536,19 @@ class EnhancedLegalQuestionWorkflow:
         # 통합 분류 캐시 초기화 (질문 유형 + 복잡도 동시 분류)
         self._classification_cache: Dict[str, Tuple[QuestionType, float, QueryComplexity, bool]] = {}
 
+        # 워크플로우 캐시 관리자 초기화
+        try:
+            from lawfirm_langgraph.core.services.workflow_cache_manager import WorkflowCacheManager
+            cache_config = {
+                'l1_cache_size': getattr(config, 'cache_l1_size', 1000),
+                'l2_cache_size': getattr(config, 'cache_l2_size', 5000),
+                'cache_dir': getattr(config, 'cache_dir', 'cache/workflow')
+            }
+            self.cache_manager = WorkflowCacheManager(cache_config)
+            self.logger.info("WorkflowCacheManager initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize WorkflowCacheManager: {e}. Caching disabled.")
+            self.cache_manager = None
 
         # Agentic AI Tool 시스템 초기화 (Tool Use/Function Calling)
         # lawfirm_langgraph 구조 사용 (langgraph_core.tools)
@@ -1295,8 +1308,21 @@ class EnhancedLegalQuestionWorkflow:
                     state["search"]["retrieved_docs"] = []
                     self.logger.warning("⚠️ [VALIDATION] No retrieved_docs found, using empty list for validation")
 
-            # generate_answer_enhanced 실행
+            # generate_answer_enhanced 실행 (성능 모니터링 포함)
             state = self.generate_answer_enhanced(state)
+
+            generation_duration = time.time() - generation_start_time
+            
+            # 성능 모니터링: 느린 답변 생성 경고
+            if generation_duration > 15:
+                self.logger.warning(
+                    f"⚠️ [PERFORMANCE] 느린 답변 생성 감지: {generation_duration:.2f}초 "
+                    f"(임계값: 15초)"
+                )
+            elif generation_duration > 10:
+                self.logger.info(
+                    f"ℹ️ [PERFORMANCE] 답변 생성 시간: {generation_duration:.2f}초"
+                )
 
             self._update_processing_time(state, generation_start_time)
             self._save_metadata_safely(state, "_last_executed_node", "generate_and_validate_answer")
@@ -6754,23 +6780,15 @@ class EnhancedLegalQuestionWorkflow:
                         f"죄송합니다. 질문 '{query}'에 대한 답변을 생성하는데 어려움이 있습니다.")
                 return state
 
-            # 쿼리 정보 가져오기 및 검증 (여러 방법 시도)
-            # 중요: state의 input 그룹에서 query 가져오기 (이미 시작 부분에서 복원했어야 함)
-            query = None
-
-            # 우선순위 1: state["input"]["query"]
-            if "input" in state and isinstance(state["input"], dict):
-                query = state["input"].get("query", "")
-
-            # 우선순위 2: _get_state_value 사용
-            if not query or not str(query).strip():
-                query = self._get_state_value(state, "query", "")
-
-            # 우선순위 3: state에서 직접 읽기
-            if not query or not str(query).strip():
-                if isinstance(state, dict) and "query" in state:
-                    query = state["query"]
-
+            # 쿼리 정보 가져오기 및 검증 (최적화: 우선순위 기반 단일 접근)
+            # 우선순위: input["query"] > query > search["search_query"]
+            query = (
+                state.get("input", {}).get("query") or
+                state.get("query") or
+                state.get("search", {}).get("search_query") or
+                ""
+            )
+            
             search_query = self._get_state_value(state, "search_query") or query
 
             # query가 빈 문자열이면 에러
@@ -6782,21 +6800,14 @@ class EnhancedLegalQuestionWorkflow:
                 self._set_answer_safely(state, "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
                 return state
 
-            # query_type 정규화 (여러 위치에서 시도)
-            query_type_raw = self._get_state_value(state, "query_type", "")
-            if not query_type_raw:
-                # analysis 그룹에서 시도
-                if "analysis" in state and isinstance(state["analysis"], dict):
-                    query_type_raw = state["analysis"].get("query_type", "")
-            if not query_type_raw:
-                # metadata에서 시도
-                if "metadata" in state and isinstance(state["metadata"], dict):
-                    query_type_raw = state["metadata"].get("query_type", "")
-            if not query_type_raw:
-                # common 그룹에서 시도
-                if "common" in state and isinstance(state["common"], dict):
-                    if "analysis" in state["common"] and isinstance(state["common"]["analysis"], dict):
-                        query_type_raw = state["common"]["analysis"].get("query_type", "")
+            # query_type 정규화 (최적화: 우선순위 기반 단일 접근)
+            query_type_raw = (
+                self._get_state_value(state, "query_type") or
+                state.get("analysis", {}).get("query_type") or
+                state.get("metadata", {}).get("query_type") or
+                state.get("common", {}).get("analysis", {}).get("query_type") or
+                ""
+            )
             
             query_type_str = self._get_query_type_str(query_type_raw)
             # query_type을 State에 다시 저장하여 다음 노드에서 사용 가능하도록 보장
@@ -6830,13 +6841,39 @@ class EnhancedLegalQuestionWorkflow:
 
             is_retry = (last_executed_node == "validate_answer_quality")
 
-            # 검색 쿼리 최적화
-            optimized_queries = self._optimize_search_query(
-                query=search_query,
-                query_type=query_type_str,
-                extracted_keywords=extracted_keywords,
-                legal_field=legal_field
-            )
+            # 캐시 확인 (재시도가 아닌 경우에만)
+            optimized_queries = None
+            if not is_retry and self.cache_manager:
+                cached_result = self.cache_manager.get_query_optimization(
+                    query=search_query,
+                    query_type=query_type_str,
+                    extracted_keywords=extracted_keywords
+                )
+                if cached_result:
+                    cache_msg = f"✅ [CACHE HIT] Query optimization cached for: {search_query[:50]}..."
+                    self.logger.info(cache_msg)
+                    import sys
+                    print(cache_msg, flush=True, file=sys.stdout)
+                    optimized_queries = cached_result
+            
+            # 캐시 미스 시 쿼리 최적화 실행
+            if not optimized_queries:
+                optimized_queries = self._optimize_search_query(
+                    query=search_query,
+                    query_type=query_type_str,
+                    extracted_keywords=extracted_keywords,
+                    legal_field=legal_field
+                )
+                
+                # 캐시 저장 (재시도가 아닌 경우에만)
+                if not is_retry and self.cache_manager:
+                    self.cache_manager.put_query_optimization(
+                        query=search_query,
+                        query_type=query_type_str,
+                        extracted_keywords=extracted_keywords,
+                        result=optimized_queries,
+                        ttl=3600.0
+                    )
 
             # 재시도 시 추가 개선
             if is_retry:
@@ -7014,20 +7051,28 @@ class EnhancedLegalQuestionWorkflow:
             print(input_msg, flush=True, file=sys.stdout)
             self.logger.info(input_msg)
 
-            # 1. 품질 평가 (기존 evaluate_search_quality 로직)
-            semantic_quality = self._evaluate_semantic_search_quality(
-                semantic_results=semantic_results,
-                query=query,
-                query_type=query_type_str,
-                min_results=search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K) // 2
-            )
-
-            keyword_quality = self._evaluate_keyword_search_quality(
-                keyword_results=keyword_results,
-                query=query,
-                query_type=query_type_str,
-                min_results=search_params.get("keyword_limit", WorkflowConstants.CATEGORY_SEARCH_LIMIT) // 2
-            )
+            # 1. 품질 평가 병렬화 (개선: semantic/keyword 품질 평가 병렬 실행)
+            from concurrent.futures import ThreadPoolExecutor
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                semantic_future = executor.submit(
+                    self._evaluate_semantic_search_quality,
+                    semantic_results=semantic_results,
+                    query=query,
+                    query_type=query_type_str,
+                    min_results=search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K) // 2
+                )
+                keyword_future = executor.submit(
+                    self._evaluate_keyword_search_quality,
+                    keyword_results=keyword_results,
+                    query=query,
+                    query_type=query_type_str,
+                    min_results=search_params.get("keyword_limit", WorkflowConstants.CATEGORY_SEARCH_LIMIT) // 2
+                )
+                
+                # 두 평가 완료 대기
+                semantic_quality = semantic_future.result()
+                keyword_quality = keyword_future.result()
 
             # 전체 품질 점수 계산 (개선: 검색 결과가 있는 경우와 없는 경우 구분)
             total_results = len(semantic_results) + len(keyword_results)
@@ -7748,6 +7793,37 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
             
+            # 캐시 확인
+            query = self._get_state_value(state, "query", "")
+            query_type = self._get_state_value(state, "query_type", "")
+            search_params = self._get_state_value(state, "search_params", {})
+            
+            if self.cache_manager:
+                cached_results = self.cache_manager.get_search_results(
+                    query=query,
+                    query_type=query_type,
+                    search_params=search_params
+                )
+                if cached_results:
+                    cache_msg = f"✅ [CACHE HIT] Search results cached for: {query[:50]}..."
+                    self.logger.info(cache_msg)
+                    import sys
+                    print(cache_msg, flush=True, file=sys.stdout)
+                    # 캐시된 결과를 state에 복원
+                    if "semantic_results" in cached_results:
+                        self._set_state_value(state, "semantic_results", cached_results["semantic_results"])
+                    if "keyword_results" in cached_results:
+                        self._set_state_value(state, "keyword_results", cached_results["keyword_results"])
+                    if "semantic_count" in cached_results:
+                        self._set_state_value(state, "semantic_count", cached_results["semantic_count"])
+                    if "keyword_count" in cached_results:
+                        self._set_state_value(state, "keyword_count", cached_results["keyword_count"])
+                    if "merged_documents" in cached_results:
+                        self._set_state_value(state, "merged_documents", cached_results["merged_documents"])
+                    if "retrieved_docs" in cached_results:
+                        self._set_state_value(state, "retrieved_docs", cached_results["retrieved_docs"])
+                    return state
+            
             # 서브노드 1: 쿼리 확장
             try:
                 state = self.query_expansion_subnode(state)
@@ -7859,6 +7935,32 @@ class EnhancedLegalQuestionWorkflow:
             self.logger.info(
                 f"✅ [EXECUTE SEARCHES] Completed all subnodes in {time.time() - start_time:.3f}s"
             )
+            
+            # 캐시 저장
+            if self.cache_manager:
+                semantic_results = self._get_state_value(state, "semantic_results", [])
+                keyword_results = self._get_state_value(state, "keyword_results", [])
+                semantic_count = self._get_state_value(state, "semantic_count", 0)
+                keyword_count = self._get_state_value(state, "keyword_count", 0)
+                merged_documents = self._get_state_value(state, "merged_documents", [])
+                retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+                
+                cache_data = {
+                    "semantic_results": semantic_results,
+                    "keyword_results": keyword_results,
+                    "semantic_count": semantic_count,
+                    "keyword_count": keyword_count,
+                    "merged_documents": merged_documents,
+                    "retrieved_docs": retrieved_docs
+                }
+                
+                self.cache_manager.put_search_results(
+                    query=query,
+                    query_type=query_type,
+                    search_params=search_params,
+                    results=cache_data,
+                    ttl=7200.0
+                )
             
             return state
             

@@ -4,6 +4,7 @@ LangGraph Workflow Service
 워크플로우 서비스 통합 클래스
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -51,16 +52,9 @@ except ImportError:
     except ImportError:
         from core.utils.langgraph_config import LangGraphConfig
 
-# Langfuse 클라이언트 통합
-try:
-    from langfuse import Langfuse, trace
-
-    from core.services.langfuse_client import LangfuseClient
-    LANGFUSE_CLIENT_AVAILABLE = True
-    LANGFUSE_TRACE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_CLIENT_AVAILABLE = False
-    LANGFUSE_TRACE_AVAILABLE = False
+# Langfuse 클라이언트 통합 (지연 import - __init__에서 실제 사용)
+LANGFUSE_CLIENT_AVAILABLE = False
+LANGFUSE_TRACE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +157,11 @@ except ImportError:
 
 class LangGraphWorkflowService:
     """LangGraph 워크플로우 서비스"""
+    
+    # 상수 정의
+    SLOW_NODE_THRESHOLD = 5.0  # 노드 실행 시간 임계값 (초)
+    DEFAULT_RECURSION_LIMIT = 200  # 기본 재귀 제한
+    MAX_PARAMETER_CHECK_COUNT = 5  # 모델 검증 시 확인할 파라미터 개수
 
     def __init__(self, config: Optional[LangGraphConfig] = None):
         """
@@ -207,17 +206,21 @@ class LangGraphWorkflowService:
         self.legal_workflow = EnhancedLegalQuestionWorkflow(self.config)
 
         # LangSmith 활성화 여부 확인 (환경 변수로 제어 가능)
-        import os
         enable_langsmith = os.environ.get("ENABLE_LANGSMITH", "false").lower() == "true"
 
         if not enable_langsmith:
             # LangSmith 비활성화 모드 (기본값) - State Reduction으로 최적화된 후에도 기본은 비활성화
             # LangSmith 트레이싱 비활성화 (긴급) - 대용량 상태 로깅 방지
-            original_tracing = os.environ.get("LANGCHAIN_TRACING_V2")
-            original_api_key = os.environ.get("LANGCHAIN_API_KEY")
+            original_tracing = os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING_V2")
+            original_api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
+            original_endpoint = os.environ.get("LANGSMITH_ENDPOINT") or os.environ.get("LANGCHAIN_ENDPOINT")
+            original_project = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("LANGCHAIN_PROJECT")
 
             # 임시로 LangSmith 비활성화
+            os.environ["LANGSMITH_TRACING"] = "false"
             os.environ["LANGCHAIN_TRACING_V2"] = "false"
+            if "LANGSMITH_API_KEY" in os.environ:
+                del os.environ["LANGSMITH_API_KEY"]
             if "LANGCHAIN_API_KEY" in os.environ:
                 del os.environ["LANGCHAIN_API_KEY"]
 
@@ -244,20 +247,48 @@ class LangGraphWorkflowService:
             finally:
                 # 환경 변수 복원
                 if original_tracing:
-                    os.environ["LANGCHAIN_TRACING_V2"] = original_tracing
+                    if isinstance(original_tracing, str) and "LANGSMITH" in original_tracing:
+                        os.environ["LANGSMITH_TRACING"] = original_tracing
+                    else:
+                        os.environ["LANGCHAIN_TRACING_V2"] = original_tracing
+                elif "LANGSMITH_TRACING" in os.environ:
+                    del os.environ["LANGSMITH_TRACING"]
                 elif "LANGCHAIN_TRACING_V2" in os.environ:
                     del os.environ["LANGCHAIN_TRACING_V2"]
 
                 if original_api_key:
-                    os.environ["LANGCHAIN_API_KEY"] = original_api_key
+                    if isinstance(original_api_key, str) and original_api_key.startswith("ls-"):
+                        os.environ["LANGSMITH_API_KEY"] = original_api_key
+                    else:
+                        os.environ["LANGCHAIN_API_KEY"] = original_api_key
+                if original_endpoint:
+                    os.environ["LANGSMITH_ENDPOINT"] = original_endpoint
+                if original_project:
+                    os.environ["LANGSMITH_PROJECT"] = original_project
         else:
             # LangSmith 활성화 모드 (ENABLE_LANGSMITH=true로 설정된 경우)
+            # LangSmith 환경 변수 설정
+            if self.config.langsmith_endpoint:
+                os.environ["LANGSMITH_ENDPOINT"] = self.config.langsmith_endpoint
+                os.environ["LANGCHAIN_ENDPOINT"] = self.config.langsmith_endpoint
+            if self.config.langsmith_api_key:
+                os.environ["LANGSMITH_API_KEY"] = self.config.langsmith_api_key
+                os.environ["LANGCHAIN_API_KEY"] = self.config.langsmith_api_key
+            if self.config.langsmith_project:
+                os.environ["LANGSMITH_PROJECT"] = self.config.langsmith_project
+                os.environ["LANGCHAIN_PROJECT"] = self.config.langsmith_project
+            os.environ["LANGSMITH_TRACING"] = "true"
+            os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            
             # 체크포인터 설정 (활성화된 경우)
             checkpointer = None
             if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                 checkpointer = self.checkpoint_manager.get_checkpointer()
-                self.logger.info(f"Using checkpoint: {self.config.checkpoint_storage.value}")
+                safe_log_info(self.logger, f"Using checkpoint: {self.config.checkpoint_storage.value}")
+            else:
+                safe_log_info(self.logger, "Compiling workflow without checkpoint")
             
+            # 워크플로우 컴파일
             self.app = self.legal_workflow.graph.compile(
                 checkpointer=checkpointer,
                 interrupt_before=None,
@@ -282,6 +313,18 @@ class LangGraphWorkflowService:
             except Exception as e:
                 safe_log_warning(self.logger, f"Failed to initialize LangfuseClient: {e}")
                 self.langfuse_client_service = None
+
+        # A/B 테스트 관리자 초기화
+        self.ab_test_manager = None
+        enable_ab_testing = os.environ.get("ENABLE_AB_TESTING", "false").lower() == "true"
+        if enable_ab_testing:
+            try:
+                from lawfirm_langgraph.core.services.ab_test_manager import ABTestManager
+                self.ab_test_manager = ABTestManager()
+                safe_log_info(self.logger, "ABTestManager initialized")
+            except Exception as e:
+                safe_log_warning(self.logger, f"Failed to initialize ABTestManager: {e}")
+                self.ab_test_manager = None
 
         safe_log_info(self.logger, "LangGraphWorkflowService initialized successfully")
 
@@ -312,37 +355,34 @@ class LangGraphWorkflowService:
             if not session_id:
                 session_id = str(uuid.uuid4())
 
+            # A/B 테스트 변형 할당
+            cache_variant = None
+            parallel_variant = None
+            
+            if self.ab_test_manager:
+                cache_variant = self.ab_test_manager.assign_variant(session_id, "cache_enabled")
+                parallel_variant = self.ab_test_manager.assign_variant(session_id, "parallel_processing")
+                
+                # 변형에 따라 설정 적용
+                cache_config = self.ab_test_manager.get_experiment_config("cache_enabled", cache_variant)
+                if cache_config:
+                    if not cache_config.get("cache", True):
+                        # 캐시 비활성화
+                        if hasattr(self.legal_workflow, 'cache_manager') and self.legal_workflow.cache_manager:
+                            self.legal_workflow.cache_manager = None
+                            self.logger.info(f"A/B Test: Cache disabled for variant {cache_variant}")
+                
+                parallel_config = self.ab_test_manager.get_experiment_config("parallel_processing", parallel_variant)
+                if parallel_config:
+                    max_workers = parallel_config.get("max_workers", 2)
+                    # 병렬 처리 워커 수 설정 (향후 구현)
+                    self.logger.info(f"A/B Test: Parallel processing max_workers={max_workers} for variant {parallel_variant}")
+
             self.logger.info(f"Processing query: {query[:100]}... (session: {session_id})")
             self.logger.debug(f"process_query: query length={len(query)}, query='{query[:50]}...'")
 
-            # 초기 상태 설정 (flat 구조 사용)
-            initial_state = create_initial_legal_state(query, session_id)
-
-            # 중요: initial_state에 query가 반드시 포함되도록 강제
-            # LangGraph에 전달하기 전에 input 그룹에 query가 있어야 함
-            if "input" not in initial_state:
-                initial_state["input"] = {}
-            if not initial_state["input"].get("query"):
-                initial_state["input"]["query"] = query
-            if not initial_state["input"].get("session_id"):
-                initial_state["input"]["session_id"] = session_id
-
-            # 최상위 레벨에도 query 포함 (이중 보장)
-            if not initial_state.get("query"):
-                initial_state["query"] = query
-            if not initial_state.get("session_id"):
-                initial_state["session_id"] = session_id
-
-            # 초기 state 검증
-            initial_query = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-            self.logger.debug(f"process_query: initial_state query length={len(initial_query)}, query='{initial_query[:50] if initial_query else 'EMPTY'}...'")
-            if not initial_query or not str(initial_query).strip():
-                self.logger.error(f"Initial state query is empty! Input query was: '{query[:50]}...'")
-                self.logger.debug(f"process_query: ERROR - initial_state query is empty!")
-                self.logger.debug(f"process_query: initial_state keys: {list(initial_state.keys())}")
-                self.logger.debug(f"process_query: initial_state['input']: {initial_state.get('input')}")
-            else:
-                self.logger.debug(f"process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
+            # 초기 상태 설정 및 검증
+            initial_state = self._prepare_and_validate_initial_state(query, session_id)
 
             # 워크플로우 실행 설정 (체크포인터 활성화 시 thread_id 설정)
             config = {}
@@ -357,7 +397,7 @@ class LangGraphWorkflowService:
             if self.app:
                 # Recursion limit 증가 (재시도 로직 개선으로 인해 더 높게 설정)
                 # 재시도 최대 3회 + 각 단계별 노드 실행을 고려하여 여유있게 설정
-                enhanced_config = {"recursion_limit": 200}
+                enhanced_config = {"recursion_limit": self.DEFAULT_RECURSION_LIMIT}
                 enhanced_config.update(config)
 
                 # 스트리밍으로 워크플로우 실행하여 진행상황 표시
@@ -371,32 +411,9 @@ class LangGraphWorkflowService:
                 self.logger.info("🔄 워크플로우 실행 시작...")
                 print("🔄 워크플로우 실행 시작...", flush=True)
 
-                # 초기 state 검증: input 그룹과 query 확인
-                initial_query_check = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-                self.logger.debug(f"astream: initial_state before astream - query='{initial_query_check[:50] if initial_query_check else 'EMPTY'}...', keys={list(initial_state.keys())}")
-
-                # 중요: initial_state에 input이 없거나 query가 비어있으면 복원
-                # LangGraph에 전달하기 전에 반드시 query가 있어야 함
-                if not initial_query_check or not str(initial_query_check).strip():
-                    self.logger.error(f"Initial state query is empty before astream! Initial state keys: {list(initial_state.keys())}")
-                    if initial_state.get("input"):
-                        self.logger.error(f"Initial state input: {initial_state['input']}")
-
-                    # query 파라미터에서 직접 복원 (process_query의 query 파라미터)
-                    # 하지만 여기서는 이미 initial_state를 받았으므로, query를 다시 찾아야 함
-                    # 대신 initial_state를 수정하여 query 포함 보장
-                    if "input" not in initial_state:
-                        initial_state["input"] = {}
-                    # query 파라미터는 함수 인자에 있으므로 직접 접근 가능
-                    # 하지만 이미 initial_state를 생성했으므로, 원본 query를 사용
-                    # create_initial_legal_state에서 이미 설정했을 것이므로 문제 없어야 함
-                    # 혹시 모르니 다시 확인
-                    if not initial_state["input"].get("query"):
-                        # 최상위 레벨 확인
-                        if initial_state.get("query"):
-                            initial_state["input"]["query"] = initial_state["query"]
-                        else:
-                            self.logger.error(f"CRITICAL: Cannot find query anywhere in initial_state!")
+                # 초기 state 최종 검증
+                if not self._validate_initial_state_before_execution(initial_state, query):
+                    raise ValueError("Initial state validation failed before workflow execution")
 
                 # 중요: 초기 input 보존 (모든 노드에서 복원 가능하도록)
                 if initial_state.get("input") and isinstance(initial_state["input"], dict):
@@ -417,7 +434,7 @@ class LangGraphWorkflowService:
 
                 # 최종 확인: initial_input에 query가 있어야 함
                 if not self._initial_input.get("query"):
-                    self.logger.error(f"CRITICAL: _initial_input has no query! This should never happen.")
+                    self.logger.error("CRITICAL: _initial_input has no query! This should never happen.")
                 else:
                     self.logger.debug(f"Preserved initial input: query length={len(self._initial_input.get('query', ''))}")
 
@@ -459,11 +476,10 @@ class LangGraphWorkflowService:
                             print(progress_msg, flush=True)
                             
                             # 병목 지점 감지: 느린 노드에 대한 경고
-                            SLOW_NODE_THRESHOLD = 5.0  # 5초 이상 실행 시 경고
-                            if node_duration > SLOW_NODE_THRESHOLD:
+                            if node_duration > self.SLOW_NODE_THRESHOLD:
                                 self.logger.warning(
                                     f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                    f"(임계값: {SLOW_NODE_THRESHOLD}초)"
+                                    f"(임계값: {self.SLOW_NODE_THRESHOLD}초)"
                                 )
 
                             # 노드 이름을 한국어로 변환하여 더 명확하게 표시
@@ -487,7 +503,7 @@ class LangGraphWorkflowService:
                                     if "classification" not in self._search_results_cache["common"]:
                                         self._search_results_cache["common"]["classification"] = {}
                                     self._search_results_cache["common"]["classification"].update(node_state["classification"])
-                                    self.logger.debug(f"astream: Cached classification group for future nodes")
+                                    self.logger.debug("astream: Cached classification group for future nodes")
                                 
                                 node_query = ""
                                 # input 그룹이 변경되었는지 확인
@@ -630,7 +646,7 @@ class LangGraphWorkflowService:
                                     self.logger.debug(f"astream: Cached search results - semantic={semantic_count}, keyword={keyword_count}")
                                 # search 그룹이 없거나 비어있으면 캐시에서 복원 시도
                                 elif self._search_results_cache:
-                                    self.logger.debug(f"astream: Restoring search results from cache")
+                                    self.logger.debug("astream: Restoring search results from cache")
                                     if "search" not in node_state:
                                         node_state["search"] = {}
                                     node_state["search"].update(self._search_results_cache)
@@ -644,23 +660,7 @@ class LangGraphWorkflowService:
                                     self.logger.debug(f"astream: Restored search results - semantic={semantic_restored}, keyword={keyword_restored}")
 
                         # input 그룹 복원 (stream_mode="updates" 사용 시 input이 변경되지 않은 노드에는 포함되지 않을 수 있음)
-                        if isinstance(node_state, dict) and self._initial_input:
-                            # stream_mode="updates" 사용 시 input 그룹이 변경된 경우에만 포함됨
-                            # input이 변경되지 않은 노드에서는 초기 input을 복원해야 함
-                            if "input" not in node_state:
-                                # input 그룹이 없으면 초기 input에서 복원
-                                node_state["input"] = self._initial_input.copy()
-                                if node_name == "classify_query":
-                                    self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
-                            elif isinstance(node_state.get("input"), dict):
-                                # input 그룹이 있지만 query가 없으면 복원
-                                node_input = node_state["input"]
-                                if not node_input.get("query") and self._initial_input.get("query"):
-                                    node_state["input"]["query"] = self._initial_input["query"]
-                                    if self._initial_input.get("session_id"):
-                                        node_state["input"]["session_id"] = self._initial_input["session_id"]
-                                    if node_name == "classify_query":
-                                        self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
+                        self._restore_input_group(node_state, node_name)
                         
                         # classification 그룹 보존 (stream_mode="updates" 사용 시 direct_answer 노드 등에서 필요)
                         # direct_answer 노드는 required_state_groups={"input", "classification"}를 필요로 함
@@ -765,7 +765,7 @@ class LangGraphWorkflowService:
                         # 중요: merge_and_rerank_with_keyword_weights 또는 process_search_results_combined 이후 retrieved_docs 캐시 업데이트
                         # stream_mode="updates" 사용 시 search 그룹이 변경된 경우에만 포함됨
                         if node_name in ["merge_and_rerank_with_keyword_weights", "process_search_results_combined"] and isinstance(node_state, dict):
-                            self.logger.debug(f"astream: Checking merge_and_rerank node_state for retrieved_docs")
+                            self.logger.debug("astream: Checking merge_and_rerank node_state for retrieved_docs")
                             # search 그룹이 변경되었는지 확인
                             search_group_updated = {}
                             if "search" in node_state and isinstance(node_state["search"], dict):
@@ -807,13 +807,32 @@ class LangGraphWorkflowService:
 
                                 self.logger.debug(f"astream: Updated cache with retrieved_docs={len(final_retrieved_docs)}, cache has search group={bool(self._search_results_cache.get('search'))}, cache keys={list(self._search_results_cache.keys())}")
                             else:
-                                self.logger.warning(f"astream: merge_and_rerank node_state has no retrieved_docs or merged_documents")
+                                self.logger.warning("astream: merge_and_rerank node_state has no retrieved_docs or merged_documents")
 
                         flat_result = node_state
 
                 # 모든 노드 실행 완료 표시
                 total_nodes = len(executed_nodes)
                 total_execution_time = time.time() - total_start_time
+                
+                # A/B 테스트 메트릭 추적
+                if self.ab_test_manager and cache_variant and parallel_variant:
+                    self.ab_test_manager.track_metric(
+                        session_id, "cache_enabled", cache_variant,
+                        "execution_time", total_execution_time
+                    )
+                    self.ab_test_manager.track_metric(
+                        session_id, "parallel_processing", parallel_variant,
+                        "execution_time", total_execution_time
+                    )
+                    
+                    # 캐시 히트율 추적 (캐시 관리자가 있는 경우)
+                    if hasattr(self.legal_workflow, 'cache_manager') and self.legal_workflow.cache_manager:
+                        cache_hit_rate = self.legal_workflow.cache_manager.get_hit_rate()
+                        self.ab_test_manager.track_metric(
+                            session_id, "cache_enabled", cache_variant,
+                            "cache_hit_rate", cache_hit_rate
+                        )
                 
                 if total_nodes > 0:
                     self.logger.info(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
@@ -833,8 +852,7 @@ class LangGraphWorkflowService:
                             print(summary_msg, flush=True)
                         
                         # 가장 느린 노드 경고
-                        SLOW_NODE_THRESHOLD = 5.0
-                        if sorted_nodes and sorted_nodes[0][1] > SLOW_NODE_THRESHOLD:
+                        if sorted_nodes and sorted_nodes[0][1] > self.SLOW_NODE_THRESHOLD:
                             slowest_node = sorted_nodes[0]
                             self.logger.warning(
                                 f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node[0]} "
@@ -908,7 +926,7 @@ class LangGraphWorkflowService:
                     if search_cache:
                         # search 그룹이 없거나 비어있으면 캐시에서 복원
                         if "search" not in flat_result or not isinstance(flat_result.get("search"), dict):
-                            self.logger.debug(f"Final result has no search group, creating from cache")
+                            self.logger.debug("Final result has no search group, creating from cache")
                             flat_result["search"] = {}
 
                         search_group = flat_result["search"]
@@ -917,7 +935,7 @@ class LangGraphWorkflowService:
                                      len(flat_result.get("retrieved_docs", [])) > 0)
 
                         if not has_results:
-                            self.logger.debug(f"Restoring search group in final result from cache")
+                            self.logger.debug("Restoring search group in final result from cache")
                             # 캐시에 search 그룹이 있으면 그걸 사용
                             if "search" in search_cache and isinstance(search_cache["search"], dict):
                                 flat_result["search"].update(search_cache["search"])
@@ -945,7 +963,7 @@ class LangGraphWorkflowService:
                         else:
                             self.logger.debug(f"Final result already has search results - retrieved_docs={len(search_group.get('retrieved_docs', []))}, top_level={len(flat_result.get('retrieved_docs', []))}")
                     else:
-                        self.logger.warning(f"No search cache available for final result restoration")
+                        self.logger.warning("No search cache available for final result restoration")
 
                 # 중요: query_complexity와 needs_search 복원 (Adaptive RAG 정보)
                 # prepare_final_response에서 보존했지만, reducer에 의해 사라질 수 있으므로 재확인
@@ -1012,7 +1030,7 @@ class LangGraphWorkflowService:
                                 if query_complexity_found:
                                     self.logger.debug(f"[5] ✅ Global cache에서 찾음 - complexity={query_complexity_found}, needs_search={needs_search_found}")
                             elif global_cache is None:
-                                self.logger.debug(f"[5] Global cache is None")
+                                self.logger.debug("[5] Global cache is None")
                             else:
                                 self.logger.debug(f"[5] Global cache is not dict: {type(global_cache)}")
                         except Exception as e:
@@ -1022,7 +1040,7 @@ class LangGraphWorkflowService:
 
                     # 6. 전체 state 재귀 검색 (마지막 시도)
                     if not query_complexity_found:
-                        self.logger.debug(f"[6] 재귀 검색 시작...")
+                        self.logger.debug("[6] 재귀 검색 시작...")
                         def find_in_dict(d, depth=0):
                             if depth > 3:  # 최대 깊이 제한
                                 return None, None
@@ -1057,7 +1075,7 @@ class LangGraphWorkflowService:
                             flat_result["metadata"]["needs_search"] = needs_search_found
                         self.logger.debug(f"✅ query_complexity 복원 완료 - {query_complexity_found}, needs_search={flat_result.get('needs_search')}")
                     else:
-                        self.logger.debug(f"❌ query_complexity를 찾지 못함 (모든 경로 확인 완료)")
+                        self.logger.debug("❌ query_complexity를 찾지 못함 (모든 경로 확인 완료)")
 
                 # 최종 결과에 query가 없으면 보존된 초기 input에서 복원
                 if isinstance(flat_result, dict) and self._initial_input:
@@ -1076,7 +1094,7 @@ class LangGraphWorkflowService:
                             flat_result["input"]["query"] = self._initial_input["query"]
                             if self._initial_input.get("session_id"):
                                 flat_result["input"]["session_id"] = self._initial_input["session_id"]
-                            self.logger.warning(f"Restored query from preserved initial_input in final result")
+                            self.logger.warning("Restored query from preserved initial_input in final result")
 
             else:
                 raise RuntimeError("워크플로우가 컴파일되지 않았습니다")
@@ -1209,22 +1227,56 @@ class LangGraphWorkflowService:
             self.logger.info(f"Query processed successfully in {processing_time:.2f}s")
             return response
 
-        except Exception as e:
+        except ValueError as e:
             import traceback
-            error_msg = f"질문 처리 중 오류 발생: {str(e)}"
-            self.logger.error(error_msg)
-            self.logger.error(traceback.format_exc())
-
+            error_msg = f"입력값 오류: {str(e)}"
+            self.logger.warning(f"Value error in process_query: {error_msg}")
+            self.logger.debug(traceback.format_exc())
             return {
-                "answer": "죄송합니다. 질문 처리 중 오류가 발생했습니다.",
+                "answer": "입력값에 문제가 있습니다. 질문을 다시 확인해주세요.",
                 "sources": [],
                 "confidence": 0.0,
                 "legal_references": [],
-                "processing_steps": [error_msg],
+                "processing_steps": ["입력값 검증 실패"],
                 "session_id": session_id or str(uuid.uuid4()),
                 "processing_time": time.time() - start_time if 'start_time' in locals() else 0.0,
                 "query_type": "error",
-                "metadata": {"error": str(e)},
+                "metadata": {"error": str(e), "error_type": "ValueError"},
+                "errors": [error_msg]
+            }
+        except RuntimeError as e:
+            import traceback
+            error_msg = f"시스템 오류: {str(e)}"
+            self.logger.error(f"Runtime error in process_query: {error_msg}")
+            self.logger.error(traceback.format_exc())
+            return {
+                "answer": "시스템 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                "sources": [],
+                "confidence": 0.0,
+                "legal_references": [],
+                "processing_steps": ["시스템 오류 발생"],
+                "session_id": session_id or str(uuid.uuid4()),
+                "processing_time": time.time() - start_time if 'start_time' in locals() else 0.0,
+                "query_type": "error",
+                "metadata": {"error": str(e), "error_type": "RuntimeError"},
+                "errors": [error_msg]
+            }
+        except Exception as e:
+            import traceback
+            error_msg = f"예상치 못한 오류: {str(e)}"
+            self.logger.error(f"Unexpected error in process_query: {error_msg}")
+            self.logger.error(traceback.format_exc())
+
+            return {
+                "answer": "죄송합니다. 질문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                "sources": [],
+                "confidence": 0.0,
+                "legal_references": [],
+                "processing_steps": ["처리 오류 발생"],
+                "session_id": session_id or str(uuid.uuid4()),
+                "processing_time": time.time() - start_time if 'start_time' in locals() else 0.0,
+                "query_type": "error",
+                "metadata": {"error": str(e), "error_type": type(e).__name__},
                 "errors": [error_msg]
             }
 
@@ -1583,6 +1635,77 @@ class LangGraphWorkflowService:
         quality_score = score / max_score if max_score > 0 else 0.0
         return round(quality_score, 2)
 
+    def _prepare_and_validate_initial_state(self, query: str, session_id: str) -> Dict[str, Any]:
+        """초기 상태 준비 및 검증"""
+        initial_state = create_initial_legal_state(query, session_id)
+        
+        if "input" not in initial_state:
+            initial_state["input"] = {}
+        if not initial_state["input"].get("query"):
+            initial_state["input"]["query"] = query
+        if not initial_state["input"].get("session_id"):
+            initial_state["input"]["session_id"] = session_id
+        
+        if not initial_state.get("query"):
+            initial_state["query"] = query
+        if not initial_state.get("session_id"):
+            initial_state["session_id"] = session_id
+        
+        initial_query = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
+        self.logger.debug(f"process_query: initial_state query length={len(initial_query)}, query='{initial_query[:50] if initial_query else 'EMPTY'}...'")
+        
+        if not initial_query or not str(initial_query).strip():
+            self.logger.error(f"Initial state query is empty! Input query was: '{query[:50]}...'")
+            self.logger.debug("process_query: ERROR - initial_state query is empty!")
+            self.logger.debug(f"process_query: initial_state keys: {list(initial_state.keys())}")
+            self.logger.debug(f"process_query: initial_state['input']: {initial_state.get('input')}")
+        else:
+            self.logger.debug(f"process_query: SUCCESS - initial_state has query with length={len(initial_query)}")
+        
+        return initial_state
+    
+    def _validate_initial_state_before_execution(self, initial_state: Dict[str, Any], query: str) -> bool:
+        """워크플로우 실행 전 초기 상태 최종 검증"""
+        initial_query_check = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
+        self.logger.debug(f"astream: initial_state before astream - query='{initial_query_check[:50] if initial_query_check else 'EMPTY'}...', keys={list(initial_state.keys())}")
+        
+        if not initial_query_check or not str(initial_query_check).strip():
+            self.logger.error(f"Initial state query is empty before astream! Initial state keys: {list(initial_state.keys())}")
+            if initial_state.get("input"):
+                self.logger.error(f"Initial state input: {initial_state['input']}")
+            
+            if "input" not in initial_state:
+                initial_state["input"] = {}
+            if not initial_state["input"].get("query"):
+                if initial_state.get("query"):
+                    initial_state["input"]["query"] = initial_state["query"]
+                else:
+                    self.logger.error("CRITICAL: Cannot find query anywhere in initial_state!")
+                    return False
+        
+        return True
+    
+    def _restore_input_group(self, node_state: Dict[str, Any], node_name: str) -> None:
+        """input 그룹 복원 (State Reduction으로 인한 데이터 손실 방지)"""
+        if not isinstance(node_state, dict) or not self._initial_input:
+            return
+        
+        # stream_mode="updates" 사용 시 input 그룹이 변경된 경우에만 포함됨
+        # input이 변경되지 않은 노드에서는 초기 input을 복원해야 함
+        if "input" not in node_state:
+            # input 그룹이 없으면 초기 input에서 복원
+            node_state["input"] = self._initial_input.copy()
+            if node_name == "classify_query":
+                self.logger.debug(f"astream: Restored query from preserved initial_input for {node_name}: '{self._initial_input['query'][:50]}...'")
+        elif isinstance(node_state.get("input"), dict):
+            # input 그룹이 있지만 query가 없으면 복원
+            node_input = node_state["input"]
+            if not node_input.get("query") and self._initial_input.get("query"):
+                node_state["input"]["query"] = self._initial_input["query"]
+                if not node_input.get("session_id") and self._initial_input.get("session_id"):
+                    node_state["input"]["session_id"] = self._initial_input["session_id"]
+                self.logger.debug(f"astream: Restored query in input group for {node_name}")
+    
     def _get_node_display_name(self, node_name: str) -> str:
         """
         노드 이름을 한국어로 변환하여 표시
