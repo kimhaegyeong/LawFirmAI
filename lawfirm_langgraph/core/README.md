@@ -13,41 +13,42 @@
 ## 🛠️ 기술 스택
 
 ### AI/ML
-- **KoGPT-2**: 한국어 생성 모델
-- **Sentence-BERT**: 텍스트 임베딩 모델
-- **ChromaDB**: 벡터 데이터베이스
+- **LangGraph**: State 기반 워크플로우 관리
+- **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
+- **Sentence-BERT**: 텍스트 임베딩 모델 (jhgan/ko-sroberta-multitask)
+- **FAISS**: 벡터 검색 엔진
 
 ### Backend
 - **FastAPI**: RESTful API 서버
 - **SQLite**: 관계형 데이터베이스
 - **Pydantic**: 데이터 검증
+- **LangChain**: LLM 통합 프레임워크
 
 ### Frontend
-- **Gradio**: 웹 인터페이스
-- **HuggingFace Spaces**: 배포 플랫폼
+- **React 18+ with TypeScript**: 모던 웹 인터페이스
+- **Vite**: 빠른 빌드 도구
+- **Tailwind CSS**: 유틸리티 기반 스타일링
 
 ## 📁 프로젝트 구조
 
 ```
 LawFirmAI/
-├── app.py                    # Gradio 메인 애플리케이션
-├── main.py                   # FastAPI 메인 애플리케이션
-├── requirements.txt          # Python 의존성
-├── Dockerfile               # Docker 컨테이너 설정
-├── docker-compose.yml       # 로컬 개발 환경
-├── env.example              # 환경 변수 템플릿
-├── .gitignore               # Git 무시 파일
-├── README.md                # 프로젝트 문서
-├── source/                  # Core Modules
-│   ├── models/              # AI 모델 관련
-│   ├── services/            # 비즈니스 로직
-│   ├── data/                # 데이터 처리
-│   ├── api/                 # API 관련
-│   └── utils/               # 유틸리티
-├── data/                    # 데이터 파일
-├── tests/                   # 테스트 코드
-├── docs/                    # 문서
-└── scripts/                 # 유틸리티 스크립트
+├── lawfirm_langgraph/      # 핵심 LangGraph 워크플로우 시스템
+│   ├── config/             # 설정 파일
+│   ├── core/               # 핵심 비즈니스 로직
+│   │   ├── agents/         # LangGraph 워크플로우 에이전트
+│   │   ├── services/      # 비즈니스 서비스
+│   │   ├── data/           # 데이터 레이어
+│   │   ├── models/         # AI 모델
+│   │   └── utils/          # 유틸리티
+│   ├── langgraph_core/     # LangGraph 핵심 모듈
+│   └── tests/             # 테스트 코드
+├── api/                    # FastAPI 애플리케이션
+├── frontend/               # React 프론트엔드
+├── scripts/                # 유틸리티 스크립트
+├── data/                   # 데이터 파일
+├── docs/                   # 문서
+└── README.md               # 프로젝트 문서
 ```
 
 ## 🚀 빠른 시작
@@ -90,16 +91,19 @@ copy env.example .env
 ### 5. 애플리케이션 실행
 
 ```bash
-# Gradio 인터페이스 실행
-python app.py
+# API 서버 실행
+cd api
+python -m api.main
 
-# 또는 FastAPI 서버 실행
-python main.py
+# React 프론트엔드 실행 (별도 터미널)
+cd frontend
+npm install
+npm run dev
 ```
 
 ### 6. 접속
 
-- **Gradio 인터페이스**: http://localhost:7860
+- **React 프론트엔드**: http://localhost:3000
 - **FastAPI 서버**: http://localhost:8000
 - **API 문서**: http://localhost:8000/docs
 
@@ -128,24 +132,20 @@ docker build -t lawfirm-ai .
 docker run -p 7860:7860 -p 8000:8000 lawfirm-ai
 ```
 
-## 📊 벤치마킹 결과
+## 📊 현재 시스템 성능
 
-### AI 모델 성능 비교
+### AI 모델
 
-| 지표 | KoBART | KoGPT-2 | 승자 |
-|------|--------|---------|------|
-| 모델 크기 | 472.5 MB | 477.5 MB | KoBART |
-| 메모리 사용량 | 400.8 MB | 748.3 MB | KoBART |
-| 추론 속도 | 13.18초 | 8.34초 | **KoGPT-2** |
-| 응답 품질 | 낮음 | 보통 | **KoGPT-2** |
+- **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
+- **응답 품질**: 법률 도메인에 최적화된 답변 생성
+- **응답 시간**: 평균 3-5초
 
-### 벡터 스토어 성능 비교
+### 벡터 검색 성능
 
-| 지표 | FAISS | ChromaDB | 승자 |
-|------|-------|----------|------|
-| 안정성 | 오류 발생 | 정상 동작 | **ChromaDB** |
-| 검색 속도 | 측정 불가 | 0.17초 | **ChromaDB** |
-| QPS | 측정 불가 | 5.82 | **ChromaDB** |
+- **FAISS**: 고속 벡터 검색 엔진
+- **검색 속도**: 평균 0.033초
+- **처리 속도**: 5.77 법률/초
+- **성공률**: 99.9%
 
 ## 🔧 개발
 
