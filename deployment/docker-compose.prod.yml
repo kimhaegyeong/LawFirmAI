@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  api:
+    image: ${ECR_REGISTRY}/lawfirmai-api:latest
+    container_name: lawfirmai-api
+    restart: unless-stopped
+    user: "1000:1000"
+    expose:
+      - "8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/lawfirm.db}
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - lawfirm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    image: ${ECR_REGISTRY}/lawfirmai-frontend:latest
+    container_name: lawfirmai-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - lawfirm-network
+
+networks:
+  lawfirm-network:
+    driver: bridge
+
