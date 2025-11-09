@@ -1,0 +1,146 @@
+# 프로덕션 환경용 Nginx 설정
+# 이 파일은 nginx.conf와 함께 사용되며, http 블록에 포함되어야 합니다.
+
+# Rate limiting zone 정의
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=100r/m;
+limit_req_zone $binary_remote_addr zone=general_limit:10m rate=200r/m;
+
+# 연결 제한
+limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 서버 버전 정보 숨김
+    server_tokens off;
+
+    # 요청 크기 제한 (10MB)
+    client_max_body_size 10M;
+
+    # 타임아웃 설정
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    keepalive_timeout 65s;
+    send_timeout 10s;
+
+    # 버퍼 크기 제한
+    client_body_buffer_size 128k;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 4k;
+
+    # 연결 제한
+    limit_conn conn_limit 10;
+
+    # Gzip 압축
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/json application/javascript;
+
+    # 보안 헤더 (전역)
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+    # HTTPS 강제 (SSL 인증서 설정 시 주석 해제)
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+
+    # Content Security Policy (필요에 따라 조정)
+    # add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' http://api:8000;" always;
+
+    # 숨겨진 파일 접근 차단
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    # SPA 라우팅 지원
+    location / {
+        # Rate limiting
+        limit_req zone=general_limit burst=50 nodelay;
+        
+        try_files $uri $uri/ /index.html;
+        
+        # 보안 헤더
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
+    # API 프록시
+    location /api {
+        # Rate limiting (분당 100 요청)
+        limit_req zone=api_limit burst=20 nodelay;
+        
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        
+        # 프록시 타임아웃 설정
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 프록시 버퍼 설정
+        proxy_buffering on;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        proxy_busy_buffers_size 8k;
+        
+        # 보안 헤더
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+    }
+
+    # SSE 스트리밍 엔드포인트
+    location ~ ^/api/.*/(stream|sse|events) {
+        limit_req zone=api_limit burst=10 nodelay;
+        
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 스트리밍 설정
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header Connection '';
+        proxy_http_version 1.1;
+        chunked_transfer_encoding off;
+        
+        # 스트리밍 타임아웃 증가
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # 정적 파일 캐싱
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    # 잘못된 HTTP 메서드 차단
+    if ($request_method !~ ^(GET|HEAD|POST|PUT|DELETE|OPTIONS|PATCH)$) {
+        return 405;
+    }
+
+    # 접근 로그 설정
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log warn;
+}
+

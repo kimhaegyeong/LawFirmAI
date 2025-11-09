@@ -1,0 +1,60 @@
+# robots.txt for LawFirmAI
+
+# 모든 크롤러에 대한 기본 규칙
+User-agent: *
+Disallow: /api/
+Disallow: /admin/
+Disallow: /internal/
+Disallow: /private/
+Disallow: /test/
+Disallow: /debug/
+Disallow: /_next/
+Disallow: /.well-known/
+Disallow: /.env
+Disallow: /config/
+Disallow: /logs/
+
+# 허용된 검색 엔진 (필요에 따라 조정)
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Bingbot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Slurp
+Allow: /
+Crawl-delay: 1
+
+User-agent: DuckDuckBot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Baiduspider
+Allow: /
+Crawl-delay: 2
+
+User-agent: YandexBot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Sogou
+Allow: /
+Crawl-delay: 2
+
+User-agent: Exabot
+Allow: /
+Crawl-delay: 1
+
+User-agent: facebot
+Allow: /
+Crawl-delay: 1
+
+User-agent: ia_archiver
+Allow: /
+Crawl-delay: 1
+
+# 사이트맵 위치 (필요 시 추가)
+# Sitemap: https://your-domain.com/sitemap.xml
+
