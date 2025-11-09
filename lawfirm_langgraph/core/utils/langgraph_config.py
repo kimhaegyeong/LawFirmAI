@@ -61,6 +61,7 @@ class LangGraphConfig:
 
     # LangSmith 설정 (LangChain 모니터링)
     langsmith_enabled: bool = False
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_api_key: str = ""
     langsmith_project: str = "LawFirmAI"
     langsmith_tracing: bool = True
@@ -130,11 +131,30 @@ class LangGraphConfig:
         config.langfuse_host = os.getenv("LANGFUSE_HOST", config.langfuse_host)
         config.langfuse_debug = os.getenv("LANGFUSE_DEBUG", "false").lower() == "true"
 
-        # LangSmith 설정 (LangChain 환경 변수 사용)
-        config.langsmith_enabled = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
-        config.langsmith_api_key = os.getenv("LANGCHAIN_API_KEY", config.langsmith_api_key)
-        config.langsmith_project = os.getenv("LANGCHAIN_PROJECT", config.langsmith_project)
-        config.langsmith_tracing = os.getenv("LANGCHAIN_TRACING", "true").lower() == "true"
+        # LangSmith 설정 (LangSmith 환경 변수 사용, 하위 호환성을 위해 LANGCHAIN_*도 지원)
+        config.langsmith_enabled = (
+            os.getenv("LANGSMITH_TRACING", "false").lower() == "true" or
+            os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+        )
+        config.langsmith_endpoint = (
+            os.getenv("LANGSMITH_ENDPOINT") or 
+            os.getenv("LANGCHAIN_ENDPOINT") or 
+            "https://api.smith.langchain.com"
+        )
+        config.langsmith_api_key = (
+            os.getenv("LANGSMITH_API_KEY") or 
+            os.getenv("LANGCHAIN_API_KEY") or 
+            config.langsmith_api_key
+        )
+        config.langsmith_project = (
+            os.getenv("LANGSMITH_PROJECT") or 
+            os.getenv("LANGCHAIN_PROJECT") or 
+            config.langsmith_project
+        )
+        config.langsmith_tracing = (
+            os.getenv("LANGSMITH_TRACING", "true").lower() == "true" or
+            os.getenv("LANGCHAIN_TRACING", "true").lower() == "true"
+        )
 
         # RAG 품질 제어 설정
         config.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", config.similarity_threshold))
@@ -200,6 +220,8 @@ class LangGraphConfig:
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,
+            "langsmith_endpoint": self.langsmith_endpoint,
+            "langsmith_project": self.langsmith_project,
             "similarity_threshold": self.similarity_threshold,
             "max_context_length": self.max_context_length,
             "max_tokens": self.max_tokens,

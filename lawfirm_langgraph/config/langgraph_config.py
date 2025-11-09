@@ -13,11 +13,30 @@ from typing import List
 
 from dotenv import load_dotenv
 
-# lawfirm_langgraph 디렉토리의 .env 파일 로드
-# config/ 폴더에서 lawfirm_langgraph/ 까지 상위 1단계
-_langgraph_dir = Path(__file__).parent.parent
-_env_file = _langgraph_dir / ".env"
-load_dotenv(dotenv_path=str(_env_file))
+# 환경 변수 로드 (중앙 집중식 로더 사용)
+# 프로젝트 루트를 찾아서 공통 로더 사용
+try:
+    # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
+    _langgraph_dir = Path(__file__).parent.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 공통 로더 사용 (이미 로드되었을 수 있으므로 ensure 사용)
+    try:
+        import sys
+        sys.path.insert(0, str(_project_root))
+        from utils.env_loader import ensure_env_loaded
+        ensure_env_loaded(_project_root)
+    except ImportError:
+        # 공통 로더가 없으면 기존 방식으로 fallback
+        _env_file = _langgraph_dir / ".env"
+        if _env_file.exists():
+            load_dotenv(dotenv_path=str(_env_file))
+except Exception:
+    # 모든 방법이 실패하면 기존 방식으로 fallback
+    _langgraph_dir = Path(__file__).parent.parent
+    _env_file = _langgraph_dir / ".env"
+    if _env_file.exists():
+        load_dotenv(dotenv_path=str(_env_file))
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +87,7 @@ class LangGraphConfig:
 
     # LangSmith 설정 (LangChain 모니터링)
     langsmith_enabled: bool = False
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_api_key: str = ""
     langsmith_project: str = "LawFirmAI"
     langsmith_tracing: bool = True
@@ -144,11 +164,30 @@ class LangGraphConfig:
         config.langfuse_host = os.getenv("LANGFUSE_HOST", config.langfuse_host)
         config.langfuse_debug = os.getenv("LANGFUSE_DEBUG", "false").lower() == "true"
 
-        # LangSmith 설정 (LangChain 환경 변수 사용)
-        config.langsmith_enabled = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
-        config.langsmith_api_key = os.getenv("LANGCHAIN_API_KEY", config.langsmith_api_key)
-        config.langsmith_project = os.getenv("LANGCHAIN_PROJECT", config.langsmith_project)
-        config.langsmith_tracing = os.getenv("LANGCHAIN_TRACING", "true").lower() == "true"
+        # LangSmith 설정 (LangSmith 환경 변수 사용, 하위 호환성을 위해 LANGCHAIN_*도 지원)
+        config.langsmith_enabled = (
+            os.getenv("LANGSMITH_TRACING", "false").lower() == "true" or
+            os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+        )
+        config.langsmith_endpoint = (
+            os.getenv("LANGSMITH_ENDPOINT") or 
+            os.getenv("LANGCHAIN_ENDPOINT") or 
+            "https://api.smith.langchain.com"
+        )
+        config.langsmith_api_key = (
+            os.getenv("LANGSMITH_API_KEY") or 
+            os.getenv("LANGCHAIN_API_KEY") or 
+            config.langsmith_api_key
+        )
+        config.langsmith_project = (
+            os.getenv("LANGSMITH_PROJECT") or 
+            os.getenv("LANGCHAIN_PROJECT") or 
+            config.langsmith_project
+        )
+        config.langsmith_tracing = (
+            os.getenv("LANGSMITH_TRACING", "true").lower() == "true" or
+            os.getenv("LANGCHAIN_TRACING", "true").lower() == "true"
+        )
 
         # RAG 품질 제어 설정
         config.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", config.similarity_threshold))
@@ -215,6 +254,8 @@ class LangGraphConfig:
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,
+            "langsmith_endpoint": self.langsmith_endpoint,
+            "langsmith_project": self.langsmith_project,
             "similarity_threshold": self.similarity_threshold,
             "max_context_length": self.max_context_length,
             "max_tokens": self.max_tokens,
