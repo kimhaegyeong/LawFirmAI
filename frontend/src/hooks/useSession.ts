@@ -56,16 +56,14 @@ export function useSession() {
       const session = await createSession(data || {});
       setCurrentSession(session);
       
-      // skipLoadSessions가 false일 때만 세션 목록 새로고침
-      // true인 경우 백그라운드에서 처리하여 UI 전환 속도 개선
-      if (skipLoadSessions) {
-        // 백그라운드에서 세션 목록 새로고침 (await 없이)
-        loadSessions().catch(err => {
-          logger.error('Failed to refresh session list:', err);
-        });
-      } else {
+      // skipLoadSessions가 true이면 세션 목록 새로고침을 완전히 건너뜀
+      // 대화형 인터페이스로 넘어갈 때는 세션 목록이 필요 없으므로
+      // 세션 목록은 사이드바에서 필요할 때만 로드됨
+      if (!skipLoadSessions) {
         await loadSessions();
       }
+      // skipLoadSessions가 true인 경우는 아무것도 하지 않음
+      // 세션 목록은 사이드바에서 필요할 때만 로드됨
       
       return session;
     } catch (err) {

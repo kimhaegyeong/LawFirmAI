@@ -70,6 +70,10 @@ export function SessionList({
     '이전': null,
   });
 
+  // 초기 마운트 여부 추적
+  const isInitialMount = useRef(true);
+  const prevSearchQuery = useRef<string | undefined>(searchQuery);
+
   // 그룹 세션 로딩
   const loadGroupSessions = useCallback(async (
     group: DateGroup,
@@ -121,33 +125,39 @@ export function SessionList({
     }
   }, [searchQuery]);
 
-  // 초기 로딩: 오늘 그룹만
+  // 초기 로딩 및 검색어 변경 처리
   useEffect(() => {
-    loadGroupSessions('오늘', 1, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // 초기 마운트 시에만 실행
+    // 초기 마운트 시: searchQuery가 없을 때만 '오늘' 그룹 로드
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      if (!searchQuery) {
+        loadGroupSessions('오늘', 1, false);
+      }
+      prevSearchQuery.current = searchQuery;
+      return;
+    }
 
-  // 검색어 변경 시 모든 그룹 새로고침
-  useEffect(() => {
-    // 검색어가 변경되면 모든 그룹의 데이터 초기화 및 재로딩
-    setGroupData(prev => ({
-      '오늘': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
-      '어제': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
-      '지난 7일': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
-      '지난 30일': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
-      '이전': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
-    }));
-    
-    // 펼쳐진 그룹들만 다시 로딩
-    // expandedGroups는 클로저로 캡처되므로 현재 상태 사용
-    setExpandedGroups(currentExpanded => {
-      currentExpanded.forEach(group => {
-        setTimeout(() => {
-          loadGroupSessions(group, 1, false);
-        }, 0);
+    // 검색어가 실제로 변경된 경우에만 처리
+    if (prevSearchQuery.current !== searchQuery) {
+      prevSearchQuery.current = searchQuery;
+      
+      // 모든 그룹의 데이터 초기화
+      setGroupData({
+        '오늘': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
+        '어제': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
+        '지난 7일': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
+        '지난 30일': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
+        '이전': { sessions: [], hasMore: true, page: 0, isLoading: false, total: 0 },
       });
-      return currentExpanded;
-    });
+      
+      // 펼쳐진 그룹들만 다시 로딩 (함수형 업데이트 사용)
+      setExpandedGroups(currentExpanded => {
+        currentExpanded.forEach(group => {
+          loadGroupSessions(group, 1, false);
+        });
+        return currentExpanded;
+      });
+    }
   }, [searchQuery, loadGroupSessions]);
 
   // 그룹 토글
