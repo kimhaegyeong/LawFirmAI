@@ -43,12 +43,10 @@ from .optimizers import (
     QueryOptimizer,
 )
 
-# Workflow (keep for backward compatibility)
+# Workflow - EnhancedLegalQuestionWorkflow only (workflow_service moved to langgraph_core.workflow)
 try:
-    from .workflow_service import LangGraphWorkflowService
     from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 except ImportError:
-    LangGraphWorkflowService = None
     EnhancedLegalQuestionWorkflow = None
 
 __all__ = [
@@ -78,6 +76,5 @@ __all__ = [
     "PerformanceOptimizer",
     "QueryOptimizer",
     # Workflow
-    "LangGraphWorkflowService",
     "EnhancedLegalQuestionWorkflow",
 ]
