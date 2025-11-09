@@ -11,8 +11,8 @@
 
 #### ✅ 완료된 부분
 - 멀티스테이지 Docker 빌드 설정
-- 기본 Gradio 애플리케이션 구조
-- LangChain 기반 RAG 시스템
+- React 프론트엔드 + FastAPI 백엔드 구조
+- LangGraph 기반 RAG 시스템
 
 #### ⚠️ 개선 필요 부분
 - Phase 2의 새로운 서비스 컴포넌트 미반영
@@ -22,10 +22,10 @@
 
 ### 🚀 구현 계획
 
-#### 1. HuggingFace Spaces 전용 Gradio 앱 생성
-- Phase 2의 모든 개선사항 통합
+#### 1. HuggingFace Spaces 전용 애플리케이션 구성
+- React 프론트엔드 + FastAPI 백엔드 구조
 - 메모리 효율적인 모델 로딩
-- 간소화된 UI/UX
+- 최적화된 UI/UX
 
 #### 2. 의존성 최적화
 - 불필요한 패키지 제거
@@ -45,18 +45,17 @@
 ### 📁 파일 구조
 
 ```
-gradio/
-├── app.py                          # HuggingFace Spaces 전용 메인 앱
-├── requirements.txt                # 최적화된 의존성
-├── Dockerfile                      # HuggingFace Spaces 최적화
-├── README.md                       # Spaces 전용 문서
-├── .env.example                    # 환경 변수 템플릿
-├── static/
-│   └── custom.css                  # 커스텀 스타일
-└── utils/
-    ├── memory_optimizer.py         # 메모리 최적화 유틸리티
-    ├── performance_monitor.py      # 성능 모니터링
-    └── error_handler.py            # 에러 핸들링
+LawFirmAI/
+├── api/                            # FastAPI 백엔드
+│   ├── main.py                     # API 메인 애플리케이션
+│   ├── requirements.txt            # 최적화된 의존성
+│   └── Dockerfile                  # HuggingFace Spaces 최적화
+├── frontend/                       # React 프론트엔드
+│   ├── src/                        # React 소스 코드
+│   ├── package.json                # npm 의존성
+│   └── Dockerfile                  # 프론트엔드 빌드
+├── lawfirm_langgraph/             # LangGraph 워크플로우
+└── .env.example                    # 환경 변수 템플릿
 ```
 
 ### 🔧 기술적 구현

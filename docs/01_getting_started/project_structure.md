@@ -317,4 +317,4 @@ def process_data(data: Dict[str, Any]) -> str:
 
 - [프로젝트 개요](project_overview.md)
 - [아키텍처](architecture.md)
-- [LangGraph 워크플로우 가이드](../05_rag_system/langgraph_integration_guide.md)
+- [LangGraph 워크플로우 가이드](../03_rag_system/langgraph_integration_guide.md)

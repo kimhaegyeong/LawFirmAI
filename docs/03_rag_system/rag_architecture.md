@@ -227,7 +227,7 @@ core/data/database.py (메타데이터 저장)
 - **OpenAI**: GPT-3.5-turbo, GPT-4
 - **Anthropic**: Claude 모델
 - **Google**: Gemini Pro, Gemini Pro Vision
-- **로컬 모델**: KoGPT-2, KoBART 등
+- **클라우드 LLM**: Google Gemini 2.5 Flash Lite
 
 ### 벡터 저장소 옵션
 - **FAISS**: 고성능 벡터 검색

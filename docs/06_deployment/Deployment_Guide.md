@@ -328,7 +328,7 @@ grep "2024-12-20" logs/lawfirm.log
 
 ### 2. 성능 모니터링
 
-Gradio UI의 **⚙️ 고급 설정** 탭에서 실시간 모니터링:
+React 프론트엔드 또는 API 문서에서 실시간 모니터링:
 
 - **메모리 사용량**: 실시간 메모리 모니터링
 - **CPU 사용률**: 시스템 리소스 사용량
@@ -492,7 +492,7 @@ cp data/backup/env_20241220_143022.env .env
 
 ### 1. Dockerfile 생성
 
-**gradio/Dockerfile**:
+**api/Dockerfile**:
 ```dockerfile
 FROM python:3.9-slim
 
@@ -578,7 +578,7 @@ docker-compose down
 3. 다음 정보 입력:
    - **Space name**: lawfirmai
    - **License**: MIT
-   - **SDK**: Gradio
+   - **SDK**: Docker (또는 React + FastAPI)
    - **Hardware**: CPU Basic (또는 GPU)
 
 ### 2. 파일 업로드

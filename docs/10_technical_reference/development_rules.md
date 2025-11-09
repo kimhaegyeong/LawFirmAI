@@ -86,7 +86,7 @@ LawFirmAI/
 │   └── requirements.txt             # 의존성
 ├── infrastructure/                  # 인프라 및 유틸리티
 │   └── utils/                       # 유틸리티 함수
-├── source/                          # 레거시 모듈 (호환성 유지)
+├── lawfirm_langgraph/               # 핵심 LangGraph 워크플로우 시스템
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
 │   └── embeddings/                  # 벡터 임베딩
@@ -333,7 +333,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 복사
 COPY apps/streamlit/ ./apps/streamlit/
-COPY core/ ./source/
+COPY lawfirm_langgraph/ ./lawfirm_langgraph/
 COPY infrastructure/ ./infrastructure/
 
 # 비root 사용자로 실행

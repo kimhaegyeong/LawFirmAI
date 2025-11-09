@@ -274,4 +274,4 @@ ls -la data/raw/assembly/precedent/$(date +%Y%m%d)/
 - [데이터 수집 가이드](../../../collection/data_collection_guide.md) (보관됨)
 - [데이터 전처리 가이드](../../../processing/preprocessing_guide.md)
 - [벡터 임베딩 가이드](../../../embedding/embedding_guide.md)
-- [RAG 시스템 가이드](../../../../05_rag_system/rag_architecture.md)
+- [RAG 시스템 가이드](../../../../03_rag_system/rag_architecture.md)

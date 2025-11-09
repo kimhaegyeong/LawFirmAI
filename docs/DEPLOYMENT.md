@@ -17,7 +17,14 @@ LawFirmAI는 API 서버와 React 프론트엔드로 분리되어 독립적으로
                               ┌───────▼────────┐
                               │  lawfirm_      │
                               │  langgraph     │
-                              │  (Backend)     │
+                              │  (LangGraph    │
+                              │   Workflow)    │
+                              └────────────────┘
+                                      │
+                              ┌───────▼────────┐
+                              │  Google        │
+                              │  Gemini 2.5   │
+                              │  Flash Lite   │
                               └────────────────┘
 ```
 
@@ -83,8 +90,16 @@ docker-compose -f frontend/docker-compose.yml up
    - `API_PORT`: 8000
    - `CORS_ORIGINS`: React 프론트엔드 URL
    - `DATABASE_URL`: 프로덕션 데이터베이스 URL
+   - `GOOGLE_API_KEY`: Google Gemini API 키
+   - `LANGGRAPH_ENABLED`: true
 
 2. 서버 실행:
+   ```bash
+   cd api
+   python -m api.main
+   ```
+
+   또는 uvicorn으로 실행:
    ```bash
    uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
    ```
@@ -117,6 +132,9 @@ npx serve -s dist -l 3000
 | `CORS_ORIGINS` | CORS 허용 오리진 | * |
 | `DATABASE_URL` | 데이터베이스 URL | sqlite:///./data/api_sessions.db |
 | `LANGGRAPH_ENABLED` | LangGraph 활성화 | true |
+| `GOOGLE_API_KEY` | Google Gemini API 키 | (필수) |
+| `GOOGLE_MODEL` | Google Gemini 모델명 | gemini-2.5-flash-lite |
+| `LLM_PROVIDER` | LLM 제공자 | google |
 
 ### React 프론트엔드
 

@@ -478,4 +478,4 @@ class HealthChecker:
 
 - [프로젝트 구조](project_structure.md)
 - [프로젝트 개요](project_overview.md)
-- [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)
+- [LangGraph 통합 가이드](../03_rag_system/langgraph_integration_guide.md)

@@ -488,7 +488,7 @@ intelligentChat("계약 해제 조건")
 
 - [프로젝트 개요](../01_getting_started/project_overview.md)
 - [데이터베이스 스키마](../10_technical_reference/database_schema.md)
-- [RAG 시스템 아키텍처](../05_rag_system/rag_architecture.md)
+- [RAG 시스템 아키텍처](../03_rag_system/rag_architecture.md)
 - [데이터 처리 가이드](../02_data/processing/preprocessing_guide.md)
 
 ---

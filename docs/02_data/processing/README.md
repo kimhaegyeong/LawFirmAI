@@ -11,4 +11,4 @@
 
 - [02_Data_Collection](../collection/README.md): 데이터 수집
 - [02_Data_Embedding](../embedding/README.md): 벡터 임베딩
-- [05_RAG_System](../../05_rag_system/README.md): RAG 시스템
+- [03_RAG_System](../../03_rag_system/README.md): RAG 시스템

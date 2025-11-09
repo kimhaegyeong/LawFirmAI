@@ -6,6 +6,8 @@
 
 LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 처리, 문서 분석, 판례 검색 등의 기능을 제공합니다.
 
+**현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
+
 ## 📁 문서 디렉토리
 
 ### 01. 시작하기 (`01_getting_started/`)
@@ -14,6 +16,7 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 - [프로젝트 구조](01_getting_started/project_structure.md)
 - [아키텍처](01_getting_started/architecture.md)
 - [프론트엔드 개발 가이드](01_getting_started/frontend_guide.md)
+- [UI 설계](01_getting_started/ui_design.md)
 
 ### 02. 데이터 (`02_data/`)
 데이터 수집, 처리, 임베딩 관련 문서
@@ -21,11 +24,11 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 - **processing/**: 데이터 전처리 가이드
 - **embedding/**: 벡터 임베딩 가이드
 
-### 03. RAG 시스템 (`05_rag_system/`)
+### 03. RAG 시스템 (`03_rag_system/`)
 LangGraph 기반 RAG 시스템 문서
-- [RAG 아키텍처](05_rag_system/rag_architecture.md)
-- [LangGraph 통합 가이드](05_rag_system/langgraph_integration_guide.md)
-- [개발 규칙](05_rag_system/langchain_langgraph_development_rules.md)
+- [RAG 아키텍처](03_rag_system/rag_architecture.md)
+- [LangGraph 통합 가이드](03_rag_system/langgraph_integration_guide.md)
+- [개발 규칙](03_rag_system/langchain_langgraph_development_rules.md)
 
 ### 04. 모델 (`04_models/`)
 AI 모델 성능 최적화 및 벤치마크
@@ -68,11 +71,13 @@ API 문서 및 통합 가이드
 - [개발 규칙](10_technical_reference/development_rules.md)
 - [인코딩 개발 규칙](10_technical_reference/encoding_development_rules.md)
 - [문제 해결 가이드](10_technical_reference/Troubleshooting_Guide.md)
+- [환경 변수 관리](10_technical_reference/environment_variables.md)
 
 ### 참고 자료 (`reference/`)
 참고 문서 및 개선 계획
 - **improvement_plans/**: 개선 계획서
   - [LangGraph 워크플로우 개선 계획](reference/improvement_plans/langgraph_improvement.md)
+- [개선 사항 요약](reference/improvements_summary.md)
 
 ## 🔍 빠른 찾기
 

@@ -191,5 +191,5 @@ pytest lawfirm_langgraph/tests/test_workflow_service.py -v
 
 - [프로젝트 구조](project_structure.md)
 - [아키텍처](architecture.md)
-- [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)
+- [LangGraph 통합 가이드](../03_rag_system/langgraph_integration_guide.md)
 - [개발 규칙](../10_technical_reference/development_rules.md)
