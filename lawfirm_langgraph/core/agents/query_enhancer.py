@@ -74,12 +74,12 @@ class QueryEnhancer:
                 "llm_enhanced": bool  # LLM 강화 사용 여부
             }
         """
-        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵
+        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (기준 완화)
         # 쿼리가 짧고 키워드가 충분하면 LLM 강화 생략
         should_skip_llm = (
-            len(query) < 30 and  # 짧은 쿼리
-            len(extracted_keywords) >= 3 and  # 키워드가 충분
-            query_type in ["general_question", "definition_question"]  # 간단한 질문 유형
+            (len(query) < 50 and len(extracted_keywords) >= 2) or  # 짧은 쿼리 + 키워드 2개 이상
+            (len(query) < 30 and len(extracted_keywords) >= 1) or  # 매우 짧은 쿼리 + 키워드 1개 이상
+            (query_type in ["general_question", "definition_question"] and len(extracted_keywords) >= 2)  # 간단한 질문 유형 + 키워드 2개 이상
         )
         
         # LLM 쿼리 강화 시도 (간단한 쿼리는 스킵)
@@ -301,9 +301,19 @@ class QueryEnhancer:
                     self.logger.warning("No LLM available for query enhancement")
                     return None
                 
-                # LLM 호출 (짧은 응답만 필요하므로 토큰 수 제한)
+                # LLM 호출 (짧은 응답만 필요하므로 토큰 수 제한, 타임아웃 설정)
                 try:
-                    response = llm_to_use.invoke(prompt)
+                    # 동기 LLM 호출에 타임아웃 적용 (최대 5초)
+                    if hasattr(llm_to_use, 'invoke'):
+                        # 타임아웃이 있는 경우 사용
+                        if hasattr(llm_to_use, 'timeout'):
+                            response = llm_to_use.invoke(prompt, timeout=5.0)
+                        else:
+                            # 타임아웃이 없는 경우 일반 호출
+                            response = llm_to_use.invoke(prompt)
+                    else:
+                        response = llm_to_use(prompt)
+                    
                     if isinstance(response, str):
                         llm_output = response
                     elif hasattr(response, 'content'):
@@ -371,24 +381,23 @@ class QueryEnhancer:
             # 체인 스텝 정의
             chain_steps = []
 
-            # Step 1: 쿼리 분석 및 핵심 키워드 추출
+            # Step 1: 쿼리 분석 및 핵심 키워드 추출 (프롬프트 최적화)
             def build_query_analysis_prompt(prev_output, initial_input):
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
                 query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
                 legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 법률 검색 쿼리를 분석하고 핵심 키워드를 추출해주세요.
+                return f"""법률 검색 쿼리 분석:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
+쿼리: {query_value}
+유형: {query_type_value}
+분야: {legal_field_value if legal_field_value else "미지정"}
 
-다음 형식으로 응답해주세요:
+응답 형식 (JSON만):
 {{
-    "core_keywords": ["핵심 키워드1", "핵심 키워드2", "핵심 키워드3"],
-    "query_intent": "쿼리의 의도 설명",
-    "key_concepts": ["핵심 법률 개념1", "핵심 법률 개념2"],
-    "analysis": "쿼리 분석 결과 (한국어)"
+    "core_keywords": ["키워드1", "키워드2", "키워드3"],
+    "query_intent": "의도",
+    "key_concepts": ["개념1", "개념2"]
 }}
 """
 
@@ -401,34 +410,24 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 2: 키워드 확장 및 변형 생성
+            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화)
             def build_keyword_expansion_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 core_keywords = prev_output.get("core_keywords", [])
-                query_intent = prev_output.get("query_intent", "")
-                key_concepts = prev_output.get("key_concepts", [])
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-                query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
-                legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 핵심 키워드를 바탕으로 검색 범위를 확장하기 위한 키워드 변형과 동의어를 생성해주세요.
+                return f"""키워드 확장:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
-쿼리 의도: {query_intent}
-핵심 키워드: {', '.join(core_keywords) if core_keywords else "없음"}
-핵심 개념: {', '.join(key_concepts) if key_concepts else "없음"}
+쿼리: {query_value}
+핵심 키워드: {', '.join(core_keywords[:5]) if core_keywords else "없음"}
 
-다음 형식으로 응답해주세요:
+응답 형식 (JSON만):
 {{
-    "expanded_keywords": ["확장 키워드1", "확장 키워드2", "확장 키워드3", "확장 키워드4", "확장 키워드5"],
-    "synonyms": ["동의어1", "동의어2", "동의어3"],
-    "related_terms": ["관련 용어1", "관련 용어2"],
-    "keyword_variants": ["키워드 변형1", "키워드 변형2"],
-    "reasoning": "확장 근거 (한국어)"
+    "expanded_keywords": ["확장1", "확장2", "확장3"],
+    "synonyms": ["동의어1", "동의어2"],
+    "keyword_variants": ["변형1", "변형2"]
 }}
 """
 
@@ -441,16 +440,13 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 3: 최적화된 쿼리 생성
+            # Step 3: 최적화된 쿼리 생성 (프롬프트 최적화)
             def build_query_optimization_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 expanded_keywords = prev_output.get("expanded_keywords", [])
-                synonyms = prev_output.get("synonyms", [])
-                related_terms = prev_output.get("related_terms", [])
-                keyword_variants = prev_output.get("keyword_variants", [])
-
+                
                 # Step 1 결과에서 core_keywords 가져오기
                 core_keywords = []
                 if hasattr(chain_executor, 'chain_history'):
@@ -462,24 +458,18 @@ class QueryEnhancer:
                                 break
 
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-                query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
-                legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 정보를 바탕으로 법률 데이터베이스 검색에 최적화된 쿼리를 생성해주세요.
+                return f"""쿼리 최적화:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
-핵심 키워드: {', '.join(core_keywords) if core_keywords else "없음"}
-확장 키워드: {', '.join(expanded_keywords[:10]) if expanded_keywords else "없음"}
+원본: {query_value}
+핵심: {', '.join(core_keywords[:3]) if core_keywords else "없음"}
+확장: {', '.join(expanded_keywords[:5]) if expanded_keywords else "없음"}
 
-다음 형식으로 응답해주세요:
+응답 형식 (JSON만):
 {{
-    "optimized_query": "최적화된 메인 쿼리 (최대 50자)",
-    "semantic_query": "벡터 검색용 쿼리 (의미 중심)",
-    "keyword_query": "키워드 검색용 쿼리 (정확 매칭 중심)",
-    "legal_terms": ["법률 전문 용어1", "법률 전문 용어2"],
-    "reasoning": "최적화 근거 (한국어)"
+    "optimized_query": "최적화 쿼리 (50자 이내)",
+    "semantic_query": "벡터 검색용",
+    "keyword_query": "키워드 검색용"
 }}
 """
 
@@ -537,11 +527,22 @@ class QueryEnhancer:
                 "legal_field": legal_field
             }
 
+            # 성능 최적화: 간단한 쿼리는 체인 단계 축소
+            # 쿼리가 짧고 키워드가 충분하면 검증 단계 스킵
+            should_skip_validation = (
+                len(query) < 60 and len(extracted_keywords) >= 2
+            )
+            
+            # 검증 단계 제거 (간단한 쿼리)
+            if should_skip_validation:
+                chain_steps = [step for step in chain_steps if step.get("name") != "query_validation"]
+                self.logger.debug(f"Skipping validation step for simple query: '{query[:50]}...'")
+            
             chain_result = chain_executor.execute_chain(
                 chain_steps=chain_steps,
                 initial_input=initial_input_dict,
-                max_iterations=2,
-                stop_on_failure=False
+                max_iterations=1,  # 각 단계 최대 1회 재시도 (2 → 1로 감소)
+                stop_on_failure=False  # 일부 단계 실패해도 계속 진행
             )
 
             # 결과 추출 및 통합
