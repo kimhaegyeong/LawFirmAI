@@ -486,7 +486,7 @@ class AnswerGenerator:
 
     def call_llm_with_retry(self, prompt: str, max_retries: int = WorkflowConstants.MAX_RETRIES) -> str:
         """
-        LLM 호출 (재시도 로직 포함)
+        LLM 호출 (재시도 로직 포함, 타임아웃 및 성능 모니터링)
 
         Args:
             prompt: 프롬프트 문자열
@@ -501,13 +501,51 @@ class AnswerGenerator:
             감지하여 on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
             따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.
         """
+        llm_timeout = WorkflowConstants.TIMEOUT * 2  # LLM 타임아웃 (기본 30초)
+        
         for attempt in range(max_retries):
             try:
+                call_start_time = time.time()
+                
                 # LLM 호출 (스트리밍 지원)
                 # invoke() 호출 시에도 내부적으로 스트리밍이 사용되므로
                 # LangGraph의 astream_events()가 이를 캡처할 수 있습니다.
                 response = self.llm.invoke(prompt)
-                return WorkflowUtils.extract_response_content(response)
+                result = WorkflowUtils.extract_response_content(response)
+                
+                call_duration = time.time() - call_start_time
+                
+                # 타임아웃 체크 (호출 후 검증)
+                if call_duration > llm_timeout:
+                    self.logger.error(
+                        f"⏱️ [LLM TIMEOUT] LLM 호출 시간 초과: {call_duration:.2f}초 "
+                        f"(임계값: {llm_timeout}초)"
+                    )
+                    if attempt < max_retries - 1:
+                        self.logger.info(f"재시도 중... (시도 {attempt + 1}/{max_retries})")
+                        time.sleep(WorkflowConstants.RETRY_DELAY)
+                        continue
+                    else:
+                        raise TimeoutError(f"LLM 호출 타임아웃 ({llm_timeout}초 초과)")
+                
+                # 성능 모니터링: 느린 호출 경고
+                if call_duration > llm_timeout * 0.8:
+                    self.logger.warning(
+                        f"⚠️ [LLM PERFORMANCE] 느린 LLM 호출 감지: {call_duration:.2f}초 "
+                        f"(임계값: {llm_timeout * 0.8:.2f}초)"
+                    )
+                elif call_duration > 10:
+                    self.logger.info(
+                        f"ℹ️ [LLM PERFORMANCE] LLM 호출 시간: {call_duration:.2f}초"
+                    )
+                
+                return result
+                        
+            except TimeoutError as e:
+                self.logger.error(f"⏱️ [LLM TIMEOUT] LLM 호출 타임아웃 (시도 {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(WorkflowConstants.RETRY_DELAY)
             except Exception as e:
                 self.logger.warning(f"LLM 호출 실패 (시도 {attempt + 1}/{max_retries}): {e}")
                 if attempt == max_retries - 1:

@@ -1342,8 +1342,42 @@ class AnswerFormatterHandler:
         # 신뢰도 계산
         answer_value = WorkflowUtils.normalize_answer(state.get("answer", ""))
 
+        # retrieved_docs 복구 (여러 위치에서 검색)
+        retrieved_docs = state.get("retrieved_docs", [])
+        if not retrieved_docs:
+            # search 그룹에서 확인
+            if "search" in state and isinstance(state["search"], dict):
+                retrieved_docs = state["search"].get("retrieved_docs", [])
+        if not retrieved_docs:
+            # common.search 그룹에서 확인
+            if "common" in state and isinstance(state["common"], dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    retrieved_docs = state["common"]["search"].get("retrieved_docs", [])
+        if not retrieved_docs:
+            # state_helpers의 get_retrieved_docs 사용
+            try:
+                from core.agents.state_helpers import get_retrieved_docs
+                retrieved_docs = get_retrieved_docs(state)
+            except (ImportError, AttributeError):
+                pass
+        if not retrieved_docs:
+            # global cache에서 확인
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache:
+                    retrieved_docs = _global_search_results_cache.get("retrieved_docs", [])
+            except (ImportError, AttributeError):
+                pass
+        
+        # 복구된 retrieved_docs를 state에 저장
+        if retrieved_docs:
+            state["retrieved_docs"] = retrieved_docs
+            self.logger.info(f"[SOURCES] Restored {len(retrieved_docs)} retrieved_docs in prepare_final_response_part")
+        else:
+            self.logger.warning(f"[SOURCES] No retrieved_docs found in prepare_final_response_part")
+
         sources_list = []
-        for doc in state.get("retrieved_docs", []):
+        for doc in retrieved_docs:
             if isinstance(doc, dict):
                 sources_list.append(doc)
 
@@ -1658,18 +1692,274 @@ class AnswerFormatterHandler:
 
                 state["answer"] = '\n'.join(new_lines)
 
-        # sources 추출
+        # sources 추출 (prepare_final_response와 동일한 로직 사용)
         final_sources_list = []
+        final_sources_detail = []
+        seen_sources = set()
+
+        # 통일된 포맷터 및 검증기 초기화
+        try:
+            from ...services.unified_source_formatter import UnifiedSourceFormatter
+            from ...services.source_validator import SourceValidator
+            formatter = UnifiedSourceFormatter()
+            validator = SourceValidator()
+        except ImportError:
+            formatter = None
+            validator = None
+
         for doc in state.get("retrieved_docs", []):
-            source = doc.get("source", "Unknown") if isinstance(doc, dict) else str(doc) if doc else "Unknown"
-            if isinstance(source, str):
-                final_sources_list.append(source)
-            elif source is not None:
+            if not isinstance(doc, dict):
+                continue
+
+            source = None
+            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            
+            # 통일된 포맷터로 상세 정보 생성
+            source_info_detail = None
+            if formatter and source_type:
                 try:
-                    final_sources_list.append(str(source))
-                except Exception:
-                    final_sources_list.append("Unknown")
-        state["sources"] = list(set(final_sources_list))
+                    merged_metadata = {**metadata}
+                    for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                               "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
+                        if key in doc:
+                            merged_metadata[key] = doc[key]
+                    
+                    source_info_detail = formatter.format_source(source_type, merged_metadata)
+                    
+                    if validator:
+                        validation_result = validator.validate_source(source_type, merged_metadata)
+                        source_info_detail.validation = validation_result
+                except Exception as e:
+                    self.logger.warning(f"Error formatting source detail: {e}")
+            
+            # 1. statute_article (법령 조문) 처리
+            if source_type == "statute_article":
+                statute_name = (
+                    doc.get("statute_name") or
+                    doc.get("law_name") or
+                    metadata.get("statute_name") or
+                    metadata.get("law_name")
+                )
+                
+                if statute_name:
+                    article_no = (
+                        doc.get("article_no") or
+                        doc.get("article_number") or
+                        metadata.get("article_no") or
+                        metadata.get("article_number")
+                    )
+                    clause_no = doc.get("clause_no") or metadata.get("clause_no")
+                    item_no = doc.get("item_no") or metadata.get("item_no")
+                    
+                    source_parts = [statute_name]
+                    if article_no:
+                        source_parts.append(article_no)
+                    if clause_no:
+                        source_parts.append(f"제{clause_no}항")
+                    if item_no:
+                        source_parts.append(f"제{item_no}호")
+                    
+                    source = " ".join(source_parts)
+            
+            # 2. case_paragraph (판례) 처리
+            elif source_type == "case_paragraph":
+                court = doc.get("court") or metadata.get("court")
+                casenames = doc.get("casenames") or metadata.get("casenames")
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or doc.get("id") or metadata.get("id")
+                
+                # court나 casenames가 없으면 다른 필드에서 찾기
+                if not court and not casenames:
+                    # metadata에서 추가 필드 확인
+                    court = metadata.get("court_name") or metadata.get("court_type")
+                    casenames = metadata.get("case_name") or metadata.get("title")
+                
+                if court or casenames or doc_id:
+                    source_parts = []
+                    if court:
+                        source_parts.append(court)
+                    if casenames:
+                        source_parts.append(casenames)
+                    if doc_id:
+                        source_parts.append(f"({doc_id})")
+                    # court나 casenames가 없어도 doc_id만 있으면 "판례 (doc_id)" 형태로 생성
+                    if not court and not casenames and doc_id:
+                        source_parts.insert(0, "판례")
+                    source = " ".join(source_parts) if source_parts else None
+            
+            # 3. decision_paragraph (결정례) 처리
+            elif source_type == "decision_paragraph":
+                org = doc.get("org") or metadata.get("org")
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id") or doc.get("id") or metadata.get("id")
+                
+                # org가 없으면 다른 필드에서 찾기
+                if not org:
+                    org = metadata.get("org_name") or metadata.get("organization")
+                
+                if org or doc_id:
+                    source_parts = []
+                    if org:
+                        source_parts.append(org)
+                    if doc_id:
+                        source_parts.append(f"({doc_id})")
+                    # org가 없어도 doc_id만 있으면 "결정례 (doc_id)" 형태로 생성
+                    if not org and doc_id:
+                        source_parts.insert(0, "결정례")
+                    source = " ".join(source_parts) if source_parts else None
+            
+            # 4. interpretation_paragraph (해석례) 처리
+            elif source_type == "interpretation_paragraph":
+                org = doc.get("org") or metadata.get("org")
+                title = doc.get("title") or metadata.get("title")
+                
+                if org or title:
+                    source_parts = []
+                    if org:
+                        source_parts.append(org)
+                    if title:
+                        source_parts.append(title)
+                    source = " ".join(source_parts)
+            
+            # 5. 기존 로직 (source_type이 없는 경우 또는 위에서 source를 찾지 못한 경우)
+            if not source:
+                source_raw = (
+                    doc.get("statute_name") or
+                    doc.get("law_name") or
+                    doc.get("source_name") or
+                    doc.get("source")
+                )
+                
+                if source_raw and isinstance(source_raw, str):
+                    source_lower = source_raw.lower().strip()
+                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                    if source_lower not in invalid_sources and len(source_lower) >= 2:
+                        source = source_raw.strip()
+                
+                if not source:
+                    source = (
+                        metadata.get("statute_name") or
+                        metadata.get("statute_abbrv") or
+                        metadata.get("law_name") or
+                        metadata.get("court") or
+                        metadata.get("court_name") or
+                        metadata.get("org") or
+                        metadata.get("org_name") or
+                        metadata.get("title") or
+                        metadata.get("case_name")
+                    )
+                
+                if not source:
+                    content = doc.get("content", "") or doc.get("text", "")
+                    if isinstance(content, str) and content:
+                        import re
+                        law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
+                        if law_pattern:
+                            source = law_pattern.group(1)
+
+            # 소스 문자열 변환 및 중복 제거
+            if source:
+                if isinstance(source, str):
+                    source_str = source.strip()
+                else:
+                    try:
+                        source_str = str(source).strip()
+                    except Exception:
+                        source_str = None
+                
+                # 검색 타입 필터링 (최종 검증)
+                if source_str:
+                    source_lower = source_str.lower().strip()
+                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                    # source_type이 있으면 더 관대하게 처리 (source_type 기반으로 생성된 source는 유효)
+                    is_valid_source = False
+                    if source_type and source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+                        # source_type 기반으로 생성된 source는 유효한 것으로 간주 (최소 1자 이상)
+                        if source_lower not in invalid_sources and len(source_lower) >= 1:
+                            is_valid_source = True
+                    else:
+                        # source_type이 없거나 일반적인 경우 기존 로직 사용 (최소 2자 이상)
+                        if source_lower not in invalid_sources and len(source_lower) >= 2:
+                            is_valid_source = True
+                    
+                    if is_valid_source:
+                        if source_str not in seen_sources and source_str != "Unknown":
+                            final_sources_list.append(source_str)
+                            seen_sources.add(source_str)
+                            
+                            # sources_detail 추가
+                            if source_info_detail:
+                                detail_dict = {
+                                    "name": source_info_detail.name,
+                                    "type": source_info_detail.type,
+                                    "url": source_info_detail.url or "",
+                                    "metadata": source_info_detail.metadata or {}
+                                }
+                                
+                                # metadata의 정보를 최상위 레벨로 추출
+                                if source_info_detail.metadata:
+                                    meta = source_info_detail.metadata
+                                    
+                                    # 법령 조문인 경우
+                                    if source_type == "statute_article":
+                                        if meta.get("statute_name"):
+                                            detail_dict["statute_name"] = meta["statute_name"]
+                                        if meta.get("article_no"):
+                                            detail_dict["article_no"] = meta["article_no"]
+                                        if meta.get("clause_no"):
+                                            detail_dict["clause_no"] = meta["clause_no"]
+                                        if meta.get("item_no"):
+                                            detail_dict["item_no"] = meta["item_no"]
+                                    
+                                    # 판례인 경우
+                                    elif source_type == "case_paragraph":
+                                        if meta.get("doc_id"):
+                                            detail_dict["case_number"] = meta["doc_id"]
+                                        if meta.get("court"):
+                                            detail_dict["court"] = meta["court"]
+                                        if meta.get("casenames"):
+                                            detail_dict["case_name"] = meta["casenames"]
+                                    
+                                    # 결정례인 경우
+                                    elif source_type == "decision_paragraph":
+                                        if meta.get("doc_id"):
+                                            detail_dict["decision_number"] = meta["doc_id"]
+                                        if meta.get("org"):
+                                            detail_dict["org"] = meta["org"]
+                                        if meta.get("decision_date"):
+                                            detail_dict["decision_date"] = meta["decision_date"]
+                                        if meta.get("result"):
+                                            detail_dict["result"] = meta["result"]
+                                    
+                                    # 해석례인 경우
+                                    elif source_type == "interpretation_paragraph":
+                                        if meta.get("doc_id"):
+                                            detail_dict["interpretation_number"] = meta["doc_id"]
+                                        if meta.get("org"):
+                                            detail_dict["org"] = meta["org"]
+                                        if meta.get("title"):
+                                            detail_dict["title"] = meta["title"]
+                                        if meta.get("response_date"):
+                                            detail_dict["response_date"] = meta["response_date"]
+                                
+                                # 상세본문 추가 (doc에서 text 또는 content 가져오기)
+                                content = doc.get("content") or doc.get("text") or ""
+                                if content:
+                                    detail_dict["content"] = content
+                                
+                                final_sources_detail.append(detail_dict)
+            elif source_type and source_type in ["case_paragraph", "decision_paragraph"]:
+                # source_type이 있지만 source가 생성되지 않은 경우 디버깅
+                self.logger.debug(f"[SOURCES DEBUG] source_type={source_type}, but source is None. doc_id={doc.get('doc_id') or metadata.get('doc_id') or metadata.get('case_id') or metadata.get('decision_id') or metadata.get('id')}")
+
+        state["sources"] = final_sources_list[:10]  # 최대 10개만 (하위 호환성)
+        state["sources_detail"] = final_sources_detail[:10]  # 최대 10개만 (신규 필드)
+        
+        # 디버깅: sources 생성 결과 로깅
+        if len(final_sources_list) > 0:
+            self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources: {final_sources_list[:5]}")
+        else:
+            retrieved_docs_count = len(state.get("retrieved_docs", []))
+            self.logger.warning(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
 
         # 법적 참조 정보 추가
         if "legal_references" not in state:
