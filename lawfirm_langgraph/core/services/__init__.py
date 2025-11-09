@@ -33,18 +33,24 @@ except ImportError as e:
 #     AnalysisService = None
 AnalysisService = None
 
-# TASK 3.2 하이브리드 검색 시스템 모듈들
+# TASK 3.2 하이브리드 검색 시스템 모듈들 - 도메인별 경로로 re-export
 try:
-    from .exact_search_engine import ExactSearchEngine
-except ImportError as e:
-    print(f"Warning: Could not import ExactSearchEngine: {e}")
-    ExactSearchEngine = None
+    from core.search.engines.exact_search_engine import ExactSearchEngine
+except ImportError:
+    try:
+        from .exact_search_engine import ExactSearchEngine
+    except ImportError as e:
+        print(f"Warning: Could not import ExactSearchEngine: {e}")
+        ExactSearchEngine = None
 
 try:
-    from .semantic_search_engine import SemanticSearchEngine
-except ImportError as e:
-    print(f"Warning: Could not import SemanticSearchEngine: {e}")
-    SemanticSearchEngine = None
+    from core.search.engines.semantic_search_engine import SemanticSearchEngine
+except ImportError:
+    try:
+        from .semantic_search_engine import SemanticSearchEngine
+    except ImportError as e:
+        print(f"Warning: Could not import SemanticSearchEngine: {e}")
+        SemanticSearchEngine = None
 
 try:
     from .result_merger import ResultMerger, ResultRanker
@@ -54,12 +60,15 @@ except ImportError as e:
     ResultRanker = None
 
 try:
-    from .hybrid_search_engine import HybridSearchEngine
-except ImportError as e:
-    # psutil 관련 경고는 무시 (선택적 의존성)
-    if "psutil" not in str(e).lower():
-        print(f"Warning: Could not import HybridSearchEngine: {e}")
-    HybridSearchEngine = None
+    from core.search.engines.hybrid_search_engine import HybridSearchEngine
+except ImportError:
+    try:
+        from .hybrid_search_engine import HybridSearchEngine
+    except ImportError as e:
+        # psutil 관련 경고는 무시 (선택적 의존성)
+        if "psutil" not in str(e).lower():
+            print(f"Warning: Could not import HybridSearchEngine: {e}")
+        HybridSearchEngine = None
 
 __all__ = [
     "ChatService",
