@@ -3,7 +3,7 @@
  */
 import { api, extractApiError } from './api';
 import logger from '../utils/logger';
-import type { ChatRequest, ChatResponse, StreamingChatRequest } from '../types/chat';
+import type { ChatRequest, ChatResponse, StreamingChatRequest, ContinueAnswerRequest, ContinueAnswerResponse } from '../types/chat';
 
 /**
  * 일반 채팅 메시지 전송
@@ -66,8 +66,12 @@ export async function* sendStreamingChatMessage(
     let jsonBuffer = ''; // JSON 파싱을 위한 버퍼
     let inDataLine = false; // data: 라인 내부인지 추적
 
+    let shouldBreak = false;
     try {
       while (true) {
+        if (shouldBreak) {
+          break;
+        }
         let readResult;
         try {
           readResult = await reader.read();
@@ -149,7 +153,24 @@ export async function* sendStreamingChatMessage(
             for (const line of lines) {
               if (line.startsWith('data: ')) {
                 const content = line.slice(6);
-                if (content !== '[스트리밍 완료]' && content !== '[완료]' && content.trim() !== '') {
+                // 완료 신호는 건너뛰기
+                if (content === '[스트리밍 완료]' || content === '[완료]') {
+                  continue;
+                }
+                // JSON 파싱 시도하여 "done" 이벤트 확인
+                if (content.trim() !== '') {
+                  try {
+                    const parsed = JSON.parse(content);
+                    // "done" 이벤트는 yield하지 않음
+                    if (parsed.type === 'done') {
+                      if (import.meta.env.DEV) {
+                        logger.debug('[SSE] Stream completion event (done) found in final buffer');
+                      }
+                      continue;
+                    }
+                  } catch (e) {
+                    // JSON 파싱 실패 시 그대로 처리
+                  }
                   if (import.meta.env.DEV) {
                     logger.debug('[SSE] Final buffer content:', content);
                   }
@@ -162,9 +183,15 @@ export async function* sendStreamingChatMessage(
           // JSON 버퍼에 남은 데이터 처리
           if (jsonBuffer.trim()) {
             try {
-              // JSON 파싱 시도
-              JSON.parse(jsonBuffer);
-              yield jsonBuffer;
+              const parsed = JSON.parse(jsonBuffer);
+              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않음
+              if (parsed.type === 'done') {
+                if (import.meta.env.DEV) {
+                  logger.debug('[SSE] Stream completion event (done) found in final buffer');
+                }
+              } else {
+                yield jsonBuffer;
+              }
             } catch (e) {
               // 파싱 실패 시 그대로 yield (하위 호환성)
               if (jsonBuffer !== '[스트리밍 완료]' && jsonBuffer !== '[완료]' && jsonBuffer.trim() !== '') {
@@ -234,6 +261,27 @@ export async function* sendStreamingChatMessage(
               if (import.meta.env.DEV) {
                 logger.debug('[SSE] Complete JSON received:', parsed.type);
               }
+              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+              if (parsed.type === 'done') {
+                streamCompleted = true;
+                if (import.meta.env.DEV) {
+                  logger.debug('[SSE] Stream completion event received (done), closing stream');
+                }
+                jsonBuffer = '';
+                inDataLine = false;
+                // 리더 정상적으로 닫기
+                if (!readerClosed && reader) {
+                  try {
+                    readerClosed = true;
+                    reader.releaseLock();
+                  } catch (e) {
+                    // 이미 닫혔거나 닫을 수 없는 경우 무시
+                  }
+                }
+                // 정상 종료를 위해 플래그 설정
+                shouldBreak = true;
+                break;
+              }
               yield jsonBuffer;
               jsonBuffer = '';
               inDataLine = false;
@@ -252,9 +300,31 @@ export async function* sendStreamingChatMessage(
                 if (import.meta.env.DEV) {
                   logger.debug('[SSE] Complete JSON from buffer:', parsed.type);
                 }
-                yield jsonBuffer;
-                jsonBuffer = '';
-                inDataLine = false;
+                // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+                if (parsed.type === 'done') {
+                  streamCompleted = true;
+                  if (import.meta.env.DEV) {
+                    logger.debug('[SSE] Stream completion event received (done) from buffer, closing stream');
+                  }
+                  jsonBuffer = '';
+                  inDataLine = false;
+                  // 리더 정상적으로 닫기
+                  if (!readerClosed && reader) {
+                    try {
+                      readerClosed = true;
+                      reader.releaseLock();
+                    } catch (e) {
+                      // 이미 닫혔거나 닫을 수 없는 경우 무시
+                    }
+                  }
+                  // 정상 종료를 위해 플래그 설정
+                  shouldBreak = true;
+                  break;
+                } else {
+                  yield jsonBuffer;
+                  jsonBuffer = '';
+                  inDataLine = false;
+                }
               } catch (e) {
                 // 파싱 실패 시 그대로 yield (하위 호환성)
                 if (jsonBuffer !== '[스트리밍 완료]' && jsonBuffer !== '[완료]') {
@@ -278,9 +348,31 @@ export async function* sendStreamingChatMessage(
               if (import.meta.env.DEV) {
                 logger.debug('[SSE] Complete multi-line JSON received:', parsed.type);
               }
-              yield jsonBuffer;
-              jsonBuffer = '';
-              inDataLine = false;
+              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+              if (parsed.type === 'done') {
+                streamCompleted = true;
+                if (import.meta.env.DEV) {
+                  logger.debug('[SSE] Stream completion event received (done) from multi-line, closing stream');
+                }
+                jsonBuffer = '';
+                inDataLine = false;
+                // 리더 정상적으로 닫기
+                if (!readerClosed && reader) {
+                  try {
+                    readerClosed = true;
+                    reader.releaseLock();
+                  } catch (e) {
+                    // 이미 닫혔거나 닫을 수 없는 경우 무시
+                  }
+                }
+                // 정상 종료를 위해 플래그 설정
+                shouldBreak = true;
+                break;
+              } else {
+                yield jsonBuffer;
+                jsonBuffer = '';
+                inDataLine = false;
+              }
             } catch (e) {
               // 파싱 실패 = 아직 불완전한 JSON
               if (import.meta.env.DEV) {
@@ -411,6 +503,54 @@ export async function* sendStreamingChatMessage(
       
       throw error;
     }
+    throw extractApiError(error);
+  }
+}
+
+/**
+ * 계속 읽기: 잘린 답변의 나머지 부분 요청
+ */
+export async function continueAnswer(
+  request: ContinueAnswerRequest
+): Promise<ContinueAnswerResponse> {
+  try {
+    const response = await api.post<ContinueAnswerResponse>('/chat/continue', request);
+    return response.data;
+  } catch (error) {
+    throw extractApiError(error);
+  }
+}
+
+/**
+ * 스트림 완료 후 sources 정보 가져오기
+ */
+export async function getChatSources(
+  sessionId: string,
+  messageId?: string
+): Promise<{
+  sources: string[];
+  legal_references: string[];
+  sources_detail: any[];
+}> {
+  try {
+    const url = messageId
+      ? `/chat/${sessionId}/sources?message_id=${messageId}`
+      : `/chat/${sessionId}/sources`;
+    
+    const response = await api.get<{
+      session_id: string;
+      sources: string[];
+      legal_references: string[];
+      sources_detail: any[];
+    }>(url);
+    
+    return {
+      sources: response.data.sources || [],
+      legal_references: response.data.legal_references || [],
+      sources_detail: response.data.sources_detail || [],
+    };
+  } catch (error) {
+    logger.error('[ChatService] Error getting sources:', error);
     throw extractApiError(error);
   }
 }

@@ -4,7 +4,7 @@
  */
 
 export interface ParsedChunk {
-  type: 'progress' | 'stream' | 'final';
+  type: 'progress' | 'stream' | 'final' | 'chunk';
   content: string;
   metadata?: {
     step?: number;
@@ -16,6 +16,10 @@ export interface ParsedChunk {
     answer_found?: boolean;
     error?: boolean;
     error_type?: string;
+    chunk_index?: number;
+    total_chunks?: number;
+    has_more?: boolean;
+    message_id?: string;
     [key: string]: any;
   };
 }
@@ -32,7 +36,7 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   // JSONL 형식 파싱 시도
   try {
     const parsed = JSON.parse(trimmed);
-    if (parsed.type && ['progress', 'stream', 'final'].includes(parsed.type)) {
+    if (parsed.type && ['progress', 'stream', 'final', 'chunk'].includes(parsed.type)) {
       return {
         type: parsed.type,
         content: parsed.content || parsed.message || '',
@@ -41,6 +45,10 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
           message: parsed.message,
           timestamp: parsed.timestamp,
           node_name: parsed.node_name,
+          chunk_index: parsed.chunk_index,
+          total_chunks: parsed.total_chunks,
+          has_more: parsed.has_more,
+          message_id: parsed.message_id,
           ...parsed.metadata
         }
       };

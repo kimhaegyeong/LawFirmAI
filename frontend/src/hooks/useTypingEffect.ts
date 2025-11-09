@@ -65,9 +65,7 @@ export function useTypingEffect(
     }
 
     const bufferIncrease = buffer.length - previousBufferLengthRef.current;
-    if (bufferIncrease > 10 && displayedLengthRef.current < previousBufferLengthRef.current) {
-      displayedLengthRef.current = previousBufferLengthRef.current;
-    }
+    // 버퍼 증가량 추적 (타이핑 효과는 한 글자씩 유지)
     previousBufferLengthRef.current = buffer.length;
 
     setDisplayed(prev => {
@@ -86,9 +84,9 @@ export function useTypingEffect(
       const currentDisplayedLength = displayedLengthRef.current;
 
       if (currentDisplayedLength < currentBuffer.length) {
-        // speed 시간이 지났는지 확인 (최소 속도 보장)
         const elapsed = currentTime - lastTimeRef.current;
         if (elapsed >= speed) {
+          // 항상 한 글자씩만 표시 (자연스러운 타이핑 효과)
           const nextLength = currentDisplayedLength + 1;
           const next = currentBuffer.slice(0, nextLength);
           
