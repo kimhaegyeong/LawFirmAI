@@ -11,9 +11,52 @@ import asyncio
 import sys
 import os
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+
+# 상수 정의
+QUESTION_MARK_THRESHOLD = 0.2
+GARBLED_CHAR_THRESHOLD = 0.3
+KOREAN_START = 0xAC00
+KOREAN_END = 0xD7A3
+MAX_DEBUG_LOGS = 10
+MAX_DETAILED_LOGS = 5
+MAX_VERBOSE_LOGS = 3
+MAX_SOURCES_DISPLAY = 5
+MAX_LEGAL_REF_DISPLAY = 5
+MAX_METADATA_DISPLAY = 10
+MAX_ANSWER_LENGTH_DISPLAY = 5000
+
+# 노드 이름 상수
+NODE_GENERATE_ANSWER_ENHANCED = "generate_answer_enhanced"
+NODE_GENERATE_AND_VALIDATE_ANSWER = "generate_and_validate_answer"
+NODE_DIRECT_ANSWER = "direct_answer"
+ANSWER_NODE_NAMES = [
+    NODE_GENERATE_ANSWER_ENHANCED,
+    NODE_GENERATE_AND_VALIDATE_ANSWER,
+    NODE_DIRECT_ANSWER
+]
+
+# 이벤트 타입 상수
+EVENT_ON_LLM_STREAM = "on_llm_stream"
+EVENT_ON_CHAT_MODEL_STREAM = "on_chat_model_stream"
+EVENT_ON_LLM_END = "on_llm_end"
+EVENT_ON_CHAT_MODEL_END = "on_chat_model_end"
+EVENT_ON_CHAIN_END = "on_chain_end"
+LLM_STREAM_EVENTS = [EVENT_ON_LLM_STREAM, EVENT_ON_CHAT_MODEL_STREAM]
+LLM_END_EVENTS = [EVENT_ON_LLM_END, EVENT_ON_CHAT_MODEL_END]
+
+# 인코딩 상수
+ENCODINGS_TO_TRY = ['utf-8', 'cp949', 'euc-kr', 'latin1']
+ENCODINGS_FOR_RECOVERY = ['cp949', 'euc-kr', 'latin1']
+
+# 세션 ID
+DEFAULT_SESSION_ID = "single_query_test"
 
 # UTF-8 인코딩 설정 (Windows PowerShell 호환)
 # 주의: sys.stdout 재설정은 로깅 설정 전에 수행해야 함
@@ -25,31 +68,63 @@ if sys.platform == 'win32':
     # Windows에서 UTF-8 출력 설정
     import io
     
-    # 표준 출력/에러 스트림을 UTF-8로 설정
-    # 단, 로깅 핸들러는 원본을 사용하도록 주의
-    if hasattr(sys.stdout, 'buffer'):
-        try:
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-        except (ValueError, AttributeError):
-            # 버퍼가 이미 분리된 경우 원본 사용
-            pass
-    if hasattr(sys.stderr, 'buffer'):
-        try:
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-        except (ValueError, AttributeError):
-            # 버퍼가 이미 분리된 경우 원본 사용
-            pass
-    
-    # 환경 변수 설정
+    # 환경 변수 설정 (가장 먼저 설정)
     os.environ['PYTHONIOENCODING'] = 'utf-8'
     
     # PowerShell 인코딩 설정 시도
     try:
         import subprocess
         # PowerShell 코드 페이지를 UTF-8로 설정
-        subprocess.run(['chcp', '65001'], shell=True, capture_output=True, check=False)
+        result = subprocess.run(['chcp', '65001'], shell=True, capture_output=True, check=False, text=True)
+        if result.returncode == 0:
+            # 성공적으로 설정된 경우
+            pass
     except Exception:
         pass  # chcp 명령 실패해도 계속 진행
+    
+    # 표준 출력/에러 스트림을 UTF-8로 설정
+    # 단, 로깅 핸들러는 원본을 사용하도록 주의
+    if hasattr(sys.stdout, 'buffer'):
+        try:
+            # 기존 래퍼가 있으면 제거
+            if isinstance(sys.stdout, io.TextIOWrapper):
+                try:
+                    sys.stdout = sys.stdout.buffer
+                except (AttributeError, ValueError):
+                    pass
+            
+            # UTF-8 래퍼 생성
+            sys.stdout = io.TextIOWrapper(
+                sys.stdout.buffer, 
+                encoding='utf-8', 
+                errors='replace', 
+                line_buffering=True,
+                write_through=True
+            )
+        except (ValueError, AttributeError, OSError):
+            # 버퍼가 이미 분리된 경우 원본 사용
+            pass
+    
+    if hasattr(sys.stderr, 'buffer'):
+        try:
+            # 기존 래퍼가 있으면 제거
+            if isinstance(sys.stderr, io.TextIOWrapper):
+                try:
+                    sys.stderr = sys.stderr.buffer
+                except (AttributeError, ValueError):
+                    pass
+            
+            # UTF-8 래퍼 생성
+            sys.stderr = io.TextIOWrapper(
+                sys.stderr.buffer, 
+                encoding='utf-8', 
+                errors='replace', 
+                line_buffering=True,
+                write_through=True
+            )
+        except (ValueError, AttributeError, OSError):
+            # 버퍼가 이미 분리된 경우 원본 사용
+            pass
 
 # 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent.parent
@@ -60,16 +135,21 @@ lawfirm_langgraph_path = Path(__file__).parent.parent
 sys.path.insert(0, str(lawfirm_langgraph_path))
 
 # 로깅 설정
-def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
+def setup_test_logging(log_to_file: bool = False, log_level: Optional[str] = None):
     """
     테스트 로깅 설정
     
     Args:
         log_to_file: 로그를 파일로 저장할지 여부
-        log_level: 로깅 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_level: 로깅 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL). None이면 환경 변수에서 읽음
+    
+    Returns:
+        (logger, log_file): 로거와 로그 파일 경로 (없으면 None)
     """
-    # 환경 변수에서 로깅 레벨 읽기
-    env_log_level = os.getenv("TEST_LOG_LEVEL", log_level).upper()
+    # 환경 변수에서 로깅 레벨 읽기 (우선순위: 인자 > 환경 변수 > 기본값)
+    if log_level is None:
+        log_level = os.getenv("TEST_LOG_LEVEL", "INFO")
+    env_log_level = log_level.upper()
     log_level_map = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -134,11 +214,29 @@ def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
         pass
     else:
         console_handler.setLevel(level)
+        # UTF-8 인코딩을 보장하는 포맷터 생성
         console_formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         console_handler.setFormatter(console_formatter)
+        
+        # 핸들러의 스트림이 UTF-8을 사용하도록 보장
+        if hasattr(console_handler, 'stream') and hasattr(console_handler.stream, 'encoding'):
+            # 스트림의 인코딩이 UTF-8이 아니면 재설정 시도
+            if console_handler.stream.encoding and console_handler.stream.encoding.lower() != 'utf-8':
+                try:
+                    import io
+                    # UTF-8로 재설정
+                    if hasattr(console_handler.stream, 'buffer'):
+                        console_handler.stream = io.TextIOWrapper(
+                            console_handler.stream.buffer,
+                            encoding='utf-8',
+                            errors='replace',
+                            line_buffering=True
+                        )
+                except (AttributeError, ValueError, OSError):
+                    pass  # 재설정 실패 시 원본 사용
         
         # 안전한 emit 메서드 생성 (버퍼 분리 오류 방지)
         # 클로저를 사용하여 original_stdout_ref를 캡처
@@ -324,12 +422,14 @@ def setup_test_logging(log_to_file: bool = False, log_level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"langgraph_test_{timestamp}.log"
         
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        # UTF-8 인코딩을 명시적으로 설정한 파일 핸들러
+        file_handler = logging.FileHandler(log_file, encoding='utf-8', errors='replace')
         file_handler.setLevel(logging.DEBUG)  # 파일에는 모든 로그 저장
         file_formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
+        file_formatter.format = lambda record: file_formatter.format(record).encode('utf-8', errors='replace').decode('utf-8')
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
         
@@ -377,7 +477,7 @@ def _try_recover_garbled_text(garbled_text: str) -> Optional[str]:
         recovered = garbled_bytes.decode('utf-8', errors='replace')
         if recovered and recovered != garbled_text and len(recovered) > 0:
             # 복구된 텍스트가 한글을 포함하는지 확인
-            has_korean = any(0xAC00 <= ord(c) <= 0xD7A3 for c in recovered)
+            has_korean = any(KOREAN_START <= ord(c) <= KOREAN_END for c in recovered)
             # '?' 문자가 적고, 한글이 있으면 복구 성공 가능성 높음
             question_ratio = recovered.count('?') / max(len(recovered), 1)
             # 깨진 문자 비율 확인 (한글 완성형 범위 외의 문자)
@@ -385,7 +485,7 @@ def _try_recover_garbled_text(garbled_text: str) -> Optional[str]:
             garbled_ratio = garbled_chars / max(len(recovered), 1)
             
             # 복구 성공 조건: 한글이 있고, '?' 비율이 낮고, 깨진 문자 비율이 낮음
-            if has_korean and question_ratio < 0.2 and garbled_ratio < 0.3:
+            if has_korean and question_ratio < QUESTION_MARK_THRESHOLD and garbled_ratio < GARBLED_CHAR_THRESHOLD:
                 test_logger.info(f"✅ Recovered text using CP949->UTF-8: '{garbled_text[:30]}...' -> '{recovered[:30]}...'")
                 return recovered
             else:
@@ -401,12 +501,12 @@ def _try_recover_garbled_text(garbled_text: str) -> Optional[str]:
         garbled_bytes = garbled_text.encode('utf-16-le', errors='ignore')
         recovered = garbled_bytes.decode('utf-8', errors='replace')
         if recovered and recovered != garbled_text and len(recovered) > 0:
-            has_korean = any(0xAC00 <= ord(c) <= 0xD7A3 for c in recovered)
+            has_korean = any(KOREAN_START <= ord(c) <= KOREAN_END for c in recovered)
             question_ratio = recovered.count('?') / max(len(recovered), 1)
-            garbled_chars = sum(1 for c in recovered if ord(c) > 0xFF and (ord(c) < 0xAC00 or ord(c) > 0xD7A3))
+            garbled_chars = sum(1 for c in recovered if ord(c) > 0xFF and (ord(c) < KOREAN_START or ord(c) > KOREAN_END))
             garbled_ratio = garbled_chars / max(len(recovered), 1)
             
-            if has_korean and question_ratio < 0.2 and garbled_ratio < 0.3:
+            if has_korean and question_ratio < QUESTION_MARK_THRESHOLD and garbled_ratio < GARBLED_CHAR_THRESHOLD:
                 test_logger.debug(f"Recovered text using UTF-16->UTF-8: '{garbled_text[:30]}...' -> '{recovered[:30]}...'")
                 return recovered
     except Exception as e:
@@ -414,8 +514,7 @@ def _try_recover_garbled_text(garbled_text: str) -> Optional[str]:
         pass
     
     # 복구 전략 2: 여러 인코딩 조합 시도
-    encodings = ['cp949', 'euc-kr', 'latin1']
-    for src_enc in encodings:
+    for src_enc in ENCODINGS_FOR_RECOVERY:
         for dst_enc in ['utf-8']:
             if src_enc == dst_enc:
                 continue
@@ -424,9 +523,9 @@ def _try_recover_garbled_text(garbled_text: str) -> Optional[str]:
                 recovered = garbled_text.encode(src_enc, errors='ignore').decode(dst_enc, errors='replace')
                 if recovered and recovered != garbled_text:
                     # 복구된 텍스트가 한글을 포함하는지 확인
-                    has_korean = any(0xAC00 <= ord(c) <= 0xD7A3 for c in recovered)
+                    has_korean = any(KOREAN_START <= ord(c) <= KOREAN_END for c in recovered)
                     question_ratio = recovered.count('?') / max(len(recovered), 1)
-                    if has_korean and question_ratio < 0.2:
+                    if has_korean and question_ratio < QUESTION_MARK_THRESHOLD:
                         test_logger.debug(f"Recovered text using {src_enc}->{dst_enc}: '{garbled_text[:30]}...' -> '{recovered[:30]}...'")
                         return recovered
             except Exception:
@@ -454,28 +553,40 @@ def _validate_and_fix_query(query: str, default_query: str) -> str:
     if not query:
         return default_query
     
+    # 먼저 복구 시도 (깨진 텍스트 복구)
+    recovered = _try_recover_garbled_text(query)
+    if recovered and recovered != query:
+        query = recovered
+    
     # 깨진 문자 패턴 감지
-    garbled_chars = sum(1 for c in query if ord(c) > 0xFF and (ord(c) < 0xAC00 or ord(c) > 0xD7A3))
+    garbled_chars = sum(1 for c in query if ord(c) > 0xFF and (ord(c) < KOREAN_START or ord(c) > KOREAN_END))
     garbled_ratio = garbled_chars / max(len(query), 1)
     
     # '?' 문자 비율 확인
     question_mark_ratio = query.count('?') / max(len(query), 1)
     
-    # 깨진 문자 비율이 30% 이상이거나 '?' 문자가 20% 이상이면 깨진 것으로 간주
-    if garbled_ratio > 0.3 or question_mark_ratio > 0.2:
+    # 한글 포함 여부 확인
+    has_korean = any(KOREAN_START <= ord(c) <= KOREAN_END for c in query)
+    
+    # 깨진 문자 비율이 임계값 이상이거나 '?' 문자가 임계값 이상이면 깨진 것으로 간주
+    if garbled_ratio > GARBLED_CHAR_THRESHOLD or question_mark_ratio > QUESTION_MARK_THRESHOLD:
         # 복구 시도
         try:
             # 여러 인코딩 방식으로 복구 시도
-            for encoding in ['cp949', 'euc-kr', 'latin1']:
+            for encoding in ENCODINGS_FOR_RECOVERY:
                 try:
                     # 원본을 bytes로 인코딩 후 다시 디코딩
                     fixed = query.encode(encoding, errors='ignore').decode('utf-8', errors='replace')
                     # 복구 후 검증
-                    fixed_garbled = sum(1 for c in fixed if ord(c) > 0xFF and (ord(c) < 0xAC00 or ord(c) > 0xD7A3))
+                    fixed_garbled = sum(1 for c in fixed if ord(c) > 0xFF and (ord(c) < KOREAN_START or ord(c) > KOREAN_END))
                     fixed_garbled_ratio = fixed_garbled / max(len(fixed), 1)
                     fixed_question_mark_ratio = fixed.count('?') / max(len(fixed), 1)
+                    fixed_has_korean = any(KOREAN_START <= ord(c) <= KOREAN_END for c in fixed)
                     
-                    if len(fixed) > 0 and fixed_garbled_ratio < 0.3 and fixed_question_mark_ratio < 0.2:
+                    if (len(fixed) > 0 and 
+                        fixed_garbled_ratio < GARBLED_CHAR_THRESHOLD and 
+                        fixed_question_mark_ratio < QUESTION_MARK_THRESHOLD and
+                        (fixed_has_korean or not has_korean)):  # 한글이 있었으면 복구 후에도 있어야 함
                         return fixed
                 except Exception:
                     continue
@@ -489,6 +600,385 @@ def _validate_and_fix_query(query: str, default_query: str) -> str:
     return query
 
 
+def _extract_token_from_event(event: Dict[str, Any]) -> Optional[str]:
+    """
+    이벤트에서 토큰 추출
+    
+    다양한 이벤트 구조를 지원하여 토큰을 추출합니다.
+    
+    Args:
+        event: 스트리밍 이벤트 딕셔너리
+    
+    Returns:
+        추출된 토큰 문자열 또는 None
+    """
+    chunk = None
+    event_data = event.get("data", {})
+    
+    try:
+        if isinstance(event_data, dict):
+            # 1. chunk 객체에서 추출
+            chunk_obj = event_data.get("chunk")
+            if chunk_obj is not None:
+                # AIMessageChunk 또는 유사한 객체
+                if hasattr(chunk_obj, "content"):
+                    content = chunk_obj.content
+                    if isinstance(content, str):
+                        chunk = content
+                    elif isinstance(content, list) and len(content) > 0:
+                        # 리스트의 첫 번째 요소
+                        first_item = content[0]
+                        if isinstance(first_item, str):
+                            chunk = first_item
+                        elif hasattr(first_item, "text"):
+                            chunk = first_item.text
+                        elif hasattr(first_item, "content"):
+                            chunk = first_item.content
+                        else:
+                            chunk = str(first_item)
+                    elif content is not None:
+                        chunk = str(content)
+                # 문자열인 경우
+                elif isinstance(chunk_obj, str):
+                    chunk = chunk_obj
+                # text 속성이 있는 경우
+                elif hasattr(chunk_obj, "text"):
+                    chunk = chunk_obj.text
+                # AIMessageChunk 타입 확인
+                elif hasattr(chunk_obj, "__class__"):
+                    class_name = str(type(chunk_obj))
+                    if "AIMessageChunk" in class_name or "MessageChunk" in class_name:
+                        try:
+                            content = getattr(chunk_obj, "content", None)
+                            if isinstance(content, str):
+                                chunk = content
+                            elif isinstance(content, list) and len(content) > 0:
+                                chunk = content[0] if isinstance(content[0], str) else str(content[0])
+                            elif content is not None:
+                                chunk = str(content)
+                        except Exception:
+                            pass
+                    # 다른 속성 시도
+                    if not chunk:
+                        for attr in ["text", "content", "message", "response"]:
+                            if hasattr(chunk_obj, attr):
+                                try:
+                                    value = getattr(chunk_obj, attr)
+                                    if isinstance(value, str) and value:
+                                        chunk = value
+                                        break
+                                except Exception:
+                                    continue
+            
+            # 2. event_data에서 직접 추출
+            if not chunk:
+                chunk = event_data.get("text") or event_data.get("content")
+            
+            # 3. delta에서 추출
+            if not chunk and "delta" in event_data:
+                delta = event_data["delta"]
+                if isinstance(delta, dict):
+                    chunk = delta.get("content") or delta.get("text") or delta.get("message")
+                elif isinstance(delta, str):
+                    chunk = delta
+                elif hasattr(delta, "content"):
+                    chunk = delta.content
+                elif hasattr(delta, "text"):
+                    chunk = delta.text
+        
+        # 4. 최상위 레벨에서 추출
+        if not chunk:
+            chunk = event.get("chunk") or event.get("text") or event.get("content")
+            # 최상위 레벨의 객체 처리
+            if chunk and not isinstance(chunk, str):
+                if hasattr(chunk, "content"):
+                    chunk = chunk.content
+                elif hasattr(chunk, "text"):
+                    chunk = chunk.text
+                else:
+                    chunk = str(chunk)
+        
+        # 최종 검증 및 반환
+        if chunk and isinstance(chunk, str) and len(chunk.strip()) > 0:
+            return chunk.strip()
+    except (AttributeError, TypeError, KeyError, ValueError) as e:
+        test_logger.debug(f"토큰 추출 중 오류: {e}")
+        pass
+    
+    return None
+
+
+def _is_answer_node(event_name: str, event_type: str) -> bool:
+    """
+    답변 생성 노드인지 확인
+    
+    Args:
+        event_name: 이벤트 이름 (노드 이름)
+        event_type: 이벤트 타입
+    
+    Returns:
+        답변 생성 노드인지 여부
+    """
+    # 이벤트 타입이 스트리밍 이벤트인 경우
+    if event_type in LLM_STREAM_EVENTS:
+        # 명시적으로 답변 생성 노드인 경우
+        if event_name in ANSWER_NODE_NAMES:
+            return True
+        
+        # 노드 이름에 답변 생성 관련 키워드가 있는 경우
+        event_name_lower = event_name.lower()
+        answer_keywords = [
+            "generate_answer", 
+            "generate_and_validate", 
+            "answer",
+            "direct_answer",
+            "final_answer",
+            "response_generation"
+        ]
+        if any(keyword in event_name_lower for keyword in answer_keywords):
+            return True
+        
+        # 분류나 검색 노드는 제외
+        exclude_keywords = [
+            "classify",
+            "classification",
+            "search",
+            "retrieve",
+            "route",
+            "assess"
+        ]
+        if any(keyword in event_name_lower for keyword in exclude_keywords):
+            return False
+    
+    # 명시적으로 정의된 답변 생성 노드
+    return event_name in ANSWER_NODE_NAMES
+
+
+def _is_json_response(chunk: str) -> bool:
+    """
+    JSON 응답인지 확인
+    
+    다양한 JSON 형식을 지원합니다:
+    - 일반 JSON: {"key": "value"}
+    - 마크다운 코드 블록: ```json {...} ```
+    - 중첩 JSON 등
+    
+    Args:
+        chunk: 확인할 텍스트 청크
+    
+    Returns:
+        JSON 응답인지 여부
+    """
+    if not chunk or not isinstance(chunk, str):
+        return False
+    
+    try:
+        import json
+        import re
+        
+        stripped = chunk.strip()
+        
+        # 빈 문자열 체크
+        if not stripped:
+            return False
+        
+        # JSON 시작 패턴 확인
+        json_patterns = [
+            r'^\s*\{',  # 일반 JSON 객체
+            r'^\s*\[',  # JSON 배열
+            r'```json\s*\{',  # 마크다운 코드 블록
+            r'```json\s*\[',  # 마크다운 코드 블록 (배열)
+        ]
+        
+        is_json_like = any(re.match(pattern, stripped, re.IGNORECASE) for pattern in json_patterns)
+        
+        if not is_json_like:
+            return False
+        
+        # 실제 JSON 파싱 시도
+        # 마크다운 코드 블록 제거
+        json_text = re.sub(r'```json\s*', '', stripped, flags=re.IGNORECASE)
+        json_text = re.sub(r'```\s*$', '', json_text, flags=re.IGNORECASE)
+        json_text = json_text.strip()
+        
+        # JSON 파싱
+        json.loads(json_text)
+        return True
+        
+    except (ValueError, json.JSONDecodeError, AttributeError):
+        # JSON 파싱 실패 시 False
+        return False
+    except Exception:
+        # 기타 예외는 False 반환
+        return False
+
+
+async def _fallback_to_process_query(
+    service: "LangGraphWorkflowService", 
+    query: str, 
+    session_id: str,
+    max_retries: int = 2
+) -> Dict[str, Any]:
+    """
+    process_query()로 폴백
+    
+    Args:
+        service: LangGraphWorkflowService 인스턴스
+        query: 질의 문자열
+        session_id: 세션 ID
+        max_retries: 최대 재시도 횟수
+    
+    Returns:
+        처리 결과 딕셔너리
+    
+    Raises:
+        Exception: 모든 재시도 실패 시
+    """
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            result = await service.process_query(
+                query=query,
+                session_id=session_id,
+                enable_checkpoint=False
+            )
+            if attempt > 0:
+                test_logger.info(f"✅ 재시도 성공 (시도 {attempt + 1}/{max_retries + 1})")
+            return result
+        except TimeoutError as e:
+            last_error = e
+            if attempt < max_retries:
+                test_logger.warning(f"⏱️ 타임아웃 발생, 재시도 중... (시도 {attempt + 1}/{max_retries + 1})")
+                await asyncio.sleep(1)  # 1초 대기 후 재시도
+            else:
+                test_logger.error(f"❌ 타임아웃: 모든 재시도 실패")
+                raise
+        except ConnectionError as e:
+            last_error = e
+            if attempt < max_retries:
+                test_logger.warning(f"🔌 연결 오류 발생, 재시도 중... (시도 {attempt + 1}/{max_retries + 1})")
+                await asyncio.sleep(2)  # 2초 대기 후 재시도
+            else:
+                test_logger.error(f"❌ 연결 오류: 모든 재시도 실패")
+                raise
+        except Exception as e:
+            last_error = e
+            # 예상치 못한 오류는 즉시 재시도하지 않음
+            test_logger.error(f"❌ 예상치 못한 오류: {type(e).__name__}: {e}")
+            raise
+    
+    # 모든 재시도 실패
+    if last_error:
+        raise last_error
+    else:
+        raise RuntimeError("폴백 처리 실패: 알 수 없는 오류")
+
+
+def _print_result_summary(result: Dict[str, Any], full_answer: str = ""):
+    """
+    결과 요약 출력
+    
+    Args:
+        result: 처리 결과 딕셔너리
+        full_answer: 전체 답변 텍스트
+    """
+    # 답변 정보
+    answer = result.get("answer", "")
+    if answer:
+        answer_length = len(answer) if isinstance(answer, str) else 0
+        test_logger.info(f"\n📝 답변 (길이: {answer_length}자)")
+        if answer_length > 0:
+            test_logger.info("-" * 80)
+            # 답변의 일부만 출력 (너무 길면)
+            display_answer = answer[:MAX_ANSWER_LENGTH_DISPLAY] if answer_length > MAX_ANSWER_LENGTH_DISPLAY else answer
+            test_logger.info(display_answer)
+            if answer_length > MAX_ANSWER_LENGTH_DISPLAY:
+                test_logger.info(f"\n... (총 {answer_length}자, {MAX_ANSWER_LENGTH_DISPLAY}자만 표시)")
+    
+    # 소스 정보
+    sources = result.get("sources", [])
+    if sources:
+        test_logger.info(f"\n📚 소스 ({len(sources)}개):")
+        test_logger.info("-" * 80)
+        for i, source in enumerate(sources[:MAX_SOURCES_DISPLAY], 1):
+            test_logger.info(f"   {i}. {source}")
+        if len(sources) > MAX_SOURCES_DISPLAY:
+            test_logger.info(f"   ... (총 {len(sources)}개)")
+    
+    # 법률 참조
+    legal_references = result.get("legal_references", [])
+    if legal_references:
+        test_logger.info(f"\n⚖️  법률 참조 ({len(legal_references)}개):")
+        test_logger.info("-" * 80)
+        for i, ref in enumerate(legal_references[:MAX_LEGAL_REF_DISPLAY], 1):
+            test_logger.info(f"   {i}. {ref}")
+        if len(legal_references) > MAX_LEGAL_REF_DISPLAY:
+            test_logger.info(f"   ... (총 {len(legal_references)}개)")
+    
+    # 신뢰도
+    confidence = result.get("confidence", 0.0)
+    if confidence:
+        test_logger.info(f"\n🎯 신뢰도: {confidence:.2f}")
+    
+    # 처리 시간
+    processing_time = result.get("processing_time", 0.0)
+    if processing_time:
+        test_logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
+    
+    # Adaptive RAG 정보
+    query_complexity = result.get("query_complexity", "")
+    needs_search = result.get("needs_search", True)
+    if query_complexity and query_complexity != "unknown":
+        test_logger.info(f"\n🔍 질의 복잡도: {query_complexity}")
+        test_logger.info(f"   검색 필요: {needs_search}")
+    
+    # retrieved_docs 정보
+    retrieved_docs = result.get("retrieved_docs", [])
+    if retrieved_docs:
+        test_logger.info(f"\n📄 검색된 문서: {len(retrieved_docs)}개")
+    
+    # 처리 단계
+    processing_steps = result.get("processing_steps", [])
+    if processing_steps:
+        test_logger.info(f"\n🔄 처리 단계 ({len(processing_steps)}개):")
+        test_logger.info("-" * 80)
+        for i, step in enumerate(processing_steps[:10], 1):  # 최대 10개만 표시
+            test_logger.info(f"   {i}. {step}")
+        if len(processing_steps) > 10:
+            test_logger.info(f"   ... (총 {len(processing_steps)}개)")
+    
+    # 에러 및 경고
+    errors = result.get("errors", [])
+    if errors:
+        test_logger.warning(f"\n⚠️  에러 ({len(errors)}개):")
+        test_logger.info("-" * 80)
+        for i, error in enumerate(errors[:5], 1):  # 최대 5개만 표시
+            test_logger.warning(f"   {i}. {error}")
+        if len(errors) > 5:
+            test_logger.warning(f"   ... (총 {len(errors)}개)")
+    
+    warnings = result.get("warnings", [])
+    if warnings:
+        test_logger.warning(f"\n⚠️  경고 ({len(warnings)}개):")
+        test_logger.info("-" * 80)
+        for i, warning in enumerate(warnings[:5], 1):  # 최대 5개만 표시
+            test_logger.warning(f"   {i}. {warning}")
+        if len(warnings) > 5:
+            test_logger.warning(f"   ... (총 {len(warnings)}개)")
+    
+    # 메타데이터
+    metadata = result.get("metadata", {})
+    if metadata:
+        test_logger.info(f"\n📊 메타데이터:")
+        test_logger.info("-" * 80)
+        for key, value in list(metadata.items())[:MAX_METADATA_DISPLAY]:
+            # 값이 너무 길면 잘라서 표시
+            if isinstance(value, str) and len(value) > 200:
+                value = value[:200] + "..."
+            test_logger.info(f"   {key}: {value}")
+
+
 async def run_single_query_test_streaming(query: str):
     """단일 질의 테스트 실행 (스트리밍 버전)"""
     test_logger.info("\n" + "="*80)
@@ -499,17 +989,32 @@ async def run_single_query_test_streaming(query: str):
         from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
         from lawfirm_langgraph.langgraph_core.state.state_definitions import create_initial_legal_state
-        import uuid
         
         test_logger.info(f"\n📋 질의: {query}")
         test_logger.info("-" * 80)
         
-        # 설정 로드
+        # 설정 로드 및 검증
         test_logger.info("\n1️⃣  설정 로드 중...")
         config = LangGraphConfig.from_env()
         config.enable_checkpoint = False
+        
+        # 설정 검증
+        validation_errors = config.validate() if hasattr(config, 'validate') else []
+        if validation_errors:
+            test_logger.warning(f"⚠️  설정 검증 경고 ({len(validation_errors)}개):")
+            for error in validation_errors[:5]:  # 최대 5개만 표시
+                test_logger.warning(f"   - {error}")
+            if len(validation_errors) > 5:
+                test_logger.warning(f"   ... (총 {len(validation_errors)}개)")
+        else:
+            test_logger.info("   ✅ 설정 검증 통과")
+        
         test_logger.info(f"   ✅ LangGraph 활성화: {config.langgraph_enabled}")
         test_logger.info(f"   ✅ 체크포인트 사용: {config.enable_checkpoint} (테스트 모드: 비활성화)")
+        
+        # 필수 설정 확인
+        if not config.langgraph_enabled:
+            test_logger.warning("⚠️  LangGraph가 비활성화되어 있습니다. 테스트가 제대로 동작하지 않을 수 있습니다.")
         
         # 서비스 초기화
         test_logger.info("\n2️⃣  LangGraphWorkflowService 초기화 중...")
@@ -522,7 +1027,7 @@ async def run_single_query_test_streaming(query: str):
         test_logger.info("-" * 80)
         
         # 세션 ID 생성
-        session_id = "single_query_test"
+        session_id = DEFAULT_SESSION_ID
         
         # 초기 상태 설정
         initial_state = create_initial_legal_state(query, session_id)
@@ -534,6 +1039,34 @@ async def run_single_query_test_streaming(query: str):
         tokens_received = 0
         event_count = 0
         llm_stream_count = 0
+        
+        # 성능 모니터링 변수
+        streaming_start_time = time.time()
+        first_token_time = None
+        last_token_time = None
+        token_times = []  # 각 토큰 수신 시간
+        
+        # 타임아웃 설정 (기본 5분)
+        streaming_timeout = float(os.getenv("STREAMING_TIMEOUT", "300"))
+        
+        # 스트리밍 버퍼 크기 제한 (기본 10MB)
+        max_buffer_size = int(os.getenv("MAX_STREAMING_BUFFER_SIZE", "10485760"))  # 10MB
+        current_buffer_size = 0
+        
+        # 중간 결과 저장 (주기적으로 저장)
+        intermediate_results = []
+        save_interval = float(os.getenv("INTERMEDIATE_SAVE_INTERVAL", "30"))  # 30초마다 저장
+        last_save_time = time.time()
+        
+        # 메모리 사용량 모니터링
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_threshold = float(os.getenv("MEMORY_THRESHOLD_MB", "2048"))  # 2GB
+            memory_monitoring_enabled = True
+        except ImportError:
+            memory_monitoring_enabled = False
+            test_logger.debug("psutil이 설치되지 않아 메모리 모니터링을 사용할 수 없습니다")
         
         # 최종 결과 저장
         final_result = None
@@ -562,8 +1095,69 @@ async def run_single_query_test_streaming(query: str):
             # 스트리밍 이벤트 처리
             event_types_seen = set()  # 본 이벤트 타입 추적
             node_names_seen = set()  # 본 노드 이름 추적
+            last_event_time = time.time()  # 마지막 이벤트 수신 시간
+            last_token_time = None  # 마지막 토큰 수신 시간
+            
+            # 타임아웃 설정
+            event_timeout = float(os.getenv("EVENT_TIMEOUT", "30"))  # 이벤트 수신 타임아웃 (기본 30초)
+            token_timeout = float(os.getenv("TOKEN_TIMEOUT", "60"))  # 토큰 수신 타임아웃 (기본 60초)
             
             async for event in get_stream_events():
+                # 타임아웃 체크
+                current_time = time.time()
+                elapsed_time = current_time - streaming_start_time
+                time_since_last_event = current_time - last_event_time
+                
+                # 전체 타임아웃 체크
+                if elapsed_time > streaming_timeout:
+                    test_logger.warning(f"⏱️ 스트리밍 전체 타임아웃: {elapsed_time:.2f}초 > {streaming_timeout}초")
+                    raise TimeoutError(f"스트리밍 전체 타임아웃: {elapsed_time:.2f}초")
+                
+                # 이벤트 수신 타임아웃 체크 (일정 시간 동안 이벤트가 없으면 타임아웃)
+                if time_since_last_event > event_timeout:
+                    test_logger.warning(f"⏱️ 이벤트 수신 타임아웃: {time_since_last_event:.2f}초 동안 이벤트 없음 (임계값: {event_timeout}초)")
+                    raise TimeoutError(f"이벤트 수신 타임아웃: {time_since_last_event:.2f}초")
+                
+                # 토큰 수신 타임아웃 체크 (토큰을 받기 시작했는데 일정 시간 동안 토큰이 없으면 타임아웃)
+                if last_token_time is not None:
+                    time_since_last_token = current_time - last_token_time
+                    if time_since_last_token > token_timeout:
+                        test_logger.warning(f"⏱️ 토큰 수신 타임아웃: {time_since_last_token:.2f}초 동안 토큰 없음 (임계값: {token_timeout}초)")
+                        raise TimeoutError(f"토큰 수신 타임아웃: {time_since_last_token:.2f}초")
+                
+                last_event_time = current_time
+                
+                # 메모리 사용량 모니터링
+                if memory_monitoring_enabled:
+                    try:
+                        memory_info = process.memory_info()
+                        memory_mb = memory_info.rss / 1024 / 1024  # MB 단위
+                        if memory_mb > memory_threshold:
+                            test_logger.warning(f"⚠️ 메모리 사용량이 임계값을 초과했습니다: {memory_mb:.2f}MB > {memory_threshold}MB")
+                    except Exception:
+                        pass  # 메모리 모니터링 실패 시 무시
+                
+                # 중간 결과 저장 (주기적으로)
+                if current_time - last_save_time > save_interval:
+                    intermediate_result = {
+                        "timestamp": current_time,
+                        "tokens_received": tokens_received,
+                        "full_answer": full_answer[:1000],  # 처음 1000자만 저장
+                        "event_count": event_count
+                    }
+                    intermediate_results.append(intermediate_result)
+                    last_save_time = current_time
+                    test_logger.debug(f"중간 결과 저장: {len(intermediate_results)}개")
+                
+                # 버퍼 크기 체크
+                current_buffer_size = len(full_answer.encode('utf-8'))
+                if current_buffer_size > max_buffer_size:
+                    test_logger.warning(f"⚠️ 버퍼 크기가 임계값을 초과했습니다: {current_buffer_size} bytes > {max_buffer_size} bytes")
+                    # 버퍼 크기 제한: 오래된 부분 제거
+                    if len(full_answer) > 50000:  # 50KB 이상이면
+                        full_answer = full_answer[-50000:]  # 마지막 50KB만 유지
+                        test_logger.debug("버퍼 크기 제한: 오래된 부분 제거")
+                
                 event_count += 1
                 event_type = event.get("event", "")
                 event_name = event.get("name", "")
@@ -573,31 +1167,32 @@ async def run_single_query_test_streaming(query: str):
                 if event_name:
                     node_names_seen.add(event_name)
                 
-                # 디버깅: 이벤트 타입 로깅 (처음 10개만, DEBUG 레벨)
-                if event_count <= 10:
+                # 이벤트 필터링 옵션 (환경 변수로 제어)
+                filter_events = os.getenv("FILTER_EVENTS", "false").lower() == "true"
+                if filter_events:
+                    # 중요한 이벤트만 처리
+                    important_events = LLM_STREAM_EVENTS + LLM_END_EVENTS + [EVENT_ON_CHAIN_END]
+                    if event_type not in important_events:
+                        continue  # 중요하지 않은 이벤트는 건너뛰기
+                
+                # 디버깅: 이벤트 타입 로깅 (처음 N개만, DEBUG 레벨)
+                if event_count <= MAX_DEBUG_LOGS:
                     test_logger.debug(f"스트리밍 이벤트 #{event_count}: type={event_type}, name={event_name}")
                 
                 # LLM 스트리밍 이벤트 감지 (답변 생성 노드에서만)
                 # LangGraph/LangChain 최신 버전에서는 on_chat_model_stream도 지원
-                if event_type in ["on_llm_stream", "on_chat_model_stream"]:
+                if event_type in LLM_STREAM_EVENTS:
                     llm_stream_count += 1
                     test_logger.debug(f"{event_type} 이벤트 발견: name={event_name}, 전체 이벤트 키: {list(event.keys())}")
                     
-                    # 답변 생성 관련 노드인지 확인 (더 많은 패턴 지원)
-                    # ChatGoogleGenerativeAI는 LLM 모델 자체이므로 항상 처리
-                    is_answer_node = (
-                        "generate_answer" in event_name.lower() or 
-                        "generate_and_validate" in event_name.lower() or
-                        "answer" in event_name.lower() or
-                        event_name in ["generate_answer_enhanced", "generate_and_validate_answer", "direct_answer"] or
-                        event_type == "on_chat_model_stream"  # on_chat_model_stream은 항상 처리
-                    )
+                    # 답변 생성 관련 노드인지 확인
+                    is_answer_node = _is_answer_node(event_name, event_type)
                     
-                    # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 5개만, DEBUG 레벨)
-                    if llm_stream_count <= 5:
+                    # 디버깅: 모든 스트리밍 이벤트 로깅 (처음 N개만, DEBUG 레벨)
+                    if llm_stream_count <= MAX_DETAILED_LOGS:
                         test_logger.debug(f"{event_type} 이벤트 #{llm_stream_count}: name={event_name}, is_answer_node={is_answer_node}")
-                        # 이벤트 구조 상세 로깅 (처음 3개만)
-                        if llm_stream_count <= 3:
+                        # 이벤트 구조 상세 로깅 (처음 N개만)
+                        if llm_stream_count <= MAX_VERBOSE_LOGS:
                             event_data = event.get("data", {})
                             test_logger.debug(f"  이벤트 구조: event_data type={type(event_data)}, event_data keys={list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
                             if isinstance(event_data, dict):
@@ -613,118 +1208,55 @@ async def run_single_query_test_streaming(query: str):
                             test_logger.debug(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
                     else:
                         # 답변 생성 노드가 아닌 경우에도 로깅 (디버깅용, DEBUG 레벨)
-                        if llm_stream_count <= 5:
+                        if llm_stream_count <= MAX_DETAILED_LOGS:
                             test_logger.debug(f"답변 생성 노드가 아님: {event_name} (무시)")
                     
                     # 노드 이름 필터링 없이 모든 on_chat_model_stream 이벤트에서 토큰 추출 시도
-                    # (노드 이름이 정확히 일치하지 않을 수 있으므로)
-                    if event_type == "on_chat_model_stream":
-                        # 모든 on_chat_model_stream 이벤트에서 토큰 추출 시도
-                        if not is_answer_node:
-                            # 답변 생성 노드가 아니어도 일단 토큰 추출 시도 (디버깅용, DEBUG 레벨)
-                            if llm_stream_count <= 3:
-                                test_logger.debug(f"⚠️ 답변 생성 노드가 아니지만 토큰 추출 시도: {event_name}")
+                    if event_type == EVENT_ON_CHAT_MODEL_STREAM and not is_answer_node:
+                        if llm_stream_count <= MAX_VERBOSE_LOGS:
+                            test_logger.debug(f"⚠️ 답변 생성 노드가 아니지만 토큰 추출 시도: {event_name}")
                     
-                    if is_answer_node or (event_type == "on_chat_model_stream" and llm_stream_count <= 10):
-                        # 토큰 추출
-                        chunk = None
-                        event_data = event.get("data", {})
+                    if is_answer_node or (event_type == EVENT_ON_CHAT_MODEL_STREAM and llm_stream_count <= MAX_DEBUG_LOGS):
+                        chunk = _extract_token_from_event(event)
                         
-                        try:
-                            # 경우 1: LangChain 표준 형식 - data.chunk.content
-                            if isinstance(event_data, dict):
-                                chunk_obj = event_data.get("chunk")
-                                if chunk_obj is not None:
-                                    # AIMessageChunk 객체 처리
-                                    if hasattr(chunk_obj, "content"):
-                                        content = chunk_obj.content
-                                        # content가 문자열이면 그대로 사용
-                                        if isinstance(content, str):
-                                            chunk = content
-                                        # content가 리스트인 경우 (AIMessageChunk의 content는 리스트일 수 있음)
-                                        elif isinstance(content, list) and len(content) > 0:
-                                            # 리스트의 첫 번째 요소가 문자열이면 사용
-                                            if isinstance(content[0], str):
-                                                chunk = content[0]
-                                            else:
-                                                chunk = str(content[0])
-                                        else:
-                                            chunk = str(content)
-                                    elif isinstance(chunk_obj, str):
-                                        chunk = chunk_obj
-                                    elif hasattr(chunk_obj, "text"):
-                                        chunk = chunk_obj.text
-                                    # AIMessageChunk 객체의 경우 직접 content 접근 시도
-                                    elif hasattr(chunk_obj, "__class__") and "AIMessageChunk" in str(type(chunk_obj)):
-                                        try:
-                                            content = getattr(chunk_obj, "content", None)
-                                            if isinstance(content, str):
-                                                chunk = content
-                                            elif isinstance(content, list) and len(content) > 0:
-                                                if isinstance(content[0], str):
-                                                    chunk = content[0]
-                                                else:
-                                                    chunk = str(content[0])
-                                            elif content is not None:
-                                                chunk = str(content)
-                                        except Exception:
-                                            pass
-                                
-                                # 경우 2: 직접 문자열 형식
-                                if not chunk:
-                                    chunk = event_data.get("text") or event_data.get("content")
-                                
-                                # 경우 3: delta 형식 (LangGraph v2)
-                                if not chunk and "delta" in event_data:
-                                    delta = event_data["delta"]
-                                    if isinstance(delta, dict):
-                                        chunk = delta.get("content") or delta.get("text")
-                                    elif isinstance(delta, str):
-                                        chunk = delta
+                        if chunk:
+                            if _is_json_response(chunk):
+                                if tokens_received <= MAX_DETAILED_LOGS:
+                                    test_logger.debug(f"JSON 응답 필터링: {chunk[:100]}...")
+                                continue
                             
-                            # 경우 4: 이벤트 최상위 레벨에 직접 포함
-                            if not chunk:
-                                chunk = event.get("chunk") or event.get("text") or event.get("content")
+                            full_answer += chunk
+                            tokens_received += 1
+                            answer_found = True
                             
-                            # 토큰이 있으면 즉시 출력
-                            if chunk and isinstance(chunk, str) and len(chunk) > 0:
-                                # JSON 응답 필터링 (검증 결과 등)
-                                if chunk.strip().startswith('{') or chunk.strip().startswith('```json'):
-                                    # JSON 응답은 로깅만 하고 출력하지 않음
-                                    if tokens_received <= 5:
-                                        test_logger.debug(f"JSON 응답 필터링: {chunk[:100]}...")
-                                    continue
-                                
-                                full_answer += chunk
-                                tokens_received += 1
-                                answer_found = True
-                                # 실시간 출력 (버퍼링 없이)
-                                print(chunk, end='', flush=True)
-                                # 디버깅: 토큰 추출 성공 로깅 (처음 10개만)
-                                if tokens_received <= 10:
-                                    test_logger.debug(f"✅ 토큰 추출 성공 #{tokens_received}: chunk='{chunk[:50]}...', length={len(chunk)}")
-                            else:
-                                # 토큰 추출 실패 로깅 (처음 3개만, DEBUG 레벨)
-                                if llm_stream_count <= 3:
-                                    test_logger.debug(f"⚠️ 토큰 추출 실패: chunk={chunk}, chunk type={type(chunk) if chunk else 'None'}")
-                                    test_logger.debug(f"  event_data keys: {list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
-                                    if isinstance(event_data, dict):
-                                        chunk_obj = event_data.get("chunk")
-                                        if chunk_obj is not None:
-                                            test_logger.debug(f"  chunk_obj type={type(chunk_obj)}, chunk_obj={chunk_obj}")
-                                
-                        except (AttributeError, TypeError, KeyError) as e:
-                            # 이벤트 구조가 예상과 다를 경우 로깅만 하고 계속 진행
-                            test_logger.debug(f"토큰 추출 실패 (이벤트 구조가 예상과 다름): {e}, event_keys={list(event.keys()) if isinstance(event, dict) else 'N/A'}")
-                            # 디버깅: 이벤트 구조 상세 로깅 (처음 3개만)
-                            if llm_stream_count <= 3:
-                                test_logger.debug(f"이벤트 구조 상세: event_data={event_data}, event_data type={type(event_data)}")
+                            # 성능 모니터링: 토큰 수신 시간 기록
+                            current_time = time.time()
+                            token_times.append(current_time)
+                            if first_token_time is None:
+                                first_token_time = current_time
+                            last_token_time = current_time
+                            
+                            # 토큰 수신 속도 실시간 표시 (주기적으로)
+                            if tokens_received % 10 == 0:  # 10개 토큰마다
+                                if len(token_times) > 1:
+                                    recent_intervals = [token_times[i] - token_times[i-1] for i in range(max(1, len(token_times)-10), len(token_times))]
+                                    avg_recent_interval = sum(recent_intervals) / len(recent_intervals) if recent_intervals else 0
+                                    recent_speed = 1.0 / avg_recent_interval if avg_recent_interval > 0 else 0
+                                    test_logger.debug(f"⚡ 토큰 수신 속도: {recent_speed:.2f} 토큰/초 (최근 10개 기준)")
+                            
+                            print(chunk, end='', flush=True)
+                            
+                            if tokens_received <= MAX_DEBUG_LOGS:
+                                test_logger.debug(f"✅ 토큰 추출 성공 #{tokens_received}: chunk='{chunk[:50]}...', length={len(chunk)}")
+                        else:
+                            if llm_stream_count <= MAX_VERBOSE_LOGS:
+                                test_logger.debug(f"⚠️ 토큰 추출 실패: event_keys={list(event.keys()) if isinstance(event, dict) else 'N/A'}")
+                                event_data = event.get("data", {})
                                 if isinstance(event_data, dict):
-                                    test_logger.debug(f"event_data keys: {list(event_data.keys())}")
-                            continue
+                                    test_logger.debug(f"  event_data keys: {list(event_data.keys())}")
                 
                 # LLM 완료 이벤트 (on_llm_end 또는 on_chat_model_end)
-                elif event_type in ["on_llm_end", "on_chat_model_end"]:
+                elif event_type in LLM_END_EVENTS:
                     # 최종 답변 확인 (누락된 부분이 있는지 체크)
                     try:
                         event_data = event.get("data", {})
@@ -756,9 +1288,9 @@ async def run_single_query_test_streaming(query: str):
                         pass
                 
                 # 노드 완료 이벤트 (최종 포맷팅된 답변 확인)
-                elif event_type == "on_chain_end":
+                elif event_type == EVENT_ON_CHAIN_END:
                     node_name = event.get("name", "")
-                    if node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
+                    if node_name in [NODE_GENERATE_ANSWER_ENHANCED, NODE_GENERATE_AND_VALIDATE_ANSWER]:
                         try:
                             event_data = event.get("data", {})
                             if isinstance(event_data, dict):
@@ -767,21 +1299,51 @@ async def run_single_query_test_streaming(query: str):
                                     # answer 필드 확인 (다양한 구조 지원)
                                     final_formatted_answer = None
                                     
+                                    # 재귀적으로 answer 필드 찾기
+                                    def find_answer_in_dict(d, depth=0, max_depth=5):
+                                        """딕셔너리에서 answer 필드를 재귀적으로 찾기"""
+                                        if depth > max_depth:
+                                            return None
+                                        if isinstance(d, dict):
+                                            # 직접 answer 필드 확인
+                                            if "answer" in d:
+                                                answer_value = d["answer"]
+                                                if isinstance(answer_value, str) and answer_value.strip():
+                                                    return answer_value
+                                            # 모든 키를 순회하며 재귀 검색
+                                            for key, value in d.items():
+                                                if isinstance(value, dict):
+                                                    found = find_answer_in_dict(value, depth + 1, max_depth)
+                                                    if found:
+                                                        return found
+                                                elif isinstance(value, list):
+                                                    for item in value:
+                                                        if isinstance(item, dict):
+                                                            found = find_answer_in_dict(item, depth + 1, max_depth)
+                                                            if found:
+                                                                return found
+                                        return None
+                                    
                                     if isinstance(output, dict):
-                                        # 최상위 레벨
-                                        final_formatted_answer = output.get("answer", "")
+                                        # 재귀적으로 answer 찾기
+                                        final_formatted_answer = find_answer_in_dict(output)
                                         
-                                        # common 그룹
-                                        if not final_formatted_answer and "common" in output:
-                                            common = output.get("common", {})
-                                            if isinstance(common, dict):
-                                                final_formatted_answer = common.get("answer", "")
-                                        
-                                        # generation 그룹
-                                        if not final_formatted_answer and "generation" in output:
-                                            generation = output.get("generation", {})
-                                            if isinstance(generation, dict):
-                                                final_formatted_answer = generation.get("answer", "")
+                                        # 찾지 못한 경우 기존 로직 사용
+                                        if not final_formatted_answer:
+                                            # 최상위 레벨
+                                            final_formatted_answer = output.get("answer", "")
+                                            
+                                            # common 그룹
+                                            if not final_formatted_answer and "common" in output:
+                                                common = output.get("common", {})
+                                                if isinstance(common, dict):
+                                                    final_formatted_answer = common.get("answer", "")
+                                            
+                                            # generation 그룹
+                                            if not final_formatted_answer and "generation" in output:
+                                                generation = output.get("generation", {})
+                                                if isinstance(generation, dict):
+                                                    final_formatted_answer = generation.get("answer", "")
                                     
                                     if final_formatted_answer and isinstance(final_formatted_answer, str) and len(final_formatted_answer) > 0:
                                         # 스트리밍이 없었을 때: 전체 답변 출력
@@ -808,7 +1370,40 @@ async def run_single_query_test_streaming(query: str):
             
             # 스트리밍 완료
             print()  # 줄바꿈
+            streaming_end_time = time.time()
+            streaming_duration = streaming_end_time - streaming_start_time
+            
+            # 성능 통계 계산
+            performance_stats = {}
+            if tokens_received > 0:
+                if first_token_time:
+                    time_to_first_token = first_token_time - streaming_start_time
+                    performance_stats["time_to_first_token"] = time_to_first_token
+                
+                if len(token_times) > 1:
+                    # 평균 토큰 수신 간격
+                    intervals = [token_times[i] - token_times[i-1] for i in range(1, len(token_times))]
+                    avg_interval = sum(intervals) / len(intervals) if intervals else 0
+                    performance_stats["avg_token_interval"] = avg_interval
+                    performance_stats["tokens_per_second"] = 1.0 / avg_interval if avg_interval > 0 else 0
+            
             test_logger.info(f"\n스트리밍 완료: 총 {event_count}개 이벤트, LLM 스트리밍 이벤트 {llm_stream_count}개, 토큰 수신 {tokens_received}개")
+            test_logger.info(f"⏱️ 스트리밍 시간: {streaming_duration:.2f}초")
+            
+            # 성능 통계 표 형식으로 출력
+            if performance_stats:
+                test_logger.info("\n📊 성능 통계:")
+                test_logger.info("-" * 80)
+                if "time_to_first_token" in performance_stats:
+                    test_logger.info(f"   첫 토큰까지 시간: {performance_stats['time_to_first_token']:.2f}초")
+                if "tokens_per_second" in performance_stats:
+                    test_logger.info(f"   평균 토큰 수신 속도: {performance_stats['tokens_per_second']:.2f} 토큰/초")
+                if "avg_token_interval" in performance_stats:
+                    test_logger.info(f"   평균 토큰 간격: {performance_stats['avg_token_interval']*1000:.2f}ms")
+                if tokens_received > 0 and streaming_duration > 0:
+                    overall_speed = tokens_received / streaming_duration
+                    test_logger.info(f"   전체 평균 속도: {overall_speed:.2f} 토큰/초")
+            
             test_logger.info(f"발생한 이벤트 타입: {sorted(event_types_seen)}")
             test_logger.info(f"발생한 노드 이름 (답변 생성 관련): {[n for n in sorted(node_names_seen) if 'answer' in n.lower() or 'generate' in n.lower()]}")
             
@@ -827,57 +1422,56 @@ async def run_single_query_test_streaming(query: str):
             # 최종 결과가 없으면 process_query()로 폴백
             if not final_result:
                 test_logger.info("\n최종 결과를 가져오기 위해 process_query() 호출...")
-                final_result = await service.process_query(
-                    query=query,
-                    session_id=session_id,
-                    enable_checkpoint=False
-                )
+                final_result = await _fallback_to_process_query(service, query, session_id)
             
+        except TimeoutError as e:
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            test_logger.error(f"⏱️ 스트리밍 타임아웃: {error_msg}")
+            test_logger.info("process_query()로 폴백 시도...")
+            try:
+                final_result = await _fallback_to_process_query(service, query, session_id)
+            except Exception as fallback_error:
+                fallback_error_msg = str(fallback_error).encode('utf-8', errors='replace').decode('utf-8')
+                test_logger.error(f"❌ 폴백 처리도 실패: {fallback_error_msg}")
+                raise
+        except asyncio.TimeoutError as e:
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            test_logger.error(f"⏱️ 비동기 타임아웃: {error_msg}")
+            test_logger.info("process_query()로 폴백 시도...")
+            try:
+                final_result = await _fallback_to_process_query(service, query, session_id)
+            except Exception as fallback_error:
+                fallback_error_msg = str(fallback_error).encode('utf-8', errors='replace').decode('utf-8')
+                test_logger.error(f"❌ 폴백 처리도 실패: {fallback_error_msg}")
+                raise
+        except ConnectionError as e:
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            test_logger.error(f"🔌 연결 오류: {error_msg}")
+            test_logger.info("process_query()로 폴백 시도...")
+            try:
+                final_result = await _fallback_to_process_query(service, query, session_id)
+            except Exception as fallback_error:
+                fallback_error_msg = str(fallback_error).encode('utf-8', errors='replace').decode('utf-8')
+                test_logger.error(f"❌ 폴백 처리도 실패: {fallback_error_msg}")
+                raise
         except Exception as stream_error:
-            test_logger.warning(f"스트리밍 실패, process_query()로 폴백: {stream_error}")
-            final_result = await service.process_query(
-                query=query,
-                session_id=session_id,
-                enable_checkpoint=False
-            )
+            error_type = type(stream_error).__name__
+            error_msg = str(stream_error).encode('utf-8', errors='replace').decode('utf-8')
+            test_logger.warning(f"⚠️ 스트리밍 실패 ({error_type}): {error_msg}")
+            test_logger.info("process_query()로 폴백 시도...")
+            try:
+                final_result = await _fallback_to_process_query(service, query, session_id)
+            except Exception as fallback_error:
+                fallback_error_msg = str(fallback_error).encode('utf-8', errors='replace').decode('utf-8')
+                test_logger.error(f"❌ 폴백 처리도 실패: {fallback_error_msg}")
+                raise
         
         # 결과 출력
         test_logger.info("\n4️⃣  결과:")
         test_logger.info("="*80)
         
         if final_result:
-            # 답변은 이미 스트리밍으로 출력했으므로, 다른 정보만 출력
-            answer = final_result.get("answer", full_answer or "")
-            
-            # 소스 정보
-            sources = final_result.get("sources", [])
-            if sources:
-                test_logger.info(f"\n📚 소스 ({len(sources)}개):")
-                test_logger.info("-" * 80)
-                for i, source in enumerate(sources[:5], 1):
-                    test_logger.info(f"   {i}. {source}")
-                if len(sources) > 5:
-                    test_logger.info(f"   ... (총 {len(sources)}개)")
-            
-            # 법률 참조
-            legal_references = final_result.get("legal_references", [])
-            if legal_references:
-                test_logger.info(f"\n⚖️  법률 참조 ({len(legal_references)}개):")
-                test_logger.info("-" * 80)
-                for i, ref in enumerate(legal_references[:5], 1):
-                    test_logger.info(f"   {i}. {ref}")
-                if len(legal_references) > 5:
-                    test_logger.info(f"   ... (총 {len(legal_references)}개)")
-            
-            # 신뢰도
-            confidence = final_result.get("confidence", 0.0)
-            if confidence:
-                test_logger.info(f"\n🎯 신뢰도: {confidence:.2f}")
-            
-            # 처리 시간
-            processing_time = final_result.get("processing_time", 0.0)
-            if processing_time:
-                test_logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
+            _print_result_summary(final_result, full_answer)
         
         test_logger.info("\n" + "="*80)
         test_logger.info("✅ 테스트 완료!")
@@ -935,7 +1529,7 @@ async def run_single_query_test(query: str):
         
         result = await service.process_query(
             query=query,
-            session_id="single_query_test",
+            session_id=DEFAULT_SESSION_ID,
             enable_checkpoint=False  # 테스트이므로 체크포인트 비활성화
         )
         
@@ -953,55 +1547,19 @@ async def run_single_query_test(query: str):
             if isinstance(answer_text, dict):
                 answer_text = str(answer_text)
         
-        # 답변 출력 (개선: 전체 답변 출력)
-        test_logger.info(f"\n📝 답변 (길이: {len(str(answer_text)) if answer_text else 0}자):")
-        test_logger.info("-" * 80)
+        # 답변 출력
         if answer_text:
-            # 개선: 전체 답변 출력 (1000자 제한 해제)
             full_answer = str(answer_text)
+            test_logger.info(f"\n📝 답변 (길이: {len(full_answer)}자):")
+            test_logger.info("-" * 80)
             test_logger.info(full_answer)
-            if len(full_answer) > 5000:
+            if len(full_answer) > MAX_ANSWER_LENGTH_DISPLAY:
                 test_logger.info(f"\n... (총 {len(full_answer)}자, 전체 출력 완료)")
         else:
             test_logger.warning("<답변 없음>")
         
-        # 소스 정보
-        sources = result.get("sources", [])
-        if sources:
-            test_logger.info(f"\n📚 소스 ({len(sources)}개):")
-            test_logger.info("-" * 80)
-            for i, source in enumerate(sources[:5], 1):  # 최대 5개만 출력
-                test_logger.info(f"   {i}. {source}")
-            if len(sources) > 5:
-                test_logger.info(f"   ... (총 {len(sources)}개)")
-        
-        # 법률 참조
-        legal_references = result.get("legal_references", [])
-        if legal_references:
-            test_logger.info(f"\n⚖️  법률 참조 ({len(legal_references)}개):")
-            test_logger.info("-" * 80)
-            for i, ref in enumerate(legal_references[:5], 1):
-                test_logger.info(f"   {i}. {ref}")
-            if len(legal_references) > 5:
-                test_logger.info(f"   ... (총 {len(legal_references)}개)")
-        
-        # 메타데이터
-        metadata = result.get("metadata", {})
-        if metadata:
-            test_logger.info(f"\n📊 메타데이터:")
-            test_logger.info("-" * 80)
-            for key, value in list(metadata.items())[:10]:  # 최대 10개만 출력
-                test_logger.info(f"   {key}: {value}")
-        
-        # 신뢰도
-        confidence = result.get("confidence", 0.0)
-        if confidence:
-            test_logger.info(f"\n🎯 신뢰도: {confidence:.2f}")
-        
-        # 처리 시간
-        processing_time = result.get("processing_time", 0.0)
-        if processing_time:
-            test_logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
+        # 결과 요약 출력
+        _print_result_summary(result)
         
         test_logger.info("\n" + "="*80)
         test_logger.info("✅ 테스트 완료!")
@@ -1093,7 +1651,7 @@ def main():
                 file_path = sys.argv[2]
                 try:
                     # 여러 인코딩 시도
-                    for encoding in ['utf-8', 'cp949', 'euc-kr']:
+                    for encoding in ENCODINGS_TO_TRY[:3]:
                         try:
                             with open(file_path, 'r', encoding=encoding) as f:
                                 query = f.read().strip()
@@ -1138,7 +1696,7 @@ def main():
             for part in query_parts:
                 if isinstance(part, bytes):
                     # bytes인 경우 여러 인코딩 시도
-                    for encoding in ['utf-8', 'cp949', 'euc-kr', 'latin1']:
+                    for encoding in ENCODINGS_TO_TRY:
                         try:
                             decoded = part.decode(encoding)
                             decoded_parts.append(decoded)
@@ -1164,7 +1722,7 @@ def main():
                             # 깨진 문자열인 경우 복구 시도
                             try:
                                 # 여러 인코딩 방식으로 복구 시도
-                                for encoding in ['cp949', 'euc-kr', 'latin1']:
+                                for encoding in ENCODINGS_FOR_RECOVERY:
                                     try:
                                         # 원본을 bytes로 인코딩 후 다시 디코딩
                                         fixed = part.encode(encoding, errors='ignore').decode('utf-8', errors='replace')
