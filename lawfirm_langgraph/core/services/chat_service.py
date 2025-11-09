@@ -55,7 +55,7 @@ class ChatService:
         if self.use_langgraph:
             try:
                 from ..utils.langgraph_config import LangGraphConfig
-                from core.agents.workflow_service import LangGraphWorkflowService
+                from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
 
                 langgraph_config = LangGraphConfig.from_env()
                 self.langgraph_service = LangGraphWorkflowService(langgraph_config)

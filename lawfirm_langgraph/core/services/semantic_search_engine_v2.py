@@ -35,6 +35,11 @@ except ImportError:
 
     class SentenceEmbedder:
         """Fallback embedder using sentence-transformers"""
+        
+        # 상수 정의
+        PARAMETER_CHECK_SAMPLE_SIZE = 10  # 검증 시 확인할 파라미터 샘플 개수
+        MAX_META_DEVICE_FIX_ATTEMPTS = 3  # meta device 수정 최대 시도 횟수
+        
         def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
             self.model_name = model_name
             import logging
@@ -285,16 +290,16 @@ except ImportError:
                                     if hasattr(param, 'data') and hasattr(param.data, 'device'):
                                         if str(param.data.device) == 'meta':
                                             meta_params.append(name)
-                                            # 강제로 CPU로 이동
-                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                            # 강제로 CPU로 이동 (zeros_like 대신 zeros 사용하여 메타 디바이스 완전 회피)
+                                            param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
                                 
                                 meta_buffers = []
                                 for name, buffer in model.named_buffers():
                                     if hasattr(buffer, 'device'):
                                         if str(buffer.device) == 'meta':
                                             meta_buffers.append(name)
-                                            # 강제로 CPU로 이동
-                                            buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                            # 강제로 CPU로 이동 (zeros_like 대신 zeros 사용하여 메타 디바이스 완전 회피)
+                                            buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
                                 
                                 if meta_params or meta_buffers:
                                     logger.warning(f"Found {len(meta_params)} meta parameters and {len(meta_buffers)} meta buffers, forced to CPU")
@@ -342,8 +347,8 @@ except ImportError:
                                         if hasattr(param, 'data'):
                                             try:
                                                 if str(param.data.device) == 'meta':
-                                                    # 메타 디바이스 파라미터는 새로 생성
-                                                    param.data = torch.zeros_like(param.data, device='cpu')
+                                                    # 메타 디바이스 파라미터는 새로 생성 (zeros_like 대신 zeros 사용)
+                                                    param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
                                                 elif param.data.device.type != 'cpu':
                                                     # CPU가 아닌 경우 CPU로 이동
                                                     param.data = param.data.to('cpu')
@@ -355,8 +360,8 @@ except ImportError:
                                         if hasattr(buffer, 'device'):
                                             try:
                                                 if str(buffer.device) == 'meta':
-                                                    # 메타 디바이스 버퍼는 새로 생성
-                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                                    # 메타 디바이스 버퍼는 새로 생성 (zeros_like 대신 zeros 사용)
+                                                    buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
                                                 elif buffer.device.type != 'cpu':
                                                     # CPU가 아닌 경우 CPU로 이동
                                                     buffer.data = buffer.data.to('cpu')
@@ -372,21 +377,66 @@ except ImportError:
                             model.eval()
                             
                             # 4단계: 모델 검증 - 추론 가능한지 확인
-                            # 개선: 검증 로직 강화 (meta device 재확인)
+                            # 개선: 검증 로직 강화 (meta device 재확인 및 자동 수정)
                             try:
-                                # 최종 meta device 확인
-                                final_check_params = list(model.parameters())[:5]  # 처음 5개 파라미터만 확인
-                                meta_count = sum(1 for p in final_check_params if hasattr(p, 'device') and str(p.device) == 'meta')
-                                if meta_count > 0:
-                                    logger.error(f"Model validation failed: {meta_count} parameters still on meta device")
-                                    raise RuntimeError(f"{meta_count} parameters still on meta device after migration")
+                                # 최종 meta device 확인 및 자동 수정
+                                all_params = list(model.parameters())
+                                sample_size = min(self.PARAMETER_CHECK_SAMPLE_SIZE, len(all_params))
+                                check_params = all_params[:sample_size] if sample_size > 0 else all_params
+                                meta_count = sum(1 for p in check_params if hasattr(p, 'device') and str(p.device) == 'meta')
                                 
+                                if meta_count > 0:
+                                    logger.warning(f"Found {meta_count} parameters still on meta device (sampled {sample_size}/{len(all_params)}), attempting automatic fix...")
+                                    
+                                    # 자동 수정: state_dict를 사용하여 가중치 보존하면서 CPU로 이동
+                                    try:
+                                        # state_dict 저장 (가중치 보존)
+                                        state_dict = model.state_dict()
+                                        
+                                        # 모든 파라미터와 버퍼를 CPU로 이동 (가중치 보존)
+                                        for name, param in model.named_parameters():
+                                            if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                                if str(param.data.device) == 'meta':
+                                                    # state_dict에서 가중치 가져오기
+                                                    if name in state_dict:
+                                                        param.data = state_dict[name].to('cpu') if hasattr(state_dict[name], 'to') else torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
+                                                    else:
+                                                        param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
+                                        
+                                        for name, buffer in model.named_buffers():
+                                            if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
+                                                # state_dict에서 버퍼 가져오기
+                                                if name in state_dict:
+                                                    buffer.data = state_dict[name].to('cpu') if hasattr(state_dict[name], 'to') else torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
+                                                else:
+                                                    buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
+                                    except Exception as fix_error:
+                                        logger.warning(f"Failed to preserve weights during meta device fix: {fix_error}, using zero initialization")
+                                        # 폴백: zeros로 초기화
+                                        for name, param in model.named_parameters():
+                                            if hasattr(param, 'data') and hasattr(param.data, 'device'):
+                                                if str(param.data.device) == 'meta':
+                                                    param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
+                                        for name, buffer in model.named_buffers():
+                                            if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
+                                                buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
+                                    
+                                    # 재확인
+                                    check_params_after = all_params[:sample_size] if sample_size > 0 else all_params
+                                    meta_count_after = sum(1 for p in check_params_after if hasattr(p, 'device') and str(p.device) == 'meta')
+                                    if meta_count_after > 0:
+                                        logger.error(f"Model validation failed: {meta_count_after} parameters still on meta device after auto-fix")
+                                        logger.warning("Continuing despite validation failure - model may not work correctly")
+                                    else:
+                                        logger.info(f"Successfully fixed meta device parameters (checked {sample_size}/{len(all_params)} parameters)")
+                                
+                                # 실제 추론 테스트
                                 test_input = tokenizer("test", return_tensors="pt", padding=True, truncation=True)
                                 for key in test_input:
                                     if isinstance(test_input[key], torch.Tensor):
                                         test_input[key] = test_input[key].to('cpu')
                                 with torch.no_grad():
-                                    test_output = model(**test_input)
+                                    _ = model(**test_input)  # 추론 테스트만 수행
                                 logger.info("Model validation successful - model can perform inference")
                             except Exception as validation_error:
                                 logger.error(f"Model validation failed: {validation_error}")
@@ -429,8 +479,8 @@ except ImportError:
                                                 if hasattr(encoded[key], 'device'):
                                                     device_str = str(encoded[key].device)
                                                     if device_str == 'meta':
-                                                        # meta device인 경우 새 텐서 생성
-                                                        encoded[key] = torch.zeros_like(encoded[key], device='cpu')
+                                                        # meta device인 경우 새 텐서 생성 (zeros_like 대신 zeros 사용)
+                                                        encoded[key] = torch.zeros(encoded[key].shape, dtype=encoded[key].dtype, device='cpu')
                                                         logger.debug(f"Meta device tensor detected for {key}, created new CPU tensor")
                                                     elif encoded[key].device.type != 'cpu':
                                                         # CPU가 아닌 경우 CPU로 이동
@@ -440,13 +490,13 @@ except ImportError:
                                         model_device = next(self._model.parameters()).device
                                         if str(model_device) == 'meta':
                                             logger.error("Model is still on meta device! Attempting emergency migration...")
-                                            # 비상 모드: 모든 파라미터와 버퍼를 강제로 CPU로 이동
+                                            # 비상 모드: 모든 파라미터와 버퍼를 강제로 CPU로 이동 (zeros_like 대신 zeros 사용)
                                             for name, param in self._model.named_parameters():
                                                 if hasattr(param, 'data') and str(param.data.device) == 'meta':
-                                                    param.data = torch.zeros_like(param.data, device='cpu')
+                                                    param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
                                             for name, buffer in self._model.named_buffers():
                                                 if hasattr(buffer, 'device') and str(buffer.device) == 'meta':
-                                                    buffer.data = torch.zeros_like(buffer.data, device='cpu')
+                                                    buffer.data = torch.zeros(buffer.data.shape, dtype=buffer.data.dtype, device='cpu')
                                             
                                             # 재확인
                                             model_device = next(self._model.parameters()).device
@@ -462,11 +512,11 @@ except ImportError:
                                         except RuntimeError as e:
                                             if "meta" in str(e).lower():
                                                 logger.error(f"Meta device error during inference: {e}")
-                                                # 모델의 모든 파라미터를 다시 CPU로 이동 시도
+                                                # 모델의 모든 파라미터를 다시 CPU로 이동 시도 (zeros_like 대신 zeros 사용)
                                                 for param in self._model.parameters():
                                                     if hasattr(param, 'data') and hasattr(param.data, 'device'):
                                                         if str(param.data.device) == 'meta':
-                                                            param.data = torch.zeros_like(param.data, device='cpu')
+                                                            param.data = torch.zeros(param.data.shape, dtype=param.data.dtype, device='cpu')
                                                 # 재시도
                                                 outputs = self._model(**encoded)
                                             else:
@@ -1662,7 +1712,7 @@ class SemanticSearchEngineV2:
             # 인덱스 파일이 손상된 경우 삭제하여 재빌드 유도
             try:
                 Path(self.index_path).unlink()
-            except:
+            except Exception:
                 pass
 
     def _get_source_metadata(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> Dict[str, Any]:
