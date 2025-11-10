@@ -1,19 +1,22 @@
 """
 채팅 엔드포인트
 """
+import json
 import logging
-from fastapi import APIRouter, HTTPException, Request, Depends
+import asyncio
+from fastapi import APIRouter, HTTPException, Request, Depends, Response
 from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from datetime import datetime
 
-from api.schemas.chat import ChatRequest, ChatResponse, StreamingChatRequest
+from api.schemas.chat import ChatRequest, ChatResponse, StreamingChatRequest, ContinueAnswerRequest, ContinueAnswerResponse
 from api.services.chat_service import get_chat_service
 from api.services.session_service import session_service
 from api.services.ocr_service import extract_text_from_base64, is_ocr_available
 from api.services.file_processor import process_file
 from api.middleware.auth_middleware import require_auth
 from api.middleware.rate_limit import limiter, is_rate_limit_enabled
+from api.services.anonymous_quota_service import anonymous_quota_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -128,7 +131,22 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
                     )
                 )
         
-        return ChatResponse(**result)
+        # 익명 사용자의 경우 응답 헤더에 남은 질의 횟수 추가
+        response = ChatResponse(**result)
+        if not current_user.get("authenticated") and anonymous_quota_service.is_enabled():
+            # current_user에 이미 quota_remaining이 포함되어 있음
+            remaining = current_user.get("quota_remaining", 0)
+            # Response 객체로 변환하여 헤더 추가
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content=response.model_dump(),
+                headers={
+                    "X-Quota-Remaining": str(remaining),
+                    "X-Quota-Limit": str(anonymous_quota_service.quota_limit)
+                }
+            )
+        
+        return response
     except ValueError as e:
         logger.warning(f"Validation error in chat endpoint: {e}")
         raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
@@ -243,6 +261,7 @@ async def chat_stream(
             """
             full_answer = ""
             has_yielded = False  # 최소한 하나의 yield가 있었는지 추적
+            final_metadata = None  # final 이벤트의 metadata 저장
             
             try:
                 async for chunk in chat_service.stream_message(
@@ -254,7 +273,6 @@ async def chat_stream(
                         chunk_stripped = chunk.strip()
                         
                         # JSONL 형식 파싱 시도
-                        import json
                         try:
                             event_data = json.loads(chunk_stripped)
                             event_type = event_data.get("type", "")
@@ -265,24 +283,22 @@ async def chat_stream(
                                 if content:
                                     full_answer += content
                             
-                            # "final" 타입인 경우 full_answer 업데이트
+                            # "final" 타입인 경우 full_answer 업데이트 및 metadata 저장
                             elif event_type == "final":
                                 content = event_data.get("content", "")
                                 if content and not content.startswith("[오류]"):
                                     full_answer = content
+                                # final 이벤트의 metadata 저장 (sources 포함)
+                                final_metadata = event_data.get("metadata", {})
                             
                             # JSONL 이벤트를 SSE 형식으로 변환
-                            # JSON 이스케이프는 json.dumps가 자동으로 처리
                             json_str = json.dumps(event_data, ensure_ascii=False)
-                            # SSE 형식으로 전송
                             yield f"data: {json_str}\n\n"
                             
                         except (json.JSONDecodeError, ValueError):
                             # JSON 파싱 실패 시 기존 형식으로 처리 (하위 호환성)
-                            # 완료 메타데이터는 제외
                             if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
                                 full_answer += chunk
-                                # SSE 형식으로 전송 (줄바꿈 보존)
                                 if '\n' in chunk:
                                     lines = chunk.split('\n')
                                     for line in lines:
@@ -294,22 +310,64 @@ async def chat_stream(
                 # 스트리밍이 정상적으로 완료되었음을 보장
                 # chat_service.stream_message에서 이미 final 이벤트를 보냈으므로
                 # 여기서는 추가 완료 신호는 불필요
-                # FastAPI StreamingResponse가 자동으로 스트림 종료를 처리
+                # 하지만 SSE 형식에서 스트림 종료를 보장하기 위해 빈 줄을 yield
+                # 이는 ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지
+                try:
+                    # SSE 스트림 종료 신호 (빈 줄)
+                    yield "\n"
+                except Exception:
+                    pass
                 
-                # 완료 후 메시지 저장
+                # 완료 후 메시지 저장 (metadata 포함)
                 if full_answer:
-                    session_service.add_message(
+                    # final_metadata가 있으면 포함, 없으면 빈 dict
+                    metadata = final_metadata if final_metadata else {}
+                    
+                    # sources가 비어있으면 별도로 가져오기
+                    if not metadata.get("sources") and not metadata.get("legal_references") and not metadata.get("sources_detail"):
+                        try:
+                            sources_data = await chat_service.get_sources_from_session(
+                                session_id=stream_request.session_id,
+                                message_id=None  # 아직 message_id가 없으므로 None
+                            )
+                            if sources_data:
+                                metadata["sources"] = sources_data.get("sources", [])
+                                metadata["legal_references"] = sources_data.get("legal_references", [])
+                                metadata["sources_detail"] = sources_data.get("sources_detail", [])
+                        except Exception as e:
+                            logger.warning(f"Failed to get sources after stream: {e}")
+                    
+                    # final_metadata의 message_id를 사용하여 메시지 저장 (일관성 유지)
+                    # final_event의 message_id와 실제 저장된 message_id가 일치하도록 함
+                    expected_message_id = metadata.get("message_id")
+                    saved_message_id = session_service.add_message(
                         session_id=stream_request.session_id,
                         role="assistant",
-                        content=full_answer
+                        content=full_answer,
+                        metadata=metadata,
+                        message_id=expected_message_id  # final_event의 message_id 사용
                     )
+                    
+                    # sources가 포함된 metadata를 별도 이벤트로 전송 (프론트엔드에서 사용)
+                    # final_event를 이미 보냈으므로, sources가 포함된 metadata를 별도 이벤트로 전송
+                    if metadata.get("sources") or metadata.get("legal_references") or metadata.get("sources_detail"):
+                        sources_event = {
+                            "type": "sources",
+                            "metadata": {
+                                "message_id": saved_message_id,
+                                "sources": metadata.get("sources", []),
+                                "legal_references": metadata.get("legal_references", []),
+                                "sources_detail": metadata.get("sources_detail", [])
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
                     
                     # 세션에 제목이 없고 첫 번째 대화라면 제목 생성 (비동기)
                     session = session_service.get_session(stream_request.session_id)
                     if session and not session.get("title"):
                         messages = session_service.get_messages(stream_request.session_id)
                         if len(messages) == 2:  # user + assistant
-                            import asyncio
                             asyncio.create_task(
                                 asyncio.to_thread(
                                     session_service.generate_session_title,
@@ -317,13 +375,9 @@ async def chat_stream(
                                 )
                             )
             except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"Error in stream_message: {e}", exc_info=True)
                 error_msg = f"[오류] {str(e)}"
                 try:
-                    # 에러 메시지를 JSON 형식으로 전송
-                    import json
                     error_event = {
                         "type": "final",
                         "content": error_msg,
@@ -341,7 +395,6 @@ async def chat_stream(
                 # 최소한 하나의 yield가 없었으면 에러 메시지 전송
                 if not has_yielded:
                     try:
-                        import json
                         error_event = {
                             "type": "final",
                             "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
@@ -349,18 +402,13 @@ async def chat_stream(
                             "timestamp": datetime.now().isoformat()
                         }
                         yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                        has_yielded = True
                     except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
                         logger.error(f"Error yielding fallback message: {e}")
                 
-                # HTTP chunked encoding이 제대로 종료되도록 보장
-                # SSE 이벤트 종료 신호: 빈 줄 2개 yield
-                # 이는 ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지
-                try:
-                    yield "\n\n"  # SSE 이벤트 종료 신호 (빈 줄 2개)
-                except Exception:
-                    pass
+                # 중요: finally 블록에서 yield를 하면 스트림 종료가 제대로 되지 않을 수 있음
+                # FastAPI StreamingResponse가 자동으로 스트림 종료를 처리하므로
+                # 여기서는 추가 종료 신호를 보내지 않음
         
         return StreamingResponse(
             generate(),
@@ -384,4 +432,99 @@ async def chat_stream(
         else:
             detail = "스트리밍 처리 중 오류가 발생했습니다"
         raise HTTPException(status_code=500, detail=detail)
+
+
+@router.get("/chat/{session_id}/sources")
+async def get_chat_sources(
+    session_id: str,
+    message_id: Optional[str] = None
+):
+    """
+    스트림 완료 후 sources 정보를 가져오는 API
+    
+    Args:
+        session_id: 세션 ID
+        message_id: 특정 메시지 ID (선택사항, 현재는 사용하지 않음)
+    
+    Returns:
+        sources, legal_references, sources_detail 정보
+    """
+    try:
+        chat_service = get_chat_service()
+        
+        if not chat_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Chat service is not available"
+            )
+        
+        # LangGraph의 최종 state에서 sources 추출
+        sources_data = await chat_service.get_sources_from_session(
+            session_id=session_id,
+            message_id=message_id
+        )
+        
+        return {
+            "session_id": session_id,
+            "sources": sources_data.get("sources", []),
+            "legal_references": sources_data.get("legal_references", []),
+            "sources_detail": sources_data.get("sources_detail", [])
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting sources for session {session_id}: {e}", exc_info=True)
+        from api.config import api_config
+        if api_config.debug:
+            detail = f"sources 가져오기 중 오류가 발생했습니다: {str(e)}"
+        else:
+            detail = "sources 가져오기 중 오류가 발생했습니다"
+        raise HTTPException(status_code=500, detail=detail)
+
+
+@router.post("/chat/continue", response_model=ContinueAnswerResponse)
+@limiter.limit("30/minute") if is_rate_limit_enabled() else lambda f: f
+async def continue_answer(
+    request: Request,
+    continue_request: ContinueAnswerRequest,
+    current_user: dict = Depends(require_auth)
+):
+    """이전 답변의 마지막 부분부터 이어서 답변 생성 (워크플로우 재개 방식)"""
+    try:
+        from api.services.chat_service import chat_service
+        
+        # LangGraph 워크플로우 서비스를 사용하여 이어서 답변 생성
+        if not chat_service.workflow_service:
+            raise HTTPException(
+                status_code=503,
+                detail="워크플로우 서비스가 초기화되지 않았습니다."
+            )
+        
+        # 워크플로우에서 이어서 답변 생성
+        result = await chat_service.workflow_service.continue_answer(
+            session_id=continue_request.session_id,
+            message_id=continue_request.message_id,
+            chunk_index=continue_request.chunk_index
+        )
+        
+        if result:
+            return ContinueAnswerResponse(
+                content=result.get("content", ""),
+                chunk_index=result.get("chunk_index", 0),
+                total_chunks=result.get("total_chunks", 1),
+                has_more=result.get("has_more", False)
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="이어서 답변을 생성할 수 없습니다."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error continuing answer: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"답변을 이어서 생성하는 중 오류가 발생했습니다: {str(e)}"
+        )
 

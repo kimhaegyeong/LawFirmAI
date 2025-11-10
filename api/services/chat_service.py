@@ -18,37 +18,18 @@ lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
 if lawfirm_langgraph_path.exists():
     sys.path.insert(0, str(lawfirm_langgraph_path))
 
-# 환경 변수 로드 (ChatService 초기화 전에 반드시 로드)
+# 환경 변수 로드 (중앙 집중식 로더 사용)
 try:
-    from dotenv import load_dotenv
-    
-    # 1. lawfirm_langgraph/.env 로드 (LangGraphConfig가 사용)
-    langgraph_env = lawfirm_langgraph_path / ".env"
-    if langgraph_env.exists():
-        load_dotenv(dotenv_path=str(langgraph_env), override=False)
-        logging.info(f"✅ [ChatService] Loaded environment from: {langgraph_env}")
-    else:
-        logging.warning(f"⚠️  [ChatService] Environment file not found: {langgraph_env}")
-    
-    # 2. 프로젝트 루트 .env 로드 (공통 설정)
-    root_env = project_root / ".env"
-    if root_env.exists():
-        load_dotenv(dotenv_path=str(root_env), override=False)
-        logging.info(f"✅ [ChatService] Loaded environment from: {root_env}")
-    
-    # 3. api/.env 로드 (API 서버 전용 설정, 최우선)
-    api_env = Path(__file__).parent.parent / ".env"
-    if api_env.exists():
-        load_dotenv(dotenv_path=str(api_env), override=True)
-        logging.info(f"✅ [ChatService] Loaded environment from: {api_env}")
-        
-except ImportError:
-    logging.warning("⚠️  python-dotenv not installed. Environment variables from .env files will not be loaded.")
+    from utils.env_loader import ensure_env_loaded
+    ensure_env_loaded(project_root)
+except ImportError as e:
+    logging.warning(f"⚠️  Failed to load environment variables: {e}")
+    logging.warning("   Make sure utils/env_loader.py exists in the project root")
 except Exception as e:
     logging.warning(f"⚠️  Failed to load environment variables: {e}")
 
 try:
-    from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+    from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
     from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
     LANGGRAPH_AVAILABLE = True
 except ImportError as e:
@@ -234,6 +215,14 @@ class ChatService:
         import os
         DEBUG_STREAM = os.getenv("DEBUG_STREAM", "false").lower() == "true"
         
+        # JSON 감지용 정규식 컴파일 (성능 최적화)
+        JSON_PATTERN = re.compile(r'^\s*"[^"]+"\s*:\s*')
+        JSON_KEYWORDS = frozenset(['"complexity"', '"confidence"', '"reasoning"', '"core_keywords"', 
+                                   '"query_intent"', '"is_valid"', '"quality_score"', '"final_score"',
+                                   '"score"', '"issues"', '"strengths"', '"recommendations"',
+                                   '"needs_improvement"', '"improvement_instructions"', '"preserve_content"',
+                                   '"focus_areas"', '"meets_quality_threshold"', '"summary"'])
+        
         has_yielded = False  # 최소한 하나의 yield가 있었는지 추적
         
         if not self.workflow_service:
@@ -255,7 +244,7 @@ class ChatService:
                 session_id = str(uuid.uuid4())
             
             # 워크플로우 스트리밍 실행
-            from lawfirm_langgraph.langgraph_core.state.state_definitions import create_initial_legal_state
+            from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
             
             # 로깅: message 값 확인
             logger.info(f"stream_message: 받은 message='{message[:100] if message else 'EMPTY'}...', length={len(message) if message else 0}")
@@ -263,33 +252,23 @@ class ChatService:
             # message를 query로 사용 (create_initial_legal_state의 첫 번째 파라미터는 query)
             initial_state = create_initial_legal_state(message, session_id)
             
-            # 중요: initial_state에 query가 반드시 포함되도록 강제
-            # LangGraph에 전달하기 전에 input 그룹에 query가 있어야 함
+            # 상태 검증 및 보강 (통합된 검증 로직)
             if "input" not in initial_state:
                 initial_state["input"] = {}
             if not initial_state["input"].get("query"):
                 initial_state["input"]["query"] = message
-                logger.debug(f"stream_message: input.query에 message 설정: '{message[:50]}...'")
             if not initial_state["input"].get("session_id"):
                 initial_state["input"]["session_id"] = session_id
             
-            # 최상위 레벨에도 query 포함 (이중 보장)
             if not initial_state.get("query"):
                 initial_state["query"] = message
-                logger.debug(f"stream_message: 최상위 query에 message 설정: '{message[:50]}...'")
             if not initial_state.get("session_id"):
                 initial_state["session_id"] = session_id
             
-            # 초기 state 검증
-            initial_query = initial_state.get("input", {}).get("query", "") if initial_state.get("input") else initial_state.get("query", "")
-            logger.info(f"stream_message: initial_state query length={len(initial_query)}, query='{initial_query[:100] if initial_query else 'EMPTY'}...'")
-            logger.debug(f"stream_message: initial_state input.query='{initial_state.get('input', {}).get('query', 'NOT_FOUND')[:50] if initial_state.get('input', {}).get('query') else 'NOT_FOUND'}...'")
-            logger.debug(f"stream_message: initial_state 최상위 query='{initial_state.get('query', 'NOT_FOUND')[:50] if initial_state.get('query') else 'NOT_FOUND'}...'")
-            
+            # 초기 state 검증 (한 번만 수행)
+            initial_query = initial_state.get("input", {}).get("query") or initial_state.get("query")
             if not initial_query or not str(initial_query).strip():
                 logger.error(f"Initial state query is empty! Input message was: '{message[:50]}...'")
-                logger.debug(f"stream_message: ERROR - initial_state query is empty!")
-                logger.debug(f"stream_message: initial_state keys: {list(initial_state.keys())}")
                 error_event = {
                     "type": "final",
                     "content": "[오류] 질문이 제대로 전달되지 않았습니다. 다시 시도해주세요.",
@@ -309,6 +288,9 @@ class ChatService:
             executed_nodes = set()  # 실행된 노드 추적
             answer_generation_started = False  # 답변 생성 노드 시작 플래그
             json_output_detected = False  # JSON 출력 감지 플래그
+            
+            # 메모리 최적화: 이벤트 히스토리 제한 (최대 100개만 유지)
+            MAX_EVENT_HISTORY = 100
             
             # 노드 이름을 사용자 친화적인 메시지로 매핑
             node_name_mapping = {
@@ -406,8 +388,17 @@ class ChatService:
                 # 스트리밍 이벤트 처리
                 event_count = 0
                 llm_stream_count = 0
-                event_types_seen = set()  # 본 이벤트 타입 추적
-                node_names_seen = set()  # 본 노드 이름 추적
+                event_types_seen = set()  # 본 이벤트 타입 추적 (디버깅용, 제한적 사용)
+                node_names_seen = set()  # 본 노드 이름 추적 (디버깅용, 제한적 사용)
+                
+                # 관련 이벤트 타입 집합 (성능 최적화)
+                RELEVANT_EVENT_TYPES = frozenset(["on_llm_stream", "on_chat_model_stream", "on_chain_stream", 
+                                                   "on_chain_start", "on_chain_end", "on_llm_end", "on_chat_model_end"])
+                
+                # 메모리 최적화: 이벤트 히스토리 크기 제한
+                if event_count > MAX_EVENT_HISTORY:
+                    event_types_seen.clear()
+                    node_names_seen.clear()
                 
                 async for event in get_stream_events():
                     event_count += 1
@@ -415,24 +406,17 @@ class ChatService:
                     event_type = event.get("event", "")
                     event_name = event.get("name", "")
                     
-                    # 모든 이벤트 타입 추적 (디버깅용)
-                    event_types_seen.add(event_type)
-                    if event_name:
-                        node_names_seen.add(event_name)
-                    
-                    # 디버깅: 처음 100개 이벤트는 항상 로깅 (문제 진단용)
-                    if event_count <= 100:
-                        logger.info(f"이벤트 #{event_count}: type={event_type}, name={event_name}")
-                    
-                    # 관련 없는 이벤트는 즉시 건너뛰기 (성능 최적화)
-                    # on_chat_model_end도 추가 (Google Gemini는 on_chat_model_stream 사용)
-                    # on_chain_stream도 추가 (LangGraph에서 체인 레벨 스트리밍 이벤트)
-                    if event_type not in ["on_llm_stream", "on_chat_model_stream", "on_chain_stream", "on_chain_start", "on_chain_end", "on_llm_end", "on_chat_model_end"]:
+                    # 관련 없는 이벤트는 즉시 건너뛰기 (성능 최적화 - 조기 종료)
+                    if event_type not in RELEVANT_EVENT_TYPES:
                         continue
                     
-                    # 디버깅: 처리할 이벤트 로깅 (처음 20개만)
-                    if DEBUG_STREAM and event_count <= 20:
-                        logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
+                    # 디버깅 모드에서만 이벤트 추적 (메모리 최적화: 제한적 추적)
+                    if DEBUG_STREAM and event_count <= MAX_EVENT_HISTORY:
+                        event_types_seen.add(event_type)
+                        if event_name:
+                            node_names_seen.add(event_name)
+                        if event_count <= 20:
+                            logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
                     
                     # LLM 스트리밍 이벤트 감지 (답변 생성 노드에서만)
                     # 
@@ -454,12 +438,11 @@ class ChatService:
                             continue
                         
                         llm_stream_count += 1
-                        if DEBUG_STREAM:
-                            logger.debug(f"{event_type} 이벤트 발견: name={event_name}, 전체 이벤트 키: {list(event.keys())}")
+                        if DEBUG_STREAM and llm_stream_count <= 10:
+                            logger.debug(f"{event_type} 이벤트 발견: name={event_name}")
                         
                         # 이벤트의 상위 노드 정보 확인
                         event_tags = event.get("tags", [])
-                        event_metadata = event.get("metadata", {})
                         event_parent = event.get("parent", {})
                         
                         # 상위 노드 이름 확인
@@ -504,29 +487,18 @@ class ChatService:
                                 # 다른 노드는 무시
                                 is_answer_node = False
                         
-                        # 디버깅: 모든 스트리밍 이벤트 로깅 (디버그 모드에서만, 처음 10개만)
-                        if DEBUG_STREAM and llm_stream_count <= 10:
+                        # 디버깅: 스트리밍 이벤트 로깅 (디버그 모드에서만, 처음 5개만)
+                        if DEBUG_STREAM and llm_stream_count <= 5:
                             logger.debug(
-                                f"{event_type} 이벤트 #{llm_stream_count}: "
-                                f"name={event_name}, parent={parent_node_name}, "
-                                f"is_answer_node={is_answer_node}, "
-                                f"answer_generation_started={answer_generation_started}, "
-                                f"last_node={last_node_name}, "
-                                f"tags={event_tags}, metadata={event_metadata}"
+                                f"{event_type} #{llm_stream_count}: name={event_name}, "
+                                f"is_answer_node={is_answer_node}, answer_generation_started={answer_generation_started}"
                             )
                         
                         if not is_answer_node:
-                            # 답변 생성 노드가 아니면 무시
-                            if DEBUG_STREAM and llm_stream_count <= 5:
-                                logger.debug(f"답변 생성 노드가 아님: {event_name}, parent={parent_node_name} (무시)")
                             continue
                         
-                        if DEBUG_STREAM:
-                            logger.debug(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}, parent={parent_node_name}")
-                        
-                        if is_answer_node:
-                            if DEBUG_STREAM:
-                                logger.debug(f"LLM 스트리밍 이벤트 감지: {event_name} (총 {llm_stream_count}개)")
+                        if DEBUG_STREAM and llm_stream_count <= 5:
+                            logger.debug(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
                             # 토큰 추출 (다양한 이벤트 구조 지원)
                             chunk = None
                             event_data = event.get("data", {})
@@ -591,35 +563,30 @@ class ChatService:
                                                             # 새로운 부분만 추출
                                                             new_part = full_answer_from_event[len(full_answer):]
                                                             
-                                                            # 토큰 단위로 분할하여 전ㅇ
-                                                            # 공백과 구두점을 기준으로 토큰 분할
-                                                            # 공백, 구두점, 한글/영문/숫자를 기준으로 토큰 분할
-                                                            tokens = re.findall(r'\S+|\s+', new_part)
-                                                            for token in tokens:
-                                                                # 줄바꿈을 포함한 모든 토큰 전송 (strip() 체크 제거)
-                                                                if token:  # 빈 문자열이 아니면 전송 (줄바꿈 포함)
-                                                                    try:
-                                                                        # type: "stream"으로 전송
-                                                                        stream_event = {
-                                                                            "type": "stream",
-                                                                            "content": token,
-                                                                            "timestamp": datetime.now().isoformat()
-                                                                        }
-                                                                        event_json = json.dumps(stream_event, ensure_ascii=False)
-                                                                        yield event_json + "\n"
-                                                                        full_answer += token
-                                                                        tokens_received += 1
-                                                                        answer_found = True
-                                                                        if DEBUG_STREAM:
-                                                                            logger.debug(f"on_chain_stream: 토큰 전송 ({len(token)}자, 누적 {len(full_answer)}자)")
-                                                                    except (TypeError, ValueError) as json_error:
-                                                                        # JSON 직렬화 실패 시 로깅만 하고 계속 진행
-                                                                        if DEBUG_STREAM:
-                                                                            logger.warning(f"토큰 JSON 직렬화 실패: {json_error}, token={repr(token[:50])}")
-                                                                        continue
+                                                            # new_part를 그대로 전송 (토큰 분리 제거)
+                                                            if new_part:
+                                                                try:
+                                                                    # type: "stream"으로 전송
+                                                                    stream_event = {
+                                                                        "type": "stream",
+                                                                        "content": new_part,
+                                                                        "timestamp": datetime.now().isoformat()
+                                                                    }
+                                                                    event_json = json.dumps(stream_event, ensure_ascii=False)
+                                                                    yield event_json + "\n"
+                                                                    full_answer += new_part
+                                                                    tokens_received += 1
+                                                                    answer_found = True
+                                                                    if DEBUG_STREAM:
+                                                                        logger.debug(f"on_chain_stream: 청크 전송 ({len(new_part)}자, 누적 {len(full_answer)}자)")
+                                                                except (TypeError, ValueError) as json_error:
+                                                                    # JSON 직렬화 실패 시 로깅만 하고 계속 진행
+                                                                    if DEBUG_STREAM:
+                                                                        logger.warning(f"청크 JSON 직렬화 실패: {json_error}, new_part={repr(new_part[:50])}")
+                                                                    continue
                                                             # full_answer 업데이트
                                                             full_answer = full_answer_from_event
-                                                            chunk = None  # 이미 토큰 단위로 전송했으므로 None으로 설정
+                                                            chunk = None  # 이미 전송했으므로 None으로 설정
                                                         else:
                                                             # 이미 받은 내용이면 스킵
                                                             chunk = None
@@ -629,27 +596,23 @@ class ChatService:
                                                     if len(chain_output) > len(full_answer):
                                                         new_part = chain_output[len(full_answer):]
                                                         
-                                                        # 토큰 단위로 분할하여 전송 (타이핑 효과를 위해 개별 전송)
-                                                        # 공백과 구두점을 기준으로 토큰 분할
-                                                        tokens = re.findall(r'\S+|\s+', new_part)
-                                                        for token in tokens:
-                                                            # 줄바꿈을 포함한 모든 토큰 전송
-                                                            if token:  # 빈 문자열이 아니면 전송 (줄바꿈 포함)
-                                                                # type: "stream"으로 전송 (타이핑 효과를 위해 개별 전송)
-                                                                stream_event = {
-                                                                    "type": "stream",
-                                                                    "content": token,
-                                                                    "timestamp": datetime.now().isoformat()
-                                                                }
-                                                                yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                                full_answer += token
-                                                                tokens_received += 1
-                                                                answer_found = True
-                                                                if DEBUG_STREAM:
-                                                                    logger.debug(f"on_chain_stream: 토큰 전송 ({len(token)}자, 누적 {len(full_answer)}자)")
+                                                        # new_part를 그대로 전송 (토큰 분리 제거)
+                                                        if new_part:
+                                                            # type: "stream"으로 전송
+                                                            stream_event = {
+                                                                "type": "stream",
+                                                                "content": new_part,
+                                                                "timestamp": datetime.now().isoformat()
+                                                            }
+                                                            yield json.dumps(stream_event, ensure_ascii=False) + "\n"
+                                                            full_answer += new_part
+                                                            tokens_received += 1
+                                                            answer_found = True
+                                                            if DEBUG_STREAM:
+                                                                logger.debug(f"on_chain_stream: 청크 전송 ({len(new_part)}자, 누적 {len(full_answer)}자)")
                                                         # full_answer 업데이트
                                                         full_answer = chain_output
-                                                        chunk = None  # 이미 토큰 단위로 전송했으므로 None으로 설정
+                                                        chunk = None  # 이미 전송했으므로 None으로 설정
                                                     else:
                                                         chunk = None
                                                 # chain_output이 객체인 경우 content 속성 확인
@@ -904,27 +867,20 @@ class ChatService:
                                     
                                     # 방법 3: JSON 키워드 패턴 감지 (중간 노드의 JSON 출력 특징)
                                     if not is_json_output:
-                                        json_keywords = ['"complexity"', '"confidence"', '"reasoning"', '"core_keywords"', 
-                                                         '"query_intent"', '"is_valid"', '"quality_score"', '"final_score"',
-                                                         '"score"', '"issues"', '"strengths"', '"recommendations"',
-                                                         '"needs_improvement"', '"improvement_instructions"', '"preserve_content"',
-                                                         '"focus_areas"', '"meets_quality_threshold"', '"summary"']
                                         # 청크 자체에 키워드가 있거나, 누적 텍스트에 키워드가 있는지 확인
-                                        if any(keyword in chunk for keyword in json_keywords):
+                                        if any(keyword in chunk for keyword in JSON_KEYWORDS):
                                             is_json_output = True
                                             json_output_detected = True
                                         elif full_answer:
                                             combined_text = full_answer + chunk
-                                            if any(keyword in combined_text for keyword in json_keywords):
+                                            if any(keyword in combined_text for keyword in JSON_KEYWORDS):
                                                 is_json_output = True
                                                 json_output_detected = True
                                     
                                     # 방법 4: JSON 구조 패턴 감지 (큰따옴표로 시작하는 키-값 쌍)
                                     if not is_json_output:
                                         # "key": 형태의 패턴이 있으면 JSON일 가능성 높음
-                                        # re 모듈은 파일 상단에서 import됨
-                                        json_pattern = r'^\s*"[^"]+"\s*:\s*'
-                                        if re.match(json_pattern, chunk_stripped) or re.match(json_pattern, chunk):
+                                        if JSON_PATTERN.match(chunk_stripped) or JSON_PATTERN.match(chunk):
                                             is_json_output = True
                                             json_output_detected = True
                                     
@@ -938,7 +894,8 @@ class ChatService:
                                     # JSON 출력이 아닌 실제 답변이 시작되면 JSON 출력 플래그 리셋
                                     if not is_json_output and json_output_detected and len(chunk_stripped) > 0:
                                         # 실제 답변이 시작된 것으로 간주 (JSON이 아닌 텍스트)
-                                        if not any(keyword in chunk for keyword in ['"complexity"', '"confidence"', '"reasoning"']):
+                                        reset_keywords = frozenset(['"complexity"', '"confidence"', '"reasoning"'])
+                                        if not any(keyword in chunk for keyword in reset_keywords):
                                             json_output_detected = False
                                             if DEBUG_STREAM:
                                                 logger.debug("실제 답변이 시작되어 JSON 출력 플래그 리셋")
@@ -1154,23 +1111,13 @@ class ChatService:
                 # 스트리밍 완료 후 최종 확인 (DEBUG_STREAM이 true일 때만)
                 if DEBUG_STREAM:
                     logger.info(f"스트리밍 이벤트 처리 완료: 총 {event_count}개 이벤트, LLM 스트리밍 이벤트 {llm_stream_count}개, 토큰 수신 {tokens_received}개")
-                    logger.info(f"발생한 이벤트 타입: {sorted(event_types_seen)}")
-                    logger.info(f"발생한 노드 이름 (답변 생성 관련): {[n for n in sorted(node_names_seen) if 'answer' in n.lower() or 'generate' in n.lower()]}")
                 
-                # 디버깅: 발생한 모든 이벤트 타입과 노드 이름 로깅 (DEBUG_STREAM이 true일 때만)
+                # LLM 스트리밍 이벤트가 없을 때만 경고 (프로덕션에서도)
                 if llm_stream_count == 0:
                     if DEBUG_STREAM:
                         logger.warning("⚠️ LLM 스트리밍 이벤트가 발생하지 않았습니다.")
                         logger.debug(f"발생한 모든 이벤트 타입: {sorted(event_types_seen)}")
                         logger.debug(f"발생한 모든 노드 이름: {sorted(node_names_seen)}")
-                    # 답변 생성 관련 노드가 실행되었는지 확인
-                    answer_nodes_executed = [n for n in sorted(node_names_seen) if 'answer' in n.lower() or 'generate' in n.lower()]
-                    if answer_nodes_executed:
-                        if DEBUG_STREAM:
-                            logger.info(f"답변 생성 관련 노드 실행됨: {answer_nodes_executed}")
-                    else:
-                        if DEBUG_STREAM:
-                            logger.warning("답변 생성 관련 노드가 실행되지 않았습니다.")
                 
                 if not answer_found:
                     # 스트리밍 이벤트에서 답변을 찾지 못한 경우
@@ -1255,22 +1202,97 @@ class ChatService:
                                     answer_found = True
             
             # 완료 메타데이터 (답변이 없어도 완료 신호 전송)
+            # 중요: 스트림 종료를 보장하기 위해 app.aget_state() 호출을 제거
+            # sources는 스트림 종료 후에 별도로 가져오거나, astream_events에서 이미 받은 정보를 사용
+            # 스트림 종료를 방해하지 않도록 sources 추출을 제거
+            final_sources = []
+            final_legal_references = []
+            final_sources_detail = []
+            
+            # 주의: app.aget_state() 호출이 스트림 종료를 방해할 수 있으므로 제거
+            # sources는 나중에 별도로 가져오거나, astream_events에서 이미 받은 정보를 사용
+            # 스트림 종료를 보장하기 위해 sources 추출을 제거
+            
             if full_answer:
-                if DEBUG_STREAM:
-                    logger.info(f"스트리밍 완료: {len(full_answer)}자, {tokens_received}개 토큰 수신")
                 has_yielded = True
-                # 최종 완료 이벤트를 JSONL 형식으로 전송
-                final_event = {
-                    "type": "final",
-                    "content": full_answer,
-                    "metadata": {
-                        "tokens_received": tokens_received,
-                        "length": len(full_answer),
-                        "answer_found": answer_found
-                    },
-                    "timestamp": datetime.now().isoformat()
-                }
-                yield json.dumps(final_event, ensure_ascii=False) + "\n"
+                
+                # 토큰 제한 확인 (MAX_OUTPUT_TOKENS = 8192)
+                MAX_OUTPUT_TOKENS = 8192
+                should_split = tokens_received >= MAX_OUTPUT_TOKENS
+                
+                import uuid
+                
+                # 메시지 ID 생성 (chat.py에서 저장 시 사용)
+                message_id = str(uuid.uuid4())
+                
+                if should_split:
+                    # 토큰 제한을 초과했을 때만 답변 분할 처리
+                    from api.services.answer_splitter import AnswerSplitter
+                    
+                    splitter = AnswerSplitter(chunk_size=2000)
+                    chunks = splitter.split_answer(full_answer)
+                    
+                    # 메시지 저장은 chat.py에서 처리하므로 여기서는 저장하지 않음
+                    # message_id는 생성만 하고 final_event에 포함
+                    
+                    # 첫 번째 청크만 즉시 전송
+                    if chunks:
+                        first_chunk = chunks[0]
+                        
+                        # 최종 완료 이벤트에 첫 번째 청크만 포함
+                        final_event = {
+                            "type": "final",
+                            "content": first_chunk.content,
+                            "metadata": {
+                                "tokens_received": tokens_received,
+                                "length": len(full_answer),
+                                "answer_found": answer_found,
+                                "sources": final_sources,
+                                "legal_references": final_legal_references,
+                                "sources_detail": final_sources_detail,
+                                "needs_continuation": True,
+                                "message_id": message_id
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        yield json.dumps(final_event, ensure_ascii=False) + "\n"
+                    else:
+                        # 청크가 없는 경우 (짧은 답변) 기존 방식 유지
+                        final_event = {
+                            "type": "final",
+                            "content": full_answer,
+                            "metadata": {
+                                "tokens_received": tokens_received,
+                                "length": len(full_answer),
+                                "answer_found": answer_found,
+                                "sources": final_sources,
+                                "legal_references": final_legal_references,
+                                "sources_detail": final_sources_detail,
+                                "message_id": message_id
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        yield json.dumps(final_event, ensure_ascii=False) + "\n"
+                else:
+                    # 메시지 저장은 chat.py에서 처리하므로 여기서는 저장하지 않음
+                    # message_id는 생성만 하고 final_event에 포함
+                    
+                    # 전체 답변을 한 번에 전송 (needs_continuation 없음)
+                    final_event = {
+                        "type": "final",
+                        "content": full_answer,
+                        "metadata": {
+                            "tokens_received": tokens_received,
+                            "length": len(full_answer),
+                            "answer_found": answer_found,
+                            "sources": final_sources,
+                            "legal_references": final_legal_references,
+                            "sources_detail": final_sources_detail,
+                            "message_id": message_id
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield json.dumps(final_event, ensure_ascii=False) + "\n"
             else:
                 if DEBUG_STREAM:
                     logger.warning("스트리밍 완료: 답변이 생성되지 않았습니다.")
@@ -1314,49 +1336,351 @@ class ChatService:
                         "timestamp": datetime.now().isoformat()
                     }
                     yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
-                    # 스트림 종료를 보장하기 위해 추가 빈 줄 yield
-                    yield "\n"
                     has_yielded = True
                 except Exception:
                     pass
-            finally:
-                # 예외 발생 시에도 스트림이 제대로 종료되도록 보장
-                # (이미 위에서 yield했으므로 여기서는 추가 처리 불필요)
-                # 하지만 스트림이 비어있지 않도록 보장
-                if not has_yielded:
-                    try:
-                        fallback_event = {
-                            "type": "final",
-                            "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
-                            "metadata": {"error": True},
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
-                        has_yielded = True
-                    except Exception as e:
-                        logger.error(f"Error yielding fallback message in finally: {e}")
-                
-                # HTTP chunked encoding이 제대로 종료되도록 보장
-                # 스트림 종료 신호: 빈 줄 2개 yield
-                # 이는 ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지
+        finally:
+            # 예외 발생 시에도 스트림이 제대로 종료되도록 보장
+            # 스트림이 비어있지 않도록 보장
+            if not has_yielded:
                 try:
-                    yield "\n\n"  # 스트림 종료 신호 (빈 줄 2개)
-                except Exception:
-                    pass
+                    fallback_event = {
+                        "type": "final",
+                        "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
+                        "metadata": {"error": True},
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
+                    has_yielded = True
+                except Exception as e:
+                    logger.error(f"Error yielding fallback message in finally: {e}")
+    
+    async def get_sources_from_session(
+        self,
+        session_id: str,
+        message_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        세션의 최종 state에서 sources 정보 가져오기
         
-        # 최소한 하나의 yield가 없었으면 에러 메시지 전송 (스트림이 비어있지 않도록 보장)
-        # (finally 블록에서 이미 처리했을 수 있으므로 중복 방지)
-        if not has_yielded:
-            try:
-                fallback_event = {
-                    "type": "final",
-                    "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
-                    "metadata": {"error": True},
-                    "timestamp": datetime.now().isoformat()
+        Args:
+            session_id: 세션 ID
+            message_id: 메시지 ID (선택사항, 해당 메시지의 metadata에서 sources 가져오기)
+        
+        Returns:
+            sources, legal_references, sources_detail 딕셔너리
+        """
+        # 먼저 메시지의 metadata에서 sources를 가져오기 시도
+        # message_id가 있으면 해당 메시지만, 없으면 모든 assistant 메시지 확인
+        try:
+            from api.services.session_service import session_service
+            messages = session_service.get_messages(session_id)
+            
+            # message_id가 있으면 해당 메시지만 확인
+            if message_id:
+                for msg in messages:
+                    if msg.get("message_id") == message_id and msg.get("role") == "assistant":
+                        metadata = msg.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            msg_sources = metadata.get("sources", [])
+                            msg_legal_references = metadata.get("legal_references", [])
+                            msg_sources_detail = metadata.get("sources_detail", [])
+                            
+                            if msg_sources or msg_legal_references or msg_sources_detail:
+                                logger.info(f"Found sources in message metadata for message_id={message_id}: {len(msg_sources)} sources, {len(msg_legal_references)} legal_references, {len(msg_sources_detail)} sources_detail")
+                                return {
+                                    "sources": msg_sources if isinstance(msg_sources, list) else [],
+                                    "legal_references": msg_legal_references if isinstance(msg_legal_references, list) else [],
+                                    "sources_detail": msg_sources_detail if isinstance(msg_sources_detail, list) else []
+                                }
+            else:
+                # message_id가 없으면 모든 assistant 메시지 확인 (최신부터)
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        metadata = msg.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            msg_sources = metadata.get("sources", [])
+                            msg_legal_references = metadata.get("legal_references", [])
+                            msg_sources_detail = metadata.get("sources_detail", [])
+                            
+                            if msg_sources or msg_legal_references or msg_sources_detail:
+                                logger.info(f"Found sources in assistant message metadata (message_id={msg.get('message_id')}): {len(msg_sources)} sources, {len(msg_legal_references)} legal_references, {len(msg_sources_detail)} sources_detail")
+                                return {
+                                    "sources": msg_sources if isinstance(msg_sources, list) else [],
+                                    "legal_references": msg_legal_references if isinstance(msg_legal_references, list) else [],
+                                    "sources_detail": msg_sources_detail if isinstance(msg_sources_detail, list) else []
+                                }
+        except Exception as e:
+            logger.warning(f"Failed to get sources from message metadata: {e}")
+        
+        # 메시지 metadata에서 sources를 찾지 못한 경우, LangGraph state에서 가져오기
+        if not self.workflow_service or not self.workflow_service.app:
+            logger.warning("Workflow service is not available")
+            return {
+                "sources": [],
+                "legal_references": [],
+                "sources_detail": []
+            }
+        
+        try:
+            # LangGraph config 생성 (thread_id를 session_id로 사용)
+            config = {"configurable": {"thread_id": session_id}}
+            
+            # 최종 state 가져오기
+            final_state = await self.workflow_service.app.aget_state(config)
+            
+            if not final_state or not final_state.values:
+                logger.warning(f"No state found for session_id: {session_id}")
+                return {
+                    "sources": [],
+                    "legal_references": [],
+                    "sources_detail": []
                 }
-                yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
-            except Exception as e:
-                logger.error(f"Error yielding fallback message: {e}")
+            
+            state_values = final_state.values
+            
+            # 디버깅: state의 모든 키 로깅
+            logger.info(f"State keys for session {session_id}: {list(state_values.keys())}")
+            
+            # 디버깅: state의 주요 필드 값 확인
+            for key in ["sources", "legal_references", "sources_detail", "metadata", "retrieved_docs", "structured_documents"]:
+                if key in state_values:
+                    value = state_values[key]
+                    if isinstance(value, list):
+                        logger.info(f"State[{key}] (list): length={len(value)}, first_item_type={type(value[0]) if value else 'empty'}")
+                        if value and len(value) > 0:
+                            logger.debug(f"State[{key}] first item: {str(value[0])[:200] if isinstance(value[0], (str, dict)) else type(value[0])}")
+                    elif isinstance(value, dict):
+                        logger.info(f"State[{key}] (dict): keys={list(value.keys())[:10]}")
+                        if "sources" in value:
+                            logger.info(f"State[{key}]['sources']: {value.get('sources', [])[:5]}")
+                    else:
+                        logger.info(f"State[{key}]: type={type(value)}, value={str(value)[:200]}")
+            
+            # sources 추출 (여러 위치에서 시도)
+            sources = []
+            
+            # 1. 최상위 레벨에서 sources 찾기
+            if "sources" in state_values:
+                sources_list = state_values.get("sources", [])
+                if isinstance(sources_list, list):
+                    sources = [str(s) for s in sources_list if s and str(s).strip()]
+                    logger.debug(f"Found {len(sources)} sources at top level")
+            
+            # 2. metadata 안에서 sources 찾기
+            if not sources and "metadata" in state_values:
+                metadata = state_values.get("metadata", {})
+                if isinstance(metadata, dict):
+                    if "sources" in metadata:
+                        metadata_sources = metadata.get("sources", [])
+                        if isinstance(metadata_sources, list):
+                            sources = [str(s) for s in metadata_sources if s and str(s).strip()]
+                            logger.debug(f"Found {len(sources)} sources in metadata")
+            
+            # 3. retrieved_docs에서 sources 추출 (최후의 수단)
+            if not sources and "retrieved_docs" in state_values:
+                retrieved_docs = state_values.get("retrieved_docs", [])
+                if isinstance(retrieved_docs, list):
+                    seen_sources = set()
+                    for doc in retrieved_docs:
+                        if isinstance(doc, dict):
+                            # 여러 필드에서 source 찾기
+                            source = (doc.get("source") or 
+                                     doc.get("title") or 
+                                     doc.get("document_id") or 
+                                     doc.get("name") or "")
+                            if source and source not in seen_sources and str(source).strip():
+                                sources.append(str(source))
+                                seen_sources.add(source)
+                    if sources:
+                        logger.info(f"Extracted {len(sources)} sources from retrieved_docs")
+                    else:
+                        logger.debug(f"No sources found in retrieved_docs (count: {len(retrieved_docs)})")
+            
+            # legal_references 추출
+            legal_references = []
+            if "legal_references" in state_values:
+                legal_refs = state_values.get("legal_references", [])
+                if isinstance(legal_refs, list):
+                    legal_references = [str(r) for r in legal_refs if r and str(r).strip()]
+            
+            # metadata에서 legal_references 찾기
+            if not legal_references and "metadata" in state_values:
+                metadata = state_values.get("metadata", {})
+                if isinstance(metadata, dict) and "legal_references" in metadata:
+                    metadata_legal_refs = metadata.get("legal_references", [])
+                    if isinstance(metadata_legal_refs, list):
+                        legal_references = [str(r) for r in metadata_legal_refs if r and str(r).strip()]
+            
+            # sources_detail 추출
+            sources_detail = []
+            if "sources_detail" in state_values:
+                sources_detail_list = state_values.get("sources_detail", [])
+                if isinstance(sources_detail_list, list):
+                    sources_detail = sources_detail_list
+            
+            # metadata에서 sources_detail 찾기
+            if not sources_detail and "metadata" in state_values:
+                metadata = state_values.get("metadata", {})
+                if isinstance(metadata, dict) and "sources_detail" in metadata:
+                    metadata_sources_detail = metadata.get("sources_detail", [])
+                    if isinstance(metadata_sources_detail, list):
+                        sources_detail = metadata_sources_detail
+            
+            # sources_detail이 비어있으면 retrieved_docs에서 직접 생성
+            if not sources_detail and "retrieved_docs" in state_values:
+                retrieved_docs = state_values.get("retrieved_docs", [])
+                if isinstance(retrieved_docs, list) and retrieved_docs:
+                    try:
+                        from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
+                        formatter = UnifiedSourceFormatter()
+                        
+                        for doc in retrieved_docs:
+                            if not isinstance(doc, dict):
+                                continue
+                            
+                            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                            if not source_type:
+                                continue
+                            
+                            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                            merged_metadata = {**metadata}
+                            
+                            # doc의 필드를 metadata에 병합
+                            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                                       "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
+                                if key in doc:
+                                    merged_metadata[key] = doc[key]
+                            
+                            source_info_detail = formatter.format_source(source_type, merged_metadata)
+                            
+                            detail_dict = {
+                                "name": source_info_detail.name,
+                                "type": source_info_detail.type,
+                                "url": source_info_detail.url or "",
+                                "metadata": source_info_detail.metadata or {}
+                            }
+                            
+                            # metadata의 정보를 최상위 레벨로 추출
+                            if source_info_detail.metadata:
+                                meta = source_info_detail.metadata
+                                
+                                # 법령 조문인 경우
+                                if source_type == "statute_article":
+                                    if meta.get("statute_name"):
+                                        detail_dict["statute_name"] = meta["statute_name"]
+                                    if meta.get("article_no"):
+                                        detail_dict["article_no"] = meta["article_no"]
+                                    if meta.get("clause_no"):
+                                        detail_dict["clause_no"] = meta["clause_no"]
+                                    if meta.get("item_no"):
+                                        detail_dict["item_no"] = meta["item_no"]
+                                
+                                # 판례인 경우
+                                elif source_type == "case_paragraph":
+                                    if meta.get("doc_id"):
+                                        detail_dict["case_number"] = meta["doc_id"]
+                                    if meta.get("court"):
+                                        detail_dict["court"] = meta["court"]
+                                    if meta.get("casenames"):
+                                        detail_dict["case_name"] = meta["casenames"]
+                                
+                                # 결정례인 경우
+                                elif source_type == "decision_paragraph":
+                                    if meta.get("doc_id"):
+                                        detail_dict["decision_number"] = meta["doc_id"]
+                                    if meta.get("org"):
+                                        detail_dict["org"] = meta["org"]
+                                    if meta.get("decision_date"):
+                                        detail_dict["decision_date"] = meta["decision_date"]
+                                    if meta.get("result"):
+                                        detail_dict["result"] = meta["result"]
+                                
+                                # 해석례인 경우
+                                elif source_type == "interpretation_paragraph":
+                                    if meta.get("doc_id"):
+                                        detail_dict["interpretation_number"] = meta["doc_id"]
+                                    if meta.get("org"):
+                                        detail_dict["org"] = meta["org"]
+                                    if meta.get("title"):
+                                        detail_dict["title"] = meta["title"]
+                                    if meta.get("response_date"):
+                                        detail_dict["response_date"] = meta["response_date"]
+                            
+                            # 상세본문 추가
+                            content = doc.get("content") or doc.get("text") or ""
+                            if content:
+                                detail_dict["content"] = content
+                            
+                            sources_detail.append(detail_dict)
+                    except Exception as e:
+                        logger.warning(f"Error generating sources_detail from retrieved_docs: {e}")
+            
+            # sources가 여전히 비어있으면, 최신 assistant 메시지의 metadata에서도 확인
+            if not sources and not legal_references and not sources_detail:
+                try:
+                    from api.services.session_service import session_service
+                    messages = session_service.get_messages(session_id)
+                    
+                    # 최신 assistant 메시지 찾기
+                    for msg in reversed(messages):
+                        if msg.get("role") == "assistant":
+                            metadata = msg.get("metadata", {})
+                            if isinstance(metadata, dict):
+                                msg_sources = metadata.get("sources", [])
+                                msg_legal_references = metadata.get("legal_references", [])
+                                msg_sources_detail = metadata.get("sources_detail", [])
+                                
+                                if msg_sources or msg_legal_references or msg_sources_detail:
+                                    sources = msg_sources if isinstance(msg_sources, list) else []
+                                    legal_references = msg_legal_references if isinstance(msg_legal_references, list) else []
+                                    sources_detail = msg_sources_detail if isinstance(msg_sources_detail, list) else []
+                                    logger.info(f"Found sources in latest assistant message metadata: {len(sources)} sources, {len(legal_references)} legal_references, {len(sources_detail)} sources_detail")
+                                    break
+                except Exception as e:
+                    logger.warning(f"Failed to get sources from latest message metadata: {e}")
+            
+            logger.info(f"Sources extracted from session {session_id}: {len(sources)} sources, {len(legal_references)} legal_references, {len(sources_detail)} sources_detail")
+            
+            # 디버깅: sources가 비어있으면 state 구조 상세 로깅
+            if not sources and not legal_references and not sources_detail:
+                logger.warning(f"No sources found in state for session {session_id}. State structure: {list(state_values.keys())}")
+                # state_values의 일부 내용 로깅 (너무 크지 않은 경우)
+                for key in ["metadata", "retrieved_docs", "structured_documents", "answer", "final_answer"]:
+                    if key in state_values:
+                        value = state_values[key]
+                        if isinstance(value, (dict, list)):
+                            logger.warning(f"State[{key}] type: {type(value)}, length/size: {len(value) if hasattr(value, '__len__') else 'N/A'}")
+                            # metadata의 경우 내부 구조도 확인
+                            if key == "metadata" and isinstance(value, dict):
+                                logger.warning(f"State[metadata] keys: {list(value.keys())[:20]}")
+                                if "sources" in value:
+                                    logger.warning(f"State[metadata]['sources'] found: {value.get('sources', [])[:5]}")
+                        elif isinstance(value, str):
+                            logger.warning(f"State[{key}] (string): length={len(value)}, preview={value[:100]}")
+                
+                # retrieved_docs에서 sources 추출 시도 (상세 로깅)
+                if "retrieved_docs" in state_values:
+                    retrieved_docs = state_values.get("retrieved_docs", [])
+                    if isinstance(retrieved_docs, list) and retrieved_docs:
+                        logger.warning(f"retrieved_docs found: {len(retrieved_docs)} documents")
+                        for i, doc in enumerate(retrieved_docs[:3]):
+                            if isinstance(doc, dict):
+                                source = doc.get("source") or doc.get("title") or ""
+                                logger.warning(f"  doc[{i}] source: {source}")
+            
+            return {
+                "sources": sources,
+                "legal_references": legal_references,
+                "sources_detail": sources_detail
+            }
+        except Exception as e:
+            logger.error(f"Error getting sources from session {session_id}: {e}", exc_info=True)
+            return {
+                "sources": [],
+                "legal_references": [],
+                "sources_detail": []
+            }
     
     def is_available(self) -> bool:
         """서비스 사용 가능 여부"""

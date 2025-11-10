@@ -2,7 +2,7 @@
 채팅 관련 스키마
 """
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 import re
 
 
@@ -21,7 +21,8 @@ class ChatRequest(BaseModel):
     file_base64: Optional[str] = Field(None, description="Base64 인코딩된 파일 (이미지, 텍스트, PDF, DOCX)")
     filename: Optional[str] = Field(None, max_length=255, description="파일명")
     
-    @validator('message')
+    @field_validator('message')
+    @classmethod
     def validate_message(cls, v):
         if not v or not v.strip():
             raise ValueError('메시지는 비어있을 수 없습니다')
@@ -50,7 +51,8 @@ class ChatRequest(BaseModel):
         
         return v.strip()
     
-    @validator('session_id')
+    @field_validator('session_id')
+    @classmethod
     def validate_session_id(cls, v):
         if v:
             uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -58,14 +60,16 @@ class ChatRequest(BaseModel):
                 raise ValueError('유효하지 않은 세션 ID 형식입니다')
         return v
     
-    @validator('context')
+    @field_validator('context')
+    @classmethod
     def validate_context(cls, v):
         if v:
             if len(v) > 5000:
                 raise ValueError('컨텍스트는 5000자를 초과할 수 없습니다')
         return v
     
-    @validator('file_base64')
+    @field_validator('file_base64')
+    @classmethod
     def validate_file_base64(cls, v):
         if v:
             # Base64 크기 제한 (10MB로 축소)
@@ -82,7 +86,8 @@ class ChatRequest(BaseModel):
                 raise ValueError('유효하지 않은 Base64 형식입니다.')
         return v
     
-    @validator('filename')
+    @field_validator('filename')
+    @classmethod
     def validate_filename(cls, v):
         if v:
             # 파일명 검증
@@ -93,12 +98,58 @@ class ChatRequest(BaseModel):
         return v
 
 
+class ContinueAnswerRequest(BaseModel):
+    """계속 읽기 요청 스키마"""
+    session_id: str = Field(..., description="세션 ID")
+    message_id: str = Field(..., description="메시지 ID")
+    chunk_index: int = Field(..., description="요청할 청크 인덱스 (0부터 시작)")
+    
+    @field_validator('session_id')
+    @classmethod
+    def validate_session_id(cls, v):
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if not re.match(uuid_pattern, v, re.IGNORECASE):
+            raise ValueError('유효하지 않은 세션 ID 형식입니다')
+        return v
+    
+    @field_validator('message_id')
+    @classmethod
+    def validate_message_id(cls, v):
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if not re.match(uuid_pattern, v, re.IGNORECASE):
+            raise ValueError('유효하지 않은 메시지 ID 형식입니다')
+        return v
+    
+    @field_validator('chunk_index')
+    @classmethod
+    def validate_chunk_index(cls, v):
+        if v < 0:
+            raise ValueError('청크 인덱스는 0 이상이어야 합니다')
+        return v
+
+
+class ContinueAnswerResponse(BaseModel):
+    """계속 읽기 응답 스키마"""
+    content: str = Field(..., description="청크 내용")
+    chunk_index: int = Field(..., description="청크 인덱스")
+    total_chunks: int = Field(..., description="전체 청크 수")
+    has_more: bool = Field(..., description="더 많은 청크가 있는지 여부")
+
+
 class SourceInfo(BaseModel):
     """출처 정보 (상세)"""
     name: str = Field(..., description="출처명")
     type: str = Field(..., description="출처 타입 (statute_article, case_paragraph 등)")
     url: Optional[str] = Field(None, description="출처 URL")
     metadata: Optional[Dict[str, Any]] = Field(None, description="추가 메타데이터")
+
+
+class AnswerChunkInfo(BaseModel):
+    """답변 청크 정보"""
+    chunk_index: int = Field(..., description="청크 인덱스 (0부터 시작)")
+    total_chunks: int = Field(..., description="전체 청크 수")
+    has_more: bool = Field(..., description="더 많은 청크가 있는지 여부")
+    is_complete: bool = Field(..., description="전체 답변이 완료되었는지 여부")
 
 
 class ChatResponse(BaseModel):
@@ -115,6 +166,8 @@ class ChatResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="메타데이터")
     errors: List[str] = Field(default_factory=list, description="에러 목록")
     warnings: List[str] = Field(default_factory=list, description="경고 메시지 목록")
+    chunk_info: Optional[AnswerChunkInfo] = Field(None, description="답변 청크 정보 (분할 전송 시)")
+    message_id: Optional[str] = Field(None, description="메시지 ID (계속 읽기 기능용)")
 
 
 class StreamingChatRequest(BaseModel):
@@ -131,7 +184,8 @@ class StreamingChatRequest(BaseModel):
     file_base64: Optional[str] = Field(None, description="Base64 인코딩된 파일 (이미지, 텍스트, PDF, DOCX)")
     filename: Optional[str] = Field(None, max_length=255, description="파일명")
     
-    @validator('message')
+    @field_validator('message')
+    @classmethod
     def validate_message(cls, v):
         if not v or not v.strip():
             raise ValueError('메시지는 비어있을 수 없습니다')
@@ -160,7 +214,8 @@ class StreamingChatRequest(BaseModel):
         
         return v.strip()
     
-    @validator('session_id')
+    @field_validator('session_id')
+    @classmethod
     def validate_session_id(cls, v):
         if v:
             uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -168,14 +223,16 @@ class StreamingChatRequest(BaseModel):
                 raise ValueError('유효하지 않은 세션 ID 형식입니다')
         return v
     
-    @validator('context')
+    @field_validator('context')
+    @classmethod
     def validate_context(cls, v):
         if v:
             if len(v) > 5000:
                 raise ValueError('컨텍스트는 5000자를 초과할 수 없습니다')
         return v
     
-    @validator('file_base64')
+    @field_validator('file_base64')
+    @classmethod
     def validate_file_base64(cls, v):
         if v:
             # Base64 크기 제한 (10MB로 축소)
@@ -192,7 +249,8 @@ class StreamingChatRequest(BaseModel):
                 raise ValueError('유효하지 않은 Base64 형식입니다.')
         return v
     
-    @validator('filename')
+    @field_validator('filename')
+    @classmethod
     def validate_filename(cls, v):
         if v:
             # 파일명 검증
@@ -201,4 +259,42 @@ class StreamingChatRequest(BaseModel):
             if not is_valid:
                 raise ValueError(error_msg)
         return v
+
+
+class ContinueAnswerRequest(BaseModel):
+    """계속 읽기 요청 스키마"""
+    session_id: str = Field(..., description="세션 ID")
+    message_id: str = Field(..., description="메시지 ID")
+    chunk_index: int = Field(..., description="요청할 청크 인덱스 (0부터 시작)")
+    
+    @field_validator('session_id')
+    @classmethod
+    def validate_session_id(cls, v):
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if not re.match(uuid_pattern, v, re.IGNORECASE):
+            raise ValueError('유효하지 않은 세션 ID 형식입니다')
+        return v
+    
+    @field_validator('message_id')
+    @classmethod
+    def validate_message_id(cls, v):
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if not re.match(uuid_pattern, v, re.IGNORECASE):
+            raise ValueError('유효하지 않은 메시지 ID 형식입니다')
+        return v
+    
+    @field_validator('chunk_index')
+    @classmethod
+    def validate_chunk_index(cls, v):
+        if v < 0:
+            raise ValueError('청크 인덱스는 0 이상이어야 합니다')
+        return v
+
+
+class ContinueAnswerResponse(BaseModel):
+    """계속 읽기 응답 스키마"""
+    content: str = Field(..., description="청크 내용")
+    chunk_index: int = Field(..., description="청크 인덱스")
+    total_chunks: int = Field(..., description="전체 청크 수")
+    has_more: bool = Field(..., description="더 많은 청크가 있는지 여부")
 
