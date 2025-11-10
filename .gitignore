@@ -40,6 +40,10 @@ venv.bak/
 lawfirm_langgraph/.env
 .env.profiles/
 
+# Allow .env.example files (template files should be version controlled)
+!.env.example
+!**/.env.example
+
 
 # IDE
 .vscode/
