@@ -106,33 +106,13 @@ lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
 if lawfirm_langgraph_path.exists():
     sys.path.insert(0, str(lawfirm_langgraph_path))
 
-# 환경 변수 로드 (lawfirm_langgraph/.env를 먼저 로드)
+# 환경 변수 로드 (중앙 집중식 로더 사용)
 try:
-    from dotenv import load_dotenv
-    
-    # 1. lawfirm_langgraph/.env 로드 (LangGraphConfig가 사용)
-    langgraph_env = lawfirm_langgraph_path / ".env"
-    if langgraph_env.exists():
-        load_dotenv(dotenv_path=str(langgraph_env), override=False)
-        print(f"✅ Loaded environment from: {langgraph_env}")
-    else:
-        print(f"⚠️  Environment file not found: {langgraph_env}")
-    
-    # 2. 프로젝트 루트 .env 로드 (공통 설정)
-    root_env = project_root / ".env"
-    if root_env.exists():
-        load_dotenv(dotenv_path=str(root_env), override=False)
-        print(f"✅ Loaded environment from: {root_env}")
-    
-    # 3. api/.env 로드 (API 서버 전용 설정, 최우선)
-    api_env = Path(__file__).parent / ".env"
-    if api_env.exists():
-        load_dotenv(dotenv_path=str(api_env), override=True)
-        print(f"✅ Loaded environment from: {api_env}")
-        
-except ImportError:
-    print("⚠️  python-dotenv not installed. Environment variables from .env files will not be loaded.")
-    print("   Install with: pip install python-dotenv")
+    from utils.env_loader import load_all_env_files
+    load_all_env_files(project_root)
+except ImportError as e:
+    print(f"⚠️  Failed to load environment variables: {e}")
+    print("   Make sure utils/env_loader.py exists in the project root")
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,13 +123,19 @@ from api.config import api_config
 from api.middleware.logging import setup_logging
 
 # 라우터는 환경 변수 로드 후에 import
-from api.routers import chat, session, history, feedback, health
+from api.routers import chat, session, history, feedback, health, auth
 
 # FastAPI 앱 생성
+# 프로덕션 환경에서 API 문서 비활성화
+docs_url = None if not api_config.debug else "/docs"
+redoc_url = None if not api_config.debug else "/redoc"
+
 app = FastAPI(
     title="LawFirmAI API",
     description="법률 AI 어시스턴트 API 서버",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=docs_url,
+    redoc_url=redoc_url
 )
 
 # CORS 설정
@@ -356,7 +342,7 @@ async def startup_event():
     logging.getLogger("lawfirm_langgraph").disabled = False
     
     # lawfirm_langgraph 하위 로거들도 동일한 레벨로 설정
-    for logger_name in ["lawfirm_langgraph.core", "lawfirm_langgraph.langgraph_core", 
+    for logger_name in ["lawfirm_langgraph.core", 
                         "lawfirm_langgraph.config", "lawfirm_langgraph.core.agents",
                         "lawfirm_langgraph.core.services", "lawfirm_langgraph.core.utils"]:
         logging.getLogger(logger_name).setLevel(log_level)
@@ -391,6 +377,7 @@ app.include_router(session.router, prefix="/api/v1", tags=["session"])
 app.include_router(history.router, prefix="/api/v1", tags=["history"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
+app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 
 
 @app.get("/")

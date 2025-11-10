@@ -1,5 +1,5 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi>=0.109.1
+uvicorn[standard]>=0.24.0
 pydantic>=2.7.4,<3.0.0
 pydantic-settings>=2.1.0
 python-dotenv>=1.0.0
@@ -15,6 +15,7 @@ langchain-text-splitters>=1.0.0,<2.0.0
 
 # Optional dependencies (for advanced features)
 langfuse>=2.0.0
+langsmith>=0.1.0
 sentence-transformers>=2.2.0
 faiss-cpu>=1.7.4
 numpy>=1.24.0
@@ -38,6 +39,12 @@ filetype>=1.2.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 slowapi>=0.1.9
+authlib>=1.2.0
+
+# Database dependencies
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.12.0
 
 # Testing dependencies
 pytest>=7.4.0

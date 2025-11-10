@@ -20,7 +20,16 @@ class APIConfig(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     
     # 데이터베이스 설정
+    # 로컬: sqlite:///./data/api_sessions.db
+    # 개발/운영: postgresql://user:password@host:port/dbname
     database_url: str = "sqlite:///./data/api_sessions.db"
+    
+    # PostgreSQL 설정 (PostgreSQL 사용 시)
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "lawfirmai"
+    postgres_user: str = "lawfirmai"
+    postgres_password: str = ""
     
     # lawfirm_langgraph 설정
     langgraph_enabled: bool = True
@@ -32,12 +41,24 @@ class APIConfig(BaseSettings):
     auth_enabled: bool = False
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
-    jwt_expiration_hours: int = 24
+    jwt_access_token_expiration_minutes: int = 30
+    jwt_refresh_token_expiration_days: int = 7
     api_key_header: str = "X-API-Key"
+    
+    # OAuth2 Google 설정
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""
+    frontend_url: str = "http://localhost:3000"
     
     # Rate Limiting 설정
     rate_limit_enabled: bool = False
     rate_limit_per_minute: int = 10
+    
+    # 익명 사용자 질의 제한 설정
+    anonymous_quota_enabled: bool = True
+    anonymous_quota_limit: int = 3
+    anonymous_quota_reset_hour: int = 0
     
     def get_cors_origins(self) -> List[str]:
         """CORS origins 리스트 반환"""
