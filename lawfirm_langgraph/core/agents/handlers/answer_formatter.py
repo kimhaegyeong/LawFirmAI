@@ -1068,6 +1068,12 @@ class AnswerFormatterHandler:
                     if not any(re.match(p, line, re.IGNORECASE) for p in skip_patterns):
                         cleaned_lines.append(line)
                     continue
+                
+                # 실제 답변 내용이 시작되는 패턴 확인 (문서 인용, 법령 인용 등)
+                if re.search(r'\[문서:|\[법령:|민법\s*제\d+조|형법\s*제\d+조', line):
+                    skip_section = False
+                    cleaned_lines.append(line)
+                    continue
 
                 # 체크리스트 패턴 제거 (• [ ] 형태)
                 if re.match(r'^\s*[•\-\*]\s*\[.*?\].*?', line):
@@ -1078,6 +1084,14 @@ class AnswerFormatterHandler:
                 if re.match(r'^안녕하세요.*?궁금하시군요\.?\s*$', line, re.IGNORECASE):
                     # 단독 라인으로만 있는 경우만 제거 (내용이 있는 경우 유지)
                     continue
+                
+                # 빈 줄이 2개 이상 연속되면 섹션 종료로 간주
+                if line.strip() == "" and i > 0 and lines[i-1].strip() == "":
+                    # 다음 줄에 실제 내용이 있는지 확인
+                    if i + 1 < len(lines) and lines[i+1].strip() and not any(re.match(p, lines[i+1], re.IGNORECASE) for p in skip_patterns):
+                        skip_section = False
+                        cleaned_lines.append(line)
+                        continue
 
                 # 섹션 내부의 다른 줄들은 모두 건너뛰기
                 continue

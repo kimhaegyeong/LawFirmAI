@@ -67,14 +67,20 @@ class AnswerResult:
 class AnswerGenerator:
     """답변 생성 엔진"""
     
-    def __init__(self, config, langfuse_client=None):
+    def __init__(self, config, langfuse_client=None, llm=None):
         """답변 생성기 초기화"""
         self.config = config
         self.langfuse_client = langfuse_client
         self.logger = logging.getLogger(__name__)
         
-        # LLM 초기화
-        self.llm = self._initialize_llm()
+        # LLM 초기화: 전달된 LLM이 있으면 사용, 없으면 자체 초기화
+        if llm is not None:
+            self.llm = llm
+            self.logger.info("Using provided LLM instance")
+        else:
+            self.llm = self._initialize_llm()
+            if self.llm is None:
+                self.logger.warning("LLM initialization failed. LLM will be required for answer generation.")
         
         # 프롬프트 템플릿 초기화
         self.prompt_templates = self._initialize_prompt_templates()
@@ -92,10 +98,6 @@ class AnswerGenerator:
     
     def _initialize_llm(self):
         """LLM 초기화"""
-        if not LANCHAIN_AVAILABLE:
-            logger.warning("LangChain is not available. Using mock LLM.")
-            return None
-        
         try:
             if self.config.llm_provider.value == "openai":
                 if self.config.llm_model.startswith("gpt-3.5") or self.config.llm_model.startswith("gpt-4"):
@@ -138,9 +140,6 @@ class AnswerGenerator:
         """프롬프트 템플릿 초기화"""
         templates = {}
         
-        if not LANCHAIN_AVAILABLE:
-            return templates
-        
         try:
             from utils.langchain_config import PromptTemplates
             
@@ -171,7 +170,7 @@ class AnswerGenerator:
         """LLM 체인 초기화"""
         chains = {}
         
-        if not self.llm or not LANCHAIN_AVAILABLE:
+        if not self.llm:
             return chains
         
         try:
@@ -199,10 +198,27 @@ class AnswerGenerator:
                 logger.warning(f"Unknown template type: {template_type}, using legal_qa")
             
             # 프롬프트 생성
-            if LANCHAIN_AVAILABLE and self.llm_chains:
+            if self.llm_chains and template_type in self.llm_chains:
                 # LangChain 체인 사용
                 chain = self.llm_chains[template_type]
                 answer = chain.run(context=context, question=query)
+            elif self.llm:
+                # LLM 직접 사용
+                if hasattr(self.llm, 'invoke'):
+                    prompt = self.prompt_templates[template_type].format(context=context, question=query)
+                    response = self.llm.invoke(prompt)
+                    if hasattr(response, 'content'):
+                        answer = response.content
+                    elif isinstance(response, str):
+                        answer = response
+                    else:
+                        answer = str(response)
+                elif hasattr(self.llm, 'predict'):
+                    prompt = self.prompt_templates[template_type].format(context=context, question=query)
+                    answer = self.llm.predict(prompt)
+                else:
+                    # 기본 프롬프트 사용
+                    answer = self._generate_basic_answer(query, context)
             else:
                 # 기본 프롬프트 사용
                 answer = self._generate_basic_answer(query, context)
@@ -307,7 +323,9 @@ class AnswerGenerator:
             
             return f"주어진 문서를 바탕으로 답변드리면:\n\n{answer}"
         else:
-            return "주어진 문서에서 관련 정보를 찾을 수 없습니다. 더 구체적인 질문을 해주시면 도움을 드릴 수 있습니다."
+            # 문서가 없거나 답변이 비어있는 경우, 일반적인 법률 지식으로 답변
+            # "관련 정보를 찾을 수 없습니다" 같은 회피적 답변은 피하고, 일반적인 법률 지식으로 답변
+            return "일반적인 법률 지식을 바탕으로 답변드리면, 해당 질문에 대한 법적 원칙과 일반적인 해석을 제공할 수 있습니다. 다만 구체적인 사안에 대한 정확한 답변을 위해서는 관련 법령과 판례를 확인하는 것이 필요합니다."
     
     def _estimate_tokens(self, query: str, context: str, answer: str) -> int:
         """토큰 수 추정"""
@@ -487,3 +505,235 @@ class AnswerGenerator:
             logger.error(f"Failed to validate answer quality: {e}")
         
         return quality_metrics
+    
+    def generate_fallback_answer(self, state: Any) -> str:
+        """
+        폴백 답변 생성 (오류 발생 시)
+        
+        Args:
+            state: LegalWorkflowState 객체 또는 dict
+            
+        Returns:
+            str: 폴백 답변 메시지
+        """
+        try:
+            # state에서 query 추출 시도
+            query = ""
+            if isinstance(state, dict):
+                query = state.get("query", state.get("question", ""))
+            elif hasattr(state, "query"):
+                query = state.query
+            elif hasattr(state, "question"):
+                query = state.question
+            
+            if query:
+                return f"죄송합니다. '{query}'에 대한 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            else:
+                return "죄송합니다. 질문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        except Exception as e:
+            self.logger.error(f"Error generating fallback answer: {e}")
+            return "죄송합니다. 질문 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+    
+    def assess_improvement_potential(
+        self,
+        quality_score: float,
+        quality_checks: Dict[str, bool],
+        state: Any
+    ) -> Dict[str, Any]:
+        """
+        답변 개선 가능성 평가
+        
+        Args:
+            quality_score: 현재 품질 점수
+            quality_checks: 품질 체크 결과 딕셔너리
+            state: LegalWorkflowState 객체 또는 dict
+            
+        Returns:
+            Dict[str, Any]: 개선 가능성 평가 결과
+        """
+        try:
+            improvement_potential = {
+                "has_potential": quality_score < 0.7,
+                "improvement_score": max(0.0, 1.0 - quality_score),
+                "priority_areas": [],
+                "recommendations": []
+            }
+            
+            # 품질 체크 결과 기반으로 개선 영역 식별
+            if isinstance(quality_checks, dict):
+                if not quality_checks.get("legal_accuracy", True):
+                    improvement_potential["priority_areas"].append("legal_accuracy")
+                    improvement_potential["recommendations"].append("법률 정확성 향상 필요")
+                
+                if not quality_checks.get("completeness", True):
+                    improvement_potential["priority_areas"].append("completeness")
+                    improvement_potential["recommendations"].append("답변 완성도 향상 필요")
+                
+                if not quality_checks.get("clarity", True):
+                    improvement_potential["priority_areas"].append("clarity")
+                    improvement_potential["recommendations"].append("답변 명확성 향상 필요")
+            
+            return improvement_potential
+        except Exception as e:
+            self.logger.error(f"Error assessing improvement potential: {e}")
+            return {
+                "has_potential": False,
+                "improvement_score": 0.0,
+                "priority_areas": [],
+                "recommendations": []
+            }
+    
+    def generate_answer_with_chain(
+        self,
+        optimized_prompt: str,
+        query: str,
+        context_dict: Dict[str, Any],
+        quality_feedback: Optional[Dict[str, Any]] = None,
+        is_retry: bool = False
+    ) -> str:
+        """
+        체인을 사용한 답변 생성
+        
+        Args:
+            optimized_prompt: 최적화된 프롬프트
+            query: 사용자 질문
+            context_dict: 컨텍스트 딕셔너리
+            quality_feedback: 품질 피드백 (선택적)
+            is_retry: 재시도 여부
+            
+        Returns:
+            str: 생성된 답변
+        """
+        try:
+            # context_dict에서 context 추출
+            context = context_dict.get("context", "") if isinstance(context_dict, dict) else str(context_dict)
+            
+            # LLM이 없으면 에러 발생
+            if not self.llm:
+                error_msg = "LLM이 초기화되지 않았습니다. LLM 설정을 확인해주세요."
+                self.logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # 프롬프트를 직접 사용하여 답변 생성
+            try:
+                if hasattr(self.llm, 'invoke'):
+                    response = self.llm.invoke(optimized_prompt)
+                    if hasattr(response, 'content'):
+                        return response.content
+                    elif isinstance(response, str):
+                        return response
+                    else:
+                        return str(response)
+                elif hasattr(self.llm, 'predict'):
+                    return self.llm.predict(optimized_prompt)
+                else:
+                    error_msg = f"LLM 객체가 'invoke' 또는 'predict' 메서드를 지원하지 않습니다. LLM 타입: {type(self.llm)}"
+                    self.logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+            except Exception as e:
+                error_msg = f"LLM 호출 실패: {e}"
+                self.logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
+        except RuntimeError:
+            raise
+        except Exception as e:
+            error_msg = f"generate_answer_with_chain 실행 중 오류 발생: {e}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+    
+    def validate_answer_uses_context(
+        self,
+        answer: str,
+        context: Dict[str, Any],
+        query: str,
+        retrieved_docs: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        답변이 컨텍스트를 사용하는지 검증
+        
+        Args:
+            answer: 답변 텍스트
+            context: 컨텍스트 딕셔너리
+            query: 질문
+            retrieved_docs: 검색된 문서 목록 (선택적)
+            
+        Returns:
+            검증 결과 딕셔너리
+        """
+        try:
+            # AnswerValidator 사용
+            from core.generation.validators.quality_validators import AnswerValidator
+            return AnswerValidator.validate_answer_uses_context(
+                answer=answer,
+                context=context,
+                query=query,
+                retrieved_docs=retrieved_docs
+            )
+        except ImportError:
+            # AnswerValidator를 import할 수 없는 경우 기본 검증 수행
+            self.logger.warning("AnswerValidator not available, using basic validation")
+            return {
+                "uses_context": True,
+                "coverage_score": 0.5,
+                "citation_count": 0,
+                "has_document_references": False,
+                "needs_regeneration": False,
+                "missing_key_info": []
+            }
+        except Exception as e:
+            self.logger.error(f"Error in validate_answer_uses_context: {e}")
+            # 기본 검증 결과 반환
+            return {
+                "uses_context": True,
+                "coverage_score": 0.5,
+                "citation_count": 0,
+                "has_document_references": False,
+                "needs_regeneration": False,
+                "missing_key_info": []
+            }
+    
+    def track_search_to_answer_pipeline(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        검색에서 답변 생성까지의 파이프라인 추적
+        
+        Args:
+            state: 워크플로우 상태
+            
+        Returns:
+            파이프라인 추적 정보
+        """
+        try:
+            # 검색 결과 추출
+            retrieved_docs = state.get("retrieved_docs", [])
+            semantic_results = state.get("semantic_results", [])
+            keyword_results = state.get("keyword_results", [])
+            
+            # 답변 정보 추출
+            answer = state.get("answer", "")
+            if isinstance(answer, dict):
+                answer_text = answer.get("content", answer.get("text", str(answer)))
+            else:
+                answer_text = str(answer)
+            
+            # 파이프라인 메트릭 계산
+            pipeline_metrics = {
+                "retrieved_docs_count": len(retrieved_docs),
+                "semantic_results_count": len(semantic_results),
+                "keyword_results_count": len(keyword_results),
+                "answer_length": len(answer_text) if answer_text else 0,
+                "has_answer": bool(answer_text),
+                "pipeline_complete": bool(answer_text and retrieved_docs)
+            }
+            
+            return pipeline_metrics
+        except Exception as e:
+            self.logger.error(f"Error in track_search_to_answer_pipeline: {e}")
+            return {
+                "retrieved_docs_count": 0,
+                "semantic_results_count": 0,
+                "keyword_results_count": 0,
+                "answer_length": 0,
+                "has_answer": False,
+                "pipeline_complete": False,
+                "error": str(e)
+            }

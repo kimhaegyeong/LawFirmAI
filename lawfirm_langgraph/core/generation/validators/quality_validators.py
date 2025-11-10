@@ -721,10 +721,24 @@ class AnswerValidator:
                 # expected_citations가 비어있을 때 답변에서 직접 추출한 Citation으로 coverage 계산
                 total_citations_in_answer = len(normalized_answer_citations)
                 if total_citations_in_answer > 0:
-                    # 최소 2개 기준으로 coverage 계산
-                    citation_coverage = min(1.0, total_citations_in_answer / 2.0)
+                    # retrieved_docs 개수를 기준으로 coverage 계산 (개선)
+                    expected_count = max(2, len(retrieved_docs) if retrieved_docs else 2)
+                    citation_coverage = min(1.0, total_citations_in_answer / expected_count)
+                    logger.debug(
+                        f"[CITATION DEBUG] No expected citations, using answer citations: "
+                        f"{total_citations_in_answer}, expected: {expected_count}, coverage: {citation_coverage}"
+                    )
                 else:
                     citation_coverage = 0.0
+            elif citations_in_answer > 0 or precedents_in_answer > 0:
+                # 정규화되지 않은 Citation이 있으면 부분 점수 부여
+                total_raw_citations = citations_in_answer + precedents_in_answer
+                expected_count = max(2, len(retrieved_docs) if retrieved_docs else 2)
+                citation_coverage = min(0.5, total_raw_citations / expected_count)
+                logger.debug(
+                    f"[CITATION DEBUG] Using raw citations: {total_raw_citations}, "
+                    f"expected: {expected_count}, coverage: {citation_coverage}"
+                )
             else:
                 # expected_citations도 없고 답변에도 Citation이 없으면 0.0
                 citation_coverage = 0.0

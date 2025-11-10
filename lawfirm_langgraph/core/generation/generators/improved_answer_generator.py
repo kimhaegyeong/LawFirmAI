@@ -9,15 +9,15 @@ import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from .gemini_client import GeminiClient, GeminiResponse
-from .prompt_templates import PromptTemplateManager
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
-from .prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
-from .semantic_domain_classifier import SemanticDomainClassifier
-from .confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
-from .question_classifier import QuestionType, QuestionClassification
-from .answer_formatter import AnswerFormatter, FormattedAnswer
-from .context_builder import ContextBuilder, ContextWindow
+from ...services.gemini_client import GeminiClient, GeminiResponse
+from ...services.prompt_templates import PromptTemplateManager
+from ...services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from ...services.prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
+from ...services.semantic_domain_classifier import SemanticDomainClassifier
+from ...services.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
+from ...services.question_classifier import QuestionType, QuestionClassification
+from ...services.answer_formatter import AnswerFormatter, FormattedAnswer
+from .context_builder import ContextBuilder
 
 logger = logging.getLogger(__name__)
 

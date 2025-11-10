@@ -214,6 +214,29 @@ class AnswerFormatterHandler:
 
         # 추론 과정 분리 (LLM 응답에서 추론 과정과 실제 답변 분리)
         extraction_start_time = time.time()
+        
+        # JSON 형식 답변 파싱 (최우선 처리)
+        import json
+        json_parsed_answer = None
+        if answer and isinstance(answer, str):
+            answer_stripped = answer.strip()
+            # JSON 형식인지 확인 ({"answer": "..."} 또는 {"answer": {...}})
+            if answer_stripped.startswith('{') and '"answer"' in answer_stripped:
+                try:
+                    # JSON 파싱 시도
+                    json_data = json.loads(answer_stripped)
+                    if isinstance(json_data, dict):
+                        json_parsed_answer = json_data.get("answer", "")
+                        if isinstance(json_parsed_answer, dict):
+                            # 중첩된 dict인 경우 문자열로 변환
+                            json_parsed_answer = json.dumps(json_parsed_answer, ensure_ascii=False)
+                        if json_parsed_answer and json_parsed_answer.strip():
+                            answer = json_parsed_answer
+                            self.logger.info("JSON 형식 답변 파싱 성공")
+                except (json.JSONDecodeError, ValueError) as e:
+                    # JSON 파싱 실패 시 원본 사용
+                    self.logger.debug(f"JSON 파싱 실패 (계속 진행): {e}")
+        
         reasoning_info = self.reasoning_extractor.extract_reasoning(answer) if self.reasoning_extractor else {}
         actual_answer = None
         extraction_method = "none"
@@ -239,7 +262,12 @@ class AnswerFormatterHandler:
 
         if not actual_answer or not actual_answer.strip():
             actual_answer = answer
-            extraction_method = "fallback"
+            extraction_method = "json_parsed" if json_parsed_answer else "fallback"
+        
+        # 형식 오류 제거 (STEP, 평가 템플릿 등)
+        if actual_answer:
+            from core.workflow.utils.workflow_utils import WorkflowUtils
+            actual_answer = WorkflowUtils._remove_format_errors(actual_answer)
 
         extraction_time = time.time() - extraction_start_time
 
@@ -1068,6 +1096,12 @@ class AnswerFormatterHandler:
                     if not any(re.match(p, line, re.IGNORECASE) for p in skip_patterns):
                         cleaned_lines.append(line)
                     continue
+                
+                # 실제 답변 내용이 시작되는 패턴 확인 (문서 인용, 법령 인용 등)
+                if re.search(r'\[문서:|\[법령:|민법\s*제\d+조|형법\s*제\d+조', line):
+                    skip_section = False
+                    cleaned_lines.append(line)
+                    continue
 
                 # 체크리스트 패턴 제거 (• [ ] 형태)
                 if re.match(r'^\s*[•\-\*]\s*\[.*?\].*?', line):
@@ -1078,6 +1112,14 @@ class AnswerFormatterHandler:
                 if re.match(r'^안녕하세요.*?궁금하시군요\.?\s*$', line, re.IGNORECASE):
                     # 단독 라인으로만 있는 경우만 제거 (내용이 있는 경우 유지)
                     continue
+                
+                # 빈 줄이 2개 이상 연속되면 섹션 종료로 간주
+                if line.strip() == "" and i > 0 and lines[i-1].strip() == "":
+                    # 다음 줄에 실제 내용이 있는지 확인
+                    if i + 1 < len(lines) and lines[i+1].strip() and not any(re.match(p, lines[i+1], re.IGNORECASE) for p in skip_patterns):
+                        skip_section = False
+                        cleaned_lines.append(line)
+                        continue
 
                 # 섹션 내부의 다른 줄들은 모두 건너뛰기
                 continue
