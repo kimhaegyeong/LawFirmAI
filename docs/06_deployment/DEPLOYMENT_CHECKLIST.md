@@ -107,14 +107,14 @@
   ```
 
 ### 초기 설정 스크립트 실행
-- [ ] `scripts/setup_ec2.sh` 다운로드 또는 복사
+- [ ] `deployment/setup_ec2.sh` 다운로드 또는 복사
 - [ ] 스크립트 실행 권한 부여:
   ```bash
-  chmod +x scripts/setup_ec2.sh
+  chmod +x deployment/setup_ec2.sh
   ```
 - [ ] 스크립트 실행:
   ```bash
-  ./scripts/setup_ec2.sh
+  ./deployment/setup_ec2.sh
   ```
 
 ### AWS CLI 설정
@@ -164,12 +164,12 @@
   ```
 
 ### Docker Compose 파일 설정
-- [ ] `docker-compose.prod.yml` 파일 복사 또는 생성
+- [ ] `deployment/docker-compose.prod.yml` 파일 복사 또는 생성
 - [ ] PostgreSQL 서비스 포함 확인
 - [ ] 환경 변수 확인
 - [ ] PostgreSQL 초기화 스크립트 실행:
   ```bash
-  docker-compose -f docker-compose.prod.yml exec api python scripts/database/init_postgresql.py
+  docker-compose -f deployment/docker-compose.prod.yml exec api python scripts/database/init_postgresql.py
   ```
 
 ## 첫 배포
@@ -189,15 +189,15 @@
 - [ ] 배포 스크립트 실행:
   ```bash
   cd /opt/lawfirmai
-  ./scripts/deploy.sh
+  ./deployment/deploy.sh
   ```
 - [ ] 컨테이너 상태 확인:
   ```bash
-  docker-compose -f docker-compose.prod.yml ps
+  docker-compose -f deployment/docker-compose.prod.yml ps
   ```
 - [ ] 로그 확인:
   ```bash
-  docker-compose -f docker-compose.prod.yml logs -f
+  docker-compose -f deployment/docker-compose.prod.yml logs -f
   ```
 
 ## Nginx 설정 (프론트엔드)
@@ -260,7 +260,7 @@
 - [ ] 데이터베이스 연결 확인:
   ```bash
   # PostgreSQL 사용 시
-  docker-compose exec postgres psql -U lawfirmai -d lawfirmai_prod -c "SELECT COUNT(*) FROM sessions;"
+  docker-compose -f deployment/docker-compose.prod.yml exec postgres psql -U lawfirmai -d lawfirmai_prod -c "SELECT COUNT(*) FROM sessions;"
   
   # SQLite 사용 시
   sqlite3 /opt/lawfirmai/data/lawfirm.db "SELECT COUNT(*) FROM sessions;"
@@ -286,7 +286,7 @@
 ### 자동 백업
 - [ ] 백업 스크립트 확인:
   ```bash
-  chmod +x /opt/lawfirmai/scripts/backup.sh
+  chmod +x /opt/lawfirmai/deployment/backup.sh
   ```
 - [ ] Crontab 설정 확인:
   ```bash
@@ -294,7 +294,7 @@
   ```
 - [ ] 수동 백업 테스트:
   ```bash
-  /opt/lawfirmai/scripts/backup.sh
+  /opt/lawfirmai/deployment/backup.sh
   ```
 
 ### S3 백업 (선택사항)

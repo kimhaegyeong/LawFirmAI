@@ -2,20 +2,52 @@
 
 이 섹션은 LawFirmAI 애플리케이션 배포 및 운영에 대한 문서를 포함합니다.
 
-## 📋 문서 목록
+## 📋 주요 문서
 
-- [배포 가이드](Deployment_Guide.md): 전체 배포 가이드 (Streamlit, Docker, HuggingFace Spaces)
-- [AWS 배포 빠른 시작](aws_deployment_quickstart.md): AWS에서 빠르게 배포하는 방법
-- [AWS 프로덕션 아키텍처](aws_production_architecture_streamlit.md): AWS 프로덕션 환경 아키텍처
-- [HuggingFace Spaces 최적화 계획](huggingface_spaces_optimization_plan.md): HuggingFace Spaces 배포 최적화
+### 🎯 최종 배포 가이드 (권장)
+- **[최종 배포 가이드](DEPLOYMENT_FINAL.md)** ⭐ - **이 문서부터 시작하세요!**
+  - 전체 배포 과정을 한 문서에 통합
+  - AWS 배포, 데이터베이스 설정, CI/CD, 모니터링 등 모든 내용 포함
+  - 단계별 배포 절차 및 문제 해결 가이드
+
+### 📚 상세 가이드
+
+#### 배포 관련
+- [배포 체크리스트](DEPLOYMENT_CHECKLIST.md) - 배포 전 확인사항
+- [AWS 빠른 시작](QUICK_START_AWS.md) - 빠른 배포를 위한 단계별 가이드
+
+#### 데이터베이스 관련
+- [PostgreSQL 마이그레이션 계획](POSTGRESQL_MIGRATION_PLAN.md) - PostgreSQL 마이그레이션 계획
+- [PostgreSQL 설정 가이드](POSTGRESQL_SETUP_GUIDE.md) - PostgreSQL 설정 방법
+- [데이터베이스 마이그레이션 가이드](DATABASE_MIGRATION_GUIDE.md) - 데이터 마이그레이션 방법
+
+#### 보안 및 최적화
+- [Nginx 보안 가이드](NGINX_SECURITY.md) - Nginx 보안 설정
+- [프리 티어 최적화 가이드](FREE_TIER_OPTIMIZATION.md) - 프리 티어 최적화 방법
 
 ## 🚀 빠른 시작
 
-1. [배포 가이드](Deployment_Guide.md)를 읽어 기본 배포 방법을 이해하세요
-2. 환경에 맞는 배포 방법을 선택하세요:
-   - 로컬: Streamlit 앱 실행
-   - Docker: Docker Compose 사용
-   - 클라우드: AWS 또는 HuggingFace Spaces
+### AWS 배포 (권장)
+
+1. **[최종 배포 가이드](DEPLOYMENT_FINAL.md)** 읽기
+2. [배포 체크리스트](DEPLOYMENT_CHECKLIST.md) 확인
+3. [AWS 빠른 시작](QUICK_START_AWS.md) 따라하기
+
+### 환경별 데이터베이스
+
+| 환경 | 데이터베이스 | 설정 |
+|------|------------|------|
+| **로컬 개발** | SQLite | `DATABASE_URL=sqlite:///./data/lawfirm.db` |
+| **개발 서버** | PostgreSQL | `DATABASE_URL=postgresql://user:pass@postgres:5432/db` |
+| **운영 서버** | PostgreSQL | `DATABASE_URL=postgresql://user:pass@postgres:5432/db` |
+
+### 배포 옵션
+
+| 옵션 | 비용 | 권장 용도 |
+|------|------|----------|
+| **프리 티어** | $0/월 (12개월) | 테스트, 학습 |
+| **프로덕션** | $70-150/월 | 실제 서비스 |
+| **고가용성** | $200-300/월 | 대규모 서비스 |
 
 ## 🔗 관련 섹션
 

@@ -135,6 +135,13 @@ npm run dev
 ### 배포
 - [배포 가이드](docs/06_deployment/Deployment_Guide.md)
 - [빠른 시작 가이드](docs/06_deployment/quick_start.md)
+- [AWS 배포 가이드](docs/06_deployment/AWS_Deployment_Guide.md)
+- [AWS 빠른 시작](docs/06_deployment/QUICK_START_AWS.md)
+- [배포 체크리스트](docs/06_deployment/DEPLOYMENT_CHECKLIST.md)
+- [프리 티어 최적화 가이드](docs/06_deployment/FREE_TIER_OPTIMIZATION.md)
+- [PostgreSQL 마이그레이션 계획](docs/06_deployment/POSTGRESQL_MIGRATION_PLAN.md)
+- [PostgreSQL 설정 가이드](docs/06_deployment/POSTGRESQL_SETUP_GUIDE.md)
+- [데이터베이스 마이그레이션 가이드](docs/06_deployment/DATABASE_MIGRATION_GUIDE.md)
 
 ### 모니터링
 - [모니터링 가이드](docs/monitoring/monitoring_guide.md)
@@ -161,14 +168,6 @@ LawFirmAI는 관계형 데이터베이스(SQLite)와 벡터 데이터베이스(F
 | 법령해석례 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
 | 행정규칙 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
 | 자치법규 | 수집 중 | ⏳ 진행 | 데이터 수집 필요 |
-
-## 🤝 기여하기
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
 ## 📄 라이선스
 

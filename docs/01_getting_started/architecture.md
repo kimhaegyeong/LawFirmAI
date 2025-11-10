@@ -11,9 +11,15 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    LangGraph 워크플로우                      │
-│  ├── lawfirm_langgraph/core/agents/workflow_service.py     │
-│  ├── lawfirm_langgraph/core/agents/legal_workflow_enhanced.py│
-│  └── lawfirm_langgraph/core/agents/state_definitions.py    │
+│  ├── lawfirm_langgraph/core/workflow/workflow_service.py   │
+│  ├── lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py│
+│  ├── lawfirm_langgraph/core/workflow/nodes/               │
+│  │   ├── classification_nodes.py      (질문 분류 노드)     │
+│  │   ├── search_nodes.py             (검색 노드)         │
+│  │   └── answer_nodes.py              (답변 생성 노드)     │
+│  └── lawfirm_langgraph/core/workflow/state/                │
+│      ├── state_definitions.py         (상태 정의)         │
+│      └── modular_states.py            (모듈화된 상태)      │
 ├─────────────────────────────────────────────────────────────┤
 │                    핵심 서비스 레이어                        │
 │  ├── lawfirm_langgraph/core/services/                      │
@@ -40,7 +46,7 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 
 | 모듈 | 책임 | 주요 컴포넌트 |
 |------|------|-------------|
-| **lawfirm_langgraph/core/agents/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced |
+| **lawfirm_langgraph/core/workflow/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced, nodes, state |
 | **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | hybrid_search, semantic_search, answer_generator |
 | **lawfirm_langgraph/core/data/** | 데이터 관리 | database, vector_store, conversation_store |
 | **lawfirm_langgraph/core/models/** | AI 모델 관리 | sentence_bert |
@@ -50,7 +56,7 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 
 ### 1. LangGraph 워크플로우 서비스
 
-**파일**: `lawfirm_langgraph/core/agents/workflow_service.py`
+**파일**: `lawfirm_langgraph/core/workflow/workflow_service.py`
 
 **역할**: LangGraph 기반 법률 질문 처리 워크플로우 관리
 
@@ -63,7 +69,7 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 **사용 예시**:
 ```python
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
@@ -225,20 +231,17 @@ answer = generator.generate(query, context)
 ```
 User Input
     ↓
-lawfirm_langgraph/core/agents/workflow_service.py
+lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
-lawfirm_langgraph/core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
-    ├── classify_query (질문 분류)
-    ├── assess_urgency (긴급도 평가)
-    ├── resolve_multi_turn (멀티턴 처리)
-    ├── search_documents (문서 검색)
+lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
+    ├── nodes/classification_nodes.py (질문 분류)
+    ├── nodes/search_nodes.py (문서 검색)
     │   ├── lawfirm_langgraph/core/services/hybrid_search_engine.py
     │   ├── lawfirm_langgraph/core/services/semantic_search_engine.py
     │   └── lawfirm_langgraph/core/services/exact_search_engine.py
-    ├── generate_answer (답변 생성)
-    │   ├── lawfirm_langgraph/core/services/answer_generator.py
-    │   └── lawfirm_langgraph/core/services/context_builder.py
-    └── calculate_confidence (신뢰도 계산)
+    └── nodes/answer_nodes.py (답변 생성)
+        ├── lawfirm_langgraph/core/services/answer_generator.py
+        ├── lawfirm_langgraph/core/services/context_builder.py
         └── lawfirm_langgraph/core/services/confidence_calculator.py
     ↓
 User Output
@@ -280,7 +283,7 @@ answer = answer_generator.generate("계약 해지", results)
 
 ```python
 import asyncio
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 async def process_query_async(query: str, session_id: str):
@@ -332,6 +335,7 @@ class WorkflowService:
 
 ```python
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
@@ -347,6 +351,8 @@ from lawfirm_langgraph.core.agents.optimizers.performance_optimizer import Perfo
 optimizer = PerformanceOptimizer()
 optimizer.optimize_memory()
 ```
+
+**참고**: `core/agents/optimizers/`는 레거시 코드입니다. 새로운 코드는 `core/workflow/` 구조를 사용하세요.
 
 ### 2. 캐싱 전략
 
@@ -422,6 +428,8 @@ class TestHybridSearchEngine:
 ### 2. 통합 테스트
 
 ```python
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+
 class TestWorkflowIntegration:
     async def test_end_to_end(self):
         """전체 워크플로우 테스트"""
@@ -436,6 +444,7 @@ class TestWorkflowIntegration:
 
 ```python
 import time
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 class TestPerformance:
     async def test_response_time(self):
