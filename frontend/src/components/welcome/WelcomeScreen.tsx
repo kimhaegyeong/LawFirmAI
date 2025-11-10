@@ -7,9 +7,10 @@ import { QUICK_QUESTIONS } from '../../utils/constants';
 
 interface WelcomeScreenProps {
   onQuestionClick?: (question: string) => void;
+  isAuthenticated?: boolean;
 }
 
-export function WelcomeScreen({ onQuestionClick }: WelcomeScreenProps) {
+export function WelcomeScreen({ onQuestionClick, isAuthenticated = true }: WelcomeScreenProps) {
   const [selectedCategory, setSelectedCategory] = useState<typeof QUICK_QUESTIONS[number] | null>(null);
 
   const handleCategoryClick = (category: typeof QUICK_QUESTIONS[number]) => {
@@ -83,6 +84,13 @@ export function WelcomeScreen({ onQuestionClick }: WelcomeScreenProps) {
         </div>
         <h2 className="text-3xl font-bold text-slate-800 mb-3">법률 AI 어시스턴트</h2>
         <p className="text-slate-600 text-lg">법률 관련 질문에 답변해드립니다</p>
+        {!isAuthenticated && (
+          <div className="mt-4 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg inline-block">
+            <p className="text-sm text-blue-800">
+              <span className="font-semibold">무료로 3회 체험</span> 가능합니다. 로그인하면 무제한으로 사용할 수 있습니다.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="w-full max-w-4xl">

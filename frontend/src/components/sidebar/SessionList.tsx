@@ -1,12 +1,13 @@
 /**
  * 세션 리스트 컴포넌트 (하이브리드 로딩)
  */
-import { Folder, ChevronDown, ChevronRight } from 'lucide-react';
+import { Folder, ChevronDown, ChevronRight, User, UserCircle } from 'lucide-react';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { DateGroup } from '../../utils/dateUtils';
 import { SessionItem } from './SessionItem';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { getSessionsByDate } from '../../services/sessionService';
+import { useAuth } from '../../hooks/useAuth';
 import logger from '../../utils/logger';
 import type { Session } from '../../types/session';
 
@@ -237,10 +238,25 @@ export function SessionList({
   // 사용자가 그룹을 클릭하면 해당 그룹의 데이터를 로드
   const visibleGroups = dateGroupOrder;
 
+  const { isAuthenticated, user } = useAuth();
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="px-4 py-2">
-        <div className="text-xs font-semibold text-slate-500 mb-2">대화 히스토리</div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-slate-500">대화 히스토리</div>
+          {isAuthenticated ? (
+            <div className="flex items-center gap-1 text-xs text-blue-600">
+              <User className="w-3 h-3" />
+              <span>로그인 사용자</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 text-xs text-slate-500">
+              <UserCircle className="w-3 h-3" />
+              <span>비로그인 사용자</span>
+            </div>
+          )}
+        </div>
 
         {visibleGroups.map((group) => {
           const isExpanded = expandedGroups.has(group);
