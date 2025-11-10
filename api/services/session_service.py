@@ -260,6 +260,45 @@ class SessionService:
             logger.error(f"Failed to delete session: {e}")
             return False
     
+    def delete_user_sessions(self, user_id: str) -> int:
+        """사용자의 모든 세션 및 메시지 일괄 삭제"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 사용자의 모든 세션 ID 조회
+            cursor.execute("""
+                SELECT session_id FROM sessions WHERE user_id = ?
+            """, (user_id,))
+            session_rows = cursor.fetchall()
+            session_ids = [row[0] for row in session_rows]
+            
+            if not session_ids:
+                conn.close()
+                logger.info(f"No sessions found for user: {user_id}")
+                return 0
+            
+            # 모든 메시지 삭제
+            placeholders = ','.join(['?'] * len(session_ids))
+            cursor.execute(f"""
+                DELETE FROM messages WHERE session_id IN ({placeholders})
+            """, session_ids)
+            
+            # 모든 세션 삭제
+            cursor.execute("""
+                DELETE FROM sessions WHERE user_id = ?
+            """, (user_id,))
+            
+            deleted_count = len(session_ids)
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Deleted {deleted_count} sessions for user: {user_id}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Failed to delete user sessions: {e}")
+            return 0
+    
     def list_sessions(
         self,
         category: Optional[str] = None,
@@ -269,7 +308,9 @@ class SessionService:
         sort_by: str = "updated_at",
         sort_order: str = "desc",
         date_from: Optional[str] = None,
-        date_to: Optional[str] = None
+        date_to: Optional[str] = None,
+        user_id: Optional[str] = None,
+        ip_address: Optional[str] = None
     ) -> tuple[List[Dict[str, Any]], int]:
         """세션 목록 조회"""
         try:
@@ -280,6 +321,19 @@ class SessionService:
             # WHERE 절 구성
             where_clauses = []
             params = []
+            
+            # 사용자별 필터링
+            if user_id:
+                # 익명 세션 ID는 anonymous_ prefix를 사용하므로 별도 처리
+                if user_id.startswith("anonymous_"):
+                    where_clauses.append("user_id = ?")
+                    params.append(user_id)
+                else:
+                    where_clauses.append("user_id = ? AND (ip_address IS NULL OR ip_address = '')")
+                    params.append(user_id)
+            elif ip_address:
+                where_clauses.append("ip_address = ? AND (user_id IS NULL OR user_id = '')")
+                params.append(ip_address)
             
             if category:
                 where_clauses.append("category = ?")
@@ -380,10 +434,12 @@ class SessionService:
         session_id: str,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        message_id: Optional[str] = None
     ) -> str:
         """메시지 추가"""
-        message_id = str(uuid.uuid4())
+        if message_id is None:
+            message_id = str(uuid.uuid4())
         
         try:
             conn = sqlite3.connect(self.db_path)
@@ -586,12 +642,95 @@ class SessionService:
             if title:
                 self.update_session(session_id, title=title)
                 logger.info(f"Generated title for session {session_id}: {title}")
-                return title
+            
+            return title
+        except Exception as e:
+            logger.error(f"Error generating session title: {e}", exc_info=True)
+            # 대체: 첫 질문의 일부를 제목으로 사용
+            try:
+                messages = self.get_messages(session_id, limit=1)
+                if messages and messages[0].get("role") == "user":
+                    fallback_title = messages[0]["content"][:20] + "..." if len(messages[0]["content"]) > 20 else messages[0]["content"]
+                    self.update_session(session_id, title=fallback_title)
+                    return fallback_title
+            except:
+                pass
+            return None
+    
+    def save_full_answer(
+        self,
+        session_id: str,
+        message_id: str,
+        full_answer: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """전체 답변을 메시지에 저장 (잘린 부분 포함)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            import json
+            metadata_str = json.dumps(metadata) if metadata else None
+            
+            cursor.execute("""
+                UPDATE messages 
+                SET content = ?, metadata = ?
+                WHERE message_id = ? AND session_id = ?
+            """, (full_answer, metadata_str, message_id, session_id))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save full answer: {e}")
+            return False
+    
+    def get_answer_chunk(
+        self,
+        session_id: str,
+        message_id: str,
+        chunk_index: int
+    ) -> Optional[Dict[str, Any]]:
+        """특정 청크의 답변 가져오기"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT content, metadata
+                FROM messages
+                WHERE message_id = ? AND session_id = ? AND role = 'assistant'
+            """, (message_id, session_id))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if not row:
+                return None
+            
+            full_answer = row[0]
+            metadata_str = row[1]
+            
+            import json
+            metadata = json.loads(metadata_str) if metadata_str else {}
+            
+            from api.services.answer_splitter import AnswerSplitter
+            chunk_size = metadata.get("chunk_size", 2000)
+            splitter = AnswerSplitter(chunk_size=chunk_size)
+            chunks = splitter.split_answer(full_answer)
+            
+            if 0 <= chunk_index < len(chunks):
+                chunk = chunks[chunk_index]
+                return {
+                    "content": chunk.content,
+                    "chunk_index": chunk.chunk_index,
+                    "total_chunks": chunk.total_chunks,
+                    "has_more": chunk.has_more
+                }
             
             return None
-            
         except Exception as e:
-            logger.error(f"Failed to generate session title: {e}", exc_info=True)
+            logger.error(f"Failed to get answer chunk: {e}")
             return None
 
 

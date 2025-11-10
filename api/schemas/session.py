@@ -3,19 +3,58 @@
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import re
 
 
 class SessionCreate(BaseModel):
     """세션 생성 스키마"""
-    title: Optional[str] = Field(None, description="세션 제목")
-    category: Optional[str] = Field(None, description="카테고리")
+    title: Optional[str] = Field(None, max_length=255, description="세션 제목")
+    category: Optional[str] = Field(None, max_length=100, description="카테고리")
+    
+    @field_validator('title')
+    @classmethod
+    def validate_title(cls, v):
+        if v and len(v.strip()) == 0:
+            raise ValueError('세션 제목은 비어있을 수 없습니다')
+        if v and len(v) > 255:
+            raise ValueError('세션 제목은 255자를 초과할 수 없습니다')
+        return v.strip() if v else None
+    
+    @field_validator('category')
+    @classmethod
+    def validate_category(cls, v):
+        if v:
+            if len(v) > 100:
+                raise ValueError('카테고리는 100자를 초과할 수 없습니다')
+            if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+                raise ValueError('카테고리는 영숫자, 하이픈, 언더스코어만 허용됩니다')
+        return v
 
 
 class SessionUpdate(BaseModel):
     """세션 업데이트 스키마"""
-    title: Optional[str] = Field(None, description="세션 제목")
-    category: Optional[str] = Field(None, description="카테고리")
+    title: Optional[str] = Field(None, max_length=255, description="세션 제목")
+    category: Optional[str] = Field(None, max_length=100, description="카테고리")
+    
+    @field_validator('title')
+    @classmethod
+    def validate_title(cls, v):
+        if v and len(v.strip()) == 0:
+            raise ValueError('세션 제목은 비어있을 수 없습니다')
+        if v and len(v) > 255:
+            raise ValueError('세션 제목은 255자를 초과할 수 없습니다')
+        return v.strip() if v else None
+    
+    @field_validator('category')
+    @classmethod
+    def validate_category(cls, v):
+        if v:
+            if len(v) > 100:
+                raise ValueError('카테고리는 100자를 초과할 수 없습니다')
+            if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+                raise ValueError('카테고리는 영숫자, 하이픈, 언더스코어만 허용됩니다')
+        return v
 
 
 class SessionResponse(BaseModel):

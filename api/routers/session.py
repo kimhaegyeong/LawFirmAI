@@ -36,6 +36,7 @@ def get_kst_date() -> datetime.date:
 
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(
+    request: Request,
     current_user: dict = Depends(require_auth),
     category: Optional[str] = Query(None, description="카테고리 필터"),
     search: Optional[str] = Query(None, description="검색어"),
@@ -48,6 +49,29 @@ async def list_sessions(
 ):
     """세션 목록 조회"""
     try:
+        # 사용자별 필터링
+        user_id = None
+        ip_address = None
+        
+        if current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 또는 IP 주소로 필터링
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            if anonymous_session_id:
+                # 익명 세션 ID를 user_id처럼 사용 (prefix로 구분)
+                user_id = f"anonymous_{anonymous_session_id}"
+            else:
+                # 익명 세션 ID가 없으면 IP 주소로 필터링 (하위 호환성)
+                client_ip = request.client.host if request.client else None
+                if not client_ip:
+                    forwarded_for = request.headers.get("X-Forwarded-For")
+                    if forwarded_for:
+                        client_ip = forwarded_for.split(",")[0].strip()
+                    else:
+                        client_ip = "unknown"
+                ip_address = client_ip
+        
         sessions, total = session_service.list_sessions(
             category=category,
             search=search,
@@ -56,7 +80,9 @@ async def list_sessions(
             sort_by=sort_by,
             sort_order=sort_order,
             date_from=date_from,
-            date_to=date_to
+            date_to=date_to,
+            user_id=user_id,
+            ip_address=ip_address
         )
         
         # 세션 목록을 SessionResponse로 변환
@@ -95,6 +121,7 @@ async def list_sessions(
 
 @router.get("/sessions/by-date", response_model=SessionListResponse)
 async def get_sessions_by_date(
+    request: Request,
     current_user: dict = Depends(require_auth),
     date_group: str = Query(..., description="날짜 그룹: today, yesterday, week, month, older"),
     page: int = Query(1, ge=1, description="페이지 번호"),
@@ -140,6 +167,29 @@ async def get_sessions_by_date(
                 detail=f"Invalid date_group: {date_group}. Must be one of: today, yesterday, week, month, older"
             )
         
+        # 사용자별 필터링
+        user_id = None
+        ip_address = None
+        
+        if current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 또는 IP 주소로 필터링
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            if anonymous_session_id:
+                # 익명 세션 ID를 user_id처럼 사용 (prefix로 구분)
+                user_id = f"anonymous_{anonymous_session_id}"
+            else:
+                # 익명 세션 ID가 없으면 IP 주소로 필터링 (하위 호환성)
+                client_ip = request.client.host if request.client else None
+                if not client_ip:
+                    forwarded_for = request.headers.get("X-Forwarded-For")
+                    if forwarded_for:
+                        client_ip = forwarded_for.split(",")[0].strip()
+                    else:
+                        client_ip = "unknown"
+                ip_address = client_ip
+        
         sessions, total = session_service.list_sessions(
             search=search,
             page=page,
@@ -147,7 +197,9 @@ async def get_sessions_by_date(
             sort_by="updated_at",
             sort_order="desc",
             date_from=date_from,
-            date_to=date_to
+            date_to=date_to,
+            user_id=user_id,
+            ip_address=ip_address
         )
         
         # 세션 목록을 SessionResponse로 변환
@@ -199,13 +251,20 @@ async def create_session(
                 client_ip = "unknown"
         
         # 사용자 ID 가져오기
-        user_id = current_user.get("user_id") if current_user else None
+        user_id = None
+        if current_user and current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 사용
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            if anonymous_session_id:
+                user_id = f"anonymous_{anonymous_session_id}"
         
         session_id = session_service.create_session(
             title=session.title,
             category=session.category,
             user_id=user_id,
-            ip_address=client_ip
+            ip_address=client_ip if not user_id else None
         )
         
         created_session = session_service.get_session(session_id)
@@ -237,6 +296,7 @@ async def create_session(
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
+    request: Request,
     session_id: str,
     current_user: dict = Depends(require_auth)
 ):
@@ -245,6 +305,35 @@ async def get_session(
         session = session_service.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        
+        # 소유자 확인
+        if current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+            session_user_id = session.get("user_id")
+            if session_user_id and session_user_id != user_id:
+                raise HTTPException(status_code=403, detail="이 세션에 접근할 권한이 없습니다.")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 또는 IP 주소로 확인
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            session_user_id = session.get("user_id")
+            
+            if anonymous_session_id:
+                # 익명 세션 ID로 확인
+                expected_user_id = f"anonymous_{anonymous_session_id}"
+                if session_user_id and session_user_id != expected_user_id:
+                    raise HTTPException(status_code=403, detail="이 세션에 접근할 권한이 없습니다.")
+            else:
+                # IP 주소로 확인 (하위 호환성)
+                client_ip = request.client.host if request.client else None
+                if not client_ip:
+                    forwarded_for = request.headers.get("X-Forwarded-For")
+                    if forwarded_for:
+                        client_ip = forwarded_for.split(",")[0].strip()
+                    else:
+                        client_ip = "unknown"
+                session_ip = session.get("ip_address")
+                if session_user_id or (session_ip and session_ip != client_ip):
+                    raise HTTPException(status_code=403, detail="이 세션에 접근할 권한이 없습니다.")
         
         # datetime 객체를 문자열로 변환
         if isinstance(session.get("created_at"), datetime):
@@ -265,13 +354,48 @@ async def get_session(
 
 @router.put("/sessions/{session_id}", response_model=SessionResponse)
 async def update_session(
+    request: Request,
     session_id: str,
     session: SessionUpdate,
     current_user: dict = Depends(require_auth)
 ):
     """세션 업데이트"""
     try:
-        user_id = current_user.get("user_id", "anonymous") if current_user else "anonymous"
+        # 소유자 확인
+        existing_session = session_service.get_session(session_id)
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+            session_user_id = existing_session.get("user_id")
+            if session_user_id and session_user_id != user_id:
+                raise HTTPException(status_code=403, detail="이 세션을 수정할 권한이 없습니다.")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 또는 IP 주소로 확인
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            session_user_id = existing_session.get("user_id")
+            
+            if anonymous_session_id:
+                # 익명 세션 ID로 확인
+                expected_user_id = f"anonymous_{anonymous_session_id}"
+                if session_user_id and session_user_id != expected_user_id:
+                    raise HTTPException(status_code=403, detail="이 세션을 수정할 권한이 없습니다.")
+                user_id = expected_user_id
+            else:
+                # IP 주소로 확인 (하위 호환성)
+                client_ip = request.client.host if request.client else None
+                if not client_ip:
+                    forwarded_for = request.headers.get("X-Forwarded-For")
+                    if forwarded_for:
+                        client_ip = forwarded_for.split(",")[0].strip()
+                    else:
+                        client_ip = "unknown"
+                session_ip = existing_session.get("ip_address")
+                if session_user_id or (session_ip and session_ip != client_ip):
+                    raise HTTPException(status_code=403, detail="이 세션을 수정할 권한이 없습니다.")
+                user_id = None
+        
         success = session_service.update_session(
             session_id=session_id,
             title=session.title,
@@ -305,12 +429,47 @@ async def update_session(
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(
+    request: Request,
     session_id: str,
     current_user: dict = Depends(require_auth)
 ):
     """세션 삭제"""
     try:
-        user_id = current_user.get("user_id", "anonymous") if current_user else "anonymous"
+        # 소유자 확인
+        existing_session = session_service.get_session(session_id)
+        if not existing_session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        user_id = None
+        if current_user.get("authenticated"):
+            user_id = current_user.get("user_id")
+            session_user_id = existing_session.get("user_id")
+            if session_user_id and session_user_id != user_id:
+                raise HTTPException(status_code=403, detail="이 세션을 삭제할 권한이 없습니다.")
+        else:
+            # 비로그인 사용자의 경우 익명 세션 ID 또는 IP 주소로 확인
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            session_user_id = existing_session.get("user_id")
+            
+            if anonymous_session_id:
+                # 익명 세션 ID로 확인
+                expected_user_id = f"anonymous_{anonymous_session_id}"
+                if session_user_id and session_user_id != expected_user_id:
+                    raise HTTPException(status_code=403, detail="이 세션을 삭제할 권한이 없습니다.")
+                user_id = expected_user_id
+            else:
+                # IP 주소로 확인 (하위 호환성)
+                client_ip = request.client.host if request.client else None
+                if not client_ip:
+                    forwarded_for = request.headers.get("X-Forwarded-For")
+                    if forwarded_for:
+                        client_ip = forwarded_for.split(",")[0].strip()
+                    else:
+                        client_ip = "unknown"
+                session_ip = existing_session.get("ip_address")
+                if session_user_id or (session_ip and session_ip != client_ip):
+                    raise HTTPException(status_code=403, detail="이 세션을 삭제할 권한이 없습니다.")
+        
         success = session_service.delete_session(session_id, user_id=user_id)
         if not success:
             raise HTTPException(status_code=404, detail="Session not found")
