@@ -2,9 +2,9 @@
  * 채팅 관련 훅
  */
 import { useState, useCallback } from 'react';
-import { sendChatMessage, sendStreamingChatMessage, continueAnswer as continueAnswerService } from '../services/chatService';
+import { sendChatMessage, sendStreamingChatMessage } from '../services/chatService';
 import logger from '../utils/logger';
-import type { ChatRequest, ChatResponse, ChatMessage, FileAttachment, ContinueAnswerRequest, ContinueAnswerResponse } from '../types/chat';
+import type { ChatRequest, ChatResponse, ChatMessage, FileAttachment } from '../types/chat';
 
 interface UseChatOptions {
   onMessage?: (message: ChatMessage) => void;
@@ -127,43 +127,9 @@ export function useChat(options?: UseChatOptions) {
     [options]
   );
 
-  /**
-   * 계속 읽기: 잘린 답변의 나머지 부분 요청
-   */
-  const continueAnswer = useCallback(
-    async (
-      sessionId: string,
-      messageId: string,
-      chunkIndex: number
-    ): Promise<ContinueAnswerResponse | null> => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const request: ContinueAnswerRequest = {
-          session_id: sessionId,
-          message_id: messageId,
-          chunk_index: chunkIndex,
-        };
-
-        const response = await continueAnswerService(request);
-        return response;
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error('알 수 없는 에러가 발생했습니다.');
-        setError(error);
-        options?.onError?.(error);
-        return null;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [options]
-  );
-
   return {
     sendMessage,
     sendStreamingMessage,
-    continueAnswer,
     isLoading,
     isStreaming,
     error,

@@ -3,15 +3,27 @@
  */
 import { api, extractApiError } from './api';
 import logger from '../utils/logger';
-import type { ChatRequest, ChatResponse, StreamingChatRequest, ContinueAnswerRequest, ContinueAnswerResponse } from '../types/chat';
+import type { ChatRequest, ChatResponse, StreamingChatRequest } from '../types/chat';
 
 /**
  * 일반 채팅 메시지 전송
  */
-export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
+export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse & { quotaInfo?: { remaining: number; limit: number } }> {
   try {
     const response = await api.post<ChatResponse>('/chat', request);
-    return response.data;
+    const quotaRemaining = response.headers['x-quota-remaining'];
+    const quotaLimit = response.headers['x-quota-limit'];
+    
+    const result: ChatResponse & { quotaInfo?: { remaining: number; limit: number } } = response.data;
+    
+    if (quotaRemaining !== undefined && quotaLimit !== undefined) {
+      result.quotaInfo = {
+        remaining: parseInt(quotaRemaining, 10),
+        limit: parseInt(quotaLimit, 10),
+      };
+    }
+    
+    return result;
   } catch (error) {
     throw extractApiError(error);
   }
@@ -51,6 +63,19 @@ export async function* sendStreamingChatMessage(
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    // 쿼터 정보 추출 (응답 헤더에서)
+    const quotaRemaining = response.headers.get('x-quota-remaining');
+    const quotaLimit = response.headers.get('x-quota-limit');
+    
+    if (quotaRemaining !== null && quotaLimit !== null) {
+      // 쿼터 정보를 첫 번째 이벤트로 yield
+      yield JSON.stringify({
+        type: 'quota',
+        remaining: parseInt(quotaRemaining, 10),
+        limit: parseInt(quotaLimit, 10),
+      });
     }
 
     const reader = response.body?.getReader();
@@ -507,19 +532,6 @@ export async function* sendStreamingChatMessage(
   }
 }
 
-/**
- * 계속 읽기: 잘린 답변의 나머지 부분 요청
- */
-export async function continueAnswer(
-  request: ContinueAnswerRequest
-): Promise<ContinueAnswerResponse> {
-  try {
-    const response = await api.post<ContinueAnswerResponse>('/chat/continue', request);
-    return response.data;
-  } catch (error) {
-    throw extractApiError(error);
-  }
-}
 
 /**
  * 스트림 완료 후 sources 정보 가져오기

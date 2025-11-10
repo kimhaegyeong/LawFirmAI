@@ -60,12 +60,6 @@ export interface SourceInfo {
   };
 }
 
-export interface AnswerChunkInfo {
-  chunk_index: number;
-  total_chunks: number;
-  has_more: boolean;
-  is_complete: boolean;
-}
 
 export interface ChatResponse {
   answer: string;
@@ -79,7 +73,6 @@ export interface ChatResponse {
   query_type: string;
   metadata: Record<string, any>;
   errors: string[];
-  chunk_info?: AnswerChunkInfo;
   message_id?: string;
 }
 
@@ -115,25 +108,12 @@ export interface ChatMessage {
     answer_found?: boolean;
     error?: boolean;
     error_type?: string;
-    chunk_info?: AnswerChunkInfo;
     message_id?: string;
     // 기타 필드 허용
     [key: string]: any;
   };
 }
 
-export interface ContinueAnswerRequest {
-  session_id: string;
-  message_id: string;
-  chunk_index: number;
-}
-
-export interface ContinueAnswerResponse {
-  content: string;
-  chunk_index: number;
-  total_chunks: number;
-  has_more: boolean;
-}
 
 export interface FileAttachment {
   id: string;

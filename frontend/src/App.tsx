@@ -10,8 +10,11 @@ import { ChatInput } from './components/chat/ChatInput';
 import { Toast } from './components/common/Toast';
 import { DocumentSidebar } from './components/chat/DocumentSidebar';
 import { ReferencesSidebar } from './components/chat/ReferencesSidebar';
+import { LoginPage } from './components/auth/LoginPage';
+import { QuotaIndicator } from './components/chat/QuotaIndicator';
 import { useChat } from './hooks/useChat';
 import { useSession } from './hooks/useSession';
+import { useAuth } from './hooks/useAuth';
 import { getHistory, exportHistory, downloadHistory } from './services/historyService';
 import { createSession } from './services/sessionService';
 import { parseStreamChunk } from './utils/streamParser';
@@ -32,6 +35,7 @@ interface ToastItem {
 }
 
 function App() {
+  const { user, isAuthenticated, isLoading: isAuthLoading, login } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentProgress, setCurrentProgress] = useState<string | null>(null);
@@ -41,6 +45,7 @@ function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [streamErrors, setStreamErrors] = useState<Map<string, StreamError>>(new Map());
   const [messageBuffers, setMessageBuffers] = useState<Map<string, string>>(new Map()); // 메시지별 버퍼 관리
+  const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; limit: number } | null>(null); // 익명 사용자 쿼터 정보
   const [documentSidebarOpen, setDocumentSidebarOpen] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState<number | null>(null);
   const [selectedMessageForDocument, setSelectedMessageForDocument] = useState<ChatMessage | null>(null);
@@ -56,7 +61,7 @@ function App() {
   const isInitialMount = useRef(true);
 
   const { currentSession, isLoading, loadSessions, newSession, loadSession, updateSession, removeSession, clearSession } = useSession();
-  const { sendStreamingMessage, isLoading: isSending, isStreaming, continueAnswer } = useChat({
+  const { sendStreamingMessage, isLoading: isSending, isStreaming } = useChat({
     onMessage: (message) => {
       setMessages((prev) => [...prev, message]);
       // 에러 메시지가 있으면 제거
@@ -93,9 +98,31 @@ function App() {
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      loadSessions();
+      
+      // URL 파라미터에서 세션 ID 확인
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionIdParam = urlParams.get('session_id');
+      
+      if (sessionIdParam) {
+        // URL 파라미터에서 세션 ID가 있으면 해당 세션 로드
+        loadSession(sessionIdParam)
+          .then(() => {
+            // URL에서 세션 ID 파라미터 제거
+            urlParams.delete('session_id');
+            const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+            window.history.replaceState({}, document.title, newUrl);
+          })
+          .catch((error) => {
+            logger.error('Failed to load session from URL parameter:', error);
+            // 세션 로드 실패 시 세션 목록 로드
+            loadSessions();
+          });
+      } else {
+        // URL 파라미터에 세션 ID가 없으면 세션 목록 로드
+        loadSessions();
+      }
     }
-  }, [loadSessions]);
+  }, [loadSessions, loadSession]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {
@@ -319,6 +346,16 @@ function App() {
           // 스트림 청크 파싱
           const parsed = parseStreamChunk(chunk);
           
+          // 쿼터 정보 처리
+          if (parsed.type === 'quota' && parsed.metadata) {
+            const quotaRemaining = parsed.metadata.remaining;
+            const quotaLimit = parsed.metadata.limit;
+            if (quotaRemaining !== undefined && quotaLimit !== undefined) {
+              setQuotaInfo({ remaining: quotaRemaining, limit: quotaLimit });
+            }
+            return; // 쿼터 정보는 메시지로 표시하지 않음
+          }
+          
           if (parsed.type === 'progress') {
             // 진행 상황을 메시지 배열에 추가
             setMessages((prev) => {
@@ -453,12 +490,6 @@ function App() {
                   ...assistantMessage,
                   content: parsed.content,
                   metadata: {
-                    chunk_info: parsed.metadata?.chunk_index !== undefined ? {
-                      chunk_index: parsed.metadata.chunk_index,
-                      total_chunks: parsed.metadata.total_chunks || 1,
-                      has_more: parsed.metadata.has_more || false,
-                      is_complete: !parsed.metadata.has_more,
-                    } : undefined,
                     message_id: parsed.metadata?.message_id,
                   },
                 }];
@@ -470,12 +501,6 @@ function App() {
                   content: parsed.content,
                   metadata: {
                     ...updated[messageIndex].metadata,
-                    chunk_info: parsed.metadata?.chunk_index !== undefined ? {
-                      chunk_index: parsed.metadata.chunk_index,
-                      total_chunks: parsed.metadata.total_chunks || 1,
-                      has_more: parsed.metadata.has_more || false,
-                      is_complete: !parsed.metadata.has_more,
-                    } : updated[messageIndex].metadata?.chunk_info,
                     message_id: parsed.metadata?.message_id || updated[messageIndex].metadata?.message_id,
                   },
                 };
@@ -486,6 +511,55 @@ function App() {
             
             if (isFirstChunk) {
               isFirstChunk = false;
+            }
+          } else if ((parsed as any).type === 'sources') {
+            // sources 이벤트 처리 (스트림 종료 후 sources 정보)
+            if (parsed.metadata) {
+              const sourcesMetadata = parsed.metadata;
+              const sourcesMessageId = sourcesMetadata.message_id;
+              
+              if (import.meta.env.DEV) {
+                logger.debug('[Stream] Sources event received:', {
+                  messageId: sourcesMessageId,
+                  sources: sourcesMetadata.sources,
+                  legalReferences: sourcesMetadata.legal_references,
+                  sourcesDetail: sourcesMetadata.sources_detail,
+                });
+              }
+              
+              // message_id로 메시지 찾기 (assistantMessageId 또는 sourcesMessageId 사용)
+              const targetMessageId = sourcesMessageId || assistantMessageId;
+              
+              setMessages((prev) => {
+                const messageIndex = prev.findIndex((msg) => 
+                  msg.id === targetMessageId || 
+                  msg.metadata?.message_id === sourcesMessageId
+                );
+                
+                if (messageIndex !== -1) {
+                  const updated = [...prev];
+                  updated[messageIndex] = {
+                    ...updated[messageIndex],
+                    metadata: {
+                      ...updated[messageIndex].metadata,
+                      sources: sourcesMetadata.sources || [],
+                      legal_references: sourcesMetadata.legal_references || [],
+                      sources_detail: sourcesMetadata.sources_detail || [],
+                      message_id: sourcesMessageId || updated[messageIndex].metadata?.message_id,
+                    },
+                  };
+                  
+                  if (import.meta.env.DEV) {
+                    logger.debug('[Stream] Message metadata updated with sources:', {
+                      messageId: targetMessageId,
+                      updatedMetadata: updated[messageIndex].metadata,
+                    });
+                  }
+                  
+                  return updated;
+                }
+                return prev;
+              });
             }
           } else if (parsed.type === 'final') {
             // 최종 완료 처리
@@ -528,12 +602,11 @@ function App() {
             
             // 최종 메시지 업데이트 (누적된 fullContent 사용)
             // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
-            // metadata에서 sources, legal_references, sources_detail, chunk_info, message_id 추출
+            // metadata에서 sources, legal_references, sources_detail, message_id 추출
             const metadata = parsed.metadata || {};
             const sources = metadata.sources || [];
             const legalReferences = metadata.legal_references || [];
             const sourcesDetail = metadata.sources_detail || [];
-            const chunkInfo = metadata.chunk_info;
             const messageId = metadata.message_id;
             
             setMessages((prev) => {
@@ -552,7 +625,6 @@ function App() {
                     sources: sources,
                     legal_references: legalReferences,
                     sources_detail: sourcesDetail,
-                    chunk_info: chunkInfo || updated[messageIndex].metadata?.chunk_info,
                     message_id: messageId || updated[messageIndex].metadata?.message_id,
                   },
                 };
@@ -568,7 +640,6 @@ function App() {
                     sources: sources,
                     legal_references: legalReferences,
                     sources_detail: sourcesDetail,
-                    chunk_info: chunkInfo,
                     message_id: messageId,
                   },
                 }];
@@ -576,30 +647,82 @@ function App() {
             });
             
             // sources가 비어있으면 별도 API로 가져오기
+            // message_id가 있으면 사용하고, 없으면 assistantMessageId 사용
+            const actualMessageId = messageId || assistantMessageId;
+            
+            // 디버깅: sources 확인
+            if (import.meta.env.DEV) {
+              logger.debug('[App] Final event sources check:', {
+                sessionId,
+                messageId: actualMessageId,
+                sourcesLength: sources.length,
+                legalReferencesLength: legalReferences.length,
+                sourcesDetailLength: sourcesDetail.length,
+                metadata: metadata,
+              });
+            }
+            
+            // sources가 비어있으면 API로 가져오기
+            // (백엔드에서 sources가 제대로 전달되지 않을 수 있으므로)
             if (sources.length === 0 && legalReferences.length === 0 && sourcesDetail.length === 0) {
+              if (import.meta.env.DEV) {
+                logger.debug('[App] Sources are empty, fetching from API...', {
+                  sessionId,
+                  messageId: actualMessageId,
+                });
+              }
+              
               // 비동기로 sources 가져오기 (UI 블로킹 방지)
               import('./services/chatService').then(({ getChatSources }) => {
-                getChatSources(sessionId, assistantMessageId)
+                // message_id가 있으면 사용, 없으면 sessionId만 사용
+                getChatSources(sessionId, actualMessageId || undefined)
                   .then((sourcesData) => {
-                    // 메시지 metadata 업데이트
-                    setMessages((prev) => {
-                      const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-                      
-                      if (messageIndex !== -1) {
-                        const updated = [...prev];
-                        updated[messageIndex] = {
-                          ...updated[messageIndex],
-                          metadata: {
-                            ...updated[messageIndex].metadata,
-                            sources: sourcesData.sources,
-                            legal_references: sourcesData.legal_references,
-                            sources_detail: sourcesData.sources_detail,
-                          },
-                        };
-                        return updated;
+                    if (import.meta.env.DEV) {
+                      logger.debug('[App] Sources fetched from API:', {
+                        sessionId,
+                        messageId: actualMessageId,
+                        sourcesData,
+                      });
+                    }
+                    
+                    // sources가 있는 경우에만 업데이트
+                    if (sourcesData.sources.length > 0 || sourcesData.legal_references.length > 0 || sourcesData.sources_detail.length > 0) {
+                      // 메시지 metadata 업데이트
+                      setMessages((prev) => {
+                        const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                        
+                        if (messageIndex !== -1) {
+                          const updated = [...prev];
+                          updated[messageIndex] = {
+                            ...updated[messageIndex],
+                            metadata: {
+                              ...updated[messageIndex].metadata,
+                              sources: sourcesData.sources,
+                              legal_references: sourcesData.legal_references,
+                              sources_detail: sourcesData.sources_detail,
+                            },
+                          };
+                          
+                          if (import.meta.env.DEV) {
+                            logger.debug('[App] Message metadata updated with sources:', {
+                              messageId: assistantMessageId,
+                              updatedMetadata: updated[messageIndex].metadata,
+                            });
+                          }
+                          
+                          return updated;
+                        }
+                        return prev;
+                      });
+                    } else {
+                      if (import.meta.env.DEV) {
+                        logger.warn('[App] Sources fetched but empty:', {
+                          sessionId,
+                          messageId: actualMessageId,
+                          sourcesData,
+                        });
                       }
-                      return prev;
-                    });
+                    }
                   })
                   .catch((error) => {
                     if (import.meta.env.DEV) {
@@ -608,8 +731,18 @@ function App() {
                     // 에러가 발생해도 계속 진행 (sources 없이)
                   });
               });
+            } else {
+              if (import.meta.env.DEV) {
+                logger.debug('[App] Sources already present in metadata:', {
+                  sessionId,
+                  messageId: actualMessageId,
+                  sources,
+                  legalReferences,
+                  sourcesDetail,
+                });
+              }
             }
-          } else if (parsed.type === 'answer') {
+          } else if ((parsed as any).type === 'answer') {
             // 기존 'answer' 타입 지원 (하위 호환성)
             fullContent += parsed.content;
             if (import.meta.env.DEV) {
@@ -647,6 +780,11 @@ function App() {
       }
     } catch (error) {
       logger.error('[Stream] Streaming error:', error);
+      
+      // 429 에러 처리 - 쿼터 정보 업데이트
+      if (error instanceof Error && error.message.includes('429')) {
+        setQuotaInfo({ remaining: 0, limit: 3 });
+      }
       
       // 남아있는 토큰 버퍼 처리
       const remainingTokens = tokenBufferRef.current.get(assistantMessageId) || '';
@@ -820,6 +958,20 @@ function App() {
     setSelectedMessageForDocument(null);
   };
 
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-slate-600">로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 로그인하지 않은 사용자도 챗봇 사용 가능 (백엔드에서 익명 사용자 쿼터로 제한)
+  // 로그인 페이지는 OAuth2 콜백 처리 시에만 표시됨
+
   return (
     <MainLayout
       sidebarContent={
@@ -856,7 +1008,7 @@ function App() {
         {/* 콘텐츠 영역 - 스크롤 가능 */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {messages.length === 0 && !isSending && !currentSession ? (
-            <WelcomeScreen onQuestionClick={handleQuestionClick} />
+            <WelcomeScreen onQuestionClick={handleQuestionClick} isAuthenticated={isAuthenticated} />
           ) : (
             <ChatHistory
               messages={messages}
@@ -890,50 +1042,23 @@ function App() {
                   }
                 }
               }}
-              onContinueReading={async (sessionId: string, messageId: string, chunkIndex: number) => {
-                if (!continueAnswer) return;
-                
-                const response = await continueAnswer(sessionId, messageId, chunkIndex);
-                if (response) {
-                  // 메시지 찾기
-                  setMessages((prev) => {
-                    const messageIndex = prev.findIndex((msg) => 
-                      msg.metadata?.message_id === messageId && msg.role === 'assistant'
-                    );
-                    
-                    if (messageIndex !== -1) {
-                      const updated = [...prev];
-                      const currentMessage = updated[messageIndex];
-                      const currentChunkInfo = currentMessage.metadata?.chunk_info;
-                      
-                      // 기존 내용에 새 청크 추가
-                      updated[messageIndex] = {
-                        ...currentMessage,
-                        content: currentMessage.content + '\n\n' + response.content,
-                        metadata: {
-                          ...currentMessage.metadata,
-                          chunk_info: {
-                            chunk_index: response.chunk_index,
-                            total_chunks: response.total_chunks,
-                            has_more: response.has_more,
-                            is_complete: !response.has_more,
-                          },
-                        },
-                      };
-                      return updated;
-                    }
-                    return prev;
-                  });
-                }
-              }}
             />
           )}
         </div>
+        {/* 쿼터 정보 표시 (익명 사용자만) */}
+        {!isAuthenticated && quotaInfo && (
+          <QuotaIndicator
+            remaining={quotaInfo.remaining}
+            limit={quotaInfo.limit}
+            isAuthenticated={isAuthenticated}
+            onLoginClick={login}
+          />
+        )}
         {/* 입력창 - 하단 고정 */}
         <div className="flex-shrink-0">
           <ChatInput 
             onSend={handleSendMessage} 
-            disabled={isSending || isStreaming} 
+            disabled={isSending || isStreaming || (!isAuthenticated && quotaInfo?.remaining === 0)} 
             isLoading={isSending || isStreaming}
             resetTrigger={inputResetTrigger}
           />

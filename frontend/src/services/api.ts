@@ -25,8 +25,20 @@ export const api: AxiosInstance = axios.create({
  * 요청 인터셉터
  */
 api.interceptors.request.use(
-  (config) => {
+  async (config) => {
     // 요청 전 처리 (인증 토큰 등)
+    const token = getAccessToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    } else {
+      // 비로그인 사용자의 경우 익명 세션 ID 헤더 추가
+      const { getOrCreateAnonymousSessionId } = await import('../utils/anonymousSession');
+      const anonymousSessionId = await getOrCreateAnonymousSessionId();
+      if (anonymousSessionId) {
+        config.headers['X-Anonymous-Session-Id'] = anonymousSessionId;
+      }
+    }
+    
     // 디버깅: 요청 정보 로깅
     const fullURL = `${config.baseURL || ''}${config.url || ''}`;
     if (import.meta.env.DEV) {
@@ -42,6 +54,17 @@ api.interceptors.request.use(
     return Promise.reject(error);
   }
 );
+
+/**
+ * Access token 조회 (순환 참조 방지를 위해 로컬 함수로 구현)
+ */
+function getAccessToken(): string | null {
+  try {
+    return localStorage.getItem('access_token');
+  } catch (error) {
+    return null;
+  }
+}
 
 /**
  * 응답 인터셉터
@@ -77,6 +100,8 @@ api.interceptors.response.use(
         case 401:
           // 인증 에러
           logger.error('인증이 필요합니다.');
+          // 토큰이 있는 경우 토큰 갱신 시도 (useAuth hook에서 처리)
+          // 여기서는 에러만 로깅하고 그대로 전달
           break;
         case 403:
           // 권한 에러
@@ -85,6 +110,16 @@ api.interceptors.response.use(
         case 404:
           // 리소스 없음
           logger.error('요청한 리소스를 찾을 수 없습니다.');
+          break;
+        case 429:
+          // Rate Limit 또는 익명 사용자 제한 초과
+          const quotaRemaining = error.response.headers['x-quota-remaining'];
+          const quotaLimit = error.response.headers['x-quota-limit'];
+          if (quotaRemaining === '0' && quotaLimit === '3') {
+            logger.error('무료 질의 3회를 모두 사용하셨습니다. 계속 사용하려면 로그인이 필요합니다.');
+          } else {
+            logger.error('요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
+          }
           break;
         case 500:
           // 서버 에러

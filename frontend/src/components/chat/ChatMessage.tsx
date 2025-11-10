@@ -33,7 +33,6 @@ interface ChatMessageProps {
   isStreaming?: boolean; // 스트리밍 중인지 여부
   error?: StreamError; // 에러 상태
   onRetry?: () => void; // 재시도 핸들러
-  onContinueReading?: (sessionId: string, messageId: string, chunkIndex: number) => Promise<void>; // 계속 읽기 핸들러
 }
 
 export function ChatMessage({ 
@@ -44,12 +43,10 @@ export function ChatMessage({
   onOpenReferencesSidebar,
   isStreaming = false,
   error,
-  onRetry,
-  onContinueReading
+  onRetry
 }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   
   // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
   if (!message || !message.id) {
@@ -63,6 +60,20 @@ export function ChatMessage({
   const isUser = message.role === 'user';
   const isProgress = message.role === 'progress';
   const metadata = message.metadata || {};
+  
+  // 디버깅: sources 확인
+  if (import.meta.env.DEV && !isUser && !isProgress) {
+    logger.debug('[ChatMessage] Metadata:', {
+      messageId: message.id,
+      hasMetadata: !!message.metadata,
+      sources: metadata.sources,
+      legal_references: metadata.legal_references,
+      sources_detail: metadata.sources_detail,
+      sourcesLength: metadata.sources?.length || 0,
+      legalReferencesLength: metadata.legal_references?.length || 0,
+      sourcesDetailLength: metadata.sources_detail?.length || 0,
+    });
+  }
   
   // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
   const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
@@ -265,27 +276,6 @@ export function ChatMessage({
     }
   };
 
-  const handleContinueReading = async () => {
-    if (!onContinueReading || !sessionId || !message.metadata?.message_id || !message.metadata?.chunk_info) {
-      return;
-    }
-
-    const chunkInfo = message.metadata.chunk_info;
-    const nextChunkIndex = (chunkInfo.chunk_index || 0) + 1;
-
-    if (nextChunkIndex >= (chunkInfo.total_chunks || 1)) {
-      return;
-    }
-
-    setIsLoadingMore(true);
-    try {
-      await onContinueReading(sessionId, message.metadata.message_id, nextChunkIndex);
-    } catch (error) {
-      logger.error('Failed to continue reading:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
 
   // assistant 메시지이고 content가 비어있으면 렌더링하지 않음
   if (!isUser && !isProgress && !content) {
@@ -386,27 +376,6 @@ export function ChatMessage({
               questions={metadata.related_questions}
               onQuestionClick={onQuestionClick}
             />
-            {metadata.chunk_info && metadata.chunk_info.has_more && metadata.message_id && sessionId && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  onClick={handleContinueReading}
-                  disabled={isLoadingMore}
-                  className="flex items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>로딩 중...</span>
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="w-4 h-4" />
-                      <span>계속 읽기 ({metadata.chunk_info.chunk_index + 1}/{metadata.chunk_info.total_chunks})</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
           </>
         )}
 
