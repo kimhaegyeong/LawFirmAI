@@ -67,7 +67,7 @@ class WorkflowFileLogger:
     def attach_to_search_loggers(self):
         """검색 관련 주요 로거에 파일 핸들러 연결"""
         search_loggers = [
-            'core.agents.legal_workflow_enhanced',
+            'core.workflow.legal_workflow_enhanced',
             'core.agents.legal_data_connector_v2',
             'source.services.semantic_search_engine_v2',
             'source.services.exact_search_engine_v2',

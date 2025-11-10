@@ -229,10 +229,14 @@ class WorkflowRoutes:
         # 3. 질문 복잡도가 충분히 높은가
 
         if not self.ai_keyword_generator:
+            self.logger.debug("🔍 [AI KEYWORD EXPANSION] Skipping: AI keyword generator not available")
             return "skip"
 
         keywords = WorkflowUtils.get_state_value(state, "extracted_keywords", [])
+        self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Checking: {len(keywords)} keywords found")
+        
         if len(keywords) < 3:
+            self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: Not enough keywords ({len(keywords)} < 3)")
             return "skip"
 
         # 복잡한 질문인 경우 확장
@@ -240,8 +244,10 @@ class WorkflowRoutes:
         complex_types = ["precedent_search", "law_inquiry", "legal_advice"]
 
         if query_type in complex_types:
+            self.logger.info(f"🔍 [AI KEYWORD EXPANSION] Expanding: query_type={query_type}, keywords={len(keywords)}")
             return "expand"
 
+        self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: query_type={query_type} not in complex_types")
         return "skip"
 
     def should_retry_generation(self, state: LegalWorkflowState) -> str:
@@ -359,6 +365,15 @@ class WorkflowRoutes:
             answer_generator = self.answer_generator
 
         # 품질 메타데이터 조회 (통합 헬퍼 사용)
+        # state 구조 확인 및 디버깅
+        state_keys = list(state.keys()) if isinstance(state, dict) else []
+        has_common = "common" in state if isinstance(state, dict) else False
+        has_common_metadata = (
+            has_common and 
+            isinstance(state.get("common"), dict) and 
+            "metadata" in state.get("common", {})
+        )
+        
         quality_meta = WorkflowUtils.get_quality_metadata(state)
         quality_check_passed = quality_meta["quality_check_passed"]
         quality_score = quality_meta["quality_score"]
@@ -366,10 +381,26 @@ class WorkflowRoutes:
         # 품질 메타데이터 상세 로깅 (디버깅용)
         self.logger.debug(
             f"🔍 [QUALITY METADATA READ] From _should_retry_validation:\n"
+            f"   state keys: {state_keys[:10]}...\n"
+            f"   has_common: {has_common}, has_common_metadata: {has_common_metadata}\n"
             f"   quality_check_passed: {quality_check_passed}\n"
             f"   quality_score: {quality_score:.2f}\n"
-            f"   quality_meta dict: {quality_meta}"
+            f"   quality_meta dict: {quality_meta}\n"
+            f"   _quality_score in state: {'_quality_score' in state if isinstance(state, dict) else False}\n"
+            f"   _quality_check_passed in state: {'_quality_check_passed' in state if isinstance(state, dict) else False}"
         )
+        
+        # 값이 0.00이면 common.metadata에서 직접 확인
+        if quality_score == 0.0 and isinstance(state, dict):
+            if "common" in state and isinstance(state.get("common"), dict):
+                common_meta = state["common"].get("metadata", {})
+                if isinstance(common_meta, dict):
+                    if "quality_score" in common_meta:
+                        quality_score = common_meta.get("quality_score", 0.0)
+                        self.logger.debug(f"🔧 [QUALITY METADATA FIX] Found quality_score in common.metadata: {quality_score}")
+                    if "quality_check_passed" in common_meta:
+                        quality_check_passed = common_meta.get("quality_check_passed", False)
+                        self.logger.debug(f"🔧 [QUALITY METADATA FIX] Found quality_check_passed in common.metadata: {quality_check_passed}")
 
         # 재시도 카운터 조회 (통합 헬퍼 사용)
         retry_counts = self.retry_manager.get_retry_counts(state)

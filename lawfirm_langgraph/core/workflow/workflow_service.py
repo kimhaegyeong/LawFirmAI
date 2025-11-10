@@ -36,11 +36,7 @@ try:
     from .legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 except ImportError:
     # Fallback: 프로젝트 루트 기준 import
-    try:
-        from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-    except ImportError:
-        # Fallback: 기존 경로 (호환성 유지)
-        from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+    from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 
 # 설정 파일 import (lawfirm_langgraph 구조 우선 시도)
 try:
@@ -149,10 +145,10 @@ try:
 except ImportError:
     # Fallback: 프로젝트 루트 기준 import
     try:
-        from lawfirm_langgraph.langgraph_core.utils.state_definitions import create_initial_legal_state
+        from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
     except ImportError:
-        # Fallback: 기존 경로 (호환성 유지)
-        from core.agents.state_definitions import create_initial_legal_state
+        # Fallback: 프로젝트 루트 기준 import
+        from core.workflow.state.state_definitions import create_initial_legal_state
 
 
 class LangGraphWorkflowService:
@@ -1190,9 +1186,20 @@ class LangGraphWorkflowService:
                 if not isinstance(processing_steps, list):
                     processing_steps = []
 
+            # retrieved_docs 추출
+            retrieved_docs = self._extract_retrieved_docs_from_result(flat_result)
+            
+            # sources 추출: flat_result에서 직접 가져오거나 retrieved_docs에서 변환
+            sources = flat_result.get("sources", []) if isinstance(flat_result, dict) else []
+            
+            # sources가 비어있고 retrieved_docs가 있으면 sources 생성
+            if (not sources or len(sources) == 0) and retrieved_docs and len(retrieved_docs) > 0:
+                sources = self._extract_sources_from_retrieved_docs(retrieved_docs)
+                self.logger.debug(f"Extracted {len(sources)} sources from {len(retrieved_docs)} retrieved_docs")
+            
             response = {
                 "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
-                "sources": flat_result.get("sources", []) if isinstance(flat_result, dict) else [],
+                "sources": sources,
                 "confidence": flat_result.get("confidence", 0.0) if isinstance(flat_result, dict) else 0.0,
                 "legal_references": flat_result.get("legal_references", []) if isinstance(flat_result, dict) else [],
                 "processing_steps": processing_steps,
@@ -1217,7 +1224,7 @@ class LangGraphWorkflowService:
                 "query_complexity": query_complexity if query_complexity else "unknown",
                 "needs_search": needs_search,
                 # retrieved_docs는 search 그룹 또는 최상위 레벨에 있을 수 있음
-                "retrieved_docs": self._extract_retrieved_docs_from_result(flat_result)
+                "retrieved_docs": retrieved_docs
             }
 
             # Langfuse에 답변 품질 추적
@@ -1376,6 +1383,157 @@ class LangGraphWorkflowService:
 
         self.logger.debug(f"No retrieved_docs found - keys={list(flat_result.keys())[:10]}")
         return []
+    
+    def _extract_sources_from_retrieved_docs(self, retrieved_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        retrieved_docs에서 소스 정보 추출
+        
+        Args:
+            retrieved_docs: 검색된 문서 리스트
+            
+        Returns:
+            소스 정보 리스트
+        """
+        if not retrieved_docs or not isinstance(retrieved_docs, list):
+            return []
+        
+        sources = []
+        seen_sources = set()  # 중복 제거용
+        
+        # source_type 매핑 (데이터베이스 타입 → 일반 타입)
+        source_type_mapping = {
+            "statute_article": "law",
+            "case_paragraph": "precedent",
+            "decision_paragraph": "decision",
+            "interpretation_paragraph": "interpretation"
+        }
+        
+        for doc in retrieved_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # 1. type 필드 확인 (우선순위 1)
+            doc_type = doc.get("type", "")
+            
+            # 2. metadata.source_type 확인 (우선순위 2)
+            if not doc_type and "metadata" in doc:
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    doc_type = metadata.get("source_type", "")
+            
+            # 3. source_type 필드 확인 (우선순위 3)
+            if not doc_type:
+                doc_type = doc.get("source_type", "")
+            
+            # 4. source_type 매핑 적용
+            if doc_type in source_type_mapping:
+                doc_type = source_type_mapping[doc_type]
+            elif not doc_type:
+                # 5. source_name에서 추론 (최후의 수단)
+                source_name = (
+                    doc.get("source") or
+                    doc.get("title") or
+                    doc.get("document_id") or
+                    doc.get("law_name") or
+                    doc.get("case_name") or
+                    doc.get("precedent_name") or
+                    ""
+                )
+                
+                if "법령" in str(source_name) or "법" in str(source_name) or "조문" in str(source_name):
+                    doc_type = "law"
+                elif "판례" in str(source_name) or "판결" in str(source_name) or "사건" in str(source_name):
+                    doc_type = "precedent"
+                elif "해석" in str(source_name) or "의견" in str(source_name):
+                    doc_type = "interpretation"
+                elif "결정" in str(source_name) or "결정례" in str(source_name):
+                    doc_type = "decision"
+                else:
+                    doc_type = "document"
+            
+            # 소스 정보 추출
+            source_name = (
+                doc.get("source") or
+                doc.get("title") or
+                doc.get("document_id") or
+                doc.get("law_name") or
+                doc.get("case_name") or
+                doc.get("precedent_name") or
+                doc.get("casenames") or  # 판례명
+                ""
+            )
+            
+            # relevance_score 추출
+            relevance_score = (
+                doc.get("relevance_score") or
+                doc.get("score") or
+                doc.get("final_weighted_score") or
+                doc.get("similarity") or
+                0.0
+            )
+            
+            # 소스 정보 구성 (개선: 모든 문서를 소스로 포함)
+            if source_name or doc_type != "document":  # 타입이 있으면 source_name이 없어도 포함
+                source_key = f"{doc_type}:{source_name or 'unknown'}"
+                if source_key not in seen_sources:
+                    seen_sources.add(source_key)
+                    
+                    source_info = {
+                        "type": doc_type,
+                        "source": str(source_name) if source_name else f"{doc_type}_document",
+                        "relevance_score": float(relevance_score) if relevance_score else 0.0
+                    }
+                    
+                    # metadata 정보도 추가
+                    if "metadata" in doc and isinstance(doc.get("metadata"), dict):
+                        metadata = doc.get("metadata", {})
+                        if "date" in metadata:
+                            source_info["date"] = metadata.get("date")
+                        if "url" in metadata:
+                            source_info["url"] = metadata.get("url")
+                    
+                    # 추가 메타데이터
+                    if "metadata" in doc and isinstance(doc["metadata"], dict):
+                        source_info["metadata"] = doc["metadata"]
+                    
+                    # 법령 조문 정보
+                    if doc_type == "law":
+                        if "article" in doc or "article_no" in doc:
+                            source_info["article"] = doc.get("article") or doc.get("article_no")
+                        if "clause" in doc or "clause_no" in doc:
+                            source_info["clause"] = doc.get("clause") or doc.get("clause_no")
+                    
+                    # 판례 정보
+                    if doc_type == "precedent":
+                        if "case_number" in doc or "doc_id" in doc:
+                            source_info["case_number"] = doc.get("case_number") or doc.get("doc_id")
+                        if "court" in doc:
+                            source_info["court"] = doc.get("court")
+                        if "casenames" in doc:
+                            source_info["case_name"] = doc.get("casenames")
+                    
+                    # 결정례 정보
+                    if doc_type == "decision":
+                        if "doc_id" in doc:
+                            source_info["doc_id"] = doc.get("doc_id")
+                        if "org" in doc:
+                            source_info["org"] = doc.get("org")
+                    
+                    # 해석례 정보
+                    if doc_type == "interpretation":
+                        if "doc_id" in doc:
+                            source_info["doc_id"] = doc.get("doc_id")
+                        if "org" in doc:
+                            source_info["org"] = doc.get("org")
+                        if "title" in doc:
+                            source_info["title"] = doc.get("title")
+                    
+                    sources.append(source_info)
+        
+        # relevance_score 기준으로 정렬 (높은 순서대로)
+        sources.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        
+        return sources
 
     async def resume_session(self, session_id: str, query: str) -> Dict[str, Any]:
         """
@@ -1413,6 +1571,142 @@ class LangGraphWorkflowService:
 
             # 새로운 세션으로 폴백
             return await self.process_query(query, session_id, enable_checkpoint=False)
+
+    async def continue_answer(
+        self,
+        session_id: str,
+        message_id: str,
+        chunk_index: int
+    ) -> Dict[str, Any]:
+        """
+        이전 답변의 마지막 부분부터 이어서 답변 생성
+        
+        Args:
+            session_id: 세션 ID
+            message_id: 메시지 ID
+            chunk_index: 현재 청크 인덱스 (사용하지 않음, 하위 호환성)
+        
+        Returns:
+            Dict[str, Any]: 이어서 생성된 답변
+        """
+        try:
+            self.logger.info(f"Continuing answer for session: {session_id}, message: {message_id}")
+            
+            # 체크포인트에서 이전 상태 복원
+            if not self.app:
+                raise RuntimeError("워크플로우가 컴파일되지 않았습니다.")
+            
+            config = {"configurable": {"thread_id": session_id}}
+            
+            # 이전 상태 가져오기
+            try:
+                # LangGraph의 get_state를 사용하여 이전 상태 가져오기
+                from langgraph.checkpoint.memory import MemorySaver
+                
+                # 체크포인터가 있으면 이전 상태 가져오기
+                if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
+                    # 이전 상태에서 continue_answer_generation 노드만 실행
+                    # 먼저 현재 상태 확인
+                    current_state = await self.app.aget_state(config)
+                    
+                    if not current_state or not current_state.values:
+                        raise ValueError(f"세션 {session_id}의 상태를 찾을 수 없습니다.")
+                    
+                    # continue_answer_generation 노드만 실행
+                    result = await self.app.ainvoke(
+                        {"continue": True},
+                        config={"recursion_limit": 50, **config}
+                    )
+                    
+                    # 결과에서 답변 추출
+                    continued_answer = result.get("answer", "")
+                    previous_answer = current_state.values.get("answer", "")
+                    
+                    if not continued_answer or continued_answer == previous_answer:
+                        # 답변이 업데이트되지 않았으면 직접 노드 실행
+                        from langgraph.graph import END
+                        
+                        # continue_answer_generation 노드 직접 호출
+                        state_dict = dict(current_state.values)
+                        state_dict["continue"] = True
+                        
+                        # 워크플로우의 continue_answer_generation 노드 실행
+                        if hasattr(self.legal_workflow, "continue_answer_generation"):
+                            updated_state = self.legal_workflow.continue_answer_generation(state_dict)
+                            continued_answer = updated_state.get("answer", "")
+                            
+                            # 이전 답변과 비교하여 새로 추가된 부분만 추출
+                            if continued_answer and previous_answer:
+                                if continued_answer.startswith(previous_answer):
+                                    new_content = continued_answer[len(previous_answer):].strip()
+                                else:
+                                    new_content = continued_answer
+                            else:
+                                new_content = continued_answer
+                        else:
+                            raise RuntimeError("continue_answer_generation 노드를 찾을 수 없습니다.")
+                    else:
+                        # 답변이 업데이트되었으면 새로 추가된 부분 추출
+                        if continued_answer.startswith(previous_answer):
+                            new_content = continued_answer[len(previous_answer):].strip()
+                        else:
+                            new_content = continued_answer
+                    
+                    # 메시지에서 전체 답변 가져오기
+                    try:
+                        from api.services.session_service import session_service
+                        messages = session_service.get_messages(session_id)
+                        full_answer = ""
+                        for msg in messages:
+                            if msg.get("message_id") == message_id and msg.get("role") == "assistant":
+                                full_answer = msg.get("content", "")
+                                break
+                        
+                        # 전체 답변에 새로 생성된 부분 추가
+                        if full_answer and new_content:
+                            full_answer = full_answer + "\n\n" + new_content
+                        elif new_content:
+                            full_answer = new_content
+                        
+                        # 메시지 업데이트 (save_full_answer 사용)
+                        if full_answer:
+                            # save_full_answer 메서드 사용
+                            if hasattr(session_service, "save_full_answer"):
+                                # 기존 메시지의 metadata 가져오기
+                                existing_metadata = {}
+                                for msg in messages:
+                                    if msg.get("message_id") == message_id:
+                                        existing_metadata = msg.get("metadata", {})
+                                        break
+                                
+                                session_service.save_full_answer(
+                                    session_id=session_id,
+                                    message_id=message_id,
+                                    full_answer=full_answer,
+                                    metadata=existing_metadata
+                                )
+                            else:
+                                self.logger.warning(f"save_full_answer 메서드가 없어 메시지를 업데이트할 수 없습니다. message_id: {message_id}")
+                    except Exception as e:
+                        self.logger.warning(f"메시지 업데이트 중 오류 (무시): {e}")
+                    
+                    return {
+                        "content": new_content,
+                        "chunk_index": chunk_index,
+                        "total_chunks": 1,
+                        "has_more": False
+                    }
+                else:
+                    raise RuntimeError("체크포인트 관리자가 활성화되지 않았습니다.")
+            
+            except Exception as e:
+                self.logger.error(f"Error continuing answer: {e}", exc_info=True)
+                raise
+        
+        except Exception as e:
+            error_msg = f"이어서 답변 생성 중 오류 발생: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            raise RuntimeError(error_msg) from e
 
     def get_session_info(self, session_id: str) -> Dict[str, Any]:
         """

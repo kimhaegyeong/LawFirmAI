@@ -9,12 +9,12 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants, RetryConfig
-from core.agents.workflow_types import QueryComplexity
-from core.agents.node_wrappers import with_state_optimization
-from core.agents.validators.quality_validators import SearchValidator
-from core.agents.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
+from core.workflow.state.state_definitions import LegalWorkflowState
+from core.workflow.utils.workflow_constants import WorkflowConstants, RetryConfig
+from core.workflow.state.workflow_types import QueryComplexity
+from core.shared.wrappers.node_wrappers import with_state_optimization
+from core.generation.validators.quality_validators import SearchValidator
+from core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
 
 try:
     from langfuse import observe

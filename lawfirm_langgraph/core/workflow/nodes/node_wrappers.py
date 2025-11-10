@@ -8,12 +8,29 @@ import logging
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
-from .state_adapter import (
-    StateAdapter,
-    validate_state_for_node,
-)
-from .state_reduction import StateReducer
-from .node_input_output_spec import validate_node_input
+# core.agents에서 state_adapter와 state_reduction import
+try:
+    from core.agents.state_adapter import (
+        StateAdapter,
+        validate_state_for_node,
+    )
+    from core.agents.state_reduction import StateReducer
+except ImportError:
+    # Fallback: 절대 경로로 재시도
+    import sys
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    lawfirm_langgraph_path = Path(__file__).parent.parent.parent
+    if str(lawfirm_langgraph_path) not in sys.path:
+        sys.path.insert(0, str(lawfirm_langgraph_path))
+    
+    from core.agents.state_adapter import (
+        StateAdapter,
+        validate_state_for_node,
+    )
+    from core.agents.state_reduction import StateReducer
 
 logger = logging.getLogger(__name__)
 
@@ -96,18 +113,18 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 # 디버깅: search_dependent_nodes 체크
                 is_search_dependent = node_name in search_dependent_nodes
                 if is_search_dependent:
-                    print(f"[DEBUG] node_wrappers ({node_name}): IS a search_dependent node")
+                    logger.debug(f"node_wrappers ({node_name}): IS a search_dependent node")
 
                 if is_search_dependent:
                     # 전역 캐시에서 검색 결과 복원 (노드 실행 전에 state에 추가)
-                    print(f"[DEBUG] node_wrappers ({node_name}): Checking global cache - cache exists={_global_search_results_cache is not None}")
+                    logger.debug(f"node_wrappers ({node_name}): Checking global cache - cache exists={_global_search_results_cache is not None}")
                     if _global_search_results_cache:
                         state_search = state.get("search", {}) if isinstance(state.get("search"), dict) else {}
                         has_results = len(state_search.get("semantic_results", [])) > 0 or len(state_search.get("keyword_results", [])) > 0
-                        print(f"[DEBUG] node_wrappers ({node_name}): State has results={has_results}, state_search semantic={len(state_search.get('semantic_results', []))}, keyword={len(state_search.get('keyword_results', []))}")
+                        logger.debug(f"node_wrappers ({node_name}): State has results={has_results}, state_search semantic={len(state_search.get('semantic_results', []))}, keyword={len(state_search.get('keyword_results', []))}")
 
                         if not has_results:
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restoring search results from global cache BEFORE function execution")
+                            logger.debug(f"node_wrappers ({node_name}): Restoring search results from global cache BEFORE function execution")
                             if "search" not in state:
                                 state["search"] = {}
                             state["search"].update(_global_search_results_cache)
@@ -124,7 +141,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             restored_semantic = len(state["search"].get("semantic_results", []))
                             restored_keyword = len(state["search"].get("keyword_results", []))
                             restored_docs = len(state.get("retrieved_docs", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restored to state BEFORE execution - semantic={restored_semantic}, keyword={restored_keyword}, retrieved_docs={restored_docs}")
+                            logger.debug(f"node_wrappers ({node_name}): Restored to state BEFORE execution - semantic={restored_semantic}, keyword={restored_keyword}, retrieved_docs={restored_docs}")
 
                     # search 그룹이 없으면 state에서 직접 찾기 (flat 구조에서)
                     if "search" not in state or not isinstance(state.get("search"), dict):
@@ -244,17 +261,16 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 # 디버깅: converted_state의 query 확인
                 converted_query = converted_state.get("query") or (converted_state.get("input") and isinstance(converted_state.get("input"), dict) and converted_state["input"].get("query"))
                 if node_name == "classify_query":
-                    print(f"[DEBUG] node_wrappers.classify_query: converted_state query='{converted_query[:50] if converted_query else 'EMPTY'}...'")
+                    logger.debug(f"node_wrappers.classify_query: converted_state query='{converted_query[:50] if converted_query else 'EMPTY'}...'")
 
-                # 개선 사항 1: Input Validation - 실패 시 자동 복구 로직 추가
                 if not is_valid:
                     # 경고를 debug 레벨로 낮춤 (자동 복구가 있으므로)
                     logger.debug(f"Input validation failed for {node_name}: {error} (attempting auto-recovery)")
                     
                     # 개선 사항 1: retrieved_docs 필드 누락 시 자동 복구
-                    if "retrieved_docs" in error:
+                    if "retrieved_docs" in error or "retrieved_docs" in str(error):
                         try:
-                            # Global cache에서 복구 시도 (전역 변수는 이미 wrapper 함수 시작 부분에서 선언됨)
+                            # Global cache에서 복구 시도
                             if _global_search_results_cache:
                                 retrieved_docs = (
                                     _global_search_results_cache.get("retrieved_docs", []) or
@@ -268,25 +284,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     if "search" not in converted_state:
                                         converted_state["search"] = {}
                                     converted_state["search"]["retrieved_docs"] = retrieved_docs
-                                    if "common" not in converted_state:
-                                        converted_state["common"] = {}
-                                    if "search" not in converted_state["common"]:
-                                        converted_state["common"]["search"] = {}
-                                    converted_state["common"]["search"]["retrieved_docs"] = retrieved_docs
                                     logger.info(f"✅ [AUTO-RECOVER] Restored {len(retrieved_docs)} retrieved_docs from global cache for {node_name}")
                                     # 재검증
                                     is_valid, error = validate_node_input(node_name, converted_state)
                                     if is_valid:
                                         logger.info(f"✅ [AUTO-RECOVER] Input validation passed after auto-recovery for {node_name}")
-                                else:
-                                    # 빈 리스트로라도 저장하여 validation 통과
-                                    converted_state["retrieved_docs"] = []
-                                    if "search" not in converted_state:
-                                        converted_state["search"] = {}
-                                    converted_state["search"]["retrieved_docs"] = []
-                                    logger.warning(f"⚠️ [AUTO-RECOVER] No retrieved_docs found, using empty list for {node_name}")
-                                    # 재검증
-                                    is_valid, error = validate_node_input(node_name, converted_state)
                         except Exception as e:
                             logger.debug(f"Auto-recovery failed for {node_name}: {e}")
                     

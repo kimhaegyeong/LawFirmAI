@@ -31,15 +31,15 @@ class WorkflowConstants:
     DEFAULT_CONFIDENCE = 0.6
 
     # 답변 길이 임계값
-    MIN_ANSWER_LENGTH_GENERATION = 50  # 생성 단계 최소 길이
-    MIN_ANSWER_LENGTH_VALIDATION = 50  # 검증 단계 최소 길이 (통일)
+    MIN_ANSWER_LENGTH_GENERATION = 100  # 생성 단계 최소 길이 (50 -> 100)
+    MIN_ANSWER_LENGTH_VALIDATION = 100  # 검증 단계 최소 길이 (50 -> 100)
 
 
 class RetryConfig:
     """재시도 설정 상수"""
-    MAX_GENERATION_RETRIES = 2
+    MAX_GENERATION_RETRIES = 4
     MAX_VALIDATION_RETRIES = 1
-    MAX_TOTAL_RETRIES = 4
+    MAX_TOTAL_RETRIES = 6
 
 
 class QualityThresholds:

@@ -6,8 +6,8 @@ Query 관련 유틸리티 메서드들을 제공하는 Mixin 클래스
 
 from typing import Any, Dict, List, Optional
 
-from core.agents.query_enhancer import QueryEnhancer
-from core.agents.workflow_utils import WorkflowUtils
+from core.search.optimizers.query_enhancer import QueryEnhancer
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class QueryUtilsMixin:

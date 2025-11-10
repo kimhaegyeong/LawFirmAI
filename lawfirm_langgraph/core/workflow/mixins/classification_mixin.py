@@ -128,6 +128,11 @@ class ClassificationMixin:
             if node_wrappers_module._global_search_results_cache is None:
                 node_wrappers_module._global_search_results_cache = {}
             
+            # None 체크 추가: _global_search_results_cache가 None이거나 dict가 아닌 경우 초기화
+            if _global_search_results_cache is None or not isinstance(_global_search_results_cache, dict):
+                _global_search_results_cache = {}
+                node_wrappers_module._global_search_results_cache = _global_search_results_cache
+            
             if "common" not in _global_search_results_cache:
                 _global_search_results_cache["common"] = {}
             if "classification" not in _global_search_results_cache["common"]:

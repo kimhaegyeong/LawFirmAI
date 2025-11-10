@@ -76,7 +76,21 @@ class SearchMixin:
             self.logger.warning(f"extracted_keywords is not a list: {type(extracted_keywords_raw)}, converting to empty list")
             extracted_keywords = []
         else:
-            extracted_keywords = [kw for kw in extracted_keywords_raw if kw and isinstance(kw, str) and len(str(kw).strip()) > 0]
+            # 문자열뿐만 아니라 숫자, 튜플 등도 허용 (hashable 타입)
+            extracted_keywords = [kw for kw in extracted_keywords_raw if kw is not None and isinstance(kw, (str, int, float, tuple))]
+            # 문자열인 경우 공백 체크
+            extracted_keywords = [kw if not isinstance(kw, str) or len(str(kw).strip()) > 0 else None for kw in extracted_keywords]
+            extracted_keywords = [kw for kw in extracted_keywords if kw is not None]
+        
+        # 디버그: extracted_keywords 확인
+        if not extracted_keywords:
+            self.logger.warning(f"⚠️ [PREPARE SEARCH QUERY] extracted_keywords is empty! State keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+            # search 그룹에서도 확인
+            if "search" in state and isinstance(state.get("search"), dict):
+                search_keywords = state["search"].get("extracted_keywords", [])
+                if search_keywords:
+                    self.logger.info(f"🔍 [PREPARE SEARCH QUERY] Found {len(search_keywords)} keywords in search group")
+                    extracted_keywords = search_keywords
         
         legal_field_raw = self._get_state_value(state, "legal_field", "")
         legal_field = str(legal_field_raw).strip() if legal_field_raw else ""

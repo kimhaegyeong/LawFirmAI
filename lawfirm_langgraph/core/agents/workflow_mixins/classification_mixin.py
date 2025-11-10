@@ -7,9 +7,9 @@ Classification Mixin
 import time
 from typing import Any, Dict, Tuple
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_types import QueryComplexity
-from core.agents.node_wrappers import with_state_optimization
+from core.workflow.state.state_definitions import LegalWorkflowState
+from core.workflow.state.workflow_types import QueryComplexity
+from core.shared.wrappers.node_wrappers import with_state_optimization
 
 try:
     from langfuse import observe
@@ -123,7 +123,7 @@ class ClassificationMixin:
         state["common"]["metadata"]["confidence"] = confidence
         
         try:
-            from core.agents.node_wrappers import _global_search_results_cache
+            from core.shared.wrappers.node_wrappers import _global_search_results_cache
             import core.agents.node_wrappers as node_wrappers_module
             if node_wrappers_module._global_search_results_cache is None:
                 node_wrappers_module._global_search_results_cache = {}

@@ -7,8 +7,8 @@ Document Analysis Mixin
 import time
 from typing import Any, Dict, List
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.node_wrappers import with_state_optimization
+from core.workflow.state.state_definitions import LegalWorkflowState
+from core.shared.wrappers.node_wrappers import with_state_optimization
 
 try:
     from langfuse import observe

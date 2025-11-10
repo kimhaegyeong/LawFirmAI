@@ -15,6 +15,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -324,10 +325,11 @@ class EnhancedLegalQuestionWorkflow(
         )
 
         # 답변 생성 핸들러 초기화 (Phase 5 리팩토링) - LLM 초기화 이후
-        # AnswerGenerator는 config만 받고 내부에서 LLM을 초기화함
+        # AnswerGenerator에 이미 초기화된 LLM 전달
         self.answer_generator = AnswerGenerator(
             config=self.config,
-            langfuse_client=None  # langfuse_client는 선택사항
+            langfuse_client=None,  # langfuse_client는 선택사항
+            llm=self.llm  # 이미 초기화된 LLM 전달
         )
 
         # 워크플로우 라우팅 핸들러 초기화 (Phase 9 리팩토링) - answer_generator 초기화 이후
@@ -506,6 +508,9 @@ class EnhancedLegalQuestionWorkflow(
         # 통합된 답변 생성, 검증, 포맷팅 및 최종 준비 노드 (Phase 5 + Phase 2 통합)
         workflow.add_node("generate_and_validate_answer", self.generate_and_validate_answer)
 
+        # 이어서 답변 생성 노드 (토큰 제한 초과 시 사용)
+        workflow.add_node("continue_answer_generation", self.continue_answer_generation)
+
         # Agentic AI 노드 (Tool Use/Function Calling)
         if self.config.use_agentic_mode:
             workflow.add_node("agentic_decision", self.agentic_decision_node)
@@ -659,35 +664,39 @@ class EnhancedLegalQuestionWorkflow(
                 query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
                 domain = self._get_domain_from_query_type(query_type_str)
 
-                # 키워드 확장 결과 캐싱 확인
+                # 로컬 개발 환경에서는 캐시 비활성화
+                is_development = os.getenv("DEBUG", "false").lower() == "true" or os.getenv("ENVIRONMENT", "").lower() == "development"
+
+                # 키워드 확장 결과 캐싱 확인 (개발 환경이 아닐 때만)
                 expansion_result = None
                 cache_hit_keywords = False
-                try:
-                    # 캐시 키 생성 (domain, keywords 기반)
-                    keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
-                    cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
-                    
-                    # PerformanceOptimizer 캐시에서 확인
-                    cached_result = self.performance_optimizer.cache.get_cached_answer(
-                        f"keyword_exp:{cache_key}", query_type_str
-                    )
-                    if cached_result and isinstance(cached_result, dict) and "expansion_result" in cached_result:
-                        expansion_data = cached_result.get("expansion_result")
-                        if expansion_data:
-                            # 캐시된 결과를 expansion_result 형태로 재구성
-                            from types import SimpleNamespace
-                            expansion_result = SimpleNamespace(
-                                api_call_success=expansion_data.get("api_call_success", True),
-                                expanded_keywords=expansion_data.get("expanded_keywords", []),
-                                domain=expansion_data.get("domain", domain),
-                                base_keywords=expansion_data.get("base_keywords", keywords),
-                                confidence=expansion_data.get("confidence", 0.9),
-                                expansion_method=expansion_data.get("expansion_method", "cache")
-                            )
-                            cache_hit_keywords = True
-                            self.logger.info(f"✅ [CACHE HIT] 키워드 확장 결과 캐시 히트: {cache_key[:16]}...")
-                except Exception as e:
-                    self.logger.debug(f"키워드 확장 캐시 확인 중 오류 (무시): {e}")
+                if not is_development:
+                    try:
+                        # 캐시 키 생성 (domain, keywords 기반)
+                        keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
+                        cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
+                        
+                        # PerformanceOptimizer 캐시에서 확인
+                        cached_result = self.performance_optimizer.cache.get_cached_answer(
+                            f"keyword_exp:{cache_key}", query_type_str
+                        )
+                        if cached_result and isinstance(cached_result, dict) and "expansion_result" in cached_result:
+                            expansion_data = cached_result.get("expansion_result")
+                            if expansion_data:
+                                # 캐시된 결과를 expansion_result 형태로 재구성
+                                from types import SimpleNamespace
+                                expansion_result = SimpleNamespace(
+                                    api_call_success=expansion_data.get("api_call_success", True),
+                                    expanded_keywords=expansion_data.get("expanded_keywords", []),
+                                    domain=expansion_data.get("domain", domain),
+                                    base_keywords=expansion_data.get("base_keywords", keywords),
+                                    confidence=expansion_data.get("confidence", 0.9),
+                                    expansion_method=expansion_data.get("expansion_method", "cache")
+                                )
+                                cache_hit_keywords = True
+                                self.logger.info(f"✅ [CACHE HIT] 키워드 확장 결과 캐시 히트: {cache_key[:16]}...")
+                    except Exception as e:
+                        self.logger.debug(f"키워드 확장 캐시 확인 중 오류 (무시): {e}")
 
                 # 캐시 미스인 경우 AI 키워드 확장 수행
                 if not expansion_result:
@@ -700,28 +709,29 @@ class EnhancedLegalQuestionWorkflow(
                             )
                         )
                         
-                        # 캐시에 저장
-                        try:
-                            keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
-                            cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
-                            expansion_data = {
-                                "api_call_success": expansion_result.api_call_success,
-                                "expanded_keywords": expansion_result.expanded_keywords if hasattr(expansion_result, 'expanded_keywords') else [],
-                                "domain": domain,
-                                "base_keywords": keywords,
-                                "confidence": expansion_result.confidence if hasattr(expansion_result, 'confidence') else 0.9,
-                                "expansion_method": expansion_result.expansion_method if hasattr(expansion_result, 'expansion_method') else "ai"
-                            }
-                            self.performance_optimizer.cache.cache_answer(
-                                f"keyword_exp:{cache_key}",
-                                query_type_str,
-                                {"expansion_result": expansion_data},
-                                confidence=1.0,
-                                sources=[]
-                            )
-                            self.logger.debug(f"✅ [CACHE STORE] 키워드 확장 결과 캐시 저장: {cache_key[:16]}...")
-                        except Exception as e:
-                            self.logger.debug(f"키워드 확장 캐시 저장 중 오류 (무시): {e}")
+                        # 캐시에 저장 (개발 환경이 아닐 때만)
+                        if not is_development:
+                            try:
+                                keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
+                                cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
+                                expansion_data = {
+                                    "api_call_success": expansion_result.api_call_success,
+                                    "expanded_keywords": expansion_result.expanded_keywords if hasattr(expansion_result, 'expanded_keywords') else [],
+                                    "domain": domain,
+                                    "base_keywords": keywords,
+                                    "confidence": expansion_result.confidence if hasattr(expansion_result, 'confidence') else 0.9,
+                                    "expansion_method": expansion_result.expansion_method if hasattr(expansion_result, 'expansion_method') else "ai"
+                                }
+                                self.performance_optimizer.cache.cache_answer(
+                                    f"keyword_exp:{cache_key}",
+                                    query_type_str,
+                                    {"expansion_result": expansion_data},
+                                    confidence=1.0,
+                                    sources=[]
+                                )
+                                self.logger.debug(f"✅ [CACHE STORE] 키워드 확장 결과 캐시 저장: {cache_key[:16]}...")
+                            except Exception as e:
+                                self.logger.debug(f"키워드 확장 캐시 저장 중 오류 (무시): {e}")
                     except Exception as e:
                         self.logger.warning(f"AI keyword expansion failed: {e}")
                         expansion_result = None
@@ -795,10 +805,10 @@ class EnhancedLegalQuestionWorkflow(
         return state
 
     # Phase 9 리팩토링: 라우팅 관련 메서드는 WorkflowRoutes로 이동됨
-    # 호환성을 위한 래퍼 메서드
-    def _should_expand_keywords_ai(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_expand_keywords_ai 래퍼"""
-        return self.workflow_routes.should_expand_keywords_ai(state)
+    # expand_keywords_ai 노드가 통합되어 더 이상 사용되지 않음
+    # def _should_expand_keywords_ai(self, state: LegalWorkflowState) -> str:
+    #     """WorkflowRoutes.should_expand_keywords_ai 래퍼"""
+    #     return self.workflow_routes.should_expand_keywords_ai(state)
 
     def _should_retry_generation(self, state: LegalWorkflowState) -> str:
         """WorkflowRoutes.should_retry_generation 래퍼"""
@@ -1319,6 +1329,30 @@ class EnhancedLegalQuestionWorkflow(
         
         quality_score = weighted_sum / total_weight if total_weight > 0 else 0.0
         quality_check_passed = quality_score >= QualityThresholds.QUALITY_PASS_THRESHOLD
+
+        # 개선: 품질 점수가 낮거나 답변 길이가 부족하면 재생성 플래그 설정
+        answer = self._get_state_value(state, "answer", "")
+        answer_length = len(answer.strip()) if isinstance(answer, str) else 0
+        min_length = WorkflowConstants.MIN_ANSWER_LENGTH_VALIDATION
+        
+        if quality_score < QualityThresholds.QUALITY_PASS_THRESHOLD or answer_length < min_length:
+            needs_regeneration = True
+            regeneration_reason = []
+            if quality_score < QualityThresholds.QUALITY_PASS_THRESHOLD:
+                regeneration_reason.append(f"low_quality_score_{quality_score:.2f}")
+            if answer_length < min_length:
+                regeneration_reason.append(f"short_answer_{answer_length}chars")
+            
+            self._set_state_value(state, "needs_regeneration", True)
+            state["needs_regeneration"] = True
+            if "metadata" not in state or not isinstance(state.get("metadata"), dict):
+                state["metadata"] = {}
+            state["metadata"]["needs_regeneration"] = True
+            state["metadata"]["regeneration_reason"] = "_".join(regeneration_reason)
+            self.logger.info(
+                f"✅ [REGENERATION FLAG] Set needs_regeneration=True (quality_score={quality_score:.2f}, "
+                f"answer_length={answer_length}, reason={'_'.join(regeneration_reason)}) in multiple locations"
+            )
 
         # 메타데이터 저장 (state reduction 후에도 유지되도록 여러 경로에 저장)
         self._save_metadata_safely(state, "quality_score", quality_score, save_to_top_level=True)
@@ -2155,19 +2189,28 @@ class EnhancedLegalQuestionWorkflow(
 
 질문: {query}
 
+**중요**: 질문의 핵심 의도를 정확히 파악하여 가장 적합한 유형을 선택하세요.
+
 다음 유형 중 하나를 선택하세요:
 1. precedent_search - 판례, 사건, 법원 판결, 판시사항 관련
 2. law_inquiry - 법률 조문, 법령, 규정의 내용을 묻는 질문
-3. legal_advice - 법률 조언, 해석, 권리 구제 방법을 묻는 질문
+3. legal_advice - 법률 조언, 해석, 권리 구제 방법을 묻는 질문 (권리와 의무, 계약서 작성 등 포함)
 4. procedure_guide - 법적 절차, 소송 방법, 대응 방법을 묻는 질문
 5. term_explanation - 법률 용어의 정의나 의미를 묻는 질문
 6. general_question - 범용적인 법률 질문
+
+**특별 지침**:
+- "권리와 의무", "계약서 작성", "법률 조언" 등이 포함된 질문은 legal_advice로 분류하되, 관련 법령 조문과 판례를 함께 검색해야 함을 명시하세요.
+- 질문에 특정 법령명이나 조문이 언급되지 않아도, 질문의 핵심 개념과 관련된 법령을 추론하여 검색 범위를 제안하세요.
+- 예: "임대차 계약서 작성" → 민법, 임대차보호법 관련 법령 조문과 판례 검색 필요
 
 다음 형식으로 응답해주세요:
 {{
     "question_type": "precedent_search" | "law_inquiry" | "legal_advice" | "procedure_guide" | "term_explanation" | "general_question",
     "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
+    "reasoning": "판단 근거 (한국어)",
+    "suggested_laws": ["관련 법령명1", "관련 법령명2"],
+    "needs_both_law_and_precedent": true | false
 }}
 """
     
@@ -2178,9 +2221,11 @@ class EnhancedLegalQuestionWorkflow(
 질문: {query}
 질문 유형: {question_type}
 
+**중요**: 질문의 핵심 키워드를 분석하여 가장 적합한 법률 분야를 선택하세요.
+
 법률 분야 예시:
 - family_law (가족법): 이혼, 양육권, 상속, 부양 등
-- civil_law (민법): 계약, 손해배상, 물권, 채권 등
+- civil_law (민법): 계약, 손해배상, 물권, 채권, 임대차, 부동산 등
 - corporate_law (기업법): 회사법, 상법, 금융법 등
 - intellectual_property (지적재산권): 특허, 상표, 저작권 등
 - criminal_law (형법): 형사소송, 범죄 등
@@ -2188,11 +2233,17 @@ class EnhancedLegalQuestionWorkflow(
 - administrative_law (행정법): 행정처분, 행정소송 등
 - general (일반): 분류되지 않는 경우
 
+**특별 지침**:
+- "임대차", "임대인", "임차인" → civil_law (민법)
+- "계약서 작성", "계약", "권리", "의무" → civil_law (민법)
+- 질문에 여러 법률 분야가 관련될 수 있으면 가장 직접적으로 관련된 분야를 선택하세요.
+
 다음 형식으로 응답해주세요:
 {{
     "legal_field": "family_law" | "civil_law" | "corporate_law" | "intellectual_property" | "criminal_law" | "labor_law" | "administrative_law" | "general",
     "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
+    "reasoning": "판단 근거 (한국어)",
+    "related_laws": ["관련 법령명1", "관련 법령명2"]
 }}
 """
     
@@ -2720,119 +2771,6 @@ class EnhancedLegalQuestionWorkflow(
         self.search_handler.fallback_search(state)
 
 
-    @observe(name="expand_keywords_ai")
-    @with_state_optimization("expand_keywords_ai", enable_reduction=True)
-    def expand_keywords_ai(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """AI 키워드 확장 (AIKeywordGenerator 사용)"""
-        try:
-            # 방법 1: 노드 호출 추적 - 실행 기록 남기기
-            # 직접 설정하여 상태 최적화로 인한 손실 방지
-            if "metadata" not in state or not isinstance(state.get("metadata"), dict):
-                state["metadata"] = {}
-            # 중요: query_complexity와 needs_search 보존
-            preserved_complexity = state.get("metadata", {}).get("query_complexity")
-            preserved_needs_search = state.get("metadata", {}).get("needs_search")
-            state["metadata"] = dict(state["metadata"])  # 복사본 생성
-            # 보존된 값 복원
-            if preserved_complexity:
-                state["metadata"]["query_complexity"] = preserved_complexity
-            if preserved_needs_search is not None:
-                state["metadata"]["needs_search"] = preserved_needs_search
-            state["metadata"]["_last_executed_node"] = "expand_keywords_ai"
-            # common 그룹에도 설정 (nested 구조 지원)
-            if "common" not in state or not isinstance(state.get("common"), dict):
-                state["common"] = {}
-            if "metadata" not in state["common"]:
-                state["common"]["metadata"] = {}
-            state["common"]["metadata"]["_last_executed_node"] = "expand_keywords_ai"
-
-            start_time = time.time()
-
-            if not self.ai_keyword_generator:
-                self.logger.debug("AIKeywordGenerator not available, skipping")
-                return state
-
-            # 기존 키워드가 없으면 기본 키워드 생성
-            keywords = self._get_state_value(state, "extracted_keywords", [])
-            if len(keywords) == 0:
-                query = self._get_state_value(state, "query", "")
-                query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", "general_question"))
-                # LegalKeywordMapper를 사용하여 기본 키워드 추출
-                keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
-                # 중복 제거 (hashable 타입만 필터링)
-                keywords = [kw for kw in keywords if isinstance(kw, (str, int, float, tuple)) and kw is not None]
-                keywords = list(set(keywords))  # 중복 제거
-                self._set_state_value(state, "extracted_keywords", keywords)
-                self.logger.info(f"Generated base keywords: {len(keywords)} keywords from query")
-
-            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
-            domain = self._get_domain_from_query_type(query_type_str)
-
-            # AI 키워드 확장 (동기 실행 - 비동기는 지원 안됨)
-            expansion_result = asyncio.run(
-                self.ai_keyword_generator.expand_domain_keywords(
-                    domain=domain,
-                    base_keywords=keywords,
-                    target_count=30
-                )
-            )
-
-            if expansion_result.api_call_success:
-                # 확장된 키워드 추가
-                all_keywords = keywords + expansion_result.expanded_keywords
-                # hashable 타입만 필터링 (슬라이스 객체 등 unhashable 타입 방지)
-                all_keywords = [kw for kw in all_keywords if isinstance(kw, (str, int, float, tuple)) and kw is not None]
-                all_keywords = list(set(all_keywords))
-                self._set_state_value(state, "extracted_keywords", all_keywords)
-                
-                # 디버그: 저장 확인
-                saved_keywords = self._get_state_value(state, "extracted_keywords", [])
-                self.logger.info(f"🔍 [KEYWORD EXPANSION] Saved {len(saved_keywords)} keywords to state (verified: {len(saved_keywords) == len(all_keywords)})")
-
-                # 메타데이터 저장 (새 딕셔너리 생성)
-                self._set_state_value(state, "ai_keyword_expansion", {
-                    "domain": expansion_result.domain,
-                    "original_keywords": expansion_result.base_keywords,
-                    "expanded_keywords": expansion_result.expanded_keywords,
-                    "confidence": expansion_result.confidence,
-                    "method": expansion_result.expansion_method
-                })
-
-                processing_time = self._update_processing_time(state, start_time)
-                self._add_step(state, "AI 키워드 확장",
-                             f"AI 키워드 확장 완료: +{len(expansion_result.expanded_keywords)}개 (총 {len(all_keywords)}개, {processing_time:.3f}s)")
-
-                self.logger.info(f"AI keyword expansion: {len(expansion_result.expanded_keywords)} keywords added in {processing_time:.3f}s")
-            else:
-                # 폴백 사용
-                self.logger.warning("AI keyword expansion failed, using fallback")
-                fallback_keywords = self.ai_keyword_generator.expand_keywords_with_fallback(
-                    domain, keywords
-                )
-                all_keywords = keywords + fallback_keywords
-                # hashable 타입만 필터링 (슬라이스 객체 등 unhashable 타입 방지)
-                all_keywords = [kw for kw in all_keywords if isinstance(kw, (str, int, float, tuple)) and kw is not None]
-                all_keywords = list(set(all_keywords))
-                self._set_state_value(state, "extracted_keywords", all_keywords)
-
-                # 메타데이터 저장 (새 딕셔너리 생성)
-                self._set_state_value(state, "ai_keyword_expansion", {
-                    "domain": domain,
-                    "original_keywords": keywords,
-                    "expanded_keywords": fallback_keywords,
-                    "confidence": 0.5,
-                    "method": "fallback"
-                })
-
-                processing_time = self._update_processing_time(state, start_time)
-                self._add_step(state, "AI 키워드 확장 (폴백)",
-                             f"AI 키워드 확장 (폴백): +{len(fallback_keywords)}개 ({processing_time:.3f}s)")
-                self.logger.info(f"Fallback keyword expansion: {len(fallback_keywords)} keywords added in {processing_time:.3f}s")
-
-        except Exception as e:
-            self._handle_error(state, str(e), "AI 키워드 확장 중 오류 발생")
-
-        return state
 
     def _get_domain_from_query_type(self, query_type: str) -> str:
         """WorkflowUtils.get_domain_from_query_type 래퍼"""
@@ -3521,8 +3459,11 @@ class EnhancedLegalQuestionWorkflow(
             normalized_response = None
             cache_hit_answer = False
             
-            # 재시도가 아닌 경우에만 캐시 확인
-            if not is_retry:
+            # 로컬 개발 환경에서는 캐시 비활성화
+            is_development = os.getenv("DEBUG", "false").lower() == "true" or os.getenv("ENVIRONMENT", "").lower() == "development"
+            
+            # 재시도가 아닌 경우에만 캐시 확인 (개발 환경이 아닐 때만)
+            if not is_retry and not is_development:
                 # 캐시 키 생성 (query, context_dict, retrieved_docs 기반)
                 context_text = context_dict.get("context", "")[:500] if isinstance(context_dict, dict) else ""
                 docs_count = len(retrieved_docs) if retrieved_docs else 0
@@ -3564,7 +3505,6 @@ class EnhancedLegalQuestionWorkflow(
                             has_format_errors = self._detect_format_errors(cached_answer)
                             
                             # 추가 검증: 소스 인용 확인 (법령 조문 또는 판례 인용)
-                            import re
                             has_law_citation = bool(re.search(r'[가-힣]+법\s*제?\s*\d+\s*조', cached_answer))
                             has_precedent_citation = bool(re.search(r'대법원|법원.*\d{4}[다나마]\d+', cached_answer))
                             has_citation = has_law_citation or has_precedent_citation
@@ -3621,8 +3561,8 @@ class EnhancedLegalQuestionWorkflow(
                     is_retry=is_retry
                 )
                 
-                # 캐시에 저장 (재시도가 아닌 경우에만, 품질 검증 통과 시)
-                if not is_retry and normalized_response:
+                # 캐시에 저장 (재시도가 아닌 경우에만, 품질 검증 통과 시, 개발 환경이 아닐 때만)
+                if not is_retry and not is_development and normalized_response:
                     # 답변 품질 검증
                     answer_str = normalized_response if isinstance(normalized_response, str) else str(normalized_response)
                     answer_length = len(answer_str.strip())
@@ -3925,6 +3865,97 @@ class EnhancedLegalQuestionWorkflow(
             # Phase 1/Phase 7: 폴백 answer 생성 - _set_answer_safely 사용
             fallback_answer = self.answer_generator.generate_fallback_answer(state)
             self._set_answer_safely(state, fallback_answer)
+        return state
+
+    @observe(name="continue_answer_generation")
+    @with_state_optimization("continue_answer_generation", enable_reduction=True)
+    def continue_answer_generation(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """이전 답변의 마지막 부분부터 이어서 답변 생성"""
+        metadata = self._get_state_value(state, "metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        
+        try:
+            start_time = time.time()
+            
+            # 이전 답변 가져오기
+            previous_answer = self._get_state_value(state, "answer", "")
+            if not previous_answer:
+                self.logger.warning("이전 답변이 없어 이어서 생성할 수 없습니다.")
+                return state
+            
+            # 이전 답변의 마지막 부분 (컨텍스트로 사용)
+            previous_context = previous_answer[-500:] if len(previous_answer) > 500 else previous_answer
+            
+            # 원본 질문과 컨텍스트 복원
+            query = self._get_state_value(state, "query", "")
+            query_type = self._restore_query_type(state)
+            retrieved_docs = self._restore_retrieved_docs(state)
+            prompt_optimized_context = self._get_state_value(state, "prompt_optimized_context", {})
+            context_dict = self._build_context_dict(state, query_type, retrieved_docs, prompt_optimized_context)
+            
+            # 이어서 생성 프롬프트 추가
+            continuation_prompt = f"""
+이전 답변의 마지막 부분:
+{previous_context}
+
+위 답변을 이어서 계속 작성해주세요. 자연스럽게 연결되도록 작성하세요.
+"""
+            
+            # 프롬프트에 continuation_prompt 추가
+            context_dict["continuation_prompt"] = continuation_prompt
+            context_dict["previous_answer"] = previous_context
+            
+            # 답변 생성 (이어서 생성)
+            if self.answer_generator:
+                # 이어서 생성 프롬프트 직접 생성
+                context_text = context_dict.get("context", "") if isinstance(context_dict, dict) else str(context_dict)
+                
+                optimized_prompt = f"""다음은 법률 질문에 대한 답변의 일부입니다. 이 답변을 자연스럽게 이어서 완성해주세요.
+
+## 질문
+{query}
+
+## 이전 답변의 마지막 부분
+{previous_context}
+
+## 관련 법률 문서
+{context_text[:2000] if len(context_text) > 2000 else context_text}
+
+위 답변을 이어서 계속 작성해주세요. 자연스럽게 연결되도록 작성하고, 관련 법률 문서를 참고하여 답변을 완성해주세요."""
+                
+                # 이어서 답변 생성
+                continued_answer = self.answer_generator.generate_answer_with_chain(
+                    optimized_prompt=optimized_prompt,
+                    query=query,
+                    context_dict=context_dict,
+                    quality_feedback=None,
+                    is_retry=False
+                )
+                
+                # 이전 답변에 이어서 생성된 답변 추가
+                full_answer = previous_answer + "\n\n" + continued_answer
+                
+                # 상태 업데이트
+                self._set_answer_safely(state, full_answer)
+                
+                # metadata 업데이트
+                metadata["continuation_generated"] = True
+                metadata["continuation_length"] = len(continued_answer)
+                self._set_state_value(state, "metadata", metadata)
+                
+                processing_time = time.time() - start_time
+                self.logger.info(
+                    f"✅ [CONTINUE ANSWER] Continued answer generation: "
+                    f"{len(continued_answer)} chars added in {processing_time:.2f}s"
+                )
+            else:
+                self.logger.error("AnswerGenerator가 없어 이어서 답변을 생성할 수 없습니다.")
+        
+        except Exception as e:
+            self.logger.error(f"❌ [CONTINUE ANSWER] Error: {e}", exc_info=True)
+            self._handle_error(state, str(e), "이어서 답변 생성 중 오류 발생")
+        
         return state
 
     def _get_question_type_and_domain(self, query_type, query: str = "") -> Tuple[QuestionType, Optional[LegalDomain]]:
@@ -6715,7 +6746,23 @@ class EnhancedLegalQuestionWorkflow(
             filtered_docs = []
             skipped_content = 0
             skipped_score = 0
+            skipped_relevance = 0
             skipped_content_details = []  # 디버깅용
+
+            # 질문의 핵심 키워드 추출 (관련성 검증용)
+            core_query_keywords = set()
+            if query:
+                # 질문에서 핵심 키워드 추출 (2글자 이상)
+                query_words = query.split()
+                for word in query_words:
+                    if len(word) >= 2 and word not in ["시", "의", "와", "과", "는", "은", "이", "가", "을", "를", "에", "에서", "로", "으로"]:
+                        core_query_keywords.add(word.lower())
+            
+            # extracted_keywords에서도 핵심 키워드 추가
+            if extracted_keywords:
+                for kw in extracted_keywords[:10]:
+                    if isinstance(kw, str) and len(kw) >= 2:
+                        core_query_keywords.add(kw.lower())
 
             for doc in weighted_docs:
                 # 개선 1: content 추출 로직 개선 - 다양한 필드명 시도
@@ -6761,6 +6808,18 @@ class EnhancedLegalQuestionWorkflow(
                             "text_len": len(str(doc.get("text", "")))
                         })
                     continue
+                
+                # 관련성 검증 강화: 질문의 핵심 키워드가 문서에 포함되어 있는지 확인
+                if core_query_keywords:
+                    content_lower = content.lower()
+                    # 핵심 키워드 중 하나라도 포함되어 있으면 관련성 있음
+                    has_relevant_keyword = any(kw in content_lower for kw in core_query_keywords if len(kw) > 2)
+                    
+                    # 관련성이 없으면 제외 (단, 판례/결정례는 예외)
+                    if not has_relevant_keyword and not is_precedent_or_decision:
+                        skipped_relevance += 1
+                        self.logger.debug(f"🔍 [SEARCH FILTERING] Filtered out irrelevant document: {doc.get('id', 'unknown')[:50]} (no relevant keywords)")
+                        continue
 
                 # 관련성 점수 확인 (판례/결정례는 점수 임계값 완화)
                 score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
@@ -7442,9 +7501,30 @@ class EnhancedLegalQuestionWorkflow(
             f"🔍 [DEBUG] Executing semantic search: query='{semantic_query[:50]}...', k={semantic_k}, original_query='{original_query[:50] if original_query else 'N/A'}...', extracted_keywords={len(extracted_keywords)}"
         )
 
-        # 메인 쿼리로 의미적 검색
+        # 검색 쿼리에 질문의 핵심 키워드를 명시적으로 포함
+        enhanced_semantic_query = semantic_query
+        if extracted_keywords and len(extracted_keywords) > 0:
+            # 핵심 키워드 추출 (법령명, 조문번호, 핵심 용어 우선)
+            core_keywords = []
+            for kw in extracted_keywords[:5]:
+                if isinstance(kw, str):
+                    # 법령명이나 조문번호가 포함된 키워드 우선
+                    if any(term in kw for term in ["법", "조", "제", "민법", "형법", "상법", "임대차", "계약"]):
+                        core_keywords.insert(0, kw)
+                    else:
+                        core_keywords.append(kw)
+            
+            if core_keywords:
+                # 쿼리에 핵심 키워드 추가 (중복 제거)
+                query_keywords = set(semantic_query.split())
+                new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
+                if new_keywords:
+                    enhanced_semantic_query = f"{semantic_query} {' '.join(new_keywords[:3])}"
+                    self.logger.info(f"🔍 [SEMANTIC SEARCH] Enhanced semantic query with keywords: '{enhanced_semantic_query[:100]}...'")
+
+        # 메인 쿼리로 의미적 검색 (향상된 쿼리 사용)
         main_semantic, main_count = self._semantic_search(
-            semantic_query,
+            enhanced_semantic_query,
             k=semantic_k,
             extracted_keywords=extracted_keywords
         )
@@ -7452,21 +7532,31 @@ class EnhancedLegalQuestionWorkflow(
         semantic_count += main_count
 
         self.logger.info(
-            f"🔍 [DEBUG] Main semantic search: {main_count} results (query: '{semantic_query[:50]}...')"
+            f"🔍 [DEBUG] Main semantic search: {main_count} results (query: '{enhanced_semantic_query[:50]}...')"
         )
 
         # 원본 query로도 의미적 검색 수행 (항상 포함)
         # 중요: 원본 query는 사용자의 직접적인 의도이므로 semantic_query와 같아도 별도로 검색
         if original_query and original_query.strip():
+            # 원본 쿼리도 키워드로 향상
+            enhanced_original_query = original_query
+            if extracted_keywords and len(extracted_keywords) > 0:
+                core_keywords = [str(kw) for kw in extracted_keywords[:3] if isinstance(kw, str)]
+                if core_keywords:
+                    query_keywords = set(original_query.split())
+                    new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
+                    if new_keywords:
+                        enhanced_original_query = f"{original_query} {' '.join(new_keywords[:2])}"
+            
             original_semantic, original_count = self._semantic_search(
-                original_query,
+                enhanced_original_query,
                 k=semantic_k // 2,
                 extracted_keywords=extracted_keywords
             )
             semantic_results.extend(original_semantic)
             semantic_count += original_count
             self.logger.info(
-                f"🔍 [DEBUG] Original query semantic search: {original_count} results (query: '{original_query[:50]}...')"
+                f"🔍 [DEBUG] Original query semantic search: {original_count} results (query: '{enhanced_original_query[:50]}...')"
             )
             print(f"[DEBUG] _execute_semantic_search_internal: Added {original_count} results from original query search")
 
@@ -9151,7 +9241,7 @@ class EnhancedLegalQuestionWorkflow(
             invalid_docs_count = 0
             # 검색 타입별 다른 관련도 기준 적용
             # 키워드 검색 결과는 관련도가 낮아도 키워드 매칭이 있으면 포함
-            min_relevance_score_semantic = 0.3  # 의미적 검색: 0.3 이상
+            min_relevance_score_semantic = 0.2  # 의미적 검색: 0.2 이상 (개선: 0.3 → 0.2로 완화)
             min_relevance_score_keyword = 0.15  # 키워드 검색: 0.15 이상 (키워드 매칭 시)
 
             for doc in retrieved_docs:
@@ -9184,7 +9274,7 @@ class EnhancedLegalQuestionWorkflow(
                 if relevance_score < min_score:
                     invalid_docs_count += 1
                     self.logger.debug(
-                        f"Document filtered: relevance score too low ({relevance_score:.3f} < {min_score}) "
+                        f"Document filtered: relevance score too low ({relevance_score:.3f} < {min_score:.3f}) "
                         f"(source: {doc.get('source', 'Unknown')}, type: {search_type})"
                     )
                     continue

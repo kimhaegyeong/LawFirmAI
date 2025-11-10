@@ -7,9 +7,9 @@ Answer Generation Mixin
 import time
 from typing import Any, Dict, List, Tuple
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants, QualityThresholds
-from core.agents.node_wrappers import with_state_optimization
+from core.workflow.state.state_definitions import LegalWorkflowState
+from core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
+from core.shared.wrappers.node_wrappers import with_state_optimization
 
 try:
     from langfuse import observe
@@ -52,7 +52,7 @@ class AnswerGenerationMixin:
         if not query_type:
             self.logger.warning("⚠️ [QUESTION TYPE] query_type not found in state, trying additional search...")
             try:
-                from core.agents.node_wrappers import _global_search_results_cache
+                from core.shared.wrappers.node_wrappers import _global_search_results_cache
                 if _global_search_results_cache:
                     cached_query_type = (
                         _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type", "") or
@@ -94,7 +94,7 @@ class AnswerGenerationMixin:
         
         if not retrieved_docs or len(retrieved_docs) == 0:
             try:
-                from core.agents.node_wrappers import _global_search_results_cache
+                from core.shared.wrappers.node_wrappers import _global_search_results_cache
                 if _global_search_results_cache:
                     cached_docs = _global_search_results_cache.get("retrieved_docs", [])
                     if cached_docs:

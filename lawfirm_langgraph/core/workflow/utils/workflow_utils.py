@@ -249,7 +249,7 @@ class WorkflowUtils:
     @staticmethod
     def normalize_answer(answer_raw: Any) -> str:
         """
-        답변을 안전하게 문자열로 변환하는 통합 메서드
+        답변을 안전하게 문자열로 변환하고 형식 오류를 제거하는 통합 메서드 (오류 처리 강화)
 
         Args:
             answer_raw: 답변 (str, dict, 또는 다른 타입)
@@ -257,28 +257,360 @@ class WorkflowUtils:
         Returns:
             정규화된 답변 문자열
         """
-        if answer_raw is None:
-            return ""
-        if isinstance(answer_raw, str):
-            return answer_raw
-        if isinstance(answer_raw, dict):
-            # dict에서 content나 answer 키를 찾거나, 전체 dict를 문자열로 변환
-            content = answer_raw.get("content") or answer_raw.get("answer")
-            if content:
-                # content가 여전히 dict일 수 있으므로 재귀적으로 처리
-                if isinstance(content, str):
-                    return content
-                elif isinstance(content, dict):
-                    return content.get("content", content.get("answer", str(content)))
+        try:
+            if answer_raw is None:
+                return ""
+            if isinstance(answer_raw, str):
+                answer = answer_raw
+                # JSON 문자열 형식 파싱 ({"answer": "..."} 또는 {"answer": {...}})
+                answer_stripped = answer.strip()
+                if answer_stripped.startswith('{') and '"answer"' in answer_stripped:
+                    try:
+                        # 불완전한 JSON 처리 (닫는 괄호가 없는 경우)
+                        if not answer_stripped.endswith('}'):
+                            # 마지막 닫는 괄호 추가 시도
+                            test_json = answer_stripped + '}'
+                            try:
+                                json_data = json.loads(test_json)
+                            except:
+                                # JSON 끝 부분 찾기
+                                last_brace = answer_stripped.rfind('}')
+                                if last_brace > 0:
+                                    test_json = answer_stripped[:last_brace+1]
+                                    json_data = json.loads(test_json)
+                                else:
+                                    raise ValueError("Invalid JSON format")
+                        else:
+                            json_data = json.loads(answer_stripped)
+                        
+                        if isinstance(json_data, dict):
+                            parsed_answer = json_data.get("answer", "")
+                            if isinstance(parsed_answer, dict):
+                                parsed_answer = json.dumps(parsed_answer, ensure_ascii=False)
+                            if parsed_answer and isinstance(parsed_answer, str) and parsed_answer.strip():
+                                answer = parsed_answer
+                            elif not parsed_answer:
+                                # answer 키가 없거나 비어있으면 전체 JSON을 문자열로 변환
+                                answer = answer_stripped
+                    except (json.JSONDecodeError, ValueError):
+                        # JSON 파싱 실패 시 원본 문자열에서 "answer" 키의 값 추출 시도
+                        import re
+                        # 멀티라인 JSON 패턴 시도
+                        match = re.search(r'"answer"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', answer_stripped, re.DOTALL)
+                        if not match:
+                            # 더 넓은 패턴 시도 (닫는 따옴표 전까지)
+                            match = re.search(r'"answer"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', answer_stripped)
+                        if match:
+                            answer = match.group(1).replace('\\n', '\n').replace('\\"', '"').replace('\\/', '/')
+                        else:
+                            # JSON 형식이지만 파싱 실패한 경우 원본에서 "answer" 키 제거 시도
+                            # {"answer": "..."} 형식에서 "..." 부분만 추출
+                            if answer_stripped.startswith('{"answer"'):
+                                # 첫 번째 따옴표 이후부터 마지막 닫는 괄호 전까지 추출
+                                start_idx = answer_stripped.find('"answer"') + len('"answer"')
+                                start_idx = answer_stripped.find('"', start_idx) + 1
+                                end_idx = answer_stripped.rfind('}')
+                                if end_idx > start_idx:
+                                    answer = answer_stripped[start_idx:end_idx].strip().strip('"')
+                                    # 이스케이프 문자 처리
+                                    answer = answer.replace('\\n', '\n').replace('\\"', '"').replace('\\/', '/')
+            elif isinstance(answer_raw, dict):
+                # dict에서 content나 answer 키를 찾거나, 전체 dict를 문자열로 변환
+                content = answer_raw.get("content") or answer_raw.get("answer")
+                if content:
+                    # content가 여전히 dict일 수 있으므로 재귀적으로 처리
+                    if isinstance(content, str):
+                        answer = content
+                    elif isinstance(content, dict):
+                        answer = content.get("content", content.get("answer", str(content)))
+                    else:
+                        answer = str(content)
                 else:
-                    return str(content)
-            return str(answer_raw)
-        if isinstance(answer_raw, list):
-            # list인 경우 첫 번째 항목 사용
-            if answer_raw:
-                return WorkflowUtils.normalize_answer(answer_raw[0])
-            return ""
-        return str(answer_raw) if answer_raw else ""
+                    answer = str(answer_raw)
+            elif isinstance(answer_raw, list):
+                # list인 경우 첫 번째 항목 사용
+                if answer_raw:
+                    return WorkflowUtils.normalize_answer(answer_raw[0])
+                return ""
+            else:
+                answer = str(answer_raw) if answer_raw else ""
+            
+            # 형식 오류 제거 (STEP, 평가 템플릿 등)
+            answer = WorkflowUtils._remove_format_errors(answer)
+            
+            # 특정 사건 내용 제거 후처리
+            answer = WorkflowUtils._remove_specific_case_details(answer)
+            
+            return answer
+        except Exception as e:
+            # 오류 발생 시 원본 답변 반환 (최소한의 처리)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"답변 정규화 중 오류 발생: {e}, 원본 답변 반환")
+            if isinstance(answer_raw, str):
+                return answer_raw.strip()
+            return str(answer_raw) if answer_raw else ""
+    
+    @staticmethod
+    def _remove_format_errors(answer: str) -> str:
+        """
+        답변에서 형식 오류 제거 (STEP, 평가 템플릿 등)
+        
+        Args:
+            answer: 원본 답변
+            
+        Returns:
+            정리된 답변
+        """
+        if not answer or not isinstance(answer, str):
+            return answer
+        
+        # STEP 패턴 제거 (예: "STEP 0:", "## STEP 0:", "### STEP 0:" 등)
+        step_patterns = [
+            r'^##\s*STEP\s*\d+[:：]\s*.*?\n',
+            r'^###\s*STEP\s*\d+[:：]\s*.*?\n',
+            r'^STEP\s*\d+[:：]\s*.*?\n',
+            r'##\s*STEP\s*\d+[:：]\s*원본\s*품질\s*평가.*?\n',
+            r'##\s*STEP\s*\d+[:：]\s*.*?평가.*?\n',
+            r'STEP\s*\d+[:：]',  # 줄 시작이 아닌 경우도 제거
+            r'##\s*STEP\s*\d+',  # 마크다운 헤더 형식
+            r'###\s*STEP\s*\d+',  # 마크다운 헤더 형식
+        ]
+        
+        for pattern in step_patterns:
+            answer = re.sub(pattern, '', answer, flags=re.MULTILINE | re.IGNORECASE)
+        
+        # 평가 템플릿 제거 (예: "• [ ] 법적 정보가 충분하고 정확한가?")
+        evaluation_patterns = [
+            r'•\s*\[[^\]]*\]\s*.*?•\s*\*\*.*?\*\*.*?\n',
+            r'평가\s*결과.*?\n',
+            r'원본\s*품질\s*평가.*?\n',
+            r'개선\s*필요.*?\n',
+            r'-?\s*\[[^\]]*\]\s*법적\s*정보.*?\n',  # 체크리스트 형식
+            r'-?\s*\[[^\]]*\]\s*구조.*?\n',  # 체크리스트 형식
+            r'-?\s*\[[^\]]*\]\s*어투.*?\n',  # 체크리스트 형식
+            r'-?\s*\[[^\]]*\]\s*예시.*?\n',  # 체크리스트 형식
+        ]
+        
+        for pattern in evaluation_patterns:
+            answer = re.sub(pattern, '', answer, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+        
+        # 프롬프트 지시사항 제거
+        prompt_instructions = [
+            r'##\s*작업\s*지시.*?\n',
+            r'##\s*지시사항.*?\n',
+            r'다음\s*단계.*?\n',
+            r'평가\s*기준.*?\n',
+            r'작업\s*방법.*?\n',  # 작업 방법 섹션 제거
+            r'내부\s*참고용.*?\n',  # 내부 참고용 제거
+        ]
+        
+        for pattern in prompt_instructions:
+            answer = re.sub(pattern, '', answer, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+        
+        # 특정 문구 제거 (개선: 답변 시작 부분의 불필요한 문구 제거)
+        unwanted_phrases = [
+            r'^주어진\s*문서를\s*바탕으로\s*답변드리면[:：]\s*\n?',
+            r'^문서를\s*바탕으로\s*답변드리면[:：]\s*\n?',
+            r'^주어진\s*문서를\s*바탕으로\s*답변하면[:：]\s*\n?',
+            r'^문서를\s*바탕으로\s*답변하면[:：]\s*\n?',
+            r'^주어진\s*문서를\s*참고하여\s*답변드리면[:：]\s*\n?',
+            r'^문서를\s*참고하여\s*답변드리면[:：]\s*\n?',
+        ]
+        
+        for pattern in unwanted_phrases:
+            answer = re.sub(pattern, '', answer, flags=re.MULTILINE | re.IGNORECASE)
+        
+        # 연속된 빈 줄 정리
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        
+        return answer.strip()
+    
+    @staticmethod
+    def _remove_specific_case_details(answer: str) -> str:
+        """
+        답변에서 특정 사건의 세부사항을 제거하고 법적 원칙만 유지
+        
+        Args:
+            answer: 원본 답변
+            
+        Returns:
+            정리된 답변
+        """
+        if not answer or not isinstance(answer, str):
+            return answer
+        
+        # 답변이 너무 짧으면 후처리 건너뛰기 (최소 100자 이상일 때만 후처리)
+        if len(answer) < 100:
+            return answer
+        
+        original_length = len(answer)
+        
+        # 답변 시작 부분의 특정 사건 내용을 우선적으로 제거 (더 공격적으로)
+        # 처음 200자에서 "[문서: ...]" 패턴을 먼저 제거
+        first_200 = answer[:200] if len(answer) > 200 else answer
+        if re.search(r'\[문서', first_200):
+            # 처음 200자에서 "[문서: ...]" 패턴 제거 (모든 변형 포함)
+            first_200_cleaned = re.sub(
+                r'\[문서[:\s]*[^\]]*\]\s*\n?',
+                '',
+                first_200
+            )
+            # "[문서: ...]" 패턴이 제거된 후 빈 줄 정리
+            first_200_cleaned = re.sub(r'\n{2,}', '\n', first_200_cleaned).strip()
+            # 정리된 처음 200자와 나머지 부분 결합
+            if len(first_200_cleaned) < len(first_200):
+                answer = first_200_cleaned + answer[200:]
+        
+        # 처음 200자에서 "나아가"로 시작하는 문장 제거 (더 공격적으로)
+        first_200 = answer[:200] if len(answer) > 200 else answer
+        if re.search(r'나아가', first_200):
+            # 처음 200자에서 "나아가"로 시작하는 문장 제거 (여러 문장 포함)
+            first_200_cleaned = re.sub(
+                r'나아가[^.]*\.',
+                '',
+                first_200
+            )
+            # "나아가"로 시작하는 문장이 여러 개일 수 있으므로 한 번 더 제거
+            first_200_cleaned = re.sub(
+                r'나아가[^.]*\.',
+                '',
+                first_200_cleaned
+            )
+            # "나아가" 문장이 제거된 후 빈 줄 정리
+            first_200_cleaned = re.sub(r'\n{2,}', '\n', first_200_cleaned).strip()
+            # 정리된 처음 200자와 나머지 부분 결합
+            if len(first_200_cleaned) < len(first_200):
+                answer = first_200_cleaned + answer[200:]
+        
+        # 처음 200자에서 "이 사건"으로 시작하는 문장 제거
+        first_200 = answer[:200] if len(answer) > 200 else answer
+        if re.search(r'이\s*사건', first_200):
+            first_200_cleaned = re.sub(
+                r'이\s*사건[^.]*\.',
+                '',
+                first_200
+            )
+            first_200_cleaned = re.sub(r'\n{2,}', '\n', first_200_cleaned).strip()
+            if len(first_200_cleaned) < len(first_200):
+                answer = first_200_cleaned + answer[200:]
+        
+        # 처음 500자 내에 특정 사건번호가 있으면 제거
+        first_500 = answer[:500] if len(answer) > 500 else answer
+        if re.search(r'[가-힣]*지방법원[가-힣]*\s*-\s*\d{4}[가나다라마바사아자차카타파하]\d+', first_500):
+            # 처음 500자에서 "[문서: ...]" 패턴 제거 (더 공격적으로)
+            first_500_cleaned = re.sub(
+                r'\[문서[:\s]*[^\]]*[가-힣]*지방법원[가-힣]*[^\]]*-\s*\d{4}[가나다라마바사아자차카타파하]\d+[^\]]*\]\s*\n?',
+                '',
+                first_500
+            )
+            # 처음 500자에서 특정 사건번호가 포함된 문장 제거 (더 공격적으로)
+            first_500_cleaned = re.sub(
+                r'[^.]*[가-힣]*지방법원[^.]*-\s*\d{4}[가나다라마바사아자차카타파하]\d+[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            # 처음 500자에서 "나아가"로 시작하는 특정 사건 사실관계 서술 제거 (더 공격적으로)
+            first_500_cleaned = re.sub(
+                r'나아가[^.]*이\s*사건[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            # 처음 500자에서 "나아가"로 시작하는 문장 전체 제거 (특정 사건 사실관계 서술)
+            first_500_cleaned = re.sub(
+                r'나아가[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            # 처음 500자에서 "이 사건"으로 시작하는 문장 제거
+            first_500_cleaned = re.sub(
+                r'이\s*사건[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            # 처음 500자에서 특정 당사자명이 포함된 문장 제거
+            first_500_cleaned = re.sub(
+                r'[^.]*피고\s+[가-힣]+[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            first_500_cleaned = re.sub(
+                r'[^.]*원고\s+본인[^.]*\.',
+                '',
+                first_500_cleaned
+            )
+            # 정리된 처음 500자와 나머지 부분 결합
+            answer = first_500_cleaned + answer[500:]
+        
+        # "[문서: ...]" 패턴 제거 (특정 사건번호 포함) - 정규식 개선
+        # 더 포괄적인 패턴으로 수정 - 모든 "[문서: ...]" 패턴 제거
+        answer = re.sub(
+            r'\[문서[:\s]*[^\]]*\]',
+            '',
+            answer
+        )
+        # "[문서: 대전지방법원 대전지방법원-2014가단3882]" 같은 중복 패턴 제거
+        answer = re.sub(
+            r'\[문서[:\s]*[^\]]*[가-힣]*지방법원[가-힣]*\s+[가-힣]*지방법원[가-힣]*[^\]]*-\s*\d{4}[가나다라마바사아자차카타파하]\d+[^\]]*\]',
+            '',
+            answer
+        )
+        # "[문서: ...]" 패턴이 남아있으면 한 번 더 제거
+        answer = re.sub(
+            r'\[문서[:\s]*[^\]]*[가-힣]*지방법원[가-힣]*[^\]]*-\s*\d{4}[가나다라마바사아자차카타파하]\d+[^\]]*\]',
+            '',
+            answer
+        )
+        
+        # 특정 사건번호 제거 (하지만 판례 인용 형식은 유지)
+        # 예: "대전지방법원-2014가단43882" 제거하되 "[판례: 대전지방법원 2014가단43882]"는 유지
+        answer = re.sub(
+            r'(?<!\[판례[:\s])(?<!\[문서[:\s])[가-힣]*지방법원[가-힣]*\s*-\s*\d{4}[가나다라마바사아자차카타파하]\d+',
+            '',
+            answer
+        )
+        
+        # 특정 사건번호가 포함된 문장 제거 (더 선택적으로 - 문장이 특정 사건에만 집중하는 경우만)
+        # 단, 일반 법적 원칙을 설명하는 문장은 유지
+        # 예: "이 사건 각 계약서 작성 당시..." 같은 패턴만 제거
+        answer = re.sub(
+            r'[^.]*이\s*사건[^.]*[가-힣]*지방법원[^.]*-\s*\d{4}[가나다라마바사아자차카타파하]\d+[^.]*\.',
+            '',
+            answer
+        )
+        
+        # 특정 당사자명을 일반적인 용어로 대체 (제거하지 않고 대체)
+        answer = re.sub(
+            r'피고\s+[가-힣]+(?:\s+또는\s+피고\s+[가-힣]+)?',
+            '당사자',
+            answer
+        )
+        answer = re.sub(
+            r'원고\s+본인',
+            '당사자',
+            answer
+        )
+        
+        # 특정 사건의 사실관계 서술을 일반적인 용어로 대체
+        answer = re.sub(
+            r'이\s*사건\s*각\s*계약서\s*작성\s*당시',
+            '계약서 작성 시',
+            answer
+        )
+        answer = re.sub(
+            r'이\s*사건\s*각\s*계약',
+            '계약',
+            answer
+        )
+        
+        # 후처리 후 답변이 너무 짧아지면 원본 반환 (50% 이상 제거된 경우)
+        if len(answer) < original_length * 0.5:
+            return answer  # 원본 반환 대신 처리된 답변 반환 (무한 루프 방지)
+        
+        # 연속된 빈 줄 정리
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        
+        return answer.strip()
 
     @staticmethod
     def save_metadata_safely(state: LegalWorkflowState, key: str, value: Any,
@@ -329,34 +661,53 @@ class WorkflowUtils:
         Returns:
             품질 메타데이터 딕셔너리 (quality_check_passed, quality_score)
         """
-        quality_check_passed = False
+        quality_check_passed = None
         quality_score = None
-
+        
+        # 디버깅: state 구조 확인
+        state_keys = list(state.keys()) if isinstance(state, dict) else []
+        
         # 1순위: 최상위 레벨 (조건부 엣지에서 가장 확실하게 접근 가능)
         if isinstance(state, dict):
-            quality_check_passed = state.get("_quality_check_passed", False)
+            if "_quality_check_passed" in state:
+                quality_check_passed = state.get("_quality_check_passed")
             if "_quality_score" in state:
                 quality_score = state.get("_quality_score")
 
         # 2순위: common.metadata (상태 최적화에서 항상 포함됨)
-        if not quality_check_passed or quality_score is None:
+        if quality_check_passed is None or quality_score is None:
             if "common" in state and isinstance(state.get("common"), dict):
                 common_meta = state["common"].get("metadata", {})
                 if isinstance(common_meta, dict):
-                    if not quality_check_passed:
-                        quality_check_passed = common_meta.get("quality_check_passed", False)
+                    if quality_check_passed is None:
+                        quality_check_passed = common_meta.get("quality_check_passed")
                     if quality_score is None:
                         quality_score = common_meta.get("quality_score")
 
-        # 3순위: 일반 경로 (get_field를 통한 접근)
-        if not quality_check_passed:
-            quality_check_passed = WorkflowUtils.get_state_value(state, "quality_check_passed", False)
+        # 3순위: metadata 그룹 직접 접근
+        if quality_check_passed is None or quality_score is None:
+            if "metadata" in state and isinstance(state.get("metadata"), dict):
+                metadata = state["metadata"]
+                if quality_check_passed is None:
+                    quality_check_passed = metadata.get("quality_check_passed")
+                if quality_score is None:
+                    quality_score = metadata.get("quality_score")
+
+        # 4순위: 일반 경로 (get_field를 통한 접근)
+        if quality_check_passed is None:
+            quality_check_passed = WorkflowUtils.get_state_value(state, "quality_check_passed")
         if quality_score is None:
-            quality_score = WorkflowUtils.get_state_value(state, "quality_score", 0.0)
+            quality_score = WorkflowUtils.get_state_value(state, "quality_score")
+
+        # 기본값 설정 (None인 경우에만)
+        if quality_check_passed is None:
+            quality_check_passed = False
+        if quality_score is None:
+            quality_score = 0.0
 
         return {
-            "quality_check_passed": quality_check_passed,
-            "quality_score": float(quality_score) if quality_score is not None else 0.0
+            "quality_check_passed": bool(quality_check_passed),
+            "quality_score": float(quality_score)
         }
 
     @staticmethod

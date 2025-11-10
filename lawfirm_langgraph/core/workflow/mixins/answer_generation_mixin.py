@@ -46,18 +46,37 @@ class AnswerGenerationMixin:
         return is_retry, time.time()
     
     def _restore_query_type(self, state: LegalWorkflowState) -> str:
-        """query_type 검색 및 복원"""
+        """query_type 검색 및 복원 (강화된 버전)"""
         query_type = self._get_state_value(state, "query_type", "")
         
+        # State에서 여러 경로로 검색
         if not query_type:
-            self.logger.warning("⚠️ [QUESTION TYPE] query_type not found in state, trying additional search...")
+            # classification 그룹 확인
+            if "classification" in state and isinstance(state["classification"], dict):
+                query_type = state["classification"].get("query_type", "")
+            # common.classification 그룹 확인
+            if not query_type and "common" in state and isinstance(state.get("common"), dict):
+                common = state["common"]
+                if "classification" in common and isinstance(common["classification"], dict):
+                    query_type = common["classification"].get("query_type", "")
+                # common.metadata 그룹 확인
+                if not query_type and "metadata" in common and isinstance(common["metadata"], dict):
+                    query_type = common["metadata"].get("query_type", "")
+            # analysis 그룹 확인
+            if not query_type and "analysis" in state and isinstance(state["analysis"], dict):
+                query_type = state["analysis"].get("query_type", "")
+        
+        # 전역 캐시에서 검색
+        if not query_type:
+            self.logger.debug("⚠️ [QUESTION TYPE] query_type not found in state, trying global cache...")
             try:
                 from core.shared.wrappers.node_wrappers import _global_search_results_cache
-                if _global_search_results_cache:
+                if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
                     cached_query_type = (
                         _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type", "") or
                         _global_search_results_cache.get("metadata", {}).get("query_type", "") or
                         _global_search_results_cache.get("classification", {}).get("query_type", "") or
+                        _global_search_results_cache.get("analysis", {}).get("query_type", "") or
                         _global_search_results_cache.get("query_type", "") or
                         ""
                     )
@@ -68,6 +87,7 @@ class AnswerGenerationMixin:
             except (ImportError, AttributeError, TypeError) as e:
                 self.logger.debug(f"Could not access global cache: {e}")
         
+        # 기본값 설정
         if not query_type:
             query_type = "general_question"
             self.logger.warning(f"⚠️ [QUESTION TYPE] query_type not found in state or global cache, using default: {query_type}")
@@ -156,6 +176,43 @@ class AnswerGenerationMixin:
                     f"⚠️ [PROMPT VALIDATION] retrieved_docs exists ({len(retrieved_docs)} docs) "
                     f"but prompt_optimized_context has 0 documents."
                 )
+            
+            # 검색 결과가 prompt_text에 포함되어 있는지 확인
+            has_doc_content_in_prompt = False
+            if retrieved_docs and len(retrieved_docs) > 0:
+                # prompt_text에 검색 결과의 source나 content 일부가 포함되어 있는지 확인
+                for doc in retrieved_docs[:5]:
+                    source = doc.get("source", "") or doc.get("title", "")
+                    content_preview = (doc.get("content") or doc.get("text", "") or doc.get("content_text", ""))[:100]
+                    if source and source in prompt_text:
+                        has_doc_content_in_prompt = True
+                        break
+                    if content_preview and content_preview in prompt_text:
+                        has_doc_content_in_prompt = True
+                        break
+            
+            # prompt_text에 검색 결과가 포함되어 있지 않으면 retrieved_docs를 사용하여 보강
+            if not has_doc_content_in_prompt and retrieved_docs and len(retrieved_docs) > 0:
+                self.logger.warning(
+                    f"⚠️ [CONTEXT ENHANCEMENT] prompt_optimized_text does not contain search results. "
+                    f"Enhancing with {len(retrieved_docs)} retrieved_docs."
+                )
+                # retrieved_docs를 사용하여 컨텍스트 보강
+                enhanced_context_parts = [prompt_text] if prompt_text else []
+                for idx, doc in enumerate(retrieved_docs[:10], 1):
+                    content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                    source = doc.get("source") or doc.get("title") or f"Document_{idx}"
+                    if content and len(content.strip()) > 20:
+                        content_preview = content[:1000]  # 최대 1000자
+                        enhanced_context_parts.append(f"[문서: {source}]\n{content_preview}")
+                
+                if enhanced_context_parts:
+                    prompt_text = "\n\n".join(enhanced_context_parts)
+                    context_length = len(prompt_text)
+                    self.logger.info(
+                        f"✅ [CONTEXT ENHANCEMENT] Enhanced context with {len(enhanced_context_parts) - 1} documents "
+                        f"({context_length} chars)"
+                    )
             
             if context_length < 300:
                 if retrieved_docs and len(retrieved_docs) > 0:

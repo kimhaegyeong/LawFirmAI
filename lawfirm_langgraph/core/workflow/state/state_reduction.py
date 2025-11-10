@@ -471,8 +471,14 @@ class StateReducer:
         Returns:
             크기가 줄어든 State
         """
-        from .state_helpers import is_modular_state
-        from .state_utils import prune_retrieved_docs
+        try:
+            from core.workflow.state.state_helpers import is_modular_state
+        except ImportError:
+            from .state_helpers import is_modular_state
+        try:
+            from core.workflow.state.state_utils import prune_retrieved_docs
+        except ImportError:
+            from .state_utils import prune_retrieved_docs
 
         reduced = dict(state)
 

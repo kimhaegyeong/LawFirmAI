@@ -193,11 +193,26 @@ def get_answer(state: LegalWorkflowState) -> AnswerState:
 
 def set_answer(state: LegalWorkflowState, data: Dict[str, Any]):
     """답변 결과 설정"""
-    if state["answer"] is None:
+    # answer가 문자열인 경우 dict로 변환
+    if isinstance(state.get("answer"), str):
+        # 문자열 answer를 dict로 변환
+        answer_text = state["answer"]
+        from .modular_states import create_default_answer
+        state["answer"] = create_default_answer()
+        state["answer"]["content"] = answer_text  # type: ignore
+    
+    if state.get("answer") is None:
         from .modular_states import create_default_answer
         state["answer"] = create_default_answer()
 
-    state["answer"].update(data)  # type: ignore
+    # answer가 dict인 경우에만 update 호출
+    if isinstance(state.get("answer"), dict):
+        state["answer"].update(data)  # type: ignore
+    else:
+        # answer가 dict가 아닌 경우, 새로 생성
+        from .modular_states import create_default_answer
+        state["answer"] = create_default_answer()
+        state["answer"].update(data)  # type: ignore
 
 
 def get_answer_text(state: LegalWorkflowState) -> str:
@@ -328,6 +343,12 @@ def set_metadata(state: LegalWorkflowState, data: Dict[str, Any]):
     if "common" not in state:
         from .modular_states import create_default_common
         state["common"] = create_default_common()
+    
+    # metadata 키가 없으면 초기화
+    if "metadata" not in state["common"]:
+        state["common"]["metadata"] = {}
+    elif not isinstance(state["common"]["metadata"], dict):
+        state["common"]["metadata"] = {}
 
     state["common"]["metadata"].update(data)
 
