@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..utils.config import Config
-from .langgraph.legal_data_connector_v2 import LegalDataConnectorV2
+from ..search.connectors.legal_data_connector import LegalDataConnectorV2
 
 logger = logging.getLogger(__name__)
 

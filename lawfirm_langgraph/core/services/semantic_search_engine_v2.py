@@ -5,11 +5,13 @@ lawfirm_v2.db의 embeddings 테이블을 사용한 벡터 검색 엔진
 """
 
 import logging
+import os
+import re
 import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -821,6 +823,12 @@ class SemanticSearchEngineV2:
         self.embedder = None
         self.dim = None
         self._initialize_embedder(model_name)
+        
+        # Reranking 모델 초기화 (Cross-Encoder)
+        self.reranker = None
+        self._use_reranking = os.getenv("USE_RERANKING", "false").lower() == "true"
+        if self._use_reranking:
+            self._initialize_reranker()
 
         if not Path(db_path).exists():
             self.logger.warning(f"Database {db_path} not found")
@@ -888,6 +896,93 @@ class SemanticSearchEngineV2:
         else:
             self.logger.error("Cannot re-initialize embedder: model_name is not set")
             return False
+
+    def _initialize_reranker(self) -> bool:
+        """
+        Cross-Encoder 기반 Reranker 초기화
+        
+        Returns:
+            초기화 성공 여부
+        """
+        try:
+            from sentence_transformers import CrossEncoder
+            
+            # 한국어 법률 도메인에 적합한 Cross-Encoder 모델 사용
+            # ms-marco 모델은 일반적으로 좋은 성능을 보임
+            reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+            
+            self.reranker = CrossEncoder(reranker_model)
+            self.logger.info(f"Reranker initialized: {reranker_model}")
+            return True
+        except ImportError:
+            self.logger.warning("sentence-transformers not available for reranking. Install with: pip install sentence-transformers")
+            self.reranker = None
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to initialize reranker: {e}")
+            self.reranker = None
+            return False
+
+    def _rerank_with_cross_encoder(self, query: str, results: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+        """
+        Cross-Encoder 기반 Reranking
+        
+        Args:
+            query: 검색 쿼리
+            results: 검색 결과 리스트
+            top_k: 반환할 최대 결과 수
+        
+        Returns:
+            Reranking된 결과 리스트
+        """
+        if not results:
+            return []
+        
+        # Reranker가 없으면 원본 결과 반환
+        if self.reranker is None:
+            if self._use_reranking:
+                # Reranking이 활성화되어 있지만 모델이 없으면 재초기화 시도
+                if self._initialize_reranker() and self.reranker is None:
+                    self.logger.warning("Reranking requested but reranker not available, returning original results")
+                    return results[:top_k]
+            else:
+                return results[:top_k]
+        
+        try:
+            # 쿼리-문서 쌍 생성
+            pairs = []
+            for result in results:
+                text = result.get("text", "") or result.get("content", "") or ""
+                if text:
+                    pairs.append([query, text])
+                else:
+                    # 텍스트가 없으면 빈 문자열 사용
+                    pairs.append([query, ""])
+            
+            if not pairs:
+                return results[:top_k]
+            
+            # Cross-Encoder로 점수 계산
+            scores = self.reranker.predict(pairs)
+            
+            # 점수를 결과에 추가하고 재정렬
+            reranked_results = []
+            for result, score in zip(results, scores):
+                result_copy = result.copy()
+                result_copy["rerank_score"] = float(score)
+                result_copy["final_score"] = float(score)  # Reranking 점수를 최종 점수로 사용
+                reranked_results.append(result_copy)
+            
+            # Reranking 점수 기준 정렬
+            reranked_results.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+            
+            self.logger.info(f"Reranked {len(results)} results, returning top {top_k}")
+            return reranked_results[:top_k]
+            
+        except Exception as e:
+            self.logger.error(f"Error during reranking: {e}")
+            # Reranking 실패 시 원본 결과 반환
+            return results[:top_k]
 
     def _detect_model_from_database(self) -> Optional[str]:
         """
@@ -1158,7 +1253,8 @@ class SemanticSearchEngineV2:
                disable_retry: bool = False,
                min_ml_confidence: Optional[float] = None,
                min_quality_score: Optional[float] = None,
-               filter_by_confidence: bool = False) -> List[Dict[str, Any]]:
+               filter_by_confidence: bool = False,
+               use_reranking: Optional[bool] = None) -> List[Dict[str, Any]]:
         """
         의미적 벡터 검색 수행
 
@@ -1197,6 +1293,10 @@ class SemanticSearchEngineV2:
                 self.logger.error(f"Final embedder initialization attempt failed: {e}")
                 return []
 
+        # Reranking 사용 여부 결정
+        if use_reranking is None:
+            use_reranking = self._use_reranking
+        
         # 재시도 로직 비활성화 옵션
         if disable_retry:
             # 높은 신뢰도만 원할 때는 첫 번째 임계값만 사용
@@ -1204,7 +1304,8 @@ class SemanticSearchEngineV2:
                 query, k, source_types, similarity_threshold,
                 min_ml_confidence=min_ml_confidence,
                 min_quality_score=min_quality_score,
-                filter_by_confidence=filter_by_confidence
+                filter_by_confidence=filter_by_confidence,
+                use_reranking=use_reranking
             )
             return results
 
@@ -1221,11 +1322,15 @@ class SemanticSearchEngineV2:
         
         for attempt, current_threshold in enumerate(thresholds_to_try):
             try:
+                # 마지막 시도에서만 Reranking 적용 (최종 결과 품질 향상)
+                apply_reranking = use_reranking if attempt == len(thresholds_to_try) - 1 else False
+                
                 results = self._search_with_threshold(
                     query, k, source_types, current_threshold,
                     min_ml_confidence=min_ml_confidence,
                     min_quality_score=min_quality_score,
-                    filter_by_confidence=filter_by_confidence
+                    filter_by_confidence=filter_by_confidence,
+                    use_reranking=apply_reranking
                 )
                 
                 # 최소 결과 수를 만족하면 반환
@@ -1254,7 +1359,8 @@ class SemanticSearchEngineV2:
                                similarity_threshold: float,
                                min_ml_confidence: Optional[float] = None,
                                min_quality_score: Optional[float] = None,
-                               filter_by_confidence: bool = False) -> List[Dict[str, Any]]:
+                               filter_by_confidence: bool = False,
+                               use_reranking: bool = False) -> List[Dict[str, Any]]:
         """
         임계값을 사용한 실제 검색 수행
         
@@ -1268,8 +1374,20 @@ class SemanticSearchEngineV2:
             filter_by_confidence: 신뢰도 기반 필터링 활성화
         """
         try:
+            # 0. 쿼리 전처리 및 정규화
+            processed_query = self._preprocess_query(query)
+            if processed_query != query:
+                try:
+                    # 인코딩 문제 방지를 위해 안전하게 로깅
+                    query_preview = query[:50] if len(query) > 50 else query
+                    processed_preview = processed_query[:50] if len(processed_query) > 50 else processed_query
+                    self.logger.info(f"Query preprocessed: '{query_preview}' -> '{processed_preview}'")
+                except Exception as log_error:
+                    self.logger.debug(f"Query preprocessed (logging failed: {log_error})")
+            
+            # 전처리된 쿼리로 임베딩 생성 (원본 쿼리는 보존)
             # 1. 쿼리 임베딩 생성 (캐시 사용)
-            query_vec = self._get_cached_query_vector(query)
+            query_vec = self._get_cached_query_vector(processed_query)
             if query_vec is None:
                 # Embedder 초기화 상태 재확인
                 if not self._ensure_embedder_initialized():
@@ -1278,15 +1396,15 @@ class SemanticSearchEngineV2:
                 
                 # 캐시에 없으면 생성
                 try:
-                    query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
-                    self._cache_query_vector(query, query_vec)
+                    query_vec = self.embedder.encode([processed_query], batch_size=1, normalize=True)[0]
+                    self._cache_query_vector(processed_query, query_vec)
                 except Exception as e:
                     self.logger.error(f"Failed to encode query: {e}")
                     # 재초기화 후 재시도
                     if self.model_name and self._initialize_embedder(self.model_name):
                         try:
-                            query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
-                            self._cache_query_vector(query, query_vec)
+                            query_vec = self.embedder.encode([processed_query], batch_size=1, normalize=True)[0]
+                            self._cache_query_vector(processed_query, query_vec)
                         except Exception as e2:
                             self.logger.error(f"Failed to encode query after re-initialization: {e2}")
                             return []
@@ -1295,6 +1413,7 @@ class SemanticSearchEngineV2:
 
             # 2. FAISS 인덱스 사용 또는 전체 벡터 로드
             if FAISS_AVAILABLE and self.index is not None:
+                self.logger.info(f"🔍 [FAISS] Using FAISS index for search (index size: {self.index.ntotal}, chunk_ids: {len(self._chunk_ids)})")
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
                 optimal_nprobe = self._calculate_optimal_nprobe(k, self.index.ntotal)
                 if self.index.nprobe != optimal_nprobe:
@@ -1303,8 +1422,9 @@ class SemanticSearchEngineV2:
 
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
-                search_k = k * 2  # 여유 있게 검색
+                search_k = k * 3  # 다양성 보장을 위해 더 많이 검색 (k * 2 -> k * 3)
                 distances, indices = self.index.search(query_vec_np, search_k)
+                self.logger.info(f"🔍 [FAISS] Search returned {len(indices[0])} results from index")
 
                 similarities = []
                 for distance, idx in zip(distances[0], indices[0]):
@@ -1324,12 +1444,17 @@ class SemanticSearchEngineV2:
 
             else:
                 # 기존 방식 (전체 벡터 로드 및 선형 검색)
+                if FAISS_AVAILABLE:
+                    self.logger.warning(f"⚠️ [FAISS] FAISS available but index is None. Using linear search. (index_building: {self._index_building})")
+                else:
+                    self.logger.info(f"ℹ️ [FAISS] FAISS not available, using linear search")
                 # FAISS 인덱스가 없으면 백그라운드에서 빌드 시작
                 if FAISS_AVAILABLE and self.index is None and not self._index_building:
                     self.logger.info("FAISS index not found, starting background build")
                     self._build_faiss_index_async()
 
                 chunk_vectors = self._load_chunk_vectors(source_types=source_types)
+                self.logger.info(f"🔍 [LINEAR] Loaded {len(chunk_vectors)} vectors for linear search")
 
                 if not chunk_vectors:
                     self.logger.warning(
@@ -1348,11 +1473,83 @@ class SemanticSearchEngineV2:
                 # 유사도 기준 정렬
                 similarities.sort(key=lambda x: x[1], reverse=True)
 
-            # 5. 상위 K개 결과 구성
-            results = []
+            # 5. 타입별 다양성 보장을 위해 더 많은 결과 검색 후 재분배
+            # 먼저 더 많은 결과를 가져온 후 타입별로 재분배
+            initial_results = similarities[:k * 2]  # 다양성 보장을 위해 2배로 증가
+            self.logger.info(f"🔍 [SEARCH] Initial results: {len(initial_results)} candidates (requested k={k})")
+            
+            # 타입별로 그룹화
+            results_by_type = {
+                "statute_article": [],
+                "case_paragraph": [],
+                "decision_paragraph": [],
+                "interpretation_paragraph": [],
+                "unknown": []
+            }
+            
             conn = self._get_connection()
-
-            for chunk_id, score in similarities[:k]:
+            for chunk_id, score in initial_results:
+                # 청크 메타데이터 조회
+                if chunk_id not in self._chunk_metadata:
+                    cursor = conn.execute(
+                        "SELECT source_type, source_id, text FROM text_chunks WHERE id = ?",
+                        (chunk_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text_content = row['text'] if row['text'] else ""
+                        if not text_content or len(text_content.strip()) < 100:
+                            source_type = row['source_type']
+                            source_id = row['source_id']
+                            restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                            if restored_text and len(restored_text.strip()) > len(text_content.strip()):
+                                text_content = restored_text
+                        
+                        self._chunk_metadata[chunk_id] = {
+                            'source_type': row['source_type'],
+                            'source_id': row['source_id'],
+                            'text': text_content
+                        }
+                
+                metadata = self._chunk_metadata.get(chunk_id, {})
+                source_type = metadata.get('source_type', 'unknown')
+                
+                # 타입별로 그룹화
+                if source_type in results_by_type:
+                    results_by_type[source_type].append((chunk_id, score))
+                else:
+                    results_by_type["unknown"].append((chunk_id, score))
+            
+            # 타입별 분포 로깅
+            type_counts_before = {t: len(results_by_type[t]) for t in results_by_type}
+            self.logger.info(f"🔍 [DIVERSITY] Type distribution before rebalancing: {type_counts_before}")
+            
+            # 타입별로 균형있게 결과 선택
+            # 각 타입에서 최소 1개씩은 포함하되, 전체적으로는 점수 순서 유지
+            diverse_similarities = []
+            seen_chunk_ids = set()
+            
+            # 1단계: 각 타입에서 최상위 1개씩 선택 (다양성 보장)
+            for source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+                if results_by_type[source_type]:
+                    top_result = results_by_type[source_type][0]
+                    if top_result[0] not in seen_chunk_ids:
+                        diverse_similarities.append(top_result)
+                        seen_chunk_ids.add(top_result[0])
+                        self.logger.debug(f"🔍 [DIVERSITY] Added top {source_type} (chunk_id={top_result[0]}, score={top_result[1]:.4f})")
+            
+            # 2단계: 나머지 결과를 점수 순서대로 추가
+            remaining_results = [(chunk_id, score) for chunk_id, score in initial_results if chunk_id not in seen_chunk_ids]
+            remaining_results.sort(key=lambda x: x[1], reverse=True)
+            
+            for result in remaining_results:
+                if len(diverse_similarities) >= k:
+                    break
+                diverse_similarities.append(result)
+            
+            # 3단계: 최종 결과 구성
+            results = []
+            for chunk_id, score in diverse_similarities[:k]:
                 # 청크 메타데이터 조회 (없으면 DB에서 조회)
                 if chunk_id not in self._chunk_metadata:
                     # 메타데이터가 없으면 DB에서 직접 조회 (전체 텍스트 가져오기)
@@ -1386,7 +1583,7 @@ class SemanticSearchEngineV2:
                 # text가 비어있거나 짧으면 원본 테이블에서 복원 시도 (최소 100자 보장)
                 if not text or len(text.strip()) < 100:
                     if not text or len(text.strip()) == 0:
-                        self.logger.warning(f"Empty text content for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}. Attempting to restore from source table...")
+                        self.logger.debug(f"Empty text content for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}. Attempting to restore from source table...")
                     else:
                         self.logger.debug(f"Short text content for chunk_id={chunk_id} (length: {len(text)} chars), attempting to restore longer text from source table...")
                     
@@ -1397,29 +1594,22 @@ class SemanticSearchEngineV2:
                             text = restored_text
                             # 복원된 text를 메타데이터에 저장
                             self._chunk_metadata[chunk_id]['text'] = text
-                            self.logger.info(f"Successfully restored text for chunk_id={chunk_id} from source table (length: {len(text)} chars)")
+                            self.logger.debug(f"Successfully restored text for chunk_id={chunk_id} from source table (length: {len(text)} chars)")
                         else:
                             self.logger.debug(f"Restored text is not longer than existing text for chunk_id={chunk_id}")
                     else:
                         if not text or len(text.strip()) == 0:
-                            self.logger.error(f"Failed to restore text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
+                            self.logger.debug(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}. Skipping this chunk.")
+                            continue  # text가 없으면 건너뛰기
                         else:
-                            self.logger.warning(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
+                            self.logger.debug(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
 
                 # 소스별 상세 메타데이터 조회
                 source_meta = self._get_source_metadata(conn, source_type, source_id)
-                # content 필드가 비어있으면 경고 및 복원 시도
+                # 최종 검증: text가 여전히 비어있으면 건너뛰기
                 if not text or len(text.strip()) == 0:
-                    self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
-                    # 복원 시도
-                    if source_type and source_id:
-                        restored_text = self._restore_text_from_source(conn, source_type, source_id)
-                        if restored_text:
-                            text = restored_text
-                            self.logger.info(f"✅ [SEMANTIC SEARCH] Restored text for chunk_id={chunk_id} (length: {len(text)} chars)")
-                        else:
-                            self.logger.error(f"❌ [SEMANTIC SEARCH] Failed to restore text for chunk_id={chunk_id}")
-                            continue  # text가 없으면 건너뛰기
+                    self.logger.debug(f"⚠️ [SEMANTIC SEARCH] Final check: Empty text for chunk_id={chunk_id}, skipping this chunk.")
+                    continue  # text가 없으면 건너뛰기
                 
                 # 최소 길이 보장 (100자 이상)
                 if text and len(text.strip()) < 100:
@@ -1449,12 +1639,32 @@ class SemanticSearchEngineV2:
                     )
                     continue
                 
+                # 타입별 가중치 적용 (판례/결정례/해석례 점수 보정)
+                type_weights = {
+                    "statute_article": 1.0,      # 법령: 기본 가중치
+                    "case_paragraph": 1.20,      # 판례: 20% 증가 (15% → 20%)
+                    "decision_paragraph": 1.20,  # 결정례: 20% 증가 (15% → 20%)
+                    "interpretation_paragraph": 1.10  # 해석례: 10% 증가
+                }
+                type_weight = type_weights.get(source_type, 1.0)
+                adjusted_score = float(score) * type_weight
+                # 가중치 적용 후 1.0을 초과하지 않도록 제한
+                adjusted_score = min(1.0, adjusted_score)
+                
                 # 하이브리드 점수 계산 (유사도 + 품질 + 신뢰도)
+                # 가중치가 적용된 점수를 사용
                 hybrid_score = self._calculate_hybrid_score(
-                    similarity=float(score),
+                    similarity=adjusted_score,
                     ml_confidence=ml_confidence,
                     quality_score=quality_score
                 )
+                
+                # 가중치 적용 로깅 (디버그 레벨)
+                if type_weight != 1.0:
+                    self.logger.debug(
+                        f"🔍 [SCORE BOOST] {source_type}: "
+                        f"original={float(score):.4f}, adjusted={adjusted_score:.4f}, weight={type_weight}"
+                    )
                 
                 # 통일된 포맷터로 출처 정보 생성
                 try:
@@ -1499,7 +1709,7 @@ class SemanticSearchEngineV2:
                         "quality_score": quality_score,
                         **source_meta
                     },
-                    "relevance_score": float(score),
+                    "relevance_score": adjusted_score,  # 가중치가 적용된 점수 사용
                     "hybrid_score": hybrid_score,
                     "ml_confidence": ml_confidence,
                     "quality_score": quality_score,
@@ -1520,7 +1730,26 @@ class SemanticSearchEngineV2:
                 results.append(result)
 
             conn.close()
-            self.logger.info(f"Semantic search found {len(results)} results for query: {query[:50]}")
+            self.logger.info(f"Semantic search found {len(results)} results for query: '{processed_query[:50]}...'")
+            
+            # 검색 결과가 없으면 경고 로그
+            if len(results) == 0:
+                self.logger.warning(f"No search results found for query: '{processed_query[:50]}...' (original: '{query[:50]}...')")
+            
+            # Reranking 적용 (옵션)
+            if use_reranking and results:
+                try:
+                    # Reranking을 위해 더 많은 결과를 가져온 후 상위 k개만 반환
+                    rerank_k = min(k * 2, len(results))  # Reranking을 위해 더 많은 결과 사용
+                    reranked_results = self._rerank_with_cross_encoder(processed_query, results[:rerank_k], k)
+                    if reranked_results:
+                        self.logger.info(f"Reranking applied: {len(reranked_results)} results returned")
+                        return reranked_results
+                    else:
+                        self.logger.warning("Reranking returned empty results, using original results")
+                except Exception as rerank_error:
+                    self.logger.warning(f"Reranking failed: {rerank_error}, using original results")
+            
             return results
 
         except Exception as e:
@@ -1529,7 +1758,7 @@ class SemanticSearchEngineV2:
 
     def _calculate_optimal_nprobe(self, k: int, total_vectors: int) -> int:
         """
-        검색 파라미터 k와 총 벡터 수에 따라 최적의 nprobe 계산
+        검색 파라미터 k와 총 벡터 수에 따라 최적의 nprobe 계산 (개선)
 
         Args:
             k: 검색할 최대 결과 수
@@ -1538,20 +1767,39 @@ class SemanticSearchEngineV2:
         Returns:
             최적의 nprobe 값
         """
-        # nlist 추정 (일반적으로 total/10 ~ total/100)
-        estimated_nlist = max(10, min(100, total_vectors // 10))
-
-        # k 값에 따라 nprobe 조정
-        if k <= 5:
-            nprobe = max(1, estimated_nlist // 10)  # 적은 결과: 낮은 nprobe (빠른 검색)
-        elif k <= 20:
-            nprobe = max(5, estimated_nlist // 5)  # 중간 결과: 중간 nprobe
+        if total_vectors <= 0:
+            return 1
+        
+        # nlist 추정 개선: sqrt 또는 // 5 고려
+        # 작은 데이터셋: sqrt 사용, 큰 데이터셋: // 5 사용
+        if total_vectors < 1000:
+            estimated_nlist = max(10, int(np.sqrt(total_vectors)))
+        elif total_vectors < 10000:
+            estimated_nlist = max(10, min(100, total_vectors // 5))
         else:
-            nprobe = max(10, estimated_nlist // 2)  # 많은 결과: 높은 nprobe (정확한 검색)
-
+            estimated_nlist = max(10, min(100, total_vectors // 10))
+        
+        # k 값과 벡터 수에 따른 더 정교한 nprobe 계산
+        # 검색 품질과 속도 균형을 위한 적응형 조정
+        if k <= 5:
+            # 적은 결과: 낮은 nprobe (빠른 검색)
+            nprobe = max(1, estimated_nlist // 10)
+        elif k <= 10:
+            # 중간 결과: 중간 nprobe
+            nprobe = max(2, estimated_nlist // 8)
+        elif k <= 20:
+            # 중간-높은 결과: 중간-높은 nprobe
+            nprobe = max(5, estimated_nlist // 5)
+        elif k <= 50:
+            # 높은 결과: 높은 nprobe (정확한 검색)
+            nprobe = max(10, estimated_nlist // 3)
+        else:
+            # 매우 높은 결과: 매우 높은 nprobe (최대 정확도)
+            nprobe = max(15, estimated_nlist // 2)
+        
         # 최소/최대 값 제한
         nprobe = min(max(1, nprobe), estimated_nlist)
-
+        
         return nprobe
 
     def _build_faiss_index_sync(self):
@@ -1690,10 +1938,13 @@ class SemanticSearchEngineV2:
     def _load_faiss_index(self):
         """저장된 FAISS 인덱스 로드"""
         if not FAISS_AVAILABLE:
+            self.logger.warning("⚠️ [FAISS] FAISS not available, cannot load index")
             return
 
         try:
+            self.logger.info(f"🔍 [FAISS] Attempting to load index from: {self.index_path}")
             self.index = faiss.read_index(str(self.index_path))
+            self.logger.info(f"✅ [FAISS] Index file loaded successfully (ntotal: {self.index.ntotal})")
 
             # chunk_id 매핑 재구성 (embeddings 테이블에서)
             conn = self._get_connection()
@@ -1704,7 +1955,11 @@ class SemanticSearchEngineV2:
             self._chunk_ids = [row[0] for row in cursor.fetchall()]
             conn.close()
 
-            self.logger.info(f"FAISS index loaded: {len(self._chunk_ids)} vectors from {self.index_path}")
+            self.logger.info(f"✅ [FAISS] FAISS index loaded: {len(self._chunk_ids)} chunk_ids mapped (index size: {self.index.ntotal})")
+            
+            # chunk_id와 인덱스 크기 일치 확인
+            if len(self._chunk_ids) != self.index.ntotal:
+                self.logger.warning(f"⚠️ [FAISS] Mismatch: chunk_ids count ({len(self._chunk_ids)}) != index.ntotal ({self.index.ntotal})")
 
         except Exception as e:
             self.logger.warning(f"Failed to load FAISS index: {e}, will rebuild")
@@ -2095,22 +2350,52 @@ class SemanticSearchEngineV2:
     def _generate_simple_query_variations(self,
                                          query: str,
                                          expanded_keywords: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """간단한 쿼리 변형 생성 (기존 코드와의 호환성 유지)"""
+        """간단한 쿼리 변형 생성 (개선: 쿼리 전처리 및 가중치 기반 변형 생성)"""
         variations = []
         
-        # 1. 원본 쿼리 (최고 가중치)
+        # 쿼리 전처리 적용
+        processed_query = self._preprocess_query(query)
+        
+        # 1. 원본 쿼리 (전처리된 쿼리, 최고 가중치)
         variations.append({
-            "query": query,
+            "query": processed_query,
             "type": "original",
             "weight": 1.0,
             "priority": 1
         })
         
-        # 2. 키워드 확장 쿼리
+        # 2. 핵심 키워드 추출 및 가중치 기반 쿼리 생성
+        keywords_with_weights = self._extract_core_keywords_with_weights(processed_query)
+        if keywords_with_weights:
+            # 가중치가 높은 키워드만 선택 (가중치 >= 0.8)
+            high_weight_keywords = [kw[0] for kw in keywords_with_weights if kw[1] >= 0.8]
+            if high_weight_keywords and len(high_weight_keywords) >= 2:
+                core_query = " ".join(high_weight_keywords[:5])
+                if core_query != processed_query:
+                    variations.append({
+                        "query": core_query,
+                        "type": "core_keywords_high_weight",
+                        "weight": 0.9,
+                        "priority": 2
+                    })
+            
+            # 모든 핵심 키워드 포함 쿼리
+            all_keywords = [kw[0] for kw in keywords_with_weights[:5]]
+            if all_keywords and len(all_keywords) >= 2:
+                all_keywords_query = " ".join(all_keywords)
+                if all_keywords_query != processed_query and all_keywords_query not in [v["query"] for v in variations]:
+                    variations.append({
+                        "query": all_keywords_query,
+                        "type": "core_keywords_all",
+                        "weight": 0.85,
+                        "priority": 2
+                    })
+        
+        # 3. 키워드 확장 쿼리
         if expanded_keywords and len(expanded_keywords) >= 2:
             # 상위 3개 키워드만 추가
             top_keywords = expanded_keywords[:3]
-            expanded_query = f"{query} {' '.join(top_keywords)}"
+            expanded_query = f"{processed_query} {' '.join(top_keywords)}"
             variations.append({
                 "query": expanded_query,
                 "type": "keyword_expanded",
@@ -2119,7 +2404,7 @@ class SemanticSearchEngineV2:
             })
             
             # 키워드만으로 검색 (원본 쿼리가 너무 길 때)
-            if len(query) > 50:
+            if len(processed_query) > 50:
                 keyword_only_query = " ".join(top_keywords)
                 variations.append({
                     "query": keyword_only_query,
@@ -2128,16 +2413,16 @@ class SemanticSearchEngineV2:
                     "priority": 3
                 })
         
-        # 3. 핵심 키워드 추출 쿼리
-        core_keywords = self._extract_core_keywords_simple(query)
-        if core_keywords and len(core_keywords) >= 2:
-            core_query = " ".join(core_keywords)
-            if core_query != query:
+        # 4. 법률 용어 기반 쿼리 변형
+        legal_terms_in_query = [kw[0] for kw in keywords_with_weights if kw[1] >= 0.8 and any(term in kw[0] for term in ["법", "조", "항", "호"])]
+        if legal_terms_in_query:
+            legal_query = " ".join(legal_terms_in_query[:3])
+            if legal_query != processed_query and legal_query not in [v["query"] for v in variations]:
                 variations.append({
-                    "query": core_query,
-                    "type": "core_keywords",
-                    "weight": 0.85,
-                    "priority": 2
+                    "query": legal_query,
+                    "type": "legal_terms",
+                    "weight": 0.95,
+                    "priority": 1
                 })
         
         # 우선순위 및 가중치 기준 정렬
@@ -2147,8 +2432,6 @@ class SemanticSearchEngineV2:
 
     def _extract_core_keywords_simple(self, query: str) -> List[str]:
         """핵심 키워드 추출 (간단한 구현)"""
-        import re
-        
         # 불용어 제거
         stopwords = ["이", "가", "을", "를", "의", "에", "에서", "로", "으로", "와", "과", "는", "은", "도", "만", "란", "이란"]
         
@@ -2159,3 +2442,115 @@ class SemanticSearchEngineV2:
         core_keywords = [w for w in words if w not in stopwords and len(w) >= 2]
         
         return core_keywords[:5]  # 상위 5개
+
+    def _extract_core_keywords_with_weights(self, query: str) -> List[Tuple[str, float]]:
+        """핵심 키워드 추출 및 가중치 계산"""
+        keywords_with_weights = []
+        
+        # 1. 법령명 추출 (가중치: 1.0)
+        law_patterns = [
+            r'([가-힣]+법)',
+            r'([가-힣]+법률)',
+            r'([가-힣]+규칙)',
+            r'([가-힣]+조례)',
+            r'([가-힣]+시행령)',
+            r'([가-힣]+시행규칙)'
+        ]
+        for pattern in law_patterns:
+            matches = re.findall(pattern, query)
+            for match in matches:
+                if match not in [kw[0] for kw in keywords_with_weights]:
+                    keywords_with_weights.append((match, 1.0))
+        
+        # 2. 조문번호 추출 (가중치: 0.9)
+        article_patterns = [
+            r'제\s*(\d+)\s*조',
+            r'(\d+)\s*조',
+            r'제\s*(\d+)\s*항',
+            r'(\d+)\s*항',
+            r'제\s*(\d+)\s*호',
+            r'(\d+)\s*호'
+        ]
+        for pattern in article_patterns:
+            matches = re.findall(pattern, query)
+            for match in matches:
+                keyword = f"제{match}조" if "조" in pattern else f"제{match}항"
+                if keyword not in [kw[0] for kw in keywords_with_weights]:
+                    keywords_with_weights.append((keyword, 0.9))
+        
+        # 3. 핵심 용어 추출 (가중치: 0.8)
+        legal_terms = [
+            "임대차", "임대인", "임차인", "계약", "계약서", "권리", "의무",
+            "손해배상", "불법행위", "채무", "채권", "소유권", "물권",
+            "이혼", "양육권", "상속", "부양", "친권",
+            "회사", "주식", "법인", "상법",
+            "특허", "상표", "저작권",
+            "형사", "범죄", "형벌",
+            "노동", "근로", "임금",
+            "행정", "행정처분", "행정소송"
+        ]
+        stopwords = ["이", "가", "을", "를", "의", "에", "에서", "로", "으로", "와", "과", "는", "은", "도", "만", "란", "이란"]
+        words = re.findall(r'[가-힣]+', query)
+        for word in words:
+            if word not in stopwords and len(word) >= 2:
+                if word in legal_terms:
+                    if word not in [kw[0] for kw in keywords_with_weights]:
+                        keywords_with_weights.append((word, 0.8))
+        
+        # 4. 일반 키워드 추출 (가중치: 0.5)
+        for word in words:
+            if word not in stopwords and len(word) >= 2:
+                if word not in [kw[0] for kw in keywords_with_weights]:
+                    keywords_with_weights.append((word, 0.5))
+        
+        # 가중치 기준 정렬 (높은 가중치 우선)
+        keywords_with_weights.sort(key=lambda x: x[1], reverse=True)
+        
+        return keywords_with_weights[:10]  # 상위 10개
+
+    def _preprocess_query(self, query: str) -> str:
+        """쿼리 전처리 및 정규화 (고급)"""
+        if not query or not query.strip():
+            return query
+        
+        try:
+            processed = query.strip()
+            
+            # 1. 법률 용어 정규화
+            legal_term_mapping = {
+                "임대차계약": "임대차 계약",
+                "임대차계약서": "임대차 계약서",
+                "임대인과임차인": "임대인 임차인",
+                "계약서작성": "계약서 작성",
+                "손해배상청구": "손해배상 청구",
+                "불법행위책임": "불법행위 책임",
+                "채무불이행": "채무 불이행",
+                "소유권이전": "소유권 이전",
+                "물권변동": "물권 변동"
+            }
+            for old_term, new_term in legal_term_mapping.items():
+                processed = processed.replace(old_term, new_term)
+            
+            # 2. 불필요한 조사 제거 (선택적 - 의미 손실 방지를 위해 보수적으로 적용)
+            # 조사는 문맥에 따라 중요할 수 있으므로, 명확히 불필요한 경우만 제거
+            # 여기서는 핵심 키워드 추출 시 처리하므로 쿼리 자체는 유지
+            
+            # 3. 법령명/조문번호 패턴 정규화
+            # "제 618 조" -> "제618조"
+            processed = re.sub(r'제\s+(\d+)\s+조', r'제\1조', processed)
+            processed = re.sub(r'제\s+(\d+)\s+항', r'제\1항', processed)
+            processed = re.sub(r'제\s+(\d+)\s+호', r'제\1호', processed)
+            
+            # 4. 연속된 공백 정리
+            processed = re.sub(r'\s+', ' ', processed)
+            processed = processed.strip()
+            
+            # 5. 전처리 결과 검증 (빈 문자열이거나 너무 짧으면 원본 반환)
+            if not processed or len(processed) < 2:
+                self.logger.warning(f"Preprocessing resulted in empty or too short query, using original: '{query}'")
+                return query
+            
+            return processed
+        except Exception as e:
+            self.logger.warning(f"Query preprocessing failed: {e}, using original query: '{query}'")
+            return query

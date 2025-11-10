@@ -71,7 +71,7 @@ class SearchHandler:
             return True
         return False
 
-    def semantic_search(self, query: str, k: Optional[int] = None) -> Tuple[List[Dict[str, Any]], int]:
+    def semantic_search(self, query: str, k: Optional[int] = None, extracted_keywords: Optional[List[str]] = None) -> Tuple[List[Dict[str, Any]], int]:
         """의미적 벡터 검색"""
         if not self.semantic_search_engine:
             self.logger.info("Semantic search not available")
@@ -79,14 +79,150 @@ class SearchHandler:
 
         try:
             search_k = k if k is not None else WorkflowConstants.SEMANTIC_SEARCH_K
-
-            # 검색 품질 강화: similarity_threshold를 0.5로 설정
+            
+            # 검색 결과 수 증가: 다양성 보장을 위해 더 많은 후보 확보
+            # 원래 k의 2배로 검색하여 판례/결정례 포함 확률 증가
+            expanded_k = search_k * 2
+            
+            # 검색 품질 강화: similarity_threshold를 0.4로 낮춰 더 많은 결과 확보
+            # (판례/결정례의 유사도가 낮을 수 있으므로)
             config_threshold = getattr(self.config, 'similarity_threshold', 0.3)
-            similarity_threshold = max(0.5, config_threshold)  # 최소 0.5 보장
+            similarity_threshold = max(0.4, config_threshold)  # 0.5 -> 0.4로 조정
 
-            results = self.semantic_search_engine.search(query, k=search_k, similarity_threshold=similarity_threshold)
-            self.logger.info(f"Semantic search found {len(results)} results")
+            # 검색 쿼리에 질문의 핵심 키워드를 명시적으로 포함
+            enhanced_query = query
+            if extracted_keywords and len(extracted_keywords) > 0:
+                # 핵심 키워드 추출 (법령명, 조문번호, 핵심 용어 우선)
+                core_keywords = []
+                for kw in extracted_keywords[:5]:
+                    if isinstance(kw, str):
+                        # 법령명이나 조문번호가 포함된 키워드 우선
+                        if any(term in kw for term in ["법", "조", "제", "민법", "형법", "상법"]):
+                            core_keywords.insert(0, kw)
+                        else:
+                            core_keywords.append(kw)
+                
+                if core_keywords:
+                    # 쿼리에 핵심 키워드 추가 (중복 제거)
+                    query_keywords = set(query.split())
+                    new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
+                    if new_keywords:
+                        enhanced_query = f"{query} {' '.join(new_keywords[:3])}"
+                        self.logger.info(f"🔍 [SEMANTIC SEARCH] Enhanced query with keywords: '{enhanced_query[:100]}...'")
+            
+            # 기본 검색 수행 (향상된 쿼리 사용)
+            # 벡터 검색 실행 (쿼리 전처리 포함)
+            self.logger.info(f"Calling semantic_search_engine.search with query: '{enhanced_query[:50]}...'")
+            results = self.semantic_search_engine.search(enhanced_query, k=expanded_k, similarity_threshold=similarity_threshold)
+            self.logger.info(f"Semantic search returned {len(results)} results")
+            
+            # 검색 결과의 관련성 검증 강화
+            if extracted_keywords and len(extracted_keywords) > 0:
+                # 질문의 핵심 키워드가 검색 결과에 포함되어 있는지 확인
+                core_keywords_lower = [str(kw).lower() for kw in extracted_keywords[:5] if isinstance(kw, str)]
+                filtered_results = []
+                for r in results:
+                    text_content = (
+                        r.get('text', '') or
+                        r.get('content', '') or
+                        str(r.get('metadata', {}).get('content', '')) or
+                        str(r.get('metadata', {}).get('text', '')) or
+                        ''
+                    ).lower()
+                    
+                    # 핵심 키워드 중 하나라도 포함되어 있으면 관련성 있음
+                    has_relevant_keyword = any(kw in text_content for kw in core_keywords_lower if len(kw) > 2)
+                    
+                    if has_relevant_keyword or len(core_keywords_lower) == 0:
+                        filtered_results.append(r)
+                    else:
+                        self.logger.debug(f"🔍 [SEMANTIC SEARCH] Filtered out result (no relevant keywords): {r.get('id', 'unknown')[:50]}")
+                
+                if len(filtered_results) < len(results):
+                    self.logger.info(f"🔍 [SEMANTIC SEARCH] Filtered {len(results) - len(filtered_results)} irrelevant results")
+                    results = filtered_results
+            
+            # 확장된 키워드가 있으면 추가 검색 수행
+            if extracted_keywords and len(extracted_keywords) > 0:
+                # 판례/결정례/해석례 검색 강화를 위한 키워드 필터링
+                precedent_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["판례", "대법원", "판결", "선고", "사건", "참고", "유사"])]
+                decision_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["결정", "심판", "의견", "통보", "결정례"])]
+                interpretation_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["해석", "해석례", "유권해석", "법리 해석"])]
+                
+                # 검색 결과 타입 분포 확인
+                result_types = {}
+                for r in results:
+                    r_type = r.get("type") or r.get("source_type") or (r.get("metadata", {}).get("source_type") if isinstance(r.get("metadata"), dict) else "")
+                    result_types[r_type] = result_types.get(r_type, 0) + 1
+                
+                has_precedent = result_types.get("case_paragraph", 0) > 0
+                has_decision = result_types.get("decision_paragraph", 0) > 0
+                has_interpretation = result_types.get("interpretation_paragraph", 0) > 0
+                
+                self.logger.info(f"🔍 [SEMANTIC SEARCH] Initial results type distribution: {result_types}")
+                
+                # 판례 검색 강화: 판례 관련 키워드가 있지만 결과에 판례가 없으면 별도 검색
+                if precedent_keywords and not has_precedent:
+                    self.logger.info(f"🔍 [PRECEDENT SEARCH] Performing dedicated precedent search with {len(precedent_keywords)} keywords")
+                    precedent_query = f"{query} {' '.join(precedent_keywords[:3])}"
+                    precedent_results = self.semantic_search_engine.search(
+                        query=precedent_query,
+                        k=search_k // 2,
+                        source_types=["case_paragraph"],
+                        similarity_threshold=max(0.35, similarity_threshold - 0.05)  # 판례는 더 낮은 임계값
+                    )
+                    results.extend(precedent_results)
+                    self.logger.info(f"🔍 [PRECEDENT SEARCH] Found {len(precedent_results)} additional precedent results")
+                
+                # 결정례 검색 강화: 결정례 관련 키워드가 있지만 결과에 결정례가 없으면 별도 검색
+                if decision_keywords and not has_decision:
+                    self.logger.info(f"🔍 [DECISION SEARCH] Performing dedicated decision search with {len(decision_keywords)} keywords")
+                    decision_query = f"{query} {' '.join(decision_keywords[:3])}"
+                    decision_results = self.semantic_search_engine.search(
+                        query=decision_query,
+                        k=search_k // 2,
+                        source_types=["decision_paragraph"],
+                        similarity_threshold=max(0.35, similarity_threshold - 0.05)  # 결정례는 더 낮은 임계값
+                    )
+                    results.extend(decision_results)
+                    self.logger.info(f"🔍 [DECISION SEARCH] Found {len(decision_results)} additional decision results")
+                
+                # 해석례 검색 강화: 해석례 관련 키워드가 있지만 결과에 해석례가 없으면 별도 검색
+                if interpretation_keywords and not has_interpretation:
+                    self.logger.info(f"🔍 [INTERPRETATION SEARCH] Performing dedicated interpretation search with {len(interpretation_keywords)} keywords")
+                    interpretation_query = f"{query} {' '.join(interpretation_keywords[:3])}"
+                    interpretation_results = self.semantic_search_engine.search(
+                        query=interpretation_query,
+                        k=search_k // 2,
+                        source_types=["interpretation_paragraph"],
+                        similarity_threshold=max(0.35, similarity_threshold - 0.05)  # 해석례는 더 낮은 임계값
+                    )
+                    results.extend(interpretation_results)
+                    self.logger.info(f"🔍 [INTERPRETATION SEARCH] Found {len(interpretation_results)} additional interpretation results")
+                
+                # 쿼리 확장 검색도 수행 (추가 결과 확보)
+                if precedent_keywords or decision_keywords or interpretation_keywords:
+                    self.logger.info(f"🔍 [SEMANTIC SEARCH] Using query expansion with {len(extracted_keywords)} expanded keywords")
+                    expansion_results = self.semantic_search_engine.search_with_query_expansion(
+                        query=query,
+                        k=search_k // 2,
+                        similarity_threshold=similarity_threshold,
+                        expanded_keywords=extracted_keywords,
+                        use_query_variations=True
+                    )
+                    # 중복 제거하면서 추가
+                    seen_ids = {r.get("metadata", {}).get("chunk_id") for r in results if r.get("metadata", {}).get("chunk_id")}
+                    for r in expansion_results:
+                        r_id = r.get("metadata", {}).get("chunk_id")
+                        if r_id and r_id not in seen_ids:
+                            results.append(r)
+                            seen_ids.add(r_id)
+            
+            self.logger.info(f"Semantic search found {len(results)} results (expanded k={expanded_k}, threshold={similarity_threshold})")
 
+            # 검색 결과 타입별 다양성 보장
+            results = self._ensure_diverse_source_types(results, search_k)
+            
             formatted_results = []
             for result in results:
                 # content 필드도 text로 매핑 (검색 결과 형식 통일)
@@ -256,10 +392,27 @@ class SearchHandler:
             # 3. Reranker를 사용한 재정렬
             if self.result_ranker and len(unique_results) > 0:
                 try:
-                    rerank_results = self.result_ranker.rank_results(
-                        unique_results[:rerank_params["top_k"]],
-                        top_k=rerank_params["top_k"]
-                    )
+                    # 문서 구조 검증: text 필드가 있는지 확인 (복사본 생성)
+                    validated_results = []
+                    for doc in unique_results[:rerank_params["top_k"]]:
+                        if isinstance(doc, dict):
+                            # 문서 복사본 생성
+                            doc_copy = dict(doc)
+                            # text 필드가 없으면 content나 chunk_text에서 가져오기
+                            if "text" not in doc_copy or not doc_copy.get("text"):
+                                doc_copy["text"] = doc_copy.get("content") or doc_copy.get("chunk_text") or doc_copy.get("text_content", "")
+                            # source 필드도 확인
+                            if "source" not in doc_copy or not doc_copy.get("source"):
+                                doc_copy["source"] = doc_copy.get("title") or doc_copy.get("document_id") or doc_copy.get("source_name", "")
+                            validated_results.append(doc_copy)
+                    
+                    if validated_results:
+                        rerank_results = self.result_ranker.rank_results(
+                            validated_results,
+                            top_k=rerank_params["top_k"]
+                        )
+                    else:
+                        raise ValueError("No valid documents for reranking")
                 except Exception as e:
                     self.logger.warning(f"Reranker failed, using combined score: {e}")
                     rerank_results = sorted(
@@ -278,18 +431,51 @@ class SearchHandler:
             # 4. 다양성 필터 적용
             try:
                 if self.result_ranker and hasattr(self.result_ranker, 'apply_diversity_filter'):
-                    diverse_results = self.result_ranker.apply_diversity_filter(
-                        rerank_results,
-                        max_per_type=5,
-                        diversity_weight=rerank_params["diversity_weight"]
-                    )
+                    # 문서 구조 검증: source 필드가 있는지 확인 (복사본 생성)
+                    validated_for_diversity = []
+                    for doc in rerank_results:
+                        if isinstance(doc, dict):
+                            # 문서 복사본 생성
+                            doc_copy = dict(doc)
+                            # source 필드가 없으면 다른 필드에서 가져오기
+                            if "source" not in doc_copy or not doc_copy.get("source"):
+                                doc_copy["source"] = doc_copy.get("title") or doc_copy.get("document_id") or doc_copy.get("source_name", "")
+                            validated_for_diversity.append(doc_copy)
+                    
+                    if validated_for_diversity:
+                        # apply_diversity_filter 메서드의 시그니처 확인
+                        import inspect
+                        sig = inspect.signature(self.result_ranker.apply_diversity_filter)
+                        params = list(sig.parameters.keys())
+                        
+                        # diversity_weight 파라미터가 있는지 확인
+                        if "diversity_weight" in params:
+                            diverse_results = self.result_ranker.apply_diversity_filter(
+                                validated_for_diversity,
+                                max_per_type=5,
+                                diversity_weight=rerank_params.get("diversity_weight", 0.3)
+                            )
+                        else:
+                            # diversity_weight 파라미터가 없으면 제외하고 호출
+                            diverse_results = self.result_ranker.apply_diversity_filter(
+                                validated_for_diversity,
+                                max_per_type=5
+                            )
+                    else:
+                        diverse_results = rerank_results
                 else:
                     diverse_results = rerank_results
             except Exception as e:
                 self.logger.warning(f"Diversity filter failed: {e}")
                 diverse_results = rerank_results
 
-            return diverse_results
+            # 5. 타입별 다양성 보장 (최종 결과에 판례/결정례 포함)
+            final_diverse_results = self._ensure_diverse_source_types(
+                diverse_results,
+                rerank_params.get("top_k", 10)
+            )
+
+            return final_diverse_results
 
         except Exception as e:
             self.logger.warning(f"Merge and rerank failed: {e}, using simple merge")
@@ -299,7 +485,128 @@ class SearchHandler:
                 all_results,
                 key=lambda x: x.get("relevance_score", 0.0),
                 reverse=True
-            )[:rerank_params.get("top_k", 20)]
+            )[:rerank_params.get("top_k", 10)]
+    
+    def _ensure_diverse_source_types(self, results: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
+        """
+        검색 결과의 타입별 다양성 보장
+        
+        검색 결과가 특정 타입(예: 법령)에 치우쳐 있을 때,
+        다른 타입(판례, 해석례, 결정례)도 포함되도록 재분배
+        
+        Args:
+            results: 검색 결과 리스트
+            max_results: 최대 결과 수
+            
+        Returns:
+            타입별로 균형있게 재분배된 결과 리스트
+        """
+        if not results or len(results) <= 1:
+            return results
+        
+        # source_type 매핑
+        source_type_mapping = {
+            "statute_article": "law",
+            "case_paragraph": "precedent",
+            "decision_paragraph": "decision",
+            "interpretation_paragraph": "interpretation"
+        }
+        
+        # 결과를 타입별로 그룹화
+        results_by_type = {
+            "law": [],
+            "precedent": [],
+            "decision": [],
+            "interpretation": [],
+            "unknown": []
+        }
+        
+        for result in results:
+            # 타입 추출
+            doc_type = (
+                result.get("type") or
+                result.get("source_type") or
+                (result.get("metadata", {}).get("source_type") if isinstance(result.get("metadata"), dict) else "") or
+                "unknown"
+            )
+            
+            # source_type 매핑 적용
+            if doc_type in source_type_mapping:
+                doc_type = source_type_mapping[doc_type]
+            elif doc_type not in results_by_type:
+                doc_type = "unknown"
+            
+            results_by_type[doc_type].append(result)
+        
+        # 타입별 개수 확인
+        type_counts = {k: len(v) for k, v in results_by_type.items()}
+        total_count = sum(type_counts.values())
+        
+        # 모든 결과가 같은 타입이면 그대로 반환
+        if len([c for c in type_counts.values() if c > 0]) <= 1:
+            self.logger.debug(f"All results are of the same type, returning as-is")
+            return results[:max_results]
+        
+        # 타입별로 균형있게 재분배
+        # 각 타입에서 최소 1개씩은 포함하되, 전체적으로는 점수 순서 유지
+        diverse_results = []
+        seen_ids = set()
+        
+        # 1단계: 각 타입에서 최상위 1개씩 선택 (다양성 보장)
+        for doc_type in ["law", "precedent", "decision", "interpretation"]:
+            if results_by_type[doc_type]:
+                top_result = results_by_type[doc_type][0]
+                result_id = top_result.get("id") or str(hash(str(top_result)))
+                if result_id not in seen_ids:
+                    diverse_results.append(top_result)
+                    seen_ids.add(result_id)
+        
+        # 2단계: 나머지 결과를 점수 순서대로 추가
+        remaining_results = []
+        for result in results:
+            result_id = result.get("id") or str(hash(str(result)))
+            if result_id not in seen_ids:
+                remaining_results.append(result)
+        
+        # 점수 기준 정렬
+        remaining_results.sort(
+            key=lambda x: (
+                x.get("score", 0.0) or
+                x.get("similarity", 0.0) or
+                x.get("relevance_score", 0.0) or
+                0.0
+            ),
+            reverse=True
+        )
+        
+        # 나머지 결과 추가 (최대 개수까지)
+        for result in remaining_results:
+            if len(diverse_results) >= max_results:
+                break
+            diverse_results.append(result)
+        
+        # 타입 분포 로깅
+        final_type_counts = {}
+        for result in diverse_results:
+            doc_type = (
+                result.get("type") or
+                result.get("source_type") or
+                (result.get("metadata", {}).get("source_type") if isinstance(result.get("metadata"), dict) else "") or
+                "unknown"
+            )
+            if doc_type in source_type_mapping:
+                doc_type = source_type_mapping[doc_type]
+            final_type_counts[doc_type] = final_type_counts.get(doc_type, 0) + 1
+        
+        self.logger.info(
+            f"🔀 [DIVERSITY] Rebalanced results: "
+            f"law={final_type_counts.get('law', 0)}, "
+            f"precedent={final_type_counts.get('precedent', 0)}, "
+            f"decision={final_type_counts.get('decision', 0)}, "
+            f"interpretation={final_type_counts.get('interpretation', 0)}"
+        )
+        
+        return diverse_results[:max_results]
 
     def filter_low_quality_results(
         self,

@@ -124,23 +124,48 @@ class ResultRanker:
         self.logger = logging.getLogger(__name__)
         self.logger.info("ResultRanker initialized")
     
-    def rank_results(self, results: List[MergedResult], top_k: int = 10) -> List[MergedResult]:
+    def rank_results(self, results: List[Any], top_k: int = 10) -> List[Any]:
         """
         검색 결과 순위 결정
         
         Args:
-            results: 병합된 검색 결과
+            results: 병합된 검색 결과 (MergedResult 또는 Dict)
             top_k: 반환할 결과 수
             
         Returns:
-            List[MergedResult]: 순위가 매겨진 결과
+            List[MergedResult] 또는 List[Dict]: 순위가 매겨진 결과
         """
         if not results:
             return []
         
+        # Dict를 MergedResult로 변환
+        converted_results = []
+        for result in results:
+            if isinstance(result, dict):
+                # Dict를 MergedResult로 변환
+                text = result.get("text") or result.get("content") or result.get("chunk_text") or ""
+                score = result.get("score") or result.get("relevance_score") or result.get("similarity", 0.0)
+                source = result.get("source") or result.get("title") or result.get("document_id") or ""
+                metadata = result.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = result if isinstance(result, dict) else {}
+                
+                converted_result = MergedResult(
+                    text=text,
+                    score=score,
+                    source=source,
+                    metadata=metadata
+                )
+                converted_results.append(converted_result)
+            elif isinstance(result, MergedResult):
+                converted_results.append(result)
+            else:
+                # 기타 타입은 건너뛰기
+                continue
+        
         # 중복 제거 (텍스트 기준)
         unique_results = {}
-        for result in results:
+        for result in converted_results:
             if result.text not in unique_results:
                 unique_results[result.text] = result
             else:
@@ -152,7 +177,20 @@ class ResultRanker:
         ranked_results = list(unique_results.values())
         ranked_results.sort(key=lambda x: x.score, reverse=True)
         
-        return ranked_results[:top_k]
+        # Dict로 변환하여 반환 (호환성 유지)
+        return [self._merged_result_to_dict(r) for r in ranked_results[:top_k]]
+    
+    def _merged_result_to_dict(self, result: MergedResult) -> Dict[str, Any]:
+        """MergedResult를 Dict로 변환"""
+        return {
+            "text": result.text,
+            "content": result.text,
+            "score": result.score,
+            "relevance_score": result.score,
+            "similarity": result.score,
+            "source": result.source,
+            "metadata": result.metadata
+        }
     
     def multi_stage_rerank(
         self,
@@ -621,22 +659,51 @@ class ResultRanker:
         except:
             return 0.5
     
-    def apply_diversity_filter(self, results: List[MergedResult], max_per_type: int = 5) -> List[MergedResult]:
+    def apply_diversity_filter(self, results: List[Any], max_per_type: int = 5, diversity_weight: float = None) -> List[Any]:
         """
         다양성 필터 적용
         
         Args:
-            results: 순위가 매겨진 결과
+            results: 순위가 매겨진 결과 (MergedResult 또는 Dict)
             max_per_type: 타입별 최대 결과 수
+            diversity_weight: 다양성 가중치 (사용하지 않지만 호환성을 위해 유지)
             
         Returns:
-            List[MergedResult]: 다양성이 적용된 결과
+            List[Dict]: 다양성이 적용된 결과
         """
-        # 타입별 카운터
+        if not results:
+            return []
+        
+        # Dict를 MergedResult로 변환
+        converted_results = []
+        for result in results:
+            if isinstance(result, dict):
+                # Dict를 MergedResult로 변환
+                text = result.get("text") or result.get("content") or result.get("chunk_text") or ""
+                score = result.get("score") or result.get("relevance_score") or result.get("similarity", 0.0)
+                source = result.get("source") or result.get("title") or result.get("document_id") or ""
+                metadata = result.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = result if isinstance(result, dict) else {}
+                
+                converted_result = MergedResult(
+                    text=text,
+                    score=score,
+                    source=source,
+                    metadata=metadata
+                )
+                converted_results.append(converted_result)
+            elif isinstance(result, MergedResult):
+                converted_results.append(result)
+            else:
+                # 기타 타입은 건너뛰기
+                continue
+        
+        # 타입별 카운터 (source를 타입으로 사용)
         type_counts = {}
         filtered_results = []
         
-        for result in results:
+        for result in converted_results:
             result_type = result.source
             if result_type not in type_counts:
                 type_counts[result_type] = 0
@@ -645,7 +712,8 @@ class ResultRanker:
                 filtered_results.append(result)
                 type_counts[result_type] += 1
         
-        return filtered_results
+        # Dict로 변환하여 반환 (호환성 유지)
+        return [self._merged_result_to_dict(r) for r in filtered_results]
 
 
 # 기본 인스턴스 생성
