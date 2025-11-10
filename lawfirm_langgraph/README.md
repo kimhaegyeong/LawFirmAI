@@ -18,12 +18,24 @@
 ```
 lawfirm_langgraph/
 ├── config/              # 설정 파일
-│   └── langgraph_config.py
-├── langgraph_core/      # 핵심 모듈
-│   ├── services/       # 워크플로우 서비스
-│   ├── utils/          # 유틸리티 함수
-│   ├── tools/          # Agentic AI Tools
-│   └── models/         # 모델 관련
+│   ├── langgraph_config.py
+│   └── app_config.py
+├── core/                # 핵심 비즈니스 로직
+│   ├── workflow/        # 워크플로우 관련
+│   │   ├── nodes/       # 워크플로우 노드
+│   │   ├── state/       # 상태 정의 및 관리
+│   │   ├── tools/       # Agentic AI Tools
+│   │   ├── utils/       # 워크플로우 유틸리티
+│   │   ├── builders/    # 체인 빌더
+│   │   └── mixins/      # 워크플로우 믹스인
+│   ├── processing/      # 데이터 처리
+│   ├── agents/          # 에이전트 관련
+│   ├── services/        # 비즈니스 서비스
+│   ├── data/            # 데이터 레이어
+│   ├── models/          # AI 모델
+│   └── utils/           # 유틸리티
+├── langgraph_core/      # ⚠️ DEPRECATED: 하위 호환성을 위한 re-export 모듈
+│                        # 새로운 코드에서는 core.*를 직접 사용하세요
 ├── tests/              # 테스트 파일
 │   ├── __init__.py
 │   ├── conftest.py              # pytest 설정 및 픽스처
@@ -32,9 +44,9 @@ lawfirm_langgraph/
 │   ├── test_workflow_nodes.py   # 워크플로우 노드 테스트
 │   ├── test_integration.py      # 통합 테스트
 │   └── run_all_tests.py         # 전체 테스트 실행 스크립트
-└── docs/               # 문서
-    ├── TEST_RESULTS.md
-    └── NEXT_STEPS.md
+└── data/               # 데이터 파일
+    ├── checkpoints/    # 체크포인트 데이터
+    └── prompts/        # 프롬프트 데이터
 ```
 
 ## 빠른 시작
@@ -60,7 +72,7 @@ GOOGLE_API_KEY=your_api_key_here
 ```python
 import asyncio
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.langgraph_core.services.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 async def main():
     config = LangGraphConfig.from_env()
@@ -162,9 +174,3 @@ pip install langchain langchain-core langgraph
 1. 환경 변수 확인: `USE_AGENTIC_MODE=true`
 2. Config 확인: `config.use_agentic_mode`
 3. Tool 시스템 로드 확인
-
-자세한 내용은 [다음 단계 가이드](docs/NEXT_STEPS.md)를 참고하세요.
-
-## 라이선스
-
-이 프로젝트는 내부 사용 목적으로 개발되었습니다.
