@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .question_classifier import QuestionType
-from .unified_prompt_manager import LegalDomain, ModelType
+from ...services.unified_prompt_manager import LegalDomain, ModelType
 
 logger = logging.getLogger(__name__)
 
