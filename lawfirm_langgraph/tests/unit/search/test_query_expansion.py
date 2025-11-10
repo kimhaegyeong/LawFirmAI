@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 def test_semantic_search_engine_query_expansion():
     """SemanticSearchEngineV2의 쿼리 확장 검색 테스트"""
     try:
-        from core.services.semantic_search_engine_v2 import SemanticSearchEngineV2
-        from core.utils.config import Config
+        from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
+        from lawfirm_langgraph.core.utils.config import Config
         
         logger.info("=" * 80)
         logger.info("테스트 1: SemanticSearchEngineV2 쿼리 확장 검색")
@@ -100,12 +100,12 @@ def test_semantic_search_engine_query_expansion():
 def test_query_expansion_subnode():
     """쿼리 확장 서브노드 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 2: 쿼리 확장 서브노드")
@@ -169,12 +169,12 @@ def test_query_expansion_subnode():
 def test_semantic_search_variations_subnode():
     """의미적 검색 변형 서브노드 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 3: 의미적 검색 변형 서브노드")
@@ -248,12 +248,12 @@ def test_semantic_search_variations_subnode():
 def test_keyword_search_subnode():
     """키워드 검색 서브노드 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 4: 키워드 검색 서브노드")
@@ -322,12 +322,12 @@ def test_keyword_search_subnode():
 def test_result_merger_subnode():
     """결과 통합 서브노드 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 5: 결과 통합 서브노드")
@@ -393,12 +393,12 @@ def test_result_merger_subnode():
 def test_expanded_queries_missing():
     """expanded_queries가 없는 경우 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 6: expanded_queries가 없는 경우")
@@ -483,12 +483,12 @@ def test_expanded_queries_missing():
 def test_parallel_search_failure():
     """병렬 처리 실패 시나리오 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 7: 병렬 처리 실패 시나리오")
@@ -567,12 +567,12 @@ def test_parallel_search_failure():
 def test_state_validation_failure():
     """State 검증 실패 케이스 테스트"""
     try:
-        from langgraph_core.state.state_definitions import LegalWorkflowState
-        from langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         try:
             from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         except ImportError:
-            from core.utils.langgraph_config import LangGraphConfig
+            from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
         
         logger.info("\n" + "=" * 80)
         logger.info("테스트 8: State 검증 실패 케이스")

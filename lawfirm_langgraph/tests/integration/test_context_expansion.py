@@ -28,7 +28,7 @@ class TestContextExpansionImprovements:
     
     def test_needs_expansion_condition_strengthened(self):
         """needs_expansion 조건 강화 테스트"""
-        from lawfirm_langgraph.core.agents.validators.quality_validators import ContextValidator
+        from lawfirm_langgraph.core.generation.validators.quality_validators import ContextValidator
         
         # Case 1: overall_score가 0.5 미만이면 확장
         context = {
@@ -70,7 +70,7 @@ class TestContextExpansionImprovements:
     
     def test_missing_info_threshold_lowered(self):
         """누락 정보 추가 조건 강화 테스트"""
-        from lawfirm_langgraph.core.agents.validators.quality_validators import ContextValidator
+        from lawfirm_langgraph.core.generation.validators.quality_validators import ContextValidator
         
         # Case 1: coverage_score가 0.3 미만이면 누락 정보 추가
         context_low_coverage = {
@@ -221,7 +221,7 @@ class TestContextExpansionImprovements:
     
     def test_should_expand_context(self):
         """확장 전 기존 문서 재평가 테스트"""
-        from lawfirm_langgraph.core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         from unittest.mock import Mock
         
         # Mock workflow 생성
@@ -276,7 +276,7 @@ class TestContextExpansionImprovements:
     
     def test_build_expanded_query(self):
         """확장 쿼리 최적화 테스트"""
-        from lawfirm_langgraph.core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+        from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
         from unittest.mock import Mock
         
         # Mock workflow 생성

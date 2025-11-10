@@ -81,7 +81,7 @@ def normalize_query(query: str) -> str:
 
 async def run(query: str):
     from lawfirm_langgraph.core.utils.langgraph_config import LangGraphConfig
-    from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+    from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
 
     # 쿼리 인코딩 정규화
     normalized_query = normalize_query(query)

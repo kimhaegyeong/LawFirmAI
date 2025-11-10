@@ -28,14 +28,14 @@ class TestLangGraphWorkflowService:
     @pytest.fixture
     def service(self, config):
         """워크플로우 서비스 인스턴스"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             return LangGraphWorkflowService(config)
     
     def test_service_initialization(self, config):
         """서비스 초기화 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             
@@ -44,12 +44,12 @@ class TestLangGraphWorkflowService:
     
     def test_service_initialization_with_default_config(self):
         """기본 설정으로 서비스 초기화 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
-            with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.LangGraphConfig') as MockConfig:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
+            with patch('lawfirm_langgraph.config.langgraph_config.LangGraphConfig') as MockConfig:
                 mock_config_instance = LangGraphConfig.from_env()
                 MockConfig.from_env.return_value = mock_config_instance
                 
-                from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+                from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
                 
                 service = LangGraphWorkflowService()
                 

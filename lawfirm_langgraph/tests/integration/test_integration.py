@@ -29,7 +29,7 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_simple_query_workflow(self, config):
         """간단한 쿼리 워크플로우 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "안녕하세요",
@@ -41,7 +41,7 @@ class TestFullWorkflow:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -55,7 +55,7 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_complex_query_workflow(self, config):
         """복잡한 쿼리 워크플로우 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "계약서 작성 시 주의해야 할 법적 사항은?",
@@ -77,7 +77,7 @@ class TestFullWorkflow:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -96,7 +96,7 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_multi_turn_conversation(self, config):
         """멀티턴 대화 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             
             # 첫 번째 턴
@@ -112,7 +112,7 @@ class TestFullWorkflow:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -145,14 +145,14 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self, config):
         """에러 복구 워크플로우 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             
             # 첫 번째 시도 실패
             mock_workflow_instance.invoke_async = AsyncMock(side_effect=Exception("일시적 에러"))
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -169,7 +169,7 @@ class TestFullWorkflow:
         config.enable_checkpoint = True
         config.checkpoint_storage = CheckpointStorageType.MEMORY
         
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "테스트 질문",
@@ -179,7 +179,7 @@ class TestFullWorkflow:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -209,7 +209,7 @@ class TestAgenticMode:
     @pytest.mark.asyncio
     async def test_agentic_mode_workflow(self, agentic_config):
         """Agentic 모드 워크플로우 테스트"""
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "복잡한 법률 질문",
@@ -220,7 +220,7 @@ class TestAgenticMode:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(agentic_config)
             service.workflow = mock_workflow_instance
@@ -246,7 +246,7 @@ class TestPerformance:
             langgraph_enabled=True,
         )
         
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "테스트 질문",
@@ -256,7 +256,7 @@ class TestPerformance:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance
@@ -278,7 +278,7 @@ class TestPerformance:
             langgraph_enabled=True,
         )
         
-        with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
+        with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow') as MockWorkflow:
             mock_workflow_instance = MagicMock()
             mock_workflow_instance.invoke_async = AsyncMock(return_value={
                 "query": "테스트 질문",
@@ -288,7 +288,7 @@ class TestPerformance:
             })
             MockWorkflow.return_value = mock_workflow_instance
             
-            from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+            from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
             
             service = LangGraphWorkflowService(config)
             service.workflow = mock_workflow_instance

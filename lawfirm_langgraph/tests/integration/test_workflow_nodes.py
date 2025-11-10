@@ -43,7 +43,7 @@ class TestWorkflowNodes:
     
     def test_classification_node(self, mock_state, config):
         """분류 노드 테스트"""
-        with patch('lawfirm_langgraph.core.agents.handlers.classification_handler.ClassificationHandler') as MockHandler:
+        with patch('lawfirm_langgraph.core.classification.handlers.classification_handler.ClassificationHandler') as MockHandler:
             mock_handler = MockHandler.return_value
             mock_handler.classify = Mock(return_value={
                 "legal_field": "contract",
@@ -130,7 +130,7 @@ class TestStateManagement:
         """상태 초기화 테스트"""
         # flat 구조를 사용하여 테스트 (레거시 호환성)
         try:
-            from lawfirm_langgraph.langgraph_core.state.state_definitions import create_flat_legal_state
+            from lawfirm_langgraph.core.workflow.state.state_definitions import create_flat_legal_state
             
             state = create_flat_legal_state(
                 query="테스트 질문",
@@ -142,7 +142,7 @@ class TestStateManagement:
             assert "retrieved_docs" in state
         except ImportError:
             # modular 구조를 사용하는 경우
-            from lawfirm_langgraph.langgraph_core.state.state_definitions import create_initial_legal_state
+            from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
             
             state = create_initial_legal_state(
                 query="테스트 질문",

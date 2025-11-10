@@ -148,6 +148,60 @@ def mock_answer_generator():
 
 
 @pytest.fixture
+def mock_chat_service():
+    """Mock ChatService 픽스처"""
+    from lawfirm_langgraph.core.utils.config import Config
+    
+    with patch('lawfirm_langgraph.core.services.chat_service.HybridSearchEngineV2'):
+        with patch('lawfirm_langgraph.core.services.chat_service.QuestionClassifier'):
+            with patch('lawfirm_langgraph.core.services.chat_service.ImprovedAnswerGenerator'):
+                with patch('lawfirm_langgraph.core.services.chat_service.IntegratedSessionManager'):
+                    with patch('lawfirm_langgraph.core.services.chat_service.MultiTurnQuestionHandler'):
+                        with patch('lawfirm_langgraph.core.services.chat_service.ContextCompressor'):
+                            with patch('lawfirm_langgraph.core.services.chat_service.UserProfileManager'):
+                                with patch('lawfirm_langgraph.core.services.chat_service.EmotionIntentAnalyzer'):
+                                    with patch('lawfirm_langgraph.core.services.chat_service.ConversationFlowTracker'):
+                                        with patch('lawfirm_langgraph.core.services.chat_service.ContextualMemoryManager'):
+                                            with patch('lawfirm_langgraph.core.services.chat_service.ConversationQualityMonitor'):
+                                                with patch('lawfirm_langgraph.core.services.chat_service.PerformanceMonitor'):
+                                                    with patch('lawfirm_langgraph.core.services.chat_service.MemoryOptimizer'):
+                                                        with patch('lawfirm_langgraph.core.services.chat_service.CacheManager'):
+                                                            from lawfirm_langgraph.core.services.chat_service import ChatService
+                                                            config = Config()
+                                                            config.database_path = ":memory:"
+                                                            service = ChatService(config)
+                                                            return service
+
+
+@pytest.fixture
+def mock_database():
+    """Mock DatabaseManager 픽스처"""
+    db = MagicMock()
+    db.execute_query = Mock(return_value=[])
+    db.execute_update = Mock(return_value=1)
+    db.get_connection = MagicMock()
+    return db
+
+
+@pytest.fixture
+def temp_database():
+    """임시 데이터베이스 픽스처"""
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        db_path = f.name
+    
+    yield db_path
+    
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
+
+
+@pytest.fixture
 def cleanup_test_files():
     """테스트 파일 정리 픽스처"""
     test_files = []
