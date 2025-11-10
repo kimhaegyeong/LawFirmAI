@@ -248,10 +248,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
 
                 # 개선 사항 1: Input Validation - 실패 시 자동 복구 로직 추가
                 if not is_valid:
-                    logger.warning(f"Input validation failed for {node_name}: {error}")
+                    # 경고를 debug 레벨로 낮춤 (자동 복구가 있으므로)
+                    logger.debug(f"Input validation failed for {node_name}: {error} (attempting auto-recovery)")
                     
                     # 개선 사항 1: retrieved_docs 필드 누락 시 자동 복구
-                    if "retrieved_docs" in error:
+                    if error and "retrieved_docs" in error:
                         try:
                             # Global cache에서 복구 시도 (전역 변수는 이미 wrapper 함수 시작 부분에서 선언됨)
                             if _global_search_results_cache:
@@ -290,7 +291,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             logger.debug(f"Auto-recovery failed for {node_name}: {e}")
                     
                     # 개선 사항 2: query_type 필드 누락 시 자동 복구
-                    if "query_type" in error or "query_type" in str(error):
+                    if error and ("query_type" in error or "query_type" in str(error)):
                         try:
                             query_type = None
                             # 1. converted_state에서 직접 확인 (stream_mode="updates" 사용 시)
@@ -878,7 +879,8 @@ def with_input_validation(node_name: str):
                 )
 
                 if not is_valid:
-                    logger.warning(f"Input validation failed for {node_name}: {error}")
+                    # 경고를 debug 레벨로 낮춤 (자동 복구 로직이 있으므로)
+                    logger.debug(f"Input validation failed for {node_name}: {error} (continuing with converted state)")
 
                 # 원본 함수 호출
                 if len(args) > 1:

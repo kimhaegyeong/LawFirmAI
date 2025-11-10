@@ -7,11 +7,15 @@ __version__ = "1.0.0"
 
 # LangGraph Core 모듈 export
 try:
-    from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
-    from lawfirm_langgraph.langgraph_core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+    from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+    from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 except ImportError:
-    LangGraphWorkflowService = None
-    EnhancedLegalQuestionWorkflow = None
+    try:
+        from core.workflow.workflow_service import LangGraphWorkflowService
+        from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+    except ImportError:
+        LangGraphWorkflowService = None
+        EnhancedLegalQuestionWorkflow = None
 
 # Config export
 try:
