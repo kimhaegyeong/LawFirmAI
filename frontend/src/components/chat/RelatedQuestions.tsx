@@ -17,7 +17,7 @@ export function RelatedQuestions({
   }
 
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-sm">
       <div className="flex items-center gap-2 mb-3">
         <Lightbulb className="w-4 h-4 text-amber-500" />
         <span className="text-sm font-semibold text-slate-700">연관 질문</span>
@@ -27,7 +27,7 @@ export function RelatedQuestions({
           <button
             key={idx}
             onClick={() => onQuestionClick?.(question)}
-            className="w-full text-left px-3 py-2 text-sm bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-colors text-slate-700 hover:text-blue-700"
+            className="w-full text-left px-3 py-2 text-sm bg-white hover:bg-amber-100 border border-amber-200 hover:border-amber-300 rounded-lg transition-colors text-slate-700 hover:text-amber-700"
           >
             {question}
           </button>

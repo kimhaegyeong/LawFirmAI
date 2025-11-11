@@ -64,7 +64,7 @@ export function ChatMessage({
   const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
     content,
     {
-      speed: 2, // ms마다 한 글자씩 표시
+      speed: 1, // ms마다 한 글자씩 표시
       enabled: isStreaming // 스트리밍 중일 때만 타이핑 효과 활성화
     }
   );
@@ -380,39 +380,38 @@ export function ChatMessage({
         )}
 
         {!isUser && (
-          <>
-            <CompactReferencesBadge
-              references={metadata.sources}
-              legalReferences={metadata.legal_references}
-              sources={metadata.sources}
-              sourcesDetail={metadata.sources_detail}
-              onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
-            />
-            {(() => {
-              const relatedQuestions = metadata.related_questions;
-              // 타입 안전성 확보: 배열인지 확인
-              const questionsArray = Array.isArray(relatedQuestions) 
-                ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
-                : undefined;
-              
-              // 디버깅 로그는 관련 질문이 있거나 metadata가 변경되었을 때만 출력
-              if (import.meta.env.DEV && questionsArray && questionsArray.length > 0) {
-                logger.debug('[ChatMessage] Related questions:', {
-                  hasQuestions: !!questionsArray,
-                  questionsCount: questionsArray.length,
-                  questions: questionsArray,
-                });
-              }
-              
-              return (
-                <RelatedQuestions
-                  questions={questionsArray}
-                  onQuestionClick={onQuestionClick}
-                />
-              );
-            })()}
-          </>
+          <CompactReferencesBadge
+            references={metadata.sources}
+            legalReferences={metadata.legal_references}
+            sources={metadata.sources}
+            sourcesDetail={metadata.sources_detail}
+            onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
+          />
         )}
+
+        {!isUser && (() => {
+          const relatedQuestions = metadata.related_questions;
+          const questionsArray = Array.isArray(relatedQuestions) 
+            ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+            : undefined;
+          
+          if (import.meta.env.DEV && questionsArray && questionsArray.length > 0) {
+            logger.debug('[ChatMessage] Related questions:', {
+              hasQuestions: !!questionsArray,
+              questionsCount: questionsArray.length,
+              questions: questionsArray,
+            });
+          }
+          
+          return questionsArray && questionsArray.length > 0 ? (
+            <div className="mt-4">
+              <RelatedQuestions
+                questions={questionsArray}
+                onQuestionClick={onQuestionClick}
+              />
+            </div>
+          ) : null;
+        })()}
 
         <div className="flex items-center justify-between mt-2">
           <span className="text-xs text-slate-500">
@@ -472,6 +471,7 @@ export function ChatMessage({
           </div>
         </div>
       </div>
+      
       {isUser && (
         <div className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center flex-shrink-0">
           <span className="text-slate-600 text-sm">U</span>
