@@ -1,12 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-Document Processors Module
-문서 프로세서 모듈
-"""
+"""문서 처리 프로세서 모듈"""
 
-from .document_processor import LegalDocumentProcessor
+from .document_processor import DocumentProcessor
 
-__all__ = [
-    "LegalDocumentProcessor",
-]
-
+__all__ = ["DocumentProcessor"]

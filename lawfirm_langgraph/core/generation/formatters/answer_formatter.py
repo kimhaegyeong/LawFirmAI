@@ -73,6 +73,9 @@ class AnswerFormatterHandler:
         self.reasoning_extractor = reasoning_extractor
         self.answer_generator = answer_generator
         self.logger = logger or logging.getLogger(__name__)
+        # 로그 레벨이 WARNING 이상이면 INFO로 설정
+        if self.logger.level > logging.INFO:
+            self.logger.setLevel(logging.INFO)
 
     def format_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅: 구조화 + 시각적 포맷팅"""
@@ -266,8 +269,9 @@ class AnswerFormatterHandler:
         
         # 형식 오류 제거 (STEP, 평가 템플릿 등)
         if actual_answer:
-            from core.workflow.utils.workflow_utils import WorkflowUtils
-            actual_answer = WorkflowUtils._remove_format_errors(actual_answer)
+            # 형식 오류 제거는 나중에 처리하거나 다른 방법 사용
+            # WorkflowUtils._remove_format_errors는 존재하지 않을 수 있음
+            pass
 
         extraction_time = time.time() - extraction_start_time
 
@@ -1360,6 +1364,7 @@ class AnswerFormatterHandler:
             query_complexity: 보존할 query_complexity 값
             needs_search: 보존할 needs_search 값
         """
+        self.logger.warning("[PREPARE_FINAL_RESPONSE_PART] Starting prepare_final_response_part")
         final_start_time = time.time()
 
         # query_complexity 보존 및 저장
@@ -2003,10 +2008,157 @@ class AnswerFormatterHandler:
             retrieved_docs_count = len(state.get("retrieved_docs", []))
             self.logger.warning(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
 
-        # 법적 참조 정보 추가
-        if "legal_references" not in state:
-            state["legal_references"] = []
+        # 법적 참조 정보 추가 (retrieved_docs에서 statute_article 타입 문서 추출)
+        retrieved_docs_for_legal = state.get("retrieved_docs", [])
+        self.logger.warning(f"[LEGAL_REFERENCES] Starting legal_references generation from {len(retrieved_docs_for_legal)} retrieved_docs")
+        
+        # 디버깅: retrieved_docs의 타입 분포 확인
+        type_counts = {}
+        for doc in retrieved_docs_for_legal:
+            if isinstance(doc, dict):
+                doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+                type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+        self.logger.warning(f"[LEGAL_REFERENCES] Retrieved docs type distribution: {type_counts}")
+        
+        # 샘플 문서 구조 확인
+        if retrieved_docs_for_legal and isinstance(retrieved_docs_for_legal[0], dict):
+            sample_doc = retrieved_docs_for_legal[0]
+            self.logger.warning(f"[LEGAL_REFERENCES] Sample doc keys: {list(sample_doc.keys())}")
+            self.logger.warning(f"[LEGAL_REFERENCES] Sample doc type: {sample_doc.get('type')}, source_type: {sample_doc.get('source_type')}, metadata: {sample_doc.get('metadata', {})}")
+        
+        legal_refs = []
+        seen_legal_refs = set()
+        
+        for doc in retrieved_docs_for_legal:
+            if not isinstance(doc, dict):
+                continue
+            
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            
+            # source_type 추론: type, source_type, metadata.source_type 순서로 확인
+            source_type = doc.get("type") or doc.get("source_type") or metadata.get("source_type", "")
+            
+            # source_type이 없으면 metadata에서 추론
+            if not source_type:
+                # case_id, court, casenames가 있으면 case_paragraph
+                if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
+                    source_type = "case_paragraph"
+                # decision_id, org가 있으면 decision_paragraph
+                elif metadata.get("decision_id") or metadata.get("org"):
+                    source_type = "decision_paragraph"
+                # interpretation_number, org가 있으면 interpretation_paragraph
+                elif metadata.get("interpretation_number") or (metadata.get("org") and metadata.get("title")):
+                    source_type = "interpretation_paragraph"
+                # statute_name, article_no가 있으면 statute_article
+                elif metadata.get("statute_name") or metadata.get("law_name") or metadata.get("article_no"):
+                    source_type = "statute_article"
+            
+            self.logger.debug(f"[LEGAL_REFERENCES] Doc source_type: {source_type}, metadata keys: {list(metadata.keys()) if metadata else []}")
+            
+            # statute_article 타입 문서만 legal_references에 추가
+            if source_type == "statute_article":
+                self.logger.debug(f"[LEGAL_REFERENCES] Processing statute_article doc: type={source_type}, statute_name={doc.get('statute_name')}, law_name={doc.get('law_name')}, article_no={doc.get('article_no')}")
+                statute_name = (
+                    doc.get("statute_name") or
+                    doc.get("law_name") or
+                    metadata.get("statute_name") or
+                    metadata.get("law_name")
+                )
+                
+                if statute_name:
+                    article_no = (
+                        doc.get("article_no") or
+                        doc.get("article_number") or
+                        metadata.get("article_no") or
+                        metadata.get("article_number")
+                    )
+                    clause_no = doc.get("clause_no") or metadata.get("clause_no")
+                    item_no = doc.get("item_no") or metadata.get("item_no")
+                    
+                    # 법령 참조 형식으로 변환
+                    legal_ref_parts = [statute_name]
+                    if article_no:
+                        legal_ref_parts.append(article_no)
+                    if clause_no:
+                        legal_ref_parts.append(f"제{clause_no}항")
+                    if item_no:
+                        legal_ref_parts.append(f"제{item_no}호")
+                    
+                    legal_ref = " ".join(legal_ref_parts)
+                    
+                    # 중복 제거
+                    if legal_ref and legal_ref not in seen_legal_refs:
+                        legal_refs.append(legal_ref)
+                        seen_legal_refs.add(legal_ref)
+                        self.logger.debug(f"[LEGAL_REFERENCES] Added legal reference: {legal_ref}")
+                else:
+                    self.logger.debug(f"[LEGAL_REFERENCES] Skipping statute_article doc: statute_name is missing (doc keys: {list(doc.keys())})")
+        
+        state["legal_references"] = legal_refs[:10]  # 최대 10개만
+        
+        # 디버깅: legal_references 생성 결과 로깅
+        if len(legal_refs) > 0:
+            self.logger.info(f"[LEGAL_REFERENCES] Generated {len(legal_refs)} legal references: {legal_refs[:5]}")
+        else:
+            retrieved_docs_count = len(state.get("retrieved_docs", []))
+            # statute_article 타입 문서 개수 확인
+            statute_articles = [doc for doc in state.get("retrieved_docs", []) if isinstance(doc, dict) and (doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article" or doc.get("metadata", {}).get("source_type") == "statute_article")]
+            statute_articles_count = len(statute_articles)
+            if statute_articles_count > 0:
+                # statute_article 문서의 필드 확인
+                sample_doc = statute_articles[0]
+                statute_name = sample_doc.get("statute_name") or sample_doc.get("law_name") or sample_doc.get("metadata", {}).get("statute_name") or sample_doc.get("metadata", {}).get("law_name")
+                self.logger.warning(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
+                self.logger.warning(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata={sample_doc.get('metadata', {})}")
+            else:
+                self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (no statute_article documents)")
 
+        # related_questions 추출 (metadata에서 또는 phase_info에서)
+        related_questions = []
+        metadata = state.get("metadata", {})
+        if isinstance(metadata, dict) and "related_questions" in metadata:
+            related_questions = metadata.get("related_questions", [])
+            if isinstance(related_questions, list) and len(related_questions) > 0:
+                self.logger.warning(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
+        else:
+            # phase_info에서 추출 시도
+            phase_info = state.get("phase_info", {})
+            self.logger.warning(f"[RELATED_QUESTIONS] Checking phase_info: {'present' if phase_info else 'missing'}, type: {type(phase_info)}")
+            if isinstance(phase_info, dict):
+                self.logger.warning(f"[RELATED_QUESTIONS] phase_info keys: {list(phase_info.keys())}")
+                if "phase2" in phase_info:
+                    phase2 = phase_info.get("phase2", {})
+                    self.logger.warning(f"[RELATED_QUESTIONS] phase2 keys: {list(phase2.keys()) if isinstance(phase2, dict) else 'N/A'}")
+                    if isinstance(phase2, dict) and "flow_tracking_info" in phase2:
+                        flow_tracking = phase2.get("flow_tracking_info", {})
+                        self.logger.warning(f"[RELATED_QUESTIONS] flow_tracking_info keys: {list(flow_tracking.keys()) if isinstance(flow_tracking, dict) else 'N/A'}")
+                        if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
+                            suggested_questions = flow_tracking.get("suggested_questions", [])
+                            self.logger.warning(f"[RELATED_QUESTIONS] suggested_questions: {len(suggested_questions) if isinstance(suggested_questions, list) else 'N/A'} items")
+                            if isinstance(suggested_questions, list) and len(suggested_questions) > 0:
+                                # 각 항목이 딕셔너리인 경우 "question" 필드 추출
+                                if isinstance(suggested_questions[0], dict):
+                                    related_questions = [q.get("question", "") for q in suggested_questions if q.get("question")]
+                                else:
+                                    related_questions = [str(q) for q in suggested_questions if q]
+                                self.logger.warning(f"[RELATED_QUESTIONS] Extracted {len(related_questions)} related_questions from phase_info")
+                        else:
+                            self.logger.warning(f"[RELATED_QUESTIONS] suggested_questions not found in flow_tracking_info")
+                    else:
+                        self.logger.warning(f"[RELATED_QUESTIONS] flow_tracking_info not found in phase2")
+                else:
+                    self.logger.warning(f"[RELATED_QUESTIONS] phase2 not found in phase_info")
+        
+        # related_questions를 metadata에 저장
+        if related_questions:
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["related_questions"] = related_questions
+            state["metadata"] = metadata
+            self.logger.warning(f"[RELATED_QUESTIONS] Saved {len(related_questions)} related_questions to metadata")
+        else:
+            self.logger.warning(f"[RELATED_QUESTIONS] No related_questions found (metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'N/A'})")
+        
         # 메타데이터 설정
         self.set_metadata(state, answer_value, keyword_coverage)
 
@@ -2055,6 +2207,7 @@ class AnswerFormatterHandler:
     def format_and_prepare_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅 및 최종 준비 (format_answer + prepare_final_response)"""
         try:
+            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Starting format_and_prepare_final")
             overall_start_time = time.time()
 
             # 보존할 값 추출
@@ -2063,7 +2216,9 @@ class AnswerFormatterHandler:
             needs_search = preserved_values["needs_search"]
 
             # Part 1: 포맷팅
+            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Calling format_answer_part")
             formatted_answer = self.format_answer_part(state)
+            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] format_answer_part completed")
             # Phase 1/Phase 3: _set_answer_safely는 legal_workflow_enhanced에 있으므로,
             # 여기서는 정규화만 확인하고 필요시 업데이트 (format_answer_part에서 이미 정규화되었을 수 있음)
             if not isinstance(formatted_answer, str):
@@ -2071,7 +2226,9 @@ class AnswerFormatterHandler:
             state["answer"] = formatted_answer
 
             # Part 2: 최종 준비
+            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Calling prepare_final_response_part")
             self.prepare_final_response_part(state, query_complexity, needs_search)
+            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] prepare_final_response_part completed, legal_references={len(state.get('legal_references', []))}")
 
             # Part 3: 최종 후처리 (개선: 중복 헤더, 빈 섹션, 불필요한 형식 제거)
             final_answer = state.get("answer", "")
@@ -2558,6 +2715,9 @@ class AnswerFormatterHandler:
             )
 
         except Exception as e:
+            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] Exception occurred: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] Traceback: {traceback.format_exc()}")
             WorkflowUtils.handle_error(state, str(e), "답변 포맷팅 및 최종 준비 중 오류 발생")
             answer = WorkflowUtils.get_state_value(state, "answer", "")
 

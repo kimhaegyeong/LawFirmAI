@@ -144,10 +144,11 @@ class SearchHandler:
             
             # 확장된 키워드가 있으면 추가 검색 수행
             if extracted_keywords and len(extracted_keywords) > 0:
-                # 판례/결정례/해석례 검색 강화를 위한 키워드 필터링
+                # 판례/결정례/해석례/법령 검색 강화를 위한 키워드 필터링
                 precedent_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["판례", "대법원", "판결", "선고", "사건", "참고", "유사"])]
                 decision_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["결정", "심판", "의견", "통보", "결정례"])]
                 interpretation_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["해석", "해석례", "유권해석", "법리 해석"])]
+                statute_keywords = [kw for kw in extracted_keywords if any(term in str(kw).lower() for term in ["법령", "법률", "조문", "조", "항", "호", "민법", "형법", "상법", "행정법", "헌법", "노동법", "가족법"])]
                 
                 # 검색 결과 타입 분포 확인
                 result_types = {}
@@ -158,6 +159,7 @@ class SearchHandler:
                 has_precedent = result_types.get("case_paragraph", 0) > 0
                 has_decision = result_types.get("decision_paragraph", 0) > 0
                 has_interpretation = result_types.get("interpretation_paragraph", 0) > 0
+                has_statute = result_types.get("statute_article", 0) > 0
                 
                 self.logger.info(f"🔍 [SEMANTIC SEARCH] Initial results type distribution: {result_types}")
                 
@@ -200,8 +202,21 @@ class SearchHandler:
                     results.extend(interpretation_results)
                     self.logger.info(f"🔍 [INTERPRETATION SEARCH] Found {len(interpretation_results)} additional interpretation results")
                 
+                # 법령 검색 강화: 법령 관련 키워드가 있지만 결과에 법령이 없으면 별도 검색
+                if statute_keywords and not has_statute:
+                    self.logger.info(f"🔍 [STATUTE SEARCH] Performing dedicated statute search with {len(statute_keywords)} keywords")
+                    statute_query = f"{query} {' '.join(statute_keywords[:3])}"
+                    statute_results = self.semantic_search_engine.search(
+                        query=statute_query,
+                        k=search_k // 2,
+                        source_types=["statute_article"],
+                        similarity_threshold=max(0.35, similarity_threshold - 0.05)  # 법령은 더 낮은 임계값
+                    )
+                    results.extend(statute_results)
+                    self.logger.info(f"🔍 [STATUTE SEARCH] Found {len(statute_results)} additional statute results")
+                
                 # 쿼리 확장 검색도 수행 (추가 결과 확보)
-                if precedent_keywords or decision_keywords or interpretation_keywords:
+                if precedent_keywords or decision_keywords or interpretation_keywords or statute_keywords:
                     self.logger.info(f"🔍 [SEMANTIC SEARCH] Using query expansion with {len(extracted_keywords)} expanded keywords")
                     expansion_results = self.semantic_search_engine.search_with_query_expansion(
                         query=query,
