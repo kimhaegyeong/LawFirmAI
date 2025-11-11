@@ -140,17 +140,12 @@ logger = logging.getLogger(__name__)
 
 # AnswerStructureEnhancer 통합 (답변 구조화 및 법적 근거 강화)
 try:
-    from core.generation.formatters.answer_structure_enhancer import AnswerStructureEnhancer
+    from core.services.answer_structure_enhancer import AnswerStructureEnhancer
     ANSWER_STRUCTURE_ENHANCER_AVAILABLE = True
 except ImportError:
-    try:
-        # 호환성을 위한 fallback
-        from core.services.answer_structure_enhancer import AnswerStructureEnhancer
-        ANSWER_STRUCTURE_ENHANCER_AVAILABLE = True
-    except ImportError:
-        ANSWER_STRUCTURE_ENHANCER_AVAILABLE = False
-        logger = logging.getLogger(__name__)
-        logger.warning("AnswerStructureEnhancer not available")
+    ANSWER_STRUCTURE_ENHANCER_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("AnswerStructureEnhancer not available")
 
 
 from core.workflow.state.workflow_types import QueryComplexity, RetryCounterManager
@@ -261,11 +256,7 @@ class EnhancedLegalQuestionWorkflow(
 
         # AnswerFormatter 초기화 (시각적 포맷팅)
         try:
-            try:
-                from core.generation.formatters.answer_formatter import AnswerFormatter
-            except ImportError:
-                # 호환성을 위한 fallback
-                from core.services.answer_formatter import AnswerFormatter
+            from core.services.answer_formatter import AnswerFormatter
             self.answer_formatter = AnswerFormatter()
             self.logger.info("AnswerFormatter initialized for visual formatting")
         except Exception as e:

@@ -30,12 +30,21 @@ from pydantic import BaseModel, Field
 
 # 기존 검색 엔진 import
 try:
-    from core.services.search.hybrid_search_engine_v2 import HybridSearchEngineV2
-    from core.services.search.search_handler import SearchHandler
+    try:
+        from core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
+        from core.agents.handlers.search_handler import SearchHandler
+    except ImportError:
+        # 호환성을 위한 fallback
+        from core.services.search.hybrid_search_engine_v2 import HybridSearchEngineV2
+        from core.services.search.search_handler import SearchHandler
     HYBRID_SEARCH_AVAILABLE = True
 except ImportError:
     try:
-        from core.services.hybrid_search_engine import HybridSearchEngine
+        try:
+            from core.search.engines.hybrid_search_engine import HybridSearchEngine
+        except ImportError:
+            # 호환성을 위한 fallback
+            from core.services.hybrid_search_engine import HybridSearchEngine
         HYBRID_SEARCH_AVAILABLE = True
     except ImportError:
         HYBRID_SEARCH_AVAILABLE = False
@@ -58,7 +67,11 @@ def get_search_engine():
             except:
                 # Fallback: HybridSearchEngine
                 try:
-                    from core.services.hybrid_search_engine import HybridSearchEngine
+                    try:
+            from core.search.engines.hybrid_search_engine import HybridSearchEngine
+        except ImportError:
+            # 호환성을 위한 fallback
+            from core.services.hybrid_search_engine import HybridSearchEngine
                     _search_engine_instance = HybridSearchEngine()
                     logger.info("HybridSearchEngine initialized for tools")
                 except:
