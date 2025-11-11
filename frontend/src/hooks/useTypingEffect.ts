@@ -64,7 +64,6 @@ export function useTypingEffect(
       return;
     }
 
-    const bufferIncrease = buffer.length - previousBufferLengthRef.current;
     // 버퍼 증가량 추적 (타이핑 효과는 한 글자씩 유지)
     previousBufferLengthRef.current = buffer.length;
 

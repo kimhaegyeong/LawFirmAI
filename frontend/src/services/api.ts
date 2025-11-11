@@ -88,7 +88,7 @@ api.interceptors.response.use(
     if (error.response) {
       // 서버 응답 에러
       const status = error.response.status;
-      const data = error.response.data as any;
+      const data = error.response.data as { detail?: string; message?: string } | undefined;
       
       // CORS 에러 체크
       if (error.code === 'ERR_NETWORK' || error.message.includes('CORS')) {
@@ -111,7 +111,7 @@ api.interceptors.response.use(
           // 리소스 없음
           logger.error('요청한 리소스를 찾을 수 없습니다.');
           break;
-        case 429:
+        case 429: {
           // Rate Limit 또는 익명 사용자 제한 초과
           const quotaRemaining = error.response.headers['x-quota-remaining'];
           const quotaLimit = error.response.headers['x-quota-limit'];
@@ -121,6 +121,7 @@ api.interceptors.response.use(
             logger.error('요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
           }
           break;
+        }
         case 500:
           // 서버 에러
           logger.error('서버 오류가 발생했습니다.');
@@ -209,11 +210,11 @@ export interface ApiError {
 /**
  * API 에러 추출
  */
-export function extractApiError(error: any): Error {
+export function extractApiError(error: unknown): Error {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError;
     if (axiosError.response) {
-      const data = axiosError.response.data as any;
+      const data = axiosError.response.data as { detail?: string; message?: string } | undefined;
       let message = data?.detail || data?.message || '에러가 발생했습니다.';
       
       // 500 오류인 경우 더 자세한 정보 표시
@@ -233,9 +234,9 @@ export function extractApiError(error: any): Error {
         }
       }
       
-      const apiError = new Error(message);
-      (apiError as any).status = axiosError.response.status;
-      (apiError as any).detail = data?.detail;
+      const apiError = new Error(message) as Error & { status?: number; detail?: string };
+      apiError.status = axiosError.response.status;
+      apiError.detail = data?.detail;
       return apiError;
     } else if (axiosError.request) {
       // 연결 거부 에러인 경우 더 자세한 메시지 제공
@@ -243,13 +244,13 @@ export function extractApiError(error: any): Error {
           axiosError.message.includes('ERR_CONNECTION_REFUSED') ||
           axiosError.message.includes('Failed to fetch')) {
         const message = 'API 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.';
-        const apiError = new Error(message);
-        (apiError as any).detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
+        const apiError = new Error(message) as Error & { detail?: string };
+        apiError.detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
         return apiError;
       }
       const message = '서버에 연결할 수 없습니다.';
-      const apiError = new Error(message);
-      (apiError as any).detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
+      const apiError = new Error(message) as Error & { detail?: string };
+      apiError.detail = `연결 시도: ${axiosError.config?.baseURL || ''}${axiosError.config?.url || ''}`;
       return apiError;
     }
   }

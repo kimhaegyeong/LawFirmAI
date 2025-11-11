@@ -4,7 +4,6 @@
 import { useState, useCallback } from 'react';
 import { getHistory, exportHistory, downloadHistory } from '../services/historyService';
 import type { HistoryQuery, Message } from '../types/history';
-import { groupSessionsByDate } from '../utils/dateUtils';
 
 export function useHistory() {
   const [messages, setMessages] = useState<Message[]>([]);

@@ -1,7 +1,7 @@
 /**
  * 세션 관련 훅
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import {
   getSessions,
   createSession,
@@ -11,7 +11,6 @@ import {
   generateSessionTitle,
   getSessionsByDate,
 } from '../services/sessionService';
-import logger from '../utils/logger';
 import type {
   Session,
   SessionCreate,

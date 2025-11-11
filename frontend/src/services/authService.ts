@@ -32,11 +32,28 @@ export function startGoogleLogin(): void {
  */
 export async function handleOAuthCallback(code: string, state: string): Promise<TokenResponse> {
   try {
-    const savedState = sessionStorage.getItem('oauth2_state');
-    if (savedState && savedState !== state) {
-      throw new Error('Invalid state parameter');
+    const processedCodeKey = `oauth2_processed_code_${code}`;
+    const isProcessed = sessionStorage.getItem(processedCodeKey);
+    
+    if (isProcessed === 'true') {
+      logger.warn('OAuth callback: 인증 코드가 이미 처리되었습니다. 중복 호출을 방지합니다.', { code: code.substring(0, 10) });
+      throw new Error('인증 코드가 이미 사용되었습니다. 다시 로그인해주세요.');
     }
-    sessionStorage.removeItem('oauth2_state');
+    
+    sessionStorage.setItem(processedCodeKey, 'true');
+    
+    const savedState = sessionStorage.getItem('oauth2_state');
+    
+    if (savedState) {
+      if (savedState !== state) {
+        logger.error('State mismatch!', { savedState, urlState: state });
+        sessionStorage.removeItem(processedCodeKey);
+        throw new Error('Invalid state parameter');
+      }
+      sessionStorage.removeItem('oauth2_state');
+    }
+    
+    logger.info('OAuth callback: 인증 코드 처리 시작', { code: code.substring(0, 10), state: state?.substring(0, 10) });
     
     const callbackUrl = api.defaults.baseURL 
       ? `${api.defaults.baseURL}/oauth2/google/callback?code=${code}&state=${state}`
@@ -51,15 +68,30 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ detail: 'OAuth callback failed' }));
+      sessionStorage.removeItem(processedCodeKey);
       throw new Error(errorData.detail || 'OAuth callback failed');
     }
     
     const data: TokenResponse = await response.json();
     
     setAccessToken(data.access_token);
+    
+    const savedToken = getAccessToken();
+    if (!savedToken) {
+      logger.error('Failed to save access token!');
+      sessionStorage.removeItem(processedCodeKey);
+      throw new Error('토큰 저장에 실패했습니다.');
+    }
+    
     if (data.refresh_token) {
       setRefreshToken(data.refresh_token);
     }
+    
+    logger.info('OAuth callback: 인증 코드 처리 완료', { code: code.substring(0, 10) });
+    
+    setTimeout(() => {
+      sessionStorage.removeItem(processedCodeKey);
+    }, 60000);
     
     return data;
   } catch (error) {
@@ -134,8 +166,14 @@ export function getAccessToken(): string | null {
 export function setAccessToken(token: string): void {
   try {
     localStorage.setItem(ACCESS_TOKEN_KEY, token);
+    const verify = localStorage.getItem(ACCESS_TOKEN_KEY);
+    if (!verify || verify !== token) {
+      logger.error('Token verification failed!');
+      throw new Error('토큰 저장 후 검증에 실패했습니다.');
+    }
   } catch (error) {
     logger.error('Failed to set access token:', error);
+    throw error;
   }
 }
 

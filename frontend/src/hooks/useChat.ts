@@ -59,6 +59,7 @@ export function useChat(options?: UseChatOptions) {
             confidence: response.confidence,
             processing_steps: response.processing_steps,
             query_type: response.query_type,
+            related_questions: response.metadata?.related_questions as string[] | undefined,
           },
         };
 

@@ -86,7 +86,6 @@ export async function* sendStreamingChatMessage(
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let streamCompleted = false;
-    let hasReceivedData = false;
     let readerClosed = false;
     let jsonBuffer = ''; // JSON 파싱을 위한 버퍼
     let inDataLine = false; // data: 라인 내부인지 추적
@@ -246,7 +245,6 @@ export async function* sendStreamingChatMessage(
           break;
         }
 
-        hasReceivedData = true;
         const chunk = decoder.decode(value, { stream: true });
         buffer += chunk;
         
@@ -542,7 +540,7 @@ export async function getChatSources(
 ): Promise<{
   sources: string[];
   legal_references: string[];
-  sources_detail: any[];
+  sources_detail: SourceInfo[];
 }> {
   try {
     const url = messageId
@@ -553,7 +551,7 @@ export async function getChatSources(
       session_id: string;
       sources: string[];
       legal_references: string[];
-      sources_detail: any[];
+      sources_detail: SourceInfo[];
     }>(url);
     
     return {
