@@ -470,10 +470,22 @@ class SessionService:
     def get_messages(
         self,
         session_id: str,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        user_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """메시지 조회"""
         try:
+            # 세션 소유권 확인 (user_id가 제공된 경우)
+            if user_id:
+                session = self.get_session(session_id)
+                if not session:
+                    return []
+                
+                session_user_id = session.get("user_id")
+                if session_user_id != user_id:
+                    # 소유권이 없으면 빈 결과 반환
+                    return []
+            
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()

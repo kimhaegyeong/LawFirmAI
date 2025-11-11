@@ -2,9 +2,9 @@
 채팅 서비스 (lawfirm_langgraph 래퍼)
 """
 import sys
-import re
 import json
 import logging
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, AsyncGenerator
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # 로거 레벨을 명시적으로 설정 (루트 로거 레벨과 동기화)
 # 환경 변수에서 로그 레벨 읽기
-import os
+import os  # noqa: E402
 log_level_str = os.getenv("LOG_LEVEL", "info").upper()
 log_level_map = {
     "CRITICAL": logging.CRITICAL,
@@ -82,6 +82,20 @@ class ChatService:
         logger.info("🚀 ChatService.__init__() called - Initializing ChatService...")
         self.workflow_service: Optional[LangGraphWorkflowService] = None
         self._initialize_workflow()
+        
+        # 스트리밍 설정 및 서비스 초기화
+        from api.services.stream_config import StreamConfig
+        from api.services.stream_event_processor import StreamEventProcessor
+        from api.services.sources_extractor import SourcesExtractor
+        from api.services.session_service import session_service
+        
+        self.stream_config = StreamConfig.from_env()
+        self.event_processor = StreamEventProcessor(config=self.stream_config)
+        self.sources_extractor = SourcesExtractor(
+            workflow_service=self.workflow_service,
+            session_service=session_service
+        )
+        
         logger.info("✅ ChatService.__init__() completed")
     
     def _initialize_workflow(self):
@@ -211,17 +225,8 @@ class ChatService:
         Yields:
             스트리밍 응답 청크 (토큰 단위)
         """
-        # 디버그 모드 확인 (환경 변수로 제어) - 함수 시작 부분에서 정의
-        import os
-        DEBUG_STREAM = os.getenv("DEBUG_STREAM", "false").lower() == "true"
-        
-        # JSON 감지용 정규식 컴파일 (성능 최적화)
-        JSON_PATTERN = re.compile(r'^\s*"[^"]+"\s*:\s*')
-        JSON_KEYWORDS = frozenset(['"complexity"', '"confidence"', '"reasoning"', '"core_keywords"', 
-                                   '"query_intent"', '"is_valid"', '"quality_score"', '"final_score"',
-                                   '"score"', '"issues"', '"strengths"', '"recommendations"',
-                                   '"needs_improvement"', '"improvement_instructions"', '"preserve_content"',
-                                   '"focus_areas"', '"meets_quality_threshold"', '"summary"'])
+        # 이벤트 프로세서 초기화
+        self.event_processor.reset()
         
         has_yielded = False  # 최소한 하나의 yield가 있었는지 추적
         
@@ -280,33 +285,8 @@ class ChatService:
             
             config = {"configurable": {"thread_id": session_id}}
             
-            # 실제 토큰 스트리밍을 위한 변수
-            full_answer = ""
-            answer_found = False
-            tokens_received = 0
-            last_node_name = None
-            executed_nodes = set()  # 실행된 노드 추적
-            answer_generation_started = False  # 답변 생성 노드 시작 플래그
-            json_output_detected = False  # JSON 출력 감지 플래그
-            
-            # 메모리 최적화: 이벤트 히스토리 제한 (최대 100개만 유지)
-            MAX_EVENT_HISTORY = 100
-            
-            # 노드 이름을 사용자 친화적인 메시지로 매핑
-            node_name_mapping = {
-                "classify_query_and_complexity": "질문 분석 중...",
-                "classification_parallel": "질문 분류 중...",
-                "route_expert": "전문가 라우팅 중...",
-                "expand_keywords": "키워드 확장 중...",
-                "prepare_search_query": "검색 쿼리 준비 중...",
-                "execute_searches_parallel": "관련 법률 검색 중...",
-                "process_search_results_combined": "검색 결과 분석 중...",
-                "prepare_documents_and_terms": "문서 준비 중...",
-                "generate_answer_enhanced": "답변 생성 중...",
-                "generate_and_validate_answer": "답변 생성 중...",
-                "validate_answer_quality": "답변 검증 중...",
-                "prepare_final_response": "최종 답변 준비 중..."
-            }
+            # 디버그 모드 확인
+            DEBUG_STREAM = self.stream_config.debug_stream
             
             # astream_events()를 사용하여 LLM 토큰 스트리밍 감지
             # 
@@ -392,13 +372,10 @@ class ChatService:
                 node_names_seen = set()  # 본 노드 이름 추적 (디버깅용, 제한적 사용)
                 
                 # 관련 이벤트 타입 집합 (성능 최적화)
-                RELEVANT_EVENT_TYPES = frozenset(["on_llm_stream", "on_chat_model_stream", "on_chain_stream", 
-                                                   "on_chain_start", "on_chain_end", "on_llm_end", "on_chat_model_end"])
+                RELEVANT_EVENT_TYPES = self.stream_config.relevant_event_types
                 
                 # 메모리 최적화: 이벤트 히스토리 크기 제한
-                if event_count > MAX_EVENT_HISTORY:
-                    event_types_seen.clear()
-                    node_names_seen.clear()
+                MAX_EVENT_HISTORY = self.stream_config.max_event_history
                 
                 async for event in get_stream_events():
                     event_count += 1
@@ -418,695 +395,18 @@ class ChatService:
                         if event_count <= 20:
                             logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
                     
-                    # LLM 스트리밍 이벤트 감지 (답변 생성 노드에서만)
-                    # 
-                    # 중요: LangChain의 ChatGoogleGenerativeAI와 Ollama는
-                    # invoke() 호출 시에도 내부적으로 스트리밍을 사용합니다.
-                    # 따라서 astream_events()가 on_llm_stream 또는 on_chat_model_stream
-                    # 이벤트를 발생시켜 실시간 토큰 스트리밍이 가능합니다.
-                    # 
-                    # LangGraph/LangChain 최신 버전에서는 on_chat_model_stream도 지원
-                    # on_chain_stream은 체인 레벨의 스트리밍 이벤트로, 체인 전체의 출력을 포함할 수 있습니다.
-                    if event_type in ["on_llm_stream", "on_chat_model_stream", "on_chain_stream"]:
-                        # 답변 생성 노드가 시작되었는지 확인 (조기 종료 최적화)
-                        if not answer_generation_started:
-                            # 답변 생성 노드가 시작되지 않았으면 모든 LLM 출력 무시
+                    # StreamEventProcessor를 사용하여 이벤트 처리
+                    stream_event = self.event_processor.process_stream_event(event)
+                    if stream_event:
+                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
+                        has_yielded = True
+                        if stream_event.get("type") == "stream":
                             llm_stream_count += 1
-                            if DEBUG_STREAM and llm_stream_count <= 5:
-                                logger.debug(f"답변 생성 노드가 시작되지 않음: {event_name} (모든 출력 무시)")
-                            # JSON 출력이든 아니든 모두 무시
-                            continue
-                        
-                        llm_stream_count += 1
-                        if DEBUG_STREAM and llm_stream_count <= 10:
-                            logger.debug(f"{event_type} 이벤트 발견: name={event_name}")
-                        
-                        # 이벤트의 상위 노드 정보 확인
-                        event_tags = event.get("tags", [])
-                        event_parent = event.get("parent", {})
-                        
-                        # 상위 노드 이름 확인
-                        parent_node_name = None
-                        if isinstance(event_parent, dict):
-                            parent_node_name = event_parent.get("name", "")
-                        elif isinstance(event_tags, list):
-                            # tags에서 노드 이름 찾기
-                            for tag in event_tags:
-                                if isinstance(tag, str) and ("generate_answer" in tag.lower() or "generate_and_validate" in tag.lower()):
-                                    parent_node_name = tag
-                                    break
-                        
-                        # 답변 생성 노드 내부의 LLM 호출인지 확인
-                        is_answer_node = False
-                        
-                        # 방법 1: 이벤트 이름으로 직접 판단
-                        if "generate_answer" in event_name.lower() or \
-                           "generate_and_validate" in event_name.lower() or \
-                           event_name in ["generate_answer_enhanced", "generate_and_validate_answer", "direct_answer"]:
-                            is_answer_node = True
-                        
-                        # 방법 2: 상위 노드가 답변 생성 노드인지 확인
-                        elif parent_node_name and (
-                            "generate_answer" in parent_node_name.lower() or 
-                            "generate_and_validate" in parent_node_name.lower() or
-                            parent_node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]
-                        ):
-                            is_answer_node = True
-                        
-                        # 방법 3: ChatGoogleGenerativeAI인 경우, 마지막으로 실행된 노드가 답변 생성 노드인지 확인
-                        elif event_name == "ChatGoogleGenerativeAI" and answer_generation_started:
-                            # last_node_name이 정확히 generate_and_validate_answer인지 확인
-                            if last_node_name == "generate_and_validate_answer":
-                                is_answer_node = True
-                            # generate_answer_enhanced도 허용 (generate_and_validate_answer 내부에서 호출)
-                            elif last_node_name == "generate_answer_enhanced":
-                                # generate_and_validate_answer 노드가 실행 중인지 확인
-                                if "generate_and_validate_answer" in executed_nodes:
-                                    is_answer_node = True
-                            else:
-                                # 다른 노드는 무시
-                                is_answer_node = False
-                        
-                        # 디버깅: 스트리밍 이벤트 로깅 (디버그 모드에서만, 처음 5개만)
-                        if DEBUG_STREAM and llm_stream_count <= 5:
-                            logger.debug(
-                                f"{event_type} #{llm_stream_count}: name={event_name}, "
-                                f"is_answer_node={is_answer_node}, answer_generation_started={answer_generation_started}"
-                            )
-                        
-                        if not is_answer_node:
-                            continue
-                        
-                        if DEBUG_STREAM and llm_stream_count <= 5:
-                            logger.debug(f"✅ 답변 생성 노드에서 {event_type} 이벤트 감지: {event_name}")
-                            # 토큰 추출 (다양한 이벤트 구조 지원)
-                            chunk = None
-                            event_data = event.get("data", {})
-                            
-                            try:
-                                # on_chain_stream 이벤트의 경우 특별 처리
-                                if event_type == "on_chain_stream":
-                                    # on_chain_stream은 체인 레벨의 스트리밍 이벤트
-                                    # data 필드에 체인의 출력이 포함될 수 있음
-                                    # 주의: on_chain_stream은 체인 전체의 출력을 포함할 수 있으므로
-                                    # 이전에 받은 답변과 비교하여 새로운 부분만 추출해야 함
-                                    
-                                    # 1. 이벤트 구조 확인 및 로깅 강화
-                                    if DEBUG_STREAM:
-                                        logger.debug(f"on_chain_stream 이벤트 수신: event_name={event_name}")
-                                        logger.debug(f"on_chain_stream 이벤트 구조: event_data type={type(event_data)}")
-                                        if isinstance(event_data, dict):
-                                            logger.debug(f"on_chain_stream event_data keys: {list(event_data.keys())}")
-                                            # event_data의 주요 키 값 로깅 (너무 길면 잘라서)
-                                            for key in list(event_data.keys())[:5]:  # 처음 5개만
-                                                value = event_data.get(key)
-                                                if isinstance(value, str):
-                                                    logger.debug(f"on_chain_stream event_data['{key}'] (str, {len(value)}자): {value[:100]}...")
-                                                elif isinstance(value, dict):
-                                                    logger.debug(f"on_chain_stream event_data['{key}'] (dict): keys={list(value.keys())[:10]}")
-                                                else:
-                                                    logger.debug(f"on_chain_stream event_data['{key}']: {type(value)}")
-                                    
-                                    try:
-                                        if isinstance(event_data, dict):
-                                            # 체인 출력에서 answer 필드 추출 시도
-                                            chain_output = event_data.get("chunk") or event_data.get("output")
-                                            
-                                            # 로깅: chain_output 구조 확인
-                                            if DEBUG_STREAM:
-                                                logger.debug(f"on_chain_stream: chain_output type={type(chain_output)}")
-                                                if chain_output:
-                                                    if isinstance(chain_output, str):
-                                                        logger.debug(f"on_chain_stream: chain_output (str, {len(chain_output)}자): {chain_output[:100]}...")
-                                                    elif isinstance(chain_output, dict):
-                                                        logger.debug(f"on_chain_stream: chain_output (dict): keys={list(chain_output.keys())[:10]}")
-                                            
-                                            if chain_output is not None:
-                                                # chain_output이 딕셔너리인 경우 answer 필드 확인
-                                                if isinstance(chain_output, dict):
-                                                    # answer 그룹에서 추출
-                                                    answer_group = chain_output.get("answer", {})
-                                                    if isinstance(answer_group, dict):
-                                                        full_answer_from_event = answer_group.get("answer", "") or answer_group.get("content", "")
-                                                    elif isinstance(answer_group, str):
-                                                        full_answer_from_event = answer_group
-                                                    else:
-                                                        full_answer_from_event = ""
-                                                    
-                                                    # 최상위 레벨에서 직접 추출
-                                                    if not full_answer_from_event:
-                                                        full_answer_from_event = chain_output.get("answer", "") or chain_output.get("content", "")
-                                                    
-                                                    # 이전에 받은 답변과 비교하여 새로운 부분만 추출
-                                                    if full_answer_from_event and isinstance(full_answer_from_event, str):
-                                                        if len(full_answer_from_event) > len(full_answer):
-                                                            # 새로운 부분만 추출
-                                                            new_part = full_answer_from_event[len(full_answer):]
-                                                            
-                                                            # new_part를 그대로 전송 (토큰 분리 제거)
-                                                            if new_part:
-                                                                try:
-                                                                    # type: "stream"으로 전송
-                                                                    stream_event = {
-                                                                        "type": "stream",
-                                                                        "content": new_part,
-                                                                        "timestamp": datetime.now().isoformat()
-                                                                    }
-                                                                    event_json = json.dumps(stream_event, ensure_ascii=False)
-                                                                    yield event_json + "\n"
-                                                                    full_answer += new_part
-                                                                    tokens_received += 1
-                                                                    answer_found = True
-                                                                    if DEBUG_STREAM:
-                                                                        logger.debug(f"on_chain_stream: 청크 전송 ({len(new_part)}자, 누적 {len(full_answer)}자)")
-                                                                except (TypeError, ValueError) as json_error:
-                                                                    # JSON 직렬화 실패 시 로깅만 하고 계속 진행
-                                                                    if DEBUG_STREAM:
-                                                                        logger.warning(f"청크 JSON 직렬화 실패: {json_error}, new_part={repr(new_part[:50])}")
-                                                                    continue
-                                                            # full_answer 업데이트
-                                                            full_answer = full_answer_from_event
-                                                            chunk = None  # 이미 전송했으므로 None으로 설정
-                                                        else:
-                                                            # 이미 받은 내용이면 스킵
-                                                            chunk = None
-                                                # chain_output이 문자열인 경우
-                                                elif isinstance(chain_output, str):
-                                                    # 이전에 받은 답변과 비교하여 새로운 부분만 추출
-                                                    if len(chain_output) > len(full_answer):
-                                                        new_part = chain_output[len(full_answer):]
-                                                        
-                                                        # new_part를 그대로 전송 (토큰 분리 제거)
-                                                        if new_part:
-                                                            # type: "stream"으로 전송
-                                                            stream_event = {
-                                                                "type": "stream",
-                                                                "content": new_part,
-                                                                "timestamp": datetime.now().isoformat()
-                                                            }
-                                                            yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                            full_answer += new_part
-                                                            tokens_received += 1
-                                                            answer_found = True
-                                                            if DEBUG_STREAM:
-                                                                logger.debug(f"on_chain_stream: 청크 전송 ({len(new_part)}자, 누적 {len(full_answer)}자)")
-                                                        # full_answer 업데이트
-                                                        full_answer = chain_output
-                                                        chunk = None  # 이미 전송했으므로 None으로 설정
-                                                    else:
-                                                        chunk = None
-                                                # chain_output이 객체인 경우 content 속성 확인
-                                                elif hasattr(chain_output, "content"):
-                                                    content = chain_output.content
-                                                    if isinstance(content, str):
-                                                        if len(content) > len(full_answer):
-                                                            new_part = content[len(full_answer):]
-                                                            
-                                                            # 토큰 단위로 분할하여 전송 (타이핑 효과를 위해 개별 전송)
-                                                            # 공백과 구두점을 기준으로 토큰 분할
-                                                            tokens = re.findall(r'\S+|\s+', new_part)
-                                                            for token in tokens:
-                                                                if token:  # 빈 문자열이 아닌 경우만 전송
-                                                                    # type: "stream"으로 전송 (타이핑 효과를 위해 개별 전송)
-                                                                    stream_event = {
-                                                                        "type": "stream",
-                                                                        "content": token,
-                                                                        "timestamp": datetime.now().isoformat()
-                                                                    }
-                                                                    yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                                    full_answer += token
-                                                                    tokens_received += 1
-                                                                    answer_found = True
-                                                                    if DEBUG_STREAM:
-                                                                        logger.debug(f"on_chain_stream: 토큰 전송 ({len(token)}자, 누적 {len(full_answer)}자)")
-                                                            # full_answer 업데이트
-                                                            full_answer = content
-                                                            chunk = None  # 이미 토큰 단위로 전송했으므로 None으로 설정
-                                                        else:
-                                                            chunk = None
-                                                    elif isinstance(content, dict):
-                                                        answer_text = content.get("answer", "") or content.get("content", "")
-                                                        if answer_text and isinstance(answer_text, str):
-                                                            if len(answer_text) > len(full_answer):
-                                                                new_part = answer_text[len(full_answer):]
-                                                                
-                                                                # 토큰 단위로 분할하여 전송 (타이핑 효과를 위해 개별 전송)
-                                                                # 공백과 구두점을 기준으로 토큰 분할
-                                                                tokens = re.findall(r'\S+|\s+', new_part)
-                                                                for token in tokens:
-                                                                    if token:  # 빈 문자열이 아닌 경우만 전송
-                                                                        # type: "stream"으로 전송 (타이핑 효과를 위해 개별 전송)
-                                                                        stream_event = {
-                                                                            "type": "stream",
-                                                                            "content": token,
-                                                                            "timestamp": datetime.now().isoformat()
-                                                                        }
-                                                                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                                        full_answer += token
-                                                                        tokens_received += 1
-                                                                        answer_found = True
-                                                                        if DEBUG_STREAM:
-                                                                            logger.debug(f"on_chain_stream: 토큰 전송 ({len(token)}자, 누적 {len(full_answer)}자)")
-                                                                # full_answer 업데이트
-                                                                full_answer = answer_text
-                                                                chunk = None  # 이미 토큰 단위로 전송했으므로 None으로 설정
-                                                            else:
-                                                                chunk = None
-                                                        else:
-                                                            chunk = None
-                                                    else:
-                                                        chunk = None
-                                            
-                                            # 2. chunk 추출 실패 시 대체 경로 추가
-                                            if not chunk:
-                                                # 대체 경로 1: event_data에서 직접 추출
-                                                text_content = event_data.get("text") or event_data.get("content")
-                                                if text_content and isinstance(text_content, str):
-                                                    if len(text_content) > len(full_answer):
-                                                        new_part = text_content[len(full_answer):]
-                                                        
-                                                        # 토큰 단위로 분할하여 전송 (타이핑 효과를 위해 개별 전송)
-                                                        # 공백과 구두점을 기준으로 토큰 분할
-                                                        tokens = re.findall(r'\S+|\s+', new_part)
-                                                        for token in tokens:
-                                                            # 줄바꿈을 포함한 모든 토큰 전송
-                                                            if token:  # 빈 문자열이 아니면 전송 (줄바꿈 포함)
-                                                                # type: "stream"으로 전송 (타이핑 효과를 위해 개별 전송)
-                                                                stream_event = {
-                                                                    "type": "stream",
-                                                                    "content": token,
-                                                                    "timestamp": datetime.now().isoformat()
-                                                                }
-                                                                yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                                full_answer += token
-                                                                tokens_received += 1
-                                                                answer_found = True
-                                                                if DEBUG_STREAM:
-                                                                    logger.debug(f"on_chain_stream: 대체 경로에서 토큰 전송 ({len(token)}자, 누적 {len(full_answer)}자)")
-                                                        # full_answer 업데이트
-                                                        full_answer = text_content
-                                                        chunk = None  # 이미 토큰 단위로 전송했으므로 None으로 설정
-                                                
-                                                # 대체 경로 2: event 최상위 레벨에서 추출
-                                                if not chunk:
-                                                    top_level_content = event.get("chunk") or event.get("output") or event.get("text") or event.get("content")
-                                                    if top_level_content and isinstance(top_level_content, str):
-                                                        if len(top_level_content) > len(full_answer):
-                                                            new_part = top_level_content[len(full_answer):]
-                                                            
-                                                            # 3. 전체 답변이 포함된 경우 작은 청크로 분할하여 전송
-                                                            if len(new_part) > 200:  # 200자 이상이면 분할
-                                                                chunk_size = 100  # 100자씩 분할
-                                                                for i in range(0, len(new_part), chunk_size):
-                                                                    chunk = new_part[i:i + chunk_size]
-                                                                    if chunk:
-                                                                        # type: "stream"으로 전송
-                                                                        stream_event = {
-                                                                            "type": "stream",
-                                                                            "content": chunk,
-                                                                            "timestamp": datetime.now().isoformat()
-                                                                        }
-                                                                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                                        full_answer += chunk
-                                                                        tokens_received += 1
-                                                                        answer_found = True
-                                                                        if DEBUG_STREAM:
-                                                                            logger.debug(f"on_chain_stream: 최상위 레벨에서 분할 청크 전송 ({len(chunk)}자, 누적 {len(full_answer)}자)")
-                                                                chunk = None  # 이미 전송했으므로 None으로 설정
-                                                            else:
-                                                                # 작은 청크는 그대로 전송
-                                                                chunk = new_part
-                                                                # full_answer 업데이트는 아래에서 처리
-                                                                full_answer = top_level_content
-                                                
-                                                # 대체 경로 3: 로깅 및 경고
-                                                if not chunk and DEBUG_STREAM:
-                                                    logger.warning(f"on_chain_stream: chunk 추출 실패 - event_data keys: {list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}, event keys: {list(event.keys())[:10]}")
-                                        else:
-                                            # event_data가 dict가 아닌 경우
-                                            if DEBUG_STREAM:
-                                                logger.warning(f"on_chain_stream: event_data가 dict가 아님 - type={type(event_data)}, value={str(event_data)[:200]}")
-                                    except Exception as chain_stream_error:
-                                        # on_chain_stream 처리 중 예외 발생 시 로깅하고 계속 진행
-                                        logger.error(f"on_chain_stream 처리 중 오류: {chain_stream_error}", exc_info=True)
-                                        if DEBUG_STREAM:
-                                            logger.debug(f"on_chain_stream 오류 상세: event_data={str(event_data)[:200] if event_data else 'None'}, event keys={list(event.keys())[:10] if isinstance(event, dict) else 'N/A'}")
-                                        chunk = None
-                                
-                                # 경우 1: LangChain 표준 형식 - data.chunk.content
-                                if not chunk and isinstance(event_data, dict):
-                                    chunk_obj = event_data.get("chunk")
-                                    if chunk_obj is not None:
-                                        # AIMessageChunk 객체 처리
-                                        if hasattr(chunk_obj, "content"):
-                                            content = chunk_obj.content
-                                            # content가 문자열이면 그대로 사용
-                                            if isinstance(content, str):
-                                                chunk = content
-                                            # content가 리스트인 경우 (AIMessageChunk의 content는 리스트일 수 있음)
-                                            elif isinstance(content, list) and len(content) > 0:
-                                                # 리스트의 첫 번째 요소가 문자열이면 사용
-                                                if isinstance(content[0], str):
-                                                    chunk = content[0]
-                                                else:
-                                                    chunk = str(content[0])
-                                            else:
-                                                chunk = str(content)
-                                        elif isinstance(chunk_obj, str):
-                                            chunk = chunk_obj
-                                        elif hasattr(chunk_obj, "text"):
-                                            chunk = chunk_obj.text
-                                        # AIMessageChunk 객체의 경우 직접 content 접근 시도
-                                        elif hasattr(chunk_obj, "__class__") and "AIMessageChunk" in str(type(chunk_obj)):
-                                            try:
-                                                content = getattr(chunk_obj, "content", None)
-                                                if isinstance(content, str):
-                                                    chunk = content
-                                                elif isinstance(content, list) and len(content) > 0:
-                                                    if isinstance(content[0], str):
-                                                        chunk = content[0]
-                                                    else:
-                                                        chunk = str(content[0])
-                                                elif content is not None:
-                                                    chunk = str(content)
-                                            except Exception:
-                                                pass
-                                    
-                                    # 경우 2: 직접 문자열 형식
-                                    if not chunk:
-                                        chunk = event_data.get("text") or event_data.get("content")
-                                    
-                                    # 경우 3: delta 형식 (LangGraph v2)
-                                    if not chunk and "delta" in event_data:
-                                        delta = event_data["delta"]
-                                        if isinstance(delta, dict):
-                                            chunk = delta.get("content") or delta.get("text")
-                                        elif isinstance(delta, str):
-                                            chunk = delta
-                                
-                                # 경우 4: 이벤트 최상위 레벨에 직접 포함
-                                if not chunk:
-                                    chunk = event.get("chunk") or event.get("text") or event.get("content")
-                                
-                                # 토큰이 있으면 즉시 전송
-                                if chunk and isinstance(chunk, str):
-                                    # JSON 형식 출력 감지 및 필터링 (중간 노드의 JSON 출력 제거)
-                                    chunk_stripped = chunk.strip()
-                                    
-                                    # 이전에 JSON 출력이 감지되었으면 계속 무시
-                                    if json_output_detected:
-                                        if DEBUG_STREAM:
-                                            logger.debug(f"이전에 JSON 출력이 감지되어 계속 무시: {chunk_stripped[:50]}...")
-                                        continue
-                                    
-                                    # JSON 형식 시작 패턴 감지
-                                    is_json_output = False
-                                    
-                                    # 방법 1: 청크 시작 부분이 JSON 형식인지 확인 (가장 강력한 필터)
-                                    # {로 시작하는 모든 청크는 JSON으로 간주
-                                    if chunk_stripped.startswith("{") or chunk.startswith("{"):
-                                        is_json_output = True
-                                        json_output_detected = True
-                                    elif chunk_stripped.startswith("```json") or chunk.startswith("```json"):
-                                        is_json_output = True
-                                        json_output_detected = True
-                                    elif chunk_stripped.startswith("```") and "json" in chunk_stripped[:20].lower():
-                                        is_json_output = True
-                                        json_output_detected = True
-                                    # ```로 시작하는 경우도 JSON일 가능성 높음 (코드 블록)
-                                    elif chunk_stripped.startswith("```") or chunk.startswith("```"):
-                                        is_json_output = True
-                                        json_output_detected = True
-                                    # 청크 자체에 ```json이 포함되어 있으면 JSON
-                                    elif "```json" in chunk or "``` json" in chunk:
-                                        is_json_output = True
-                                        json_output_detected = True
-                                    
-                                    # 방법 2: 누적된 답변과 현재 청크를 합쳐서 JSON 형식인지 확인
-                                    if not is_json_output:
-                                        # full_answer가 비어있지 않으면 누적 텍스트 확인
-                                        if full_answer:
-                                            combined_text = (full_answer + chunk).strip()
-                                            # {로 시작하는 모든 텍스트는 JSON으로 간주
-                                            if combined_text.startswith("{") or combined_text.startswith("```json"):
-                                                is_json_output = True
-                                                json_output_detected = True
-                                            elif combined_text.startswith("```") and "json" in combined_text[:20].lower():
-                                                is_json_output = True
-                                                json_output_detected = True
-                                            elif combined_text.startswith("```"):
-                                                is_json_output = True
-                                                json_output_detected = True
-                                            elif "```json" in combined_text or "``` json" in combined_text:
-                                                is_json_output = True
-                                                json_output_detected = True
-                                        # full_answer가 비어있고 현재 청크가 { 또는 ```로 시작하면 JSON
-                                        elif chunk_stripped.startswith("{") or chunk.startswith("{") or chunk_stripped.startswith("```") or chunk.startswith("```"):
-                                            is_json_output = True
-                                            json_output_detected = True
-                                    
-                                    # 방법 3: JSON 키워드 패턴 감지 (중간 노드의 JSON 출력 특징)
-                                    if not is_json_output:
-                                        # 청크 자체에 키워드가 있거나, 누적 텍스트에 키워드가 있는지 확인
-                                        if any(keyword in chunk for keyword in JSON_KEYWORDS):
-                                            is_json_output = True
-                                            json_output_detected = True
-                                        elif full_answer:
-                                            combined_text = full_answer + chunk
-                                            if any(keyword in combined_text for keyword in JSON_KEYWORDS):
-                                                is_json_output = True
-                                                json_output_detected = True
-                                    
-                                    # 방법 4: JSON 구조 패턴 감지 (큰따옴표로 시작하는 키-값 쌍)
-                                    if not is_json_output:
-                                        # "key": 형태의 패턴이 있으면 JSON일 가능성 높음
-                                        if JSON_PATTERN.match(chunk_stripped) or JSON_PATTERN.match(chunk):
-                                            is_json_output = True
-                                            json_output_detected = True
-                                    
-                                    # JSON 형식이면 무시 (중간 노드의 JSON 출력)
-                                    if is_json_output:
-                                        if DEBUG_STREAM:
-                                            logger.debug(f"JSON 형식 출력 감지 및 무시: {chunk_stripped[:100]}...")
-                                        # JSON 출력은 full_answer에 누적하지 않음
-                                        continue
-                                    
-                                    # JSON 출력이 아닌 실제 답변이 시작되면 JSON 출력 플래그 리셋
-                                    if not is_json_output and json_output_detected and len(chunk_stripped) > 0:
-                                        # 실제 답변이 시작된 것으로 간주 (JSON이 아닌 텍스트)
-                                        reset_keywords = frozenset(['"complexity"', '"confidence"', '"reasoning"'])
-                                        if not any(keyword in chunk for keyword in reset_keywords):
-                                            json_output_detected = False
-                                            if DEBUG_STREAM:
-                                                logger.debug("실제 답변이 시작되어 JSON 출력 플래그 리셋")
-                                    
-                                    # 공백 토큰도 포함 (실제 토큰 스트리밍)
-                                    # 단, 완전히 빈 문자열은 제외
-                                    if len(chunk) > 0:
-                                        full_answer += chunk
-                                        tokens_received += 1
-                                        answer_found = True
-                                        # 스트림 청크를 JSONL 형식으로 전송
-                                        stream_event = {
-                                            "type": "stream",
-                                            "content": chunk,
-                                            "timestamp": datetime.now().isoformat()
-                                        }
-                                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                        
-                            except (AttributeError, TypeError, KeyError) as e:
-                                # 이벤트 구조가 예상과 다를 경우 로깅만 하고 계속 진행
-                                logger.debug(f"토큰 추출 실패 (이벤트 구조가 예상과 다름): {e}, event_keys={list(event.keys()) if isinstance(event, dict) else 'N/A'}")
-                                # 디버깅: 이벤트 구조 상세 로깅 (처음 3개만)
-                                if llm_stream_count <= 3:
-                                    logger.debug(f"이벤트 구조 상세: event_data={event_data}, event_data type={type(event_data)}")
-                                    if isinstance(event_data, dict):
-                                        logger.debug(f"event_data keys: {list(event_data.keys())}")
-                                continue
-                    
-                    # LLM 완료 이벤트 (on_llm_end 또는 on_chat_model_end)
-                    elif event_type in ["on_llm_end", "on_chat_model_end"]:
-                        # 최종 답변 확인 (누락된 부분이 있는지 체크)
-                        try:
-                            event_data = event.get("data", {})
-                            if isinstance(event_data, dict):
-                                output = event_data.get("output")
-                                if output is not None:
-                                    final_answer = None
-                                    
-                                    # 다양한 출력 형식 지원
-                                    if hasattr(output, "content"):
-                                        final_answer = output.content
-                                    elif isinstance(output, str):
-                                        final_answer = output
-                                    elif isinstance(output, dict):
-                                        final_answer = output.get("content") or output.get("text") or str(output)
-                                    else:
-                                        final_answer = str(output)
-                                    
-                                    # 누락된 부분이 있으면 전송 (스트리밍 중 일부 토큰이 누락된 경우)
-                                    if final_answer and isinstance(final_answer, str):
-                                        if len(final_answer) > len(full_answer):
-                                            missing_part = final_answer[len(full_answer):]
-                                            if missing_part:
-                                                full_answer = final_answer
-                                                # 스트림 청크를 JSONL 형식으로 전송
-                                                stream_event = {
-                                                    "type": "stream",
-                                                    "content": missing_part,
-                                                    "timestamp": datetime.now().isoformat()
-                                                }
-                                                yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                logger.debug(f"누락된 부분 전송: {len(missing_part)}자")
-                        except (AttributeError, TypeError, KeyError) as e:
-                            logger.debug(f"on_llm_end 이벤트 처리 실패: {e}")
-                            pass
-                    
-                    # 노드 실행 이벤트 (진행 상황 표시)
-                    elif event_type == "on_chain_start":
-                        node_name = event.get("name", "")
-                        
-                        # 주요 노드의 진행 상황 표시
-                        if node_name in node_name_mapping:
-                            if node_name not in executed_nodes:
-                                progress_message = node_name_mapping.get(node_name, f"[{node_name} 실행 중...]")
-                                # 진행 상황 메시지를 JSONL 형식으로 전송
-                                step_number = len(executed_nodes) + 1
-                                progress_event = {
-                                    "type": "progress",
-                                    "step": step_number,
-                                    "message": progress_message,
-                                    "node_name": node_name,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                                yield json.dumps(progress_event, ensure_ascii=False) + "\n"
-                                executed_nodes.add(node_name)
-                                if DEBUG_STREAM:
-                                    logger.debug(f"진행 상황 메시지 전송: {progress_message}")
-                        
-                        # 답변 생성 노드 시작 시 플래그 설정
-                        if node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]:
-                            answer_generation_started = True
-                            json_output_detected = False  # 답변 생성 노드 시작 시 JSON 출력 플래그 리셋
-                            if not answer_found:
-                                # 답변 생성 시작을 JSONL 형식으로 전송
-                                step_number = len(executed_nodes) + 1
-                                progress_event = {
-                                    "type": "progress",
-                                    "step": step_number,
-                                    "message": "답변 생성 중...",
-                                    "node_name": node_name,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                                yield json.dumps(progress_event, ensure_ascii=False) + "\n"
-                                last_node_name = node_name
-                                if DEBUG_STREAM:
-                                    logger.debug(f"답변 생성 노드 시작: {node_name}, answer_generation_started=True, json_output_detected=False")
-                    
-                    # 노드 완료 이벤트 (generate_and_validate_answer 노드의 answer 필드만 확인)
-                    elif event_type == "on_chain_end":
-                        node_name = event.get("name", "")
-                        if node_name == "generate_and_validate_answer":
-                            # 답변 생성 노드가 완료되면 플래그 해제
-                            answer_generation_started = False
-                            if DEBUG_STREAM:
-                                logger.debug(f"답변 생성 노드 완료: {node_name}, answer_generation_started=False")
-                            
-                            # generate_and_validate_answer 노드의 output에서 answer 필드만 추출
-                            try:
-                                event_data = event.get("data", {})
-                                if isinstance(event_data, dict):
-                                    output = event_data.get("output")
-                                    if output is not None:
-                                        # answer 필드 추출 (다양한 구조 지원)
-                                        answer_text = None
-                                        
-                                        if isinstance(output, dict):
-                                            # 최상위 레벨
-                                            answer_text = output.get("answer", "")
-                                            
-                                            # answer 그룹 (dict인 경우)
-                                            if not answer_text and "answer" in output:
-                                                answer_group = output.get("answer", {})
-                                                if isinstance(answer_group, dict):
-                                                    answer_text = answer_group.get("answer", "")
-                                                elif isinstance(answer_group, str):
-                                                    answer_text = answer_group
-                                            
-                                            # common 그룹
-                                            if not answer_text and "common" in output:
-                                                common = output.get("common", {})
-                                                if isinstance(common, dict):
-                                                    answer_text = common.get("answer", "")
-                                        
-                                        # answer 필드가 있고, JSON 형식이 아니면 확인
-                                        if answer_text and isinstance(answer_text, str) and len(answer_text) > 0:
-                                            # JSON 형식 필터링
-                                            answer_stripped = answer_text.strip()
-                                            is_json_answer = (
-                                                answer_stripped.startswith("{") or 
-                                                answer_stripped.startswith("```json") or
-                                                (answer_stripped.startswith("```") and "json" in answer_stripped[:20].lower())
-                                            )
-                                            
-                                            if not is_json_answer:
-                                                # 스트리밍된 답변과 비교하여 누락된 부분만 전송
-                                                if len(answer_text) > len(full_answer):
-                                                    missing_part = answer_text[len(full_answer):]
-                                                    if missing_part:
-                                                        if DEBUG_STREAM:
-                                                            logger.debug(f"누락된 부분 전송: {len(missing_part)}자")
-                                                        # 스트림 청크를 JSONL 형식으로 전송
-                                                        stream_event = {
-                                                            "type": "stream",
-                                                            "content": missing_part,
-                                                            "timestamp": datetime.now().isoformat()
-                                                        }
-                                                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                        full_answer = answer_text
-                                                        answer_found = True
-                                                elif not answer_found:
-                                                    # 스트리밍이 없었던 경우 전체 답변 전송
-                                                    if DEBUG_STREAM:
-                                                        logger.debug(f"전체 답변 전송 (스트리밍 없음): {len(answer_text)}자")
-                                                    stream_event = {
-                                                        "type": "stream",
-                                                        "content": answer_text,
-                                                        "timestamp": datetime.now().isoformat()
-                                                    }
-                                                    yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                                    full_answer = answer_text
-                                                    answer_found = True
-                                                else:
-                                                    if DEBUG_STREAM:
-                                                        logger.debug("스트리밍된 답변이 이미 있습니다.")
-                                            else:
-                                                if DEBUG_STREAM:
-                                                    logger.debug("answer 필드가 JSON 형식이므로 무시합니다.")
-                                        else:
-                                            if DEBUG_STREAM:
-                                                logger.debug("answer 필드를 찾을 수 없거나 비어있습니다.")
-                            except (AttributeError, TypeError, KeyError) as e:
-                                if DEBUG_STREAM:
-                                    logger.debug(f"on_chain_end에서 answer 추출 실패: {e}")
-                            
-                            if not answer_found:
-                                # 스트리밍 이벤트가 전혀 발생하지 않은 경우
-                                if DEBUG_STREAM:
-                                    logger.warning("스트리밍 이벤트가 발생하지 않았습니다.")
-                                error_event = {
-                                    "type": "final",
-                                    "content": "[오류] 스트리밍 응답을 생성할 수 없습니다. 다시 시도해주세요.",
-                                    "metadata": {"error": True},
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                                yield json.dumps(error_event, ensure_ascii=False) + "\n"
-                                answer_found = True
-                        elif node_name == "generate_answer_enhanced":
-                            # generate_answer_enhanced 노드는 generate_and_validate_answer 내부에서 호출되므로
-                            # 여기서는 플래그만 확인하고 answer는 generate_and_validate_answer에서 처리
-                            if DEBUG_STREAM:
-                                logger.debug(f"generate_answer_enhanced 노드 완료: {node_name}")
+                
+                # event_processor에서 상태 가져오기
+                full_answer = self.event_processor.full_answer
+                answer_found = self.event_processor.answer_found
+                tokens_received = self.event_processor.tokens_received
                 
                 # 스트리밍 완료 후 최종 확인 (DEBUG_STREAM이 true일 때만)
                 if DEBUG_STREAM:
@@ -1133,7 +433,7 @@ class ChatService:
                             # 누락된 부분만 전송
                             missing_part = final_answer[len(full_answer):]
                             if missing_part:
-                                full_answer = final_answer
+                                self.event_processor.full_answer = final_answer
                                 # 스트림 청크를 JSONL 형식으로 전송
                                 stream_event = {
                                     "type": "stream",
@@ -1141,26 +441,26 @@ class ChatService:
                                     "timestamp": datetime.now().isoformat()
                                 }
                                 yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                answer_found = True
+                                self.event_processor.answer_found = True
                                 if DEBUG_STREAM:
                                     logger.info(f"최종 답변에서 누락된 부분 전송: {len(missing_part)}자")
                         elif final_answer:
                             # 전체 답변 전송 (full_answer가 비어있는 경우)
-                            full_answer = final_answer
+                            self.event_processor.full_answer = final_answer
                             stream_event = {
                                 "type": "stream",
                                 "content": final_answer,
                                 "timestamp": datetime.now().isoformat()
                             }
                             yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                            answer_found = True
+                            self.event_processor.answer_found = True
                             if DEBUG_STREAM:
                                 logger.info(f"전체 답변 전송: {len(final_answer)}자")
                     except Exception as e:
                         if DEBUG_STREAM:
                             logger.error(f"최종 결과 가져오기 실패: {e}", exc_info=True)
                         # 에러 발생 시에도 최소한 에러 메시지 yield (스트림이 비어있지 않도록)
-                        if not answer_found:
+                        if not self.event_processor.answer_found:
                             error_event = {
                                 "type": "final",
                                 "content": f"[오류] 답변을 생성할 수 없습니다: {str(e)}",
@@ -1168,7 +468,7 @@ class ChatService:
                                 "timestamp": datetime.now().isoformat()
                             }
                             yield json.dumps(error_event, ensure_ascii=False) + "\n"
-                            answer_found = True
+                            self.event_processor.answer_found = True
             
             except Exception as stream_error:
                 # astream_events 실패 시 astream으로 폴백
@@ -1188,36 +488,57 @@ class ChatService:
                                 if "answer" in common:
                                     answer = common.get("answer", "")
                             
-                            if answer and isinstance(answer, str) and len(answer) > len(full_answer):
-                                new_part = answer[len(full_answer):]
-                                if new_part:
-                                    full_answer = answer
-                                    # 스트림 청크를 JSONL 형식으로 전송
-                                    stream_event = {
-                                        "type": "stream",
-                                        "content": new_part,
-                                        "timestamp": datetime.now().isoformat()
-                                    }
-                                    yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                                    answer_found = True
+                            if answer and isinstance(answer, str):
+                                current_full_answer = self.event_processor.full_answer
+                                if len(answer) > len(current_full_answer):
+                                    new_part = answer[len(current_full_answer):]
+                                    if new_part:
+                                        self.event_processor.full_answer = answer
+                                        # 스트림 청크를 JSONL 형식으로 전송
+                                        stream_event = {
+                                            "type": "stream",
+                                            "content": new_part,
+                                            "timestamp": datetime.now().isoformat()
+                                        }
+                                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
+                                        self.event_processor.answer_found = True
             
             # 완료 메타데이터 (답변이 없어도 완료 신호 전송)
-            # 중요: 스트림 종료를 보장하기 위해 app.aget_state() 호출을 제거
-            # sources는 스트림 종료 후에 별도로 가져오거나, astream_events에서 이미 받은 정보를 사용
-            # 스트림 종료를 방해하지 않도록 sources 추출을 제거
+            # sources는 스트림 종료 직전에 SourcesExtractor를 사용하여 가져오기
             final_sources = []
             final_legal_references = []
             final_sources_detail = []
+            final_related_questions = []
             
-            # 주의: app.aget_state() 호출이 스트림 종료를 방해할 수 있으므로 제거
-            # sources는 나중에 별도로 가져오거나, astream_events에서 이미 받은 정보를 사용
-            # 스트림 종료를 보장하기 위해 sources 추출을 제거
+            # 스트림 종료 직전에 sources 가져오기 (빠르게 처리)
+            if session_id:
+                try:
+                    try:
+                        sources_data = await asyncio.wait_for(
+                            self.sources_extractor.extract_from_state(session_id),
+                            timeout=2.0  # 2초 타임아웃
+                        )
+                        final_sources = sources_data.get("sources", [])
+                        final_legal_references = sources_data.get("legal_references", [])
+                        final_sources_detail = sources_data.get("sources_detail", [])
+                        final_related_questions = sources_data.get("related_questions", [])
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout getting sources from LangGraph state for session {session_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get sources from LangGraph state: {e}")
+                except Exception as e:
+                    logger.warning(f"Error getting sources from LangGraph state: {e}")
+            
+            # event_processor에서 full_answer 가져오기
+            full_answer = self.event_processor.full_answer
+            answer_found = self.event_processor.answer_found
+            tokens_received = self.event_processor.tokens_received
             
             if full_answer:
                 has_yielded = True
                 
-                # 토큰 제한 확인 (MAX_OUTPUT_TOKENS = 8192)
-                MAX_OUTPUT_TOKENS = 8192
+                # 토큰 제한 확인
+                MAX_OUTPUT_TOKENS = self.stream_config.max_output_tokens
                 should_split = tokens_received >= MAX_OUTPUT_TOKENS
                 
                 import uuid
@@ -1225,11 +546,53 @@ class ChatService:
                 # 메시지 ID 생성 (chat.py에서 저장 시 사용)
                 message_id = str(uuid.uuid4())
                 
+                # final 이벤트 생성 직전에 sources를 다시 한 번 확인
+                # LangGraph state에서 sources를 가져오는 시점이 너무 빠를 수 있으므로
+                # final 이벤트 생성 직전에 다시 확인 (재시도 최소화하여 스트림 블로킹 방지)
+                if not final_sources and not final_legal_references and not final_sources_detail:
+                    if session_id and self.workflow_service and self.workflow_service.app:
+                        try:
+                            config = {"configurable": {"thread_id": session_id}}
+                            
+                            # 즉시 시도 (타임아웃 2초, 재시도 없음)
+                            try:
+                                final_state = await asyncio.wait_for(
+                                    self.workflow_service.app.aget_state(config),
+                                    timeout=2.0
+                                )
+                                
+                                if final_state and final_state.values:
+                                    state_values = final_state.values
+                                    
+                                    # sources 추출
+                                    sources_data = self.sources_extractor._extract_sources(state_values)
+                                    legal_references_data = self.sources_extractor._extract_legal_references(state_values)
+                                    sources_detail_data = self.sources_extractor._extract_sources_detail(state_values)
+                                    related_questions_data = self.sources_extractor._extract_related_questions(state_values)
+                                    
+                                    if sources_data or legal_references_data or sources_detail_data or related_questions_data:
+                                        if sources_data:
+                                            final_sources = sources_data
+                                        if legal_references_data:
+                                            final_legal_references = legal_references_data
+                                        if sources_detail_data:
+                                            final_sources_detail = sources_detail_data
+                                        if related_questions_data:
+                                            final_related_questions = related_questions_data
+                                        
+                                        logger.info(f"Re-extracted sources before final event: {len(final_sources)} sources, {len(final_legal_references)} legal_references, {len(final_sources_detail)} sources_detail, {len(final_related_questions)} related_questions")
+                            except asyncio.TimeoutError:
+                                logger.warning(f"Timeout re-getting sources before final event")
+                            except Exception as e:
+                                logger.warning(f"Failed to re-get sources before final event: {e}")
+                        except Exception as e:
+                            logger.warning(f"Error re-getting sources before final event: {e}")
+                
                 if should_split:
                     # 토큰 제한을 초과했을 때만 답변 분할 처리
                     from api.services.answer_splitter import AnswerSplitter
                     
-                    splitter = AnswerSplitter(chunk_size=2000)
+                    splitter = AnswerSplitter(chunk_size=self.stream_config.chunk_size)
                     chunks = splitter.split_answer(full_answer)
                     
                     # 메시지 저장은 chat.py에서 처리하므로 여기서는 저장하지 않음
@@ -1250,6 +613,7 @@ class ChatService:
                                 "sources": final_sources,
                                 "legal_references": final_legal_references,
                                 "sources_detail": final_sources_detail,
+                                "related_questions": final_related_questions,
                                 "needs_continuation": True,
                                 "message_id": message_id
                             },
@@ -1268,6 +632,7 @@ class ChatService:
                                 "sources": final_sources,
                                 "legal_references": final_legal_references,
                                 "sources_detail": final_sources_detail,
+                                "related_questions": final_related_questions,
                                 "message_id": message_id
                             },
                             "timestamp": datetime.now().isoformat()
@@ -1288,6 +653,7 @@ class ChatService:
                             "sources": final_sources,
                             "legal_references": final_legal_references,
                             "sources_detail": final_sources_detail,
+                            "related_questions": final_related_questions,
                             "message_id": message_id
                         },
                         "timestamp": datetime.now().isoformat()
@@ -1338,22 +704,12 @@ class ChatService:
                     yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
                     has_yielded = True
                 except Exception:
+                    # yield 자체가 실패하면 스트림이 끊어질 수 있음
+                    # 하지만 이 경우는 매우 드물고, FastAPI가 자동으로 처리
                     pass
-        finally:
-            # 예외 발생 시에도 스트림이 제대로 종료되도록 보장
-            # 스트림이 비어있지 않도록 보장
-            if not has_yielded:
-                try:
-                    fallback_event = {
-                        "type": "final",
-                        "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
-                        "metadata": {"error": True},
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
-                    has_yielded = True
-                except Exception as e:
-                    logger.error(f"Error yielding fallback message in finally: {e}")
+        # finally 블록 제거: finally에서 yield를 하면 제너레이터가 제대로 종료되지 않아
+        # ERR_INCOMPLETE_CHUNKED_ENCODING 오류가 발생할 수 있음
+        # 스트림 종료는 FastAPI StreamingResponse가 자동으로 처리
     
     async def get_sources_from_session(
         self,
@@ -1371,316 +727,413 @@ class ChatService:
             sources, legal_references, sources_detail 딕셔너리
         """
         # 먼저 메시지의 metadata에서 sources를 가져오기 시도
-        # message_id가 있으면 해당 메시지만, 없으면 모든 assistant 메시지 확인
-        try:
-            from api.services.session_service import session_service
-            messages = session_service.get_messages(session_id)
-            
-            # message_id가 있으면 해당 메시지만 확인
-            if message_id:
-                for msg in messages:
-                    if msg.get("message_id") == message_id and msg.get("role") == "assistant":
-                        metadata = msg.get("metadata", {})
-                        if isinstance(metadata, dict):
-                            msg_sources = metadata.get("sources", [])
-                            msg_legal_references = metadata.get("legal_references", [])
-                            msg_sources_detail = metadata.get("sources_detail", [])
-                            
-                            if msg_sources or msg_legal_references or msg_sources_detail:
-                                logger.info(f"Found sources in message metadata for message_id={message_id}: {len(msg_sources)} sources, {len(msg_legal_references)} legal_references, {len(msg_sources_detail)} sources_detail")
-                                return {
-                                    "sources": msg_sources if isinstance(msg_sources, list) else [],
-                                    "legal_references": msg_legal_references if isinstance(msg_legal_references, list) else [],
-                                    "sources_detail": msg_sources_detail if isinstance(msg_sources_detail, list) else []
-                                }
-            else:
-                # message_id가 없으면 모든 assistant 메시지 확인 (최신부터)
-                for msg in reversed(messages):
-                    if msg.get("role") == "assistant":
-                        metadata = msg.get("metadata", {})
-                        if isinstance(metadata, dict):
-                            msg_sources = metadata.get("sources", [])
-                            msg_legal_references = metadata.get("legal_references", [])
-                            msg_sources_detail = metadata.get("sources_detail", [])
-                            
-                            if msg_sources or msg_legal_references or msg_sources_detail:
-                                logger.info(f"Found sources in assistant message metadata (message_id={msg.get('message_id')}): {len(msg_sources)} sources, {len(msg_legal_references)} legal_references, {len(msg_sources_detail)} sources_detail")
-                                return {
-                                    "sources": msg_sources if isinstance(msg_sources, list) else [],
-                                    "legal_references": msg_legal_references if isinstance(msg_legal_references, list) else [],
-                                    "sources_detail": msg_sources_detail if isinstance(msg_sources_detail, list) else []
-                                }
-        except Exception as e:
-            logger.warning(f"Failed to get sources from message metadata: {e}")
+        result = await self.sources_extractor.extract_from_message_metadata(session_id, message_id)
         
-        # 메시지 metadata에서 sources를 찾지 못한 경우, LangGraph state에서 가져오기
-        if not self.workflow_service or not self.workflow_service.app:
-            logger.warning("Workflow service is not available")
-            return {
-                "sources": [],
-                "legal_references": [],
-                "sources_detail": []
+        # 없으면 state에서 가져오기
+        if not any(result.values()):
+            result = await self.sources_extractor.extract_from_state(session_id)
+        
+        return result
+    
+    async def stream_final_answer(
+        self,
+        message: str,
+        session_id: Optional[str] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        LangGraph의 astream_events()를 사용하여 
+        generate_and_validate_answer 노드의 LLM 응답만 스트림 형태로 전달
+        
+        예제 코드 참고:
+        async for event in compiled_graph.astream_events({"topic": "AI"}):
+            if event["event"] == "on_llm_stream" and event["name"] == "generate_response":
+                yield f"data: {json.dumps({'token': data})}\n\n"
+        """
+        if not self.workflow_service:
+            error_event = {
+                "type": "error",
+                "content": "[오류] 서비스 초기화에 실패했습니다.",
+                "timestamp": datetime.now().isoformat()
             }
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            return
         
         try:
-            # LangGraph config 생성 (thread_id를 session_id로 사용)
+            import uuid
+            
+            # 세션 ID 생성
+            if not session_id:
+                session_id = str(uuid.uuid4())
+            
+            # 초기 state 생성
+            from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
+            initial_state = create_initial_legal_state(message, session_id)
+            
+            # 상태 검증 및 보강
+            if "input" not in initial_state:
+                initial_state["input"] = {}
+            if not initial_state["input"].get("query"):
+                initial_state["input"]["query"] = message
+            if not initial_state["input"].get("session_id"):
+                initial_state["input"]["session_id"] = session_id
+            
+            if not initial_state.get("query"):
+                initial_state["query"] = message
+            if not initial_state.get("session_id"):
+                initial_state["session_id"] = session_id
+            
+            # 상태 검증
+            initial_query = initial_state.get("input", {}).get("query") or initial_state.get("query")
+            if not initial_query or not str(initial_query).strip():
+                error_event = {
+                    "type": "error",
+                    "content": "[오류] 질문이 제대로 전달되지 않았습니다.",
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                return
+            
             config = {"configurable": {"thread_id": session_id}}
             
-            # 최종 state 가져오기
-            final_state = await self.workflow_service.app.aget_state(config)
+            # 진행 상황 표시
+            progress_event = {
+                "type": "progress",
+                "content": "답변 생성 중...",
+                "timestamp": datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps(progress_event, ensure_ascii=False)}\n\n"
             
-            if not final_state or not final_state.values:
-                logger.warning(f"No state found for session_id: {session_id}")
-                return {
-                    "sources": [],
-                    "legal_references": [],
-                    "sources_detail": []
-                }
+            # LangGraph의 astream_events() 사용
+            # generate_and_validate_answer 노드의 LLM 스트림만 필터링
+            # StreamEventProcessor의 로직을 참고하여 구현
+            answer_generation_started = False
+            last_node_name = None
+            event_count = 0
+            stream_event_count = 0
+            on_llm_stream_count = 0
+            on_chat_model_stream_count = 0
+            on_chain_stream_count = 0
             
-            state_values = final_state.values
-            
-            # 디버깅: state의 모든 키 로깅
-            logger.info(f"State keys for session {session_id}: {list(state_values.keys())}")
-            
-            # 디버깅: state의 주요 필드 값 확인
-            for key in ["sources", "legal_references", "sources_detail", "metadata", "retrieved_docs", "structured_documents"]:
-                if key in state_values:
-                    value = state_values[key]
-                    if isinstance(value, list):
-                        logger.info(f"State[{key}] (list): length={len(value)}, first_item_type={type(value[0]) if value else 'empty'}")
-                        if value and len(value) > 0:
-                            logger.debug(f"State[{key}] first item: {str(value[0])[:200] if isinstance(value[0], (str, dict)) else type(value[0])}")
-                    elif isinstance(value, dict):
-                        logger.info(f"State[{key}] (dict): keys={list(value.keys())[:10]}")
-                        if "sources" in value:
-                            logger.info(f"State[{key}]['sources']: {value.get('sources', [])[:5]}")
-                    else:
-                        logger.info(f"State[{key}]: type={type(value)}, value={str(value)[:200]}")
-            
-            # sources 추출 (여러 위치에서 시도)
-            sources = []
-            
-            # 1. 최상위 레벨에서 sources 찾기
-            if "sources" in state_values:
-                sources_list = state_values.get("sources", [])
-                if isinstance(sources_list, list):
-                    sources = [str(s) for s in sources_list if s and str(s).strip()]
-                    logger.debug(f"Found {len(sources)} sources at top level")
-            
-            # 2. metadata 안에서 sources 찾기
-            if not sources and "metadata" in state_values:
-                metadata = state_values.get("metadata", {})
-                if isinstance(metadata, dict):
-                    if "sources" in metadata:
-                        metadata_sources = metadata.get("sources", [])
-                        if isinstance(metadata_sources, list):
-                            sources = [str(s) for s in metadata_sources if s and str(s).strip()]
-                            logger.debug(f"Found {len(sources)} sources in metadata")
-            
-            # 3. retrieved_docs에서 sources 추출 (최후의 수단)
-            if not sources and "retrieved_docs" in state_values:
-                retrieved_docs = state_values.get("retrieved_docs", [])
-                if isinstance(retrieved_docs, list):
-                    seen_sources = set()
-                    for doc in retrieved_docs:
-                        if isinstance(doc, dict):
-                            # 여러 필드에서 source 찾기
-                            source = (doc.get("source") or 
-                                     doc.get("title") or 
-                                     doc.get("document_id") or 
-                                     doc.get("name") or "")
-                            if source and source not in seen_sources and str(source).strip():
-                                sources.append(str(source))
-                                seen_sources.add(source)
-                    if sources:
-                        logger.info(f"Extracted {len(sources)} sources from retrieved_docs")
-                    else:
-                        logger.debug(f"No sources found in retrieved_docs (count: {len(retrieved_docs)})")
-            
-            # legal_references 추출
-            legal_references = []
-            if "legal_references" in state_values:
-                legal_refs = state_values.get("legal_references", [])
-                if isinstance(legal_refs, list):
-                    legal_references = [str(r) for r in legal_refs if r and str(r).strip()]
-            
-            # metadata에서 legal_references 찾기
-            if not legal_references and "metadata" in state_values:
-                metadata = state_values.get("metadata", {})
-                if isinstance(metadata, dict) and "legal_references" in metadata:
-                    metadata_legal_refs = metadata.get("legal_references", [])
-                    if isinstance(metadata_legal_refs, list):
-                        legal_references = [str(r) for r in metadata_legal_refs if r and str(r).strip()]
-            
-            # sources_detail 추출
-            sources_detail = []
-            if "sources_detail" in state_values:
-                sources_detail_list = state_values.get("sources_detail", [])
-                if isinstance(sources_detail_list, list):
-                    sources_detail = sources_detail_list
-            
-            # metadata에서 sources_detail 찾기
-            if not sources_detail and "metadata" in state_values:
-                metadata = state_values.get("metadata", {})
-                if isinstance(metadata, dict) and "sources_detail" in metadata:
-                    metadata_sources_detail = metadata.get("sources_detail", [])
-                    if isinstance(metadata_sources_detail, list):
-                        sources_detail = metadata_sources_detail
-            
-            # sources_detail이 비어있으면 retrieved_docs에서 직접 생성
-            if not sources_detail and "retrieved_docs" in state_values:
-                retrieved_docs = state_values.get("retrieved_docs", [])
-                if isinstance(retrieved_docs, list) and retrieved_docs:
-                    try:
-                        from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
-                        formatter = UnifiedSourceFormatter()
-                        
-                        for doc in retrieved_docs:
-                            if not isinstance(doc, dict):
-                                continue
-                            
-                            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
-                            if not source_type:
-                                continue
-                            
-                            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                            merged_metadata = {**metadata}
-                            
-                            # doc의 필드를 metadata에 병합
-                            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
-                                       "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
-                                if key in doc:
-                                    merged_metadata[key] = doc[key]
-                            
-                            source_info_detail = formatter.format_source(source_type, merged_metadata)
-                            
-                            detail_dict = {
-                                "name": source_info_detail.name,
-                                "type": source_info_detail.type,
-                                "url": source_info_detail.url or "",
-                                "metadata": source_info_detail.metadata or {}
-                            }
-                            
-                            # metadata의 정보를 최상위 레벨로 추출
-                            if source_info_detail.metadata:
-                                meta = source_info_detail.metadata
-                                
-                                # 법령 조문인 경우
-                                if source_type == "statute_article":
-                                    if meta.get("statute_name"):
-                                        detail_dict["statute_name"] = meta["statute_name"]
-                                    if meta.get("article_no"):
-                                        detail_dict["article_no"] = meta["article_no"]
-                                    if meta.get("clause_no"):
-                                        detail_dict["clause_no"] = meta["clause_no"]
-                                    if meta.get("item_no"):
-                                        detail_dict["item_no"] = meta["item_no"]
-                                
-                                # 판례인 경우
-                                elif source_type == "case_paragraph":
-                                    if meta.get("doc_id"):
-                                        detail_dict["case_number"] = meta["doc_id"]
-                                    if meta.get("court"):
-                                        detail_dict["court"] = meta["court"]
-                                    if meta.get("casenames"):
-                                        detail_dict["case_name"] = meta["casenames"]
-                                
-                                # 결정례인 경우
-                                elif source_type == "decision_paragraph":
-                                    if meta.get("doc_id"):
-                                        detail_dict["decision_number"] = meta["doc_id"]
-                                    if meta.get("org"):
-                                        detail_dict["org"] = meta["org"]
-                                    if meta.get("decision_date"):
-                                        detail_dict["decision_date"] = meta["decision_date"]
-                                    if meta.get("result"):
-                                        detail_dict["result"] = meta["result"]
-                                
-                                # 해석례인 경우
-                                elif source_type == "interpretation_paragraph":
-                                    if meta.get("doc_id"):
-                                        detail_dict["interpretation_number"] = meta["doc_id"]
-                                    if meta.get("org"):
-                                        detail_dict["org"] = meta["org"]
-                                    if meta.get("title"):
-                                        detail_dict["title"] = meta["title"]
-                                    if meta.get("response_date"):
-                                        detail_dict["response_date"] = meta["response_date"]
-                            
-                            # 상세본문 추가
-                            content = doc.get("content") or doc.get("text") or ""
-                            if content:
-                                detail_dict["content"] = content
-                            
-                            sources_detail.append(detail_dict)
-                    except Exception as e:
-                        logger.warning(f"Error generating sources_detail from retrieved_docs: {e}")
-            
-            # sources가 여전히 비어있으면, 최신 assistant 메시지의 metadata에서도 확인
-            if not sources and not legal_references and not sources_detail:
-                try:
-                    from api.services.session_service import session_service
-                    messages = session_service.get_messages(session_id)
-                    
-                    # 최신 assistant 메시지 찾기
-                    for msg in reversed(messages):
-                        if msg.get("role") == "assistant":
-                            metadata = msg.get("metadata", {})
-                            if isinstance(metadata, dict):
-                                msg_sources = metadata.get("sources", [])
-                                msg_legal_references = metadata.get("legal_references", [])
-                                msg_sources_detail = metadata.get("sources_detail", [])
-                                
-                                if msg_sources or msg_legal_references or msg_sources_detail:
-                                    sources = msg_sources if isinstance(msg_sources, list) else []
-                                    legal_references = msg_legal_references if isinstance(msg_legal_references, list) else []
-                                    sources_detail = msg_sources_detail if isinstance(msg_sources_detail, list) else []
-                                    logger.info(f"Found sources in latest assistant message metadata: {len(sources)} sources, {len(legal_references)} legal_references, {len(sources_detail)} sources_detail")
-                                    break
-                except Exception as e:
-                    logger.warning(f"Failed to get sources from latest message metadata: {e}")
-            
-            logger.info(f"Sources extracted from session {session_id}: {len(sources)} sources, {len(legal_references)} legal_references, {len(sources_detail)} sources_detail")
-            
-            # 디버깅: sources가 비어있으면 state 구조 상세 로깅
-            if not sources and not legal_references and not sources_detail:
-                logger.warning(f"No sources found in state for session {session_id}. State structure: {list(state_values.keys())}")
-                # state_values의 일부 내용 로깅 (너무 크지 않은 경우)
-                for key in ["metadata", "retrieved_docs", "structured_documents", "answer", "final_answer"]:
-                    if key in state_values:
-                        value = state_values[key]
-                        if isinstance(value, (dict, list)):
-                            logger.warning(f"State[{key}] type: {type(value)}, length/size: {len(value) if hasattr(value, '__len__') else 'N/A'}")
-                            # metadata의 경우 내부 구조도 확인
-                            if key == "metadata" and isinstance(value, dict):
-                                logger.warning(f"State[metadata] keys: {list(value.keys())[:20]}")
-                                if "sources" in value:
-                                    logger.warning(f"State[metadata]['sources'] found: {value.get('sources', [])[:5]}")
-                        elif isinstance(value, str):
-                            logger.warning(f"State[{key}] (string): length={len(value)}, preview={value[:100]}")
+            async for event in self.workflow_service.app.astream_events(
+                initial_state,
+                config,
+                version="v2"
+            ):
+                event_count += 1
+                event_type = event.get("event", "")
+                event_name = event.get("name", "")
+                event_parent = event.get("parent", {})
                 
-                # retrieved_docs에서 sources 추출 시도 (상세 로깅)
-                if "retrieved_docs" in state_values:
-                    retrieved_docs = state_values.get("retrieved_docs", [])
-                    if isinstance(retrieved_docs, list) and retrieved_docs:
-                        logger.warning(f"retrieved_docs found: {len(retrieved_docs)} documents")
-                        for i, doc in enumerate(retrieved_docs[:3]):
-                            if isinstance(doc, dict):
-                                source = doc.get("source") or doc.get("title") or ""
-                                logger.warning(f"  doc[{i}] source: {source}")
-            
-            return {
-                "sources": sources,
-                "legal_references": legal_references,
-                "sources_detail": sources_detail
-            }
-        except Exception as e:
-            logger.error(f"Error getting sources from session {session_id}: {e}", exc_info=True)
-            return {
-                "sources": [],
-                "legal_references": [],
-                "sources_detail": []
-            }
+                # on_llm_stream 이벤트 발생 추적
+                if event_type == "on_llm_stream":
+                    on_llm_stream_count += 1
+                    if on_llm_stream_count <= 10:  # 처음 10개만 상세 로깅
+                        logger.debug(
+                            f"[stream_final_answer] on_llm_stream 이벤트 #{on_llm_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                elif event_type == "on_chat_model_stream":
+                    on_chat_model_stream_count += 1
+                    if on_chat_model_stream_count <= 10:
+                        logger.debug(
+                            f"[stream_final_answer] on_chat_model_stream 이벤트 #{on_chat_model_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                elif event_type == "on_chain_stream":
+                    on_chain_stream_count += 1
+                    if on_chain_stream_count <= 5:
+                        logger.debug(
+                            f"[stream_final_answer] on_chain_stream 이벤트 #{on_chain_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                
+                # on_chain_start: 답변 생성 노드 시작 감지
+                if event_type == "on_chain_start":
+                    node_name = event_name
+                    if node_name in ["generate_and_validate_answer", "generate_answer_enhanced"]:
+                        answer_generation_started = True
+                        last_node_name = node_name
+                        logger.debug(f"[stream_final_answer] 답변 생성 노드 시작: {node_name}")
+                
+                # on_chain_end: 답변 생성 노드 완료
+                elif event_type == "on_chain_end":
+                    node_name = event_name
+                    if node_name == "generate_and_validate_answer":
+                        answer_generation_started = False
+                        logger.debug(f"[stream_final_answer] 답변 생성 노드 완료: {node_name}")
+                
+                # LLM 스트리밍 이벤트 처리 (on_llm_stream, on_chat_model_stream만 처리)
+                # on_chain_stream은 제외 (전체 답변을 한 번에 전달하므로 토큰 단위 스트리밍 불가)
+                elif event_type in ["on_llm_stream", "on_chat_model_stream"]:
+                    # on_llm_stream 이벤트 발생 로깅
+                    logger.debug(
+                        f"[stream_final_answer] on_llm_stream 이벤트 발생: "
+                        f"type={event_type}, name={event_name}, "
+                        f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}, "
+                        f"last_node={last_node_name}, started={answer_generation_started}"
+                    )
+                    
+                    # 답변 생성 노드가 시작되지 않았으면 건너뛰기
+                    if not answer_generation_started:
+                        logger.debug(f"[stream_final_answer] 답변 생성 노드가 시작되지 않아 건너뜀: {event_name}")
+                        continue
+                    
+                    # 답변 생성 노드인지 확인 (StreamEventProcessor의 is_answer_node 로직 참고)
+                    is_target_node = False
+                    
+                    # 방법 1: 이벤트 이름으로 직접 판단
+                    if "generate_answer" in event_name.lower() or \
+                       "generate_and_validate" in event_name.lower() or \
+                       event_name in ["generate_answer_enhanced", "generate_and_validate_answer", "direct_answer"]:
+                        is_target_node = True
+                        logger.debug(f"[stream_final_answer] 방법 1: 이벤트 이름으로 타겟 노드 확인: {event_name}")
+                    
+                    # 방법 2: parent 필드에서 노드 이름 확인
+                    if not is_target_node:
+                        parent_node_name = None
+                        if isinstance(event_parent, dict):
+                            parent_node_name = event_parent.get("name", "")
+                        
+                        if parent_node_name and (
+                            "generate_answer" in parent_node_name.lower() or 
+                            "generate_and_validate" in parent_node_name.lower() or
+                            parent_node_name in ["generate_answer_enhanced", "generate_and_validate_answer"]
+                        ):
+                            is_target_node = True
+                            logger.debug(f"[stream_final_answer] 방법 2: parent 필드로 타겟 노드 확인: {parent_node_name}")
+                    
+                    # 방법 3: last_node_name으로 확인 (LLM 모델 이름인 경우)
+                    if not is_target_node and last_node_name in ["generate_and_validate_answer", "generate_answer_enhanced"]:
+                        if "Chat" in event_name or "LLM" in event_name or "Model" in event_name:
+                            is_target_node = True
+                            logger.debug(f"[stream_final_answer] 방법 3: last_node_name으로 타겟 노드 확인: {last_node_name}, event_name={event_name}")
+                    
+                    if is_target_node:
+                        logger.debug(f"[stream_final_answer] 타겟 노드 확인됨: {event_name}, 토큰 추출 시작")
+                        event_data = event.get("data", {})
+                        
+                        # on_llm_stream, on_chat_model_stream: StreamEventProcessor의 extract_chunk_from_llm_stream 로직 사용
+                        chunk_obj = event_data.get("chunk")
+                        token = None
+                        
+                        if chunk_obj:
+                            if hasattr(chunk_obj, "content"):
+                                content = chunk_obj.content
+                                if isinstance(content, str):
+                                    token = content
+                                elif isinstance(content, list) and len(content) > 0:
+                                    token = content[0] if isinstance(content[0], str) else str(content[0])
+                                else:
+                                    token = str(content) if content else None
+                            elif isinstance(chunk_obj, str):
+                                token = chunk_obj
+                            elif isinstance(chunk_obj, dict):
+                                token = chunk_obj.get("content") or chunk_obj.get("text")
+                            elif hasattr(chunk_obj, "text"):
+                                token = chunk_obj.text
+                            elif hasattr(chunk_obj, "__class__") and "AIMessageChunk" in str(type(chunk_obj)):
+                                try:
+                                    content = getattr(chunk_obj, "content", None)
+                                    if isinstance(content, str):
+                                        token = content
+                                    elif isinstance(content, list) and len(content) > 0:
+                                        token = content[0] if isinstance(content[0], str) else str(content[0])
+                                    elif content is not None:
+                                        token = str(content)
+                                except Exception:
+                                    token = None
+                            else:
+                                token = str(chunk_obj) if chunk_obj else None
+                        
+                        # delta 형식 처리 (LangGraph v2)
+                        if not token and "delta" in event_data:
+                            delta = event_data["delta"]
+                            if isinstance(delta, dict):
+                                token = delta.get("content") or delta.get("text")
+                            elif isinstance(delta, str):
+                                token = delta
+                        
+                        # 토큰이 있으면 SSE 형식으로 전달
+                        if token and isinstance(token, str) and len(token) > 0:
+                            stream_event_count += 1
+                            logger.debug(
+                                f"[stream_final_answer] 토큰 전송: "
+                                f"token_length={len(token)}, "
+                                f"token_preview={token[:50]}..., "
+                                f"stream_event_count={stream_event_count}"
+                            )
+                            stream_event = {
+                                "type": "stream",
+                                "content": token,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.debug(
+                                f"[stream_final_answer] 토큰 추출 실패: "
+                                f"token={token}, "
+                                f"chunk_obj={chunk_obj}, "
+                                f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else []}"
+                            )
+                    else:
+                        # 디버깅: 필터링되지 않은 이벤트 로깅
+                        logger.debug(
+                            f"[stream_final_answer] 타겟 노드가 아님 (필터링됨): "
+                            f"type={event_type}, name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}, "
+                            f"last_node={last_node_name}, started={answer_generation_started}"
+                        )
+                
+                # generate_and_validate_answer 노드 완료 시점
+                elif event_type == "on_chain_end" and event_name == "generate_and_validate_answer":
+                    logger.info(
+                        f"[stream_final_answer] 스트리밍 완료: "
+                        f"총 {event_count}개 이벤트, "
+                        f"스트림 이벤트 {stream_event_count}개, "
+                        f"on_llm_stream={on_llm_stream_count}개, "
+                        f"on_chat_model_stream={on_chat_model_stream_count}개, "
+                        f"on_chain_stream={on_chain_stream_count}개"
+                    )
+                    
+                    # 최종 완료 이벤트 (metadata 포함)
+                    try:
+                        # State 가져오기 (재시도 최소화하여 스트림 블로킹 방지)
+                        final_state = None
+                        state_values = None
+                        
+                        try:
+                            # 즉시 시도 (타임아웃 2초)
+                            final_state = await asyncio.wait_for(
+                                self.workflow_service.app.aget_state(config),
+                                timeout=2.0
+                            )
+                            if final_state and final_state.values:
+                                state_values = final_state.values
+                        except asyncio.TimeoutError:
+                            logger.warning(f"[stream_final_answer] Timeout getting state, using empty metadata")
+                        except Exception as e:
+                            logger.warning(f"[stream_final_answer] Error getting state: {e}")
+                        
+                        if final_state and state_values:
+                            # metadata 추출
+                            sources = state_values.get("sources", [])
+                            legal_references = state_values.get("legal_references", [])
+                            sources_detail = state_values.get("sources_detail", [])
+                            related_questions = state_values.get("metadata", {}).get("related_questions", [])
+                            
+                            # sources가 여전히 없으면 retrieved_docs에서 직접 추출 시도
+                            if not sources and not sources_detail:
+                                retrieved_docs = state_values.get("retrieved_docs", [])
+                                if retrieved_docs:
+                                    logger.info(f"[stream_final_answer] Sources not in state, extracting from {len(retrieved_docs)} retrieved_docs")
+                                    # SourcesExtractor를 사용하여 sources 추출
+                                    if hasattr(self, 'sources_extractor') and self.sources_extractor:
+                                        try:
+                                            sources_data = self.sources_extractor._extract_sources(state_values)
+                                            legal_references_data = self.sources_extractor._extract_legal_references(state_values)
+                                            sources_detail_data = self.sources_extractor._extract_sources_detail(state_values)
+                                            related_questions_data = self.sources_extractor._extract_related_questions(state_values)
+                                            
+                                            if sources_data:
+                                                sources = sources_data
+                                            if legal_references_data:
+                                                legal_references = legal_references_data
+                                            if sources_detail_data:
+                                                sources_detail = sources_detail_data
+                                            if related_questions_data:
+                                                related_questions = related_questions_data
+                                            
+                                            logger.info(f"[stream_final_answer] Extracted {len(sources)} sources from retrieved_docs")
+                                        except Exception as e:
+                                            logger.warning(f"[stream_final_answer] Failed to extract sources from retrieved_docs: {e}")
+                            
+                            # related_questions가 없으면 sources_extractor로 추출 시도
+                            if not related_questions:
+                                if hasattr(self, 'sources_extractor') and self.sources_extractor:
+                                    try:
+                                        related_questions_data = self.sources_extractor._extract_related_questions(state_values)
+                                        if related_questions_data:
+                                            related_questions = related_questions_data
+                                            logger.info(f"[stream_final_answer] Extracted {len(related_questions)} related_questions from state")
+                                    except Exception as e:
+                                        logger.warning(f"[stream_final_answer] Failed to extract related_questions from state: {e}")
+                            
+                            # LLM 검증 결과 추출
+                            llm_validation_result = state_values.get("metadata", {}).get("llm_validation_result", {})
+                            
+                            final_metadata = {
+                                "sources": sources,
+                                "legal_references": legal_references,
+                                "sources_detail": sources_detail,
+                                "related_questions": related_questions,
+                                "llm_validation": llm_validation_result if llm_validation_result else None
+                            }
+                        else:
+                            final_metadata = {}
+                    except Exception as e:
+                        logger.error(f"Error getting final state: {e}", exc_info=True)
+                        final_metadata = {}
+                    
+                    # 품질 검증 결과가 있으면 검증 이벤트 전송
+                    if final_metadata.get("llm_validation"):
+                        validation_result = final_metadata["llm_validation"]
+                        validation_event = {
+                            "type": "validation",
+                            "content": "답변 품질 검증 완료",
+                            "metadata": {
+                                "quality_score": validation_result.get("quality_score", 0.0),
+                                "is_valid": validation_result.get("is_valid", False),
+                                "needs_regeneration": validation_result.get("needs_regeneration", False),
+                                "regeneration_reason": validation_result.get("regeneration_reason"),
+                                "issues": validation_result.get("issues", []),
+                                "strengths": validation_result.get("strengths", [])
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        yield f"data: {json.dumps(validation_event, ensure_ascii=False)}\n\n"
+                    
+                    # 최종 답변 이벤트
+                    final_event = {
+                        "type": "final",
+                        "content": "",  # 스트림으로 이미 전송됨
+                        "metadata": final_metadata or {},
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+                    
+                    # 완료 이벤트
+                    done_event = {
+                        "type": "done",
+                        "content": "[DONE]",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+                    break  # 스트리밍 종료
+                
+            except GeneratorExit:
+                # 클라이언트가 연결을 끊은 경우 정상 종료
+                logger.debug("[stream_final_answer] Client disconnected, closing stream")
+                return
+            except Exception as e:
+                logger.error(f"Stream error: {e}", exc_info=True)
+                try:
+                    error_event = {
+                        "type": "error",
+                        "content": f"[오류] 스트리밍 중 오류가 발생했습니다: {str(e)}",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                except GeneratorExit:
+                    # yield 중 클라이언트가 연결을 끊은 경우
+                    logger.debug("[stream_final_answer] Client disconnected during error handling")
+                    return
+                except Exception as yield_error:
+                    # yield 자체가 실패한 경우 (스트림이 이미 닫힘)
+                    logger.error(f"Failed to yield error event: {yield_error}")
+                    return
     
     def is_available(self) -> bool:
         """서비스 사용 가능 여부"""
