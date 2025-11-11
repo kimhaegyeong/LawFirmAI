@@ -31,8 +31,9 @@ export function startGoogleLogin(): void {
  * OAuth2 콜백 처리
  */
 export async function handleOAuthCallback(code: string, state: string): Promise<TokenResponse> {
+  const processedCodeKey = `oauth2_processed_code_${code}`;
+  
   try {
-    const processedCodeKey = `oauth2_processed_code_${code}`;
     const isProcessed = sessionStorage.getItem(processedCodeKey);
     
     if (isProcessed === 'true') {
@@ -47,13 +48,50 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     if (savedState) {
       if (savedState !== state) {
         logger.error('State mismatch!', { savedState, urlState: state });
-        sessionStorage.removeItem(processedCodeKey);
         throw new Error('Invalid state parameter');
       }
       sessionStorage.removeItem('oauth2_state');
     }
     
     logger.info('OAuth callback: 인증 코드 처리 시작', { code: code.substring(0, 10), state: state?.substring(0, 10) });
+    
+    // URL 파라미터에서 토큰 확인 (백엔드가 리다이렉트로 전달)
+    const urlParams = new URLSearchParams(window.location.search);
+    const accessToken = urlParams.get('access_token');
+    const refreshToken = urlParams.get('refresh_token');
+    
+    if (accessToken) {
+      // 백엔드가 토큰을 쿼리 파라미터로 전달한 경우
+      logger.info('OAuth callback: URL 파라미터에서 토큰 확인');
+      
+      setAccessToken(accessToken);
+      
+      const savedToken = getAccessToken();
+      if (!savedToken) {
+        logger.error('Failed to save access token!');
+        throw new Error('토큰 저장에 실패했습니다.');
+      }
+      
+      if (refreshToken) {
+        setRefreshToken(refreshToken);
+      }
+      
+      logger.info('OAuth callback: 인증 코드 처리 완료', { code: code.substring(0, 10) });
+      
+      setTimeout(() => {
+        sessionStorage.removeItem(processedCodeKey);
+      }, 60000);
+      
+      return {
+        access_token: accessToken,
+        refresh_token: refreshToken || '',
+        token_type: 'bearer',
+        expires_in: 3600
+      };
+    }
+    
+    // 토큰이 URL 파라미터에 없는 경우 백엔드 API 호출 (fallback)
+    logger.info('OAuth callback: 백엔드 API 호출로 토큰 교환');
     
     const callbackUrl = api.defaults.baseURL 
       ? `${api.defaults.baseURL}/oauth2/google/callback?code=${code}&state=${state}`
@@ -64,11 +102,41 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
       headers: {
         'Accept': 'application/json',
       },
+      redirect: 'manual'
     });
+    
+    if (response.status === 307 || response.status === 302) {
+      // 리다이렉트 응답인 경우, Location 헤더에서 토큰 추출 시도
+      const location = response.headers.get('Location');
+      if (location) {
+        const redirectUrl = new URL(location);
+        const redirectAccessToken = redirectUrl.searchParams.get('access_token');
+        const redirectRefreshToken = redirectUrl.searchParams.get('refresh_token');
+        
+        if (redirectAccessToken) {
+          setAccessToken(redirectAccessToken);
+          if (redirectRefreshToken) {
+            setRefreshToken(redirectRefreshToken);
+          }
+          
+          logger.info('OAuth callback: 리다이렉트 URL에서 토큰 추출 완료');
+          
+          setTimeout(() => {
+            sessionStorage.removeItem(processedCodeKey);
+          }, 60000);
+          
+          return {
+            access_token: redirectAccessToken,
+            refresh_token: redirectRefreshToken || '',
+            token_type: 'bearer',
+            expires_in: 3600
+          };
+        }
+      }
+    }
     
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ detail: 'OAuth callback failed' }));
-      sessionStorage.removeItem(processedCodeKey);
       throw new Error(errorData.detail || 'OAuth callback failed');
     }
     
@@ -79,7 +147,6 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     const savedToken = getAccessToken();
     if (!savedToken) {
       logger.error('Failed to save access token!');
-      sessionStorage.removeItem(processedCodeKey);
       throw new Error('토큰 저장에 실패했습니다.');
     }
     
@@ -96,6 +163,14 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     return data;
   } catch (error) {
     logger.error('Failed to handle OAuth callback:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    if (errorMessage.includes('이미 사용되었습니다') || errorMessage.includes('invalid_grant')) {
+      logger.warn('인증 코드가 이미 사용되었거나 만료되었습니다. sessionStorage에 유지합니다.');
+    } else {
+      sessionStorage.removeItem(processedCodeKey);
+    }
+    
     throw extractApiError(error);
   }
 }
@@ -240,5 +315,28 @@ function generateState(): string {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
   return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 오래된 OAuth 키들을 sessionStorage에서 정리
+ */
+export function cleanupOldOAuthKeys(): void {
+  try {
+    const keysToRemove: string[] = [];
+    
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith('oauth2_processed_code_')) {
+        keysToRemove.push(key);
+      }
+    }
+    
+    if (keysToRemove.length > 0) {
+      keysToRemove.forEach(key => sessionStorage.removeItem(key));
+      logger.info(`Cleaned up ${keysToRemove.length} old OAuth keys from sessionStorage`);
+    }
+  } catch (error) {
+    logger.error('Failed to cleanup old OAuth keys:', error);
+  }
 }
 

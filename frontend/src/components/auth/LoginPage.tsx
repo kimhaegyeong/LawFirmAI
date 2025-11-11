@@ -9,7 +9,7 @@ import { isAuthenticated as checkAuthenticated } from '../../services/authServic
 import logger from '../../utils/logger';
 
 export function LoginPage() {
-  const { login, handleCallback, isLoading, error, isAuthenticated } = useAuth();
+  const { login, handleCallback, isLoading, error, isAuthenticated, user } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
   const [callbackCompleted, setCallbackCompleted] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -53,6 +53,26 @@ export function LoginPage() {
           logger.info('LoginPage: OAuth callback 처리 성공');
           window.history.replaceState({}, document.title, window.location.pathname);
           setCallbackCompleted(true);
+          
+          // 성공 직후 리다이렉트 시도 (useEffect가 실행되기 전에)
+          setTimeout(() => {
+            if (checkAuthenticated()) {
+              logger.info('LoginPage: handleCallback 성공 후 즉시 리다이렉트 시도');
+              window.history.replaceState({}, document.title, '/');
+              window.dispatchEvent(new PopStateEvent('popstate'));
+              
+              // 추가 확인: 300ms 후에도 여전히 LoginPage에 있으면 강제 리다이렉트
+              setTimeout(() => {
+                const urlParams = new URLSearchParams(window.location.search);
+                const hasCode = urlParams.get('code');
+                const hasState = urlParams.get('state');
+                if (hasCode || hasState) {
+                  logger.warn('LoginPage: URL 파라미터가 여전히 존재, 강제 리다이렉트');
+                  window.location.href = '/';
+                }
+              }, 300);
+            }
+          }, 200);
         })
         .catch((err) => {
           logger.warn('LoginPage: OAuth callback failed, continuing as guest:', err);
@@ -60,7 +80,8 @@ export function LoginPage() {
           hasProcessedCallback.current = false;
           window.history.replaceState({}, document.title, window.location.pathname);
           setTimeout(() => {
-            window.location.replace('/');
+            window.history.replaceState({}, document.title, '/');
+            window.dispatchEvent(new PopStateEvent('popstate'));
           }, 300);
         })
         .finally(() => {
@@ -70,16 +91,63 @@ export function LoginPage() {
   }, [handleCallback]);
 
   useEffect(() => {
-    if (callbackCompleted && isAuthenticated && !isLoading && !isProcessing) {
+    logger.debug('LoginPage: 리다이렉트 useEffect 실행', {
+      callbackCompleted,
+      isAuthenticated,
+      hasUser: !!user,
+      isLoading,
+      isProcessing,
+      checkAuth: checkAuthenticated()
+    });
+
+    if (callbackCompleted && isAuthenticated && user && !isLoading && !isProcessing) {
       if (checkAuthenticated()) {
+        logger.info('LoginPage: 로그인 성공, 메인 화면으로 리다이렉트', { 
+          callbackCompleted, 
+          isAuthenticated, 
+          hasUser: !!user,
+          isLoading,
+          isProcessing 
+        });
+        
+        // URL 파라미터 제거
+        window.history.replaceState({}, document.title, '/');
+        
+        // App.tsx가 리렌더링되도록 popstate 이벤트 발생
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        
+        // 짧은 지연 후 URL 확인 및 필요시 강제 리다이렉트
         setTimeout(() => {
-          window.location.replace('/');
-        }, 300);
+          const urlParams = new URLSearchParams(window.location.search);
+          const hasCode = urlParams.get('code');
+          const hasState = urlParams.get('state');
+          const currentPath = window.location.pathname;
+          
+          if (!hasCode && !hasState && currentPath === '/') {
+            logger.info('LoginPage: URL 파라미터 제거 완료, 리다이렉트 완료');
+          } else {
+            logger.warn('LoginPage: URL 파라미터가 여전히 존재하거나 경로가 잘못됨, 강제 리다이렉트', {
+              hasCode: !!hasCode,
+              hasState: !!hasState,
+              currentPath
+            });
+            // 강제로 페이지 이동 (popstate 이벤트만으로는 부족한 경우)
+            window.location.href = '/';
+          }
+        }, 200);
       } else {
         logger.error('Token not found before redirect!');
       }
+    } else {
+      logger.debug('LoginPage: 리다이렉트 조건 미충족', {
+        callbackCompleted,
+        isAuthenticated,
+        hasUser: !!user,
+        isLoading,
+        isProcessing
+      });
     }
-  }, [callbackCompleted, isAuthenticated, isLoading, isProcessing]);
+  }, [callbackCompleted, isAuthenticated, user, isLoading, isProcessing]);
 
   const handleLogin = () => {
     login();

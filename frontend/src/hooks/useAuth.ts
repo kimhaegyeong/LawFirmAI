@@ -21,11 +21,24 @@ export function useAuth() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const isInitialMount = useRef(true);
+  const isLoadingUser = useRef(false);
+  const isHandlingCallback = useRef(false);
 
   /**
    * 사용자 정보 조회
    */
   const loadUser = useCallback(async () => {
+    if (isLoadingUser.current) {
+      logger.debug('loadUser: Already loading, skipping duplicate call');
+      return;
+    }
+
+    // handleCallback이 실행 중이면 토큰을 삭제하지 않음
+    if (isHandlingCallback.current) {
+      logger.debug('loadUser: Callback handling in progress, skipping to avoid token deletion');
+      return;
+    }
+
     if (!checkAuthenticated()) {
       setIsLoading(false);
       setIsAuthenticated(false);
@@ -33,6 +46,7 @@ export function useAuth() {
       return;
     }
 
+    isLoadingUser.current = true;
     setIsLoading(true);
     setError(null);
 
@@ -40,16 +54,20 @@ export function useAuth() {
       const userInfo = await getCurrentUser();
       setUser(userInfo);
       setIsAuthenticated(userInfo.authenticated);
-      if (!userInfo.authenticated) {
+      
+      // handleCallback이 실행 중이면 토큰을 삭제하지 않음
+      if (!userInfo.authenticated && !isHandlingCallback.current) {
         logger.warn('User info indicates not authenticated, clearing tokens');
         logoutService();
+      } else if (!userInfo.authenticated && isHandlingCallback.current) {
+        logger.debug('loadUser: Callback handling in progress, not clearing tokens');
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error('사용자 정보를 불러올 수 없습니다.');
       logger.error('Failed to load user:', error);
       
       const axiosError = err as any;
-      if (axiosError?.response?.status === 401) {
+      if (axiosError?.response?.status === 401 && !isHandlingCallback.current) {
         setError(error);
         setIsAuthenticated(false);
         setUser(null);
@@ -58,9 +76,13 @@ export function useAuth() {
         setError(error);
         setIsAuthenticated(false);
         setUser(null);
+        if (axiosError?.response?.status === 401 && isHandlingCallback.current) {
+          logger.debug('loadUser: Callback handling in progress, not clearing tokens on 401');
+        }
       }
     } finally {
       setIsLoading(false);
+      isLoadingUser.current = false;
     }
   }, []);
 
@@ -81,21 +103,73 @@ export function useAuth() {
    * OAuth2 콜백 처리
    */
   const handleCallback = useCallback(async (code: string, state: string) => {
+    if (isLoadingUser.current) {
+      logger.debug('handleCallback: User loading in progress, waiting...');
+      await new Promise(resolve => {
+        const checkInterval = setInterval(() => {
+          if (!isLoadingUser.current) {
+            clearInterval(checkInterval);
+            resolve(undefined);
+          }
+        }, 100);
+      });
+    }
+
+    isHandlingCallback.current = true;
+    isLoadingUser.current = true;
     setIsLoading(true);
     setError(null);
 
     try {
-      await handleOAuthCallback(code, state);
+      const tokenResponse = await handleOAuthCallback(code, state);
       
-      if (!checkAuthenticated()) {
+      // 토큰이 응답에 포함되어 있는지 확인
+      if (!tokenResponse || !tokenResponse.access_token) {
+        throw new Error('토큰 응답이 올바르지 않습니다.');
+      }
+      
+      // 토큰을 다시 한 번 저장 (확실하게)
+      const { setAccessToken: saveToken } = await import('../services/authService');
+      saveToken(tokenResponse.access_token);
+      
+      if (tokenResponse.refresh_token) {
+        const { setRefreshToken: saveRefreshToken } = await import('../services/authService');
+        saveRefreshToken(tokenResponse.refresh_token);
+      }
+      
+      // 토큰이 localStorage에 제대로 저장되었는지 확인
+      const savedToken = checkAuthenticated();
+      logger.info('Token saved, verifying:', { hasToken: !!savedToken });
+      
+      if (!savedToken) {
         throw new Error('토큰이 저장되지 않았습니다.');
       }
       
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // localStorage에서 직접 토큰 확인
+      const directToken = localStorage.getItem('access_token');
+      logger.info('Direct token check:', { hasToken: !!directToken, tokenLength: directToken?.length });
+      
+      if (!directToken) {
+        throw new Error('토큰이 localStorage에 저장되지 않았습니다.');
+      }
+      
+      // 토큰이 저장된 후 충분히 대기 (다른 useEffect가 실행되지 않도록)
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // 다시 한 번 토큰 확인
+      const tokenBeforeRequest = localStorage.getItem('access_token');
+      logger.info('Token before /auth/me request:', { hasToken: !!tokenBeforeRequest });
+      
+      if (!tokenBeforeRequest) {
+        throw new Error('토큰이 요청 전에 사라졌습니다.');
+      }
       
       const userInfo = await getCurrentUser();
       
+      logger.info('User info from /auth/me:', { authenticated: userInfo.authenticated, userId: userInfo.user_id });
+      
       if (!userInfo.authenticated) {
+        logger.error('Authentication failed:', { userInfo });
         throw new Error('사용자 인증에 실패했습니다.');
       }
       
@@ -111,6 +185,8 @@ export function useAuth() {
       throw error;
     } finally {
       setIsLoading(false);
+      isLoadingUser.current = false;
+      isHandlingCallback.current = false;
     }
   }, []);
 
@@ -173,6 +249,12 @@ export function useAuth() {
    * 토큰이 있지만 사용자 정보가 로드되지 않은 경우 다시 조회
    */
   useEffect(() => {
+    // handleCallback이 실행 중이면 retryLoadUser를 실행하지 않음
+    if (isHandlingCallback.current) {
+      logger.debug('retryLoadUser: Callback handling in progress, skipping');
+      return;
+    }
+
     if (!isLoading && checkAuthenticated() && !user && !isInitialMount.current) {
       const retryLoadUser = async () => {
         try {
@@ -180,7 +262,8 @@ export function useAuth() {
         } catch (err) {
           logger.error('Failed to reload user:', err);
           setTimeout(() => {
-            if (checkAuthenticated() && !user) {
+            // handleCallback이 실행 중이면 재시도하지 않음
+            if (checkAuthenticated() && !user && !isHandlingCallback.current) {
               loadUser().catch((err) => {
                 logger.error('Retry failed to reload user:', err);
               });
