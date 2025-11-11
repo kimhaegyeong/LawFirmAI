@@ -147,6 +147,38 @@ class AnswerGenerationMixin:
         
         return retrieved_docs or []
     
+    def _build_intelligent_context(self, state: LegalWorkflowState) -> Dict[str, Any]:
+        """intelligent context 구축 (context_builder 사용)"""
+        try:
+            if hasattr(self, 'context_builder') and self.context_builder:
+                context_result = self.context_builder.build_intelligent_context(state)
+                # 타입 검증 및 변환 (안전하게 처리)
+                if isinstance(context_result, dict):
+                    return context_result
+                elif isinstance(context_result, str):
+                    self.logger.warning(f"⚠️ [CONTEXT] context_builder returned str instead of dict, converting")
+                    return {"context": context_result}
+                else:
+                    self.logger.warning(f"⚠️ [CONTEXT] context_builder returned unexpected type: {type(context_result)}, converting to dict")
+                    return {"context": str(context_result) if context_result else ""}
+            else:
+                self.logger.warning("⚠️ [CONTEXT] context_builder not available, using fallback")
+                query = self._get_state_value(state, "query", "")
+                retrieved_docs = self._restore_retrieved_docs(state)
+                context_parts = [f"질문: {query}"]
+                if retrieved_docs:
+                    for idx, doc in enumerate(retrieved_docs[:5], 1):
+                        if isinstance(doc, dict):
+                            content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                            source = doc.get("source") or doc.get("title") or f"Document_{idx}"
+                            if content:
+                                context_parts.append(f"[{source}]\n{content[:500]}")
+                return {"context": "\n\n".join(context_parts)}
+        except Exception as e:
+            self.logger.error(f"❌ [CONTEXT] Failed to build intelligent context: {e}", exc_info=True)
+            query = self._get_state_value(state, "query", "")
+            return {"context": f"질문: {query}"}
+    
     def _build_context_dict(
         self, 
         state: LegalWorkflowState, 
@@ -155,6 +187,15 @@ class AnswerGenerationMixin:
         prompt_optimized_context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """context_dict 생성 (중복 코드 제거)"""
+        # prompt_optimized_context가 딕셔너리가 아닌 경우 변환
+        if not isinstance(prompt_optimized_context, dict):
+            if isinstance(prompt_optimized_context, str):
+                self.logger.warning(f"⚠️ [CONTEXT DICT] prompt_optimized_context is str, converting to dict")
+                prompt_optimized_context = {"prompt_optimized_text": prompt_optimized_context}
+            else:
+                self.logger.warning(f"⚠️ [CONTEXT DICT] prompt_optimized_context is not dict (type: {type(prompt_optimized_context)}), using empty dict")
+                prompt_optimized_context = {}
+        
         has_valid_optimized_context = (
             prompt_optimized_context
             and isinstance(prompt_optimized_context, dict)
