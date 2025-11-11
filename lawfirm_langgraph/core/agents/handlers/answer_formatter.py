@@ -14,16 +14,22 @@ from core.agents.state_definitions import LegalWorkflowState
 from core.agents.workflow_utils import WorkflowUtils
 from core.agents.validators.quality_validators import AnswerValidator
 
+from .config.formatter_config import AnswerLengthConfig, ConfidenceConfig
+from .managers.confidence_manager import ConfidenceManager
+from .extractors.source_extractor import SourceExtractor
+from .cleaners.answer_cleaner import AnswerCleaner
+from .formatters.length_adjuster import AnswerLengthAdjuster
+
 # Constants for processing steps
 MAX_PROCESSING_STEPS = 50
 
-# 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 추가 증가
+# 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 추가 증가 (하위 호환성 유지)
 ANSWER_LENGTH_TARGETS = {
-    "simple_question": (500, 3000),      # 간단한 질의: 500-3000자 (2000 -> 3000)
-    "term_explanation": (800, 3500),     # 용어 설명: 800-3500자 (2500 -> 3500)
-    "legal_analysis": (1500, 5000),      # 법률 분석: 1500-5000자 (4000 -> 5000)
-    "complex_question": (2000, 8000),    # 복잡한 질의: 2000-8000자 (5000 -> 8000)
-    "default": (800, 4000)               # 기본값: 800-4000자 (3000 -> 4000)
+    "simple_question": (500, 3000),
+    "term_explanation": (800, 3500),
+    "legal_analysis": (1500, 5000),
+    "complex_question": (2000, 8000),
+    "default": (800, 4000)
 }
 
 
@@ -73,6 +79,16 @@ class AnswerFormatterHandler:
         self.reasoning_extractor = reasoning_extractor
         self.answer_generator = answer_generator
         self.logger = logger or logging.getLogger(__name__)
+        if self.logger.level > logging.INFO:
+            self.logger.setLevel(logging.INFO)
+        
+        # 리팩토링된 컴포넌트 초기화
+        self.length_config = AnswerLengthConfig()
+        self.confidence_config = ConfidenceConfig()
+        self.confidence_manager = ConfidenceManager(self.confidence_config, self.logger)
+        self.source_extractor = SourceExtractor(self.logger)
+        self.answer_cleaner = AnswerCleaner(self.logger)
+        self.length_adjuster = AnswerLengthAdjuster(self.length_config, self.logger)
 
     def format_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅: 구조화 + 시각적 포맷팅"""
@@ -465,53 +481,10 @@ class AnswerFormatterHandler:
 
             formatted_answer = '\n'.join(cleaned_lines)
 
-            # 신뢰도 값 통일 (현재 state의 confidence 값으로 교체) - format_answer_part 단계에서도 적용
+            # 신뢰도 값 통일 (리팩토링된 메서드 사용)
             current_confidence = state.get("confidence", 0.0)
             if current_confidence > 0:
-                confidence_str = f"{current_confidence:.1%}"
-                # 신뢰도 레벨 결정
-                if current_confidence >= 0.8:
-                    level = "high"
-                    emoji = "🟢"
-                elif current_confidence >= 0.6:
-                    level = "medium"
-                    emoji = "🟡"
-                else:
-                    level = "low"
-                    emoji = "🟠"
-
-                # 반복 적용하여 모든 신뢰도 패턴 교체
-                for _ in range(5):  # 더 많이 반복
-                    formatted_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', formatted_answer, flags=re.IGNORECASE)
-                    formatted_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', formatted_answer, flags=re.IGNORECASE)
-                    formatted_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', formatted_answer, flags=re.IGNORECASE)
-                    formatted_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', formatted_answer, flags=re.IGNORECASE)
-                    formatted_answer = re.sub(r'신뢰도:\s*[\d.]+%', f'신뢰도: {confidence_str}', formatted_answer, flags=re.IGNORECASE)
-                    formatted_answer = re.sub(r'답변품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', formatted_answer, flags=re.IGNORECASE)
-
-                # "신뢰도정보" 섹션도 교체 (format_answer_part 단계에서)
-                new_confidence_section = f'### 💡 신뢰도정보\n{emoji} **신뢰도: {confidence_str}** ({level})\n\n**상세점수:**\n- 답변 품질: {confidence_str}\n\n**설명:** 신뢰도: {confidence_str}'
-
-                # 섹션을 직접 찾아 교체
-                lines = formatted_answer.split('\n')
-                new_lines = []
-                in_confidence_section = False
-
-                for line in lines:
-                    if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
-                        in_confidence_section = True
-                        new_lines.append(new_confidence_section)
-                        continue
-
-                    if in_confidence_section:
-                        if line.strip() == '---' or line.strip().startswith('💼') or re.match(r'^###\s+', line):
-                            in_confidence_section = False
-                            new_lines.append(line)
-                        continue
-
-                    new_lines.append(line)
-
-                formatted_answer = '\n'.join(new_lines)
+                formatted_answer = self.confidence_manager.replace_in_text(formatted_answer, current_confidence)
 
         WorkflowUtils.update_processing_time(state, format_start_time)
         WorkflowUtils.add_step(state, "포맷팅", "답변 구조화 및 포맷팅 완료")
@@ -899,224 +872,16 @@ class AnswerFormatterHandler:
         return metadata
 
     def _remove_metadata_sections(self, answer_text: str) -> str:
-        """답변 텍스트에서 메타 정보 섹션 제거 (줄 단위 직접 처리)"""
-        import re
-
-        if not answer_text or not isinstance(answer_text, str):
-            return answer_text
-
-        lines = answer_text.split('\n')
-        cleaned_lines = []
-        in_confidence_section = False
-        in_reference_section = False
-        in_disclaimer_section = False
-
-        for i, line in enumerate(lines):
-            # 신뢰도 정보 섹션 시작
-            if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
-                in_confidence_section = True
-                continue
-
-            # 참고 자료 섹션 시작
-            if re.match(r'^###\s*📚\s*참고\s*자료', line, re.IGNORECASE):
-                in_reference_section = True
-                continue
-
-            # 면책 조항 섹션 시작 (--- 또는 💼, 단 "---" 다음에 실제 면책 조항이 있는 경우만)
-            # "---" 다음에 "본 답변은", "면책", "변호사" 같은 키워드가 있으면 면책 조항으로 간주
-            if line.strip() == '---':
-                # 다음 몇 줄을 확인하여 면책 조항인지 판단
-                next_line_idx = i + 1
-                if next_line_idx < len(lines):
-                    next_line = lines[next_line_idx]
-                    if re.search(r'면책|본 답변은.*일반적인|변호사와.*상담|개별.*사안', next_line, re.IGNORECASE):
-                        in_disclaimer_section = True
-                        continue
-                # 면책 조항이 아니면 "---" 줄만 건너뛰고 계속 진행
-                continue
-            elif re.match(r'^\s*💼\s*\*\*면책\s*조항\*\*', line, re.IGNORECASE):
-                in_disclaimer_section = True
-                continue
-
-            # 섹션 종료 확인
-            if in_confidence_section:
-                # 다음 ### 섹션이나 --- 나오면 종료
-                if re.match(r'^###\s+', line) or line.strip() == '---':
-                    in_confidence_section = False
-                    # 이 줄은 건너뛰기
-                    continue
-                # 섹션 내부는 모두 건너뛰기
-                continue
-
-            if in_reference_section:
-                # 다음 ### 섹션이나 --- 나오면 종료
-                if re.match(r'^###\s+', line) or line.strip() == '---':
-                    in_reference_section = False
-                    # 이 줄은 건너뛰기
-                    continue
-                # 섹션 내부는 모두 건너뛰기
-                continue
-
-            if in_disclaimer_section:
-                # 면책 조항 섹션 종료 확인 (### 헤더가 나오면 종료, 또는 답변 내용이 다시 시작되면 종료)
-                if re.match(r'^###\s+', line) or re.match(r'^##\s+', line):
-                    in_disclaimer_section = False
-                    # 이 줄은 포함하지 않음
-                    continue
-                # 면책 조항 섹션 내부는 모두 건너뛰기
-                continue
-
-            # 남아있는 메타 정보 패턴 제거 (상세 점수, 설명 등)
-            if re.match(r'^\*\*상세\s*점수:\*\*', line, re.IGNORECASE):
-                continue
-            if re.match(r'^\*\*설명:\*\*', line, re.IGNORECASE):
-                continue
-            if re.match(r'^-\s*답변\s*품질:', line, re.IGNORECASE):
-                continue
-            if re.match(r'^-\s*신뢰도:', line, re.IGNORECASE):
-                continue
-
-            # 메타 정보 섹션이 아닌 경우만 추가
-            cleaned_lines.append(line)
-
-        cleaned_text = '\n'.join(cleaned_lines)
-
-        # 연속된 빈 줄 정리
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-
-        # 남아있는 메타 정보 패턴 추가 제거
-        # "**상세 점수:**" 섹션 제거
-        cleaned_text = re.sub(r'\*\*상세\s*점수:\*\*.*?\n', '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
-        # "- 답변 품질:" 패턴 제거
-        cleaned_text = re.sub(r'-\s*답변\s*품질:\s*[\d.]+%?\s*\n?', '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
-        # "**설명:**" 패턴 제거
-        cleaned_text = re.sub(r'\*\*설명:\*\*\s*신뢰도:.*?\n?', '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
-        # "- 신뢰도:" 패턴 제거
-        cleaned_text = re.sub(r'-\s*신뢰도:\s*[\d.]+%?\s*\n?', '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
-
-        # 연속된 빈 줄 재정리
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-
-        return cleaned_text.strip()
+        """답변 텍스트에서 메타 정보 섹션 제거 (리팩토링된 메서드 사용)"""
+        return self.answer_cleaner.remove_metadata_sections(answer_text)
 
     def _remove_answer_header(self, answer_text: str) -> str:
-        """답변 텍스트에서 '## 답변' 헤더 제거"""
-        import re
-
-        if not answer_text or not isinstance(answer_text, str):
-            return answer_text
-
-        # '## 답변' 헤더 제거 (단독 라인으로 있는 경우)
-        answer_text = re.sub(r'^##\s*답변\s*\n+', '', answer_text, flags=re.MULTILINE | re.IGNORECASE)
-
-        # 앞부분의 빈 줄 제거
-        answer_text = answer_text.lstrip('\n')
-
-        return answer_text
+        """답변 텍스트에서 '## 답변' 헤더 제거 (리팩토링된 메서드 사용)"""
+        return self.answer_cleaner.remove_answer_header(answer_text)
 
     def _remove_intermediate_text(self, answer_text: str) -> str:
-        """
-        중간 생성 텍스트 제거 (STEP 0, 원본 답변, 질문 정보 등)
-
-        Args:
-            answer_text: 원본 답변 텍스트
-
-        Returns:
-            중간 텍스트가 제거된 답변
-        """
-        import re
-
-        if not answer_text or not isinstance(answer_text, str):
-            return answer_text
-
-        lines = answer_text.split('\n')
-        cleaned_lines = []
-        skip_section = False
-
-        # 제거할 패턴 목록
-        skip_patterns = [
-            r'^##\s*STEP\s*0',
-            r'^##\s*원본\s*품질\s*평가',
-            r'^##\s*질문\s*정보',
-            r'^##\s*원본\s*답변',
-            r'^\*\*질문\*\*:',
-            r'^\*\*질문\s*유형\*\*:',
-            r'^평가\s*결과',
-            r'원본\s*에\s*개선이\s*필요하면',
-            r'^\*\*평가\s*결\s*과\s*에\s*따른\s*작업',
-        ]
-
-        for i, line in enumerate(lines):
-            # 섹션 시작 패턴 확인
-            is_section_start = False
-            for pattern in skip_patterns:
-                if re.match(pattern, line, re.IGNORECASE):
-                    skip_section = True
-                    is_section_start = True
-                    self.logger.debug(f"[INTERMEDIATE TEXT REMOVAL] Found skip pattern: {line[:50]}")
-                    break
-
-            if is_section_start:
-                continue
-
-            # 섹션 종료 확인 (다음 ## 헤더 또는 실제 답변 시작)
-            if skip_section:
-                # 다음 ## 헤더가 나오거나, 실제 답변 시작 패턴 확인
-                if re.match(r'^##\s+[가-힣]', line):  # 실제 답변 섹션 시작
-                    skip_section = False
-                    # 이 줄은 포함 (하지만 패턴에 매칭되지 않는 경우만)
-                    if not any(re.match(p, line, re.IGNORECASE) for p in skip_patterns):
-                        cleaned_lines.append(line)
-                    continue
-                
-                # 실제 답변 내용이 시작되는 패턴 확인 (문서 인용, 법령 인용 등)
-                if re.search(r'\[문서:|\[법령:|민법\s*제\d+조|형법\s*제\d+조', line):
-                    skip_section = False
-                    cleaned_lines.append(line)
-                    continue
-
-                # 체크리스트 패턴 제거 (• [ ] 형태)
-                if re.match(r'^\s*[•\-\*]\s*\[.*?\].*?', line):
-                    continue
-
-                # "안녕하세요" 인사말은 유지하되, 단독 라인만 제거 (내용은 유지)
-                # 주의: 인사말이 포함된 라인은 내용이 있을 수 있으므로 제거하지 않음
-                if re.match(r'^안녕하세요.*?궁금하시군요\.?\s*$', line, re.IGNORECASE):
-                    # 단독 라인으로만 있는 경우만 제거 (내용이 있는 경우 유지)
-                    continue
-                
-                # 빈 줄이 2개 이상 연속되면 섹션 종료로 간주
-                if line.strip() == "" and i > 0 and lines[i-1].strip() == "":
-                    # 다음 줄에 실제 내용이 있는지 확인
-                    if i + 1 < len(lines) and lines[i+1].strip() and not any(re.match(p, lines[i+1], re.IGNORECASE) for p in skip_patterns):
-                        skip_section = False
-                        cleaned_lines.append(line)
-                        continue
-
-                # 섹션 내부의 다른 줄들은 모두 건너뛰기
-                continue
-            else:
-                # 일반 텍스트 추가 (체크리스트 패턴 필터링)
-                if re.match(r'^\s*[•\-\*]\s*\[.*?\].*?', line):
-                    continue
-
-                # 체크박스 패턴 제거 (• [ ] 법적 정보가 충분하고...)
-                if re.search(r'\[.*?\].*?(충분|명확|일관|포함)', line):
-                    continue
-
-                cleaned_lines.append(line)
-
-        cleaned_text = '\n'.join(cleaned_lines)
-
-        # 연속된 빈 줄 정리
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-
-        # 앞뒤 공백 제거
-        cleaned_text = cleaned_text.strip()
-
-        self.logger.debug(f"[INTERMEDIATE TEXT REMOVAL] Removed sections, original: {len(answer_text)}, cleaned: {len(cleaned_text)}")
-
-        return cleaned_text
+        """중간 생성 텍스트 제거 (리팩토링된 메서드 사용)"""
+        return self.answer_cleaner.remove_intermediate_text(answer_text)
 
     def _adjust_answer_length(
         self,
@@ -1126,107 +891,10 @@ class AnswerFormatterHandler:
         grounding_score: Optional[float] = None,
         quality_score: Optional[float] = None
     ) -> str:
-        """
-        답변 길이를 질의 유형에 맞게 조절
-
-        Args:
-            answer: 원본 답변
-            query_type: 질의 유형
-            query_complexity: 질의 복잡도
-            grounding_score: 검증 점수 (선택적, 품질 기반 길이 조정에 사용)
-            quality_score: 품질 점수 (선택적, 품질 기반 길이 조정에 사용)
-
-        Returns:
-            조절된 답변
-        """
-        import re
-
-        if not answer:
-            return answer
-
-        current_length = len(answer)
-
-        # 목표 길이 결정 (개선: 기본값 수정)
-        if query_complexity == "simple":
-            min_len, max_len = ANSWER_LENGTH_TARGETS.get("simple_question", ANSWER_LENGTH_TARGETS["default"])
-        elif query_complexity == "moderate":
-            # moderate는 기본적으로 더 긴 답변 허용 (개선: moderate 복잡도 처리)
-            min_len, max_len = ANSWER_LENGTH_TARGETS.get("legal_analysis", ANSWER_LENGTH_TARGETS["default"])
-        elif query_complexity == "complex":
-            min_len, max_len = ANSWER_LENGTH_TARGETS.get("complex_question", ANSWER_LENGTH_TARGETS["default"])
-        else:
-            targets = ANSWER_LENGTH_TARGETS.get(query_type, ANSWER_LENGTH_TARGETS["default"])
-            min_len, max_len = targets
-
-        # 답변 품질에 따른 길이 조정 (개선: 품질 기반 동적 조정)
-        original_max_len = max_len
-        if grounding_score is not None and grounding_score >= 0.7:
-            # 높은 Grounding Score면 더 긴 답변 허용 (최대 50% 증가)
-            max_len = int(max_len * 1.5)
-            self.logger.info(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (grounding_score: {grounding_score:.2f})")
-        elif quality_score is not None and quality_score >= 0.8:
-            # 높은 품질 점수면 더 긴 답변 허용 (최대 30% 증가)
-            max_len = int(max_len * 1.3)
-            self.logger.info(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (quality_score: {quality_score:.2f})")
-        elif grounding_score is not None and grounding_score >= 0.5:
-            # 중간 Grounding Score면 약간 더 긴 답변 허용 (최대 20% 증가)
-            max_len = int(max_len * 1.2)
-            self.logger.debug(f"[ANSWER LENGTH] Quality-based adjustment: max_len increased from {original_max_len} to {max_len} (grounding_score: {grounding_score:.2f})")
-
-        # 길이가 적절한 경우 그대로 반환
-        if min_len <= current_length <= max_len:
-            self.logger.debug(f"[ANSWER LENGTH] Length OK: {current_length} (target: {min_len}-{max_len})")
-            return answer
-
-        # 너무 긴 경우: 핵심 내용만 추출
-        if current_length > max_len:
-            self.logger.info(f"[ANSWER LENGTH] Too long: {current_length}, adjusting to max {max_len}")
-            # 섹션별로 분리
-            sections = re.split(r'\n\n+', answer)
-
-            # 각 섹션의 중요도 평가 (법령 인용, 판례 등 포함 여부)
-            important_sections = []
-            other_sections = []
-
-            for section in sections:
-                if (re.search(r'\[법령:', section) or
-                    re.search(r'대법원', section) or
-                    re.search(r'제\s*\d+\s*조', section)):
-                    important_sections.append(section)
-                else:
-                    other_sections.append(section)
-
-            # 중요 섹션 우선 포함
-            result = []
-            current_len = 0
-
-            for section in important_sections:
-                if current_len + len(section) <= max_len:
-                    result.append(section)
-                    current_len += len(section)
-                else:
-                    # 섹션 일부만 포함
-                    remaining = max_len - current_len - 10  # 여유 공간
-                    if remaining > 100:  # 최소 100자 이상은 포함
-                        result.append(section[:remaining] + "...")
-                    break
-
-            # 여유가 있으면 다른 섹션도 포함
-            for section in other_sections:
-                if current_len + len(section) <= max_len:
-                    result.append(section)
-                    current_len += len(section)
-                else:
-                    break
-
-            adjusted_answer = '\n\n'.join(result)
-            self.logger.info(f"[ANSWER LENGTH] Adjusted: {len(answer)} -> {len(adjusted_answer)}")
-            return adjusted_answer
-
-        # 너무 짧은 경우: 이미 최소 길이로 생성된 것이므로 그대로 반환
-        # (추가 생성은 LLM 호출이 필요하므로 여기서는 하지 않음)
-        self.logger.debug(f"[ANSWER LENGTH] Too short: {current_length} (target: {min_len}-{max_len}), keeping as is")
-        return answer
+        """답변 길이를 질의 유형에 맞게 조절 (리팩토링된 메서드 사용)"""
+        return self.length_adjuster.adjust_length(
+            answer, query_type, query_complexity, grounding_score, quality_score
+        )
 
     def _calculate_consistent_confidence(
         self,
@@ -1332,6 +1000,7 @@ class AnswerFormatterHandler:
             query_complexity: 보존할 query_complexity 값
             needs_search: 보존할 needs_search 값
         """
+        self.logger.warning("[PREPARE_FINAL_RESPONSE_PART] Starting prepare_final_response_part")
         final_start_time = time.time()
 
         # query_complexity 보존 및 저장
@@ -1591,60 +1260,10 @@ class AnswerFormatterHandler:
 
         state["confidence"] = final_adjusted_confidence
 
-        # 신뢰도 값 설정 직후 답변 텍스트의 신뢰도 값 교체 (중요: prepare_final_response_part에서)
-        import re
+        # 신뢰도 값 설정 직후 답변 텍스트의 신뢰도 값 교체 (리팩토링된 메서드 사용)
         current_answer = state.get("answer", "")
         if current_answer and isinstance(current_answer, str) and final_adjusted_confidence > 0:
-            confidence_str = f"{final_adjusted_confidence:.1%}"
-            # 신뢰도 레벨 결정
-            if final_adjusted_confidence >= 0.8:
-                level = "high"
-                emoji = "🟢"
-            elif final_adjusted_confidence >= 0.6:
-                level = "medium"
-                emoji = "🟡"
-            else:
-                level = "low"
-                emoji = "🟠"
-
-            # 반복 적용하여 모든 신뢰도 패턴 교체
-            for _ in range(5):
-                current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'신뢰도:\s*[\d.]+%', f'신뢰도: {confidence_str}', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'답변품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', current_answer, flags=re.IGNORECASE)
-                # 레벨도 함께 교체
-                current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(medium\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(high\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                current_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-
-            # "신뢰도정보" 섹션 직접 교체
-            new_confidence_section = f'### 💡 신뢰도정보\n{emoji} **신뢰도: {confidence_str}** ({level})\n\n**상세점수:**\n- 답변 품질: {confidence_str}\n\n**설명:** 신뢰도: {confidence_str}'
-
-            lines = current_answer.split('\n')
-            new_lines = []
-            in_confidence_section = False
-
-            for line in lines:
-                if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
-                    in_confidence_section = True
-                    new_lines.append(new_confidence_section)
-                    continue
-
-                if in_confidence_section:
-                    if line.strip() == '---' or line.strip().startswith('💼') or re.match(r'^###\s+', line):
-                        in_confidence_section = False
-                        new_lines.append(line)
-                    continue
-
-                new_lines.append(line)
-
-            state["answer"] = '\n'.join(new_lines)
+            state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
 
         # 최종 answer를 문자열로 수렴
         try:
@@ -1652,64 +1271,18 @@ class AnswerFormatterHandler:
         except Exception:
             state["answer"] = str(state.get("answer", ""))
 
-        # normalize_answer 호출 이후 신뢰도 값 다시 교체 (정규화로 인한 손실 방지)
+        # normalize_answer 호출 이후 신뢰도 값 다시 교체 (정규화로 인한 손실 방지, 리팩토링된 메서드 사용)
         if final_adjusted_confidence > 0 and state.get("answer"):
             current_answer = state.get("answer", "")
             if isinstance(current_answer, str):
-                confidence_str = f"{final_adjusted_confidence:.1%}"
-                if final_adjusted_confidence >= 0.8:
-                    level = "high"
-                    emoji = "🟢"
-                elif final_adjusted_confidence >= 0.6:
-                    level = "medium"
-                    emoji = "🟡"
-                else:
-                    level = "low"
-                    emoji = "🟠"
-
-                # 반복 적용하여 모든 신뢰도 패턴 교체
-                for _ in range(5):
-                    current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'신뢰도:\s*[\d.]+%', f'신뢰도: {confidence_str}', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'답변품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', current_answer, flags=re.IGNORECASE)
-                    # 레벨도 함께 교체
-                    current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(medium\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(high\)', f'**신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-                    current_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'{emoji} **신뢰도: {confidence_str}** ({level})', current_answer, flags=re.IGNORECASE)
-
-                # "신뢰도정보" 섹션 직접 교체 (다시)
-                new_confidence_section = f'### 💡 신뢰도정보\n{emoji} **신뢰도: {confidence_str}** ({level})\n\n**상세점수:**\n- 답변 품질: {confidence_str}\n\n**설명:** 신뢰도: {confidence_str}'
-
-                lines = current_answer.split('\n')
-                new_lines = []
-                in_confidence_section = False
-
-                for line in lines:
-                    if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
-                        in_confidence_section = True
-                        new_lines.append(new_confidence_section)
-                        continue
-
-                    if in_confidence_section:
-                        if line.strip() == '---' or line.strip().startswith('💼') or re.match(r'^###\s+', line):
-                            in_confidence_section = False
-                            new_lines.append(line)
-                        continue
-
-                    new_lines.append(line)
-
-                state["answer"] = '\n'.join(new_lines)
+                state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
 
         # sources 추출 (prepare_final_response와 동일한 로직 사용)
         final_sources_list = []
         final_sources_detail = []
         seen_sources = set()
+        legal_refs = []
+        seen_legal_refs = set()
 
         # 통일된 포맷터 및 검증기 초기화
         try:
@@ -1768,7 +1341,16 @@ class AnswerFormatterHandler:
                     
                     source_parts = [statute_name]
                     if article_no:
-                        source_parts.append(article_no)
+                        # article_no가 문자열이 아니면 문자열로 변환
+                        article_no_str = str(article_no) if article_no else ""
+                        # article_no가 이미 "제2조" 형식이면 그대로 사용, 아니면 "제{article_no}조" 형식으로 변환
+                        if article_no_str.startswith("제") and article_no_str.endswith("조"):
+                            source_parts.append(article_no_str)
+                        else:
+                            # article_no에서 숫자만 추출
+                            article_no_clean = article_no_str.strip()
+                            if article_no_clean:
+                                source_parts.append(f"제{article_no_clean}조")
                     if clause_no:
                         source_parts.append(f"제{clause_no}항")
                     if item_no:
@@ -1900,6 +1482,13 @@ class AnswerFormatterHandler:
                             final_sources_list.append(source_str)
                             seen_sources.add(source_str)
                             
+                            # statute_article 타입 문서의 경우 legal_references에도 추가
+                            if source_type == "statute_article" and source_str:
+                                # source_str에서 이미 "제{article_no}조" 형식으로 변환된 경우 그대로 사용
+                                if source_str not in seen_legal_refs:
+                                    legal_refs.append(source_str)
+                                    seen_legal_refs.add(source_str)
+                            
                             # sources_detail 추가
                             if source_info_detail:
                                 detail_dict = {
@@ -1968,6 +1557,15 @@ class AnswerFormatterHandler:
         state["sources"] = final_sources_list[:10]  # 최대 10개만 (하위 호환성)
         state["sources_detail"] = final_sources_detail[:10]  # 최대 10개만 (신규 필드)
         
+        # 디버깅: sources_detail 생성 결과 로깅
+        if len(final_sources_detail) > 0:
+            self.logger.info(f"[SOURCES_DETAIL] Generated {len(final_sources_detail)} sources_detail entries")
+            for i, detail in enumerate(final_sources_detail[:3], 1):
+                if isinstance(detail, dict):
+                    self.logger.debug(f"[SOURCES_DETAIL] {i}. {detail.get('name', 'N/A')} (type: {detail.get('type', 'N/A')})")
+        else:
+            self.logger.warning(f"[SOURCES_DETAIL] No sources_detail generated from {len(state.get('retrieved_docs', []))} retrieved_docs")
+        
         # 디버깅: sources 생성 결과 로깅
         if len(final_sources_list) > 0:
             self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources: {final_sources_list[:5]}")
@@ -1975,54 +1573,135 @@ class AnswerFormatterHandler:
             retrieved_docs_count = len(state.get("retrieved_docs", []))
             self.logger.warning(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
 
-        # 법적 참조 정보 추가
-        if "legal_references" not in state:
-            state["legal_references"] = []
+        # 법적 참조 정보 추가 (sources 생성 시점에 함께 생성)
+        # statute_article 타입 문서의 sources를 legal_references로 사용
+        # sources_detail에서 legal_references 추출 (리팩토링된 메서드 사용)
+        legal_refs_from_detail = self.source_extractor.extract_legal_references_from_sources_detail(final_sources_detail)
+        legal_refs.extend(legal_refs_from_detail)
+        seen_legal_refs.update(legal_refs_from_detail)
+        
+        # sources_detail에서 찾지 못한 경우, retrieved_docs에서 직접 추출
+        if len(legal_refs) == 0:
+            legal_refs_from_docs = self.source_extractor.extract_legal_references_from_docs(state.get("retrieved_docs", []))
+            legal_refs.extend(legal_refs_from_docs)
+            seen_legal_refs.update(legal_refs_from_docs)
+        
+        state["legal_references"] = legal_refs[:10]  # 최대 10개만
+        
+        # 디버깅: legal_references 생성 결과 로깅
+        if len(legal_refs) > 0:
+            self.logger.info(f"[LEGAL_REFERENCES] Generated {len(legal_refs)} legal references: {legal_refs[:5]}")
+        else:
+            retrieved_docs_count = len(state.get("retrieved_docs", []))
+            # statute_article 타입 문서 개수 확인
+            statute_articles = [doc for doc in state.get("retrieved_docs", []) if isinstance(doc, dict) and (doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article" or doc.get("metadata", {}).get("source_type") == "statute_article")]
+            statute_articles_count = len(statute_articles)
+            if statute_articles_count > 0:
+                # statute_article 문서의 필드 확인
+                sample_doc = statute_articles[0]
+                statute_name = sample_doc.get("statute_name") or sample_doc.get("law_name") or sample_doc.get("metadata", {}).get("statute_name") or sample_doc.get("metadata", {}).get("law_name")
+                self.logger.warning(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
+                self.logger.warning(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata={sample_doc.get('metadata', {})}")
+            else:
+                self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (no statute_article documents)")
+
+        # related_questions 추출 (metadata에서 또는 phase_info에서 또는 LLM으로 생성)
+        related_questions = []
+        metadata = state.get("metadata", {})
+        if isinstance(metadata, dict) and "related_questions" in metadata:
+            related_questions = metadata.get("related_questions", [])
+            if isinstance(related_questions, list) and len(related_questions) > 0:
+                self.logger.warning(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
+        else:
+            # phase_info에서 추출 시도
+            phase_info = state.get("phase_info", {})
+            self.logger.debug(f"[RELATED_QUESTIONS] Checking phase_info: {'present' if phase_info else 'missing'}, type: {type(phase_info)}")
+            if isinstance(phase_info, dict):
+                self.logger.debug(f"[RELATED_QUESTIONS] phase_info keys: {list(phase_info.keys())}")
+                if "phase2" in phase_info:
+                    phase2 = phase_info.get("phase2", {})
+                    self.logger.debug(f"[RELATED_QUESTIONS] phase2 keys: {list(phase2.keys()) if isinstance(phase2, dict) else 'N/A'}")
+                    if isinstance(phase2, dict) and "flow_tracking_info" in phase2:
+                        flow_tracking = phase2.get("flow_tracking_info", {})
+                        self.logger.debug(f"[RELATED_QUESTIONS] flow_tracking_info keys: {list(flow_tracking.keys()) if isinstance(flow_tracking, dict) else 'N/A'}")
+                        if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
+                            suggested_questions = flow_tracking.get("suggested_questions", [])
+                            self.logger.debug(f"[RELATED_QUESTIONS] suggested_questions: {len(suggested_questions) if isinstance(suggested_questions, list) else 'N/A'} items")
+                            if isinstance(suggested_questions, list) and len(suggested_questions) > 0:
+                                # 각 항목이 딕셔너리인 경우 "question" 필드 추출
+                                if isinstance(suggested_questions[0], dict):
+                                    related_questions = [q.get("question", "") for q in suggested_questions if q.get("question")]
+                                else:
+                                    related_questions = [str(q) for q in suggested_questions if q]
+                                self.logger.info(f"[RELATED_QUESTIONS] Extracted {len(related_questions)} related_questions from phase_info")
+                        else:
+                            self.logger.debug(f"[RELATED_QUESTIONS] suggested_questions not found in flow_tracking_info")
+                    else:
+                        self.logger.debug(f"[RELATED_QUESTIONS] flow_tracking_info not found in phase2")
+                else:
+                    self.logger.debug(f"[RELATED_QUESTIONS] phase2 not found in phase_info")
+        
+        # related_questions가 없으면 템플릿 기반 생성 시도 (phase_info에 의존하지 않음)
+        if not related_questions:
+            try:
+                query = state.get("query", "")
+                answer = state.get("answer", "")
+                self.logger.debug(f"[RELATED_QUESTIONS] Attempting to generate related_questions: query={query[:50] if query else 'None'}, answer={answer[:50] if answer else 'None'}")
+                if query:
+                    # answer가 없어도 query만으로 관련 질문 생성 가능
+                    if not answer:
+                        answer = ""  # 빈 문자열로 설정
+                    # 간단한 템플릿 기반 관련 질문 생성
+                    related_questions = self._generate_related_questions(query, answer)
+                    if related_questions:
+                        self.logger.info(f"[RELATED_QUESTIONS] Generated {len(related_questions)} related_questions using template: {related_questions[:3]}")
+                else:
+                    self.logger.debug(f"[RELATED_QUESTIONS] Cannot generate related_questions: query is empty")
+            except Exception as e:
+                self.logger.warning(f"[RELATED_QUESTIONS] Failed to generate related_questions: {e}", exc_info=True)
+        
+        # related_questions를 metadata에 저장
+        if related_questions:
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["related_questions"] = related_questions
+            state["metadata"] = metadata
+            self.logger.info(f"[RELATED_QUESTIONS] Saved {len(related_questions)} related_questions to metadata")
+        else:
+            self.logger.debug(f"[RELATED_QUESTIONS] No related_questions found (metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'N/A'})")
 
         # 메타데이터 설정
         self.set_metadata(state, answer_value, keyword_coverage)
-
-        # 임시 라우팅 플래그/피드백 제거
-        try:
-            metadata = state.get("metadata", {})
-            if isinstance(metadata, dict):
-                for k in ("force_rag_fallback", "router_feedback"):
-                    metadata.pop(k, None)
-                state["metadata"] = metadata
-        except Exception:
-            pass
-
-        # sources 표준화 및 중복 제거
-        try:
-            src = state.get("sources", [])
-            norm = []
-            seen = set()
-            if isinstance(src, list):
-                for s in src:
-                    if isinstance(s, dict):
-                        key = (s.get("type"), s.get("sql") or s.get("title") or s.get("url"))
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        norm.append(s)
-                    elif isinstance(s, str):
-                        if s in seen:
-                            continue
-                        seen.add(s)
-                        norm.append(s)
-            state["sources"] = norm[:10]
-        except Exception:
-            pass
-
-        WorkflowUtils.update_processing_time(state, final_start_time)
-        WorkflowUtils.add_step(state, "최종 준비", "최종 응답 준비 완료")
-
-        # Final pruning after adding last step
-        if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
-            state["processing_steps"] = prune_processing_steps(
-                state["processing_steps"],
-                max_items=MAX_PROCESSING_STEPS
-            )
+    
+    def _generate_related_questions(self, query: str, answer: str) -> List[str]:
+        """관련 질문 생성 (템플릿 기반)"""
+        related_questions = []
+        
+        # 질문에서 핵심 키워드 추출
+        query_lower = query.lower()
+        
+        # 법령 관련 질문 패턴
+        if any(keyword in query_lower for keyword in ["법령", "법률", "조문", "조", "항"]):
+            related_questions.append(f"{query}에 대한 다른 법령도 확인해볼까요?")
+            related_questions.append(f"{query}와 관련된 판례도 찾아볼까요?")
+        
+        # 판례 관련 질문 패턴
+        elif any(keyword in query_lower for keyword in ["판례", "판결", "사건", "대법원"]):
+            related_questions.append(f"{query}와 유사한 사건의 판례도 찾아볼까요?")
+            related_questions.append(f"{query}에 대한 법령 조문도 확인해볼까요?")
+        
+        # 손해배상 관련 질문 패턴
+        elif any(keyword in query_lower for keyword in ["손해배상", "배상", "손해", "청구"]):
+            related_questions.append("손해배상 청구의 절차는 어떻게 되나요?")
+            related_questions.append("손해배상의 범위는 어떻게 결정되나요?")
+            related_questions.append("손해배상과 관련된 판례도 찾아볼까요?")
+        
+        # 일반적인 관련 질문
+        if len(related_questions) < 3:
+            related_questions.append(f"{query}에 대한 더 자세한 정보가 필요하신가요?")
+            related_questions.append(f"{query}와 관련된 다른 질문이 있으신가요?")
+        
+        return related_questions[:5]
 
     def format_and_prepare_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅 및 최종 준비 (format_answer + prepare_final_response)"""
@@ -2043,107 +1722,17 @@ class AnswerFormatterHandler:
             state["answer"] = formatted_answer
 
             # Part 2: 최종 준비
+            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Calling prepare_final_response_part")
             self.prepare_final_response_part(state, query_complexity, needs_search)
+            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] prepare_final_response_part completed, legal_references={len(state.get('legal_references', []))}")
 
-            # Part 3: 최종 후처리 (개선: 중복 헤더, 빈 섹션, 불필요한 형식 제거)
+            # Part 3: 최종 후처리 (리팩토링된 메서드 사용)
             final_answer = state.get("answer", "")
             if final_answer:
                 import re
 
-                # 중복 헤더 제거 (개선된 버전)
-                lines = final_answer.split('\n')
-                result_lines = []
-                seen_headers = set()
-                skip_next_empty = False
-
-                for i, line in enumerate(lines):
-                    header_match = re.match(r'^(#{1,3})\s+(.+)', line)
-                    if header_match:
-                        level = len(header_match.group(1))
-                        header_text = header_match.group(2).strip()
-
-                        # 이모지 및 특수문자 제거
-                        clean_header = re.sub(r'[📖⚖️💼💡📚📋⭐📌🔍💬🎯📊📝📄⏰🔗⚠️❗✅🚨🎉💯🔔]+\s*', '', header_text).strip()
-
-                        # "답변", "답" 같은 단어만 포함된 헤더는 더 일반적으로 처리
-                        normalized_header = re.sub(r'\s+', ' ', clean_header.lower())
-
-                        # 중복 확인 (같은 레벨, 같은 제목)
-                        header_key = f"{level}:{normalized_header}"
-
-                        # 특정 중복 패턴 제거
-                        if normalized_header in ["답변", "answer", "답"]:
-                            # 이미 "답변" 헤더가 있으면 중복 제거
-                            if "답변" in seen_headers or "answer" in seen_headers:
-                                skip_next_empty = True
-                                continue
-
-                        if header_key in seen_headers:
-                            skip_next_empty = True
-                            continue
-
-                        seen_headers.add(normalized_header)
-                        seen_headers.add(header_key)
-                        skip_next_empty = False
-                    elif skip_next_empty and line.strip() == "":
-                        # 중복 헤더 다음의 빈 줄도 제거
-                        continue
-                    else:
-                        skip_next_empty = False
-
-                    result_lines.append(line)
-
-                final_answer = '\n'.join(result_lines)
-
-                # 중복 헤더 제거 (더 강력한 방식 - 줄 단위 직접 처리)
-                lines = final_answer.split('\n')
-                cleaned_lines = []
-                seen_answer_header = False
-                i = 0
-
-                while i < len(lines):
-                    line = lines[i]
-                    # "## 답변" 헤더는 한 번만 유지
-                    if re.match(r'^##\s*답변\s*$', line, re.IGNORECASE):
-                        if not seen_answer_header:
-                            cleaned_lines.append(line)
-                            seen_answer_header = True
-                        # 다음 줄이 "###"로 시작하면 건너뛰기
-                        if i + 1 < len(lines) and re.match(r'^###\s*.*답변', lines[i + 1], re.IGNORECASE):
-                            i += 2  # "## 답변"과 "### 답변" 모두 건너뛰기
-                            continue
-                        else:
-                            i += 1
-                            continue
-                    # "###" 로 시작하고 "답변"이 포함된 줄 제거
-                    elif re.match(r'^###\s*.*답변', line, re.IGNORECASE):
-                        i += 1
-                        continue  # 이 줄은 건너뛰기
-                    else:
-                        cleaned_lines.append(line)
-                        i += 1
-
-                final_answer = '\n'.join(cleaned_lines)
-
-                # 추가 패턴 제거 (정규식으로 남은 것들 처리)
-                # "## 답변" 바로 다음에 오는 "###" 헤더 제거
-                final_answer = re.sub(
-                    r'(##\s*답변\s*\n+)(###\s*.*답변\s*\n+)',
-                    r'\1',
-                    final_answer,
-                    flags=re.MULTILINE | re.IGNORECASE
-                )
-
-                # 연속된 "## 답변" 패턴 제거
-                final_answer = re.sub(
-                    r'##\s*답변\s*\n+\s*##\s*답변',
-                    '## 답변',
-                    final_answer,
-                    flags=re.IGNORECASE | re.MULTILINE
-                )
-
-                # 빈 섹션 정리 (헤더만 있고 내용 없는 섹션)
-                final_answer = re.sub(r'###\s+[^\n]+\s*\n\s*\n(?=###|$)', '', final_answer, flags=re.MULTILINE)
+                # 중복 헤더 제거 (리팩토링된 메서드 사용)
+                final_answer = self.answer_cleaner.remove_duplicate_headers(final_answer)
 
                 # 연속된 빈 줄 정리 (3개 이상 -> 2개)
                 final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
@@ -2157,53 +1746,10 @@ class AnswerFormatterHandler:
                 # "의", "및", "와", "과" 앞뒤 공백 보장
                 final_answer = re.sub(r'([가-힣])(의|및|와|과|에서|으로|에게)([가-힣])', r'\1 \2 \3', final_answer)
 
-                # 답변 내부의 하드코딩된 신뢰도 값 교체 (state의 confidence로 통일)
+                # 답변 내부의 하드코딩된 신뢰도 값 교체 (리팩토링된 메서드 사용)
                 current_confidence = state.get("confidence", 0.0)
                 if current_confidence > 0:
-                    # 답변 내부의 모든 신뢰도 패턴 찾기 및 교체 (개선: 더 포괄적인 패턴)
-                    confidence_str = f"{current_confidence:.1%}"
-
-                    # 다양한 신뢰도 패턴 교체 (더 포괄적이고 강력한 패턴, 모든 경우를 찾기 위해 반복 적용)
-                    # 이모지 포함 패턴 (우선 처리, 더 포괄적인 패턴)
-                    final_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'🟡 **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*\s*\(medium\)', f'🟡 **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'🟡 **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'🟡 **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-
-                    # 볼드 패턴 (더 포괄적)
-                    final_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(low\)', f'**신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*\s*\(medium\)', f'**신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-
-                    # 일반 패턴 (더 포괄적)
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+%\s*\(low\)', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+%\s*\(medium\)', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+%\s*\(high\)', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    # 가장 일반적인 패턴 (모든 숫자 패턴 매칭, 여러 번 적용)
-                    for _ in range(3):  # 여러 번 적용하여 모든 인스턴스 교체
-                        final_answer = re.sub(r'신뢰도:\s*[\d.]+%', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'🟡 **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-
-                    # % 없는 패턴
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+\s*\(low\)', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+\s*\(medium\)', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'신뢰도:\s*[\d.]+(?:\s|$|\))', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-
-                    # 답변 품질 패턴
-                    final_answer = re.sub(r'답변품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                    final_answer = re.sub(r'답변\s*품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', final_answer, flags=re.IGNORECASE)
-
-                    # 상세점수 패턴도 교체
-                    final_answer = re.sub(r'상세점수:.*?답변품질:\s*[\d.]+%', f'상세점수:\n- 답변 품질: {confidence_str}', final_answer, flags=re.IGNORECASE | re.DOTALL)
-
-                    # "신뢰도정보" 섹션 전체 교체 시도
-                    final_answer = re.sub(
-                        r'###\s*💡\s*신뢰도정보.*?(?=\n###|\n---|\Z)',
-                        f'### 💡 신뢰도정보\n🟡 **신뢰도: {confidence_str}** (medium)\n\n**설명:** 신뢰도: {confidence_str}',
-                        final_answer,
-                        flags=re.DOTALL | re.IGNORECASE
-                    )
+                    final_answer = self.confidence_manager.replace_in_text(final_answer, current_confidence)
 
                 # "참고자료" 섹션이 "관련 정보를 찾을 수 없습니다"로 표시된 경우 소스 정보로 교체
                 sources_list = state.get("sources", [])
@@ -2257,79 +1803,10 @@ class AnswerFormatterHandler:
                         final_cleaned.append(line)
                     final_answer = '\n'.join(final_cleaned)
 
-                # 신뢰도 값 최종 교체 (추가 안전장치 - 더 강력한 패턴 매칭)
+                # 신뢰도 값 최종 교체 (리팩토링된 메서드 사용)
                 current_confidence = state.get("confidence", 0.0)
                 if current_confidence > 0:
-                    confidence_str = f"{current_confidence:.1%}"
-                    # 신뢰도 레벨 결정
-                    if current_confidence >= 0.8:
-                        level = "high"
-                        emoji = "🟢"
-                    elif current_confidence >= 0.6:
-                        level = "medium"
-                        emoji = "🟡"
-                    else:
-                        level = "low"
-                        emoji = "🟠"
-
-                    # 모든 신뢰도 패턴 최종 교체 (반복 적용, 더 포괄적인 패턴)
-                    for _ in range(10):  # 충분히 반복 적용
-                        # 가장 일반적인 패턴 우선
-                        final_answer = re.sub(r'\*\*신뢰도:\s*[\d.]+%\*\*', f'**신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'🟡\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'🟠\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'🟢\s*\*\*신뢰도:\s*[\d.]+%\*\*', f'{emoji} **신뢰도: {confidence_str}**', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'신뢰도:\s*[\d.]+%', f'신뢰도: {confidence_str}', final_answer, flags=re.IGNORECASE)
-                        final_answer = re.sub(r'답변품질:\s*[\d.]+%', f'답변 품질: {confidence_str}', final_answer, flags=re.IGNORECASE)
-
-                    # "신뢰도정보" 섹션 전체를 찾아서 교체 (더 강력한 방법 - 직접 섹션 찾기)
-                    # 섹션 전체를 새로운 내용으로 교체
-                    new_confidence_section = f'### 💡 신뢰도정보\n{emoji} **신뢰도: {confidence_str}** ({level})\n\n**상세점수:**\n- 답변 품질: {confidence_str}\n\n**설명:** 신뢰도: {confidence_str}'
-
-                    # 더 직접적인 방법: "### 💡 신뢰도정보"로 시작하는 섹션을 직접 찾아 교체
-                    lines = final_answer.split('\n')
-                    new_lines = []
-                    in_confidence_section = False
-
-                    for i, line in enumerate(lines):
-                        # "### 💡 신뢰도정보" 또는 "###💡신뢰도정보"로 시작하는 줄 찾기
-                        if re.match(r'^###\s*💡\s*신뢰도정보', line, re.IGNORECASE):
-                            in_confidence_section = True
-                            new_lines.append(new_confidence_section)
-                            continue
-
-                        # 신뢰도 섹션 내부이면 건너뛰기 (다음 섹션 시작까지)
-                        if in_confidence_section:
-                            # "---" 또는 "💼" 또는 다음 "###" 섹션 시작까지 건너뛰기
-                            if line.strip() == '---' or line.strip().startswith('💼') or re.match(r'^###\s+', line):
-                                in_confidence_section = False
-                                # 섹션 종료 후 이 줄은 포함
-                                new_lines.append(line)
-                            # 그 외는 모두 건너뛰기
-                            continue
-
-                        new_lines.append(line)
-
-                    final_answer = '\n'.join(new_lines)
-
-                    # 추가로 정규식으로도 시도 (fallback)
-                    if '### 💡 신뢰도정보' in final_answer or '###💡신뢰도정보' in final_answer:
-                        # 정규식으로 한 번 더 교체 시도
-                        patterns = [
-                            r'###\s*💡\s*신뢰도정보.*?(?=\n---|\n💼|\Z)',
-                            r'###\s*💡\s*신뢰도정보.*?(?=\n###|\Z)',
-                            r'###\s*💡\s*신뢰도정보[^\n]*\n.*?(?=\n---|\n💼|\Z)',
-                        ]
-
-                        for pattern in patterns:
-                            if re.search(pattern, final_answer, flags=re.DOTALL | re.IGNORECASE):
-                                final_answer = re.sub(
-                                    pattern,
-                                    new_confidence_section,
-                                    final_answer,
-                                    flags=re.DOTALL | re.IGNORECASE
-                                )
-                                break
+                    final_answer = self.confidence_manager.replace_in_text(final_answer, current_confidence)
 
                 # 메타 정보 섹션 추출 및 분리 (신뢰도 섹션 교체 후)
                 metadata_sections = self._extract_metadata_sections(final_answer)
