@@ -7,6 +7,7 @@
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -177,50 +178,108 @@ class UnifiedSourceFormatter:
             }
         )
     
+    def _format_article_no(self, article_no: str) -> str:
+        """조문번호를 6자리 형식으로 변환 (예: 제2조 -> 000200, 제10조의2 -> 001002)"""
+        if not article_no:
+            return ""
+        
+        numbers = re.findall(r'\d+', article_no)
+        if not numbers:
+            return ""
+        
+        main_no = int(numbers[0])
+        sub_no = int(numbers[1]) if len(numbers) > 1 else 0
+        
+        return f"{main_no:04d}{sub_no:02d}"
+    
     def _generate_statute_url(self, statute_name: str, article_no: str, metadata: Dict[str, Any]) -> str:
-        """법령 조문 URL 생성"""
+        """법령 조문 URL 생성 (Open Law API 형식)"""
+        base_url = "http://www.law.go.kr/DRF/lawService.do"
+        
+        law_id = metadata.get("law_id") or metadata.get("법령ID") or metadata.get("ID")
+        if law_id:
+            url = f"{base_url}?target=eflaw&ID={law_id}&type=HTML"
+            if article_no:
+                jo_no = self._format_article_no(article_no)
+                if jo_no:
+                    url += f"&JO={jo_no}"
+            return url
+        
+        mst = metadata.get("mst") or metadata.get("MST") or metadata.get("lsi_seq")
+        effective_date = metadata.get("effective_date") or metadata.get("efYd") or metadata.get("시행일자")
+        
+        if mst and effective_date:
+            ef_yd = str(effective_date).replace("-", "")
+            url = f"{base_url}?target=eflaw&MST={mst}&efYd={ef_yd}&type=HTML"
+            if article_no:
+                jo_no = self._format_article_no(article_no)
+                if jo_no:
+                    url += f"&JO={jo_no}"
+            return url
+        
         if not statute_name or not article_no:
             return ""
         
-        base_url = "https://www.law.go.kr"
-        effective_date = metadata.get("effective_date", "")
         proclamation_number = metadata.get("proclamation_number", "")
+        effective_date = metadata.get("effective_date", "")
         
         if effective_date:
             effective_date = effective_date.replace("-", "")
-            return f"{base_url}/LSW/lsInfoP.do?efYd={effective_date}&lsiSeq={proclamation_number}"
+            return f"https://www.law.go.kr/LSW/lsInfoP.do?efYd={effective_date}&lsiSeq={proclamation_number}"
         elif proclamation_number:
-            return f"{base_url}/LSW/lsInfoP.do?lsiSeq={proclamation_number}"
+            return f"https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq={proclamation_number}"
         else:
-            return f"{base_url}/LSW/lsSc.do?lawNm={statute_name}&articleNo={article_no.replace('제', '').replace('조', '')}"
+            return f"https://www.law.go.kr/LSW/lsSc.do?lawNm={statute_name}&articleNo={article_no.replace('제', '').replace('조', '')}"
     
     def _generate_case_url(self, doc_id: str, metadata: Dict[str, Any]) -> str:
-        """판례 URL 생성"""
-        if not doc_id:
-            return ""
-        
+        """판례 URL 생성 (Open Law API 형식)"""
         detail_url = metadata.get("detail_url", "")
         if detail_url:
             return detail_url
         
-        base_url = "https://glaw.scourt.go.kr"
-        return f"{base_url}/wsjo/panre/sjo100.do?contId={doc_id}"
+        precedent_serial_number = (
+            metadata.get("precedent_serial_number") or 
+            metadata.get("판례일련번호") or 
+            metadata.get("판례정보일련번호") or
+            doc_id
+        )
+        
+        if not precedent_serial_number:
+            return ""
+        
+        base_url = "http://www.law.go.kr/DRF/lawService.do"
+        return f"{base_url}?target=prec&ID={precedent_serial_number}&type=HTML"
     
     def _generate_decision_url(self, doc_id: str, metadata: Dict[str, Any]) -> str:
-        """결정례 URL 생성"""
-        if not doc_id:
+        """헌재결정례 URL 생성 (Open Law API 형식)"""
+        decision_serial_number = (
+            metadata.get("decision_serial_number") or 
+            metadata.get("헌재결정례일련번호") or 
+            metadata.get("결정ID") or
+            doc_id
+        )
+        
+        if not decision_serial_number:
             return ""
         
-        base_url = "https://www.law.go.kr"
-        return f"{base_url}/LSW/lsInfoP.do?lsiSeq={doc_id}"
+        base_url = "http://www.law.go.kr/DRF/lawService.do"
+        return f"{base_url}?target=detc&ID={decision_serial_number}&type=HTML"
     
     def _generate_interpretation_url(self, doc_id: str, metadata: Dict[str, Any]) -> str:
-        """해석례 URL 생성"""
-        if not doc_id:
+        """법령해석례 URL 생성 (Open Law API 형식)"""
+        interpretation_serial_number = (
+            metadata.get("interpretation_serial_number") or 
+            metadata.get("법령해석례일련번호") or 
+            metadata.get("해석ID") or 
+            metadata.get("expcId") or
+            doc_id
+        )
+        
+        if not interpretation_serial_number:
             return ""
         
-        base_url = "https://www.law.go.kr"
-        return f"{base_url}/LSW/lsInfoP.do?lsiSeq={doc_id}"
+        base_url = "http://www.law.go.kr/DRF/lawService.do"
+        return f"{base_url}?target=expc&ID={interpretation_serial_number}&type=HTML"
     
     def format_sources_list(self, sources: List[Dict[str, Any]]) -> List[SourceInfo]:
         """출처 리스트를 통일된 형식으로 포맷팅"""
