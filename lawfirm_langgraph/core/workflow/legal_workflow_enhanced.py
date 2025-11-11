@@ -2088,8 +2088,17 @@ class EnhancedLegalQuestionWorkflow(
 
             prompt_optimized_context = self._get_state_value(state, "prompt_optimized_context", {})
             
+            # prompt_optimized_context 타입 검증 및 변환
+            if not isinstance(prompt_optimized_context, dict):
+                if isinstance(prompt_optimized_context, str):
+                    self.logger.warning(f"⚠️ [PROMPT CONTEXT] prompt_optimized_context is str, converting to dict")
+                    prompt_optimized_context = {"prompt_optimized_text": prompt_optimized_context}
+                else:
+                    self.logger.warning(f"⚠️ [PROMPT CONTEXT] prompt_optimized_context is not dict (type: {type(prompt_optimized_context)}), using empty dict")
+                    prompt_optimized_context = {}
+            
             # prompt_optimized_context가 없거나 유효하지 않으면 자동 생성
-            if not prompt_optimized_context or not isinstance(prompt_optimized_context, dict) or not prompt_optimized_context.get("prompt_optimized_text"):
+            if not prompt_optimized_context or not prompt_optimized_context.get("prompt_optimized_text"):
                 if retrieved_docs and len(retrieved_docs) > 0:
                     self.logger.info("⚠️ [FALLBACK] prompt_optimized_context is missing or invalid, generating automatically")
                     try:
@@ -2109,12 +2118,16 @@ class EnhancedLegalQuestionWorkflow(
             
             context_dict = self._build_context_dict(state, query_type, retrieved_docs, prompt_optimized_context)
             
-            # context_dict가 dict가 아닌 경우 변환
+            # context_dict가 dict가 아닌 경우 변환 (강화된 검증)
             if not isinstance(context_dict, dict):
                 self.logger.warning(f"⚠️ [CONTEXT DICT] context_dict is not a dict (type: {type(context_dict)}), converting to dict")
                 if isinstance(context_dict, str):
                     context_dict = {"context": context_dict}
+                elif context_dict is None:
+                    self.logger.warning(f"⚠️ [CONTEXT DICT] context_dict is None, using empty dict")
+                    context_dict = {}
                 else:
+                    self.logger.warning(f"⚠️ [CONTEXT DICT] context_dict is unexpected type {type(context_dict)}, using empty dict")
                     context_dict = {}
 
             # 최종 검증: context_dict에 실제 문서 내용이 포함되었는지 확인
@@ -2136,33 +2149,52 @@ class EnhancedLegalQuestionWorkflow(
             except Exception as e:
                 self.logger.warning(f"Router fallback expansion skipped due to error: {e}")
 
-            # 컨텍스트 품질 검증
+            # 컨텍스트 품질 검증 (context_dict 타입 재확인)
+            if not isinstance(context_dict, dict):
+                if isinstance(context_dict, str):
+                    self.logger.warning(f"⚠️ [VALIDATE CONTEXT] context_dict is str before validation, converting to dict")
+                    context_dict = {"context": context_dict}
+                else:
+                    self.logger.warning(f"⚠️ [VALIDATE CONTEXT] context_dict is not dict (type: {type(context_dict)}), using empty dict")
+                    context_dict = {}
+            
             validation_results = self._validate_context_quality(
                 context_dict,
                 query,
                 query_type,
                 extracted_keywords
             )
+            
+            # validation_results 타입 검증 (근본적 해결)
+            if not isinstance(validation_results, dict):
+                self.logger.error(f"❌ [VALIDATION] validation_results is not dict (type: {type(validation_results)}), using empty dict")
+                if isinstance(validation_results, str):
+                    validation_results = {"error": validation_results, "overall_score": 0.0}
+                else:
+                    validation_results = {"overall_score": 0.0}
 
             # 검색 품질 모니터링 강화
-            overall_score = validation_results.get("overall_score", 0.0)
+            overall_score = validation_results.get("overall_score", 0.0) if isinstance(validation_results, dict) else 0.0
             if 0.4 <= overall_score < 0.5:
+                relevance = validation_results.get('relevance_score', 0.0) if isinstance(validation_results, dict) else 0.0
+                coverage = validation_results.get('coverage_score', 0.0) if isinstance(validation_results, dict) else 0.0
+                sufficiency = validation_results.get('sufficiency_score', 0.0) if isinstance(validation_results, dict) else 0.0
                 self.logger.warning(
                     f"⚠️ [SEARCH QUALITY] Low quality detected: overall_score={overall_score:.2f} "
-                    f"(relevance={validation_results.get('relevance_score', 0.0):.2f}, "
-                    f"coverage={validation_results.get('coverage_score', 0.0):.2f}, "
-                    f"sufficiency={validation_results.get('sufficiency_score', 0.0):.2f})"
+                    f"(relevance={relevance:.2f}, coverage={coverage:.2f}, sufficiency={sufficiency:.2f})"
                 )
             elif overall_score < 0.4:
+                relevance = validation_results.get('relevance_score', 0.0) if isinstance(validation_results, dict) else 0.0
+                coverage = validation_results.get('coverage_score', 0.0) if isinstance(validation_results, dict) else 0.0
+                sufficiency = validation_results.get('sufficiency_score', 0.0) if isinstance(validation_results, dict) else 0.0
                 self.logger.warning(
                     f"⚠️ [SEARCH QUALITY] Very low quality detected: overall_score={overall_score:.2f} "
-                    f"(relevance={validation_results.get('relevance_score', 0.0):.2f}, "
-                    f"coverage={validation_results.get('coverage_score', 0.0):.2f}, "
-                    f"sufficiency={validation_results.get('sufficiency_score', 0.0):.2f})"
+                    f"(relevance={relevance:.2f}, coverage={coverage:.2f}, sufficiency={sufficiency:.2f})"
                 )
 
             # 품질 부족 시 컨텍스트 확장
-            if validation_results.get("needs_expansion", False):
+            needs_expansion = validation_results.get("needs_expansion", False) if isinstance(validation_results, dict) else False
+            if needs_expansion:
                 state = self._adaptive_context_expansion(state, validation_results)
                 # 확장 후 컨텍스트 재구축
                 expanded_context = self.context_builder.build_intelligent_context(state)
@@ -2172,16 +2204,33 @@ class EnhancedLegalQuestionWorkflow(
                     context_dict = {"context": expanded_context}
                 else:
                     self.logger.warning(f"⚠️ [CONTEXT DICT] Expanded context is not dict or str (type: {type(expanded_context)})")
+                    context_dict = {}
+                
+                # context_dict 타입 재확인
+                if not isinstance(context_dict, dict):
+                    if isinstance(context_dict, str):
+                        context_dict = {"context": context_dict}
+                    else:
+                        context_dict = {}
+                
                 # 재검증 (선택적)
                 validation_results = self._validate_context_quality(
                     context_dict, query, query_type, extracted_keywords
                 )
                 
+                # validation_results 타입 재검증
+                if not isinstance(validation_results, dict):
+                    self.logger.error(f"❌ [VALIDATION] validation_results after expansion is not dict (type: {type(validation_results)}), using empty dict")
+                    if isinstance(validation_results, str):
+                        validation_results = {"error": validation_results, "overall_score": 0.0}
+                    else:
+                        validation_results = {"overall_score": 0.0}
+                
                 # 확장 효과 분석
                 metadata = self._get_metadata_safely(state)
-                expansion_stats = metadata.get("context_expansion_stats", {})
+                expansion_stats = metadata.get("context_expansion_stats", {}) if isinstance(metadata, dict) else {}
                 if expansion_stats:
-                    final_overall_score = validation_results.get("overall_score", 0.0)
+                    final_overall_score = validation_results.get("overall_score", 0.0) if isinstance(validation_results, dict) else 0.0
                     score_improvement = final_overall_score - expansion_stats.get("initial_overall_score", 0.0)
                     expansion_stats["final_overall_score"] = final_overall_score
                     expansion_stats["score_improvement"] = score_improvement
@@ -2421,13 +2470,20 @@ class EnhancedLegalQuestionWorkflow(
                             f"This may indicate some documents were lost during preparation."
                         )
 
-            # context_dict 타입 최종 검증 (get_optimized_prompt 호출 전)
+            # context_dict 타입 최종 검증 (get_optimized_prompt 호출 전) - 근본적 해결
             if not isinstance(context_dict, dict):
-                self.logger.warning(f"⚠️ [CONTEXT DICT] context_dict is not a dict before get_optimized_prompt (type: {type(context_dict)}), converting to dict")
+                self.logger.error(f"❌ [CONTEXT DICT] context_dict is not a dict before get_optimized_prompt (type: {type(context_dict)}), converting to dict")
                 if isinstance(context_dict, str):
                     context_dict = {"context": context_dict}
+                elif context_dict is None:
+                    context_dict = {}
                 else:
                     context_dict = {}
+            
+            # 추가 안전 검증 (이중 체크)
+            if not isinstance(context_dict, dict):
+                self.logger.error(f"❌ [CONTEXT DICT] context_dict still not dict after conversion, forcing empty dict")
+                context_dict = {}
             
             optimized_prompt = self.unified_prompt_manager.get_optimized_prompt(
                 query=query,
@@ -2438,10 +2494,13 @@ class EnhancedLegalQuestionWorkflow(
                 base_prompt_type=base_prompt_type
             )
 
-            # 프롬프트 생성 후 상세 로깅
+            # 프롬프트 생성 후 상세 로깅 (안전한 접근)
             prompt_length = len(optimized_prompt) if isinstance(optimized_prompt, str) else 0
             context_length_in_dict = context_dict.get("context_length", 0) if isinstance(context_dict, dict) else 0
-            docs_included = context_dict.get("docs_included", context_dict.get("document_count", 0)) if isinstance(context_dict, dict) else 0
+            docs_included = (
+                context_dict.get("docs_included", context_dict.get("document_count", 0))
+                if isinstance(context_dict, dict) else 0
+            )
 
             # 프롬프트에 문서 섹션이 포함되어 있는지 확인
             has_documents_section = isinstance(optimized_prompt, str) and ("검색된 법률 문서" in optimized_prompt or "## 🔍" in optimized_prompt)
@@ -3256,19 +3315,51 @@ class EnhancedLegalQuestionWorkflow(
         extracted_keywords: List[str]
     ) -> Dict[str, Any]:
         """ContextExpansionProcessor.validate_context_quality 래퍼 (ContextValidator 사용)"""
-        if self.context_expansion_processor:
-            return self.context_expansion_processor.validate_context_quality(
-                context, query, query_type, extracted_keywords
-            )
-        from core.workflow.validators.quality_validators import ContextValidator
-        return ContextValidator.validate_context_quality(
-            context=context,
-            query=query,
-            query_type=query_type,
-            extracted_keywords=extracted_keywords,
-            calculate_relevance_func=None,
-            calculate_coverage_func=None
-        )
+        # context 타입 검증 및 변환 (근본적 해결)
+        if not isinstance(context, dict):
+            if isinstance(context, str):
+                self.logger.error(f"❌ [VALIDATE CONTEXT] context is str, converting to dict")
+                context = {"context": context}
+            else:
+                self.logger.error(f"❌ [VALIDATE CONTEXT] context is not dict (type: {type(context)}), using empty dict")
+                context = {}
+        
+        try:
+            if self.context_expansion_processor:
+                result = self.context_expansion_processor.validate_context_quality(
+                    context, query, query_type, extracted_keywords
+                )
+            else:
+                from core.workflow.validators.quality_validators import ContextValidator
+                result = ContextValidator.validate_context_quality(
+                    context=context,
+                    query=query,
+                    query_type=query_type,
+                    extracted_keywords=extracted_keywords,
+                    calculate_relevance_func=None,
+                    calculate_coverage_func=None
+                )
+            
+            # 반환값 타입 검증 (근본적 해결)
+            if not isinstance(result, dict):
+                self.logger.error(f"❌ [VALIDATE CONTEXT] validate_context_quality returned non-dict (type: {type(result)}), using default dict")
+                if isinstance(result, str):
+                    result = {"error": result, "overall_score": 0.0, "relevance_score": 0.0, "coverage_score": 0.0, "sufficiency_score": 0.0, "needs_expansion": False}
+                else:
+                    result = {"overall_score": 0.0, "relevance_score": 0.0, "coverage_score": 0.0, "sufficiency_score": 0.0, "needs_expansion": False}
+            
+            return result
+        except Exception as e:
+            self.logger.error(f"❌ [VALIDATE CONTEXT] Error in validate_context_quality: {e}", exc_info=True)
+            # 예외 발생 시 기본 딕셔너리 반환 (근본적 해결)
+            return {
+                "overall_score": 0.0,
+                "relevance_score": 0.0,
+                "coverage_score": 0.0,
+                "sufficiency_score": 0.0,
+                "needs_expansion": False,
+                "error": str(e)
+            }
 
     def _validate_context_quality_original(
         self,
