@@ -45,6 +45,15 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   try {
     const parsed = JSON.parse(trimmed);
     if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start'].includes(parsed.type)) {
+      // sources 이벤트의 경우 metadata를 그대로 보존
+      if (parsed.type === 'sources') {
+        return {
+          type: parsed.type,
+          content: parsed.content || parsed.message || '',
+          metadata: parsed.metadata || {}
+        };
+      }
+      
       return {
         type: parsed.type,
         content: parsed.content || parsed.message || '',

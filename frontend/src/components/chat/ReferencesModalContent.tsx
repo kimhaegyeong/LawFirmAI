@@ -926,9 +926,9 @@ export function ReferencesModalContent({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full space-y-4">
       {/* 탭/필터 UI */}
-      <div className="flex gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+      <div className="flex gap-2 border-b border-slate-200 pb-2 overflow-x-auto flex-shrink-0">
         <button
           onClick={() => setSelectedType('all')}
           className={`px-3 py-1 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${
@@ -1002,7 +1002,7 @@ export function ReferencesModalContent({
       </div>
 
       {/* 참고자료 목록 */}
-      <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 -mr-2">
+      <div className="space-y-3 flex-1 overflow-y-auto pr-2 -mr-2 min-h-0">
         {filteredReferences.length === 0 ? (
           <div className="text-center py-8 text-slate-500">
             선택한 타입의 참고자료가 없습니다.

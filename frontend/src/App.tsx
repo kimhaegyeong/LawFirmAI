@@ -530,7 +530,7 @@ function App() {
               isFirstChunk = false;
             }
           } else if (parsed.type === 'sources') {
-            // sources 이벤트 처리 (별도 이벤트)
+            // sources 이벤트 처리
             if (parsed.metadata) {
               const sourcesMetadata = parsed.metadata;
               const sourcesMessageId = sourcesMetadata.message_id;
@@ -545,14 +545,24 @@ function App() {
                 });
               }
               
-              // message_id로 메시지 찾기
+              // 메시지 찾기: sourcesMessageId가 있으면 우선 사용, 없으면 assistantMessageId 사용
               const targetMessageId = sourcesMessageId || assistantMessageId;
               
               setMessages((prev) => {
-                const messageIndex = prev.findIndex((msg) => 
-                  msg.id === targetMessageId || 
-                  msg.metadata?.message_id === sourcesMessageId
-                );
+                // 메시지 찾기: id 또는 metadata.message_id로 매칭
+                const messageIndex = prev.findIndex((msg) => {
+                  if (msg.id === targetMessageId) {
+                    return true;
+                  }
+                  if (sourcesMessageId && msg.metadata?.message_id === sourcesMessageId) {
+                    return true;
+                  }
+                  // assistantMessageId와 매칭 (sourcesMessageId가 없는 경우)
+                  if (!sourcesMessageId && msg.id === assistantMessageId) {
+                    return true;
+                  }
+                  return false;
+                });
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -564,10 +574,10 @@ function App() {
                       ...existingMsg,
                       metadata: {
                         ...existingMsg.metadata,
-                        sources: (sourcesMetadata.sources as string[] | undefined) || [],
-                        legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
-                        sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
-                        related_questions: (sourcesMetadata.related_questions as string[] | undefined) || existingMsg.metadata?.related_questions,
+                        sources: Array.isArray(sourcesMetadata.sources) ? sourcesMetadata.sources : [],
+                        legal_references: Array.isArray(sourcesMetadata.legal_references) ? sourcesMetadata.legal_references : [],
+                        sources_detail: Array.isArray(sourcesMetadata.sources_detail) ? sourcesMetadata.sources_detail : [],
+                        related_questions: Array.isArray(sourcesMetadata.related_questions) ? sourcesMetadata.related_questions : (existingMsg.metadata?.related_questions || []),
                         message_id: sourcesMessageId || existingMsg.metadata?.message_id,
                       },
                     };
@@ -581,6 +591,19 @@ function App() {
                   }
                   
                   return updated;
+                } else {
+                  // 메시지를 찾지 못한 경우 로그 출력
+                  if (import.meta.env.DEV) {
+                    logger.warn('[Stream] Message not found for sources event:', {
+                      targetMessageId,
+                      sourcesMessageId,
+                      assistantMessageId,
+                      availableMessageIds: prev.map(msg => ({
+                        id: msg.id,
+                        message_id: msg.metadata?.message_id
+                      })),
+                    });
+                  }
                 }
                 return prev;
               });
