@@ -15,7 +15,11 @@ from ...services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
 from ...services.prompt_optimizer import PromptOptimizer, PromptPerformanceMetrics
 from ...services.semantic_domain_classifier import SemanticDomainClassifier
 from ...services.confidence_calculator import ConfidenceCalculator, ConfidenceInfo, ConfidenceLevel
-from ...services.question_classifier import QuestionType, QuestionClassification
+try:
+    from ...classification.classifiers.question_classifier import QuestionType, QuestionClassification
+except ImportError:
+    # 호환성을 위한 fallback
+    from ...services.question_classifier import QuestionType, QuestionClassification
 from ...services.answer_formatter import AnswerFormatter, FormattedAnswer
 from .context_builder import ContextBuilder
 

@@ -861,7 +861,8 @@ class AnswerStructureEnhancer:
                     logger.info(f"LLM initialized: Google Gemini ({config.google_model})")
                     return llm
                 except Exception as e:
-                    logger.error(f"Failed to initialize Google Gemini: {e}", exc_info=True)
+                    logger.warning(f"Failed to initialize Google Gemini (optional): {e}")
+                    # 선택적 의존성이므로 오류를 무시하고 계속 진행
 
             if config.llm_provider == "ollama" and Ollama:
                 try:
