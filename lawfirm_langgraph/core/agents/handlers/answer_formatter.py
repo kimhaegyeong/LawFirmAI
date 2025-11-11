@@ -138,9 +138,15 @@ class AnswerFormatterHandler:
             # 2단계: 시각적 포맷팅 (이모지 + 섹션 구조)
             if self.answer_formatter:
                 try:
-                    from core.services.question_classifier import (
-                        QuestionType as QType,
-                    )
+                    try:
+                        from core.classification.classifiers.question_classifier import (
+                            QuestionType as QType,
+                        )
+                    except ImportError:
+                        # 호환성을 위한 fallback
+                        from core.services.question_classifier import (
+                            QuestionType as QType,
+                        )
                     question_type_mapping = {
                         "precedent_search": QType.PRECEDENT_SEARCH,
                         "law_inquiry": QType.LAW_INQUIRY,
@@ -151,7 +157,7 @@ class AnswerFormatterHandler:
                     }
                     q_type = question_type_mapping.get(query_type, QType.GENERAL_QUESTION)
 
-                    from core.services.confidence_calculator import (
+                    from core.generation.validators.confidence_calculator import (
                         ConfidenceInfo,
                     )
                     final_confidence = state.get("structure_confidence") or confidence
@@ -414,7 +420,7 @@ class AnswerFormatterHandler:
                 }
                 q_type = question_type_mapping.get(query_type, QType.GENERAL_QUESTION)
 
-                from core.services.confidence_calculator import (
+                from core.generation.validators.confidence_calculator import (
                     ConfidenceInfo,
                 )
                 final_confidence = state.get("structure_confidence") or confidence
@@ -2213,7 +2219,7 @@ class AnswerFormatterHandler:
 
     def map_confidence_level(self, confidence: float):
         """신뢰도 점수에 따른 레벨 매핑"""
-        from core.services.confidence_calculator import ConfidenceLevel
+        from core.generation.validators.confidence_calculator import ConfidenceLevel
 
         if confidence >= 0.9:
             return ConfidenceLevel.VERY_HIGH
