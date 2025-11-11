@@ -4,7 +4,7 @@
 import json
 import logging
 import asyncio
-from fastapi import APIRouter, HTTPException, Request, Depends, Response
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator, Optional
 from datetime import datetime
@@ -262,6 +262,7 @@ async def chat_stream(
             full_answer = ""
             has_yielded = False  # 최소한 하나의 yield가 있었는지 추적
             final_metadata = None  # final 이벤트의 metadata 저장
+            stream_closed = False  # 스트림이 정상적으로 종료되었는지 추적
             
             try:
                 async for chunk in chat_service.stream_message(
@@ -272,51 +273,102 @@ async def chat_stream(
                         has_yielded = True
                         chunk_stripped = chunk.strip()
                         
-                        # JSONL 형식 파싱 시도
-                        try:
-                            event_data = json.loads(chunk_stripped)
-                            event_type = event_data.get("type", "")
+                        # chat_service.stream_message()에서 이미 JSONL 형식으로 yield하므로
+                        # JSON 파싱 없이 직접 SSE 형식으로 변환 (성능 최적화)
+                        if chunk_stripped:
+                            # JSONL 형식을 SSE 형식으로 직접 변환 (불필요한 JSON 파싱/직렬화 제거)
+                            yield f"data: {chunk_stripped}\n\n"
                             
-                            # "stream" 타입인 경우에만 full_answer에 추가
-                            if event_type == "stream":
-                                content = event_data.get("content", "")
-                                if content:
-                                    full_answer += content
-                            
-                            # "final" 타입인 경우 full_answer 업데이트 및 metadata 저장
-                            elif event_type == "final":
-                                content = event_data.get("content", "")
-                                if content and not content.startswith("[오류]"):
-                                    full_answer = content
-                                # final 이벤트의 metadata 저장 (sources 포함)
-                                final_metadata = event_data.get("metadata", {})
-                            
-                            # JSONL 이벤트를 SSE 형식으로 변환
-                            json_str = json.dumps(event_data, ensure_ascii=False)
-                            yield f"data: {json_str}\n\n"
-                            
-                        except (json.JSONDecodeError, ValueError):
-                            # JSON 파싱 실패 시 기존 형식으로 처리 (하위 호환성)
-                            if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
-                                full_answer += chunk
-                                if '\n' in chunk:
-                                    lines = chunk.split('\n')
-                                    for line in lines:
-                                        yield f"data: {line}\n"
-                                    yield "\n"
-                                else:
-                                    yield f"data: {chunk}\n\n"
+                            # full_answer와 final_metadata 추적을 위해 선택적으로 JSON 파싱
+                            try:
+                                event_data = json.loads(chunk_stripped)
+                                event_type = event_data.get("type", "")
+                                
+                                # "stream" 타입인 경우에만 full_answer에 추가
+                                if event_type == "stream":
+                                    content = event_data.get("content", "")
+                                    if content:
+                                        full_answer += content
+                                
+                                # "final" 타입인 경우 full_answer 업데이트 및 metadata 저장
+                                elif event_type == "final":
+                                    content = event_data.get("content", "")
+                                    if content and not content.startswith("[오류]"):
+                                        full_answer = content
+                                    # final 이벤트의 metadata 저장 (sources 포함)
+                                    # workflow_service에서 이미 related_questions로 변환되어 있음
+                                    final_metadata = event_data.get("metadata", {})
+                                    
+                                    # related_questions 포함 여부 확인 (디버깅용)
+                                    if final_metadata.get("related_questions"):
+                                        logger.debug(
+                                            f"Final event metadata contains {len(final_metadata.get('related_questions', []))} related_questions"
+                                        )
+                                    else:
+                                        logger.debug("Final event metadata does not contain related_questions")
+                                    
+                                    # final 이벤트의 metadata에 sources가 없으면 즉시 가져오기
+                                    if not final_metadata.get("sources") and not final_metadata.get("legal_references") and not final_metadata.get("sources_detail"):
+                                        try:
+                                            sources_data = await chat_service.get_sources_from_session(
+                                                session_id=stream_request.session_id,
+                                                message_id=final_metadata.get("message_id")
+                                            )
+                                            if sources_data:
+                                                final_metadata["sources"] = sources_data.get("sources", [])
+                                                final_metadata["legal_references"] = sources_data.get("legal_references", [])
+                                                final_metadata["sources_detail"] = sources_data.get("sources_detail", [])
+                                                
+                                                # sources_event를 즉시 전송
+                                                if final_metadata.get("sources") or final_metadata.get("legal_references") or final_metadata.get("sources_detail") or final_metadata.get("related_questions"):
+                                                    sources_event = {
+                                                        "type": "sources",
+                                                        "metadata": {
+                                                            "message_id": final_metadata.get("message_id"),
+                                                            "sources": final_metadata.get("sources", []),
+                                                            "legal_references": final_metadata.get("legal_references", []),
+                                                            "sources_detail": final_metadata.get("sources_detail", []),
+                                                            "related_questions": final_metadata.get("related_questions", [])
+                                                        },
+                                                        "timestamp": datetime.now().isoformat()
+                                                    }
+                                                    logger.debug(f"Sending sources_event after fetching sources: {len(final_metadata.get('related_questions', []))} related_questions")
+                                                    yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
+                                        except Exception as e:
+                                            logger.warning(f"Failed to get sources after final event: {e}")
+                                    
+                                    # related_questions만 있어도 sources_event 전송 (sources가 없는 경우)
+                                    if final_metadata.get("related_questions") and not (final_metadata.get("sources") or final_metadata.get("legal_references") or final_metadata.get("sources_detail")):
+                                        sources_event = {
+                                            "type": "sources",
+                                            "metadata": {
+                                                "message_id": final_metadata.get("message_id"),
+                                                "sources": final_metadata.get("sources", []),
+                                                "legal_references": final_metadata.get("legal_references", []),
+                                                "sources_detail": final_metadata.get("sources_detail", []),
+                                                "related_questions": final_metadata.get("related_questions", [])
+                                            },
+                                            "timestamp": datetime.now().isoformat()
+                                        }
+                                        logger.debug(f"Sending sources_event with related_questions only: {len(final_metadata.get('related_questions', []))} questions")
+                                        yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
+                            except (json.JSONDecodeError, ValueError):
+                                # JSON 파싱 실패 시 기존 형식으로 처리 (하위 호환성)
+                                if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
+                                    full_answer += chunk
+                                    if '\n' in chunk:
+                                        lines = chunk.split('\n')
+                                        for line in lines:
+                                            yield f"data: {line}\n"
+                                        yield "\n"
+                                    else:
+                                        yield f"data: {chunk}\n\n"
                 
                 # 스트리밍이 정상적으로 완료되었음을 보장
                 # chat_service.stream_message에서 이미 final 이벤트를 보냈으므로
                 # 여기서는 추가 완료 신호는 불필요
-                # 하지만 SSE 형식에서 스트림 종료를 보장하기 위해 빈 줄을 yield
-                # 이는 ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지
-                try:
-                    # SSE 스트림 종료 신호 (빈 줄)
-                    yield "\n"
-                except Exception:
-                    pass
+                # FastAPI StreamingResponse가 자동으로 스트림 종료를 처리하므로
+                # 빈 줄을 yield하면 ERR_INCOMPLETE_CHUNKED_ENCODING 오류가 발생할 수 있음
                 
                 # 완료 후 메시지 저장 (metadata 포함)
                 if full_answer:
@@ -350,17 +402,19 @@ async def chat_stream(
                     
                     # sources가 포함된 metadata를 별도 이벤트로 전송 (프론트엔드에서 사용)
                     # final_event를 이미 보냈으므로, sources가 포함된 metadata를 별도 이벤트로 전송
-                    if metadata.get("sources") or metadata.get("legal_references") or metadata.get("sources_detail"):
+                    if metadata.get("sources") or metadata.get("legal_references") or metadata.get("sources_detail") or metadata.get("related_questions"):
                         sources_event = {
                             "type": "sources",
                             "metadata": {
                                 "message_id": saved_message_id,
                                 "sources": metadata.get("sources", []),
                                 "legal_references": metadata.get("legal_references", []),
-                                "sources_detail": metadata.get("sources_detail", [])
+                                "sources_detail": metadata.get("sources_detail", []),
+                                "related_questions": metadata.get("related_questions", [])
                             },
                             "timestamp": datetime.now().isoformat()
                         }
+                        logger.debug(f"Sending sources_event with related_questions: {len(metadata.get('related_questions', []))} questions")
                         yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
                     
                     # 세션에 제목이 없고 첫 번째 대화라면 제목 생성 (비동기)
@@ -374,6 +428,10 @@ async def chat_stream(
                                     stream_request.session_id
                                 )
                             )
+                
+                # 스트리밍이 정상적으로 완료됨
+                stream_closed = True
+                
             except Exception as e:
                 logger.error(f"Error in stream_message: {e}", exc_info=True)
                 error_msg = f"[오류] {str(e)}"
@@ -389,36 +447,23 @@ async def chat_stream(
                     }
                     yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
                     has_yielded = True
+                    stream_closed = True
                 except Exception as yield_error:
                     logger.error(f"Error yielding error message: {yield_error}")
-            finally:
-                # 최소한 하나의 yield가 없었으면 에러 메시지 전송
-                if not has_yielded:
-                    try:
-                        error_event = {
-                            "type": "final",
-                            "content": "[오류] 스트리밍 응답을 생성할 수 없습니다.",
-                            "metadata": {"error": True},
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
-                        has_yielded = True
-                    except Exception as e:
-                        logger.error(f"Error yielding fallback message: {e}")
-                
-                # 중요: finally 블록에서 yield를 하면 스트림 종료가 제대로 되지 않을 수 있음
-                # FastAPI StreamingResponse가 자동으로 스트림 종료를 처리하므로
-                # 여기서는 추가 종료 신호를 보내지 않음
+                    # yield 자체가 실패한 경우에도 스트림이 정상 종료되도록 보장
+                    stream_closed = True
         
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",  # Nginx 버퍼링 비활성화
                 "Content-Type": "text/event-stream; charset=utf-8",
-                "Transfer-Encoding": "chunked",  # 명시적으로 chunked encoding 지정
+                # Transfer-Encoding: chunked는 FastAPI가 자동으로 처리하므로 명시하지 않음
+                # 명시하면 ERR_INCOMPLETE_CHUNKED_ENCODING 오류가 발생할 수 있음
+                "X-Content-Type-Options": "nosniff",
             }
         )
     except ValueError as e:

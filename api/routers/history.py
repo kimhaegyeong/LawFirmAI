@@ -2,7 +2,7 @@
 히스토리 관리 엔드포인트
 """
 import logging
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from fastapi.responses import Response
 from typing import Optional
 import json
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/history", response_model=HistoryResponse)
 async def get_history(
+    request: Request,
     current_user: dict = Depends(require_auth),
     session_id: Optional[str] = Query(None, description="세션 ID 필터"),
     category: Optional[str] = Query(None, description="카테고리 필터"),
@@ -31,12 +32,25 @@ async def get_history(
     from datetime import datetime
     
     try:
+        # 사용자별 필터링
+        user_id = None
+        
+        if current_user.get("authenticated"):
+            # 로그인 사용자: user_id로 필터링
+            user_id = current_user.get("user_id")
+        else:
+            # 비회원: anonymous_session_id로 필터링
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            if anonymous_session_id:
+                user_id = f"anonymous_{anonymous_session_id}"
+        
         result = history_service.get_history(
             session_id=session_id,
             category=category,
             search=search,
             page=page,
-            page_size=page_size
+            page_size=page_size,
+            user_id=user_id
         )
         
         # 메시지를 MessageResponse로 변환
@@ -122,23 +136,43 @@ async def get_history(
 
 @router.post("/history/export")
 async def export_history(
-    request: ExportRequest,
+    request: Request,
+    export_request: ExportRequest,
     current_user: dict = Depends(require_auth)
 ):
     """히스토리 내보내기"""
     try:
+        # 사용자별 필터링
+        user_id = None
+        
+        if current_user.get("authenticated"):
+            # 로그인 사용자: user_id로 필터링
+            user_id = current_user.get("user_id")
+        else:
+            # 비회원: anonymous_session_id로 필터링
+            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+            if anonymous_session_id:
+                user_id = f"anonymous_{anonymous_session_id}"
+        
         export_data = []
         
-        for session_id in request.session_ids:
+        for session_id in export_request.session_ids:
             session = session_service.get_session(session_id)
             if session:
-                messages = session_service.get_messages(session_id)
+                # 세션 소유권 확인
+                if user_id:
+                    session_user_id = session.get("user_id")
+                    if session_user_id != user_id:
+                        # 소유권이 없으면 건너뛰기
+                        continue
+                
+                messages = session_service.get_messages(session_id, user_id=user_id)
                 export_data.append({
                     "session": session,
                     "messages": messages
                 })
         
-        if request.format == "json":
+        if export_request.format == "json":
             content = json.dumps(export_data, ensure_ascii=False, indent=2)
             return Response(
                 content=content,
@@ -147,7 +181,7 @@ async def export_history(
                     "Content-Disposition": "attachment; filename=history.json"
                 }
             )
-        elif request.format == "txt":
+        elif export_request.format == "txt":
             # 텍스트 형식으로 변환
             lines = []
             for item in export_data:

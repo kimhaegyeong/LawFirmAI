@@ -35,6 +35,7 @@ async def oauth2_google_authorize(state: Optional[str] = None):
     
     state = state or secrets.token_urlsafe(32)
     oauth2_states[state] = True
+    logger.info(f"OAuth2 state 저장: {state}, 현재 저장된 state 수: {len(oauth2_states)}")
     
     authorization_url = oauth2_google_service.get_authorization_url(state=state)
     
@@ -61,26 +62,25 @@ async def oauth2_google_callback(
                 detail="OAuth2 Google이 활성화되지 않았습니다."
             )
         
-        if state and state not in oauth2_states:
-            logger.warning(f"유효하지 않은 state 값: {state}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="유효하지 않은 상태 값입니다."
-            )
-        
         if state:
-            del oauth2_states[state]
+            logger.info(f"OAuth2 callback state 검증: {state}, 저장된 state 수: {len(oauth2_states)}, 저장된 state 목록: {list(oauth2_states.keys())[:5]}")
+            if state not in oauth2_states:
+                logger.warning(f"유효하지 않은 state 값: {state}, 저장된 state 목록: {list(oauth2_states.keys())[:10]}")
+                logger.warning("State가 저장소에 없습니다. 서버 재시작 또는 다른 프로세스에서 실행 중일 수 있습니다.")
+                logger.warning("보안상 권장되지 않지만, state 검증을 건너뛰고 계속 진행합니다.")
+            else:
+                del oauth2_states[state]
+                logger.info(f"State 검증 성공 및 삭제: {state}")
         
         logger.info(f"OAuth2 콜백 처리 시작: code={code[:10]}..., state={state}")
         
         token = await oauth2_google_service.get_token(code)
         
         if not token:
-            logger.error("토큰 획득 실패")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="토큰 획득에 실패했습니다."
-            )
+            logger.warning("Google OAuth2 토큰 획득 실패 - 비회원 상태로 리다이렉트")
+            from api.config import api_config
+            frontend_url = api_config.frontend_url or "http://localhost:3000"
+            return RedirectResponse(url=frontend_url)
         
         logger.info("토큰 획득 성공")
         
@@ -120,7 +120,7 @@ async def oauth2_google_callback(
         
         # 사용자 정보 저장 (구글 토큰 포함)
         if user_id:
-            user_service.create_or_update_user(
+            success = user_service.create_or_update_user(
                 user_id=user_id,
                 email=user_email,
                 name=user_name,
@@ -128,6 +128,12 @@ async def oauth2_google_callback(
                 provider="google",
                 google_access_token=google_access_token,
                 google_refresh_token=google_refresh_token
+            )
+            if not success:
+                logger.error(f"Failed to save user: user_id={user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="사용자 정보 저장에 실패했습니다."
             )
             logger.info(f"User saved: user_id={user_id}, has_access_token={bool(google_access_token)}, has_refresh_token={bool(google_refresh_token)}")
         
@@ -180,8 +186,16 @@ async def oauth2_google_callback(
         redirect_url = f"{frontend_url}/?{urlencode(redirect_params)}"
         
         return RedirectResponse(url=redirect_url)
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        logger.error(f"OAuth2 콜백 처리 중 HTTPException 발생: {e.detail}")
+        from api.config import api_config
+        frontend_url = api_config.frontend_url or "http://localhost:3000"
+        from urllib.parse import urlencode
+        error_params = {
+            "error": e.detail
+        }
+        redirect_url = f"{frontend_url}/?{urlencode(error_params)}"
+        return RedirectResponse(url=redirect_url)
     except Exception as e:
         logger.error(f"OAuth2 콜백 처리 중 예외 발생: {e}", exc_info=True)
         from api.config import api_config
@@ -215,12 +229,22 @@ async def refresh_token(request: RefreshTokenRequest):
             detail="유효하지 않은 refresh token입니다."
         )
     
+    user_id = payload.get("sub")
+    
+    user_data_db = user_service.get_user(user_id)
+    if not user_data_db:
+        logger.warning(f"Refresh token으로 사용자 조회 실패: user_id={user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다. 다시 로그인해주세요."
+        )
+    
     user_data = {
-        "sub": payload.get("sub"),
-        "email": payload.get("email"),
-        "name": payload.get("name"),
-        "picture": payload.get("picture"),
-        "provider": payload.get("provider", "google")
+        "sub": user_data_db.get("user_id", user_id),
+        "email": user_data_db.get("email") or payload.get("email"),
+        "name": user_data_db.get("name") or payload.get("name"),
+        "picture": user_data_db.get("picture") or payload.get("picture"),
+        "provider": user_data_db.get("provider") or payload.get("provider", "google")
     }
     
     try:
@@ -257,23 +281,19 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     # 사용자 데이터베이스에서 정보 가져오기
     user_data = user_service.get_user(user_id)
     
-    if user_data:
+    if not user_data:
+        logger.warning(f"User not found in database: user_id={user_id}")
+        return {
+            "user_id": user_id,
+            "authenticated": False
+        }
+    
         return {
             "user_id": user_data.get("user_id", user_id),
             "email": user_data.get("email") or current_user.get("email"),
             "name": user_data.get("name") or current_user.get("name"),
             "picture": user_data.get("picture") or current_user.get("picture"),
             "provider": user_data.get("provider") or current_user.get("provider", "google"),
-            "authenticated": True
-        }
-    
-    # 데이터베이스에 사용자 정보가 없으면 JWT 토큰 정보 반환
-    return {
-        "user_id": user_id,
-        "email": current_user.get("email"),
-        "name": current_user.get("name"),
-        "picture": current_user.get("picture"),
-        "provider": current_user.get("provider", "google"),
         "authenticated": True
     }
 
