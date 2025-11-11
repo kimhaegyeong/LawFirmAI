@@ -2,8 +2,11 @@
  * 참고자료 상세 정보 뷰 컴포넌트
  * DocumentSidebar와 동일한 디자인으로 참고자료 상세 정보를 표시합니다.
  */
-import { FileText, Scale, Bookmark, ExternalLink, ArrowLeft } from 'lucide-react';
+import { FileText, Scale, Bookmark, ExternalLink, ArrowLeft, Copy, Check } from 'lucide-react';
+import { useMemo, useState, useEffect } from 'react';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
+import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
+import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
 
 interface ReferenceDetailViewProps {
   reference: LegalReferenceDetail;
@@ -18,6 +21,15 @@ export function ReferenceDetailView({
   onBack,
   onClose,
 }: ReferenceDetailViewProps) {
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  
+  useEffect(() => {
+    if (copiedField) {
+      const timer = setTimeout(() => setCopiedField(null), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [copiedField]);
+  
   // 문서 타입 결정
   const documentType = reference.type;
 
@@ -31,6 +43,104 @@ export function ReferenceDetailView({
 
   // sourceDetail 또는 reference에서 정보 추출
   const docMetadata = sourceDetail?.metadata || {};
+  
+  // URL 생성 (useMemo로 최적화)
+  const generatedUrl = useMemo(() => {
+    if (reference.url || sourceDetail?.url) {
+      return reference.url || sourceDetail?.url || null;
+    }
+    
+    const metadata = {
+      ...docMetadata,
+      ...reference,
+      ...sourceDetail,
+      law_id: docMetadata.law_id || sourceDetail?.metadata?.law_id,
+      mst: docMetadata.mst || sourceDetail?.metadata?.mst,
+      article_no: reference.article_number || sourceDetail?.article_no || docMetadata.article_no,
+      effective_date: docMetadata.effective_date || sourceDetail?.metadata?.effective_date,
+      precedent_serial_number: docMetadata.precedent_serial_number || sourceDetail?.metadata?.precedent_serial_number,
+      decision_serial_number: docMetadata.decision_serial_number || sourceDetail?.metadata?.decision_serial_number,
+      interpretation_serial_number: docMetadata.interpretation_serial_number || sourceDetail?.metadata?.interpretation_serial_number,
+      doc_id: reference.case_number || reference.decision_number || reference.interpretation_number || sourceDetail?.doc_id || docMetadata.doc_id,
+      statute_name: reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name,
+      casenames: reference.case_name || sourceDetail?.case_name || docMetadata.casenames,
+    };
+    
+    const urlType: LawUrlType = 
+      documentType === 'law' ? 'statute' :
+      documentType === 'precedent' ? 'case' :
+      documentType === 'decision' ? 'decision' :
+      documentType === 'interpretation' ? 'interpretation' : 'statute';
+    
+    return generateLawUrl(urlType, metadata);
+  }, [reference, sourceDetail, docMetadata, documentType]);
+  
+  // 검색 링크 생성 (URL이 없을 때)
+  const searchUrl = useMemo(() => {
+    if (generatedUrl) return null;
+    
+    const metadata = {
+      ...docMetadata,
+      ...reference,
+      ...sourceDetail,
+      statute_name: reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name,
+      casenames: reference.case_name || sourceDetail?.case_name || docMetadata.casenames,
+      org: reference.org || sourceDetail?.org || docMetadata.org,
+      title: reference.title || sourceDetail?.title || docMetadata.title,
+    };
+    
+    const urlType: LawUrlType = 
+      documentType === 'law' ? 'statute' :
+      documentType === 'precedent' ? 'case' :
+      documentType === 'decision' ? 'decision' :
+      documentType === 'interpretation' ? 'interpretation' : 'statute';
+    
+    return generateSearchUrl(urlType, metadata);
+  }, [generatedUrl, reference, sourceDetail, docMetadata, documentType]);
+  
+  // 정보 복사 핸들러
+  const handleCopy = async (text: string, fieldName: string) => {
+    await copyToClipboardWithFeedback(
+      text,
+      () => setCopiedField(fieldName),
+      () => {}
+    );
+  };
+  
+  // 정보 필드 컴포넌트 (복사 기능 포함)
+  const InfoField = ({ label, value, fieldName, isMonospace = false }: { 
+    label: string; 
+    value: string | number | undefined; 
+    fieldName: string;
+    isMonospace?: boolean;
+  }) => {
+    if (!value) return null;
+    
+    const valueStr = String(value);
+    const isCopied = copiedField === fieldName;
+    
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-medium text-slate-500">{label}</span>
+          <button
+            onClick={() => handleCopy(valueStr, fieldName)}
+            className="p-1 hover:bg-slate-100 rounded transition-colors text-slate-400 hover:text-slate-600"
+            title="복사"
+          >
+            {isCopied ? (
+              <Check className="w-3 h-3 text-green-600" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+        <p className={`text-sm text-slate-800 mt-1 ${isMonospace ? 'font-mono' : ''}`}>
+          {valueStr}
+        </p>
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -98,44 +208,56 @@ export function ReferenceDetailView({
           {/* 법령 정보 */}
           {documentType === 'law' && (
             <div className="space-y-3">
-              {(reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">법령명</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name}
-                  </p>
-                </div>
-              )}
-              {(reference.article_number || sourceDetail?.article_no || docMetadata.article_no) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">조문</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.article_number || 
-                     (sourceDetail?.article_no ? `제${sourceDetail.article_no}조` : '') ||
-                     (docMetadata.article_no ? `제${docMetadata.article_no}조` : '')}
-                  </p>
-                </div>
-              )}
-              {(sourceDetail?.clause_no || docMetadata.clause_no) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">항</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    제{sourceDetail?.clause_no || docMetadata.clause_no}항
-                  </p>
-                </div>
-              )}
-              {(sourceDetail?.item_no || docMetadata.item_no) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">호</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    제{sourceDetail?.item_no || docMetadata.item_no}호
-                  </p>
-                </div>
-              )}
+              <InfoField
+                label="법령명"
+                value={reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name}
+                fieldName="statute_name"
+              />
+              <InfoField
+                label="조문"
+                value={
+                  reference.article_number || 
+                  (sourceDetail?.article_no ? `제${sourceDetail.article_no}조` : undefined) ||
+                  (docMetadata.article_no ? `제${docMetadata.article_no}조` : undefined)
+                }
+                fieldName="article_no"
+              />
+              <InfoField
+                label="항"
+                value={sourceDetail?.clause_no || docMetadata.clause_no ? `제${sourceDetail?.clause_no || docMetadata.clause_no}항` : undefined}
+                fieldName="clause_no"
+              />
+              <InfoField
+                label="호"
+                value={sourceDetail?.item_no || docMetadata.item_no ? `제${sourceDetail?.item_no || docMetadata.item_no}호` : undefined}
+                fieldName="item_no"
+              />
+              <InfoField
+                label="법령ID"
+                value={docMetadata.law_id || docMetadata.법령ID || docMetadata.ID}
+                fieldName="law_id"
+                isMonospace
+              />
+              <InfoField
+                label="법령 마스터번호 (MST)"
+                value={docMetadata.mst || docMetadata.MST || docMetadata.lsi_seq}
+                fieldName="mst"
+                isMonospace
+              />
+              <InfoField
+                label="공포번호"
+                value={docMetadata.proclamation_number || docMetadata.공포번호}
+                fieldName="proclamation_number"
+              />
+              <InfoField
+                label="시행일자"
+                value={docMetadata.effective_date || docMetadata.efYd || docMetadata.시행일자}
+                fieldName="effective_date"
+              />
               {docMetadata.title && (
                 <div>
                   <span className="text-xs font-medium text-slate-500">제목</span>
-                  <p className="text-sm text-slate-800 mt-1">{docMetadata.title}</p>
+                  <p className="text-sm text-slate-800 mt-1">{String(docMetadata.title)}</p>
                 </div>
               )}
             </div>
@@ -144,112 +266,96 @@ export function ReferenceDetailView({
           {/* 판례 정보 */}
           {documentType === 'precedent' && (
             <div className="space-y-3">
-              {(reference.case_name || sourceDetail?.case_name || docMetadata.casenames) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">사건명</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.case_name || sourceDetail?.case_name || docMetadata.casenames}
-                  </p>
-                </div>
-              )}
-              {(reference.court || sourceDetail?.court || docMetadata.court) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">법원</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.court || sourceDetail?.court || docMetadata.court}
-                  </p>
-                </div>
-              )}
-              {(reference.case_number || sourceDetail?.case_number || docMetadata.doc_id) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">사건번호</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.case_number || sourceDetail?.case_number || docMetadata.doc_id}
-                  </p>
-                </div>
-              )}
-              {reference.decision_date && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">판결일</span>
-                  <p className="text-sm text-slate-800 mt-1">{reference.decision_date}</p>
-                </div>
-              )}
+              <InfoField
+                label="사건명"
+                value={reference.case_name || sourceDetail?.case_name || docMetadata.casenames}
+                fieldName="case_name"
+              />
+              <InfoField
+                label="법원"
+                value={reference.court || sourceDetail?.court || docMetadata.court}
+                fieldName="court"
+              />
+              <InfoField
+                label="사건번호"
+                value={reference.case_number || sourceDetail?.case_number || docMetadata.doc_id}
+                fieldName="case_number"
+              />
+              <InfoField
+                label="판례일련번호"
+                value={docMetadata.precedent_serial_number || docMetadata.판례일련번호 || docMetadata.판례정보일련번호}
+                fieldName="precedent_serial_number"
+                isMonospace
+              />
+              <InfoField
+                label="판결일"
+                value={reference.decision_date || docMetadata.announce_date}
+                fieldName="decision_date"
+              />
             </div>
           )}
 
           {/* 결정례 정보 */}
           {documentType === 'decision' && (
             <div className="space-y-3">
-              {(reference.org || sourceDetail?.org || docMetadata.org) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">기관</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.org || sourceDetail?.org || docMetadata.org}
-                  </p>
-                </div>
-              )}
-              {(reference.decision_number || sourceDetail?.decision_number || docMetadata.doc_id) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">일련번호</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.decision_number || sourceDetail?.decision_number || docMetadata.doc_id}
-                  </p>
-                </div>
-              )}
-              {(sourceDetail?.decision_date || docMetadata.decision_date) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">결정일</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {sourceDetail?.decision_date || docMetadata.decision_date}
-                  </p>
-                </div>
-              )}
-              {(reference.result || sourceDetail?.result || docMetadata.result) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">결과</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.result || sourceDetail?.result || docMetadata.result}
-                  </p>
-                </div>
-              )}
+              <InfoField
+                label="기관"
+                value={reference.org || sourceDetail?.org || docMetadata.org}
+                fieldName="org"
+              />
+              <InfoField
+                label="일련번호"
+                value={reference.decision_number || sourceDetail?.decision_number || docMetadata.doc_id}
+                fieldName="decision_number"
+              />
+              <InfoField
+                label="헌재결정례일련번호"
+                value={docMetadata.decision_serial_number || docMetadata.헌재결정례일련번호}
+                fieldName="decision_serial_number"
+                isMonospace
+              />
+              <InfoField
+                label="결정일"
+                value={sourceDetail?.decision_date || docMetadata.decision_date}
+                fieldName="decision_date"
+              />
+              <InfoField
+                label="결과"
+                value={reference.result || sourceDetail?.result || docMetadata.result}
+                fieldName="result"
+              />
             </div>
           )}
 
           {/* 해석례 정보 */}
           {documentType === 'interpretation' && (
             <div className="space-y-3">
-              {(reference.title || sourceDetail?.title || docMetadata.title) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">제목</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.title || sourceDetail?.title || docMetadata.title}
-                  </p>
-                </div>
-              )}
-              {(reference.org || sourceDetail?.org || docMetadata.org) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">기관</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.org || sourceDetail?.org || docMetadata.org}
-                  </p>
-                </div>
-              )}
-              {(reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">일련번호</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
-                  </p>
-                </div>
-              )}
-              {(sourceDetail?.response_date || docMetadata.response_date) && (
-                <div>
-                  <span className="text-xs font-medium text-slate-500">회신일</span>
-                  <p className="text-sm text-slate-800 mt-1">
-                    {sourceDetail?.response_date || docMetadata.response_date}
-                  </p>
-                </div>
-              )}
+              <InfoField
+                label="제목"
+                value={reference.title || sourceDetail?.title || docMetadata.title}
+                fieldName="title"
+              />
+              <InfoField
+                label="기관"
+                value={reference.org || sourceDetail?.org || docMetadata.org}
+                fieldName="org"
+              />
+              <InfoField
+                label="일련번호"
+                value={reference.interpretation_number || sourceDetail?.interpretation_number || docMetadata.doc_id}
+                fieldName="interpretation_number"
+              />
+              <InfoField
+                label="법령해석례일련번호"
+                value={docMetadata.interpretation_serial_number || docMetadata.법령해석례일련번호 || docMetadata.해석ID || docMetadata.expcId}
+                fieldName="interpretation_serial_number"
+                isMonospace
+              />
+              <InfoField
+                label="회신일"
+                value={sourceDetail?.response_date || docMetadata.response_date}
+                fieldName="response_date"
+              />
             </div>
           )}
 
@@ -263,20 +369,47 @@ export function ReferenceDetailView({
             </div>
           )}
 
-          {/* 원문 링크 */}
-          {(reference.url || sourceDetail?.url) && (
-            <div className="pt-3 border-t border-slate-200">
-              <a
-                href={reference.url || sourceDetail?.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                <ExternalLink className="w-4 h-4" />
-                원문 보기
-              </a>
-            </div>
-          )}
+          {/* 원문 링크 및 검색 링크 */}
+          <div className="pt-3 border-t border-slate-200 space-y-2">
+            {generatedUrl && (
+              <div>
+                <a
+                  href={generatedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition-colors font-medium w-full justify-center"
+                  title="국가법령정보센터에서 원문 보기"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  국가법령정보센터에서 원문 보기
+                </a>
+                {import.meta.env.DEV && (
+                  <div className="mt-2 text-xs text-slate-500 break-all">
+                    {generatedUrl}
+                  </div>
+                )}
+              </div>
+            )}
+            {!generatedUrl && searchUrl && (
+              <div>
+                <a
+                  href={searchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg transition-colors font-medium w-full justify-center"
+                  title="국가법령정보센터에서 검색하기"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  국가법령정보센터에서 검색하기
+                </a>
+              </div>
+            )}
+            {!generatedUrl && !searchUrl && (
+              <div className="text-xs text-slate-500 text-center py-2">
+                원문 링크를 생성할 수 없습니다. 필요한 정보가 부족합니다.
+              </div>
+            )}
+          </div>
 
           {/* 상세본문 */}
           {(reference.article_content || reference.summary || reference.content || sourceDetail?.content) && (

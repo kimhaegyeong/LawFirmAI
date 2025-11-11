@@ -6,6 +6,7 @@ import { FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
 import { useState, useMemo, useEffect } from 'react';
 import logger from '../../utils/logger';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
+import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 
 interface ReferencesModalContentProps {
   references?: string[];
@@ -382,8 +383,34 @@ function parseOtherReference(ref: string): Partial<LegalReferenceDetail> {
 /**
  * 법령 카드 컴포넌트
  */
-function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+function LawCard({ law, onClick, sourceDetail }: { law: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const cardUrl = useMemo(() => {
+    if (law.url) return law.url;
+    
+    const metadata = {
+      ...sourceDetail?.metadata,
+      ...law,
+      law_id: sourceDetail?.metadata?.law_id,
+      mst: sourceDetail?.metadata?.mst,
+      article_no: law.article_number || sourceDetail?.article_no,
+      effective_date: sourceDetail?.metadata?.effective_date,
+      statute_name: law.law_name || sourceDetail?.statute_name,
+    };
+    
+    return generateLawUrl('statute', metadata);
+  }, [law, sourceDetail]);
+  
+  const searchUrl = useMemo(() => {
+    if (cardUrl) return null;
+    
+    const metadata = {
+      statute_name: law.law_name || sourceDetail?.statute_name || sourceDetail?.metadata?.statute_name,
+    };
+    
+    return generateSearchUrl('statute', metadata);
+  }, [cardUrl, law, sourceDetail]);
   
   return (
     <div 
@@ -440,13 +467,25 @@ function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string 
             <p className="text-sm text-slate-600 mt-2">{law.content}</p>
           ) : null}
         </div>
-        {law.url ? (
+        {cardUrl ? (
           <a
-            href={law.url}
+            href={cardUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
             title="원문 보기"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : searchUrl ? (
+          <a
+            href={searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
+            title="검색하기"
+            onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -454,6 +493,10 @@ function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string 
           <button
             className="text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
             title="상세 정보 보기"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
@@ -466,8 +509,32 @@ function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string 
 /**
  * 판례 카드 컴포넌트
  */
-function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const cardUrl = useMemo(() => {
+    if (precedent.url) return precedent.url;
+    
+    const metadata = {
+      ...sourceDetail?.metadata,
+      ...precedent,
+      precedent_serial_number: sourceDetail?.metadata?.precedent_serial_number,
+      doc_id: precedent.case_number || sourceDetail?.doc_id,
+      casenames: precedent.case_name || sourceDetail?.case_name,
+    };
+    
+    return generateLawUrl('case', metadata);
+  }, [precedent, sourceDetail]);
+  
+  const searchUrl = useMemo(() => {
+    if (cardUrl) return null;
+    
+    const metadata = {
+      casenames: precedent.case_name || sourceDetail?.case_name || sourceDetail?.metadata?.casenames,
+    };
+    
+    return generateSearchUrl('case', metadata);
+  }, [cardUrl, precedent, sourceDetail]);
   
   return (
     <div 
@@ -530,13 +597,25 @@ function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail
             <p className="text-sm text-slate-700 mt-2">{precedent.content}</p>
           ) : null}
         </div>
-        {precedent.url ? (
+        {cardUrl ? (
           <a
-            href={precedent.url}
+            href={cardUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
             title="원문 보기"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : searchUrl ? (
+          <a
+            href={searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
+            title="검색하기"
+            onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -544,6 +623,10 @@ function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail
           <button
             className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
             title="상세 정보 보기"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
@@ -556,8 +639,32 @@ function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail
 /**
  * 결정례 카드 컴포넌트
  */
-function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+function DecisionCard({ decision, onClick, sourceDetail }: { decision: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const cardUrl = useMemo(() => {
+    if (decision.url) return decision.url;
+    
+    const metadata = {
+      ...sourceDetail?.metadata,
+      ...decision,
+      decision_serial_number: sourceDetail?.metadata?.decision_serial_number,
+      doc_id: decision.decision_number || sourceDetail?.doc_id,
+      org: decision.org || sourceDetail?.org,
+    };
+    
+    return generateLawUrl('decision', metadata);
+  }, [decision, sourceDetail]);
+  
+  const searchUrl = useMemo(() => {
+    if (cardUrl) return null;
+    
+    const metadata = {
+      org: decision.org || sourceDetail?.org || sourceDetail?.metadata?.org,
+    };
+    
+    return generateSearchUrl('decision', metadata);
+  }, [cardUrl, decision, sourceDetail]);
   
   return (
     <div 
@@ -613,13 +720,25 @@ function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & 
             </div>
           ) : null}
         </div>
-        {decision.url ? (
+        {cardUrl ? (
           <a
-            href={decision.url}
+            href={cardUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-orange-600 hover:text-orange-700 p-1 rounded hover:bg-orange-100 transition-colors"
             title="원문 보기"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : searchUrl ? (
+          <a
+            href={searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-orange-600 hover:text-orange-700 p-1 rounded hover:bg-orange-100 transition-colors"
+            title="검색하기"
+            onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -627,6 +746,10 @@ function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & 
           <button
             className="text-orange-600 hover:text-orange-700 p-1 rounded hover:bg-orange-100 transition-colors"
             title="상세 정보 보기"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
@@ -639,8 +762,32 @@ function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & 
 /**
  * 해석례 카드 컴포넌트
  */
-function InterpretationCard({ interpretation, onClick }: { interpretation: LegalReferenceDetail & { url?: string }; onClick?: () => void }) {
+function InterpretationCard({ interpretation, onClick, sourceDetail }: { interpretation: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const cardUrl = useMemo(() => {
+    if (interpretation.url) return interpretation.url;
+    
+    const metadata = {
+      ...sourceDetail?.metadata,
+      ...interpretation,
+      interpretation_serial_number: sourceDetail?.metadata?.interpretation_serial_number,
+      doc_id: interpretation.interpretation_number || sourceDetail?.doc_id,
+      title: interpretation.title || sourceDetail?.title,
+    };
+    
+    return generateLawUrl('interpretation', metadata);
+  }, [interpretation, sourceDetail]);
+  
+  const searchUrl = useMemo(() => {
+    if (cardUrl) return null;
+    
+    const metadata = {
+      title: interpretation.title || sourceDetail?.title || sourceDetail?.metadata?.title,
+    };
+    
+    return generateSearchUrl('interpretation', metadata);
+  }, [cardUrl, interpretation, sourceDetail]);
   
   return (
     <div 
@@ -696,13 +843,25 @@ function InterpretationCard({ interpretation, onClick }: { interpretation: Legal
             </div>
           ) : null}
         </div>
-        {interpretation.url ? (
+        {cardUrl ? (
           <a
-            href={interpretation.url}
+            href={cardUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-indigo-600 hover:text-indigo-700 p-1 rounded hover:bg-indigo-100 transition-colors"
             title="원문 보기"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        ) : searchUrl ? (
+          <a
+            href={searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-indigo-600 hover:text-indigo-700 p-1 rounded hover:bg-indigo-100 transition-colors"
+            title="검색하기"
+            onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -710,6 +869,10 @@ function InterpretationCard({ interpretation, onClick }: { interpretation: Legal
           <button
             className="text-indigo-600 hover:text-indigo-700 p-1 rounded hover:bg-indigo-100 transition-colors"
             title="상세 정보 보기"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
@@ -1018,22 +1181,23 @@ export function ReferencesModalContent({
             )}
             
             {filteredReferences.map((ref) => {
+              const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
+              
               const handleClick = () => {
                 if (onReferenceClick) {
-                  const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
                   onReferenceClick(ref, sourceDetail);
                 }
               };
 
               switch (ref.type) {
                 case 'law':
-                  return <LawCard key={ref.id} law={ref} onClick={handleClick} />;
+                  return <LawCard key={ref.id} law={ref} onClick={handleClick} sourceDetail={sourceDetail} />;
                 case 'precedent':
-                  return <PrecedentCard key={ref.id} precedent={ref} onClick={handleClick} />;
+                  return <PrecedentCard key={ref.id} precedent={ref} onClick={handleClick} sourceDetail={sourceDetail} />;
                 case 'decision':
-                  return <DecisionCard key={ref.id} decision={ref} onClick={handleClick} />;
+                  return <DecisionCard key={ref.id} decision={ref} onClick={handleClick} sourceDetail={sourceDetail} />;
                 case 'interpretation':
-                  return <InterpretationCard key={ref.id} interpretation={ref} onClick={handleClick} />;
+                  return <InterpretationCard key={ref.id} interpretation={ref} onClick={handleClick} sourceDetail={sourceDetail} />;
                 case 'regulation':
                   return <RegulationCard key={ref.id} regulation={ref} onClick={handleClick} />;
                 default:
