@@ -289,87 +289,101 @@ setup_csrf_protection(app)
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 로깅 설정 강화"""
-    # HuggingFace 로깅 비활성화 (가장 먼저 실행)
+    import asyncio
+    
     try:
-        from lawfirm_langgraph.core.utils.safe_logging import disable_external_logging
-        disable_external_logging()
-    except ImportError:
-        # fallback: 직접 비활성화
-        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-        os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
-        logging.getLogger('transformers').setLevel(logging.ERROR)
-        logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
-        logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
-        logging.getLogger('torch').setLevel(logging.ERROR)
-        logging.getLogger('asyncio').setLevel(logging.WARNING)
-    
-    # 로깅 설정을 다시 강제로 적용
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    root_logger.disabled = False
-    
-    # 핸들러 확인 및 추가
-    has_stdout_handler = any(
-        isinstance(h, logging.StreamHandler) and h.stream == sys.stdout 
-        for h in root_logger.handlers
-    )
-    if not has_stdout_handler:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(log_level)
-        handler.setFormatter(
-            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        # HuggingFace 로깅 비활성화 (가장 먼저 실행)
+        try:
+            from lawfirm_langgraph.core.utils.safe_logging import disable_external_logging
+            disable_external_logging()
+        except ImportError:
+            # fallback: 직접 비활성화
+            os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+            os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+            logging.getLogger('transformers').setLevel(logging.ERROR)
+            logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
+            logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
+            logging.getLogger('torch').setLevel(logging.ERROR)
+            logging.getLogger('asyncio').setLevel(logging.WARNING)
+        
+        # 로깅 설정을 다시 강제로 적용
+        root_logger = logging.getLogger()
+        root_logger.setLevel(log_level)
+        root_logger.disabled = False
+        
+        # 핸들러 확인 및 추가
+        has_stdout_handler = any(
+            isinstance(h, logging.StreamHandler) and h.stream == sys.stdout 
+            for h in root_logger.handlers
         )
-        root_logger.addHandler(handler)
-    
-    # 모든 핸들러의 레벨 설정
-    for handler in root_logger.handlers:
-        handler.setLevel(log_level)
-    
-    # 로깅 보호
-    logging.disable(logging.NOTSET)
-    
-    # 주요 로거들 활성화
-    logging.getLogger("api").setLevel(log_level)
-    logging.getLogger("api").disabled = False
-    logging.getLogger("api.services").setLevel(log_level)
-    logging.getLogger("api.services").disabled = False
-    logging.getLogger("api.services.chat_service").setLevel(log_level)
-    logging.getLogger("api.services.chat_service").disabled = False
-    
-    # lawfirm_langgraph 로거 레벨 설정 (환경 변수 LOG_LEVEL 반영)
-    logging.getLogger("lawfirm_langgraph").setLevel(log_level)
-    logging.getLogger("lawfirm_langgraph").disabled = False
-    
-    # lawfirm_langgraph 하위 로거들도 동일한 레벨로 설정
-    for logger_name in ["lawfirm_langgraph.core", 
-                        "lawfirm_langgraph.config", "lawfirm_langgraph.core.agents",
-                        "lawfirm_langgraph.core.services", "lawfirm_langgraph.core.utils"]:
-        logging.getLogger(logger_name).setLevel(log_level)
-        logging.getLogger(logger_name).disabled = False
-    
-    # 로깅 테스트
-    test_logger = logging.getLogger("api.startup")
-    test_logger.setLevel(log_level)
-    test_logger.disabled = False
-    test_logger.propagate = True
-    
-    print(f"[DEBUG] Startup event - Root logger level: {logging.getLevelName(root_logger.level)}")
-    print(f"[DEBUG] Startup event - Root logger disabled: {root_logger.disabled}")
-    print(f"[DEBUG] Startup event - Number of handlers: {len(root_logger.handlers)}")
-    test_logger.info("✅ Startup event - Logging configured and enabled!")
-    
-    # ChatService 초기화하여 로그 확인
-    try:
-        from api.services.chat_service import get_chat_service
-        test_logger.info("Initializing ChatService during startup to verify logging...")
-        chat_service = get_chat_service()
-        if chat_service.is_available():
-            test_logger.info("✅ ChatService initialized successfully during startup")
-        else:
-            test_logger.warning("⚠️  ChatService initialized but workflow service is not available")
+        if not has_stdout_handler:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(log_level)
+            handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            )
+            root_logger.addHandler(handler)
+        
+        # 모든 핸들러의 레벨 설정
+        for handler in root_logger.handlers:
+            handler.setLevel(log_level)
+        
+        # 로깅 보호
+        logging.disable(logging.NOTSET)
+        
+        # 주요 로거들 활성화
+        logging.getLogger("api").setLevel(log_level)
+        logging.getLogger("api").disabled = False
+        logging.getLogger("api.services").setLevel(log_level)
+        logging.getLogger("api.services").disabled = False
+        logging.getLogger("api.services.chat_service").setLevel(log_level)
+        logging.getLogger("api.services.chat_service").disabled = False
+        
+        # lawfirm_langgraph 로거 레벨 설정 (환경 변수 LOG_LEVEL 반영)
+        logging.getLogger("lawfirm_langgraph").setLevel(log_level)
+        logging.getLogger("lawfirm_langgraph").disabled = False
+        
+        # lawfirm_langgraph 하위 로거들도 동일한 레벨로 설정
+        for logger_name in ["lawfirm_langgraph.core", 
+                            "lawfirm_langgraph.config", "lawfirm_langgraph.core.agents",
+                            "lawfirm_langgraph.core.services", "lawfirm_langgraph.core.utils"]:
+            logging.getLogger(logger_name).setLevel(log_level)
+            logging.getLogger(logger_name).disabled = False
+        
+        # 로깅 테스트
+        test_logger = logging.getLogger("api.startup")
+        test_logger.setLevel(log_level)
+        test_logger.disabled = False
+        test_logger.propagate = True
+        
+        print(f"[DEBUG] Startup event - Root logger level: {logging.getLevelName(root_logger.level)}")
+        print(f"[DEBUG] Startup event - Root logger disabled: {root_logger.disabled}")
+        print(f"[DEBUG] Startup event - Number of handlers: {len(root_logger.handlers)}")
+        test_logger.info("✅ Startup event - Logging configured and enabled!")
+        
+        # ChatService 초기화하여 로그 확인
+        try:
+            from api.services.chat_service import get_chat_service
+            test_logger.info("Initializing ChatService during startup to verify logging...")
+            chat_service = get_chat_service()
+            if chat_service.is_available():
+                test_logger.info("✅ ChatService initialized successfully during startup")
+            else:
+                test_logger.warning("⚠️  ChatService initialized but workflow service is not available")
+        except Exception as e:
+            test_logger.error(f"Failed to initialize ChatService during startup: {e}", exc_info=True)
+    except asyncio.CancelledError:
+        # Windows에서 reload 시 startup 이벤트가 취소될 수 있음
+        # 이 경우 정상적인 동작이므로 무시
+        pass
     except Exception as e:
-        test_logger.error(f"Failed to initialize ChatService during startup: {e}", exc_info=True)
+        # 기타 예외는 로깅하되 서버 시작을 막지 않음
+        try:
+            logger = logging.getLogger("api.startup")
+            logger.error(f"Startup event error: {e}", exc_info=True)
+        except:
+            print(f"[ERROR] Startup event error: {e}", flush=True)
 
 # 라우터 등록
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
