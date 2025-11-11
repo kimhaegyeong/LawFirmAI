@@ -116,6 +116,14 @@ dmypy.json
 docs/_build/
 site/
 
+# Security Audit Reports
+docs/07_api/security_audit/*.json
+docs/07_api/security_audit/*.txt
+docs/**/security_audit/*.json
+docs/**/security_audit/*.txt
+**/security_audit/*.json
+**/security_audit/*.txt
+
 # HuggingFace Cache
 .cache/
 huggingface/
