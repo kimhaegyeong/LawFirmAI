@@ -16,7 +16,11 @@ from typing import Any, Dict, Optional, Tuple
 from core.agents.parsers.response_parsers import ClassificationParser
 from core.agents.workflow_constants import WorkflowConstants
 from core.agents.workflow_utils import WorkflowUtils
-from core.services.question_classifier import QuestionType
+try:
+    from core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    # 호환성을 위한 fallback
+    from core.services.question_classifier import QuestionType
 
 
 class QueryComplexity(str, Enum):
