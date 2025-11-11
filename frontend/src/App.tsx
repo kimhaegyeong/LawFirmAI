@@ -17,6 +17,7 @@ import { useSession } from './hooks/useSession';
 import { useAuth } from './hooks/useAuth';
 import { getHistory, exportHistory, downloadHistory } from './services/historyService';
 import { createSession } from './services/sessionService';
+import { cleanupOldOAuthKeys } from './services/authService';
 import { parseStreamChunk, type ParsedChunk } from './utils/streamParser';
 import { classifyStreamError, StreamError } from './types/error';
 import logger from './utils/logger';
@@ -38,6 +39,7 @@ function App() {
   const { isAuthenticated, isLoading: isAuthLoading, login } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [locationKey, setLocationKey] = useState(0);
   const [currentProgress, setCurrentProgress] = useState<string | null>(null);
   const [progressHistory, setProgressHistory] = useState<string[]>([]);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null); // 현재 스트리밍 중인 메시지 ID
@@ -56,7 +58,6 @@ function App() {
   // 토큰 배치 업데이트를 위한 ref
   const tokenBufferRef = useRef<Map<string, string>>(new Map()); // 메시지별 토큰 버퍼
   const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map()); // 메시지별 타이머 (setTimeout 반환값)
-  const loadingSourcesRef = useRef<Set<string>>(new Set()); // sources 로딩 중인 message_id 추적
   
   // 초기 마운트 여부 추적 (StrictMode 대응)
   const isInitialMount = useRef(true);
@@ -95,11 +96,24 @@ function App() {
     },
   });
 
+  // URL 변경 감지를 위한 popstate 이벤트 리스너
+  useEffect(() => {
+    const handlePopState = () => {
+      setLocationKey(prev => prev + 1);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
   // 초기 세션 로드 (StrictMode 대응)
   // 세션 목록은 SessionList 컴포넌트에서 로드하므로 여기서는 URL 파라미터의 세션 ID만 처리
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
+      
+      cleanupOldOAuthKeys();
       
       // URL 파라미터에서 세션 ID 확인
       const urlParams = new URLSearchParams(window.location.search);
@@ -530,10 +544,11 @@ function App() {
               isFirstChunk = false;
             }
           } else if (parsed.type === 'sources') {
-            // sources 이벤트 처리
+            // sources 이벤트 처리 (별도 이벤트)
             if (parsed.metadata) {
               const sourcesMetadata = parsed.metadata;
               const sourcesMessageId = sourcesMetadata.message_id;
+              const relatedQuestions = sourcesMetadata.related_questions as string[] | undefined;
               
               if (import.meta.env.DEV) {
                 logger.debug('[Stream] Sources event received:', {
@@ -541,28 +556,18 @@ function App() {
                   sources: sourcesMetadata.sources,
                   legalReferences: sourcesMetadata.legal_references,
                   sourcesDetail: sourcesMetadata.sources_detail,
-                  relatedQuestions: sourcesMetadata.related_questions,
+                  relatedQuestions: relatedQuestions,
                 });
               }
               
-              // 메시지 찾기: sourcesMessageId가 있으면 우선 사용, 없으면 assistantMessageId 사용
+              // message_id로 메시지 찾기
               const targetMessageId = sourcesMessageId || assistantMessageId;
               
               setMessages((prev) => {
-                // 메시지 찾기: id 또는 metadata.message_id로 매칭
-                const messageIndex = prev.findIndex((msg) => {
-                  if (msg.id === targetMessageId) {
-                    return true;
-                  }
-                  if (sourcesMessageId && msg.metadata?.message_id === sourcesMessageId) {
-                    return true;
-                  }
-                  // assistantMessageId와 매칭 (sourcesMessageId가 없는 경우)
-                  if (!sourcesMessageId && msg.id === assistantMessageId) {
-                    return true;
-                  }
-                  return false;
-                });
+                const messageIndex = prev.findIndex((msg) => 
+                  msg.id === targetMessageId || 
+                  msg.metadata?.message_id === sourcesMessageId
+                );
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -574,11 +579,11 @@ function App() {
                       ...existingMsg,
                       metadata: {
                         ...existingMsg.metadata,
-                        sources: Array.isArray(sourcesMetadata.sources) ? sourcesMetadata.sources : [],
-                        legal_references: Array.isArray(sourcesMetadata.legal_references) ? sourcesMetadata.legal_references : [],
-                        sources_detail: Array.isArray(sourcesMetadata.sources_detail) ? sourcesMetadata.sources_detail : [],
-                        related_questions: Array.isArray(sourcesMetadata.related_questions) ? sourcesMetadata.related_questions : (existingMsg.metadata?.related_questions || []),
+                        sources: (sourcesMetadata.sources as string[] | undefined) || [],
+                        legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
+                        sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
                         message_id: sourcesMessageId || existingMsg.metadata?.message_id,
+                        related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : existingMsg.metadata?.related_questions,
                       },
                     };
                   }
@@ -591,19 +596,6 @@ function App() {
                   }
                   
                   return updated;
-                } else {
-                  // 메시지를 찾지 못한 경우 로그 출력
-                  if (import.meta.env.DEV) {
-                    logger.warn('[Stream] Message not found for sources event:', {
-                      targetMessageId,
-                      sourcesMessageId,
-                      assistantMessageId,
-                      availableMessageIds: prev.map(msg => ({
-                        id: msg.id,
-                        message_id: msg.metadata?.message_id
-                      })),
-                    });
-                  }
                 }
                 return prev;
               });
@@ -613,6 +605,7 @@ function App() {
             if (parsed.metadata) {
               const sourcesMetadata = parsed.metadata;
               const sourcesMessageId = sourcesMetadata.message_id;
+              const relatedQuestions = sourcesMetadata.related_questions as string[] | undefined;
               
               if (import.meta.env.DEV) {
                 logger.debug('[Stream] Sources in final metadata:', {
@@ -620,7 +613,7 @@ function App() {
                   sources: sourcesMetadata.sources,
                   legalReferences: sourcesMetadata.legal_references,
                   sourcesDetail: sourcesMetadata.sources_detail,
-                  relatedQuestions: sourcesMetadata.related_questions,
+                  relatedQuestions: relatedQuestions,
                 });
               }
               
@@ -646,8 +639,8 @@ function App() {
                         sources: (sourcesMetadata.sources as string[] | undefined) || [],
                         legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
                         sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
-                        related_questions: (sourcesMetadata.related_questions as string[] | undefined) || existingMsg.metadata?.related_questions,
                         message_id: sourcesMessageId || existingMsg.metadata?.message_id,
+                        related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : existingMsg.metadata?.related_questions,
                       },
                     };
                   }
@@ -659,61 +652,6 @@ function App() {
                     });
                   }
                   
-                  return updated;
-                }
-                return prev;
-              });
-            }
-          } else if (parsed.type === 'validation' || parsed.type === 'validation_start' || parsed.type === 'regeneration_start') {
-            // 품질 검증 이벤트 처리
-            if (parsed.type === 'validation_start') {
-              setCurrentProgress('답변 품질 검증 중...');
-            } else if (parsed.type === 'regeneration_start') {
-              setCurrentProgress('답변 재생성 중...');
-            } else if (parsed.type === 'validation' && parsed.metadata) {
-              const validationMetadata = parsed.metadata;
-              const qualityScore = validationMetadata.quality_score as number | undefined;
-              const needsRegeneration = validationMetadata.needs_regeneration as boolean | undefined;
-              
-              if (import.meta.env.DEV) {
-                logger.debug('[Stream] Validation event received:', {
-                  qualityScore,
-                  is_valid: validationMetadata.is_valid,
-                  needsRegeneration,
-                  regenerationReason: validationMetadata.regeneration_reason,
-                  issues: validationMetadata.issues,
-                  strengths: validationMetadata.strengths,
-                });
-              }
-              
-              // 재생성이 필요한 경우 알림 (선택적)
-              if (needsRegeneration) {
-                // 재생성 필요 알림은 선택적으로 표시
-                // setCurrentProgress('답변 품질을 개선하기 위해 재생성 중입니다...');
-              }
-              
-              // 검증 결과를 메시지 metadata에 저장 (선택적)
-              setMessages((prev) => {
-                const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-                if (messageIndex !== -1) {
-                  const updated = [...prev];
-                  const existingMsg = updated[messageIndex];
-                  if (existingMsg) {
-                    updated[messageIndex] = {
-                      ...existingMsg,
-                      metadata: {
-                        ...existingMsg.metadata,
-                        validation: {
-                          quality_score: qualityScore,
-                          is_valid: validationMetadata.is_valid,
-                          needs_regeneration: needsRegeneration,
-                          regeneration_reason: validationMetadata.regeneration_reason,
-                          issues: validationMetadata.issues,
-                          strengths: validationMetadata.strengths,
-                        },
-                      },
-                    };
-                  }
                   return updated;
                 }
                 return prev;
@@ -1087,14 +1025,6 @@ function App() {
     if (!message.metadata?.sources?.length && 
         !message.metadata?.sources_detail?.length && 
         currentSession?.session_id) {
-      
-      // 이미 로딩 중이면 중복 호출 방지
-      if (loadingSourcesRef.current.has(message.id)) {
-        return;
-      }
-      
-      loadingSourcesRef.current.add(message.id);
-      
       try {
         const { getChatSources } = await import('./services/chatService');
         const sourcesData = await getChatSources(
@@ -1141,8 +1071,6 @@ function App() {
         });
       } catch (error) {
         logger.error('[App] Error fetching sources for sidebar:', error);
-      } finally {
-        loadingSourcesRef.current.delete(message.id);
       }
     }
   };
@@ -1165,12 +1093,18 @@ function App() {
   }
 
   // OAuth 콜백 처리 또는 로그인 페이지 표시
+  // locationKey를 의존성에 추가하여 URL 변경 시 리렌더링 보장
   const urlParams = new URLSearchParams(window.location.search);
   const hasOAuthCallback = urlParams.get('code') && urlParams.get('state');
   const hasOAuthError = urlParams.get('error');
+  const currentPath = window.location.pathname;
   
-  if (hasOAuthCallback || hasOAuthError || window.location.pathname === '/login') {
-    logger.info('App: Showing LoginPage, hasOAuthCallback:', hasOAuthCallback, 'hasOAuthError:', hasOAuthError);
+  // locationKey를 사용하여 URL 변경 시 리렌더링 보장
+  // locationKey가 변경되면 이 컴포넌트가 리렌더링되어 URL 파라미터를 다시 확인
+  const _ = locationKey; // locationKey를 사용하여 리렌더링 보장
+  
+  if (hasOAuthCallback || hasOAuthError || currentPath === '/login') {
+    logger.info('App: Showing LoginPage, hasOAuthCallback:', hasOAuthCallback, 'hasOAuthError:', hasOAuthError, 'currentPath:', currentPath);
     return <LoginPage />;
   }
 
