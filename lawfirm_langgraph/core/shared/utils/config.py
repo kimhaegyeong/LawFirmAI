@@ -34,6 +34,9 @@ if sys.platform == "win32":
     os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 
+# 환경 변수 경고 메시지 중복 출력 방지
+_warned_env_vars = set()
+
 class Config(BaseSettings):
     """설정 관리 클래스"""
     
@@ -123,7 +126,8 @@ class Config(BaseSettings):
                     print(f"환경변수 파일 로딩 실패: {e}")
             else:
                 # .env 파일이 없으면 환경변수에서 직접 설정
-                if not os.getenv("LAW_OPEN_API_OC"):
+                if not os.getenv("LAW_OPEN_API_OC") and "LAW_OPEN_API_OC" not in _warned_env_vars:
+                    _warned_env_vars.add("LAW_OPEN_API_OC")
                     print("⚠️ LAW_OPEN_API_OC 환경변수가 설정되지 않았습니다.")
                     print("다음 중 하나의 방법으로 설정하세요:")
                     print("1. .env 파일 생성: LAW_OPEN_API_OC=your_email@example.com")

@@ -11,6 +11,105 @@ import os
 from typing import Optional
 
 
+class SafeStreamHandler(logging.StreamHandler):
+    """버퍼 분리 오류를 방지하는 안전한 스트림 핸들러"""
+    
+    def __init__(self, stream=None, original_stdout_ref=None):
+        if stream is None:
+            stream = sys.stdout
+        super().__init__(stream)
+        self._original_stdout = original_stdout_ref
+        self._fallback_stream = None
+    
+    def _get_safe_stream(self):
+        """안전한 스트림 반환"""
+        streams_to_try = []
+        if self.stream and hasattr(self.stream, 'write'):
+            streams_to_try.append(self.stream)
+        if self._original_stdout is not None and hasattr(self._original_stdout, 'write'):
+            streams_to_try.append(self._original_stdout)
+        if sys.stdout and hasattr(sys.stdout, 'write'):
+            streams_to_try.append(sys.stdout)
+        if sys.stderr and hasattr(sys.stderr, 'write'):
+            streams_to_try.append(sys.stderr)
+        
+        for stream in streams_to_try:
+            try:
+                if hasattr(stream, 'buffer') or hasattr(stream, 'write'):
+                    return stream
+            except (ValueError, AttributeError, OSError):
+                continue
+        return None
+    
+    def _is_stream_valid(self, stream):
+        """스트림이 유효한지 확인"""
+        if stream is None:
+            return False
+        try:
+            if hasattr(stream, 'buffer'):
+                buffer = stream.buffer
+                if buffer is None:
+                    return False
+                if hasattr(buffer, 'raw'):
+                    raw = buffer.raw
+                    if raw is None:
+                        return False
+            if not hasattr(stream, 'write'):
+                return False
+            return True
+        except (ValueError, AttributeError, OSError):
+            return False
+    
+    def emit(self, record):
+        """안전한 로그 출력 (버퍼 분리 오류 방지)"""
+        try:
+            msg = self.format(record) + self.terminator
+            safe_stream = self._get_safe_stream()
+            if safe_stream is not None:
+                try:
+                    if hasattr(safe_stream, 'buffer'):
+                        try:
+                            buffer = safe_stream.buffer
+                            if buffer is None:
+                                raise ValueError("Buffer is None")
+                        except (ValueError, AttributeError):
+                            if hasattr(safe_stream, 'write'):
+                                safe_stream.write(msg)
+                                return
+                            else:
+                                raise ValueError("No write method")
+                    else:
+                        safe_stream.write(msg)
+                    
+                    try:
+                        safe_stream.flush()
+                    except (ValueError, AttributeError, OSError):
+                        pass
+                    return
+                except (ValueError, AttributeError, OSError) as e:
+                    if "detached" in str(e).lower() or "raw stream" in str(e).lower():
+                        pass
+                    else:
+                        pass
+            
+            try:
+                if sys.stderr and hasattr(sys.stderr, 'write'):
+                    try:
+                        sys.stderr.write(msg)
+                        try:
+                            sys.stderr.flush()
+                        except (ValueError, AttributeError, OSError):
+                            pass
+                        return
+                    except (ValueError, AttributeError, OSError) as e:
+                        if "detached" in str(e).lower() or "raw stream" in str(e).lower():
+                            pass
+            except (ValueError, AttributeError, OSError):
+                pass
+        except Exception:
+            self.handleError(record)
+
+
 def disable_external_logging():
     """
     외부 라이브러리의 로깅을 비활성화합니다.
@@ -134,9 +233,9 @@ def setup_safe_logging(
     # 새로운 핸들러 설정
     handlers = []
     
-    # 콘솔 핸들러 (안전한 설정)
+    # 콘솔 핸들러 (SafeStreamHandler 사용)
     try:
-        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler = SafeStreamHandler(sys.stdout)
         console_handler.setLevel(getattr(logging, level.upper()))
         console_formatter = logging.Formatter(format_string)
         console_handler.setFormatter(console_formatter)
