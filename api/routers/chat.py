@@ -432,6 +432,10 @@ async def chat_stream(
                 # 스트리밍이 정상적으로 완료됨
                 stream_closed = True
                 
+            except GeneratorExit:
+                # 클라이언트가 연결을 끊은 경우 정상 종료
+                logger.debug("[chat_stream] Client disconnected, closing stream")
+                return
             except Exception as e:
                 logger.error(f"Error in stream_message: {e}", exc_info=True)
                 error_msg = f"[오류] {str(e)}"
@@ -448,6 +452,10 @@ async def chat_stream(
                     yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
                     has_yielded = True
                     stream_closed = True
+                except GeneratorExit:
+                    # yield 중 클라이언트가 연결을 끊은 경우
+                    logger.debug("[chat_stream] Client disconnected during error handling")
+                    return
                 except Exception as yield_error:
                     logger.error(f"Error yielding error message: {yield_error}")
                     # yield 자체가 실패한 경우에도 스트림이 정상 종료되도록 보장
