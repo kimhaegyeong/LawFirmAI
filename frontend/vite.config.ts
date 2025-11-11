@@ -21,7 +21,7 @@ export default defineConfig({
         secure: false,
         ws: true,
         configure: (proxy, _options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
             const url = req.url || '';
             if (url.includes('/chat/stream')) {
               proxyReq.setHeader('X-Accel-Buffering', 'no');
@@ -30,7 +30,7 @@ export default defineConfig({
               proxyReq.setHeader('Accept', 'text/event-stream');
             }
           });
-          proxy.on('proxyRes', (proxyRes, req, res) => {
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
             const url = req.url || '';
             if (url.includes('/chat/stream')) {
               proxyRes.headers['X-Accel-Buffering'] = 'no';
@@ -49,7 +49,7 @@ export default defineConfig({
               res.end('Proxy error: ' + err.message);
             }
           });
-          proxy.on('close', (req, res) => {
+          proxy.on('close', (req, _res) => {
             const url = req.url || '';
             if (url.includes('/chat/stream')) {
               console.log('[Vite Proxy] Stream connection closed:', url);

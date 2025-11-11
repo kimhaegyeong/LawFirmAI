@@ -10,18 +10,18 @@ import { ChatInput } from './components/chat/ChatInput';
 import { Toast } from './components/common/Toast';
 import { DocumentSidebar } from './components/chat/DocumentSidebar';
 import { ReferencesSidebar } from './components/chat/ReferencesSidebar';
-import { LoginPage } from './components/auth/LoginPage';
 import { QuotaIndicator } from './components/chat/QuotaIndicator';
+import { LoginPage } from './components/auth/LoginPage';
 import { useChat } from './hooks/useChat';
 import { useSession } from './hooks/useSession';
 import { useAuth } from './hooks/useAuth';
 import { getHistory, exportHistory, downloadHistory } from './services/historyService';
 import { createSession } from './services/sessionService';
-import { parseStreamChunk } from './utils/streamParser';
+import { parseStreamChunk, type ParsedChunk } from './utils/streamParser';
 import { classifyStreamError, StreamError } from './types/error';
 import logger from './utils/logger';
 import { convertImageToBase64, convertFileToBase64, isImageFile, isDocumentFile } from './utils/fileUtils';
-import type { ChatMessage, FileAttachment } from './types/chat';
+import type { ChatMessage, FileAttachment, SourceInfo } from './types/chat';
 import type { Session } from './types/session';
 
 interface ToastItem {
@@ -35,16 +35,16 @@ interface ToastItem {
 }
 
 function App() {
-  const { user, isAuthenticated, isLoading: isAuthLoading, login } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, login } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentProgress, setCurrentProgress] = useState<string | null>(null);
   const [progressHistory, setProgressHistory] = useState<string[]>([]);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null); // 현재 스트리밍 중인 메시지 ID
+  const [, setMessageBuffers] = useState<Map<string, string>>(new Map()); // 메시지 버퍼
   const [inputResetTrigger, setInputResetTrigger] = useState(0); // 입력창 초기화 트리거
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [streamErrors, setStreamErrors] = useState<Map<string, StreamError>>(new Map());
-  const [messageBuffers, setMessageBuffers] = useState<Map<string, string>>(new Map()); // 메시지별 버퍼 관리
   const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; limit: number } | null>(null); // 익명 사용자 쿼터 정보
   const [documentSidebarOpen, setDocumentSidebarOpen] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState<number | null>(null);
@@ -56,6 +56,7 @@ function App() {
   // 토큰 배치 업데이트를 위한 ref
   const tokenBufferRef = useRef<Map<string, string>>(new Map()); // 메시지별 토큰 버퍼
   const tokenBufferTimeoutRef = useRef<Map<string, number>>(new Map()); // 메시지별 타이머 (setTimeout 반환값)
+  const loadingSourcesRef = useRef<Set<string>>(new Set()); // sources 로딩 중인 message_id 추적
   
   // 초기 마운트 여부 추적 (StrictMode 대응)
   const isInitialMount = useRef(true);
@@ -94,7 +95,8 @@ function App() {
     },
   });
 
-  // 초기 세션 목록 로드 (StrictMode 대응)
+  // 초기 세션 로드 (StrictMode 대응)
+  // 세션 목록은 SessionList 컴포넌트에서 로드하므로 여기서는 URL 파라미터의 세션 ID만 처리
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
@@ -114,15 +116,10 @@ function App() {
           })
           .catch((error) => {
             logger.error('Failed to load session from URL parameter:', error);
-            // 세션 로드 실패 시 세션 목록 로드
-            loadSessions();
           });
-      } else {
-        // URL 파라미터에 세션 ID가 없으면 세션 목록 로드
-        loadSessions();
       }
     }
-  }, [loadSessions, loadSession]);
+  }, [loadSession]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {
@@ -362,7 +359,9 @@ function App() {
               // 마지막 진행 상황 메시지 찾기 (역순으로 검색)
               let lastProgressIndex = -1;
               for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].role === 'progress') {
+                // eslint-disable-next-line security/detect-object-injection
+                const msg = prev[i];
+                if (msg && msg.role === 'progress') {
                   lastProgressIndex = i;
                   break;
                 }
@@ -371,15 +370,20 @@ function App() {
               if (lastProgressIndex !== -1) {
                 // 기존 진행 상황 메시지 업데이트
                 const updated = [...prev];
-                updated[lastProgressIndex] = {
-                  ...updated[lastProgressIndex],
-                  content: parsed.content,
-                  timestamp: new Date(),
-                  metadata: parsed.metadata ? {
-                    ...updated[lastProgressIndex].metadata,
-                    ...parsed.metadata,
-                  } : updated[lastProgressIndex].metadata,
-                };
+                // eslint-disable-next-line security/detect-object-injection
+                const existingMsg = updated[lastProgressIndex];
+                if (existingMsg) {
+                  // eslint-disable-next-line security/detect-object-injection
+                  updated[lastProgressIndex] = {
+                    ...existingMsg,
+                    content: parsed.content,
+                    timestamp: new Date(),
+                    metadata: parsed.metadata ? {
+                      ...existingMsg.metadata,
+                      ...parsed.metadata,
+                    } : existingMsg.metadata,
+                  };
+                }
                 if (import.meta.env.DEV) {
                   logger.debug('[Stream] Progress message updated:', parsed.content);
                 }
@@ -442,7 +446,15 @@ function App() {
                 // 이미 메시지가 있으면 실시간 업데이트
                 if (messageIndex !== -1) {
                   const updated = [...prevMessages];
-                  updated[messageIndex] = { ...updated[messageIndex], content: updatedBuffer };
+                  // eslint-disable-next-line security/detect-object-injection
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    updated[messageIndex] = { 
+                      ...existingMsg, 
+                      content: updatedBuffer 
+                    };
+                  }
                   if (import.meta.env.DEV && updatedBuffer.length % 50 === 0) {
                     logger.debug('[Stream] Message updated at index:', messageIndex, 'Content length:', updatedBuffer.length);
                   }
@@ -496,14 +508,19 @@ function App() {
               } else if (messageIndex !== -1) {
                 // 기존 메시지 업데이트
                 const updated = [...prevMessages];
-                updated[messageIndex] = {
-                  ...updated[messageIndex],
-                  content: parsed.content,
-                  metadata: {
-                    ...updated[messageIndex].metadata,
-                    message_id: parsed.metadata?.message_id || updated[messageIndex].metadata?.message_id,
-                  },
-                };
+                // eslint-disable-next-line security/detect-object-injection
+                const existingMsg = updated[messageIndex];
+                if (existingMsg) {
+                  // eslint-disable-next-line security/detect-object-injection
+                  updated[messageIndex] = {
+                    ...existingMsg,
+                    content: parsed.content,
+                    metadata: {
+                      ...existingMsg.metadata,
+                      message_id: parsed.metadata?.message_id || existingMsg.metadata?.message_id,
+                    },
+                  };
+                }
                 return updated;
               }
               return prevMessages;
@@ -512,8 +529,8 @@ function App() {
             if (isFirstChunk) {
               isFirstChunk = false;
             }
-          } else if ((parsed as any).type === 'sources') {
-            // sources 이벤트 처리 (스트림 종료 후 sources 정보)
+          } else if (parsed.type === 'sources') {
+            // sources 이벤트 처리 (별도 이벤트)
             if (parsed.metadata) {
               const sourcesMetadata = parsed.metadata;
               const sourcesMessageId = sourcesMetadata.message_id;
@@ -524,6 +541,63 @@ function App() {
                   sources: sourcesMetadata.sources,
                   legalReferences: sourcesMetadata.legal_references,
                   sourcesDetail: sourcesMetadata.sources_detail,
+                  relatedQuestions: sourcesMetadata.related_questions,
+                });
+              }
+              
+              // message_id로 메시지 찾기
+              const targetMessageId = sourcesMessageId || assistantMessageId;
+              
+              setMessages((prev) => {
+                const messageIndex = prev.findIndex((msg) => 
+                  msg.id === targetMessageId || 
+                  msg.metadata?.message_id === sourcesMessageId
+                );
+                
+                if (messageIndex !== -1) {
+                  const updated = [...prev];
+                  // eslint-disable-next-line security/detect-object-injection
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    updated[messageIndex] = {
+                      ...existingMsg,
+                      metadata: {
+                        ...existingMsg.metadata,
+                        sources: (sourcesMetadata.sources as string[] | undefined) || [],
+                        legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
+                        sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
+                        related_questions: (sourcesMetadata.related_questions as string[] | undefined) || existingMsg.metadata?.related_questions,
+                        message_id: sourcesMessageId || existingMsg.metadata?.message_id,
+                      },
+                    };
+                  }
+                  
+                  if (import.meta.env.DEV && existingMsg) {
+                    logger.debug('[Stream] Message metadata updated with sources:', {
+                      messageId: targetMessageId,
+                      updatedMetadata: updated[messageIndex]?.metadata,
+                    });
+                  }
+                  
+                  return updated;
+                }
+                return prev;
+              });
+            }
+          } else if (parsed.metadata && 'sources' in parsed.metadata) {
+            // final 이벤트의 metadata에 sources가 있는 경우 (기존 로직 유지)
+            if (parsed.metadata) {
+              const sourcesMetadata = parsed.metadata;
+              const sourcesMessageId = sourcesMetadata.message_id;
+              
+              if (import.meta.env.DEV) {
+                logger.debug('[Stream] Sources in final metadata:', {
+                  messageId: sourcesMessageId,
+                  sources: sourcesMetadata.sources,
+                  legalReferences: sourcesMetadata.legal_references,
+                  sourcesDetail: sourcesMetadata.sources_detail,
+                  relatedQuestions: sourcesMetadata.related_questions,
                 });
               }
               
@@ -538,24 +612,85 @@ function App() {
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
-                  updated[messageIndex] = {
-                    ...updated[messageIndex],
-                    metadata: {
-                      ...updated[messageIndex].metadata,
-                      sources: sourcesMetadata.sources || [],
-                      legal_references: sourcesMetadata.legal_references || [],
-                      sources_detail: sourcesMetadata.sources_detail || [],
-                      message_id: sourcesMessageId || updated[messageIndex].metadata?.message_id,
-                    },
-                  };
+                  // eslint-disable-next-line security/detect-object-injection
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    updated[messageIndex] = {
+                      ...existingMsg,
+                      metadata: {
+                        ...existingMsg.metadata,
+                        sources: (sourcesMetadata.sources as string[] | undefined) || [],
+                        legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
+                        sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
+                        related_questions: (sourcesMetadata.related_questions as string[] | undefined) || existingMsg.metadata?.related_questions,
+                        message_id: sourcesMessageId || existingMsg.metadata?.message_id,
+                      },
+                    };
+                  }
                   
-                  if (import.meta.env.DEV) {
-                    logger.debug('[Stream] Message metadata updated with sources:', {
+                  if (import.meta.env.DEV && existingMsg) {
+                    logger.debug('[Stream] Message metadata updated with sources from final:', {
                       messageId: targetMessageId,
-                      updatedMetadata: updated[messageIndex].metadata,
+                      updatedMetadata: updated[messageIndex]?.metadata,
                     });
                   }
                   
+                  return updated;
+                }
+                return prev;
+              });
+            }
+          } else if (parsed.type === 'validation' || parsed.type === 'validation_start' || parsed.type === 'regeneration_start') {
+            // 품질 검증 이벤트 처리
+            if (parsed.type === 'validation_start') {
+              setCurrentProgress('답변 품질 검증 중...');
+            } else if (parsed.type === 'regeneration_start') {
+              setCurrentProgress('답변 재생성 중...');
+            } else if (parsed.type === 'validation' && parsed.metadata) {
+              const validationMetadata = parsed.metadata;
+              const qualityScore = validationMetadata.quality_score as number | undefined;
+              const needsRegeneration = validationMetadata.needs_regeneration as boolean | undefined;
+              
+              if (import.meta.env.DEV) {
+                logger.debug('[Stream] Validation event received:', {
+                  qualityScore,
+                  is_valid: validationMetadata.is_valid,
+                  needsRegeneration,
+                  regenerationReason: validationMetadata.regeneration_reason,
+                  issues: validationMetadata.issues,
+                  strengths: validationMetadata.strengths,
+                });
+              }
+              
+              // 재생성이 필요한 경우 알림 (선택적)
+              if (needsRegeneration) {
+                // 재생성 필요 알림은 선택적으로 표시
+                // setCurrentProgress('답변 품질을 개선하기 위해 재생성 중입니다...');
+              }
+              
+              // 검증 결과를 메시지 metadata에 저장 (선택적)
+              setMessages((prev) => {
+                const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                if (messageIndex !== -1) {
+                  const updated = [...prev];
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    updated[messageIndex] = {
+                      ...existingMsg,
+                      metadata: {
+                        ...existingMsg.metadata,
+                        validation: {
+                          quality_score: qualityScore,
+                          is_valid: validationMetadata.is_valid,
+                          needs_regeneration: needsRegeneration,
+                          regeneration_reason: validationMetadata.regeneration_reason,
+                          issues: validationMetadata.issues,
+                          strengths: validationMetadata.strengths,
+                        },
+                      },
+                    };
+                  }
                   return updated;
                 }
                 return prev;
@@ -602,12 +737,13 @@ function App() {
             
             // 최종 메시지 업데이트 (누적된 fullContent 사용)
             // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
-            // metadata에서 sources, legal_references, sources_detail, message_id 추출
+            // metadata에서 sources, legal_references, sources_detail, message_id, related_questions 추출
             const metadata = parsed.metadata || {};
             const sources = metadata.sources || [];
             const legalReferences = metadata.legal_references || [];
             const sourcesDetail = metadata.sources_detail || [];
             const messageId = metadata.message_id;
+            const relatedQuestions = metadata.related_questions as string[] | undefined;
             
             setMessages((prev) => {
               const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
@@ -616,18 +752,24 @@ function App() {
                 // 기존 메시지 업데이트 (누적된 fullContent 사용)
                 // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
                 const updated = [...prev];
-                updated[messageIndex] = {
-                  ...updated[messageIndex],
-                  content: fullContent,  // 이미 누적된 내용 사용
-                  metadata: {
-                    ...updated[messageIndex].metadata,
-                    ...metadata,
-                    sources: sources,
-                    legal_references: legalReferences,
-                    sources_detail: sourcesDetail,
-                    message_id: messageId || updated[messageIndex].metadata?.message_id,
-                  },
-                };
+                // eslint-disable-next-line security/detect-object-injection
+                const existingMsg = updated[messageIndex];
+                if (existingMsg) {
+                  // eslint-disable-next-line security/detect-object-injection
+                  updated[messageIndex] = {
+                    ...existingMsg,
+                    content: fullContent,  // 이미 누적된 내용 사용
+                    metadata: {
+                      ...existingMsg.metadata,
+                      ...metadata,
+                      sources: Array.isArray(sources) ? sources : [],
+                      legal_references: Array.isArray(legalReferences) ? legalReferences : [],
+                      sources_detail: Array.isArray(sourcesDetail) ? sourcesDetail : [],
+                      message_id: messageId || existingMsg.metadata?.message_id,
+                      related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : existingMsg.metadata?.related_questions,
+                    },
+                  };
+                }
                 return updated;
               } else {
                 // 메시지가 없으면 추가
@@ -641,6 +783,7 @@ function App() {
                     legal_references: legalReferences,
                     sources_detail: sourcesDetail,
                     message_id: messageId,
+                    related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : undefined,
                   },
                 }];
               }
@@ -693,9 +836,12 @@ function App() {
                         
                         if (messageIndex !== -1) {
                           const updated = [...prev];
+                          // eslint-disable-next-line security/detect-object-injection
                           updated[messageIndex] = {
+                            // eslint-disable-next-line security/detect-object-injection
                             ...updated[messageIndex],
                             metadata: {
+                              // eslint-disable-next-line security/detect-object-injection
                               ...updated[messageIndex].metadata,
                               sources: sourcesData.sources,
                               legal_references: sourcesData.legal_references,
@@ -706,6 +852,7 @@ function App() {
                           if (import.meta.env.DEV) {
                             logger.debug('[App] Message metadata updated with sources:', {
                               messageId: assistantMessageId,
+                              // eslint-disable-next-line security/detect-object-injection
                               updatedMetadata: updated[messageIndex].metadata,
                             });
                           }
@@ -742,7 +889,7 @@ function App() {
                 });
               }
             }
-          } else if ((parsed as any).type === 'answer') {
+          } else if ((parsed as ParsedChunk & { type: 'answer' }).type === 'answer') {
             // 기존 'answer' 타입 지원 (하위 호환성)
             fullContent += parsed.content;
             if (import.meta.env.DEV) {
@@ -917,6 +1064,14 @@ function App() {
     if (!message.metadata?.sources?.length && 
         !message.metadata?.sources_detail?.length && 
         currentSession?.session_id) {
+      
+      // 이미 로딩 중이면 중복 호출 방지
+      if (loadingSourcesRef.current.has(message.id)) {
+        return;
+      }
+      
+      loadingSourcesRef.current.add(message.id);
+      
       try {
         const { getChatSources } = await import('./services/chatService');
         const sourcesData = await getChatSources(
@@ -929,25 +1084,42 @@ function App() {
           const messageIndex = prev.findIndex((msg) => msg.id === message.id);
           if (messageIndex !== -1) {
             const updated = [...prev];
+            // eslint-disable-next-line security/detect-object-injection
             updated[messageIndex] = {
+              // eslint-disable-next-line security/detect-object-injection
               ...updated[messageIndex],
               metadata: {
+                // eslint-disable-next-line security/detect-object-injection
                 ...updated[messageIndex].metadata,
                 sources: sourcesData.sources,
                 legal_references: sourcesData.legal_references,
                 sources_detail: sourcesData.sources_detail,
               },
             };
-            // selectedMessageForDocument도 업데이트
-            if (selectedMessageForDocument?.id === message.id) {
-              setSelectedMessageForDocument(updated[messageIndex]);
-            }
             return updated;
+          }
+          return prev;
+        });
+        
+        // selectedMessageForDocument도 업데이트 (setMessages 외부에서)
+        setSelectedMessageForDocument((prev) => {
+          if (prev?.id === message.id) {
+            return {
+              ...prev,
+              metadata: {
+                ...prev.metadata,
+                sources: sourcesData.sources,
+                legal_references: sourcesData.legal_references,
+                sources_detail: sourcesData.sources_detail,
+              },
+            };
           }
           return prev;
         });
       } catch (error) {
         logger.error('[App] Error fetching sources for sidebar:', error);
+      } finally {
+        loadingSourcesRef.current.delete(message.id);
       }
     }
   };
@@ -969,8 +1141,17 @@ function App() {
     );
   }
 
+  // OAuth 콜백 처리 또는 로그인 페이지 표시
+  const urlParams = new URLSearchParams(window.location.search);
+  const hasOAuthCallback = urlParams.get('code') && urlParams.get('state');
+  const hasOAuthError = urlParams.get('error');
+  
+  if (hasOAuthCallback || hasOAuthError || window.location.pathname === '/login') {
+    logger.info('App: Showing LoginPage, hasOAuthCallback:', hasOAuthCallback, 'hasOAuthError:', hasOAuthError);
+    return <LoginPage />;
+  }
+
   // 로그인하지 않은 사용자도 챗봇 사용 가능 (백엔드에서 익명 사용자 쿼터로 제한)
-  // 로그인 페이지는 OAuth2 콜백 처리 시에만 표시됨
 
   return (
     <MainLayout
