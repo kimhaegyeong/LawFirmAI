@@ -1,7 +1,7 @@
 /**
  * 채팅 메시지 컴포넌트
  */
-import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
+import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';

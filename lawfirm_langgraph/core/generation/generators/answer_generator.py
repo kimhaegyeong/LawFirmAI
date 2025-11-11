@@ -7,6 +7,7 @@ Answer Generator
 import logging
 import time
 import os
+import asyncio
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 from datetime import datetime
@@ -141,7 +142,7 @@ class AnswerGenerator:
         templates = {}
         
         try:
-            from utils.langchain_config import PromptTemplates
+            from core.shared.utils.langchain_config import PromptTemplates
             
             # 법률 Q&A 템플릿
             templates['legal_qa'] = PromptTemplate(
@@ -592,7 +593,9 @@ class AnswerGenerator:
         is_retry: bool = False
     ) -> str:
         """
-        체인을 사용한 답변 생성
+        체인을 사용한 답변 생성 (스트리밍 지원)
+        
+        LangGraph는 노드 내에서 stream() 또는 astream()을 호출하면 자동으로 on_llm_stream 이벤트를 발생시킵니다.
         
         Args:
             optimized_prompt: 최적화된 프롬프트
@@ -614,9 +617,73 @@ class AnswerGenerator:
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
             
-            # 프롬프트를 직접 사용하여 답변 생성
+            # 스트리밍으로 답변 생성
+            # 우선순위: stream() > astream() (asyncio.run) > invoke()
+            # stream()이 있으면 항상 stream()을 사용 (이벤트 루프 문제 없음)
             try:
-                if hasattr(self.llm, 'invoke'):
+                full_answer = ""
+                
+                # stream() 사용 (동기 스트리밍) - LangGraph가 on_llm_stream 이벤트 발생
+                # 이벤트 루프 문제 없이 안전하게 사용 가능
+                if hasattr(self.llm, 'stream'):
+                    for chunk in self.llm.stream(optimized_prompt):
+                        if hasattr(chunk, 'content'):
+                            full_answer += chunk.content
+                        elif isinstance(chunk, str):
+                            full_answer += chunk
+                        else:
+                            full_answer += str(chunk)
+                    return full_answer
+                
+                # astream() 사용 (비동기 스트리밍) - LangGraph가 on_llm_stream 이벤트 발생
+                # stream()이 없을 때만 사용
+                elif hasattr(self.llm, 'astream'):
+                    # 실행 중인 이벤트 루프 확인
+                    try:
+                        asyncio.get_running_loop()
+                        # 실행 중인 이벤트 루프가 있으면 astream() 사용 불가
+                        # invoke()로 폴백
+                        if hasattr(self.llm, 'invoke'):
+                            response = self.llm.invoke(optimized_prompt)
+                            if hasattr(response, 'content'):
+                                return response.content
+                            elif isinstance(response, str):
+                                return response
+                            else:
+                                return str(response)
+                        else:
+                            raise RuntimeError("Cannot use astream() in running event loop without stream() or invoke() method")
+                    except RuntimeError:
+                        # 실행 중인 이벤트 루프가 없으면 asyncio.run()을 사용
+                        # asyncio.run()은 새 이벤트 루프를 생성하고 실행합니다
+                        async def _async_generate():
+                            result = ""
+                            async for chunk in self.llm.astream(optimized_prompt):
+                                if hasattr(chunk, 'content'):
+                                    result += chunk.content
+                                elif isinstance(chunk, str):
+                                    result += chunk
+                                else:
+                                    result += str(chunk)
+                            return result
+                        try:
+                            return asyncio.run(_async_generate())
+                        except RuntimeError as e:
+                            # asyncio.run()이 실패하면 (이벤트 루프가 이미 실행 중일 수 있음)
+                            # invoke()로 폴백
+                            if hasattr(self.llm, 'invoke'):
+                                response = self.llm.invoke(optimized_prompt)
+                                if hasattr(response, 'content'):
+                                    return response.content
+                                elif isinstance(response, str):
+                                    return response
+                                else:
+                                    return str(response)
+                            else:
+                                raise RuntimeError(f"Cannot use astream() or asyncio.run(): {e}")
+                
+                # invoke() 폴백 (스트리밍 미지원) - on_chain_stream 이벤트만 발생
+                elif hasattr(self.llm, 'invoke'):
                     response = self.llm.invoke(optimized_prompt)
                     if hasattr(response, 'content'):
                         return response.content
@@ -627,7 +694,7 @@ class AnswerGenerator:
                 elif hasattr(self.llm, 'predict'):
                     return self.llm.predict(optimized_prompt)
                 else:
-                    error_msg = f"LLM 객체가 'invoke' 또는 'predict' 메서드를 지원하지 않습니다. LLM 타입: {type(self.llm)}"
+                    error_msg = f"LLM 객체가 스트리밍을 지원하지 않습니다. LLM 타입: {type(self.llm)}"
                     self.logger.error(error_msg)
                     raise RuntimeError(error_msg)
             except Exception as e:

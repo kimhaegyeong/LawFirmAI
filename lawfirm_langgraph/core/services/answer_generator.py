@@ -142,7 +142,7 @@ class AnswerGenerator:
             return templates
         
         try:
-            from utils.langchain_config import PromptTemplates
+            from core.shared.utils.langchain_config import PromptTemplates
             
             # 법률 Q&A 템플릿
             templates['legal_qa'] = PromptTemplate(
