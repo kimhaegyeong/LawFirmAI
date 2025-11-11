@@ -135,6 +135,7 @@ chroma_db/
 # personal data
 data/
 !lawfirm_langgraph/langgraph_core/data/  # Allow langgraph_core/data module (source code)
+!lawfirm_langgraph/core/data/  # Allow core/data directory
 reports/
 results/
 debug/

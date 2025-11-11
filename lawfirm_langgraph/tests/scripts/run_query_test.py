@@ -298,14 +298,93 @@ async def run_query_test(query: str):
         else:
             logger.warning("<답변 없음>")
         
-        # 소스
+        # retrieved_docs (데이터베이스/벡터스토어에서 검색한 참고자료)
+        retrieved_docs = result.get("retrieved_docs", [])
+        if retrieved_docs:
+            logger.info(f"\n🔍 검색된 참고자료 (retrieved_docs) ({len(retrieved_docs)}개):")
+            
+            # 타입별 분포 확인
+            type_counts = {}
+            statute_articles = []
+            for doc in retrieved_docs:
+                if isinstance(doc, dict):
+                    doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+                    type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+                    if doc_type == "statute_article":
+                        statute_articles.append(doc)
+            
+            logger.info(f"   타입 분포: {type_counts}")
+            if statute_articles:
+                logger.info(f"   statute_article 타입 문서: {len(statute_articles)}개")
+            
+            for i, doc in enumerate(retrieved_docs[:10], 1):
+                if isinstance(doc, dict):
+                    doc_id = doc.get("doc_id") or doc.get("id") or doc.get("_id") or f"doc_{i}"
+                    doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+                    title = doc.get("title") or doc.get("name") or doc.get("content", "")[:50] or "제목 없음"
+                    search_type = doc.get("search_type") or doc.get("search_method") or "unknown"
+                    logger.info(f"   {i}. [{doc_type}] {title} (ID: {doc_id}, 검색방법: {search_type})")
+                    
+                    # statute_article 타입 문서의 경우 상세 정보 출력
+                    if doc_type == "statute_article":
+                        statute_name = doc.get("statute_name") or doc.get("law_name") or doc.get("metadata", {}).get("statute_name") or doc.get("metadata", {}).get("law_name")
+                        article_no = doc.get("article_no") or doc.get("article_number") or doc.get("metadata", {}).get("article_no") or doc.get("metadata", {}).get("article_number")
+                        clause_no = doc.get("clause_no") or doc.get("metadata", {}).get("clause_no")
+                        item_no = doc.get("item_no") or doc.get("metadata", {}).get("item_no")
+                        logger.info(f"      - statute_name: {statute_name}")
+                        logger.info(f"      - article_no: {article_no}")
+                        logger.info(f"      - clause_no: {clause_no}")
+                        logger.info(f"      - item_no: {item_no}")
+                    
+                    # 상세 정보 (선택적)
+                    if doc.get("score"):
+                        logger.info(f"      - 점수: {doc.get('score'):.4f}")
+                    if doc.get("metadata") and doc_type != "statute_article":
+                        logger.info(f"      - 메타데이터: {doc.get('metadata')}")
+                else:
+                    logger.info(f"   {i}. {str(doc)[:100]}")
+            if len(retrieved_docs) > 10:
+                logger.info(f"   ... (총 {len(retrieved_docs)}개)")
+        else:
+            logger.warning("\n⚠️  검색된 참고자료 (retrieved_docs)가 없습니다!")
+            logger.warning("   - 데이터베이스/벡터스토어에서 검색이 수행되지 않았거나")
+            logger.warning("   - 검색 결과가 없을 수 있습니다.")
+        
+        # 소스 (retrieved_docs에서 변환된 sources)
         sources = result.get("sources", [])
         if sources:
-            logger.info(f"\n📚 소스 ({len(sources)}개):")
-            for i, source in enumerate(sources[:5], 1):
-                logger.info(f"   {i}. {source}")
-            if len(sources) > 5:
+            logger.info(f"\n📚 소스 (sources) ({len(sources)}개):")
+            for i, source in enumerate(sources[:10], 1):
+                if isinstance(source, dict):
+                    source_id = source.get("id") or source.get("doc_id") or source.get("_id") or f"source_{i}"
+                    source_name = source.get("name") or source.get("title") or source.get("content", "")[:50] or "제목 없음"
+                    logger.info(f"   {i}. {source_name} (ID: {source_id})")
+                else:
+                    logger.info(f"   {i}. {source}")
+            if len(sources) > 10:
                 logger.info(f"   ... (총 {len(sources)}개)")
+        else:
+            logger.warning("\n⚠️  소스 (sources)가 없습니다!")
+            if retrieved_docs:
+                logger.warning(f"   - retrieved_docs는 {len(retrieved_docs)}개 있지만 sources로 변환되지 않았습니다.")
+                logger.warning("   - prepare_final_response_part에서 sources 생성 과정을 확인하세요.")
+            else:
+                logger.warning("   - retrieved_docs도 없어 sources를 생성할 수 없습니다.")
+        
+        # sources_detail
+        sources_detail = result.get("sources_detail", [])
+        if sources_detail:
+            logger.info(f"\n📋 소스 상세 (sources_detail) ({len(sources_detail)}개):")
+            for i, detail in enumerate(sources_detail[:5], 1):
+                if isinstance(detail, dict):
+                    name = detail.get("name") or detail.get("title") or "제목 없음"
+                    doc_id = detail.get("id") or detail.get("doc_id") or f"detail_{i}"
+                    source_type = detail.get("type") or detail.get("source_type") or "unknown"
+                    logger.info(f"   {i}. [{source_type}] {name} (ID: {doc_id})")
+                else:
+                    logger.info(f"   {i}. {detail}")
+            if len(sources_detail) > 5:
+                logger.info(f"   ... (총 {len(sources_detail)}개)")
         
         # 법률 참조
         legal_references = result.get("legal_references", [])
@@ -315,13 +394,51 @@ async def run_query_test(query: str):
                 logger.info(f"   {i}. {ref}")
             if len(legal_references) > 5:
                 logger.info(f"   ... (총 {len(legal_references)}개)")
+        else:
+            logger.warning("\n⚠️  법률 참조 (legal_references)가 없습니다!")
+            if retrieved_docs:
+                # statute_article 타입 문서 확인
+                statute_articles = [doc for doc in retrieved_docs if isinstance(doc, dict) and (doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article" or doc.get("metadata", {}).get("source_type") == "statute_article")]
+                if statute_articles:
+                    logger.warning(f"   - retrieved_docs에 statute_article 타입 문서가 {len(statute_articles)}개 있지만 legal_references로 변환되지 않았습니다.")
+                    logger.info("\n   statute_article 문서 샘플 (처음 3개):")
+                    for i, doc in enumerate(statute_articles[:3], 1):
+                        logger.info(f"   {i}. type: {doc.get('type')}, statute_name: {doc.get('statute_name')}, law_name: {doc.get('law_name')}, article_no: {doc.get('article_no')}, metadata: {doc.get('metadata', {})}")
+                else:
+                    logger.warning("   - retrieved_docs에 statute_article 타입 문서가 없습니다.")
+                    logger.info("\n   retrieved_docs 타입 분포:")
+                    type_counts = {}
+                    for doc in retrieved_docs:
+                        if isinstance(doc, dict):
+                            doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+                            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+                    for doc_type, count in type_counts.items():
+                        logger.info(f"      - {doc_type}: {count}개")
+        
+        # 관련 질문 (related_questions)
+        related_questions = result.get("metadata", {}).get("related_questions", [])
+        if related_questions:
+            logger.info(f"\n❓ 관련 질문 (related_questions) ({len(related_questions)}개):")
+            for i, question in enumerate(related_questions[:5], 1):
+                logger.info(f"   {i}. {question}")
+            if len(related_questions) > 5:
+                logger.info(f"   ... (총 {len(related_questions)}개)")
+        else:
+            logger.warning("\n⚠️  관련 질문 (related_questions)가 없습니다!")
+            logger.warning("   가능한 원인:")
+            logger.warning("   1. phase_info에 suggested_questions가 없을 수 있습니다.")
+            logger.warning("   2. conversation_flow_tracker가 초기화되지 않았을 수 있습니다.")
+            logger.warning("   3. metadata에 저장되지 않았을 수 있습니다.")
         
         # 메타데이터
         metadata = result.get("metadata", {})
         if metadata:
             logger.info(f"\n📊 메타데이터:")
             for key, value in list(metadata.items())[:10]:
-                logger.info(f"   {key}: {value}")
+                if key == "related_questions":
+                    logger.info(f"   {key}: {value} ({len(value) if isinstance(value, list) else 'N/A'}개)")
+                else:
+                    logger.info(f"   {key}: {value}")
         
         # 신뢰도
         confidence = result.get("confidence", 0.0)
@@ -332,6 +449,74 @@ async def run_query_test(query: str):
         processing_time = result.get("processing_time", 0.0)
         if processing_time:
             logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
+        
+        # 디버깅: retrieved_docs와 sources 관계 분석
+        logger.info("\n" + "="*80)
+        logger.info("🔍 디버깅 정보:")
+        logger.info("="*80)
+        
+        if retrieved_docs and not sources:
+            logger.warning("⚠️  retrieved_docs는 있지만 sources가 없습니다!")
+            logger.warning("   가능한 원인:")
+            logger.warning("   1. prepare_final_response_part가 실행되지 않았을 수 있습니다.")
+            logger.warning("   2. retrieved_docs의 형식이 sources 생성 로직과 맞지 않을 수 있습니다.")
+            logger.warning("   3. source_type이 없거나 인식되지 않는 형식일 수 있습니다.")
+            logger.info("\n   retrieved_docs 샘플 (처음 3개):")
+            for i, doc in enumerate(retrieved_docs[:3], 1):
+                logger.info(f"   {i}. {doc}")
+        elif not retrieved_docs and not sources:
+            logger.warning("⚠️  retrieved_docs와 sources 모두 없습니다!")
+            logger.warning("   가능한 원인:")
+            logger.warning("   1. 검색이 수행되지 않았을 수 있습니다 (direct_answer 노드 사용).")
+            logger.warning("   2. 검색 결과가 없을 수 있습니다.")
+            logger.warning("   3. retrieved_docs가 state에서 손실되었을 수 있습니다.")
+        elif retrieved_docs and sources:
+            logger.info(f"✅ retrieved_docs ({len(retrieved_docs)}개) → sources ({len(sources)}개) 변환 성공")
+            if len(retrieved_docs) > len(sources):
+                logger.warning(f"   ⚠️  일부 retrieved_docs가 sources로 변환되지 않았습니다.")
+                logger.warning(f"   ({len(retrieved_docs) - len(sources)}개 누락)")
+        
+        # legal_references 디버깅
+        if retrieved_docs and not legal_references:
+            statute_articles = [doc for doc in retrieved_docs if isinstance(doc, dict) and (doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article" or doc.get("metadata", {}).get("source_type") == "statute_article")]
+            if statute_articles:
+                logger.warning(f"\n⚠️  retrieved_docs에 statute_article 타입 문서가 {len(statute_articles)}개 있지만 legal_references로 변환되지 않았습니다!")
+                logger.warning("   가능한 원인:")
+                logger.warning("   1. prepare_final_response_part가 실행되지 않았을 수 있습니다.")
+                logger.warning("   2. statute_name이나 article_no 필드가 없을 수 있습니다.")
+                logger.warning("   3. legal_references 생성 로직이 실행되지 않았을 수 있습니다.")
+                logger.info("\n   statute_article 문서 상세 (처음 3개):")
+                for i, doc in enumerate(statute_articles[:3], 1):
+                    logger.info(f"   {i}. 전체 구조:")
+                    logger.info(f"      {doc}")
+        
+        # related_questions 디버깅
+        if not related_questions:
+            logger.warning(f"\n⚠️  related_questions가 없습니다!")
+            logger.warning("   가능한 원인:")
+            logger.warning("   1. phase_info에 suggested_questions가 없을 수 있습니다.")
+            logger.warning("   2. conversation_flow_tracker가 초기화되지 않았을 수 있습니다.")
+            logger.warning("   3. metadata에 저장되지 않았을 수 있습니다.")
+            # phase_info 확인
+            if "phase_info" in result:
+                phase_info = result.get("phase_info", {})
+                logger.info(f"\n   phase_info 확인:")
+                logger.info(f"      phase_info keys: {list(phase_info.keys()) if isinstance(phase_info, dict) else 'N/A'}")
+                if isinstance(phase_info, dict) and "phase2" in phase_info:
+                    phase2 = phase_info.get("phase2", {})
+                    if isinstance(phase2, dict) and "flow_tracking_info" in phase2:
+                        flow_tracking = phase2.get("flow_tracking_info", {})
+                        if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
+                            suggested_questions = flow_tracking.get("suggested_questions", [])
+                            logger.info(f"      suggested_questions in phase_info: {len(suggested_questions)}개")
+                        else:
+                            logger.warning("      suggested_questions가 phase_info에 없습니다.")
+        
+        # needs_search 확인
+        needs_search = result.get("needs_search", True)
+        logger.info(f"\n   needs_search: {needs_search}")
+        if not needs_search:
+            logger.info("   → direct_answer 노드가 사용되어 검색이 수행되지 않았을 수 있습니다.")
         
         logger.info("\n" + "="*80)
         logger.info("✅ 테스트 완료!")

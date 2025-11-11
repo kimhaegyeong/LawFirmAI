@@ -14,6 +14,15 @@ class APIConfig(BaseSettings):
     api_port: int = 8000
     debug: bool = False
     
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 개발 모드 자동 감지: DEBUG 환경 변수 또는 ENVIRONMENT=development
+        if self.debug is False:
+            debug_env = os.getenv("DEBUG", "").lower()
+            environment = os.getenv("ENVIRONMENT", "").lower()
+            if debug_env in ("true", "1", "yes") or environment == "development":
+                self.debug = True
+    
     # CORS 설정
     # 개발 환경: "http://localhost:3000,http://127.0.0.1:3000"
     # 프로덕션: 실제 도메인을 지정
