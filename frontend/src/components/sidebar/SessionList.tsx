@@ -94,9 +94,7 @@ export function SessionList({
       // 로딩 시작
       return {
         ...prev,
-        // eslint-disable-next-line security/detect-object-injection
         [group]: { 
-          // eslint-disable-next-line security/detect-object-injection
           ...prev[group], 
           isLoading: true 
         },
@@ -113,13 +111,10 @@ export function SessionList({
 
       setGroupData(prev => ({
         ...prev,
-        // eslint-disable-next-line security/detect-object-injection
         [group]: {
           sessions: append 
-            // eslint-disable-next-line security/detect-object-injection
             ? [...prev[group].sessions, ...response.sessions]
             : response.sessions,
-          // eslint-disable-next-line security/detect-object-injection
           hasMore: response.sessions.length === 20 && response.total > prev[group].sessions.length + response.sessions.length,
           page,
           isLoading: false,
@@ -130,9 +125,7 @@ export function SessionList({
       logger.error(`Failed to load ${group} sessions:`, error);
       setGroupData(prev => ({
         ...prev,
-        // eslint-disable-next-line security/detect-object-injection
         [group]: { 
-          // eslint-disable-next-line security/detect-object-injection
           ...prev[group], 
           isLoading: false 
         },

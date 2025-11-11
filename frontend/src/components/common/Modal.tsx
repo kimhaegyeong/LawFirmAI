@@ -61,14 +61,24 @@ export function Modal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
       onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          onClose();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label="모달 닫기"
     >
       <div
         className={`bg-white rounded-lg shadow-xl ${sizeClasses[size]} w-full max-h-[90vh] overflow-hidden flex flex-col`}
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? 'modal-title' : undefined}
       >
         {title && (
           <div className="flex items-center justify-between p-4 border-b border-slate-200">
-            <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+            <h2 id="modal-title" className="text-lg font-semibold text-slate-800">{title}</h2>
             <button
               onClick={onClose}
               className="p-1 hover:bg-slate-100 rounded-lg transition-colors"

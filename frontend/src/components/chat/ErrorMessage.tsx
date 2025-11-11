@@ -1,7 +1,6 @@
 /**
  * 에러 메시지 컴포넌트
  */
-import React from 'react';
 import { AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { StreamError } from '../../types/error';
 

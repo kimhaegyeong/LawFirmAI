@@ -1,46 +1,85 @@
 /**
  * 로그인 페이지 컴포넌트
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Scale, LogIn, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { LoadingSpinner } from '../common/LoadingSpinner';
+import { isAuthenticated as checkAuthenticated } from '../../services/authService';
 import logger from '../../utils/logger';
 
 export function LoginPage() {
-  const { login, handleCallback, isLoading, error } = useAuth();
+  const { login, handleCallback, isLoading, error, isAuthenticated } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [callbackCompleted, setCallbackCompleted] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const hasProcessedCallback = useRef(false);
 
   useEffect(() => {
+    if (hasProcessedCallback.current) {
+      logger.debug('LoginPage: Callback already processed, skipping...');
+      return;
+    }
+
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
     const state = urlParams.get('state');
-    const error = urlParams.get('error');
+    const errorParam = urlParams.get('error');
 
-    if (error) {
-      setError(new Error(decodeURIComponent(error)));
+    if (errorParam) {
+      logger.error('OAuth error in URL:', errorParam);
+      setUrlError(errorParam);
       window.history.replaceState({}, document.title, window.location.pathname);
       return;
     }
 
     if (code && state) {
+      const processedCodeKey = `oauth2_processed_code_${code}`;
+      const isProcessed = sessionStorage.getItem(processedCodeKey);
+      
+      if (isProcessed === 'true') {
+        logger.warn('LoginPage: 인증 코드가 이미 처리되었습니다. 중복 호출을 방지합니다.');
+        hasProcessedCallback.current = true;
+        return;
+      }
+      
+      hasProcessedCallback.current = true;
       setIsProcessing(true);
+      
+      logger.info('LoginPage: OAuth callback 처리 시작', { code: code.substring(0, 10), state: state.substring(0, 10) });
+      
       handleCallback(code, state)
         .then(() => {
+          logger.info('LoginPage: OAuth callback 처리 성공');
           window.history.replaceState({}, document.title, window.location.pathname);
-          setTimeout(() => {
-            window.location.reload();
-          }, 100);
+          setCallbackCompleted(true);
         })
         .catch((err) => {
-          logger.error('OAuth callback error:', err);
-          setError(err instanceof Error ? err : new Error('로그인에 실패했습니다.'));
+          logger.warn('LoginPage: OAuth callback failed, continuing as guest:', err);
+          setCallbackCompleted(false);
+          hasProcessedCallback.current = false;
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setTimeout(() => {
+            window.location.replace('/');
+          }, 300);
         })
         .finally(() => {
           setIsProcessing(false);
         });
     }
   }, [handleCallback]);
+
+  useEffect(() => {
+    if (callbackCompleted && isAuthenticated && !isLoading && !isProcessing) {
+      if (checkAuthenticated()) {
+        setTimeout(() => {
+          window.location.replace('/');
+        }, 300);
+      } else {
+        logger.error('Token not found before redirect!');
+      }
+    }
+  }, [callbackCompleted, isAuthenticated, isLoading, isProcessing]);
 
   const handleLogin = () => {
     login();
@@ -58,12 +97,12 @@ export function LoginPage() {
             <p className="text-slate-600">로그인하여 서비스를 이용하세요</p>
           </div>
 
-          {error && (
+          {(error || urlError) && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-red-800">로그인 실패</p>
-                <p className="text-sm text-red-600 mt-1">{error.message}</p>
+                <p className="text-sm text-red-600 mt-1">{error?.message || urlError}</p>
               </div>
             </div>
           )}

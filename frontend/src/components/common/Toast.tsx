@@ -1,7 +1,7 @@
 /**
  * Toast 알림 컴포넌트
  */
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, AlertCircle, CheckCircle, Info, AlertTriangle } from 'lucide-react';
 
 export interface ToastProps {
@@ -54,6 +54,7 @@ export function Toast({
     warning: 'text-yellow-600',
   };
 
+  // eslint-disable-next-line security/detect-object-injection
   const Icon = icons[type];
 
   if (!isVisible) return null;
@@ -62,10 +63,14 @@ export function Toast({
     <div 
       className={`fixed top-4 right-4 z-50 min-w-[300px] max-w-[500px] rounded-lg border p-4 shadow-lg transition-all ${
         isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2'
+        // eslint-disable-next-line security/detect-object-injection
       } ${colors[type]}`}
     >
       <div className="flex items-start gap-3">
-        <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${iconColors[type]}`} />
+        <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${
+          // eslint-disable-next-line security/detect-object-injection
+          iconColors[type]
+        }`} />
         <div className="flex-1">
           <p className="text-sm font-medium">{message}</p>
           {action && (

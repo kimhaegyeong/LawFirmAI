@@ -2,7 +2,7 @@
  * 채팅 메시지 컴포넌트
  */
 import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -48,38 +48,23 @@ export function ChatMessage({
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
   
-  // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
-  if (!message || !message.id) {
-    return null;
-  }
+  // 안전성 검사: message가 없거나 필수 필드가 없으면 기본값 설정
+  const safeMessage = message || { id: '', content: '', role: 'user' as const, timestamp: new Date() };
+  const safeId = safeMessage.id || '';
   
   // content가 없으면 빈 문자열로 처리
-  const content = message.content || '';
+  const content = safeMessage.content || '';
   
   // 메시지 타입 확인 (먼저 정의)
-  const isUser = message.role === 'user';
-  const isProgress = message.role === 'progress';
-  const metadata = message.metadata || {};
-  
-  // 디버깅: sources 확인
-  if (import.meta.env.DEV && !isUser && !isProgress) {
-    logger.debug('[ChatMessage] Metadata:', {
-      messageId: message.id,
-      hasMetadata: !!message.metadata,
-      sources: metadata.sources,
-      legal_references: metadata.legal_references,
-      sources_detail: metadata.sources_detail,
-      sourcesLength: metadata.sources?.length || 0,
-      legalReferencesLength: metadata.legal_references?.length || 0,
-      sourcesDetailLength: metadata.sources_detail?.length || 0,
-    });
-  }
+  const isUser = safeMessage.role === 'user';
+  const isProgress = safeMessage.role === 'progress';
+  const metadata = safeMessage.metadata || {};
   
   // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
   const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
     content,
     {
-      speed: 50, // 50ms마다 한 글자씩 표시 (더 천천히)
+      speed: 2, // ms마다 한 글자씩 표시
       enabled: isStreaming // 스트리밍 중일 때만 타이핑 효과 활성화
     }
   );
@@ -95,23 +80,70 @@ export function ChatMessage({
 
   // 마크다운 렌더링 전에 "문서 N" 패턴을 특별한 링크로 변환
   const processedMarkdown = useMemo(() => {
-    if (!markdownContent || !metadata.sources || !onDocumentClick) return markdownContent;
+    if (!markdownContent) return markdownContent;
+    if (!onDocumentClick) return markdownContent;
+    
+    // 이미 링크로 변환된 텍스트는 건너뛰기 (#doc-로 시작하는 링크가 있으면 이미 변환된 것)
+    if (markdownContent.includes('#doc-')) {
+      return markdownContent;
+    }
     
     let processed = markdownContent;
     const sources = metadata.sources || [];
     const sourcesDetail = metadata.sources_detail || [];
     
-    // "문서 1", "문서 2" 등을 특별한 링크 형식으로 변환
-    sources.forEach((source, index) => {
-      const docNum = index + 1;
-      // "문서 1", "문서1", "문서 1번" 등의 패턴 매칭
-      const pattern = new RegExp(`문서\\s*${docNum}(?!\\d)`, 'g');
+    // sources가 있으면 기존 로직 사용
+    if (sources.length > 0) {
+      sources.forEach((source, index) => {
+        const docNum = index + 1;
+        // "문서 1", "문서1", "문서 1번" 등의 패턴 매칭
+        // 이미 링크로 변환된 부분은 제외하기 위해 링크 패턴이 아닌 경우만 매칭
+        // eslint-disable-next-line security/detect-non-literal-regexp
+        const pattern = new RegExp(`문서\\s*${docNum}(?!\\d)`, 'g');
+        
+        processed = processed.replace(pattern, (match, offset) => {
+          // 이전 문자 확인: [로 시작하는 링크가 아니어야 함
+          const beforeMatch = processed.substring(Math.max(0, offset - 10), offset);
+          if (beforeMatch.includes('[') && beforeMatch.includes('](')) {
+            // 이미 링크로 변환된 부분
+            return match;
+          }
+          // 링크로 변환
+          // eslint-disable-next-line security/detect-object-injection
+          return `[문서 ${docNum}](#doc-${index} "${source || sourcesDetail[index]?.name || `문서 ${docNum}`}")`;
+        });
+      });
+    } else {
+      // sources가 없으면 답변에서 "문서 N" 패턴을 찾아서 최대 문서 개수 추정
+      const documentPattern = /문서\s*(\d+)/g;
+      const matches = Array.from(markdownContent.matchAll(documentPattern));
+      const maxDocNum = matches.length > 0 
+        ? Math.max(...matches.map(m => parseInt(m[1] || '0', 10)))
+        : 0;
       
-      processed = processed.replace(
-        pattern,
-        `[문서 ${docNum}](#doc-${index} "${source || sourcesDetail[index]?.name || `문서 ${docNum}`}")`
-      );
-    });
+      // 추정된 문서 개수만큼 링크 생성
+      if (maxDocNum > 0) {
+        for (let i = 0; i < maxDocNum; i++) {
+          const docNum = i + 1;
+          // "문서 1", "문서1", "문서 1번" 등의 패턴 매칭
+          // 이미 링크로 변환된 부분은 제외하기 위해 링크 패턴이 아닌 경우만 매칭
+          // eslint-disable-next-line security/detect-non-literal-regexp
+          const pattern = new RegExp(`문서\\s*${docNum}(?!\\d)`, 'g');
+          
+          processed = processed.replace(pattern, (match, offset) => {
+            // 이전 문자 확인: [로 시작하는 링크가 아니어야 함
+            const beforeMatch = processed.substring(Math.max(0, offset - 10), offset);
+            if (beforeMatch.includes('[') && beforeMatch.includes('](')) {
+              // 이미 링크로 변환된 부분
+              return match;
+            }
+            // 링크로 변환
+            // eslint-disable-next-line security/detect-object-injection
+            return `[문서 ${docNum}](#doc-${i} "문서 ${docNum}")`;
+          });
+        }
+      }
+    }
     
     return processed;
   }, [markdownContent, metadata.sources, metadata.sources_detail, onDocumentClick]);
@@ -119,14 +151,14 @@ export function ChatMessage({
   // 마크다운 컴포넌트 메모이제이션
   const markdownComponents = useMemo(() => ({
     // 코드 블록 스타일링
-    code: ({ className, children, ...props }: any) => {
+    code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
       const match = /language-(\w+)/.exec(className || '');
       const isInline = !match;
       
       if (!isInline && match) {
         return (
           <SyntaxHighlighter
-            style={vscDarkPlus as any}
+            style={vscDarkPlus}
             language={match[1]}
             PreTag="div"
             className="rounded-lg my-2"
@@ -143,7 +175,7 @@ export function ChatMessage({
       );
     },
     // 링크 스타일링 (문서 참조 링크 처리)
-    a: ({ node, href, title, children, ...props }: any) => {
+    a: ({ href, title, children, ...props }: React.ComponentPropsWithoutRef<'a'> & { href?: string; title?: string }) => {
       // 문서 참조 링크인지 확인 (#doc-로 시작)
       if (href?.startsWith('#doc-')) {
         const docIndex = parseInt(href.replace('#doc-', ''), 10);
@@ -151,7 +183,7 @@ export function ChatMessage({
           return (
             <DocumentReference
               documentIndex={docIndex}
-              onClick={() => onDocumentClick(message, docIndex)}
+              onClick={() => onDocumentClick(safeMessage, docIndex)}
             />
           );
         }
@@ -172,76 +204,54 @@ export function ChatMessage({
       );
     },
     // 리스트 스타일링
-    ul: ({ node, ...props }: any) => (
+    ul: ({ ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
       <ul className="list-disc list-inside my-2 space-y-1" {...props} />
     ),
-    ol: ({ node, ...props }: any) => (
+    ol: ({ ...props }: React.ComponentPropsWithoutRef<'ol'>) => (
       <ol className="list-decimal list-inside my-2 space-y-1" {...props} />
     ),
     // 제목 스타일링
-    h1: ({ node, ...props }: any) => (
-      <h1 className="text-2xl font-bold mt-4 mb-2" {...props} />
+    h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
+      <h1 className="text-2xl font-bold mt-4 mb-2" {...props}>{children}</h1>
     ),
-    h2: ({ node, ...props }: any) => (
-      <h2 className="text-xl font-bold mt-3 mb-2" {...props} />
+    h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => (
+      <h2 className="text-xl font-bold mt-3 mb-2" {...props}>{children}</h2>
     ),
-    h3: ({ node, ...props }: any) => (
-      <h3 className="text-lg font-semibold mt-2 mb-1" {...props} />
+    h3: ({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => (
+      <h3 className="text-lg font-semibold mt-2 mb-1" {...props}>{children}</h3>
     ),
     // 강조 스타일링
-    strong: ({ node, ...props }: any) => (
+    strong: ({ ...props }: React.ComponentPropsWithoutRef<'strong'>) => (
       <strong className="font-semibold" {...props} />
     ),
-    em: ({ node, ...props }: any) => (
+    em: ({ ...props }: React.ComponentPropsWithoutRef<'em'>) => (
       <em className="italic" {...props} />
     ),
     // 인용구 스타일링
-    blockquote: ({ node, ...props }: any) => (
+    blockquote: ({ ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
       <blockquote className="border-l-4 border-slate-300 pl-4 italic my-2 text-slate-600" {...props} />
     ),
     // 테이블 스타일링
-    table: ({ node, ...props }: any) => (
+    table: ({ ...props }: React.ComponentPropsWithoutRef<'table'>) => (
       <div className="overflow-x-auto my-2">
         <table className="min-w-full border-collapse border border-slate-300" {...props} />
       </div>
     ),
-    th: ({ node, ...props }: any) => (
+    th: ({ ...props }: React.ComponentPropsWithoutRef<'th'>) => (
       <th className="border border-slate-300 px-4 py-2 bg-slate-100 font-semibold" {...props} />
     ),
-    td: ({ node, ...props }: any) => (
+    td: ({ ...props }: React.ComponentPropsWithoutRef<'td'>) => (
       <td className="border border-slate-300 px-4 py-2" {...props} />
     ),
     // 수평선 스타일링
-    hr: ({ node, ...props }: any) => (
+    hr: ({ ...props }: React.ComponentPropsWithoutRef<'hr'>) => (
       <hr className="my-4 border-slate-300" {...props} />
     ),
     // 단락 스타일링
-    p: ({ node, ...props }: any) => (
+    p: ({ ...props }: React.ComponentPropsWithoutRef<'p'>) => (
       <p className="my-2" {...props} />
     ),
-  }), [message, onDocumentClick]);
-
-  if (import.meta.env.DEV) {
-    if (isStreaming) {
-      logger.debug('[ChatMessage] Streaming:', {
-        messageId: message.id,
-        contentLength: content.length,
-        displayedLength: displayedContent.length,
-        isStreaming,
-        isTypingComplete,
-        displayedContent: displayedContent.substring(0, 50) + '...'
-      });
-    } else if (message.role === 'assistant' && content.length > 0) {
-      logger.debug('[ChatMessage] Not streaming:', {
-        messageId: message.id,
-        contentLength: content.length,
-        displayedLength: displayedContent.length,
-        isStreaming,
-        isTypingComplete,
-        shouldRenderMarkdown
-      });
-    }
-  }
+  }), [safeMessage, onDocumentClick]);
 
   const handleCopy = async () => {
     try {
@@ -265,9 +275,10 @@ export function ChatMessage({
     try {
       // 세션 ID는 메시지 메타데이터에서 가져오거나, 부모 컴포넌트에서 전달받아야 함
       // 현재는 임시로 빈 문자열 사용
+      const sessionIdValue = sessionId || (typeof safeMessage.metadata?.session_id === 'string' ? safeMessage.metadata.session_id : '') || '';
       await sendFeedback({
-        message_id: message.id,
-        session_id: sessionId || message.metadata?.session_id || '',
+        message_id: safeMessage.id,
+        session_id: sessionIdValue,
         rating: ratingToNumber(rating),
       });
     } catch (error) {
@@ -277,6 +288,11 @@ export function ChatMessage({
   };
 
 
+  // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
+  if (!safeId) {
+    return null;
+  }
+  
   // assistant 메시지이고 content가 비어있으면 렌더링하지 않음
   if (!isUser && !isProgress && !content) {
     return null;
@@ -317,9 +333,9 @@ export function ChatMessage({
             : 'bg-white border-slate-200'
         }`}
       >
-        {message.attachments && message.attachments.length > 0 && (
+        {safeMessage.attachments && safeMessage.attachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            {message.attachments.map((att) => (
+            {safeMessage.attachments.map((att) => (
               <FileAttachment
                 key={att.id}
                 attachment={att}
@@ -370,18 +386,37 @@ export function ChatMessage({
               legalReferences={metadata.legal_references}
               sources={metadata.sources}
               sourcesDetail={metadata.sources_detail}
-              onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(message, selectedType)}
+              onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
             />
-            <RelatedQuestions
-              questions={metadata.related_questions}
-              onQuestionClick={onQuestionClick}
-            />
+            {(() => {
+              const relatedQuestions = metadata.related_questions;
+              // 타입 안전성 확보: 배열인지 확인
+              const questionsArray = Array.isArray(relatedQuestions) 
+                ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+                : undefined;
+              
+              // 디버깅 로그는 관련 질문이 있거나 metadata가 변경되었을 때만 출력
+              if (import.meta.env.DEV && questionsArray && questionsArray.length > 0) {
+                logger.debug('[ChatMessage] Related questions:', {
+                  hasQuestions: !!questionsArray,
+                  questionsCount: questionsArray.length,
+                  questions: questionsArray,
+                });
+              }
+              
+              return (
+                <RelatedQuestions
+                  questions={questionsArray}
+                  onQuestionClick={onQuestionClick}
+                />
+              );
+            })()}
           </>
         )}
 
         <div className="flex items-center justify-between mt-2">
           <span className="text-xs text-slate-500">
-            {message.timestamp ? formatRelativeTime(message.timestamp) : '방금 전'}
+            {safeMessage.timestamp ? formatRelativeTime(safeMessage.timestamp) : '방금 전'}
           </span>
           <div className="flex items-center gap-2">
             {/* 에러가 발생한 assistant 메시지에 재시도 버튼 표시 */}

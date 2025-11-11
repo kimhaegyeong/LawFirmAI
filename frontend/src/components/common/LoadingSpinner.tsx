@@ -17,7 +17,10 @@ export function LoadingSpinner({ size = 'md', className = '' }: LoadingSpinnerPr
 
   return (
     <Loader2
-      className={`animate-spin text-blue-600 ${sizeClasses[size]} ${className}`}
+      className={`animate-spin text-blue-600 ${
+        // eslint-disable-next-line security/detect-object-injection
+        sizeClasses[size]
+      } ${className}`}
     />
   );
 }

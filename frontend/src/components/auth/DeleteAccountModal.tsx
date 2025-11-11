@@ -87,7 +87,7 @@ export function DeleteAccountModal({ isOpen, onClose, onSuccess }: DeleteAccount
             </div>
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-700 mb-2">
-                확인을 위해 <span className="font-bold text-red-600">"{requiredText}"</span>를 입력하세요:
+                확인을 위해 <span className="font-bold text-red-600">&quot;{requiredText}&quot;</span>를 입력하세요:
               </label>
               <input
                 type="text"

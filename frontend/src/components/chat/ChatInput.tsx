@@ -4,7 +4,7 @@
 import { Send, Paperclip } from 'lucide-react';
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { FileAttachment } from '../common/FileAttachment';
-import { fileToFileInfo, formatFileSize } from '../../utils/fileUtils';
+import { fileToFileInfo } from '../../utils/fileUtils';
 import type { FileAttachment as FileAttachmentType } from '../../types/chat';
 
 interface ChatInputProps {

@@ -76,6 +76,14 @@ export function SessionItem({
       ref={itemRef}
       className="group pl-6 pr-2 py-2 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors relative"
       onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
+      role="button"
+      tabIndex={0}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">

@@ -231,6 +231,7 @@ function parseLegalReference(ref: string): Partial<LegalReferenceDetail> {
 
   // 조문 추출 (복잡한 형식 지원)
   // 예: "제123조", "제250조 제1항", "제1조 제1항 제1호", "제1조 제1항 제1호 제1목"
+  // eslint-disable-next-line security/detect-unsafe-regex
   const articlePattern = /제(\d+)조(?:\s+제(\d+)항)?(?:\s+제(\d+)호)?(?:\s+제(\d+)목)?/;
   const articleMatch = ref.match(articlePattern);
   
@@ -245,7 +246,7 @@ function parseLegalReference(ref: string): Partial<LegalReferenceDetail> {
   // 조문 제목 추출 (있는 경우)
   // "제1조 (목적)" 형식 또는 "제1조 목적" 형식
   const titlePatterns = [
-    /제\d+조\s*[\(（](.+?)[\)）]/,  // 괄호 형식
+    /제\d+조\s*[(（](.+?)[)）]/,  // 괄호 형식
     /제\d+조\s+(.+?)(?:\s+제\d+항|$)/,  // 일반 형식
   ];
   
@@ -294,7 +295,7 @@ function parsePrecedentReference(ref: string): Partial<LegalReferenceDetail> {
   // 판결일 추출 (다양한 형식 지원)
   // 예: "2020.12.25", "2020-12-25", "2020년 12월 25일", "20201225"
   const datePatterns = [
-    /(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})/,  // 2020.12.25, 2020-12-25
+    /(\d{4}[.-]\d{1,2}[.-]\d{1,2})/,  // 2020.12.25, 2020-12-25
     /(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)/,  // 2020년 12월 25일
     /(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)/,  // 2020. 12. 25.
   ];
@@ -388,6 +389,14 @@ function LawCard({ law, onClick }: { law: LegalReferenceDetail & { url?: string 
     <div 
       className={`p-4 bg-blue-50 border border-blue-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
@@ -464,6 +473,14 @@ function PrecedentCard({ precedent, onClick }: { precedent: LegalReferenceDetail
     <div 
       className={`p-4 bg-green-50 border border-green-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
@@ -546,6 +563,14 @@ function DecisionCard({ decision, onClick }: { decision: LegalReferenceDetail & 
     <div 
       className={`p-4 bg-orange-50 border border-orange-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
@@ -621,6 +646,14 @@ function InterpretationCard({ interpretation, onClick }: { interpretation: Legal
     <div 
       className={`p-4 bg-indigo-50 border border-indigo-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
@@ -694,6 +727,14 @@ function RegulationCard({ regulation, onClick }: { regulation: LegalReferenceDet
     <div 
       className={`p-4 bg-purple-50 border border-purple-200 rounded-lg hover:shadow-md transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
@@ -969,6 +1010,7 @@ export function ReferencesModalContent({
         ) : (
           <>
             {/* 상위 3개 제한 안내 (전체가 아닌 경우) */}
+            {/* eslint-disable-next-line security/detect-object-injection */}
             {selectedType !== 'all' && counts[selectedType] > 3 && (
               <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
                 관련도가 높은 상위 3개만 표시됩니다. (전체 {counts[selectedType]}개)
@@ -978,7 +1020,7 @@ export function ReferencesModalContent({
             {filteredReferences.map((ref) => {
               const handleClick = () => {
                 if (onReferenceClick) {
-                  const sourceDetail = (ref as any).sourceDetail;
+                  const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
                   onReferenceClick(ref, sourceDetail);
                 }
               };

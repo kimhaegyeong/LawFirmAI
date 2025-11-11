@@ -1,7 +1,7 @@
 /**
  * 파일 첨부 컴포넌트
  */
-import { X, FileText, FileImage } from 'lucide-react';
+import { X, FileText } from 'lucide-react';
 import { formatFileSize, isImageFile } from '../../utils/fileUtils';
 import type { FileAttachment as FileAttachmentType } from '../../types/chat';
 

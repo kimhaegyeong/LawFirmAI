@@ -2,10 +2,8 @@
  * 문서 상세 정보 사이드바 컴포넌트
  * 오른쪽에서 슬라이드되는 사이드바로 문서 상세 정보를 표시합니다.
  */
-import { X, FileText, Scale, Bookmark, ExternalLink, Loader2 } from 'lucide-react';
+import { X, FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { getChatSources } from '../../services/chatService';
-import logger from '../../utils/logger';
 import type { SourceInfo } from '../../types/chat';
 
 interface DocumentSidebarProps {
@@ -14,7 +12,7 @@ interface DocumentSidebarProps {
   documentIndex: number | null;
   sources?: string[];
   sourcesDetail?: SourceInfo[];
-  metadata?: any;
+  metadata?: Record<string, unknown>;
   sessionId?: string;
   messageId?: string;
 }
@@ -25,34 +23,17 @@ export function DocumentSidebar({
   documentIndex,
   sources = [],
   sourcesDetail = [],
-  metadata,
-  sessionId,
-  messageId
+  metadata: _metadata,
+  sessionId: _sessionId,
+  messageId: _messageId
 }: DocumentSidebarProps) {
-  const [loadingSources, setLoadingSources] = useState(false);
   const [loadedSources, setLoadedSources] = useState<string[]>(sources);
   const [loadedSourcesDetail, setLoadedSourcesDetail] = useState<SourceInfo[]>(sourcesDetail);
   
-  // sources가 없으면 API로 가져오기
   useEffect(() => {
-    if (isOpen && (!sources.length && !sourcesDetail.length) && sessionId) {
-      setLoadingSources(true);
-      getChatSources(sessionId, messageId)
-        .then((sourcesData) => {
-          setLoadedSources(sourcesData.sources);
-          setLoadedSourcesDetail(sourcesData.sources_detail);
-        })
-        .catch((error) => {
-          logger.error('[DocumentSidebar] Error fetching sources:', error);
-        })
-        .finally(() => {
-          setLoadingSources(false);
-        });
-    } else {
-      setLoadedSources(sources);
-      setLoadedSourcesDetail(sourcesDetail);
-    }
-  }, [isOpen, sources, sourcesDetail, sessionId, messageId]);
+    setLoadedSources(sources);
+    setLoadedSourcesDetail(sourcesDetail);
+  }, [sources, sourcesDetail]);
   
   // ESC 키로 닫기
   useEffect(() => {
@@ -77,46 +58,10 @@ export function DocumentSidebar({
     return null;
   }
 
+  // eslint-disable-next-line security/detect-object-injection
   const source = loadedSources[documentIndex];
+  // eslint-disable-next-line security/detect-object-injection
   const sourceDetail = loadedSourcesDetail[documentIndex];
-
-  // 로딩 중일 때
-  if (loadingSources) {
-    return (
-      <>
-        {/* 오버레이 제거 (dim 처리 안함) */}
-        <div
-          className={`fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
-            isOpen ? 'translate-x-0' : 'translate-x-full'
-          }`}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="document-sidebar-title"
-        >
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50">
-              <h2 id="document-sidebar-title" className="text-lg font-semibold text-slate-800">
-                문서 {documentIndex + 1}
-              </h2>
-              <button
-                onClick={onClose}
-                className="p-1.5 rounded-md hover:bg-slate-200 transition-colors text-slate-600"
-                aria-label="사이드바 닫기"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex-1 flex items-center justify-center">
-              <div className="flex items-center gap-2 text-slate-500">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>참조자료를 불러오는 중...</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
 
   // 문서 정보가 없으면 표시하지 않음
   if (!source && !sourceDetail) {
