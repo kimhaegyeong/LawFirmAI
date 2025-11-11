@@ -1723,28 +1723,32 @@ class SemanticSearchEngineV2:
         try:
             if source_type == "statute_article":
                 cursor = conn.execute("""
-                    SELECT sa.*, s.name as statute_name, s.abbrv, s.category, s.statute_type
+                    SELECT sa.*, s.name as statute_name, s.abbrv, s.category, s.statute_type,
+                           s.law_id, s.mst, s.proclamation_number, s.effective_date
                     FROM statute_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
                     WHERE sa.id = ?
                 """, (source_id,))
             elif source_type == "case_paragraph":
                 cursor = conn.execute("""
-                    SELECT cp.*, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
+                    SELECT cp.*, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date,
+                           c.precedent_serial_number
                     FROM case_paragraphs cp
                     JOIN cases c ON cp.case_id = c.id
                     WHERE cp.id = ?
                 """, (source_id,))
             elif source_type == "decision_paragraph":
                 cursor = conn.execute("""
-                    SELECT dp.*, d.org, d.doc_id, d.decision_date, d.result
+                    SELECT dp.*, d.org, d.doc_id, d.decision_date, d.result,
+                           d.decision_serial_number
                     FROM decision_paragraphs dp
                     JOIN decisions d ON dp.decision_id = d.id
                     WHERE dp.id = ?
                 """, (source_id,))
             elif source_type == "interpretation_paragraph":
                 cursor = conn.execute("""
-                    SELECT ip.*, i.org, i.doc_id, i.title, i.response_date
+                    SELECT ip.*, i.org, i.doc_id, i.title, i.response_date,
+                           i.interpretation_serial_number
                     FROM interpretation_paragraphs ip
                     JOIN interpretations i ON ip.interpretation_id = i.id
                     WHERE ip.id = ?
