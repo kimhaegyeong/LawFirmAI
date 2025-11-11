@@ -15,12 +15,38 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.utils.config import Config
-from core.services.optimized_model_manager import model_manager
-from core.services.optimized_hybrid_search_engine import OptimizedHybridSearchEngine, OptimizedSearchConfig
-from core.services.integrated_cache_system import cache_system
-from core.services.optimized_hybrid_classifier import OptimizedHybridQuestionClassifier
-from core.services.improved_answer_generator import ImprovedAnswerGenerator
-from core.services.answer_structure_enhancer import QuestionType
+from core.models.managers.optimized_model_manager import model_manager
+try:
+    from core.services.optimized_hybrid_search_engine import OptimizedHybridSearchEngine, OptimizedSearchConfig
+except ImportError:
+    OptimizedHybridSearchEngine = None
+    OptimizedSearchConfig = None
+
+try:
+    from core.services.integrated_cache_system import cache_system
+except ImportError:
+    cache_system = None
+
+try:
+    from core.services.optimized_hybrid_classifier import OptimizedHybridQuestionClassifier
+except ImportError:
+    OptimizedHybridQuestionClassifier = None
+
+try:
+    from core.generation.generators.improved_answer_generator import ImprovedAnswerGenerator
+except ImportError:
+    try:
+        from core.services.improved_answer_generator import ImprovedAnswerGenerator
+    except ImportError:
+        ImprovedAnswerGenerator = None
+
+try:
+    from core.generation.formatters.answer_structure_enhancer import QuestionType
+except ImportError:
+    try:
+        from core.services.answer_structure_enhancer import QuestionType
+    except ImportError:
+        QuestionType = None
 
 class OptimizedChatService:
     """최적화된 채팅 서비스"""

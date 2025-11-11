@@ -20,23 +20,59 @@ from ..utils.performance_optimizer import (
     memory_optimized,
     performance_monitor,
 )
-from .context_compressor import ContextCompressor
+# Context Compressor
+try:
+    from core.agents.handlers.context_compressor import ContextCompressor
+except ImportError:
+    # 호환성을 위한 fallback
+    from .context_compressor import ContextCompressor
 
 # Phase 3: 장기 기억 및 품질 모니터링 모듈
-from .contextual_memory_manager import ContextualMemoryManager
-from .conversation_flow_tracker import ConversationFlowTracker
-from .conversation_quality_monitor import ConversationQualityMonitor
-from .emotion_intent_analyzer import EmotionIntentAnalyzer
-from .hybrid_search_engine_v2 import HybridSearchEngineV2
-from .improved_answer_generator import ImprovedAnswerGenerator
+try:
+    from core.conversation.contextual_memory_manager import ContextualMemoryManager
+    from core.conversation.conversation_flow_tracker import ConversationFlowTracker
+    from core.conversation.conversation_quality_monitor import ConversationQualityMonitor
+    from core.classification.analyzers.emotion_intent_analyzer import EmotionIntentAnalyzer
+except ImportError:
+    # Fallback: 파일이 없을 수 있으므로 None으로 설정
+    ContextualMemoryManager = None
+    ConversationFlowTracker = None
+    ConversationQualityMonitor = None
+    EmotionIntentAnalyzer = None
+
+try:
+    from core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
+except ImportError:
+    # 호환성을 위한 fallback
+    from .hybrid_search_engine_v2 import HybridSearchEngineV2
+
+try:
+    from core.generation.generators.improved_answer_generator import ImprovedAnswerGenerator
+except ImportError:
+    # Fallback: 파일이 없을 수 있으므로 None으로 설정
+    ImprovedAnswerGenerator = None
 
 # Phase 1: 대화 맥락 강화 모듈
-from .integrated_session_manager import IntegratedSessionManager
-from .multi_turn_handler import MultiTurnQuestionHandler
-from .question_classifier import QuestionClassifier
+try:
+    from core.conversation.integrated_session_manager import IntegratedSessionManager
+    from core.conversation.multi_turn_handler import MultiTurnQuestionHandler
+except ImportError:
+    # 호환성을 위한 fallback
+    from .integrated_session_manager import IntegratedSessionManager
+    from .multi_turn_handler import MultiTurnQuestionHandler
+
+try:
+    from core.classification.classifiers.question_classifier import QuestionClassifier
+except ImportError:
+    # 호환성을 위한 fallback
+    from .question_classifier import QuestionClassifier
 
 # Phase 2: 개인화 및 지능형 분석 모듈
-from .user_profile_manager import UserProfileManager
+try:
+    from core.shared.profiles.user_profile_manager import UserProfileManager
+except ImportError:
+    # Fallback: 파일이 없을 수 있으므로 None으로 설정
+    UserProfileManager = None
 
 logger = get_logger(__name__)
 
@@ -111,12 +147,20 @@ class ChatService:
 
         # Phase 3: 장기 기억 및 품질 모니터링 컴포넌트 초기화
         try:
-            if self.session_manager:
-                self.contextual_memory_manager = ContextualMemoryManager(self.session_manager.conversation_store)
-                self.quality_monitor = ConversationQualityMonitor(self.session_manager.conversation_store)
+            if ContextualMemoryManager is not None:
+                if self.session_manager:
+                    self.contextual_memory_manager = ContextualMemoryManager(self.session_manager.conversation_store)
+                else:
+                    self.contextual_memory_manager = ContextualMemoryManager()
             else:
-                self.contextual_memory_manager = ContextualMemoryManager()
-                self.quality_monitor = ConversationQualityMonitor()
+                self.contextual_memory_manager = None
+            if ConversationQualityMonitor is not None:
+                if self.session_manager:
+                    self.quality_monitor = ConversationQualityMonitor(self.session_manager.conversation_store)
+                else:
+                    self.quality_monitor = ConversationQualityMonitor()
+            else:
+                self.quality_monitor = None
             self.logger.info("Phase 3 components initialized successfully")
         except Exception as e:
             self.logger.error(f"Failed to initialize Phase 3 components: {e}")
@@ -396,7 +440,11 @@ class ChatService:
             # 대화 흐름 추적
             if self.conversation_flow_tracker and phase1_info.get("context"):
                 try:
-                    from .conversation_manager import ConversationTurn
+                    try:
+                        from core.conversation.conversation_manager import ConversationTurn
+                    except ImportError:
+                        # 호환성을 위한 fallback
+                        from .conversation_manager import ConversationTurn
 
                     # 대화 흐름 추적
                     self.conversation_flow_tracker.track_conversation_flow(session_id,
