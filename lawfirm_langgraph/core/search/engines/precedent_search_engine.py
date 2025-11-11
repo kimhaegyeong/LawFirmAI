@@ -15,7 +15,7 @@ from pathlib import Path
 from core.data.database import DatabaseManager
 from core.data.vector_store import LegalVectorStore
 from core.utils.config import Config
-from core.services.ai_keyword_generator import AIKeywordGenerator
+from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
 
 logger = logging.getLogger(__name__)
 

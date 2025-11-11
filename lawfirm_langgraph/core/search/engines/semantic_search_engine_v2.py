@@ -1458,7 +1458,7 @@ class SemanticSearchEngineV2:
                 
                 # 통일된 포맷터로 출처 정보 생성
                 try:
-                    from core.services.unified_source_formatter import UnifiedSourceFormatter
+                    from core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
                     formatter = UnifiedSourceFormatter()
                     source_info = formatter.format_source(source_type, source_meta)
                     source_name = source_info.name

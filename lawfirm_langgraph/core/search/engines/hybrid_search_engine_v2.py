@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from core.utils.config import Config
 from .exact_search_engine_v2 import ExactSearchEngineV2
 from core.classification.classifiers.question_classifier import QuestionType
-from core.services.result_merger import ResultMerger, ResultRanker
+from core.search.processors.result_merger import ResultMerger, ResultRanker
 from .semantic_search_engine_v2 import SemanticSearchEngineV2
 
 logger = logging.getLogger(__name__)
