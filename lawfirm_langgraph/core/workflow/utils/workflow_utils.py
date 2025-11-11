@@ -1063,3 +1063,73 @@ class WorkflowUtils:
             "term_explanation": ["civil_law", "family_law", "contract_review"],
             "general_question": ["civil_law", "family_law", "contract_review"]
         }
+    
+    @staticmethod
+    def extract_chain_results(chain_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """체인 실행 결과 추출"""
+        question_type_result = None
+        legal_field_result = None
+        complexity_result = None
+        search_necessity_result = None
+        
+        for step in chain_history:
+            step_name = step.get("step_name")
+            if step.get("success"):
+                if step_name == "question_type_classification":
+                    question_type_result = step.get("output", {})
+                elif step_name == "legal_field_extraction":
+                    legal_field_result = step.get("output", {})
+                elif step_name == "complexity_assessment":
+                    complexity_result = step.get("output", {})
+                elif step_name == "search_necessity_assessment":
+                    search_necessity_result = step.get("output", {})
+        
+        return {
+            "question_type_result": question_type_result,
+            "legal_field_result": legal_field_result,
+            "complexity_result": complexity_result,
+            "search_necessity_result": search_necessity_result
+        }
+    
+    @staticmethod
+    def convert_chain_results(
+        question_type_result: Dict[str, Any],
+        complexity_result: Dict[str, Any],
+        search_necessity_result: Dict[str, Any]
+    ) -> Tuple[QuestionType, float, 'QueryComplexity', bool]:
+        """체인 결과를 반환 형식으로 변환"""
+        from core.workflow.state.workflow_types import QueryComplexity
+        
+        if not question_type_result or not isinstance(question_type_result, dict):
+            raise ValueError("Question type classification failed")
+        
+        question_type_mapping = {
+            "precedent_search": QuestionType.PRECEDENT_SEARCH,
+            "law_inquiry": QuestionType.LAW_INQUIRY,
+            "legal_advice": QuestionType.LEGAL_ADVICE,
+            "procedure_guide": QuestionType.PROCEDURE_GUIDE,
+            "term_explanation": QuestionType.TERM_EXPLANATION,
+            "general_question": QuestionType.GENERAL_QUESTION,
+        }
+        question_type_str = question_type_result.get("question_type", "general_question")
+        classified_type = question_type_mapping.get(question_type_str, QuestionType.GENERAL_QUESTION)
+        confidence = float(question_type_result.get("confidence", 0.85))
+        
+        if complexity_result and isinstance(complexity_result, dict):
+            complexity_str = complexity_result.get("complexity", "moderate")
+        else:
+            complexity_str = "moderate"
+        
+        complexity_mapping = {
+            "simple": QueryComplexity.SIMPLE,
+            "moderate": QueryComplexity.MODERATE,
+            "complex": QueryComplexity.COMPLEX,
+        }
+        complexity = complexity_mapping.get(complexity_str, QueryComplexity.MODERATE)
+        
+        if search_necessity_result and isinstance(search_necessity_result, dict):
+            needs_search = search_necessity_result.get("needs_search", True)
+        else:
+            needs_search = complexity != QueryComplexity.SIMPLE
+        
+        return (classified_type, confidence, complexity, needs_search)

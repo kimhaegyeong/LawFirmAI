@@ -38,6 +38,19 @@ except ImportError:
     # Fallback: 프로젝트 루트 기준 import
     from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 
+# ConversationFlowTracker import
+try:
+    from ..services.conversation_flow_tracker import ConversationFlowTracker
+    from ..services.conversation_manager import ConversationContext, ConversationTurn
+except ImportError:
+    try:
+        from core.services.conversation_flow_tracker import ConversationFlowTracker
+        from core.services.conversation_manager import ConversationContext, ConversationTurn
+    except ImportError:
+        ConversationFlowTracker = None
+        ConversationContext = None
+        ConversationTurn = None
+
 # 설정 파일 import (lawfirm_langgraph 구조 우선 시도)
 try:
     from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
@@ -175,6 +188,16 @@ class LangGraphWorkflowService:
         # 검색 결과 보존을 위한 캐시 (LangGraph reducer 문제 우회)
         self._search_results_cache: Optional[Dict[str, Any]] = None
 
+        # ConversationFlowTracker 초기화 (추천 질문 생성용)
+        self.conversation_flow_tracker = None
+        if ConversationFlowTracker is not None:
+            try:
+                self.conversation_flow_tracker = ConversationFlowTracker()
+                safe_log_info(self.logger, "ConversationFlowTracker initialized for suggested questions")
+            except Exception as e:
+                safe_log_warning(self.logger, f"Failed to initialize ConversationFlowTracker: {e}, continuing without suggested questions")
+                self.conversation_flow_tracker = None
+        
         # 컴포넌트 초기화 - 체크포인터 설정에 따라 초기화
         self.checkpoint_manager = None
         if self.config.enable_checkpoint and CheckpointManager is not None:
@@ -1197,6 +1220,90 @@ class LangGraphWorkflowService:
                 sources = self._extract_sources_from_retrieved_docs(retrieved_docs)
                 self.logger.debug(f"Extracted {len(sources)} sources from {len(retrieved_docs)} retrieved_docs")
             
+            # metadata 추출 및 suggested_questions 변환
+            metadata = flat_result.get("metadata", {}) if isinstance(flat_result, dict) else {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            
+            # phase_info에서 suggested_questions 추출하여 metadata.related_questions로 변환 (우선순위 1)
+            if isinstance(flat_result, dict) and "phase_info" in flat_result:
+                phase_info = flat_result.get("phase_info", {})
+                if isinstance(phase_info, dict) and "phase2" in phase_info:
+                    phase2_info = phase_info.get("phase2", {})
+                    if isinstance(phase2_info, dict) and "flow_tracking_info" in phase2_info:
+                        flow_tracking = phase2_info.get("flow_tracking_info", {})
+                        if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
+                            suggested_questions = flow_tracking.get("suggested_questions", [])
+                            if isinstance(suggested_questions, list) and len(suggested_questions) > 0:
+                                # 각 항목이 딕셔너리인 경우 "question" 필드 추출
+                                if isinstance(suggested_questions[0], dict):
+                                    related_questions = [q.get("question", "") for q in suggested_questions if q.get("question")]
+                                else:
+                                    related_questions = [str(q) for q in suggested_questions if q]
+                                
+                                # metadata에 related_questions 추가
+                                metadata["related_questions"] = related_questions
+                                self.logger.debug(f"Extracted {len(related_questions)} related questions from phase_info")
+            
+            # phase_info에 suggested_questions가 없으면 conversation_flow_tracker로 생성 (우선순위 2)
+            if "related_questions" not in metadata or not metadata.get("related_questions"):
+                if self.conversation_flow_tracker and ConversationContext is not None and ConversationTurn is not None:
+                    try:
+                        # 현재 질문과 답변으로 ConversationContext 구성
+                        answer = flat_result.get("answer", "") if isinstance(flat_result, dict) else ""
+                        query_type = flat_result.get("query_type", "general_question") if isinstance(flat_result, dict) else "general_question"
+                        
+                        if not query or not answer:
+                            self.logger.debug("Skipping suggested questions generation: query or answer is empty")
+                        else:
+                            # ConversationTurn 생성
+                            turn = ConversationTurn(
+                                user_query=query,
+                                bot_response=answer,
+                                timestamp=datetime.now(),
+                                question_type=query_type
+                            )
+                            
+                            # ConversationContext 생성 (올바른 필드 사용)
+                            context = ConversationContext(
+                                session_id=session_id or "default",
+                                turns=[turn],
+                                entities={},
+                                topic_stack=[],
+                                created_at=datetime.now(),
+                                last_updated=datetime.now()
+                            )
+                            
+                            # 추천 질문 생성
+                            self.logger.debug(f"Generating suggested questions for query_type={query_type}, session_id={session_id or 'default'}")
+                            suggested_questions = self.conversation_flow_tracker.suggest_follow_up_questions(context)
+                            
+                            if suggested_questions and len(suggested_questions) > 0:
+                                # 문자열 리스트로 변환 및 검증
+                                related_questions = [str(q).strip() for q in suggested_questions if q and str(q).strip()]
+                                if related_questions:
+                                    metadata["related_questions"] = related_questions
+                                    self.logger.info(
+                                        f"[Suggested Questions] Successfully generated {len(related_questions)} questions "
+                                        f"for query_type={query_type}, session_id={session_id or 'default'}"
+                                    )
+                                    self.logger.debug(f"Suggested questions: {related_questions}")
+                                else:
+                                    self.logger.debug("All suggested questions were empty after filtering")
+                            else:
+                                self.logger.debug(f"No suggested questions generated for query_type={query_type}")
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Failed to generate suggested questions using ConversationFlowTracker: {e}",
+                            exc_info=True
+                        )
+                        # 에러가 발생해도 계속 진행 (기본 질문 추가하지 않음)
+                else:
+                    if not self.conversation_flow_tracker:
+                        self.logger.debug("ConversationFlowTracker not available, skipping suggested questions generation")
+                    elif ConversationContext is None or ConversationTurn is None:
+                        self.logger.debug("ConversationContext or ConversationTurn not available, skipping suggested questions generation")
+            
             response = {
                 "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
                 "sources": sources,
@@ -1206,7 +1313,7 @@ class LangGraphWorkflowService:
                 "session_id": session_id,
                 "processing_time": processing_time,
                 "query_type": flat_result.get("query_type", "") if isinstance(flat_result, dict) else "",
-                "metadata": flat_result.get("metadata", {}) if isinstance(flat_result, dict) else {},
+                "metadata": metadata,
                 "errors": flat_result.get("errors", []) if isinstance(flat_result, dict) else [],
                 # 새로 추가된 필드들
                 "legal_field": flat_result.get("legal_field", "unknown") if isinstance(flat_result, dict) else "unknown",
