@@ -2,7 +2,7 @@
  * API 기본 타입 정의
  */
 
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
   message?: string;

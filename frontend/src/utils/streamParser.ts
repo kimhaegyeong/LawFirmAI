@@ -4,7 +4,7 @@
  */
 
 export interface ParsedChunk {
-  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota';
+  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota' | 'sources' | 'validation' | 'validation_start' | 'regeneration_start';
   content: string;
   metadata?: {
     step?: number;
@@ -22,7 +22,13 @@ export interface ParsedChunk {
     message_id?: string;
     remaining?: number;
     limit?: number;
-    [key: string]: any;
+    quality_score?: number;
+    is_valid?: boolean;
+    needs_regeneration?: boolean;
+    regeneration_reason?: string;
+    issues?: string[];
+    strengths?: string[];
+    [key: string]: unknown;
   };
 }
 
@@ -38,7 +44,7 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   // JSONL 형식 파싱 시도
   try {
     const parsed = JSON.parse(trimmed);
-    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota'].includes(parsed.type)) {
+    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start'].includes(parsed.type)) {
       return {
         type: parsed.type,
         content: parsed.content || parsed.message || '',

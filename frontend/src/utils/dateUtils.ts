@@ -2,12 +2,13 @@
  * 날짜 유틸리티 함수
  */
 import logger from './logger';
+import type { Session } from '../types/session';
 
 export type DateGroup = '오늘' | '어제' | '지난 7일' | '지난 30일' | '이전';
 
 export interface DateGrouped {
   group: DateGroup;
-  sessions: any[];
+  sessions: Session[];
 }
 
 /**
@@ -107,8 +108,8 @@ export function getDateGroup(date: string | Date): DateGroup {
 /**
  * 세션 목록을 날짜별로 그룹화
  */
-export function groupSessionsByDate(sessions: any[]): DateGrouped[] {
-  const grouped: Record<DateGroup, any[]> = {
+export function groupSessionsByDate(sessions: Session[]): DateGrouped[] {
+  const grouped: Record<DateGroup, Session[]> = {
     '오늘': [],
     '어제': [],
     '지난 7일': [],

@@ -56,7 +56,7 @@ export interface SourceInfo {
     decision_date?: string;
     response_date?: string;
     result?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 
@@ -71,7 +71,7 @@ export interface ChatResponse {
   session_id: string;
   processing_time: number;
   query_type: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
   errors: string[];
   message_id?: string;
 }
@@ -98,6 +98,7 @@ export interface ChatMessage {
     confidence?: number;
     processing_steps?: string[];
     query_type?: string;
+    related_questions?: string[];  // 추천 질문
     // Progress 메시지용 추가 필드
     step?: number;
     message?: string;
@@ -110,7 +111,7 @@ export interface ChatMessage {
     error_type?: string;
     message_id?: string;
     // 기타 필드 허용
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 
