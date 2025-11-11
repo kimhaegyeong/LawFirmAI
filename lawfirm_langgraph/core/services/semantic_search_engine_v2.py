@@ -906,20 +906,30 @@ class SemanticSearchEngineV2:
         """
         try:
             from sentence_transformers import CrossEncoder
+            import os
             
             # 한국어 법률 도메인에 적합한 Cross-Encoder 모델 사용
             # ms-marco 모델은 일반적으로 좋은 성능을 보임
             reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
             
-            self.reranker = CrossEncoder(reranker_model)
+            # HuggingFace 인증 토큰 확인
+            hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN")
+            if not hf_token:
+                self.logger.debug("HUGGINGFACE_HUB_TOKEN not set, reranker may fail if model requires authentication")
+            
+            self.reranker = CrossEncoder(reranker_model, token=hf_token)
             self.logger.info(f"Reranker initialized: {reranker_model}")
             return True
         except ImportError:
-            self.logger.warning("sentence-transformers not available for reranking. Install with: pip install sentence-transformers")
+            self.logger.debug("sentence-transformers not available for reranking. Reranking will be disabled.")
             self.reranker = None
             return False
         except Exception as e:
-            self.logger.error(f"Failed to initialize reranker: {e}")
+            error_msg = str(e)
+            if "401" in error_msg or "Unauthorized" in error_msg:
+                self.logger.debug(f"Reranker initialization failed (authentication required): {error_msg[:100]}. Set HUGGINGFACE_HUB_TOKEN environment variable to enable reranking.")
+            else:
+                self.logger.debug(f"Reranker initialization failed: {error_msg[:100]}. Reranking will be disabled.")
             self.reranker = None
             return False
 
@@ -960,6 +970,11 @@ class SemanticSearchEngineV2:
                     pairs.append([query, ""])
             
             if not pairs:
+                return results[:top_k]
+            
+            # Reranker가 초기화되지 않은 경우 원본 결과 반환
+            if self.reranker is None:
+                self.logger.debug("Reranker not initialized, returning original results")
                 return results[:top_k]
             
             # Cross-Encoder로 점수 계산
