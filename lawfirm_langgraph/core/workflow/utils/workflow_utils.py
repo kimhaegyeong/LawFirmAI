@@ -18,7 +18,7 @@ from core.workflow.state.state_utils import (
     prune_processing_steps,
 )
 from core.classification.classifiers.question_classifier import QuestionType
-from core.services.unified_prompt_manager import LegalDomain
+from core.agents.prompt_builders.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:

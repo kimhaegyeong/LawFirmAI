@@ -40,16 +40,21 @@ except ImportError:
 
 # ConversationFlowTracker import
 try:
-    from ..services.conversation_flow_tracker import ConversationFlowTracker
-    from ..services.conversation_manager import ConversationContext, ConversationTurn
+    from ..conversation.conversation_flow_tracker import ConversationFlowTracker
+    from ..conversation.conversation_manager import ConversationContext, ConversationTurn
 except ImportError:
     try:
-        from core.services.conversation_flow_tracker import ConversationFlowTracker
-        from core.services.conversation_manager import ConversationContext, ConversationTurn
+        from core.conversation.conversation_flow_tracker import ConversationFlowTracker
+        from core.conversation.conversation_manager import ConversationContext, ConversationTurn
     except ImportError:
-        ConversationFlowTracker = None
-        ConversationContext = None
-        ConversationTurn = None
+        try:
+            # 호환성을 위한 fallback
+            from core.conversation.conversation_flow_tracker import ConversationFlowTracker
+            from core.conversation.conversation_manager import ConversationContext, ConversationTurn
+        except ImportError:
+            ConversationFlowTracker = None
+            ConversationContext = None
+            ConversationTurn = None
 
 # 설정 파일 import (lawfirm_langgraph 구조 우선 시도)
 try:
@@ -193,9 +198,9 @@ class LangGraphWorkflowService:
         if ConversationFlowTracker is not None:
             try:
                 self.conversation_flow_tracker = ConversationFlowTracker()
-                safe_log_info(self.logger, "ConversationFlowTracker initialized for suggested questions")
+                self.logger.info("ConversationFlowTracker initialized for suggested questions")
             except Exception as e:
-                safe_log_warning(self.logger, f"Failed to initialize ConversationFlowTracker: {e}, continuing without suggested questions")
+                self.logger.warning(f"Failed to initialize ConversationFlowTracker: {e}, continuing without suggested questions")
                 self.conversation_flow_tracker = None
         
         # 컴포넌트 초기화 - 체크포인터 설정에 따라 초기화
@@ -325,7 +330,11 @@ class LangGraphWorkflowService:
         self.langfuse_client_service = None
         if LANGFUSE_CLIENT_AVAILABLE and self.config.langfuse_enabled:
             try:
-                from core.services.langfuse_client import LangfuseClient
+                try:
+                    from core.shared.clients.langfuse_client import LangfuseClient
+                except ImportError:
+                    # 호환성을 위한 fallback
+                    from core.services.langfuse_client import LangfuseClient
                 self.langfuse_client_service = LangfuseClient(self.config)
                 if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
                     safe_log_info(self.logger, "LangfuseClient initialized for answer quality tracking")
@@ -1243,22 +1252,47 @@ class LangGraphWorkflowService:
                                 
                                 # metadata에 related_questions 추가
                                 metadata["related_questions"] = related_questions
+                                # flat_result에도 metadata 업데이트하여 다음 단계에서 사용 가능하도록
+                                if isinstance(flat_result, dict):
+                                    if "metadata" not in flat_result:
+                                        flat_result["metadata"] = {}
+                                    flat_result["metadata"]["related_questions"] = related_questions
                                 self.logger.debug(f"Extracted {len(related_questions)} related questions from phase_info")
             
             # phase_info에 suggested_questions가 없으면 conversation_flow_tracker로 생성 (우선순위 2)
             if "related_questions" not in metadata or not metadata.get("related_questions"):
+                self.logger.info(f"[workflow_service] Step 1: Checking related_questions in metadata: {len(metadata.get('related_questions', []))} questions")
+                
                 if self.conversation_flow_tracker and ConversationContext is not None and ConversationTurn is not None:
+                    self.logger.info("[workflow_service] Step 2: ConversationFlowTracker is available, attempting to generate related_questions")
                     try:
                         # 현재 질문과 답변으로 ConversationContext 구성
+                        # query 추출: flat_result > self._initial_input > 메서드 파라미터 순서
+                        current_query = ""
+                        if isinstance(flat_result, dict):
+                            flat_input = flat_result.get("input", {})
+                            if isinstance(flat_input, dict) and flat_input.get("query"):
+                                current_query = flat_input.get("query", "")
+                            elif flat_result.get("query"):
+                                current_query = flat_result.get("query", "")
+                        
+                        if not current_query and self._initial_input and self._initial_input.get("query"):
+                            current_query = self._initial_input.get("query", "")
+                        
+                        if not current_query:
+                            current_query = query  # 메서드 파라미터 사용
+                        
                         answer = flat_result.get("answer", "") if isinstance(flat_result, dict) else ""
                         query_type = flat_result.get("query_type", "general_question") if isinstance(flat_result, dict) else "general_question"
                         
-                        if not query or not answer:
-                            self.logger.debug("Skipping suggested questions generation: query or answer is empty")
+                        self.logger.info(f"[workflow_service] Step 3: query={bool(current_query)}, query_length={len(current_query) if current_query else 0}, answer={bool(answer)}, answer_length={len(answer) if answer else 0}, query_type={query_type}")
+                        
+                        if not current_query or not answer:
+                            self.logger.warning(f"[workflow_service] Step 3: Skipping suggested questions generation: query={bool(current_query)}, answer={bool(answer)}")
                         else:
                             # ConversationTurn 생성
                             turn = ConversationTurn(
-                                user_query=query,
+                                user_query=current_query,
                                 bot_response=answer,
                                 timestamp=datetime.now(),
                                 question_type=query_type
@@ -1275,34 +1309,47 @@ class LangGraphWorkflowService:
                             )
                             
                             # 추천 질문 생성
-                            self.logger.debug(f"Generating suggested questions for query_type={query_type}, session_id={session_id or 'default'}")
+                            self.logger.info(f"[workflow_service] Step 4: Generating suggested questions for query_type={query_type}, session_id={session_id or 'default'}")
                             suggested_questions = self.conversation_flow_tracker.suggest_follow_up_questions(context)
+                            
+                            self.logger.info(f"[workflow_service] Step 5: suggest_follow_up_questions returned {len(suggested_questions) if suggested_questions else 0} questions")
                             
                             if suggested_questions and len(suggested_questions) > 0:
                                 # 문자열 리스트로 변환 및 검증
                                 related_questions = [str(q).strip() for q in suggested_questions if q and str(q).strip()]
                                 if related_questions:
                                     metadata["related_questions"] = related_questions
+                                    # flat_result에도 metadata 업데이트하여 다음 단계에서 사용 가능하도록
+                                    if isinstance(flat_result, dict):
+                                        if "metadata" not in flat_result:
+                                            flat_result["metadata"] = {}
+                                        flat_result["metadata"]["related_questions"] = related_questions
                                     self.logger.info(
-                                        f"[Suggested Questions] Successfully generated {len(related_questions)} questions "
+                                        f"[workflow_service] Step 6: Successfully generated {len(related_questions)} related_questions "
                                         f"for query_type={query_type}, session_id={session_id or 'default'}"
                                     )
-                                    self.logger.debug(f"Suggested questions: {related_questions}")
+                                    self.logger.info(f"[workflow_service] Generated questions: {related_questions[:3]}")
                                 else:
-                                    self.logger.debug("All suggested questions were empty after filtering")
+                                    self.logger.warning("[workflow_service] Step 6: All suggested questions were empty after filtering")
                             else:
-                                self.logger.debug(f"No suggested questions generated for query_type={query_type}")
+                                self.logger.warning(f"[workflow_service] Step 6: No suggested questions generated for query_type={query_type}")
                     except Exception as e:
-                        self.logger.warning(
-                            f"Failed to generate suggested questions using ConversationFlowTracker: {e}",
+                        self.logger.error(
+                            f"[workflow_service] Step 7: Failed to generate suggested questions using ConversationFlowTracker: {e}",
                             exc_info=True
                         )
                         # 에러가 발생해도 계속 진행 (기본 질문 추가하지 않음)
                 else:
                     if not self.conversation_flow_tracker:
-                        self.logger.debug("ConversationFlowTracker not available, skipping suggested questions generation")
+                        self.logger.warning("[workflow_service] ConversationFlowTracker not available, skipping suggested questions generation")
                     elif ConversationContext is None or ConversationTurn is None:
-                        self.logger.debug("ConversationContext or ConversationTurn not available, skipping suggested questions generation")
+                        self.logger.warning("[workflow_service] ConversationContext or ConversationTurn not available, skipping suggested questions generation")
+                    else:
+                        self.logger.warning("[workflow_service] Unknown reason for skipping suggested questions generation")
+            
+            # 최종 확인
+            final_related_questions = metadata.get("related_questions", [])
+            self.logger.info(f"[workflow_service] Final check: related_questions count={len(final_related_questions)}")
             
             response = {
                 "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",

@@ -7,6 +7,7 @@ Workflow Utils Module
 from .workflow_utils import WorkflowUtils
 from .workflow_constants import WorkflowConstants, QualityThresholds, RetryConfig
 from .workflow_routes import WorkflowRoutes
+from .workflow_statistics import WorkflowStatistics
 
 __all__ = [
     "WorkflowUtils",
@@ -14,5 +15,6 @@ __all__ = [
     "QualityThresholds",
     "RetryConfig",
     "WorkflowRoutes",
+    "WorkflowStatistics",
 ]
 
