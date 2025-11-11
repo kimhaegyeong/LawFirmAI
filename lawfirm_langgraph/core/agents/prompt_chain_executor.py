@@ -462,16 +462,36 @@ class PromptChainExecutor:
                     )
 
                     # LLM 호출 (스트리밍 지원)
-                    # 
-                    # 중요: LangChain의 ChatGoogleGenerativeAI와 Ollama는
-                    # invoke() 호출 시에도 내부적으로 스트리밍을 사용합니다.
-                    # LangGraph의 astream_events()가 이를 감지하여 
-                    # on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
-                    # 
-                    # 따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.
-                    # 명시적으로 astream()을 사용하려면 이 메서드를 async로 변경하고
-                    # async for chunk in self.llm.astream(prompt) 형태로 수정해야 합니다.
-                    llm_response = self.llm.invoke(prompt)
+                    # stream() 우선 사용 - LangGraph가 on_llm_stream 이벤트 발생
+                    if hasattr(self.llm, 'stream'):
+                        try:
+                            full_response = ""
+                            for chunk in self.llm.stream(prompt):
+                                if hasattr(chunk, 'content'):
+                                    full_response += chunk.content
+                                elif isinstance(chunk, str):
+                                    full_response += chunk
+                                else:
+                                    full_response += str(chunk)
+                            llm_response = full_response
+                            safe_log_debug(
+                                self.logger,
+                                f"✅ [CHAIN STEP] '{step_name}' - stream() 사용 성공"
+                            )
+                        except Exception as stream_error:
+                            # stream() 실패 시 invoke()로 폴백
+                            safe_log_warning(
+                                self.logger,
+                                f"⚠️ [CHAIN STEP] '{step_name}' - stream() 호출 실패, invoke()로 폴백: {stream_error}"
+                            )
+                            llm_response = self.llm.invoke(prompt)
+                    else:
+                        # stream()이 없으면 invoke() 사용
+                        safe_log_debug(
+                            self.logger,
+                            f"ℹ️ [CHAIN STEP] '{step_name}' - stream() 미지원, invoke() 사용"
+                        )
+                        llm_response = self.llm.invoke(prompt)
 
                     # 응답 추출
                     response_content = self._extract_response_content(llm_response)
