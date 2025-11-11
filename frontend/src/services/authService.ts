@@ -55,39 +55,112 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     
     logger.info('OAuth callback: 인증 코드 처리 시작', { code: code.substring(0, 10), state: state?.substring(0, 10) });
     
-    // URL 파라미터에서 토큰 확인 (백엔드가 리다이렉트로 전달)
+    // URL 파라미터에서 세션 ID 확인 (보안 강화: 토큰을 URL에 포함하지 않음)
     const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session_id');
+    
+    if (sessionId) {
+      // 세션 ID로 토큰 교환 (보안 강화)
+      logger.info('OAuth callback: 세션 ID로 토큰 교환');
+      
+      try {
+        const exchangeUrl = api.defaults.baseURL 
+          ? `${api.defaults.baseURL}/oauth2/token-exchange`
+          : `/api/v1/oauth2/token-exchange`;
+        
+        const response = await fetch(exchangeUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ session_id: sessionId }),
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: '토큰 교환 실패' }));
+          throw new Error(errorData.detail || '토큰 교환에 실패했습니다.');
+        }
+        
+        const tokenResponse: TokenResponse = await response.json();
+        
+        if (!tokenResponse.access_token) {
+          throw new Error('토큰 응답이 올바르지 않습니다.');
+        }
+        
+        setAccessToken(tokenResponse.access_token);
+        
+        const savedToken = getAccessToken();
+        if (!savedToken || savedToken !== tokenResponse.access_token) {
+          logger.error('Failed to save access token!', { saved: !!savedToken, matches: savedToken === tokenResponse.access_token });
+          throw new Error('토큰 저장에 실패했습니다.');
+        }
+        
+        if (tokenResponse.refresh_token) {
+          setRefreshToken(tokenResponse.refresh_token);
+        }
+        
+        // 보안을 위해 URL에서 세션 ID 제거
+        urlParams.delete('session_id');
+        const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+        window.history.replaceState({}, document.title, newUrl);
+        
+        logger.info('OAuth callback: 토큰 교환 완료', { code: code.substring(0, 10) });
+        
+        setTimeout(() => {
+          sessionStorage.removeItem(processedCodeKey);
+        }, 60000);
+        
+        return tokenResponse;
+      } catch (tokenError) {
+        logger.error('OAuth callback: 토큰 교환 중 오류 발생', { error: tokenError });
+        throw tokenError;
+      }
+    }
+    
+    // 하위 호환성을 위해 기존 방식도 지원 (URL 파라미터에서 토큰 확인)
     const accessToken = urlParams.get('access_token');
     const refreshToken = urlParams.get('refresh_token');
     
     if (accessToken) {
-      // 백엔드가 토큰을 쿼리 파라미터로 전달한 경우
-      logger.info('OAuth callback: URL 파라미터에서 토큰 확인');
+      logger.warn('OAuth callback: URL 파라미터에서 토큰 확인 (하위 호환성, 보안상 권장되지 않음)');
       
-      setAccessToken(accessToken);
-      
-      const savedToken = getAccessToken();
-      if (!savedToken) {
-        logger.error('Failed to save access token!');
-        throw new Error('토큰 저장에 실패했습니다.');
+      try {
+        setAccessToken(accessToken);
+        
+        const savedToken = getAccessToken();
+        if (!savedToken || savedToken !== accessToken) {
+          logger.error('Failed to save access token!', { saved: !!savedToken, matches: savedToken === accessToken });
+          throw new Error('토큰 저장에 실패했습니다.');
+        }
+        
+        if (refreshToken) {
+          setRefreshToken(refreshToken);
+        }
+        
+        // 보안을 위해 URL에서 토큰 제거
+        urlParams.delete('access_token');
+        urlParams.delete('refresh_token');
+        const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+        window.history.replaceState({}, document.title, newUrl);
+        
+        logger.info('OAuth callback: 인증 코드 처리 완료', { code: code.substring(0, 10) });
+        
+        setTimeout(() => {
+          sessionStorage.removeItem(processedCodeKey);
+        }, 60000);
+        
+        return {
+          access_token: accessToken,
+          refresh_token: refreshToken || '',
+          token_type: 'bearer',
+          expires_in: 3600
+        };
+      } catch (tokenError) {
+        logger.error('OAuth callback: 토큰 저장 중 오류 발생', { error: tokenError });
+        throw tokenError;
       }
-      
-      if (refreshToken) {
-        setRefreshToken(refreshToken);
-      }
-      
-      logger.info('OAuth callback: 인증 코드 처리 완료', { code: code.substring(0, 10) });
-      
-      setTimeout(() => {
-        sessionStorage.removeItem(processedCodeKey);
-      }, 60000);
-      
-      return {
-        access_token: accessToken,
-        refresh_token: refreshToken || '',
-        token_type: 'bearer',
-        expires_in: 3600
-      };
     }
     
     // 토큰이 URL 파라미터에 없는 경우 백엔드 API 호출 (fallback)
@@ -109,35 +182,68 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
       // 리다이렉트 응답인 경우, Location 헤더에서 토큰 추출 시도
       const location = response.headers.get('Location');
       if (location) {
-        const redirectUrl = new URL(location);
-        const redirectAccessToken = redirectUrl.searchParams.get('access_token');
-        const redirectRefreshToken = redirectUrl.searchParams.get('refresh_token');
-        
-        if (redirectAccessToken) {
-          setAccessToken(redirectAccessToken);
-          if (redirectRefreshToken) {
-            setRefreshToken(redirectRefreshToken);
+        try {
+          const redirectUrl = new URL(location);
+          const redirectAccessToken = redirectUrl.searchParams.get('access_token');
+          const redirectRefreshToken = redirectUrl.searchParams.get('refresh_token');
+          
+          if (redirectAccessToken) {
+            setAccessToken(redirectAccessToken);
+            if (redirectRefreshToken) {
+              setRefreshToken(redirectRefreshToken);
+            }
+            
+            logger.info('OAuth callback: 리다이렉트 URL에서 토큰 추출 완료');
+            
+            setTimeout(() => {
+              sessionStorage.removeItem(processedCodeKey);
+            }, 60000);
+            
+            return {
+              access_token: redirectAccessToken,
+              refresh_token: redirectRefreshToken || '',
+              token_type: 'bearer',
+              expires_in: 3600
+            };
+          } else {
+            // 리다이렉트 응답이지만 토큰이 없는 경우
+            // 백엔드가 이미 처리했을 수 있으므로, 에러 파라미터 확인
+            const errorParam = redirectUrl.searchParams.get('error');
+            if (errorParam) {
+              logger.error('OAuth callback: 리다이렉트 URL에 에러 파라미터 발견', { error: errorParam, location });
+              throw new Error(errorParam);
+            }
+            
+            // 토큰이 없고 에러도 없는 경우, 백엔드가 이미 처리했을 수 있음
+            // 하지만 프론트엔드에서는 토큰이 필요하므로 오류로 처리
+            logger.warn('OAuth callback: 리다이렉트 응답을 받았지만 토큰이 없습니다', { location });
+            throw new Error('OAuth 콜백 처리 중 토큰을 받지 못했습니다. 다시 로그인해주세요.');
           }
-          
-          logger.info('OAuth callback: 리다이렉트 URL에서 토큰 추출 완료');
-          
-          setTimeout(() => {
-            sessionStorage.removeItem(processedCodeKey);
-          }, 60000);
-          
-          return {
-            access_token: redirectAccessToken,
-            refresh_token: redirectRefreshToken || '',
-            token_type: 'bearer',
-            expires_in: 3600
-          };
+        } catch (urlError) {
+          if (urlError instanceof Error && urlError.message.includes('OAuth')) {
+            throw urlError;
+          }
+          logger.error('OAuth callback: 리다이렉트 URL 파싱 실패', { location, error: urlError });
+          throw new Error('OAuth 콜백 리다이렉트 URL 처리에 실패했습니다.');
         }
+      } else {
+        logger.error('OAuth callback: 리다이렉트 응답이지만 Location 헤더가 없습니다', { status: response.status });
+        throw new Error('OAuth 콜백 리다이렉트 응답이 올바르지 않습니다.');
       }
     }
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'OAuth callback failed' }));
-      throw new Error(errorData.detail || 'OAuth callback failed');
+      let errorMessage = 'OAuth callback failed';
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.detail || errorData.message || errorMessage;
+        logger.error('OAuth callback: API 오류 응답', { status: response.status, error: errorData });
+      } catch (jsonError) {
+        const text = await response.text().catch(() => '');
+        logger.error('OAuth callback: API 오류 응답 (JSON 파싱 실패)', { status: response.status, text });
+        errorMessage = text || errorMessage;
+      }
+      throw new Error(errorMessage);
     }
     
     const data: TokenResponse = await response.json();

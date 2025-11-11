@@ -16,6 +16,23 @@ export function LoginPage() {
   const hasProcessedCallback = useRef(false);
 
   useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    const errorParam = urlParams.get('error');
+
+    if (!code && !state && !errorParam) {
+      if (isAuthenticated && user && !isLoading && !isProcessing) {
+        if (checkAuthenticated()) {
+          logger.info('LoginPage: 이미 로그인되어 있음, 메인 화면으로 리다이렉트');
+          window.history.replaceState({}, document.title, '/');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }
+      }
+    }
+  }, [isAuthenticated, user, isLoading, isProcessing]);
+
+  useEffect(() => {
     if (hasProcessedCallback.current) {
       logger.debug('LoginPage: Callback already processed, skipping...');
       return;
@@ -51,23 +68,37 @@ export function LoginPage() {
       handleCallback(code, state)
         .then(() => {
           logger.info('LoginPage: OAuth callback 처리 성공');
-          window.history.replaceState({}, document.title, window.location.pathname);
+          
+          // URL 파라미터 정리 (토큰은 이미 authService에서 제거됨)
+          const urlParams = new URLSearchParams(window.location.search);
+          urlParams.delete('code');
+          urlParams.delete('state');
+          const cleanUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+          window.history.replaceState({}, document.title, cleanUrl);
+          
           setCallbackCompleted(true);
           
           // 성공 직후 리다이렉트 시도 (useEffect가 실행되기 전에)
           setTimeout(() => {
             if (checkAuthenticated()) {
               logger.info('LoginPage: handleCallback 성공 후 즉시 리다이렉트 시도');
+              
+              // URL 파라미터 완전 제거
               window.history.replaceState({}, document.title, '/');
               window.dispatchEvent(new PopStateEvent('popstate'));
               
               // 추가 확인: 300ms 후에도 여전히 LoginPage에 있으면 강제 리다이렉트
               setTimeout(() => {
-                const urlParams = new URLSearchParams(window.location.search);
-                const hasCode = urlParams.get('code');
-                const hasState = urlParams.get('state');
-                if (hasCode || hasState) {
-                  logger.warn('LoginPage: URL 파라미터가 여전히 존재, 강제 리다이렉트');
+                const currentUrlParams = new URLSearchParams(window.location.search);
+                const hasCode = currentUrlParams.get('code');
+                const hasState = currentUrlParams.get('state');
+                const hasToken = currentUrlParams.get('access_token');
+                if (hasCode || hasState || hasToken) {
+                  logger.warn('LoginPage: URL 파라미터가 여전히 존재, 강제 리다이렉트', {
+                    hasCode: !!hasCode,
+                    hasState: !!hasState,
+                    hasToken: !!hasToken
+                  });
                   window.location.href = '/';
                 }
               }, 300);
@@ -75,10 +106,22 @@ export function LoginPage() {
           }, 200);
         })
         .catch((err) => {
-          logger.warn('LoginPage: OAuth callback failed, continuing as guest:', err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          logger.warn('LoginPage: OAuth callback failed, continuing as guest:', { error: errorMessage, err });
+          
           setCallbackCompleted(false);
           hasProcessedCallback.current = false;
-          window.history.replaceState({}, document.title, window.location.pathname);
+          
+          // URL 파라미터 정리
+          const urlParams = new URLSearchParams(window.location.search);
+          urlParams.delete('code');
+          urlParams.delete('state');
+          urlParams.delete('access_token');
+          urlParams.delete('refresh_token');
+          
+          const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+          window.history.replaceState({}, document.title, newUrl);
+          
           setTimeout(() => {
             window.history.replaceState({}, document.title, '/');
             window.dispatchEvent(new PopStateEvent('popstate'));
@@ -110,25 +153,34 @@ export function LoginPage() {
           isProcessing 
         });
         
-        // URL 파라미터 제거
-        window.history.replaceState({}, document.title, '/');
+        // URL 파라미터 정리 (토큰 및 인증 코드 제거)
+        const urlParams = new URLSearchParams(window.location.search);
+        urlParams.delete('code');
+        urlParams.delete('state');
+        urlParams.delete('access_token');
+        urlParams.delete('refresh_token');
+        
+        const cleanUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+        window.history.replaceState({}, document.title, cleanUrl);
         
         // App.tsx가 리렌더링되도록 popstate 이벤트 발생
         window.dispatchEvent(new PopStateEvent('popstate'));
         
         // 짧은 지연 후 URL 확인 및 필요시 강제 리다이렉트
         setTimeout(() => {
-          const urlParams = new URLSearchParams(window.location.search);
-          const hasCode = urlParams.get('code');
-          const hasState = urlParams.get('state');
+          const currentUrlParams = new URLSearchParams(window.location.search);
+          const hasCode = currentUrlParams.get('code');
+          const hasState = currentUrlParams.get('state');
+          const hasToken = currentUrlParams.get('access_token');
           const currentPath = window.location.pathname;
           
-          if (!hasCode && !hasState && currentPath === '/') {
+          if (!hasCode && !hasState && !hasToken && currentPath === '/') {
             logger.info('LoginPage: URL 파라미터 제거 완료, 리다이렉트 완료');
           } else {
             logger.warn('LoginPage: URL 파라미터가 여전히 존재하거나 경로가 잘못됨, 강제 리다이렉트', {
               hasCode: !!hasCode,
               hasState: !!hasState,
+              hasToken: !!hasToken,
               currentPath
             });
             // 강제로 페이지 이동 (popstate 이벤트만으로는 부족한 경우)

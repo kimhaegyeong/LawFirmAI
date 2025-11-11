@@ -173,9 +173,13 @@ export function useAuth() {
         throw new Error('사용자 인증에 실패했습니다.');
       }
       
+      // 사용자 정보 설정 (retryLoadUser useEffect가 실행되지 않도록)
       setUser(userInfo);
       setIsAuthenticated(userInfo.authenticated);
       logger.info('Login successful');
+      
+      // handleCallback에서 이미 사용자 정보를 가져왔으므로, 
+      // retryLoadUser useEffect가 실행되지 않도록 user 상태를 먼저 설정
     } catch (err) {
       const error = err instanceof Error ? err : new Error('로그인에 실패했습니다.');
       setError(error);
@@ -184,9 +188,14 @@ export function useAuth() {
       setUser(null);
       throw error;
     } finally {
+      // handleCallback 완료 후 상태 업데이트
+      // user 상태가 설정되면 retryLoadUser useEffect가 실행되지 않음
       setIsLoading(false);
       isLoadingUser.current = false;
       isHandlingCallback.current = false;
+      
+      // handleCallback이 완료되었음을 로깅
+      logger.debug('handleCallback: Completed, user state updated');
     }
   }, []);
 
@@ -255,15 +264,22 @@ export function useAuth() {
       return;
     }
 
-    if (!isLoading && checkAuthenticated() && !user && !isInitialMount.current) {
+    // handleCallback에서 이미 사용자 정보를 가져왔다면 실행하지 않음
+    if (isLoading) {
+      logger.debug('retryLoadUser: Still loading, skipping');
+      return;
+    }
+
+    if (checkAuthenticated() && !user && !isInitialMount.current) {
+      logger.debug('retryLoadUser: Token found but no user, loading user info');
       const retryLoadUser = async () => {
         try {
           await loadUser();
         } catch (err) {
           logger.error('Failed to reload user:', err);
           setTimeout(() => {
-            // handleCallback이 실행 중이면 재시도하지 않음
-            if (checkAuthenticated() && !user && !isHandlingCallback.current) {
+            // handleCallback이 실행 중이거나 로딩 중이면 재시도하지 않음
+            if (checkAuthenticated() && !user && !isHandlingCallback.current && !isLoading) {
               loadUser().catch((err) => {
                 logger.error('Retry failed to reload user:', err);
               });

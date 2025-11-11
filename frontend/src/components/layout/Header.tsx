@@ -70,17 +70,9 @@ export function Header({ onMenuClick }: HeaderProps) {
                 <User className="w-4 h-4 text-blue-600" />
               </div>
             )}
-            <div className="flex flex-col items-start">
-              {user.name && (
-                <span className="text-sm font-medium text-slate-800">{user.name}</span>
-              )}
-              {user.email && (
-                <span className="text-xs text-slate-500">{user.email}</span>
-              )}
-              {user.user_id && (
-                <span className="text-xs text-slate-400">ID: {user.user_id}</span>
-              )}
-            </div>
+            {user.name && (
+              <span className="text-sm font-medium text-slate-800">{user.name}</span>
+            )}
           </div>
           <div className="relative" ref={userMenuRef}>
             <button
