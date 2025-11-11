@@ -30,12 +30,18 @@ api.interceptors.request.use(
     const token = getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+      if (import.meta.env.DEV) {
+        logger.debug(`[API Request] Token included: ${token.substring(0, 20)}...`);
+      }
     } else {
       // 비로그인 사용자의 경우 익명 세션 ID 헤더 추가
       const { getOrCreateAnonymousSessionId } = await import('../utils/anonymousSession');
       const anonymousSessionId = await getOrCreateAnonymousSessionId();
       if (anonymousSessionId) {
         config.headers['X-Anonymous-Session-Id'] = anonymousSessionId;
+      }
+      if (import.meta.env.DEV) {
+        logger.debug('[API Request] No token found, using anonymous session');
       }
     }
     
