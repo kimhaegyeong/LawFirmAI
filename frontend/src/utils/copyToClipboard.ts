@@ -1,6 +1,7 @@
 /**
  * 클립보드 복사 유틸리티
  */
+import logger from './logger';
 
 /**
  * 텍스트를 클립보드에 복사
@@ -32,7 +33,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       }
     }
   } catch (err) {
-    console.error('Failed to copy text to clipboard:', err);
+    logger.error('Failed to copy text to clipboard:', err);
     return false;
   }
 }
