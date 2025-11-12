@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # OAuth2 상태 저장소 (실제로는 Redis 등 사용 권장)
 oauth2_states = {}
 
+# OAuth2 토큰 임시 저장소 (세션 ID -> 토큰 매핑)
+# 실제 프로덕션에서는 Redis 등 사용 권장
+oauth2_token_store: Dict[str, Dict[str, Any]] = {}
+
 
 @router.get("/oauth2/google/authorize")
 async def oauth2_google_authorize(state: Optional[str] = None):
@@ -175,13 +179,36 @@ async def oauth2_google_callback(
         
         logger.info("토큰 생성 성공")
         
+        # 보안을 위해 토큰을 세션에 저장하고 세션 ID만 전달
+        session_id = secrets.token_urlsafe(32)
+        oauth2_token_store[session_id] = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_at": None  # 필요시 만료 시간 추가
+        }
+        
+        # 5분 후 자동 삭제 (보안)
+        import asyncio
+        async def cleanup_token():
+            await asyncio.sleep(300)  # 5분
+            if session_id in oauth2_token_store:
+                del oauth2_token_store[session_id]
+                logger.info(f"OAuth2 토큰 세션 만료 및 삭제: {session_id[:10]}...")
+        
+        # 백그라운드 태스크로 실행 (실제로는 별도 스케줄러 사용 권장)
+        try:
+            asyncio.create_task(cleanup_token())
+        except Exception as e:
+            logger.warning(f"토큰 정리 태스크 생성 실패: {e}")
+        
         from api.config import api_config
         frontend_url = api_config.frontend_url or "http://localhost:3000"
         
         from urllib.parse import urlencode
         redirect_params = {
             "code": code,
-            "state": state or ""
+            "state": state or "",
+            "session_id": session_id
         }
         redirect_url = f"{frontend_url}/?{urlencode(redirect_params)}"
         
@@ -206,6 +233,46 @@ async def oauth2_google_callback(
         }
         redirect_url = f"{frontend_url}/?{urlencode(error_params)}"
         return RedirectResponse(url=redirect_url)
+
+
+@router.post("/oauth2/token-exchange", response_model=TokenResponse)
+async def oauth2_token_exchange(request: Request):
+    """OAuth2 세션 ID로 토큰 교환 (보안 강화)"""
+    try:
+        body = await request.json()
+        session_id = body.get("session_id")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="요청 본문을 파싱할 수 없습니다."
+        )
+    
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="세션 ID가 필요합니다."
+        )
+    
+    if session_id not in oauth2_token_store:
+        logger.warning(f"유효하지 않은 세션 ID: {session_id[:10]}...")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="유효하지 않거나 만료된 세션 ID입니다."
+        )
+    
+    token_data = oauth2_token_store[session_id]
+    
+    # 토큰을 반환하고 즉시 삭제 (일회용)
+    del oauth2_token_store[session_id]
+    
+    logger.info(f"OAuth2 토큰 교환 성공: {session_id[:10]}...")
+    
+    return TokenResponse(
+        access_token=token_data["access_token"],
+        refresh_token=token_data.get("refresh_token", ""),
+        token_type="bearer",
+        expires_in=3600
+    )
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)
@@ -266,34 +333,52 @@ async def refresh_token(request: RefreshTokenRequest):
 
 
 @router.get("/auth/me")
-async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def get_current_user_info(current_user: Optional[Dict[str, Any]] = Depends(get_current_user)):
     """현재 사용자 정보 조회"""
-    if not current_user or not current_user.get("authenticated"):
+    # current_user가 None이거나 인증되지 않은 경우
+    if not current_user:
+        logger.debug("get_current_user_info: current_user is None")
         return {
             "user_id": "anonymous",
             "authenticated": False
         }
     
-    user_id = current_user.get("user_id")
-    if not user_id or user_id == "anonymous" or user_id == "api_key_user":
-        return current_user
-    
-    # 사용자 데이터베이스에서 정보 가져오기
-    user_data = user_service.get_user(user_id)
-    
-    if not user_data:
-        logger.warning(f"User not found in database: user_id={user_id}")
+    if not current_user.get("authenticated"):
+        logger.debug(f"get_current_user_info: user not authenticated, user_id={current_user.get('user_id')}")
         return {
-            "user_id": user_id,
+            "user_id": current_user.get("user_id", "anonymous"),
             "authenticated": False
         }
     
+    user_id = current_user.get("user_id")
+    if not user_id or user_id == "anonymous" or user_id == "api_key_user":
+        logger.debug(f"get_current_user_info: returning current_user as-is, user_id={user_id}")
+        return current_user
+    
+    # 사용자 데이터베이스에서 정보 가져오기
+    logger.debug(f"get_current_user_info: fetching user from database, user_id={user_id}")
+    user_data = user_service.get_user(user_id)
+    
+    if not user_data:
+        logger.warning(f"User not found in database: user_id={user_id}, returning token payload")
+        # 데이터베이스에 사용자가 없어도 토큰이 유효하면 토큰 정보 반환
         return {
-            "user_id": user_data.get("user_id", user_id),
-            "email": user_data.get("email") or current_user.get("email"),
-            "name": user_data.get("name") or current_user.get("name"),
-            "picture": user_data.get("picture") or current_user.get("picture"),
-            "provider": user_data.get("provider") or current_user.get("provider", "google"),
+            "user_id": user_id,
+            "email": current_user.get("email"),
+            "name": current_user.get("name"),
+            "picture": current_user.get("picture"),
+            "provider": current_user.get("provider", "google"),
+            "authenticated": True
+        }
+    
+    # 데이터베이스에서 가져온 정보와 토큰 정보 병합
+    logger.info(f"get_current_user_info: user found in database, user_id={user_id}")
+    return {
+        "user_id": user_data.get("user_id", user_id),
+        "email": user_data.get("email") or current_user.get("email"),
+        "name": user_data.get("name") or current_user.get("name"),
+        "picture": user_data.get("picture") or current_user.get("picture"),
+        "provider": user_data.get("provider") or current_user.get("provider", "google"),
         "authenticated": True
     }
 

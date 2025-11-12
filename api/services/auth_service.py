@@ -78,16 +78,22 @@ class AuthService:
     def verify_token(self, token: str, token_type: str = "access") -> Optional[Dict[str, Any]]:
         """JWT 토큰 검증"""
         if not self.secret_key:
+            logger.warning("verify_token: JWT_SECRET_KEY가 설정되지 않았습니다.")
             return None
         
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            if payload.get("type") != token_type:
-                logger.debug(f"JWT 토큰 타입 불일치: 기대={token_type}, 실제={payload.get('type')}")
+            token_payload_type = payload.get("type")
+            if token_payload_type != token_type:
+                logger.warning(f"JWT 토큰 타입 불일치: 기대={token_type}, 실제={token_payload_type}")
                 return None
+            logger.debug(f"JWT 토큰 검증 성공: type={token_payload_type}, sub={payload.get('sub')}")
             return payload
         except JWTError as e:
-            logger.debug(f"JWT 토큰 검증 실패: {e}")
+            logger.warning(f"JWT 토큰 검증 실패: {type(e).__name__}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"JWT 토큰 검증 중 예상치 못한 오류: {type(e).__name__}: {e}", exc_info=True)
             return None
     
     def verify_api_key(self, api_key: str) -> bool:
@@ -99,7 +105,9 @@ class AuthService:
     
     def is_auth_enabled(self) -> bool:
         """인증 활성화 여부"""
-        return api_config.auth_enabled and bool(self.secret_key or os.getenv("API_KEY"))
+        enabled = api_config.auth_enabled and bool(self.secret_key or os.getenv("API_KEY"))
+        logger.debug(f"is_auth_enabled: auth_enabled={api_config.auth_enabled}, has_secret_key={bool(self.secret_key)}, has_api_key={bool(os.getenv('API_KEY'))}, result={enabled}")
+        return enabled
 
 
 auth_service = AuthService()

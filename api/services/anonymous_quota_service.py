@@ -5,12 +5,19 @@ IP 주소 기반으로 익명 사용자의 질의 횟수를 추적하고 제한�
 import os
 import logging
 from typing import Dict, Optional
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone, timedelta
 from collections import defaultdict
 
 from api.config import api_config
 
 logger = logging.getLogger(__name__)
+
+KST = timezone(timedelta(hours=9))
+
+
+def get_kst_date() -> date:
+    """KST 기준 오늘 날짜 반환"""
+    return datetime.now(KST).date()
 
 
 class AnonymousQuotaService:
@@ -25,7 +32,7 @@ class AnonymousQuotaService:
         # IP 주소별 질의 횟수 및 마지막 리셋 날짜 저장
         # 구조: {ip_address: {"count": int, "last_reset_date": date}}
         self._quota_store: Dict[str, Dict[str, any]] = defaultdict(
-            lambda: {"count": 0, "last_reset_date": date.today()}
+            lambda: {"count": 0, "last_reset_date": get_kst_date()}
         )
         
         if self.enabled:
@@ -40,26 +47,25 @@ class AnonymousQuotaService:
         return ip_address.strip()
     
     def _should_reset(self, ip_address: str) -> bool:
-        """일일 리셋이 필요한지 확인"""
+        """일일 리셋이 필요한지 확인 (KST 기준)"""
         key = self._get_quota_key(ip_address)
         if key not in self._quota_store:
             return True
         
         last_reset_date = self._quota_store[key]["last_reset_date"]
-        today = date.today()
+        today_kst = get_kst_date()
         
-        # 날짜가 변경되었으면 리셋
-        if last_reset_date < today:
+        if last_reset_date < today_kst:
             return True
         
         return False
     
     def _reset_quota(self, ip_address: str):
-        """특정 IP 주소의 질의 횟수 리셋"""
+        """특정 IP 주소의 질의 횟수 리셋 (KST 기준)"""
         key = self._get_quota_key(ip_address)
         self._quota_store[key] = {
             "count": 0,
-            "last_reset_date": date.today()
+            "last_reset_date": get_kst_date()
         }
         logger.debug(f"익명 사용자 질의 횟수 리셋: {ip_address}")
     
@@ -114,18 +120,18 @@ class AnonymousQuotaService:
         return remaining
     
     def reset_daily_quota(self):
-        """모든 IP 주소의 일일 질의 횟수 리셋"""
+        """모든 IP 주소의 일일 질의 횟수 리셋 (KST 기준)"""
         if not self.enabled:
             return
         
-        today = date.today()
+        today_kst = get_kst_date()
         reset_count = 0
         
         for key in list(self._quota_store.keys()):
-            if self._quota_store[key]["last_reset_date"] < today:
+            if self._quota_store[key]["last_reset_date"] < today_kst:
                 self._quota_store[key] = {
                     "count": 0,
-                    "last_reset_date": today
+                    "last_reset_date": today_kst
                 }
                 reset_count += 1
         
