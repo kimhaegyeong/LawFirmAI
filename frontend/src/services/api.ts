@@ -2,7 +2,7 @@
  * API 기본 설정 및 Axios 인스턴스
  */
 import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
-import logger from '../utils/logger';
+import logger, { apiLogger } from '../utils/logger';
 
 // 개발 환경에서는 명시적으로 localhost:8000 사용
 // 프로덕션 환경에서는 환경 변수 또는 기본값 사용
@@ -31,7 +31,7 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
       if (import.meta.env.DEV) {
-        logger.debug(`[API Request] Token included: ${token.substring(0, 20)}...`);
+        apiLogger.debug(`Token included: ${token.substring(0, 20)}...`);
       }
     } else {
       // 비로그인 사용자의 경우 익명 세션 ID 헤더 추가
@@ -41,17 +41,16 @@ api.interceptors.request.use(
         config.headers['X-Anonymous-Session-Id'] = anonymousSessionId;
       }
       if (import.meta.env.DEV) {
-        logger.debug('[API Request] No token found, using anonymous session');
+        apiLogger.debug('No token found, using anonymous session');
       }
     }
     
     // 디버깅: 요청 정보 로깅
     const fullURL = `${config.baseURL || ''}${config.url || ''}`;
     if (import.meta.env.DEV) {
-      logger.debug(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
-      logger.debug('[API Request] Base URL:', config.baseURL);
-      logger.debug('[API Request] Full URL:', fullURL);
-      console.log('[API] Request URL:', fullURL);
+      apiLogger.debug(`${config.method?.toUpperCase()} ${config.url}`);
+      apiLogger.debug('Base URL:', config.baseURL);
+      apiLogger.debug('Full URL:', fullURL);
     }
     return config;
   },
@@ -79,13 +78,13 @@ api.interceptors.response.use(
   (response: AxiosResponse) => {
     // 디버깅: 응답 정보 로깅
     if (import.meta.env.DEV) {
-      logger.debug(`[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
+      apiLogger.debug(`${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
       // CORS 헤더 확인
       const corsHeaders = {
         'Access-Control-Allow-Origin': response.headers['access-control-allow-origin'],
         'Access-Control-Allow-Credentials': response.headers['access-control-allow-credentials'],
       };
-      logger.debug('[API Response] CORS Headers:', corsHeaders);
+      apiLogger.debug('CORS Headers:', corsHeaders);
     }
     return response;
   },
@@ -141,7 +140,7 @@ api.interceptors.response.use(
       const url = error.config?.url || '';
       const fullURL = baseURL + url;
       
-      console.error('[API] Connection failed:', {
+      apiLogger.error('Connection failed:', {
         baseURL,
         url,
         fullURL,
@@ -223,9 +222,35 @@ export function extractApiError(error: unknown): Error {
       const data = axiosError.response.data as { detail?: string; message?: string } | undefined;
       let message = data?.detail || data?.message || '에러가 발생했습니다.';
       
+      // 429 에러인 경우 쿼터 정보 포함
+      if (axiosError.response.status === 429) {
+        const quotaRemaining = axiosError.response.headers['x-quota-remaining'];
+        const quotaLimit = axiosError.response.headers['x-quota-limit'];
+        
+        const apiError = new Error(message) as Error & { 
+          status?: number; 
+          detail?: string;
+          quotaInfo?: { remaining: number; limit: number };
+          response?: AxiosResponse;
+        };
+        apiError.status = 429;
+        apiError.detail = data?.detail;
+        apiError.response = axiosError.response;
+        
+        // 쿼터 정보가 있으면 포함
+        if (quotaRemaining !== undefined && quotaLimit !== undefined) {
+          apiError.quotaInfo = {
+            remaining: parseInt(quotaRemaining, 10),
+            limit: parseInt(quotaLimit, 10),
+          };
+        }
+        
+        return apiError;
+      }
+      
       // 500 오류인 경우 더 자세한 정보 표시
       if (axiosError.response.status === 500) {
-        console.error('[API] 500 Error Details:', {
+        apiLogger.error('500 Error Details:', {
           status: axiosError.response.status,
           data: data,
           detail: data?.detail,
