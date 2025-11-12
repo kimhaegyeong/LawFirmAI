@@ -77,22 +77,43 @@ function App() {
     },
     onError: (error) => {
       logger.error('Chat error:', error);
-      const streamError = classifyStreamError(error instanceof Error ? error : new Error(String(error)));
       
-      // Toast 표시
-      const toastId = `toast-${Date.now()}`;
-      setToasts((prev) => [...prev, {
-        id: toastId,
-        message: streamError.message,
-        type: 'error',
-        action: streamError.canRetry ? {
-          label: '다시 시도',
-          onClick: () => {
-            setToasts((prev) => prev.filter(t => t.id !== toastId));
-            // 재시도 로직은 필요시 구현
-          }
-        } : undefined,
-      }]);
+      let errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Axios 에러의 경우 detail 필드 확인
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as any;
+        if (axiosError.response?.data?.detail) {
+          errorMessage = axiosError.response.data.detail;
+        }
+      }
+      
+      // 로그인한 사용자에게는 익명 사용자 쿼터 메시지를 필터링
+      if (isAuthenticated && (
+        errorMessage.includes('무료 질의 3회를 모두 사용하셨습니다') ||
+        errorMessage.includes('무료로 3회 체험')
+      )) {
+        errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
+      }
+      
+      const streamError = classifyStreamError(new Error(errorMessage));
+      
+      // Toast 표시 (로그인한 사용자에게는 익명 사용자 쿼터 메시지 표시 안 함)
+      if (!isAuthenticated || !streamError.message.includes('무료 질의 3회를 모두 사용하셨습니다')) {
+        const toastId = `toast-${Date.now()}`;
+        setToasts((prev) => [...prev, {
+          id: toastId,
+          message: streamError.message,
+          type: 'error',
+          action: streamError.canRetry ? {
+            label: '다시 시도',
+            onClick: () => {
+              setToasts((prev) => prev.filter(t => t.id !== toastId));
+              // 재시도 로직은 필요시 구현
+            }
+          } : undefined,
+        }]);
+      }
     },
   });
 
@@ -129,11 +150,63 @@ function App() {
             window.history.replaceState({}, document.title, newUrl);
           })
           .catch((error) => {
-            logger.error('Failed to load session from URL parameter:', error);
+            // 429 에러 처리 - 쿼터 정보 업데이트 (익명 사용자만)
+            if (error && typeof error === 'object' && 'status' in error) {
+              const apiError = error as any;
+              if (apiError.status === 429 && !isAuthenticated) {
+                // 에러 객체에서 쿼터 정보 추출
+                if (apiError.quotaInfo) {
+                  setQuotaInfo(apiError.quotaInfo);
+                } else if (apiError.response?.headers) {
+                  // 응답 헤더에서 쿼터 정보 추출 (fallback)
+                  const quotaRemaining = apiError.response.headers['x-quota-remaining'];
+                  const quotaLimit = apiError.response.headers['x-quota-limit'];
+                  
+                  if (quotaRemaining !== undefined && quotaLimit !== undefined) {
+                    setQuotaInfo({ 
+                      remaining: parseInt(quotaRemaining, 10), 
+                      limit: parseInt(quotaLimit, 10) 
+                    });
+                  } else {
+                    // 헤더 정보가 없으면 기본값 설정
+                    setQuotaInfo({ remaining: 0, limit: 3 });
+                  }
+                } else {
+                  // 기본값 설정
+                  setQuotaInfo({ remaining: 0, limit: 3 });
+                }
+                
+                // Toast 메시지 표시
+                setToasts((prev) => [
+                  ...prev,
+                  {
+                    id: `quota-exceeded-${Date.now()}`,
+                    message: '무료 질의 3회를 모두 사용하셨습니다. 계속 사용하려면 로그인이 필요합니다.',
+                    type: 'warning',
+                    action: {
+                      label: '로그인',
+                      onClick: () => login(),
+                    },
+                  },
+                ]);
+              }
+            }
+            
+            // 404 오류는 세션이 존재하지 않는 정상적인 상황일 수 있음
+            const isNotFound = error?.status === 404 || error?.message?.includes('Session not found');
+            if (isNotFound) {
+              logger.warn(`Session not found in URL parameter: ${sessionIdParam}. The session may have been deleted or does not exist.`);
+              // URL에서 세션 ID 파라미터 제거 (존재하지 않는 세션 ID는 URL에 남겨두지 않음)
+              urlParams.delete('session_id');
+              const newUrl = window.location.pathname + (urlParams.toString() ? `?${urlParams.toString()}` : '');
+              window.history.replaceState({}, document.title, newUrl);
+            } else {
+              logger.error('Failed to load session from URL parameter:', error);
+            }
           });
       }
     }
-  }, [loadSession]);
+  }, [loadSession, isAuthenticated, login]);
 
   // 세션 변경 시 메시지 로드
   useEffect(() => {
@@ -561,13 +634,33 @@ function App() {
               }
               
               // message_id로 메시지 찾기
-              const targetMessageId = sourcesMessageId || assistantMessageId;
-              
+              // sourcesMessageId가 있으면 그것을 우선 사용, 없으면 assistantMessageId 사용
+              // 메시지를 찾을 때는 여러 조건을 확인: id, metadata.message_id, 또는 가장 최근 assistant 메시지
               setMessages((prev) => {
-                const messageIndex = prev.findIndex((msg) => 
-                  msg.id === targetMessageId || 
-                  msg.metadata?.message_id === sourcesMessageId
-                );
+                let messageIndex = -1;
+                
+                if (sourcesMessageId) {
+                  // sourcesMessageId로 먼저 찾기
+                  messageIndex = prev.findIndex((msg) => 
+                    msg.id === sourcesMessageId || 
+                    msg.metadata?.message_id === sourcesMessageId
+                  );
+                }
+                
+                // 찾지 못했으면 assistantMessageId로 찾기
+                if (messageIndex === -1) {
+                  messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                }
+                
+                // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
+                if (messageIndex === -1) {
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    if (prev[i]?.role === 'assistant') {
+                      messageIndex = i;
+                      break;
+                    }
+                  }
+                }
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -617,14 +710,34 @@ function App() {
                 });
               }
               
-              // message_id로 메시지 찾기 (assistantMessageId 또는 sourcesMessageId 사용)
-              const targetMessageId = sourcesMessageId || assistantMessageId;
-              
+              // message_id로 메시지 찾기
+              // sourcesMessageId가 있으면 그것을 우선 사용, 없으면 assistantMessageId 사용
+              // 메시지를 찾을 때는 여러 조건을 확인: id, metadata.message_id, 또는 가장 최근 assistant 메시지
               setMessages((prev) => {
-                const messageIndex = prev.findIndex((msg) => 
-                  msg.id === targetMessageId || 
-                  msg.metadata?.message_id === sourcesMessageId
-                );
+                let messageIndex = -1;
+                
+                if (sourcesMessageId) {
+                  // sourcesMessageId로 먼저 찾기
+                  messageIndex = prev.findIndex((msg) => 
+                    msg.id === sourcesMessageId || 
+                    msg.metadata?.message_id === sourcesMessageId
+                  );
+                }
+                
+                // 찾지 못했으면 assistantMessageId로 찾기
+                if (messageIndex === -1) {
+                  messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                }
+                
+                // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
+                if (messageIndex === -1) {
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    if (prev[i]?.role === 'assistant') {
+                      messageIndex = i;
+                      break;
+                    }
+                  }
+                }
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -658,7 +771,7 @@ function App() {
               });
             }
           } else if (parsed.type === 'final') {
-            // 최종 완료 처리
+            // 최종 완료 처리 - 메타데이터만 업데이트 (content는 업데이트하지 않음)
             // 남아있는 토큰 버퍼 처리 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
             const remainingTokens = tokenBufferRef.current.get(assistantMessageId) || '';
             if (remainingTokens) {
@@ -672,19 +785,17 @@ function App() {
               tokenBufferTimeoutRef.current.delete(assistantMessageId);
             }
             
-            // final 이벤트의 content가 더 길면 누락된 부분이 있을 수 있으므로 확인
-            if (parsed.content && parsed.content.length > fullContent.length) {
-              fullContent = parsed.content;
-            }
+            // final 이벤트의 content는 빈 문자열이므로 무시하고, fullContent 사용
+            // final 이벤트는 메타데이터만 업데이트하는 용도
             
             if (import.meta.env.DEV) {
-              logger.debug('[Stream] Final content received, length:', fullContent.length);
+              logger.debug('[Stream] Final event received (metadata only), content length:', fullContent.length);
               if (parsed.metadata) {
                 logger.debug('[Stream] Final metadata:', parsed.metadata);
               }
             }
             
-            // 버퍼에 최종 내용 저장
+            // 버퍼에 최종 내용 저장 (이미 누적된 fullContent 사용)
             setMessageBuffers(prev => {
               const newMap = new Map(prev);
               newMap.set(assistantMessageId, fullContent);
@@ -696,7 +807,7 @@ function App() {
             // ChatMessage에서 Markdown 렌더링 활성화
             setStreamingMessageId(null);
             
-            // 최종 메시지 업데이트 (누적된 fullContent 사용)
+            // 최종 메시지 메타데이터만 업데이트 (content는 변경하지 않음)
             // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
             // metadata에서 sources, legal_references, sources_detail, message_id, related_questions 추출
             const metadata = parsed.metadata || {};
@@ -707,10 +818,33 @@ function App() {
             const relatedQuestions = metadata.related_questions as string[] | undefined;
             
             setMessages((prev) => {
-              const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+              let messageIndex = -1;
+              
+              // messageId가 있으면 먼저 그것으로 찾기
+              if (messageId) {
+                messageIndex = prev.findIndex((msg) => 
+                  msg.id === messageId || 
+                  msg.metadata?.message_id === messageId
+                );
+              }
+              
+              // 찾지 못했으면 assistantMessageId로 찾기
+              if (messageIndex === -1) {
+                messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+              }
+              
+              // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
+              if (messageIndex === -1) {
+                for (let i = prev.length - 1; i >= 0; i--) {
+                  if (prev[i]?.role === 'assistant') {
+                    messageIndex = i;
+                    break;
+                  }
+                }
+              }
               
               if (messageIndex !== -1) {
-                // 기존 메시지 업데이트 (누적된 fullContent 사용)
+                // 기존 메시지의 메타데이터만 업데이트 (content는 변경하지 않음)
                 // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
                 const updated = [...prev];
                 // eslint-disable-next-line security/detect-object-injection
@@ -719,7 +853,7 @@ function App() {
                   // eslint-disable-next-line security/detect-object-injection
                   updated[messageIndex] = {
                     ...existingMsg,
-                    content: fullContent,  // 이미 누적된 내용 사용
+                    // content는 변경하지 않음 (이미 stream 이벤트에서 업데이트됨)
                     metadata: {
                       ...existingMsg.metadata,
                       ...metadata,
@@ -733,11 +867,11 @@ function App() {
                 }
                 return updated;
               } else {
-                // 메시지가 없으면 추가
+                // 메시지가 없으면 추가 (fallback)
                 // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
                 return [...prev, {
                   ...assistantMessage,
-                  content: fullContent,  // 이미 누적된 내용 사용
+                  content: fullContent,
                   metadata: {
                     ...metadata,
                     sources: sources,
@@ -750,13 +884,71 @@ function App() {
               }
             });
             
+          } else if (parsed.type === 'done') {
+            // done 이벤트: 서버에서 보낸 최종 답변으로 교체 (타이핑 효과 없이)
+            const finalContent = parsed.content || fullContent;
+            
+            if (import.meta.env.DEV) {
+              logger.debug('[Stream] Done event received, final content length:', finalContent.length);
+              if (parsed.metadata) {
+                logger.debug('[Stream] Done metadata:', parsed.metadata);
+              }
+            }
+            
+            // 버퍼에 최종 내용 저장
+            setMessageBuffers(prev => {
+              const newMap = new Map(prev);
+              newMap.set(assistantMessageId, finalContent);
+              return newMap;
+            });
+            
+            // 스트리밍 완료 (타이핑 효과 비활성화)
+            setStreamingMessageId(null);
+            
+            // 최종 메시지 업데이트 (서버에서 보낸 최종 답변으로 교체)
+            const metadata = parsed.metadata || {};
+            const sources = metadata.sources || [];
+            const legalReferences = metadata.legal_references || [];
+            const sourcesDetail = metadata.sources_detail || [];
+            const messageId = metadata.message_id;
+            const relatedQuestions = metadata.related_questions as string[] | undefined;
+            
+            setMessages((prev) => {
+              const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+              
+              if (messageIndex !== -1) {
+                const updated = [...prev];
+                const existingMsg = updated[messageIndex];
+                if (existingMsg) {
+                  updated[messageIndex] = {
+                    ...existingMsg,
+                    content: finalContent,  // 서버에서 보낸 최종 답변으로 교체
+                    metadata: {
+                      ...existingMsg.metadata,
+                      ...metadata,
+                      sources: Array.isArray(sources) ? sources : [],
+                      legal_references: Array.isArray(legalReferences) ? legalReferences : [],
+                      sources_detail: Array.isArray(sourcesDetail) ? sourcesDetail : [],
+                      message_id: messageId || existingMsg.metadata?.message_id,
+                      related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : existingMsg.metadata?.related_questions,
+                    },
+                  };
+                }
+                return updated;
+              } else {
+                if (import.meta.env.DEV) {
+                  logger.warn('[Stream] Done event received but message not found. It should have been added by final event.');
+                }
+                return prev;
+              }
+            });
+            
             // sources가 비어있으면 별도 API로 가져오기
             // message_id가 있으면 사용하고, 없으면 assistantMessageId 사용
             const actualMessageId = messageId || assistantMessageId;
             
-            // 디버깅: sources 확인
             if (import.meta.env.DEV) {
-              logger.debug('[App] Final event sources check:', {
+              logger.debug('[App] Done event sources check:', {
                 sessionId,
                 messageId: actualMessageId,
                 sourcesLength: sources.length,
@@ -889,8 +1081,20 @@ function App() {
     } catch (error) {
       logger.error('[Stream] Streaming error:', error);
       
-      // 429 에러 처리 - 쿼터 정보 업데이트
-      if (error instanceof Error && error.message.includes('429')) {
+      // 429 에러 처리 - 쿼터 정보 업데이트 (익명 사용자만)
+      if (error && typeof error === 'object' && 'status' in error) {
+        const apiError = error as any;
+        if (apiError.status === 429 && !isAuthenticated) {
+          // 에러 객체에서 쿼터 정보 추출
+          if (apiError.quotaInfo) {
+            setQuotaInfo(apiError.quotaInfo);
+          } else {
+            // 기본값 설정
+            setQuotaInfo({ remaining: 0, limit: 3 });
+          }
+        }
+      } else if (error instanceof Error && error.message.includes('429') && !isAuthenticated) {
+        // fallback: 메시지에 429가 포함된 경우
         setQuotaInfo({ remaining: 0, limit: 3 });
       }
       
@@ -910,8 +1114,26 @@ function App() {
       // 에러 발생 시 현재 진행 상황만 초기화 (히스토리는 유지)
       setCurrentProgress(null);
       
+      let errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Axios 에러의 경우 detail 필드 확인
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as any;
+        if (axiosError.response?.data?.detail) {
+          errorMessage = axiosError.response.data.detail;
+        }
+      }
+      
+      // 로그인한 사용자에게는 익명 사용자 쿼터 메시지를 필터링
+      if (isAuthenticated && (
+        errorMessage.includes('무료 질의 3회를 모두 사용하셨습니다') ||
+        errorMessage.includes('무료로 3회 체험')
+      )) {
+        errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
+      }
+      
       const streamError = classifyStreamError(
-        error instanceof Error ? error : new Error(String(error))
+        new Error(errorMessage)
       );
       
       // 에러 발생 시 메시지 업데이트 (내용이 있거나 에러 메시지가 있는 경우에만)
@@ -952,31 +1174,33 @@ function App() {
         return newMap;
       });
       
-      // Toast 표시
-      const toastId = `toast-${Date.now()}`;
-      setToasts((prev) => [...prev, {
-        id: toastId,
-        message: streamError.message,
-        type: 'error',
-        action: streamError.canRetry ? {
-          label: '다시 시도',
-          onClick: () => {
-            // 재시도 로직
-            setStreamErrors((prev) => {
-              const newMap = new Map(prev);
-              const error = newMap.get(assistantMessageId);
-              if (error) {
-                error.retryCount = (error.retryCount || 0) + 1;
-                newMap.set(assistantMessageId, error);
-              }
-              return newMap;
-            });
-            // 메시지 재전송
-            handleStreamingMessage(message, sessionId, attachments, undefined, undefined, undefined, true);
-            setToasts((prev) => prev.filter(t => t.id !== toastId));
-          }
-        } : undefined,
-      }]);
+      // Toast 표시 (로그인한 사용자에게는 익명 사용자 쿼터 메시지 표시 안 함)
+      if (!isAuthenticated || !streamError.message.includes('무료 질의 3회를 모두 사용하셨습니다')) {
+        const toastId = `toast-${Date.now()}`;
+        setToasts((prev) => [...prev, {
+          id: toastId,
+          message: streamError.message,
+          type: 'error',
+          action: streamError.canRetry ? {
+            label: '다시 시도',
+            onClick: () => {
+              // 재시도 로직
+              setStreamErrors((prev) => {
+                const newMap = new Map(prev);
+                const error = newMap.get(assistantMessageId);
+                if (error) {
+                  error.retryCount = (error.retryCount || 0) + 1;
+                  newMap.set(assistantMessageId, error);
+                }
+                return newMap;
+              });
+              // 메시지 재전송
+              handleStreamingMessage(message, sessionId, attachments, undefined, undefined, undefined, true);
+              setToasts((prev) => prev.filter(t => t.id !== toastId));
+            }
+          } : undefined,
+        }]);
+      }
     }
   };
 
@@ -1103,6 +1327,14 @@ function App() {
   // locationKey가 변경되면 이 컴포넌트가 리렌더링되어 URL 파라미터를 다시 확인
   const _ = locationKey; // locationKey를 사용하여 리렌더링 보장
   
+  // 이미 로그인되어 있고 OAuth 콜백이 아닌 경우 메인 화면으로 리다이렉트
+  if (isAuthenticated && !hasOAuthCallback && !hasOAuthError && currentPath === '/login') {
+    logger.info('App: Already authenticated, redirecting to main screen');
+    window.history.replaceState({}, document.title, '/');
+    setLocationKey(prev => prev + 1);
+    return null;
+  }
+  
   if (hasOAuthCallback || hasOAuthError || currentPath === '/login') {
     logger.info('App: Showing LoginPage, hasOAuthCallback:', hasOAuthCallback, 'hasOAuthError:', hasOAuthError, 'currentPath:', currentPath);
     return <LoginPage />;
@@ -1146,7 +1378,7 @@ function App() {
         {/* 콘텐츠 영역 - 스크롤 가능 */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {messages.length === 0 && !isSending && !currentSession ? (
-            <WelcomeScreen onQuestionClick={handleQuestionClick} isAuthenticated={isAuthenticated} />
+            <WelcomeScreen onQuestionClick={handleQuestionClick} isAuthenticated={isAuthenticated} quotaInfo={quotaInfo} onLoginClick={login} />
           ) : (
             <ChatHistory
               messages={messages}

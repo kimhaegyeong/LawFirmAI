@@ -1,11 +1,12 @@
 /**
  * 채팅 히스토리 컴포넌트
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChatMessage } from './ChatMessage';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
 import type { StreamError } from '../../types/error';
+import { ChevronDown } from 'lucide-react';
 
 interface ChatHistoryProps {
   messages: ChatMessageType[];
@@ -36,21 +37,75 @@ export function ChatHistory({
 }: ChatHistoryProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const autoScrollEnabledRef = useRef(true);
+
+  const checkIfNearBottom = (container: HTMLElement): boolean => {
+    const threshold = 100;
+    const scrollTop = container.scrollTop;
+    const scrollHeight = container.scrollHeight;
+    const clientHeight = container.clientHeight;
+    return scrollHeight - scrollTop - clientHeight < threshold;
+  };
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    const container = containerRef.current?.closest('.overflow-y-auto');
+    if (container && container instanceof HTMLElement) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior
+      });
+      autoScrollEnabledRef.current = true;
+      setShowScrollToBottom(false);
+    } else if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
+    }
+  };
 
   useEffect(() => {
-    // 새 메시지가 추가되거나 업데이트될 때 스크롤 (스트리밍 중에도 실시간 스크롤)
+    const container = containerRef.current?.closest('.overflow-y-auto');
+    if (!container || !(container instanceof HTMLElement)) return;
+
+    const handleScroll = () => {
+      const isNearBottom = checkIfNearBottom(container);
+      
+      if (isNearBottom) {
+        setShowScrollToBottom(false);
+        autoScrollEnabledRef.current = true;
+      } else {
+        setShowScrollToBottom(true);
+        autoScrollEnabledRef.current = false;
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  useEffect(() => {
     if (messagesEndRef.current && containerRef.current) {
       const container = containerRef.current.closest('.overflow-y-auto');
-      if (container) {
-        // 스트리밍 중에는 즉시 스크롤 (smooth 없이)
-        // 마지막 메시지가 progress이거나 isLoading이면 스트리밍 중으로 간주
+      if (container && container instanceof HTMLElement) {
         const lastMessage = messages[messages.length - 1];
         const isStreaming = isLoading || lastMessage?.role === 'progress' || currentProgress !== null;
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: isStreaming ? 'auto' : 'smooth'
-        });
-      } else {
+        
+        if (isStreaming) {
+          const isNearBottom = checkIfNearBottom(container);
+          if (isNearBottom) {
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: 'auto'
+            });
+          }
+        } else {
+          if (autoScrollEnabledRef.current) {
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: 'smooth'
+            });
+          }
+        }
+      } else if (messagesEndRef.current) {
         messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
       }
     }
@@ -61,19 +116,14 @@ export function ChatHistory({
   }
 
   return (
-    <div ref={containerRef} className="h-full bg-gradient-to-b from-slate-50 to-white">
+    <div ref={containerRef} className="h-full bg-gradient-to-b from-slate-50 to-white relative">
       <div className="max-w-4xl mx-auto px-6 py-8">
         <div className="space-y-4">
           {messages.map((message) => {
-            // 특정 메시지가 스트리밍 중이면 isStreaming prop 전달
-            // streamingMessageId가 null이 아니고 메시지 ID와 일치하면 스트리밍 중
-            // streamingMessageId가 null이면 스트리밍 완료로 간주하여 isStreaming: false
-            // 이렇게 하면 ChatMessage에서 Markdown 렌더링이 활성화됨
             const isStreaming = message.role === 'assistant' && 
               streamingMessageId !== null &&
               message.id === streamingMessageId;
             
-            // 에러 상태 확인
             const error = streamErrors.get(message.id);
             
             return (
@@ -103,6 +153,16 @@ export function ChatHistory({
           <div ref={messagesEndRef} />
         </div>
       </div>
+
+      {showScrollToBottom && (
+        <button
+          onClick={() => scrollToBottom('smooth')}
+          className="fixed bottom-24 right-8 z-50 bg-white border border-slate-300 rounded-full p-3 shadow-lg hover:bg-slate-50 transition-all duration-200 flex items-center justify-center group"
+          aria-label="맨 아래로 스크롤"
+        >
+          <ChevronDown className="w-5 h-5 text-slate-600 group-hover:text-slate-900" />
+        </button>
+      )}
     </div>
   );
 }
