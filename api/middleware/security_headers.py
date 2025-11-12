@@ -1,6 +1,7 @@
 """
 보안 헤더 미들웨어
 """
+import os
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
@@ -12,12 +13,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         from api.config import api_config
         
         # 프로덕션 환경에서 HTTPS 강제 (localhost 제외)
-        if not api_config.debug:
-            # localhost나 127.0.0.1은 HTTPS 강제하지 않음
+        # 환경 변수 FORCE_HTTPS로 강제 설정 가능
+        force_https = os.getenv("FORCE_HTTPS", "").lower() in ("true", "1", "yes")
+        
+        if not api_config.debug or force_https:
+            # localhost나 127.0.0.1은 HTTPS 강제하지 않음 (개발 환경)
             host = request.url.hostname
             is_localhost = host in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
             
-            if not is_localhost and request.url.scheme == "http":
+            # X-Forwarded-Proto 헤더 확인 (프록시 뒤에서 실행 중인 경우)
+            forwarded_proto = request.headers.get("X-Forwarded-Proto", "").lower()
+            is_https = request.url.scheme == "https" or forwarded_proto == "https"
+            
+            if not is_localhost and not is_https:
                 https_url = request.url.replace(scheme="https")
                 return RedirectResponse(url=str(https_url), status_code=301)
         
@@ -41,9 +49,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         for header, value in cors_headers.items():
             response.headers[header] = value
         
-        # 프로덕션 환경에서만 HSTS 추가
-        if not api_config.debug:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # 프로덕션 환경에서만 HSTS 추가 (HTTPS 사용 시)
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").lower()
+        is_https = request.url.scheme == "https" or forwarded_proto == "https"
+        
+        if (not api_config.debug or force_https) and is_https:
+            # HSTS 헤더: 1년간 HTTPS 강제, 서브도메인 포함, preload 허용
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
         
         # Content Security Policy (필요에 따라 조정)
         host = request.url.hostname
