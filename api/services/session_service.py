@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 
 
+def get_kst_now() -> datetime:
+    """KST 기준 현재 시간 반환"""
+    return datetime.now(KST)
+
+
 class SessionService:
     """세션 관리 서비스"""
     
@@ -37,26 +42,42 @@ class SessionService:
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     title TEXT,
-                    category TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     message_count INTEGER DEFAULT 0,
                     user_id TEXT,
-                    ip_address TEXT,
-                    metadata TEXT
+                    ip_address TEXT
                 )
             """)
             
             # 기존 테이블에 컬럼 추가 (마이그레이션)
-            try:
-                cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
-            except sqlite3.OperationalError:
-                pass  # 컬럼이 이미 존재하는 경우
+            cursor.execute("PRAGMA table_info(sessions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
             
-            try:
-                cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
-            except sqlite3.OperationalError:
-                pass  # 컬럼이 이미 존재하는 경우
+            if "user_id" not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+                    logger.info("Added user_id column to sessions table")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to add user_id column: {e}")
+            
+            if "ip_address" not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
+                    logger.info("Added ip_address column to sessions table")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to add ip_address column: {e}")
+            
+            if "metadata" in existing_columns:
+                try:
+                    sqlite_version = sqlite3.sqlite_version_info
+                    if sqlite_version >= (3, 35, 0):
+                        cursor.execute("ALTER TABLE sessions DROP COLUMN metadata")
+                        logger.info("Removed metadata column from sessions table")
+                    else:
+                        logger.info("SQLite version < 3.35.0, metadata column will be ignored (not removed)")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to remove metadata column: {e}")
             
             # 메시지 테이블 생성
             cursor.execute("""
@@ -103,10 +124,45 @@ class SessionService:
         except Exception as e:
             logger.warning(f"Failed to set database permissions: {e}")
     
+    def _ensure_columns_exist(self, conn: sqlite3.Connection):
+        """필요한 컬럼이 존재하는지 확인하고 없으면 추가"""
+        try:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(sessions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            if "user_id" not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+                    logger.info("Added user_id column to sessions table")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to add user_id column: {e}")
+            
+            if "ip_address" not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE sessions ADD COLUMN ip_address TEXT")
+                    logger.info("Added ip_address column to sessions table")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to add ip_address column: {e}")
+            
+            if "category" in existing_columns:
+                try:
+                    sqlite_version = sqlite3.sqlite_version_info
+                    if sqlite_version >= (3, 35, 0):
+                        cursor.execute("ALTER TABLE sessions DROP COLUMN category")
+                        logger.info("Removed category column from sessions table")
+                    else:
+                        logger.info("SQLite version < 3.35.0, category column will be ignored (not removed)")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Failed to remove category column: {e}")
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to ensure columns exist: {e}")
+    
     def create_session(
         self,
         title: Optional[str] = None,
-        category: Optional[str] = None,
         user_id: Optional[str] = None,
         ip_address: Optional[str] = None
     ) -> str:
@@ -115,12 +171,13 @@ class SessionService:
         
         try:
             conn = sqlite3.connect(self.db_path)
+            self._ensure_columns_exist(conn)
             cursor = conn.cursor()
             
             cursor.execute("""
-                INSERT INTO sessions (session_id, title, category, created_at, updated_at, user_id, ip_address)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (session_id, title, category, datetime.now(), datetime.now(), user_id, ip_address))
+                INSERT INTO sessions (session_id, title, created_at, updated_at, user_id, ip_address)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (session_id, title, get_kst_now(), get_kst_now(), user_id, ip_address))
             
             conn.commit()
             conn.close()
@@ -151,19 +208,6 @@ class SessionService:
                 if isinstance(session_dict.get("updated_at"), datetime):
                     session_dict["updated_at"] = session_dict["updated_at"].isoformat()
                 
-                # metadata가 JSON 문자열인 경우 파싱
-                if session_dict.get("metadata"):
-                    if isinstance(session_dict["metadata"], str):
-                        try:
-                            import json
-                            session_dict["metadata"] = json.loads(session_dict["metadata"])
-                        except (json.JSONDecodeError, TypeError):
-                            session_dict["metadata"] = {}
-                    elif not isinstance(session_dict["metadata"], dict):
-                        session_dict["metadata"] = {}
-                else:
-                    session_dict["metadata"] = {}
-                
                 # 세션 만료 시간 확인
                 if check_expiry:
                     updated_at = session_dict.get("updated_at")
@@ -173,7 +217,7 @@ class SessionService:
                         if isinstance(updated_at, datetime):
                             expiry_hours = api_config.session_ttl_hours
                             expiry_time = updated_at + timedelta(hours=expiry_hours)
-                            if datetime.now() > expiry_time:
+                            if get_kst_now() > expiry_time:
                                 logger.warning(f"Session expired: {session_id}")
                                 conn.close()
                                 return None
@@ -190,8 +234,7 @@ class SessionService:
     def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        category: Optional[str] = None
+        title: Optional[str] = None
     ) -> bool:
         """세션 업데이트"""
         try:
@@ -205,16 +248,12 @@ class SessionService:
                 updates.append("title = ?")
                 params.append(title)
             
-            if category is not None:
-                updates.append("category = ?")
-                params.append(category)
-            
             if not updates:
                 conn.close()
                 return False
             
             updates.append("updated_at = ?")
-            params.append(datetime.now())
+            params.append(get_kst_now())
             params.append(session_id)
             
             query = "UPDATE sessions SET " + ", ".join(updates) + " WHERE session_id = ?"
@@ -237,16 +276,19 @@ class SessionService:
             
             # 세션 소유자 확인
             if user_id:
-                cursor.execute("""
-                    SELECT user_id FROM sessions WHERE session_id = ?
-                """, (session_id,))
-                row = cursor.fetchone()
-                if row:
-                    session_user_id = row["user_id"]
-                    if session_user_id and session_user_id != user_id:
-                        conn.close()
-                        logger.warning(f"Session ownership mismatch: {session_id}, user: {user_id}")
-                        return False
+                cursor.execute("PRAGMA table_info(sessions)")
+                existing_columns = [row[1] for row in cursor.fetchall()]
+                if "user_id" in existing_columns:
+                    cursor.execute("""
+                        SELECT user_id FROM sessions WHERE session_id = ?
+                    """, (session_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        session_user_id = row["user_id"]
+                        if session_user_id and session_user_id != user_id:
+                            conn.close()
+                            logger.warning(f"Session ownership mismatch: {session_id}, user: {user_id}")
+                            return False
             
             # 메시지도 함께 삭제
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
@@ -266,28 +308,38 @@ class SessionService:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 사용자의 모든 세션 ID 조회
-            cursor.execute("""
-                SELECT session_id FROM sessions WHERE user_id = ?
-            """, (user_id,))
-            session_rows = cursor.fetchall()
-            session_ids = [row[0] for row in session_rows]
+            # 컬럼 존재 여부 확인
+            cursor.execute("PRAGMA table_info(sessions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            has_user_id = "user_id" in existing_columns
             
-            if not session_ids:
+            if has_user_id:
+                # 사용자의 모든 세션 ID 조회
+                cursor.execute("""
+                    SELECT session_id FROM sessions WHERE user_id = ?
+                """, (user_id,))
+                session_rows = cursor.fetchall()
+                session_ids = [row[0] for row in session_rows]
+                
+                if not session_ids:
+                    conn.close()
+                    logger.info(f"No sessions found for user: {user_id}")
+                    return 0
+                
+                # 모든 메시지 삭제
+                placeholders = ','.join(['?'] * len(session_ids))
+                cursor.execute(f"""
+                    DELETE FROM messages WHERE session_id IN ({placeholders})
+                """, session_ids)
+                
+                # 모든 세션 삭제
+                cursor.execute("""
+                    DELETE FROM sessions WHERE user_id = ?
+                """, (user_id,))
+            else:
                 conn.close()
-                logger.info(f"No sessions found for user: {user_id}")
+                logger.warning("user_id column does not exist, cannot delete user sessions")
                 return 0
-            
-            # 모든 메시지 삭제
-            placeholders = ','.join(['?'] * len(session_ids))
-            cursor.execute(f"""
-                DELETE FROM messages WHERE session_id IN ({placeholders})
-            """, session_ids)
-            
-            # 모든 세션 삭제
-            cursor.execute("""
-                DELETE FROM sessions WHERE user_id = ?
-            """, (user_id,))
             
             deleted_count = len(session_ids)
             
@@ -301,7 +353,6 @@ class SessionService:
     
     def list_sessions(
         self,
-        category: Optional[str] = None,
         search: Optional[str] = None,
         page: int = 1,
         page_size: int = 10,
@@ -318,6 +369,12 @@ class SessionService:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
+            # 컬럼 존재 여부 확인
+            cursor.execute("PRAGMA table_info(sessions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            has_user_id = "user_id" in existing_columns
+            has_ip_address = "ip_address" in existing_columns
+            
             # WHERE 절 구성
             where_clauses = []
             params = []
@@ -326,18 +383,23 @@ class SessionService:
             if user_id:
                 # 익명 세션 ID는 anonymous_ prefix를 사용하므로 별도 처리
                 if user_id.startswith("anonymous_"):
-                    where_clauses.append("user_id = ?")
-                    params.append(user_id)
+                    if has_user_id:
+                        where_clauses.append("user_id = ?")
+                        params.append(user_id)
                 else:
-                    where_clauses.append("user_id = ? AND (ip_address IS NULL OR ip_address = '')")
-                    params.append(user_id)
+                    if has_user_id:
+                        if has_ip_address:
+                            where_clauses.append("user_id = ? AND (ip_address IS NULL OR ip_address = '')")
+                        else:
+                            where_clauses.append("user_id = ?")
+                        params.append(user_id)
             elif ip_address:
-                where_clauses.append("ip_address = ? AND (user_id IS NULL OR user_id = '')")
-                params.append(ip_address)
-            
-            if category:
-                where_clauses.append("category = ?")
-                params.append(category)
+                if has_ip_address:
+                    if has_user_id:
+                        where_clauses.append("ip_address = ? AND (user_id IS NULL OR user_id = '')")
+                    else:
+                        where_clauses.append("ip_address = ?")
+                    params.append(ip_address)
             
             if search:
                 where_clauses.append("(title LIKE ? OR session_id LIKE ?)")
@@ -345,20 +407,14 @@ class SessionService:
                 params.append(f"%{search}%")
             
             # 날짜 필터 추가 (KST 기준)
-            # SQLite에서 타임스탬프를 KST로 변환하여 날짜 비교
-            # datetime.now()로 저장된 값은 서버 로컬 시간대를 사용하므로,
-            # KST 기준으로 비교하려면 타임스탬프를 KST로 변환한 후 날짜를 추출해야 함
-            # datetime(updated_at, '+9 hours')를 사용하여 타임스탬프에 9시간을 더한 후 날짜 추출
+            # 데이터는 이미 KST로 저장되므로 DATE() 함수만 사용
             if date_from:
                 try:
                     # 날짜 형식 검증
                     datetime.strptime(date_from, "%Y-%m-%d")
-                    # SQLite에서 타임스탬프를 KST로 변환한 후 날짜 비교
-                    # datetime(updated_at, '+9 hours')는 타임스탬프에 9시간을 더하여 KST로 변환
-                    where_clauses.append("DATE(datetime(updated_at, '+9 hours')) >= ?")
+                    where_clauses.append("DATE(updated_at) >= ?")
                     params.append(date_from)
                 except ValueError:
-                    # 날짜 형식이 잘못된 경우 기존 방식 사용
                     logger.warning(f"Invalid date_from format: {date_from}, using DATE() function")
                     where_clauses.append("DATE(updated_at) >= ?")
                     params.append(date_from)
@@ -367,11 +423,9 @@ class SessionService:
                 try:
                     # 날짜 형식 검증
                     datetime.strptime(date_to, "%Y-%m-%d")
-                    # SQLite에서 타임스탬프를 KST로 변환한 후 날짜 비교
-                    where_clauses.append("DATE(datetime(updated_at, '+9 hours')) <= ?")
+                    where_clauses.append("DATE(updated_at) <= ?")
                     params.append(date_to)
                 except ValueError:
-                    # 날짜 형식이 잘못된 경우 기존 방식 사용
                     logger.warning(f"Invalid date_to format: {date_to}, using DATE() function")
                     where_clauses.append("DATE(updated_at) <= ?")
                     params.append(date_to)
@@ -409,19 +463,6 @@ class SessionService:
                 if isinstance(session_dict.get("updated_at"), datetime):
                     session_dict["updated_at"] = session_dict["updated_at"].isoformat()
                 
-                # metadata가 JSON 문자열인 경우 파싱
-                if session_dict.get("metadata"):
-                    if isinstance(session_dict["metadata"], str):
-                        try:
-                            import json
-                            session_dict["metadata"] = json.loads(session_dict["metadata"])
-                        except (json.JSONDecodeError, TypeError):
-                            session_dict["metadata"] = {}
-                    elif not isinstance(session_dict["metadata"], dict):
-                        session_dict["metadata"] = {}
-                else:
-                    session_dict["metadata"] = {}
-                
                 sessions.append(session_dict)
             
             return sessions, total
@@ -451,14 +492,14 @@ class SessionService:
             cursor.execute("""
                 INSERT INTO messages (message_id, session_id, role, content, timestamp, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (message_id, session_id, role, content, datetime.now(), metadata_str))
+            """, (message_id, session_id, role, content, get_kst_now(), metadata_str))
             
             # 메시지 개수 업데이트
             cursor.execute("""
                 UPDATE sessions 
                 SET message_count = message_count + 1, updated_at = ?
                 WHERE session_id = ?
-            """, (datetime.now(), session_id))
+            """, (get_kst_now(), session_id))
             
             conn.commit()
             conn.close()
@@ -600,10 +641,18 @@ class SessionService:
                 sys.path.insert(0, str(lawfirm_langgraph_path))
             
             try:
-                from core.services.gemini_client import GeminiClient
+                from core.shared.clients.gemini_client import GeminiClient
                 gemini_client = GeminiClient()
+            except ImportError:
+                try:
+                    from core.services.gemini_client import GeminiClient
+                    gemini_client = GeminiClient()
+                except Exception as e:
+                    logger.error(f"Failed to initialize Gemini client: {e}")
+                    gemini_client = None
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
+                gemini_client = None
                 # 대체: 첫 질문의 일부를 제목으로 사용
                 fallback_title = user_message[:20] + "..." if len(user_message) > 20 else user_message
                 self.update_session(session_id, title=fallback_title)

@@ -13,13 +13,11 @@ class Session(Base):
     
     session_id = Column(String(255), primary_key=True)
     title = Column(Text)
-    category = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     message_count = Column(Integer, default=0)
     user_id = Column(String(255))
     ip_address = Column(String(45))
-    metadata = Column(JSON)
     
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
     
@@ -28,13 +26,11 @@ class Session(Base):
         return {
             "session_id": self.session_id,
             "title": self.title,
-            "category": self.category,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "message_count": self.message_count,
             "user_id": self.user_id,
             "ip_address": self.ip_address,
-            "metadata": self.metadata,
         }
 
 

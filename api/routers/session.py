@@ -38,7 +38,6 @@ def get_kst_date() -> datetime.date:
 async def list_sessions(
     request: Request,
     current_user: dict = Depends(require_auth),
-    category: Optional[str] = Query(None, description="카테고리 필터"),
     search: Optional[str] = Query(None, description="검색어"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=1000, description="페이지 크기"),
@@ -73,7 +72,6 @@ async def list_sessions(
                 ip_address = client_ip
         
         sessions, total = session_service.list_sessions(
-            category=category,
             search=search,
             page=page,
             page_size=page_size,
@@ -262,7 +260,6 @@ async def create_session(
         
         session_id = session_service.create_session(
             title=session.title,
-            category=session.category,
             user_id=user_id,
             ip_address=client_ip if not user_id else None
         )
@@ -302,8 +299,10 @@ async def get_session(
 ):
     """세션 상세 조회"""
     try:
+        logger.debug(f"get_session called with session_id: {session_id}")
         session = session_service.get_session(session_id)
         if not session:
+            logger.warning(f"Session not found: {session_id}")
             raise HTTPException(status_code=404, detail="Session not found")
         
         # 소유자 확인
@@ -398,9 +397,7 @@ async def update_session(
         
         success = session_service.update_session(
             session_id=session_id,
-            title=session.title,
-            category=session.category,
-            user_id=user_id
+            title=session.title
         )
         
         if not success:
