@@ -48,12 +48,29 @@ export async function* sendStreamingChatMessage(
       ? `${api.defaults.baseURL}/chat/stream`
       : '/api/v1/chat/stream';
     
+    // Authorization 헤더 추가 (로그인한 사용자의 경우)
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    };
+    
+    // 토큰이 있으면 Authorization 헤더에 추가
+    const { getAccessToken } = await import('./authService');
+    const token = getAccessToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Token included in streaming request');
+      }
+    } else {
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] No token found, using anonymous session');
+      }
+    }
+    
     const response = await fetch(streamUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
+      headers,
       body: JSON.stringify(request),
       signal: abortController.signal,
     });
@@ -185,11 +202,12 @@ export async function* sendStreamingChatMessage(
                 if (content.trim() !== '') {
                   try {
                     const parsed = JSON.parse(content);
-                    // "done" 이벤트는 yield하지 않음
+                    // "done" 이벤트는 최종 답변을 포함하므로 yield
                     if (parsed.type === 'done') {
                       if (import.meta.env.DEV) {
-                        logger.debug('[SSE] Stream completion event (done) found in final buffer');
+                        logger.debug('[SSE] Done event found in final buffer, yielding for final answer replacement');
                       }
+                      yield content;
                       continue;
                     }
                   } catch (e) {
@@ -208,11 +226,12 @@ export async function* sendStreamingChatMessage(
           if (jsonBuffer.trim()) {
             try {
               const parsed = JSON.parse(jsonBuffer);
-              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않음
+              // "done" 이벤트는 최종 답변을 포함하므로 yield
               if (parsed.type === 'done') {
                 if (import.meta.env.DEV) {
-                  logger.debug('[SSE] Stream completion event (done) found in final buffer');
+                  logger.debug('[SSE] Done event found in final buffer, yielding for final answer replacement');
                 }
+                yield jsonBuffer;
               } else {
                 yield jsonBuffer;
               }
@@ -284,11 +303,12 @@ export async function* sendStreamingChatMessage(
               if (import.meta.env.DEV) {
                 logger.debug('[SSE] Complete JSON received:', parsed.type);
               }
-              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+              // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
               if (parsed.type === 'done') {
+                yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
                 streamCompleted = true;
                 if (import.meta.env.DEV) {
-                  logger.debug('[SSE] Stream completion event received (done), closing stream');
+                  logger.debug('[SSE] Done event received with final answer, closing stream');
                 }
                 jsonBuffer = '';
                 inDataLine = false;
@@ -323,11 +343,12 @@ export async function* sendStreamingChatMessage(
                 if (import.meta.env.DEV) {
                   logger.debug('[SSE] Complete JSON from buffer:', parsed.type);
                 }
-                // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+                // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
                 if (parsed.type === 'done') {
+                  yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
                   streamCompleted = true;
                   if (import.meta.env.DEV) {
-                    logger.debug('[SSE] Stream completion event received (done) from buffer, closing stream');
+                    logger.debug('[SSE] Done event received with final answer from buffer, closing stream');
                   }
                   jsonBuffer = '';
                   inDataLine = false;
@@ -371,11 +392,12 @@ export async function* sendStreamingChatMessage(
               if (import.meta.env.DEV) {
                 logger.debug('[SSE] Complete multi-line JSON received:', parsed.type);
               }
-              // "done" 이벤트는 스트림 종료 신호이므로 yield하지 않고 정상 종료
+              // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
               if (parsed.type === 'done') {
+                yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
                 streamCompleted = true;
                 if (import.meta.env.DEV) {
-                  logger.debug('[SSE] Stream completion event received (done) from multi-line, closing stream');
+                  logger.debug('[SSE] Done event received with final answer from multi-line, closing stream');
                 }
                 jsonBuffer = '';
                 inDataLine = false;

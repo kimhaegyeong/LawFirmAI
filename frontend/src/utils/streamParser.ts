@@ -4,7 +4,7 @@
  */
 
 export interface ParsedChunk {
-  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota' | 'sources' | 'validation' | 'validation_start' | 'regeneration_start';
+  type: 'progress' | 'stream' | 'final' | 'chunk' | 'quota' | 'sources' | 'validation' | 'validation_start' | 'regeneration_start' | 'done';
   content: string;
   metadata?: {
     step?: number;
@@ -44,7 +44,7 @@ export function parseStreamChunk(chunk: string): ParsedChunk {
   // JSONL 형식 파싱 시도
   try {
     const parsed = JSON.parse(trimmed);
-    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start'].includes(parsed.type)) {
+    if (parsed.type && ['progress', 'stream', 'final', 'chunk', 'quota', 'sources', 'validation', 'validation_start', 'regeneration_start', 'done'].includes(parsed.type)) {
       // sources 이벤트의 경우 metadata를 그대로 보존
       if (parsed.type === 'sources') {
         return {
