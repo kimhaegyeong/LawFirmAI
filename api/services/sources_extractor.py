@@ -649,6 +649,13 @@ class SourcesExtractor:
         )
         if llm_questions:
             logger.info(f"[sources_extractor] Generated {len(llm_questions)} related_questions using direct LLM call")
+            # state_values의 metadata에 저장
+            if isinstance(state_values, dict):
+                if "metadata" not in state_values:
+                    state_values["metadata"] = {}
+                if isinstance(state_values["metadata"], dict):
+                    state_values["metadata"]["related_questions"] = llm_questions
+                    logger.info(f"[sources_extractor] Saved {len(llm_questions)} related_questions to state metadata")
             return llm_questions
         
         if self.workflow_service and hasattr(self.workflow_service, 'conversation_flow_tracker') and self.workflow_service.conversation_flow_tracker:
