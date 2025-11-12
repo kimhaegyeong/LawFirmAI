@@ -13,6 +13,10 @@ import {
 import logger from '../utils/logger';
 import type { UserInfo } from '../types/auth';
 
+// 모듈 레벨에서 전역 호출 추적 (React StrictMode 대응)
+let globalLoadingPromise: Promise<UserInfo | null> | null = null;
+let globalHasLoaded = false;
+
 export function useAuth() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -21,13 +25,39 @@ export function useAuth() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const isInitialMount = useRef(true);
+  const isInitialMountComplete = useRef(false); // 초기 마운트 완료 여부 추적
   const isLoadingUser = useRef(false);
   const isHandlingCallback = useRef(false);
+  const hasLoadedUser = useRef(false); // 사용자 정보가 이미 로드되었는지 추적
+  const userRef = useRef<UserInfo | null>(null); // 최신 user 상태 추적
+  const isAuthenticatedRef = useRef<boolean>(false); // 최신 isAuthenticated 상태 추적
+
+  // user와 isAuthenticated 상태 변경 시 ref 업데이트
+  useEffect(() => {
+    userRef.current = user;
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [user, isAuthenticated]);
 
   /**
    * 사용자 정보 조회
    */
   const loadUser = useCallback(async () => {
+    // 전역 로딩 중이면 기존 Promise 반환
+    if (globalLoadingPromise) {
+      logger.debug('loadUser: Global loading in progress, waiting for existing call');
+      try {
+        const userInfo = await globalLoadingPromise;
+        if (userInfo) {
+          setUser(userInfo);
+          setIsAuthenticated(userInfo.authenticated);
+          hasLoadedUser.current = true;
+        }
+      } catch (err) {
+        logger.error('loadUser: Error from global loading promise:', err);
+      }
+      return;
+    }
+
     if (isLoadingUser.current) {
       logger.debug('loadUser: Already loading, skipping duplicate call');
       return;
@@ -39,10 +69,17 @@ export function useAuth() {
       return;
     }
 
+    // 사용자 정보가 이미 로드되었고 인증 상태가 유지되면 다시 호출하지 않음
+    if (globalHasLoaded && hasLoadedUser.current && userRef.current && isAuthenticatedRef.current) {
+      logger.debug('loadUser: User already loaded globally, skipping duplicate call');
+      return;
+    }
+
     if (!checkAuthenticated()) {
       setIsLoading(false);
       setIsAuthenticated(false);
       setUser(null);
+      hasLoadedUser.current = false;
       return;
     }
 
@@ -50,15 +87,32 @@ export function useAuth() {
     setIsLoading(true);
     setError(null);
 
+    // 전역 Promise 생성
+    globalLoadingPromise = (async () => {
+      try {
+        const userInfo = await getCurrentUser();
+        globalHasLoaded = true;
+        return userInfo;
+      } catch (err) {
+        globalHasLoaded = false;
+        throw err;
+      } finally {
+        globalLoadingPromise = null;
+      }
+    })();
+
     try {
-      const userInfo = await getCurrentUser();
+      const userInfo = await globalLoadingPromise;
       setUser(userInfo);
       setIsAuthenticated(userInfo.authenticated);
+      hasLoadedUser.current = true;
       
       // handleCallback이 실행 중이면 토큰을 삭제하지 않음
       if (!userInfo.authenticated && !isHandlingCallback.current) {
         logger.warn('User info indicates not authenticated, clearing tokens');
         logoutService();
+        hasLoadedUser.current = false;
+        globalHasLoaded = false;
       } else if (!userInfo.authenticated && isHandlingCallback.current) {
         logger.debug('loadUser: Callback handling in progress, not clearing tokens');
       }
@@ -67,6 +121,8 @@ export function useAuth() {
       logger.error('Failed to load user:', error);
       
       const axiosError = err as any;
+      hasLoadedUser.current = false;
+      globalHasLoaded = false;
       if (axiosError?.response?.status === 401 && !isHandlingCallback.current) {
         setError(error);
         setIsAuthenticated(false);
@@ -164,7 +220,31 @@ export function useAuth() {
         throw new Error('토큰이 요청 전에 사라졌습니다.');
       }
       
-      const userInfo = await getCurrentUser();
+      // 전역 로딩 중이면 기다림
+      let userInfo: UserInfo;
+      if (globalLoadingPromise) {
+        logger.debug('handleCallback: Global loading in progress, waiting for existing call');
+        const result = await globalLoadingPromise;
+        if (!result) {
+          throw new Error('사용자 정보를 불러올 수 없습니다.');
+        }
+        userInfo = result;
+      } else {
+        // 전역 Promise 생성
+        globalLoadingPromise = (async () => {
+          try {
+            const info = await getCurrentUser();
+            globalHasLoaded = true;
+            return info;
+          } catch (err) {
+            globalHasLoaded = false;
+            throw err;
+          } finally {
+            globalLoadingPromise = null;
+          }
+        })();
+        userInfo = await globalLoadingPromise;
+      }
       
       logger.info('User info from /auth/me:', { authenticated: userInfo.authenticated, userId: userInfo.user_id });
       
@@ -176,6 +256,8 @@ export function useAuth() {
       // 사용자 정보 설정 (retryLoadUser useEffect가 실행되지 않도록)
       setUser(userInfo);
       setIsAuthenticated(userInfo.authenticated);
+      hasLoadedUser.current = true;
+      globalHasLoaded = true;
       logger.info('Login successful');
       
       // handleCallback에서 이미 사용자 정보를 가져왔으므로, 
@@ -207,6 +289,10 @@ export function useAuth() {
     setUser(null);
     setIsAuthenticated(false);
     setError(null);
+    hasLoadedUser.current = false;
+    globalHasLoaded = false;
+    globalLoadingPromise = null;
+    isInitialMountComplete.current = false;
     // 로그아웃 후 페이지 새로고침하여 상태 초기화
     window.location.href = '/';
   }, []);
@@ -242,54 +328,71 @@ export function useAuth() {
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
+      // 전역적으로 이미 로드되었으면 스킵
+      if (globalHasLoaded && hasLoadedUser.current) {
+        logger.debug('Initial mount: User already loaded globally, skipping');
+        setIsLoading(false);
+        isInitialMountComplete.current = true;
+        return;
+      }
       if (checkAuthenticated()) {
         loadUser().catch((err) => {
           logger.error('Failed to load user on mount:', err);
+        }).finally(() => {
+          isInitialMountComplete.current = true;
         });
       } else {
         setIsLoading(false);
         setIsAuthenticated(false);
         setUser(null);
+        isInitialMountComplete.current = true;
       }
     }
   }, [loadUser]);
 
   /**
    * 토큰이 있지만 사용자 정보가 로드되지 않은 경우 다시 조회
+   * 초기 마운트는 별도 useEffect에서 처리하므로 이 useEffect는 실행하지 않음
    */
   useEffect(() => {
+    // 초기 마운트가 완료되지 않았으면 스킵
+    if (!isInitialMountComplete.current) {
+      logger.debug('retryLoadUser: Initial mount not complete, skipping');
+      return;
+    }
+
+    // 전역적으로 이미 로드되었으면 스킵
+    if (globalHasLoaded) {
+      logger.debug('retryLoadUser: User already loaded globally, skipping');
+      return;
+    }
+
     // handleCallback이 실행 중이면 retryLoadUser를 실행하지 않음
     if (isHandlingCallback.current) {
       logger.debug('retryLoadUser: Callback handling in progress, skipping');
       return;
     }
 
-    // handleCallback에서 이미 사용자 정보를 가져왔다면 실행하지 않음
-    if (isLoading) {
+    // 이미 사용자 정보가 로드되었으면 실행하지 않음
+    if (hasLoadedUser.current && user) {
+      logger.debug('retryLoadUser: User already loaded, skipping');
+      return;
+    }
+
+    // 로딩 중이면 실행하지 않음
+    if (isLoading || isLoadingUser.current || globalLoadingPromise) {
       logger.debug('retryLoadUser: Still loading, skipping');
       return;
     }
 
-    if (checkAuthenticated() && !user && !isInitialMount.current) {
+    // 토큰이 있고 사용자 정보가 없을 때만 실행
+    if (checkAuthenticated() && !user) {
       logger.debug('retryLoadUser: Token found but no user, loading user info');
-      const retryLoadUser = async () => {
-        try {
-          await loadUser();
-        } catch (err) {
-          logger.error('Failed to reload user:', err);
-          setTimeout(() => {
-            // handleCallback이 실행 중이거나 로딩 중이면 재시도하지 않음
-            if (checkAuthenticated() && !user && !isHandlingCallback.current && !isLoading) {
-              loadUser().catch((err) => {
-                logger.error('Retry failed to reload user:', err);
-              });
-            }
-          }, 1000);
-        }
-      };
-      retryLoadUser();
+      loadUser().catch((err) => {
+        logger.error('Failed to reload user:', err);
+      });
     }
-  }, [isLoading, user, loadUser]);
+  }, [user, loadUser, isLoading]);
 
   return {
     user,
