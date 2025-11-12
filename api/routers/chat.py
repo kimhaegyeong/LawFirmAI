@@ -137,23 +137,26 @@ async def _generate_stream_response(
     message: str,
     session_id: str
 ) -> AsyncGenerator[str, None]:
-    """스트리밍 응답 생성"""
+    """스트리밍 응답 생성 - chunk 단위로 실시간 전달"""
     full_answer = ""
     final_metadata = None
     
     try:
-        async for chunk in chat_service.stream_message(
+        # stream_final_answer를 직접 호출하여 chunk 단위 스트리밍
+        async for chunk in chat_service.stream_final_answer(
             message=message,
             session_id=session_id
         ):
             if chunk:
-                chunk_stripped = chunk.strip()
+                # chunk는 이미 "data: {...}\n\n" 형식이므로 그대로 yield
+                yield chunk
                 
-                if chunk_stripped:
-                    yield f"data: {chunk_stripped}\n\n"
-                    
-                    try:
-                        event_data = json.loads(chunk_stripped)
+                # final 이벤트에서 메타데이터 추출
+                try:
+                    # "data: " 접두사 제거
+                    if chunk.startswith("data: "):
+                        json_str = chunk[6:].strip()
+                        event_data = json.loads(json_str)
                         event_type = event_data.get("type", "")
                         
                         if event_type == "stream":
@@ -167,13 +170,7 @@ async def _generate_stream_response(
                                 full_answer = content
                             final_metadata = event_data.get("metadata", {})
                             
-                            if final_metadata.get("related_questions"):
-                                logger.debug(
-                                    f"Final event metadata contains {len(final_metadata.get('related_questions', []))} related_questions"
-                                )
-                            else:
-                                logger.debug("Final event metadata does not contain related_questions")
-                            
+                            # sources 데이터가 없으면 세션에서 가져오기
                             if not _has_sources_data(final_metadata):
                                 try:
                                     sources_data = await chat_service.get_sources_from_session(
@@ -187,25 +184,18 @@ async def _generate_stream_response(
                                         
                                         if _has_sources_data(final_metadata):
                                             sources_event = _create_sources_event(final_metadata)
-                                            logger.debug(f"Sending sources_event after fetching sources: {len(final_metadata.get('related_questions', []))} related_questions")
                                             yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
                                 except Exception as e:
                                     logger.warning(f"Failed to get sources after final event: {e}")
                             
-                            if final_metadata.get("related_questions") and not (final_metadata.get("sources") or final_metadata.get("legal_references") or final_metadata.get("sources_detail")):
+                            # related_questions만 있는 경우 sources 이벤트 전송
+                            if final_metadata.get("related_questions") and not _has_sources_data(final_metadata):
                                 sources_event = _create_sources_event(final_metadata)
-                                logger.debug(f"Sending sources_event with related_questions only: {len(final_metadata.get('related_questions', []))} questions")
                                 yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
-                    except (json.JSONDecodeError, ValueError):
-                        if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
-                            full_answer += chunk
-                            if '\n' in chunk:
-                                lines = chunk.split('\n')
-                                for line in lines:
-                                    yield f"data: {line}\n"
-                                yield "\n"
-                            else:
-                                yield f"data: {chunk}\n\n"
+                except (json.JSONDecodeError, ValueError) as e:
+                    # JSON 파싱 실패는 무시 (일부 청크는 JSON이 아닐 수 있음)
+                    if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
+                        logger.debug(f"Failed to parse chunk as JSON: {e}")
         
         if full_answer:
             metadata = final_metadata if final_metadata else {}

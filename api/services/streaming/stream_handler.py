@@ -1,0 +1,474 @@
+"""
+스트리밍 처리 전용 클래스
+"""
+import json
+import asyncio
+import logging
+import uuid
+from typing import Dict, Any, Optional, AsyncGenerator
+from datetime import datetime
+
+from .constants import StreamingConstants
+from .event_builder import StreamEventBuilder
+from .token_extractor import TokenExtractor
+from .node_filter import NodeFilter
+
+logger = logging.getLogger(__name__)
+
+
+class StreamHandler:
+    """스트리밍 처리 전용 클래스"""
+    
+    def __init__(
+        self,
+        workflow_service,
+        sources_extractor,
+        extract_related_questions_fn=None
+    ):
+        self.workflow_service = workflow_service
+        self.sources_extractor = sources_extractor
+        self.extract_related_questions_fn = extract_related_questions_fn
+        self.token_extractor = TokenExtractor()
+        self.node_filter = NodeFilter()
+        self.event_builder = StreamEventBuilder()
+        # 로그 카운터 초기화
+        self._skip_log_count = 0
+        self._classification_skip_count = 0
+    
+    async def stream_final_answer(
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        validate_and_augment_state_fn=None
+    ) -> AsyncGenerator[str, None]:
+        """
+        LangGraph의 astream_events()를 사용하여 
+        generate_and_validate_answer 노드의 LLM 응답만 스트림 형태로 전달
+        """
+        if not self.workflow_service:
+            error_event = self.event_builder.create_error_event(
+                "[오류] 서비스 초기화에 실패했습니다."
+            )
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            return
+        
+        try:
+            if not session_id:
+                session_id = str(uuid.uuid4())
+            
+            from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
+            initial_state = create_initial_legal_state(message, session_id)
+            
+            if validate_and_augment_state_fn:
+                initial_query = validate_and_augment_state_fn(initial_state, message, session_id)
+            else:
+                initial_query = self._validate_and_augment_state(initial_state, message, session_id)
+            
+            if not initial_query:
+                error_event = self.event_builder.create_error_event(
+                    "[오류] 질문이 제대로 전달되지 않았습니다."
+                )
+                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                return
+            
+            callback_handler, config = await self._setup_callback_handler(session_id)
+            
+            progress_event = self.event_builder.create_progress_event("답변 생성 중...")
+            yield f"data: {json.dumps(progress_event, ensure_ascii=False)}\n\n"
+            
+            async for chunk in self._process_stream_events(
+                initial_state, config, callback_handler, message, session_id
+            ):
+                yield chunk
+                
+        except GeneratorExit:
+            logger.debug("[stream_final_answer] Client disconnected, closing stream")
+            return
+        except Exception as e:
+            logger.error(f"Stream error: {e}", exc_info=True)
+            try:
+                error_event = self.event_builder.create_error_event(
+                    f"[오류] 스트리밍 중 오류가 발생했습니다: {str(e)}",
+                    type(e).__name__
+                )
+                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            except GeneratorExit:
+                logger.debug("[stream_final_answer] Client disconnected during error handling")
+                return
+            except Exception as yield_error:
+                logger.error(f"Failed to yield error event: {yield_error}")
+                return
+    
+    async def _setup_callback_handler(self, session_id: str):
+        """콜백 핸들러 설정"""
+        callback_queue = asyncio.Queue()
+        callback_handler = None
+        
+        if self.workflow_service and hasattr(self.workflow_service, 'create_streaming_callback_handler'):
+            callback_handler = self.workflow_service.create_streaming_callback_handler(queue=callback_queue)
+            if callback_handler:
+                logger.info("[stream_final_answer] ✅ StreamingCallbackHandler created and ready")
+            else:
+                logger.warning("[stream_final_answer] ⚠️ Failed to create StreamingCallbackHandler")
+        
+        config = {"configurable": {"thread_id": session_id}}
+        if callback_handler:
+            config = self.workflow_service.get_config_with_callbacks(
+                session_id=session_id,
+                callbacks=[callback_handler]
+            )
+            logger.info(f"[stream_final_answer] ✅ Callbacks added to config: {len(config.get('callbacks', []))} callback(s)")
+        else:
+            logger.warning("[stream_final_answer] ⚠️ No callback handler, streaming may not work optimally")
+        
+        return callback_handler, config
+    
+    async def _process_stream_events(
+        self,
+        initial_state: Dict[str, Any],
+        config: Dict[str, Any],
+        callback_handler: Any,
+        message: str,
+        session_id: str
+    ) -> AsyncGenerator[str, None]:
+        """스트림 이벤트 처리"""
+        # 로그 카운터 초기화 (각 스트림 세션마다)
+        self._skip_log_count = 0
+        self._classification_skip_count = 0
+        
+        answer_generation_started = False
+        last_node_name = None
+        event_count = 0
+        stream_event_count = 0
+        on_llm_stream_count = 0
+        on_chat_model_stream_count = 0
+        on_chain_stream_count = 0
+        full_answer = ""
+        callback_chunks_received = 0
+        processed_callback_chunks = set()
+        
+        callback_queue = None
+        if callback_handler and hasattr(callback_handler, 'queue'):
+            callback_queue = callback_handler.queue
+        chunk_output_queue = asyncio.Queue() if callback_queue else None
+        
+        callback_monitoring_active = True
+        callback_task = None
+        
+        async def monitor_callback_queue():
+            """콜백 큐 모니터링"""
+            nonlocal callback_monitoring_active
+            while callback_monitoring_active:
+                try:
+                    if callback_queue and chunk_output_queue:
+                        try:
+                            chunk_data = await asyncio.wait_for(
+                                callback_queue.get(),
+                                timeout=StreamingConstants.CALLBACK_QUEUE_TIMEOUT
+                            )
+                            if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
+                                await chunk_output_queue.put(chunk_data)
+                        except asyncio.TimeoutError:
+                            await asyncio.sleep(StreamingConstants.CALLBACK_MONITORING_INTERVAL)
+                            continue
+                        except asyncio.QueueEmpty:
+                            await asyncio.sleep(StreamingConstants.CALLBACK_MONITORING_INTERVAL)
+                            continue
+                    else:
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.debug(f"[stream_final_answer] Error in callback queue monitoring: {e}")
+                    await asyncio.sleep(0.1)
+        
+        if callback_queue and chunk_output_queue:
+            callback_task = asyncio.create_task(monitor_callback_queue())
+            logger.info("[stream_final_answer] ✅ Callback queue monitoring task started")
+        
+        try:
+            async for event in self.workflow_service.app.astream_events(
+                initial_state,
+                config,
+                version="v2"
+            ):
+                if chunk_output_queue:
+                    try:
+                        while True:
+                            try:
+                                chunk_data = chunk_output_queue.get_nowait()
+                                if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
+                                    content = chunk_data.get("content", "")
+                                    chunk_index = chunk_data.get("chunk_index", 0)
+                                    chunk_key = f"{chunk_index}_{content[:10]}"
+                                    
+                                    if chunk_key not in processed_callback_chunks and content:
+                                        processed_callback_chunks.add(chunk_key)
+                                        callback_chunks_received += 1
+                                        full_answer += content
+                                        
+                                        stream_event = self.event_builder.create_stream_event(
+                                            content, source="callback"
+                                        )
+                                        yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                                        
+                                        if callback_chunks_received <= StreamingConstants.MAX_DEBUG_LOGS:
+                                            logger.info(
+                                                f"[stream_final_answer] ✅ Callback chunk #{callback_chunks_received}: "
+                                                f"length={len(content)}, content={content[:50]}..."
+                                            )
+                            except asyncio.QueueEmpty:
+                                break
+                    except Exception as e:
+                        logger.debug(f"[stream_final_answer] Error checking callback output queue: {e}")
+                
+                event_count += 1
+                event_type = event.get("event", "")
+                event_name = event.get("name", "")
+                event_parent = event.get("parent", {})
+                
+                if event_type == "on_llm_stream":
+                    on_llm_stream_count += 1
+                    if on_llm_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
+                        logger.debug(
+                            f"[stream_final_answer] on_llm_stream 이벤트 #{on_llm_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                elif event_type == "on_chat_model_stream":
+                    on_chat_model_stream_count += 1
+                    if on_chat_model_stream_count <= StreamingConstants.MAX_DEBUG_LOGS:
+                        logger.debug(
+                            f"[stream_final_answer] on_chat_model_stream 이벤트 #{on_chat_model_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                elif event_type == "on_chain_stream":
+                    on_chain_stream_count += 1
+                    if on_chain_stream_count <= StreamingConstants.MAX_DETAILED_LOGS:
+                        logger.debug(
+                            f"[stream_final_answer] on_chain_stream 이벤트 #{on_chain_stream_count}: "
+                            f"name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}"
+                        )
+                
+                if event_type == "on_chain_start":
+                    node_name = event_name
+                    if self.node_filter.is_answer_generation_node(node_name):
+                        answer_generation_started = True
+                        last_node_name = node_name
+                        logger.debug(f"[stream_final_answer] 답변 생성 노드 시작: {node_name}")
+                
+                elif event_type == "on_chain_end":
+                    node_name = event_name
+                    if self.node_filter.is_answer_completion_node(node_name):
+                        answer_generation_started = False
+                        logger.debug(f"[stream_final_answer] 답변 생성 노드 완료: {node_name}")
+                
+                elif event_type in ["on_llm_stream", "on_chat_model_stream"]:
+                    # 분류 노드는 정상 동작이므로 조용히 건너뜀
+                    if self.node_filter.is_classification_node(event_name):
+                        self._classification_skip_count += 1
+                        continue
+                    
+                    if not answer_generation_started:
+                        # 로그 카운터를 사용하여 제한된 횟수만 로그 출력
+                        if self._skip_log_count < StreamingConstants.MAX_SKIP_LOGS:
+                            logger.debug(f"[stream_final_answer] 답변 생성 노드가 시작되지 않아 건너뜀: {event_name}")
+                            self._skip_log_count += 1
+                        continue
+                    
+                    if self.node_filter.is_target_node(event_name, event_parent, last_node_name):
+                        logger.debug(f"[stream_final_answer] 타겟 노드 확인됨: {event_name}, 토큰 추출 시작")
+                        event_data = event.get("data", {})
+                        token = self.token_extractor.extract_from_event(event_data)
+                        
+                        if token:
+                            stream_event_count += 1
+                            full_answer += token
+                            logger.debug(
+                                f"[stream_final_answer] 토큰 전송: "
+                                f"token_length={len(token)}, "
+                                f"token_preview={token[:50]}..., "
+                                f"stream_event_count={stream_event_count}"
+                            )
+                            stream_event = self.event_builder.create_stream_event(token)
+                            yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.debug(
+                                f"[stream_final_answer] 토큰 추출 실패: "
+                                f"token={token}, "
+                                f"event_data_keys={list(event_data.keys()) if isinstance(event_data, dict) else []}"
+                            )
+                    else:
+                        logger.debug(
+                            f"[stream_final_answer] 타겟 노드가 아님 (필터링됨): "
+                            f"type={event_type}, name={event_name}, "
+                            f"parent={event_parent.get('name', '') if isinstance(event_parent, dict) else ''}, "
+                            f"last_node={last_node_name}, started={answer_generation_started}"
+                        )
+                
+                if event_type == "on_chain_end" and self.node_filter.is_answer_completion_node(event_name):
+                    if chunk_output_queue:
+                        try:
+                            while True:
+                                try:
+                                    chunk_data = chunk_output_queue.get_nowait()
+                                    if chunk_data and chunk_data.get("type") == StreamingConstants.CALLBACK_CHUNK_TYPE:
+                                        content = chunk_data.get("content", "")
+                                        chunk_index = chunk_data.get("chunk_index", 0)
+                                        chunk_key = f"{chunk_index}_{content[:10]}"
+                                        
+                                        if chunk_key not in processed_callback_chunks and content:
+                                            processed_callback_chunks.add(chunk_key)
+                                            callback_chunks_received += 1
+                                            full_answer += content
+                                            
+                                            stream_event = self.event_builder.create_stream_event(
+                                                content, source="callback"
+                                            )
+                                            yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                                except asyncio.QueueEmpty:
+                                    break
+                        except Exception as e:
+                            logger.debug(f"[stream_final_answer] Error processing remaining callback chunks: {e}")
+                    
+                    logger.info(
+                        f"[stream_final_answer] 스트리밍 완료: "
+                        f"총 {event_count}개 이벤트, "
+                        f"스트림 이벤트 {stream_event_count}개, "
+                        f"콜백 청크 {callback_chunks_received}개, "
+                        f"on_llm_stream={on_llm_stream_count}개, "
+                        f"on_chat_model_stream={on_chat_model_stream_count}개, "
+                        f"on_chain_stream={on_chain_stream_count}개, "
+                        f"full_answer_length={len(full_answer)}"
+                    )
+                    
+                    await asyncio.sleep(StreamingConstants.STATE_RETRY_DELAY)
+                    
+                    final_metadata = await self._get_final_metadata(
+                        config, initial_state, message, full_answer, session_id
+                    )
+                    
+                    if final_metadata.get("llm_validation"):
+                        validation_event = self.event_builder.create_validation_event(
+                            final_metadata["llm_validation"]
+                        )
+                        yield f"data: {json.dumps(validation_event, ensure_ascii=False)}\n\n"
+                    
+                    final_event = self.event_builder.create_final_event("", final_metadata)
+                    yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+                    
+                    done_event = self.event_builder.create_done_event(full_answer, final_metadata)
+                    yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+                    break
+        
+        finally:
+            callback_monitoring_active = False
+            if callback_task:
+                callback_task.cancel()
+                try:
+                    await callback_task
+                except asyncio.CancelledError:
+                    pass
+            
+            if callback_handler and hasattr(callback_handler, 'get_stats'):
+                stats = callback_handler.get_stats()
+                logger.info(
+                    f"[stream_final_answer] Callback stats: "
+                    f"chunks={callback_chunks_received}, "
+                    f"total_chunks={stats.get('total_chunks', 0)}, "
+                    f"streaming_active={stats.get('streaming_active', False)}"
+                )
+    
+    
+    async def _get_final_metadata(
+        self,
+        config: Dict[str, Any],
+        initial_state: Dict[str, Any],
+        message: str,
+        full_answer: str,
+        session_id: str
+    ) -> Dict[str, Any]:
+        """최종 메타데이터 가져오기"""
+        try:
+            final_state = await asyncio.wait_for(
+                self.workflow_service.app.aget_state(config),
+                timeout=StreamingConstants.STATE_TIMEOUT
+            )
+            if final_state and final_state.values:
+                state_values = final_state.values
+                logger.debug(
+                    f"[stream_final_answer] State retrieved: "
+                    f"answer_length={len(state_values.get('answer', ''))}, "
+                    f"full_answer_length={len(full_answer)}"
+                )
+                
+                sources = state_values.get("sources", [])
+                legal_references = state_values.get("legal_references", [])
+                sources_detail = state_values.get("sources_detail", [])
+                
+                if not sources and not sources_detail:
+                    retrieved_docs = state_values.get("retrieved_docs", [])
+                    if retrieved_docs and self.sources_extractor:
+                        try:
+                            sources_data = self.sources_extractor._extract_sources(state_values)
+                            legal_references_data = self.sources_extractor._extract_legal_references(state_values)
+                            sources_detail_data = self.sources_extractor._extract_sources_detail(state_values)
+                            
+                            if sources_detail_data:
+                                sources_detail = sources_detail_data
+                                state_values["sources_detail"] = sources_detail_data
+                            if sources_data:
+                                sources = sources_data
+                                state_values["sources"] = sources_data
+                            if legal_references_data:
+                                legal_references = legal_references_data
+                        except Exception as e:
+                            logger.warning(f"[stream_final_answer] Failed to extract sources from retrieved_docs: {e}", exc_info=True)
+                
+                related_questions = []
+                if self.extract_related_questions_fn:
+                    related_questions = await self.extract_related_questions_fn(
+                        state_values, initial_state, message, full_answer, session_id
+                    )
+                
+                llm_validation_result = state_values.get("metadata", {}).get("llm_validation_result", {})
+                
+                return {
+                    "sources": sources,
+                    "legal_references": legal_references,
+                    "sources_detail": sources_detail,
+                    "related_questions": related_questions,
+                    "llm_validation": llm_validation_result if llm_validation_result else None
+                }
+        except asyncio.TimeoutError:
+            logger.warning(f"[stream_final_answer] Timeout getting state, using empty metadata")
+        except Exception as e:
+            logger.warning(f"[stream_final_answer] Error getting state: {e}")
+        
+        return {}
+    
+    def _validate_and_augment_state(
+        self,
+        initial_state: Dict[str, Any],
+        message: str,
+        session_id: str
+    ) -> Optional[str]:
+        """상태 검증 및 보강"""
+        if "input" not in initial_state:
+            initial_state["input"] = {}
+        if not initial_state["input"].get("query"):
+            initial_state["input"]["query"] = message
+        if not initial_state["input"].get("session_id"):
+            initial_state["input"]["session_id"] = session_id
+        
+        if not initial_state.get("query"):
+            initial_state["query"] = message
+        if not initial_state.get("session_id"):
+            initial_state["session_id"] = session_id
+        
+        initial_query = initial_state.get("input", {}).get("query") or initial_state.get("query")
+        if not initial_query or not str(initial_query).strip():
+            logger.error(f"Initial state query is empty! Input message was: '{message[:50]}...'")
+            return None
+        return initial_query
+

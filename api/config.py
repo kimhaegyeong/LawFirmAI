@@ -2,7 +2,7 @@
 API 서버 설정 관리
 """
 import os
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 
 
@@ -120,6 +120,30 @@ class APIConfig(BaseSettings):
         extra = "ignore"
 
 
-# 전역 설정 인스턴스
-api_config = APIConfig()
+# 전역 설정 인스턴스 (지연 초기화)
+_api_config_instance: Optional[APIConfig] = None
+
+
+def get_api_config() -> APIConfig:
+    """API 설정 인스턴스 가져오기 (지연 초기화)"""
+    global _api_config_instance
+    if _api_config_instance is None:
+        _api_config_instance = APIConfig()
+    return _api_config_instance
+
+
+# 하위 호환성을 위한 전역 변수 (속성 접근 시 지연 초기화)
+class _APIConfigProxy:
+    """APIConfig 프록시 클래스 (지연 초기화 지원)"""
+    
+    def __getattr__(self, name: str):
+        return getattr(get_api_config(), name)
+    
+    def __setattr__(self, name: str, value):
+        config = get_api_config()
+        setattr(config, name, value)
+
+
+# 전역 설정 인스턴스 (프록시를 통해 지연 초기화)
+api_config = _APIConfigProxy()
 
