@@ -6,6 +6,16 @@ import logging
 import os
 from pathlib import Path
 
+# Windows에서 multiprocessing 시작 방식 명시적 설정 (uvicorn reload와의 호환성)
+if sys.platform == "win32":
+    import multiprocessing
+    try:
+        # spawn 방식으로 설정 (Windows에서 가장 안정적)
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # 이미 설정된 경우 무시
+        pass
+
 # HuggingFace 로깅 비활성화 (가장 먼저 실행)
 os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
@@ -119,7 +129,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 환경 변수 로드 후에만 import (순서 중요!)
 # routers를 import하면 chat_service가 초기화되므로, 환경 변수를 먼저 로드해야 함
-from api.config import api_config
+from api.config import api_config, get_api_config
+
+# 환경 변수 로드 후 설정 인스턴스 재초기화 (환경 변수 반영)
+# 이렇게 하면 api_config가 최신 환경 변수를 사용합니다
+get_api_config()
 from api.middleware.logging import setup_logging
 
 # 라우터는 환경 변수 로드 후에 import
@@ -373,8 +387,9 @@ async def startup_event():
                 test_logger.warning("⚠️  ChatService initialized but workflow service is not available")
         except Exception as e:
             test_logger.error(f"Failed to initialize ChatService during startup: {e}", exc_info=True)
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         # Windows에서 reload 시 startup 이벤트가 취소될 수 있음
+        # 또는 프로세스 간 통신 중단 시 발생할 수 있음
         # 이 경우 정상적인 동작이므로 무시
         pass
     except Exception as e:
@@ -505,6 +520,12 @@ if __name__ == "__main__":
         uvicorn_config["reload_excludes"] = reload_exclude
         # Windows에서 안정성을 위해 reload-delay 추가
         uvicorn_config["reload_delay"] = 0.25
+        # Windows에서 multiprocessing 안정성을 위한 추가 설정
+        uvicorn_config["loop"] = "asyncio"
+        # Windows에서 reload 시 안정성을 위해 workers 명시적으로 1로 설정
+        # (reload는 단일 워커에서만 작동)
+        if "workers" not in uvicorn_config:
+            uvicorn_config["workers"] = 1
     
     # uvicorn 실행 전에 로깅 테스트
     print(f"[DEBUG] Testing logging before uvicorn.run()...")
