@@ -540,16 +540,325 @@ class SourcesExtractor:
             
             source = self._extract_source_from_doc(doc)
             
+            # source_processor가 실패하면 fallback 사용
+            if not source:
+                source = self._extract_source_fallback(doc, retrieved_docs)
+            
             if source:
                 source_str = source.strip() if isinstance(source, str) else str(source).strip()
                 source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
                 
-                if self.source_processor.validate_source(source_str, source_type):
-                    if source_str not in seen_sources:
-                        sources.append(source_str)
-                        seen_sources.add(source_str)
+                # validate_source 검증
+                is_valid = self.source_processor.validate_source(source_str, source_type)
+                
+                # fallback에서 추출한 경우 또는 유효한 source인 경우 추가
+                # fallback에서 추출한 경우는 validate_source가 실패해도 추가 (조문 번호 등이 있을 수 있음)
+                # 단, "_source"로 끝나는 기본값은 제외
+                if source_str and not source_str.endswith("_source"):
+                    if is_valid or (len(source_str) >= 2 and source_str not in SourcesExtractorConstants.INVALID_SOURCES):
+                        # 너무 긴 문장 제외 (100자 이상)
+                        if len(source_str) <= 100:
+                            if source_str not in seen_sources:
+                                sources.append(source_str)
+                                seen_sources.add(source_str)
+                                logger.debug(f"[sources_extractor] Added source: {source_str} (validated: {is_valid})")
+                        else:
+                            logger.debug(f"[sources_extractor] Skipped too long source: {source_str[:50]}...")
+                    else:
+                        logger.debug(f"[sources_extractor] Skipped invalid source: {source_str}")
         
         return sources
+    
+    def _extract_statute_name_from_context(self, doc: Dict[str, Any], all_docs: List[Dict[str, Any]], article_no: str = "") -> Optional[str]:
+        """같은 세션의 다른 문서(판례 등)에서 법령명 추출"""
+        if not article_no:
+            # doc의 content에서 조문 번호 추출
+            content = doc.get("content") or doc.get("text") or ""
+            match = re.search(r'제\s*(\d+)\s*조', content)
+            if match:
+                article_no = match.group(1)
+            else:
+                # metadata에서 조문 번호 추출
+                article_no = doc.get("article_no") or doc.get("article_number") or ""
+                if article_no:
+                    # "제XXX조" 형식에서 숫자만 추출
+                    match = re.search(r'(\d+)', article_no)
+                    if match:
+                        article_no = match.group(1)
+        
+        if article_no:
+            # 다른 문서들에서 같은 조문 번호를 가진 법령명 찾기
+            for other_doc in all_docs:
+                if other_doc.get("type") == "case_paragraph":
+                    other_content = other_doc.get("content") or other_doc.get("text") or ""
+                    # "민법 제XXX조" 패턴 찾기
+                    pattern = r'([가-힣]{1,20}법)\s*제\s*' + re.escape(article_no) + r'\s*조'
+                    match = re.search(pattern, other_content)
+                    if match:
+                        extracted = match.group(1).strip()
+                        if len(extracted) <= 20 and extracted.count(' ') <= 2:
+                            logger.debug(f"[sources_extractor] Extracted statute name from context (case reference): {extracted} for article {article_no}")
+                            return extracted
+        
+        return None
+    
+    def _get_statute_name_from_db(self, law_id: Optional[str], statute_id: Optional[str]) -> Optional[str]:
+        """데이터베이스에서 법령명 조회 (타임아웃 및 예외 처리 강화)"""
+        if not law_id and not statute_id:
+            return None
+        
+        try:
+            # 데이터베이스 연결 시도 (타임아웃 설정)
+            import sqlite3
+            import os
+            
+            # 데이터베이스 경로 찾기
+            db_paths = [
+                os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'lawfirm_v2.db'),
+                os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'lawfirm_v2.db'),
+                os.getenv('DATABASE_PATH', ''),
+            ]
+            
+            for db_path in db_paths:
+                if db_path and os.path.exists(db_path):
+                    try:
+                        # 타임아웃 설정 (5초)
+                        conn = sqlite3.connect(db_path, timeout=5.0)
+                        conn.row_factory = sqlite3.Row
+                        try:
+                            cursor = conn.cursor()
+                            
+                            if law_id:
+                                # assembly_laws 테이블에서 조회
+                                cursor.execute("SELECT law_name FROM assembly_laws WHERE law_id = ? LIMIT 1", (law_id,))
+                                result = cursor.fetchone()
+                                if result:
+                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
+                                    logger.debug(f"[sources_extractor] Found statute name from DB (law_id): {statute_name}")
+                                    return statute_name
+                            
+                            if statute_id:
+                                # statutes 테이블에서 조회
+                                cursor.execute("SELECT name FROM statutes WHERE id = ? LIMIT 1", (statute_id,))
+                                result = cursor.fetchone()
+                                if result:
+                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
+                                    logger.debug(f"[sources_extractor] Found statute name from DB (statute_id): {statute_name}")
+                                    return statute_name
+                                
+                                # statute_articles를 통해 statutes 조회
+                                cursor.execute("""
+                                    SELECT s.name FROM statutes s
+                                    INNER JOIN statute_articles sa ON s.id = sa.statute_id
+                                    WHERE sa.id = ? LIMIT 1
+                                """, (statute_id,))
+                                result = cursor.fetchone()
+                                if result:
+                                    statute_name = result[0] if isinstance(result, sqlite3.Row) else result[0]
+                                    logger.debug(f"[sources_extractor] Found statute name from DB (via statute_articles): {statute_name}")
+                                    return statute_name
+                        finally:
+                            conn.close()
+                        break
+                    except sqlite3.OperationalError as e:
+                        # 데이터베이스 잠금 오류 등은 무시하고 계속 진행
+                        logger.debug(f"[sources_extractor] Database operational error (skipping): {e}")
+                        continue
+                    except Exception as db_error:
+                        # 기타 데이터베이스 오류는 로그만 남기고 계속 진행
+                        logger.debug(f"[sources_extractor] Database error (skipping): {db_error}")
+                        continue
+        except Exception as e:
+            # 모든 예외를 잡아서 스트리밍이 중단되지 않도록 함
+            logger.debug(f"[sources_extractor] Failed to get statute name from DB (non-blocking): {e}")
+        
+        return None
+    
+    def _extract_source_fallback(self, doc: Dict[str, Any], all_docs: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+        """fallback source 추출 (metadata가 비어있어도 content나 다른 필드에서 추출)"""
+        source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+        metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+        
+        logger.debug(f"[sources_extractor] Using fallback source extraction: type={source_type}, has_metadata={bool(metadata)}, metadata_keys={list(metadata.keys()) if metadata else []}")
+        
+        # doc의 최상위 레벨 필드도 확인 (강화)
+        merged_metadata = {**metadata}
+        for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                   "court", "doc_id", "casenames", "org", "title", "case_id", "decision_id", "interpretation_number",
+                   "law_id", "statute_id", "abbrv", "statute_abbrv"]:
+            if key in doc and not merged_metadata.get(key):
+                merged_metadata[key] = doc[key]
+        
+        if source_type == "case_paragraph":
+            court = merged_metadata.get("court") or ""
+            case_name = merged_metadata.get("casenames") or ""
+            doc_id = merged_metadata.get("doc_id") or merged_metadata.get("case_id") or ""
+            
+            if court or case_name or doc_id:
+                result = f"{court} {case_name} {doc_id}".strip()
+                logger.debug(f"[sources_extractor] Extracted case source from metadata: {result}")
+                return result
+            
+            # content에서 판례 정보 추출 시도
+            content = doc.get("content") or doc.get("text") or ""
+            if content:
+                # 패턴 1: 날짜 포함 형식 "대법원 2007. 12. 27. 선고 2006다9408 판결"
+                pattern1 = r'(대법원|지방법원|고등법원|특허법원|가정법원|행정법원|헌법재판소)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s*(\d{4}[가나다라마바사아자차카타파하]\d+)'
+                match = re.search(pattern1, content)
+                if match:
+                    result = f"{match.group(1)} {match.group(3)}"
+                    logger.debug(f"[sources_extractor] Extracted case source from content (with date): {result}")
+                    return result
+                
+                # 패턴 2: 날짜 없는 형식 "대법원 2021다275611"
+                pattern2 = r'(대법원|지방법원|고등법원|특허법원|가정법원|행정법원|헌법재판소)\s+(\d{4}[가나다라마바사아자차카타파하]\d+)'
+                match = re.search(pattern2, content)
+                if match:
+                    result = f"{match.group(1)} {match.group(2)}"
+                    logger.debug(f"[sources_extractor] Extracted case source from content (no date): {result}")
+                    return result
+                
+        elif source_type == "statute_article":
+            statute_name = merged_metadata.get("statute_name") or merged_metadata.get("law_name") or ""
+            article_no = merged_metadata.get("article_no") or merged_metadata.get("article_number") or ""
+            clause_no = merged_metadata.get("clause_no") or ""
+            item_no = merged_metadata.get("item_no") or ""
+            
+            # 1. law_id나 statute_id가 있으면 데이터베이스에서 조회
+            if not statute_name:
+                law_id = merged_metadata.get("law_id") or doc.get("law_id")
+                statute_id = merged_metadata.get("statute_id") or doc.get("statute_id")
+                if law_id or statute_id:
+                    db_statute_name = self._get_statute_name_from_db(law_id, statute_id)
+                    if db_statute_name:
+                        statute_name = db_statute_name
+                        logger.debug(f"[sources_extractor] Extracted statute name from DB: {statute_name}")
+            
+            # 2. abbrv나 statute_abbrv가 있으면 사용 (약어는 나중에 처리)
+            if not statute_name:
+                abbrv = merged_metadata.get("abbrv") or merged_metadata.get("statute_abbrv") or doc.get("abbrv") or doc.get("statute_abbrv")
+                if abbrv:
+                    # 약어를 법령명으로 변환 (일반적인 약어 매핑)
+                    abbrv_to_name = {
+                        "민법": "민법",
+                        "형법": "형법",
+                        "상법": "상법",
+                        "민소법": "민사소송법",
+                        "형소법": "형사소송법",
+                    }
+                    if abbrv in abbrv_to_name:
+                        statute_name = abbrv_to_name[abbrv]
+                        logger.debug(f"[sources_extractor] Extracted statute name from abbrv: {statute_name}")
+            
+            # 3. 같은 세션의 다른 문서(판례)에서 법령명 추출
+            if not statute_name and all_docs:
+                extracted_from_context = self._extract_statute_name_from_context(doc, all_docs, article_no.replace("제", "").replace("조", "").strip() if article_no else "")
+                if extracted_from_context:
+                    statute_name = extracted_from_context
+                    logger.debug(f"[sources_extractor] Extracted statute name from context: {statute_name}")
+            
+            # 4. metadata에 법령명이 없으면 content에서 추출 시도
+            content = doc.get("content") or doc.get("text") or ""
+            if not statute_name and content:
+                # 패턴 1: 「법령명」 형식
+                pattern1 = r'「([^」]+)」'
+                match = re.search(pattern1, content)
+                if match:
+                    statute_name = match.group(1).strip()
+                    logger.debug(f"[sources_extractor] Extracted statute name from content (quotes): {statute_name}")
+                else:
+                    # 패턴 2: "법령명" + "법" 형식 (예: "민사소송 등 인지법", "건축법")
+                    # 최대 20자로 제한하여 너무 긴 문장 제외
+                    pattern2 = r'([가-힣]{1,20}법)(?:\s|$|\.|,|\)|「|」|제)'
+                    match = re.search(pattern2, content)
+                    if match:
+                        extracted = match.group(1).strip()
+                        # "규칙 또는 처분의 헌법" 같은 긴 문장 제외 (공백이 많으면 제외)
+                        if len(extracted) <= 20 and extracted.count(' ') <= 2:
+                            statute_name = extracted
+                            logger.debug(f"[sources_extractor] Extracted statute name from content (pattern): {statute_name}")
+                        else:
+                            logger.debug(f"[sources_extractor] Skipped too long statute name: {extracted}")
+            
+            # 5. content에서 상대 참조 해석 ("전3조", "전조" 등)
+            if not article_no and content:
+                relative_ref_pattern = r'전\s*(\d+)\s*조|전\s*조'
+                match = re.search(relative_ref_pattern, content)
+                if match:
+                    # 상대 참조가 있으면 일반적으로 "민법"으로 추정
+                    if not statute_name:
+                        statute_name = "민법"
+                    logger.debug(f"[sources_extractor] Found relative reference in content, using default statute: {statute_name}")
+            
+            # 6. 조문 번호가 없으면 content에서 추출 시도
+            if not article_no and content:
+                # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등 (주요 법령명)
+                # 법령명 바로 앞에 공백이나 구두점이 있어야 함 (문맥 제거)
+                pattern1 = r'(?:^|\.|,|\)|\(|「|」|에|의|을|를|이|가|은|는|으로|로|에서|부터|까지|와|과|및|또는)\s*(민법|형법|상법|공법|행정법|민사소송법|형사소송법|가족법|상속법|채권법|물권법|계약법|불법행위법|부동산법|임대차보호법|전세권법|근저당법|저당권법|담보법|보증법|연대보증법|보증채무법|채권담보법|소유권법|점유권법|지상권법|지역권법|질권법|유치권법|우선변제권법|담보물권법|민사집행법)\s*제\s*(\d+)\s*조'
+                match = re.search(pattern1, content)
+                if match:
+                    if not statute_name:
+                        statute_name = match.group(1).strip()
+                    article_no = f"제{match.group(2)}조"
+                    logger.debug(f"[sources_extractor] Extracted statute and article from content: {statute_name} {article_no}")
+                else:
+                    # 패턴 2: "법령명 제XXX조" (앞에 법령명이 있는 경우)
+                    pattern2 = r'([가-힣]{1,20}법)\s*제\s*(\d+)\s*조'
+                    match = re.search(pattern2, content)
+                    if match:
+                        if not statute_name:
+                            extracted_statute = match.group(1).strip()
+                            # 너무 긴 문장 제외
+                            if len(extracted_statute) <= 20 and extracted_statute.count(' ') <= 2:
+                                statute_name = extracted_statute
+                        article_no = f"제{match.group(2)}조"
+                        logger.debug(f"[sources_extractor] Extracted statute and article from content (pattern2): {statute_name} {article_no}")
+                    else:
+                        # 패턴 3: "제XXX조" (법령명 없이 조문만)
+                        pattern3 = r'제\s*(\d+)\s*조'
+                        match = re.search(pattern3, content)
+                        if match:
+                            article_no = f"제{match.group(1)}조"
+                            # 조문 번호가 있으면 같은 세션의 다른 문서에서 법령명 찾기
+                            if not statute_name and all_docs:
+                                extracted_from_context = self._extract_statute_name_from_context(doc, all_docs, match.group(1))
+                                if extracted_from_context:
+                                    statute_name = extracted_from_context
+                                else:
+                                    # 일반적인 법령명 추정 (민법이 가장 일반적)
+                                    statute_name = "민법"
+                            elif not statute_name:
+                                statute_name = "민법"
+                            logger.debug(f"[sources_extractor] Extracted article from content: {article_no}, statute_name: {statute_name}")
+            
+            # 법령명이나 조문 번호가 있으면 반환
+            if statute_name or article_no:
+                parts = [statute_name] if statute_name else []
+                if article_no:
+                    parts.append(article_no)
+                if clause_no:
+                    parts.append(f"제{clause_no}항")
+                if item_no:
+                    parts.append(f"제{item_no}호")
+                return " ".join(parts).strip()
+            
+            # 아무것도 없으면 None 반환 (기본값은 필터링됨)
+            return None
+            
+        elif source_type == "decision_paragraph":
+            org = merged_metadata.get("org") or ""
+            doc_id = merged_metadata.get("doc_id") or merged_metadata.get("decision_id") or ""
+            if org or doc_id:
+                return f"{org} {doc_id}".strip()
+            
+        elif source_type == "interpretation_paragraph":
+            org = merged_metadata.get("org") or ""
+            title = merged_metadata.get("title") or ""
+            doc_id = merged_metadata.get("doc_id") or merged_metadata.get("interpretation_number") or ""
+            if org or title or doc_id:
+                return f"{org} {title} {doc_id}".strip()
+        
+        return None
     
     def _extract_source_from_doc(self, doc: Dict[str, Any]) -> Optional[str]:
         """단일 doc에서 source 추출"""
@@ -587,25 +896,129 @@ class SourcesExtractor:
             source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
             metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             
+            # doc의 최상위 레벨 필드도 확인 (강화)
+            merged_metadata = {**metadata}
+            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                       "law_id", "statute_id", "abbrv", "statute_abbrv"]:
+                if key in doc and not merged_metadata.get(key):
+                    merged_metadata[key] = doc[key]
+            
             if source_type == "statute_article":
                 statute_name = (
-                    doc.get("statute_name") or
-                    doc.get("law_name") or
-                    metadata.get("statute_name") or
-                    metadata.get("law_name")
+                    merged_metadata.get("statute_name") or
+                    merged_metadata.get("law_name")
                 )
                 
-                if statute_name:
-                    article_no = (
-                        doc.get("article_no") or
-                        doc.get("article_number") or
-                        metadata.get("article_no") or
-                        metadata.get("article_number")
-                    )
-                    clause_no = doc.get("clause_no") or metadata.get("clause_no")
-                    item_no = doc.get("item_no") or metadata.get("item_no")
+                # 1. law_id나 statute_id가 있으면 데이터베이스에서 조회
+                if not statute_name:
+                    law_id = merged_metadata.get("law_id") or doc.get("law_id")
+                    statute_id = merged_metadata.get("statute_id") or doc.get("statute_id")
+                    if law_id or statute_id:
+                        db_statute_name = self._get_statute_name_from_db(law_id, statute_id)
+                        if db_statute_name:
+                            statute_name = db_statute_name
+                            logger.debug(f"[sources_extractor] Extracted statute name from DB for legal_references: {statute_name}")
+                
+                # 2. abbrv나 statute_abbrv가 있으면 사용
+                if not statute_name:
+                    abbrv = merged_metadata.get("abbrv") or merged_metadata.get("statute_abbrv") or doc.get("abbrv") or doc.get("statute_abbrv")
+                    if abbrv:
+                        abbrv_to_name = {
+                            "민법": "민법",
+                            "형법": "형법",
+                            "상법": "상법",
+                            "민소법": "민사소송법",
+                            "형소법": "형사소송법",
+                        }
+                        if abbrv in abbrv_to_name:
+                            statute_name = abbrv_to_name[abbrv]
+                            logger.debug(f"[sources_extractor] Extracted statute name from abbrv for legal_references: {statute_name}")
+                
+                # 3. 같은 세션의 다른 문서(판례)에서 법령명 추출
+                if not statute_name:
+                    extracted_from_context = self._extract_statute_name_from_context(doc, retrieved_docs)
+                    if extracted_from_context:
+                        statute_name = extracted_from_context
+                        logger.debug(f"[sources_extractor] Extracted statute name from context for legal_references: {statute_name}")
+                
+                # 4. metadata에 법령명이 없으면 content에서 추출 시도
+                content = doc.get("content") or doc.get("text") or ""
+                if not statute_name and content:
+                    # 패턴 1: 「법령명」 형식
+                    pattern1 = r'「([^」]+)」'
+                    match = re.search(pattern1, content)
+                    if match:
+                        statute_name = match.group(1).strip()
+                        logger.debug(f"[sources_extractor] Extracted statute name for legal_references (quotes): {statute_name}")
+                    else:
+                        # 패턴 2: "법령명" + "법" 형식 (최대 20자로 제한)
+                        pattern2 = r'([가-힣]{1,20}법)(?:\s|$|\.|,|\)|「|」|제)'
+                        match = re.search(pattern2, content)
+                        if match:
+                            extracted = match.group(1).strip()
+                            # "규칙 또는 처분의 헌법" 같은 긴 문장 제외
+                            if len(extracted) <= 20 and extracted.count(' ') <= 2:
+                                statute_name = extracted
+                                logger.debug(f"[sources_extractor] Extracted statute name for legal_references (pattern): {statute_name}")
+                            else:
+                                logger.debug(f"[sources_extractor] Skipped too long statute name for legal_references: {extracted}")
+                
+                article_no = (
+                    merged_metadata.get("article_no") or
+                    merged_metadata.get("article_number")
+                )
+                
+                # 5. content에서 상대 참조 해석 ("전3조", "전조" 등)
+                if not article_no and content:
+                    relative_ref_pattern = r'전\s*(\d+)\s*조|전\s*조'
+                    match = re.search(relative_ref_pattern, content)
+                    if match:
+                        if not statute_name:
+                            statute_name = "민법"
+                        logger.debug(f"[sources_extractor] Found relative reference in content for legal_references, using default statute: {statute_name}")
+                
+                # 6. 조문 번호가 없으면 content에서 추출 시도
+                if not article_no and content:
+                    # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등
+                    pattern1 = r'(민법|형법|상법|공법|행정법|민사소송법|형사소송법|가족법|상속법|채권법|물권법|계약법|불법행위법|부동산법|임대차보호법|전세권법|근저당법|저당권법|담보법|보증법|연대보증법|보증채무법|채권담보법)\s*제\s*(\d+)\s*조'
+                    match = re.search(pattern1, content)
+                    if match:
+                        if not statute_name:
+                            statute_name = match.group(1).strip()
+                        article_no = f"제{match.group(2)}조"
+                        logger.debug(f"[sources_extractor] Extracted statute and article for legal_references: {statute_name} {article_no}")
+                    else:
+                        # 패턴 2: "법령명 제XXX조"
+                        pattern2 = r'([가-힣]{1,20}법)\s*제\s*(\d+)\s*조'
+                        match = re.search(pattern2, content)
+                        if match:
+                            if not statute_name:
+                                extracted_statute = match.group(1).strip()
+                                if len(extracted_statute) <= 20 and extracted_statute.count(' ') <= 2:
+                                    statute_name = extracted_statute
+                            article_no = f"제{match.group(2)}조"
+                            logger.debug(f"[sources_extractor] Extracted statute and article for legal_references (pattern2): {statute_name} {article_no}")
+                        else:
+                            # 패턴 3: "제XXX조" (법령명 없이 조문만)
+                            pattern3 = r'제\s*(\d+)\s*조'
+                            match = re.search(pattern3, content)
+                            if match:
+                                article_no = f"제{match.group(1)}조"
+                                # 조문 번호가 있으면 같은 세션의 다른 문서에서 법령명 찾기
+                                if not statute_name:
+                                    extracted_from_context = self._extract_statute_name_from_context(doc, retrieved_docs, match.group(1))
+                                    if extracted_from_context:
+                                        statute_name = extracted_from_context
+                                    else:
+                                        statute_name = "민법"
+                                logger.debug(f"[sources_extractor] Extracted article for legal_references: {article_no}, statute_name: {statute_name}")
+                
+                # 법령명이나 조문 번호가 있으면 legal_references에 추가
+                if statute_name or article_no:
+                    clause_no = merged_metadata.get("clause_no")
+                    item_no = merged_metadata.get("item_no")
                     
-                    legal_ref_parts = [statute_name]
+                    legal_ref_parts = [statute_name] if statute_name else []
                     if article_no:
                         legal_ref_parts.append(article_no)
                     if clause_no:
@@ -618,6 +1031,7 @@ class SourcesExtractor:
                     if legal_ref and legal_ref not in seen_legal_refs:
                         legal_refs.append(legal_ref)
                         seen_legal_refs.add(legal_ref)
+                        logger.debug(f"[sources_extractor] Added legal_reference: {legal_ref}")
         
         return legal_refs
     
@@ -747,7 +1161,22 @@ class SourcesExtractor:
             return []
         
         try:
-            from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
+            UnifiedSourceFormatter = None
+            try:
+                from lawfirm_langgraph.core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+            except (ImportError, AttributeError):
+                try:
+                    from core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+                except (ImportError, AttributeError):
+                    try:
+                        from lawfirm_langgraph.core.services.unified_source_formatter import UnifiedSourceFormatter
+                    except (ImportError, AttributeError):
+                        pass
+            
+            if UnifiedSourceFormatter is None:
+                logger.warning("UnifiedSourceFormatter not found, using fallback method for sources_detail")
+                return self._generate_sources_detail_fallback(retrieved_docs)
+            
             formatter = UnifiedSourceFormatter()
             
             sources_detail = []
@@ -833,4 +1262,351 @@ class SourcesExtractor:
             return sources_detail
         except Exception as e:
             logger.warning(f"Error generating sources_detail from retrieved_docs: {e}")
+            return self._generate_sources_detail_fallback(retrieved_docs)
+    
+    def _generate_sources_detail_fallback(
+        self, 
+        retrieved_docs: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """retrieved_docs에서 sources_detail 생성 (fallback 방법)"""
+        if not isinstance(retrieved_docs, list) or not retrieved_docs:
             return []
+        
+        sources_detail = []
+        for doc in retrieved_docs:
+            logger.debug(f"[sources_extractor] Processing doc for sources_detail: type={doc.get('type')}, has_metadata={bool(doc.get('metadata'))}, metadata_keys={list(doc.get('metadata', {}).keys()) if isinstance(doc.get('metadata'), dict) else []}")
+            if not isinstance(doc, dict):
+                continue
+            
+            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            if not source_type:
+                metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
+                    source_type = "case_paragraph"
+                elif metadata.get("decision_id") or metadata.get("org"):
+                    source_type = "decision_paragraph"
+                elif metadata.get("interpretation_number") or (metadata.get("org") and metadata.get("title")):
+                    source_type = "interpretation_paragraph"
+                elif metadata.get("statute_name") or metadata.get("law_name") or metadata.get("article_no"):
+                    source_type = "statute_article"
+                else:
+                    continue
+            
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            merged_metadata = {**metadata}
+            
+            # doc의 최상위 레벨 필드도 확인 (metadata에 없으면 doc에서 가져오기, 강화)
+            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                       "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date",
+                       "case_id", "decision_id", "interpretation_number", "law_id", "statute_id", "abbrv", "statute_abbrv"]:
+                if key in doc and not merged_metadata.get(key):
+                    merged_metadata[key] = doc[key]
+            
+            detail_dict = {
+                "name": "",
+                "type": source_type,
+                "url": "",
+                "metadata": merged_metadata
+            }
+            
+            if source_type == "statute_article":
+                statute_name = merged_metadata.get("statute_name") or merged_metadata.get("law_name") or ""
+                article_no = merged_metadata.get("article_no") or merged_metadata.get("article_number") or ""
+                clause_no = merged_metadata.get("clause_no") or ""
+                item_no = merged_metadata.get("item_no") or ""
+                
+                # 1. law_id나 statute_id가 있으면 데이터베이스에서 조회
+                if not statute_name:
+                    law_id = merged_metadata.get("law_id") or doc.get("law_id")
+                    statute_id = merged_metadata.get("statute_id") or doc.get("statute_id")
+                    if law_id or statute_id:
+                        db_statute_name = self._get_statute_name_from_db(law_id, statute_id)
+                        if db_statute_name:
+                            statute_name = db_statute_name
+                            merged_metadata["statute_name"] = statute_name
+                            detail_dict["metadata"]["statute_name"] = statute_name
+                            logger.debug(f"[sources_extractor] Extracted statute name from DB for sources_detail: {statute_name}")
+                
+                # 2. abbrv나 statute_abbrv가 있으면 사용
+                if not statute_name:
+                    abbrv = merged_metadata.get("abbrv") or merged_metadata.get("statute_abbrv") or doc.get("abbrv") or doc.get("statute_abbrv")
+                    if abbrv:
+                        abbrv_to_name = {
+                            "민법": "민법",
+                            "형법": "형법",
+                            "상법": "상법",
+                            "민소법": "민사소송법",
+                            "형소법": "형사소송법",
+                        }
+                        if abbrv in abbrv_to_name:
+                            statute_name = abbrv_to_name[abbrv]
+                            merged_metadata["statute_name"] = statute_name
+                            detail_dict["metadata"]["statute_name"] = statute_name
+                            logger.debug(f"[sources_extractor] Extracted statute name from abbrv for sources_detail: {statute_name}")
+                
+                # 3. 같은 세션의 다른 문서(판례)에서 법령명 추출
+                if not statute_name:
+                    extracted_from_context = self._extract_statute_name_from_context(doc, retrieved_docs, article_no.replace("제", "").replace("조", "").strip() if article_no else "")
+                    if extracted_from_context:
+                        statute_name = extracted_from_context
+                        merged_metadata["statute_name"] = statute_name
+                        detail_dict["metadata"]["statute_name"] = statute_name
+                        logger.debug(f"[sources_extractor] Extracted statute name from context for sources_detail: {statute_name}")
+                
+                # 4. metadata에 법령명이 없으면 content에서 추출 시도
+                content = doc.get("content") or doc.get("text") or ""
+                if not statute_name and content:
+                    # 패턴 1: 「법령명」 형식
+                    pattern1 = r'「([^」]+)」'
+                    match = re.search(pattern1, content)
+                    if match:
+                        statute_name = match.group(1).strip()
+                        merged_metadata["statute_name"] = statute_name
+                        detail_dict["metadata"]["statute_name"] = statute_name
+                        logger.debug(f"[sources_extractor] Extracted statute name for sources_detail (quotes): {statute_name}")
+                    else:
+                        # 패턴 2: "법령명" + "법" 형식 (최대 20자로 제한)
+                        pattern2 = r'([가-힣]{1,20}법)(?:\s|$|\.|,|\)|「|」|제)'
+                        match = re.search(pattern2, content)
+                        if match:
+                            extracted = match.group(1).strip()
+                            # "규칙 또는 처분의 헌법" 같은 긴 문장 제외
+                            if len(extracted) <= 20 and extracted.count(' ') <= 2:
+                                statute_name = extracted
+                                merged_metadata["statute_name"] = statute_name
+                                detail_dict["metadata"]["statute_name"] = statute_name
+                                logger.debug(f"[sources_extractor] Extracted statute name for sources_detail (pattern): {statute_name}")
+                            else:
+                                logger.debug(f"[sources_extractor] Skipped too long statute name for sources_detail: {extracted}")
+                
+                # 5. content에서 상대 참조 해석 ("전3조", "전조" 등)
+                if not article_no and content:
+                    relative_ref_pattern = r'전\s*(\d+)\s*조|전\s*조'
+                    match = re.search(relative_ref_pattern, content)
+                    if match:
+                        if not statute_name:
+                            statute_name = "민법"
+                            merged_metadata["statute_name"] = statute_name
+                            detail_dict["metadata"]["statute_name"] = statute_name
+                        logger.debug(f"[sources_extractor] Found relative reference in content for sources_detail, using default statute: {statute_name}")
+                
+                # 6. 조문 번호가 없으면 content에서 추출 시도
+                if not article_no and content:
+                    # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등 (문맥 제거)
+                    pattern1 = r'(?:^|\.|,|\)|\(|「|」|에|의|을|를|이|가|은|는|으로|로|에서|부터|까지|와|과|및|또는)\s*(민법|형법|상법|공법|행정법|민사소송법|형사소송법|가족법|상속법|채권법|물권법|계약법|불법행위법|부동산법|임대차보호법|전세권법|근저당법|저당권법|담보법|보증법|연대보증법|보증채무법|채권담보법|민사집행법)\s*제\s*(\d+)\s*조'
+                    match = re.search(pattern1, content)
+                    if match:
+                        if not statute_name:
+                            statute_name = match.group(1).strip()
+                            merged_metadata["statute_name"] = statute_name
+                            detail_dict["metadata"]["statute_name"] = statute_name
+                        article_no = f"제{match.group(2)}조"
+                        merged_metadata["article_no"] = article_no
+                        detail_dict["metadata"]["article_no"] = article_no
+                        logger.debug(f"[sources_extractor] Extracted statute and article for sources_detail: {statute_name} {article_no}")
+                    else:
+                        # 패턴 2: "법령명 제XXX조" (앞에 법령명이 있는 경우)
+                        pattern2 = r'([가-힣]{1,20}법)\s*제\s*(\d+)\s*조'
+                        match = re.search(pattern2, content)
+                        if match:
+                            extracted_statute = match.group(1).strip()
+                            # 너무 긴 문장 제외
+                            if len(extracted_statute) <= 20 and extracted_statute.count(' ') <= 2:
+                                if not statute_name:
+                                    statute_name = extracted_statute
+                                    merged_metadata["statute_name"] = statute_name
+                                    detail_dict["metadata"]["statute_name"] = statute_name
+                                article_no = f"제{match.group(2)}조"
+                                merged_metadata["article_no"] = article_no
+                                detail_dict["metadata"]["article_no"] = article_no
+                                logger.debug(f"[sources_extractor] Extracted statute and article for sources_detail (pattern2): {statute_name} {article_no}")
+                        else:
+                            # 패턴 3: "제XXX조" (법령명 없이 조문만)
+                            pattern3 = r'제\s*(\d+)\s*조'
+                            match = re.search(pattern3, content)
+                            if match:
+                                article_no = f"제{match.group(1)}조"
+                                merged_metadata["article_no"] = article_no
+                                detail_dict["metadata"]["article_no"] = article_no
+                                # 조문 번호가 있으면 같은 세션의 다른 문서에서 법령명 찾기
+                                if not statute_name:
+                                    extracted_from_context = self._extract_statute_name_from_context(doc, retrieved_docs, match.group(1))
+                                    if extracted_from_context:
+                                        statute_name = extracted_from_context
+                                    else:
+                                        statute_name = "민법"
+                                    merged_metadata["statute_name"] = statute_name
+                                    detail_dict["metadata"]["statute_name"] = statute_name
+                                logger.debug(f"[sources_extractor] Extracted article for sources_detail: {article_no}, statute_name: {statute_name}")
+                
+                name_parts = []
+                if statute_name:
+                    name_parts.append(statute_name)
+                if article_no:
+                    name_parts.append(article_no)
+                if clause_no:
+                    name_parts.append(f"제{clause_no}항")
+                if item_no:
+                    name_parts.append(f"제{item_no}호")
+                
+                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "법령"
+                detail_dict["statute_name"] = statute_name
+                detail_dict["article_no"] = article_no
+                if clause_no:
+                    detail_dict["clause_no"] = clause_no
+                if item_no:
+                    detail_dict["item_no"] = item_no
+            
+            elif source_type == "case_paragraph":
+                # 판례 정보 추출
+                court = merged_metadata.get("court") or ""
+                doc_id = merged_metadata.get("doc_id") or merged_metadata.get("case_id") or ""
+                casenames = merged_metadata.get("casenames") or ""
+                announce_date = merged_metadata.get("announce_date") or ""
+                
+                content = doc.get("content") or doc.get("text") or ""
+                
+                # content에서 판례 정보 추출
+                if not court and content:
+                    # 법원명 패턴: "대법원", "지방법원", "고등법원" 등
+                    court_pattern = r'(대법원|지방법원|고등법원|특허법원|가정법원|행정법원|헌법재판소)'
+                    match = re.search(court_pattern, content)
+                    if match:
+                        court = match.group(1)
+                        merged_metadata["court"] = court
+                        detail_dict["metadata"]["court"] = court
+                        logger.debug(f"[sources_extractor] Extracted court from content: {court}")
+                
+                if not doc_id and content:
+                    # 사건번호 패턴: "2021다275611", "2000다72572" 등
+                    case_number_pattern = r'(\d{4}[가나다라마바사아자차카타파하]\d+)'
+                    match = re.search(case_number_pattern, content)
+                    if match:
+                        doc_id = match.group(1)
+                        merged_metadata["doc_id"] = doc_id
+                        detail_dict["metadata"]["doc_id"] = doc_id
+                        logger.debug(f"[sources_extractor] Extracted case number from content: {doc_id}")
+                
+                if not announce_date and content:
+                    # 날짜 패턴: "2021. 5. 24.", "2000. 3. 15." 등
+                    date_pattern = r'(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)'
+                    match = re.search(date_pattern, content)
+                    if match:
+                        announce_date = match.group(1).strip()
+                        merged_metadata["announce_date"] = announce_date
+                        detail_dict["metadata"]["announce_date"] = announce_date
+                        logger.debug(f"[sources_extractor] Extracted announce_date from content: {announce_date}")
+                
+                # 판례명 생성
+                name_parts = []
+                if court:
+                    name_parts.append(court)
+                if doc_id:
+                    name_parts.append(doc_id)
+                elif casenames:
+                    name_parts.append(casenames[:30])  # 너무 길면 자름
+                
+                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "판례"
+                detail_dict["court"] = court
+                detail_dict["case_number"] = doc_id
+                if casenames:
+                    detail_dict["case_name"] = casenames
+            
+            elif source_type == "decision_paragraph":
+                # 결정례 정보 추출
+                org = merged_metadata.get("org") or ""
+                doc_id = merged_metadata.get("doc_id") or merged_metadata.get("decision_id") or ""
+                decision_date = merged_metadata.get("decision_date") or ""
+                result = merged_metadata.get("result") or ""
+                
+                content = doc.get("content") or doc.get("text") or ""
+                
+                # content에서 기관명 추출
+                if not org and content:
+                    # 기관명 패턴: "고용노동부", "법제처" 등
+                    org_pattern = r'(고용노동부|법제처|행정안전부|기획재정부|교육부|과학기술정보통신부|외교부|통일부|법무부|국방부|문화체육관광부|농림축산식품부|산업통상자원부|보건복지부|환경부|국토교통부|해양수산부|중소벤처기업부|여성가족부|국세청|관세청|공정거래위원회|금융감독원)'
+                    match = re.search(org_pattern, content)
+                    if match:
+                        org = match.group(1)
+                        merged_metadata["org"] = org
+                        detail_dict["metadata"]["org"] = org
+                        logger.debug(f"[sources_extractor] Extracted org from content: {org}")
+                
+                # content에서 날짜 추출
+                if not decision_date and content:
+                    date_pattern = r'(\d{4}\.\s*\d{1,2}\.\s*\d{1,2})'
+                    match = re.search(date_pattern, content)
+                    if match:
+                        decision_date = match.group(1).strip()
+                        merged_metadata["decision_date"] = decision_date
+                        detail_dict["metadata"]["decision_date"] = decision_date
+                        logger.debug(f"[sources_extractor] Extracted decision_date from content: {decision_date}")
+                
+                # 결정례명 생성
+                name_parts = []
+                if org:
+                    name_parts.append(org)
+                if doc_id:
+                    name_parts.append(doc_id)
+                
+                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "결정례"
+                detail_dict["org"] = org
+                detail_dict["decision_number"] = doc_id
+                if decision_date:
+                    detail_dict["decision_date"] = decision_date
+                if result:
+                    detail_dict["result"] = result
+            
+            elif source_type == "interpretation_paragraph":
+                # 해석례 정보 추출
+                org = merged_metadata.get("org") or ""
+                title = merged_metadata.get("title") or ""
+                doc_id = merged_metadata.get("doc_id") or merged_metadata.get("interpretation_number") or ""
+                response_date = merged_metadata.get("response_date") or ""
+                
+                content = doc.get("content") or doc.get("text") or ""
+                
+                # content에서 기관명 추출
+                if not org and content:
+                    # 기관명 패턴
+                    org_pattern = r'(고용노동부|법제처|행정안전부|기획재정부|교육부|과학기술정보통신부|외교부|통일부|법무부|국방부|문화체육관광부|농림축산식품부|산업통상자원부|보건복지부|환경부|국토교통부|해양수산부|중소벤처기업부|여성가족부|국세청|관세청|공정거래위원회|금융감독원)'
+                    match = re.search(org_pattern, content)
+                    if match:
+                        org = match.group(1)
+                        merged_metadata["org"] = org
+                        detail_dict["metadata"]["org"] = org
+                        logger.debug(f"[sources_extractor] Extracted org from content for interpretation: {org}")
+                
+                # content에서 날짜 추출
+                if not response_date and content:
+                    date_pattern = r'(\d{4}\.\s*\d{1,2}\.\s*\d{1,2})'
+                    match = re.search(date_pattern, content)
+                    if match:
+                        response_date = match.group(1).strip()
+                        merged_metadata["response_date"] = response_date
+                        detail_dict["metadata"]["response_date"] = response_date
+                        logger.debug(f"[sources_extractor] Extracted response_date from content: {response_date}")
+                
+                # 해석례명 생성
+                name_parts = []
+                if org:
+                    name_parts.append(org)
+                if title:
+                    name_parts.append(title[:30])  # 너무 길면 자름
+                elif doc_id:
+                    name_parts.append(doc_id)
+                
+                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "해석례"
+                detail_dict["org"] = org
+                detail_dict["title"] = title
+                detail_dict["interpretation_number"] = doc_id
+                if response_date:
+                    detail_dict["response_date"] = response_date
+            
+            content = doc.get("content") or doc.get("text") or ""
+            if content:
+                detail_dict["content"] = content
+            
+            sources_detail.append(detail_dict)
+        
+        return sources_detail
