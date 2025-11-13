@@ -242,6 +242,22 @@ class SearchExecutionProcessor:
                         self.logger.debug(f"Keyword search exception: {e}")
                     keyword_results, keyword_count = [], 0
 
+            # 법령 조문 직접 검색 추가 (개선 #10) - ThreadPoolExecutor 완료 후 병합
+            direct_statute_results = []
+            try:
+                if original_query and query_type_str == "law_inquiry":
+                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                    data_connector = LegalDataConnectorV2()
+                    direct_statute_results = data_connector.search_statute_article_direct(original_query, limit=5)
+                    if direct_statute_results:
+                        self.logger.info(f"⚖️ [DIRECT STATUTE] {len(direct_statute_results)}개 조문 직접 검색 성공")
+                        # 직접 검색된 조문을 keyword_results 최상위에 추가 (relevance_score=1.0이므로 최상위로)
+                        keyword_results = direct_statute_results + keyword_results
+                        keyword_count += len(direct_statute_results)
+                        self.logger.info(f"⚖️ [DIRECT STATUTE] keyword_results에 {len(direct_statute_results)}개 조문 추가 완료 (총 {keyword_count}개)")
+            except Exception as e:
+                self.logger.warning(f"법령 조문 직접 검색 실패: {e}")
+
             ensure_state_group(state, "search")
 
             if debug_mode:

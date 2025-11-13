@@ -45,6 +45,9 @@ class WorkflowDocumentProcessor:
             min_relevance_score_semantic = 0.2
             min_relevance_score_keyword = 0.15
             
+            # 개선 #4: 법령 조문 타입 문서의 필터링 임계값 완화
+            min_relevance_score_statute_article = 0.1
+            
             for doc in retrieved_docs:
                 if not isinstance(doc, dict):
                     invalid_docs_count += 1
@@ -61,18 +64,33 @@ class WorkflowDocumentProcessor:
                 keyword_match_score = doc.get("keyword_match_score", 0.0)
                 has_keyword_match = keyword_match_score > 0.0 or len(doc.get("matched_keywords", [])) > 0
                 
-                min_score = min_relevance_score_keyword if search_type == "keyword" else min_relevance_score_semantic
+                # 문서 타입 확인
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                source_type = doc.get("source_type", "").lower() if doc.get("source_type") else ""
+                is_statute_article = (
+                    doc_type == "statute_article" or 
+                    source_type == "statute_article" or
+                    "statute_article" in doc_type or
+                    "statute_article" in source_type or
+                    doc.get("direct_match", False) or
+                    search_type == "direct_statute"
+                )
                 
-                if search_type == "keyword" and has_keyword_match:
+                # 개선 #4: 법령 조문은 낮은 임계값 적용
+                if is_statute_article:
+                    min_score = min_relevance_score_statute_article
+                elif search_type == "keyword" and has_keyword_match:
                     min_score = min_relevance_score_keyword
                 elif search_type == "semantic":
                     min_score = min_relevance_score_semantic
+                else:
+                    min_score = min_relevance_score_keyword if search_type == "keyword" else min_relevance_score_semantic
                 
                 if relevance_score < min_score:
                     invalid_docs_count += 1
                     self.logger.debug(
                         f"Document filtered: relevance score too low ({relevance_score:.3f} < {min_score:.3f}) "
-                        f"(source: {doc.get('source', 'Unknown')}, type: {search_type})"
+                        f"(source: {doc.get('source', 'Unknown')}, type: {search_type}, doc_type: {doc_type})"
                     )
                     continue
                 
@@ -199,7 +217,20 @@ class WorkflowDocumentProcessor:
                     ])
                     doc_section += "\n\n"
                 
-                max_content_length = 1500
+                # 컨텍스트 길이 최적화: 토큰 수 기반 동적 조정
+                # 한글 기준 대략 1토큰 = 2-3자, 영어 기준 1토큰 = 4자
+                # 안전하게 1토큰 = 2.5자로 계산
+                max_tokens_per_doc = 600  # 문서당 최대 토큰 수
+                max_content_length = int(max_tokens_per_doc * 2.5)  # 약 1500자
+                
+                # 질문 타입별 동적 조정
+                if query_type == "law_inquiry":
+                    max_tokens_per_doc = 800  # 법령 조회: 더 긴 컨텍스트 허용
+                    max_content_length = int(max_tokens_per_doc * 2.5)  # 약 2000자
+                elif query_type == "complex_question":
+                    max_tokens_per_doc = 1000  # 복잡한 질문: 더 긴 컨텍스트 허용
+                    max_content_length = int(max_tokens_per_doc * 2.5)  # 약 2500자
+                
                 if len(content) > max_content_length:
                     content = content[:max_content_length] + "..."
                 

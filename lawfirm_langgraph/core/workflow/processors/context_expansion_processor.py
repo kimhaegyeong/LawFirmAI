@@ -209,9 +209,12 @@ class ContextExpansionProcessor:
             common_words = query_words.intersection(context_words)
             return len(common_words) / len(query_words)
 
-        context_text = context.get("text", "") or context.get("content", "")
-        if not context_text and isinstance(context, dict):
-            context_text = str(context).get("text", "") or str(context).get("content", "")
+        if isinstance(context, dict):
+            context_text = context.get("text", "") or context.get("content", "")
+        elif isinstance(context, str):
+            context_text = context
+        else:
+            context_text = str(context) if context else ""
 
         relevance = calculate_relevance(context_text, query)
         coverage = len(extracted_keywords) / max(len(query.split()), 1) if extracted_keywords else 0.0

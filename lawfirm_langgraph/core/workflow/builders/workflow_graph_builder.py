@@ -5,6 +5,7 @@ Workflow Graph Builder
 """
 
 import logging
+import os
 from typing import Any, Callable, Dict
 
 from langgraph.graph import END, StateGraph
@@ -69,6 +70,15 @@ class WorkflowGraphBuilder:
         workflow.add_node("prepare_documents_and_terms", node_handlers.get("prepare_documents_and_terms"))
         workflow.add_node("generate_and_validate_answer", node_handlers.get("generate_and_validate_answer"))
         workflow.add_node("continue_answer_generation", node_handlers.get("continue_answer_generation"))
+        
+        # 스트리밍 노드 추가
+        if node_handlers.get("generate_answer_stream"):
+            workflow.add_node("generate_answer_stream", node_handlers.get("generate_answer_stream"))
+            self.logger.info("generate_answer_stream node added to workflow")
+        
+        if node_handlers.get("generate_answer_final"):
+            workflow.add_node("generate_answer_final", node_handlers.get("generate_answer_final"))
+            self.logger.info("generate_answer_final node added to workflow")
 
         if self.config.use_agentic_mode:
             workflow.add_node("agentic_decision", node_handlers.get("agentic_decision_node"))
@@ -101,15 +111,7 @@ class WorkflowGraphBuilder:
                 }
             )
 
-        if self.config.use_agentic_mode:
-            workflow.add_conditional_edges(
-                "agentic_decision",
-                self._route_after_agentic_func,
-                {
-                    "has_results": "prepare_documents_and_terms",
-                    "no_results": "generate_and_validate_answer",
-                }
-            )
+        # agentic_decision 라우팅은 setup_routing의 끝에서 처리
 
         workflow.add_conditional_edges(
             "route_expert",
@@ -124,21 +126,75 @@ class WorkflowGraphBuilder:
             "prepare_search_query",
             self._should_skip_search_adaptive_func,
             {
-                "skip": "generate_and_validate_answer",
+                "skip": self._get_answer_generation_node(),
                 "continue": "execute_searches_parallel"
             }
         )
 
-        workflow.add_conditional_edges(
-            "generate_and_validate_answer",
-            self._should_retry_validation_func,
-            {
-                "accept": END,
-                "retry_generate": "generate_and_validate_answer",
-                "retry_search": "expand_keywords"
-            }
-        )
+        # 답변 생성 노드 라우팅 (환경 변수 기반)
+        answer_node = self._get_answer_generation_node()
+        if answer_node == "generate_answer_stream":
+            # 스트리밍 노드 -> 최종 노드 -> 검증
+            workflow.add_edge("generate_answer_stream", "generate_answer_final")
+            workflow.add_conditional_edges(
+                "generate_answer_final",
+                self._should_retry_validation_func,
+                {
+                    "accept": END,
+                    "retry_generate": "generate_answer_stream",
+                    "retry_search": "expand_keywords"
+                }
+            )
+        elif answer_node == "generate_answer_final":
+            # 최종 노드만 사용 (테스트 모드)
+            workflow.add_conditional_edges(
+                "generate_answer_final",
+                self._should_retry_validation_func,
+                {
+                    "accept": END,
+                    "retry_generate": "generate_answer_final",
+                    "retry_search": "expand_keywords"
+                }
+            )
+        else:
+            # 기본 노드 사용 (generate_and_validate_answer)
+            workflow.add_conditional_edges(
+                "generate_and_validate_answer",
+                self._should_retry_validation_func,
+                {
+                    "accept": END,
+                    "retry_generate": "generate_and_validate_answer",
+                    "retry_search": "expand_keywords"
+                }
+            )
+        
+        # agentic_decision에서도 답변 생성 노드 사용
+        if self.config.use_agentic_mode:
+            workflow.add_conditional_edges(
+                "agentic_decision",
+                self._route_after_agentic_func,
+                {
+                    "has_results": "prepare_documents_and_terms",
+                    "no_results": self._get_answer_generation_node(),
+                }
+            )
 
+    def _get_answer_generation_node(self) -> str:
+        """
+        환경 변수에 따라 답변 생성 노드 선택
+        
+        Returns:
+            노드 이름 (generate_answer_stream, generate_answer_final, 또는 generate_and_validate_answer)
+        """
+        use_streaming_mode = os.getenv("USE_STREAMING_MODE", "true").lower() == "true"
+        
+        if use_streaming_mode:
+            # API 모드: 스트리밍 노드 사용
+            return "generate_answer_stream"
+        else:
+            # 테스트 모드: 최종 노드 사용 (검증 및 포맷팅 포함)
+            return "generate_answer_final"
+    
     def add_edges(self, workflow: StateGraph) -> None:
         """엣지 추가"""
         workflow.add_edge("direct_answer", END)
@@ -147,5 +203,8 @@ class WorkflowGraphBuilder:
         workflow.add_edge("expand_keywords", "prepare_search_query")
         workflow.add_edge("execute_searches_parallel", "process_search_results_combined")
         workflow.add_edge("process_search_results_combined", "prepare_documents_and_terms")
-        workflow.add_edge("prepare_documents_and_terms", "generate_and_validate_answer")
+        
+        # 답변 생성 노드로의 엣지 (환경 변수 기반)
+        answer_node = self._get_answer_generation_node()
+        workflow.add_edge("prepare_documents_and_terms", answer_node)
 

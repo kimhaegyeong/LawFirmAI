@@ -495,6 +495,24 @@ class WorkflowUtils:
             if len(first_200_cleaned) < len(first_200):
                 answer = first_200_cleaned + answer[200:]
         
+        # 전체 답변에서 특정 사건번호 패턴 제거 (개선)
+        case_number_patterns = [
+            r'\d{4}[가나다라마바사아자차카타파하]\d+',  # 기본 사건번호 패턴
+            r'\d{4}고단\d+',  # 고단 사건번호
+            r'\d{4}가단\d+',  # 가단 사건번호
+            r'\d{4}나단\d+',  # 나단 사건번호
+        ]
+        
+        for pattern in case_number_patterns:
+            # 사건번호가 포함된 문장 전체 제거 (더 공격적으로)
+            answer = re.sub(
+                r'[^.]*' + pattern + r'[^.]*\.',
+                '',
+                answer
+            )
+            # 사건번호만 제거 (문장 중간에 있는 경우)
+            answer = re.sub(pattern, '', answer)
+        
         # 처음 500자 내에 특정 사건번호가 있으면 제거
         first_500 = answer[:500] if len(answer) > 500 else answer
         if re.search(r'[가-힣]*지방법원[가-힣]*\s*-\s*\d{4}[가나다라마바사아자차카타파하]\d+', first_500):

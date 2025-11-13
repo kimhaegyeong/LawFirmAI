@@ -38,6 +38,15 @@ except ImportError:
     # Fallback: 프로젝트 루트 기준 import
     from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 
+# 콜백 핸들러 import
+try:
+    from .callbacks.streaming_callback_handler import StreamingCallbackHandler
+except ImportError:
+    try:
+        from core.workflow.callbacks.streaming_callback_handler import StreamingCallbackHandler
+    except ImportError:
+        StreamingCallbackHandler = None
+
 # ConversationFlowTracker import
 try:
     from ..conversation.conversation_flow_tracker import ConversationFlowTracker
@@ -354,7 +363,64 @@ class LangGraphWorkflowService:
                 safe_log_warning(self.logger, f"Failed to initialize ABTestManager: {e}")
                 self.ab_test_manager = None
 
+        # 스트리밍 콜백 핸들러 초기화 (스트리밍 모드 활성화 시)
+        self.streaming_callback_handler = None
+        if StreamingCallbackHandler is not None:
+            try:
+                # 큐는 각 요청마다 생성되므로 여기서는 None으로 초기화
+                # 실제 사용 시 ChatService에서 큐를 생성하여 전달
+                self.streaming_callback_handler_class = StreamingCallbackHandler
+                safe_log_info(self.logger, "StreamingCallbackHandler class available")
+            except Exception as e:
+                safe_log_warning(self.logger, f"Failed to initialize StreamingCallbackHandler: {e}")
+                self.streaming_callback_handler_class = None
+        else:
+            safe_log_warning(self.logger, "StreamingCallbackHandler not available")
+
         safe_log_info(self.logger, "LangGraphWorkflowService initialized successfully")
+    
+    def create_streaming_callback_handler(self, queue: Optional[asyncio.Queue] = None) -> Optional[Any]:
+        """
+        스트리밍 콜백 핸들러 생성
+        
+        Args:
+            queue: 청크를 저장할 asyncio.Queue. None이면 자동 생성
+            
+        Returns:
+            StreamingCallbackHandler 인스턴스 또는 None
+        """
+        if self.streaming_callback_handler_class is None:
+            return None
+        
+        try:
+            if queue is None:
+                queue = asyncio.Queue()
+            handler = self.streaming_callback_handler_class(queue=queue)
+            return handler
+        except Exception as e:
+            self.logger.warning(f"Failed to create StreamingCallbackHandler: {e}")
+            return None
+    
+    def get_config_with_callbacks(self, session_id: Optional[str] = None, callbacks: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """
+        콜백이 포함된 config 생성
+        
+        Args:
+            session_id: 세션 ID
+            callbacks: 콜백 핸들러 리스트
+            
+        Returns:
+            LangGraph config 딕셔너리
+        """
+        config = {"configurable": {}}
+        
+        if session_id:
+            config["configurable"]["thread_id"] = session_id
+        
+        if callbacks:
+            config["callbacks"] = callbacks
+        
+        return config
 
     async def process_query(
         self,

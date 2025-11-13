@@ -449,7 +449,7 @@ class AnswerQualityValidator:
         if fact_mentions > 0:
             copy_score += min(0.3, fact_mentions * 0.1)
 
-        needs_regeneration = copy_score >= 0.5 or len(case_numbers) >= 2
+        needs_regeneration = copy_score >= 0.3 or len(case_numbers) >= 1
 
         return {
             "has_specific_case": len(case_numbers) > 0 or len(party_names) > 0,

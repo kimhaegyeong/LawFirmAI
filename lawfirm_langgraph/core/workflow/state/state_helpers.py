@@ -452,7 +452,7 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
 
         # Classification
         # 중요: get_classification이 None을 반환할 수 있으므로 안전하게 처리
-        "query_type": lambda s: (get_classification(s) or {}).get("query_type", ""),
+        "query_type": lambda s: (get_classification(s) or {}).get("query_type", "") or s.get("query_type", "") or (s.get("metadata", {}) or {}).get("query_type", "") or ((s.get("common", {}) or {}).get("classification", {}) or {}).get("query_type", ""),
         "confidence": lambda s: (get_classification(s) or {}).get("confidence", 0.0),
         "legal_field": lambda s: (get_classification(s) or {}).get("legal_field", ""),
         "legal_domain": lambda s: (get_classification(s) or {}).get("legal_domain", ""),
@@ -483,6 +483,9 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
         "merged_documents": lambda s: (get_search(s) or {}).get("merged_documents", []),
         "keyword_weights": lambda s: (get_search(s) or {}).get("keyword_weights", {}),
         "prompt_optimized_context": lambda s: (get_search(s) or {}).get("prompt_optimized_context", {}),
+        "structured_documents": lambda s: (get_search(s) or {}).get("structured_documents", {}) or s.get("structured_documents", {}),
+        "search_quality": lambda s: (get_search(s) or {}).get("search_quality", {}) or s.get("search_quality", {}) or (s.get("metadata", {}) or {}).get("search_quality", {}),
+        "search_quality_evaluation": lambda s: (get_search(s) or {}).get("search_quality_evaluation", {}) or s.get("search_quality_evaluation", {}) or (s.get("metadata", {}) or {}).get("search_quality_evaluation", {}),
 
         # Analysis
         # 중요: get_analysis 등이 None을 반환할 수 있으므로 안전하게 처리
@@ -516,6 +519,8 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
         "retry_count": lambda s: (get_control(s) or {}).get("retry_count", 0),
         "quality_check_passed": lambda s: (get_control(s) or {}).get("quality_check_passed", False),
         "needs_enhancement": lambda s: (get_control(s) or {}).get("needs_enhancement", False),
+        "needs_regeneration": lambda s: (get_control(s) or {}).get("needs_regeneration", False) or s.get("needs_regeneration", False) or (s.get("metadata", {}) or {}).get("needs_regeneration", False),
+        "regeneration_reason": lambda s: (get_control(s) or {}).get("regeneration_reason") or s.get("regeneration_reason") or (s.get("metadata", {}) or {}).get("regeneration_reason"),
 
         # Common
         "processing_steps": lambda s: get_processing_steps(s),
@@ -591,7 +596,7 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
         set_multi_turn(state, {field_path: value})  # type: ignore
     elif field_path in ["legal_validity_check", "legal_basis_validation", "outdated_laws"]:
         set_validation(state, {field_path: value})  # type: ignore
-    elif field_path in ["retry_count", "quality_check_passed", "needs_enhancement"]:
+    elif field_path in ["retry_count", "quality_check_passed", "needs_enhancement", "needs_regeneration", "regeneration_reason"]:
         set_control(state, {field_path: value})  # type: ignore
     elif field_path in ["processing_time", "tokens_used", "processing_steps", "errors"]:
         # common 필드 처리

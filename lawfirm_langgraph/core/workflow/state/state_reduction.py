@@ -87,6 +87,13 @@ class StateReducer:
         # 워크플로우 전반에서 query가 필요하므로 항상 input 그룹 포함
         required_groups = required_groups | {"input"}
 
+        # 중요: 특정 노드에서 필수 필드 보존
+        # generate_answer_stream, generate_answer_final 노드에서 retrieved_docs, query_type 등이 필요
+        critical_nodes = ["generate_answer_stream", "generate_answer_final", "generate_answer_enhanced"]
+        if node_name in critical_nodes:
+            # 이 노드들은 retrieved_docs, query_type, structured_documents가 필요
+            required_groups = required_groups | {"search", "common"}
+
         reduced = {}
 
         # 필수 그룹만 추출
@@ -219,6 +226,39 @@ class StateReducer:
                 # 재시도 카운터도 명시적으로 복사
                 if "generation_retry_count" in safe_metadata:
                     reduced["common"]["metadata"]["generation_retry_count"] = safe_metadata["generation_retry_count"]
+
+        # 중요: critical 노드들에 대해 필수 필드 보존
+        critical_nodes = ["generate_answer_stream", "generate_answer_final", "generate_answer_enhanced"]
+        if node_name in critical_nodes:
+            # retrieved_docs 보존 (nested 또는 flat 구조)
+            if "retrieved_docs" in state:
+                if "search" not in reduced:
+                    reduced["search"] = {}
+                if "retrieved_docs" not in reduced["search"]:
+                    reduced["search"]["retrieved_docs"] = state["retrieved_docs"]
+            elif "search" in reduced and isinstance(reduced["search"], dict):
+                if "retrieved_docs" in state:
+                    reduced["search"]["retrieved_docs"] = state["retrieved_docs"]
+            
+            # structured_documents 보존
+            if "structured_documents" in state:
+                if "search" not in reduced:
+                    reduced["search"] = {}
+                if "structured_documents" not in reduced["search"]:
+                    reduced["search"]["structured_documents"] = state["structured_documents"]
+            
+            # query_type 보존 (top-level 또는 metadata)
+            query_type_value = state.get("query_type") or (state.get("metadata", {}).get("query_type") if isinstance(state.get("metadata"), dict) else None)
+            if query_type_value:
+                if "common" not in reduced:
+                    reduced["common"] = {}
+                if "metadata" not in reduced["common"]:
+                    reduced["common"]["metadata"] = {}
+                if "query_type" not in reduced["common"]["metadata"]:
+                    reduced["common"]["metadata"]["query_type"] = query_type_value
+                # top-level에도 보존
+                if "query_type" not in reduced:
+                    reduced["query_type"] = query_type_value
 
         return reduced
 

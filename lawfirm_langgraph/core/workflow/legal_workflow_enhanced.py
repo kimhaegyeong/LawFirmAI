@@ -140,12 +140,10 @@ logger = logging.getLogger(__name__)
 
 # AnswerStructureEnhancer 통합 (답변 구조화 및 법적 근거 강화)
 try:
-    from core.services.answer_structure_enhancer import AnswerStructureEnhancer
+    from core.generation.formatters.answer_structure_enhancer import AnswerStructureEnhancer
     ANSWER_STRUCTURE_ENHANCER_AVAILABLE = True
 except ImportError:
     ANSWER_STRUCTURE_ENHANCER_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("AnswerStructureEnhancer not available")
 
 
 from core.workflow.state.workflow_types import QueryComplexity, RetryCounterManager
@@ -172,37 +170,17 @@ class EnhancedLegalQuestionWorkflow(
     def __init__(self, config: LangGraphConfig):
         self.config = config
 
-        # 개선: 로거를 명시적으로 초기화하고 핸들러 보장
+        # 개선: 로거를 명시적으로 초기화 (루트 로거 핸들러 사용)
         self.logger = logging.getLogger(__name__)
 
         # 로거 레벨 설정 (명시적으로 설정)
         self.logger.setLevel(logging.DEBUG)
 
-        # 로거의 propagate 설정 (루트 로거로 전파 보장)
+        # 로거의 propagate 설정 (루트 로거로 전파, 중복 방지를 위해 핸들러 추가하지 않음)
         self.logger.propagate = True
 
-        # 핸들러가 없으면 추가 (SafeStreamHandler 사용)
-        if not self.logger.handlers:
-            try:
-                from core.shared.utils.safe_logging import SafeStreamHandler
-                handler = SafeStreamHandler(sys.stdout)
-                handler.setLevel(logging.DEBUG)
-                formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-            except ImportError:
-                handler = logging.StreamHandler(sys.stdout)
-                handler.setLevel(logging.DEBUG)
-                formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
-
-        # 로거 설정 확인 (디버깅용 - 한 번만 출력)
-        self.logger.debug(f"Logger initialized: name={__name__}, level={self.logger.level}, handlers={len(self.logger.handlers)}")
+        # 핸들러는 루트 로거에서 관리하므로 여기서 추가하지 않음
+        # (루트 로거에 이미 핸들러가 있으면 중복 출력 방지)
 
         # 통합 프롬프트 관리자 초기화 (우선)
         self.unified_prompt_manager = UnifiedPromptManager()
@@ -252,26 +230,29 @@ class EnhancedLegalQuestionWorkflow(
             self.logger.info("AnswerStructureEnhancer initialized for answer quality enhancement")
         else:
             self.answer_structure_enhancer = None
-            self.logger.warning("AnswerStructureEnhancer not available")
+            self.logger.debug("AnswerStructureEnhancer not available (optional feature)")
 
-        # AnswerFormatter 초기화 (시각적 포맷팅)
-        try:
-            from core.services.answer_formatter import AnswerFormatter
-            self.answer_formatter = AnswerFormatter()
-            self.logger.info("AnswerFormatter initialized for visual formatting")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize AnswerFormatter: {e}")
-            self.answer_formatter = None
+        # AnswerFormatter 초기화 (시각적 포맷팅 - 선택적 기능)
+        # 모듈이 존재하지 않으므로 None으로 설정
+        self.answer_formatter = None
 
         # Semantic Search Engine 초기화 (벡터 검색을 위한 - lawfirm_v2_faiss.index 사용)
         try:
-            from core.services.semantic_search_engine_v2 import SemanticSearchEngineV2
+            from core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
             from core.utils.config import Config
             # lawfirm_v2.db 기반으로 자동으로 ./data/lawfirm_v2_faiss.index 사용
             config = Config()
             db_path = config.database_path
             self.semantic_search = SemanticSearchEngineV2(db_path=db_path)
-            self.logger.info(f"SemanticSearchEngineV2 initialized successfully with {db_path}")
+            
+            if hasattr(self.semantic_search, 'diagnose'):
+                diagnosis = self.semantic_search.diagnose()
+                if diagnosis.get("available"):
+                    self.logger.info(f"SemanticSearchEngineV2 initialized successfully with {db_path}")
+                else:
+                    self.logger.warning(f"SemanticSearchEngineV2 initialized but not available: {diagnosis.get('issues', [])}")
+            else:
+                self.logger.info(f"SemanticSearchEngineV2 initialized successfully with {db_path}")
         except Exception as e:
             self.logger.warning(f"Failed to initialize SemanticSearchEngineV2: {e}")
             self.semantic_search = None
@@ -632,6 +613,8 @@ class EnhancedLegalQuestionWorkflow(
         """WorkflowGraphBuilder.build_graph 래퍼"""
         if self.workflow_graph_builder:
             node_handlers = {
+                "generate_answer_stream": self.generate_answer_stream,
+                "generate_answer_final": self.generate_answer_final,
                 "classify_query_and_complexity": self.classify_query_and_complexity,
                 "direct_answer_node": self.direct_answer_node,
                 "classification_parallel": self.classification_parallel,
@@ -1024,6 +1007,193 @@ class EnhancedLegalQuestionWorkflow(
             state.setdefault("search", {})["results"] = []
             return state
 
+    @observe(name="generate_answer_stream")
+    @with_state_optimization("generate_answer_stream", enable_reduction=True)
+    def generate_answer_stream(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """스트리밍 전용 답변 생성 노드 - 스트리밍만 수행하고 검증/포맷팅은 하지 않음 (콜백 방식 사용)"""
+        try:
+            start_time = time.time()
+            self.logger.info("📡 [STREAM NODE] 스트리밍 전용 답변 생성 시작 (콜백 방식)")
+            
+            # 중요: retrieved_docs, query_type 등을 명시적으로 보존
+            # State reduction으로 인한 손실 방지
+            preserved_retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            preserved_structured_docs = self._get_state_value(state, "structured_documents", [])
+            preserved_query_type = self._get_state_value(state, "query_type") or (state.get("metadata", {}).get("query_type") if isinstance(state.get("metadata"), dict) else None)
+            
+            # generate_answer_enhanced 실행 (답변 생성만)
+            # 콜백은 LangGraph의 astream_events()와 config의 callbacks를 통해 처리됨
+            state = self.generate_answer_enhanced(state)
+            
+            # 보존된 필드 복원 (reduction으로 손실된 경우 대비)
+            if preserved_retrieved_docs and not self._get_state_value(state, "retrieved_docs"):
+                self._set_state_value(state, "retrieved_docs", preserved_retrieved_docs)
+            if preserved_structured_docs and not self._get_state_value(state, "structured_documents"):
+                self._set_state_value(state, "structured_documents", preserved_structured_docs)
+            if preserved_query_type:
+                metadata = self._get_metadata_safely(state)
+                if "query_type" not in metadata:
+                    metadata["query_type"] = preserved_query_type
+                self._set_state_value(state, "metadata", metadata)
+                # top-level에도 보존
+                if "query_type" not in state:
+                    state["query_type"] = preserved_query_type
+            
+            # 스트리밍 완료 표시
+            metadata = self._get_metadata_safely(state)
+            metadata["streaming_completed"] = True
+            metadata["streaming_node_executed"] = True
+            self._set_state_value(state, "metadata", metadata)
+            
+            elapsed = time.time() - start_time
+            self.logger.info(f"📡 [STREAM NODE] 스트리밍 전용 답변 생성 완료 ({elapsed:.2f}s)")
+            
+        except Exception as e:
+            self.logger.error(f"❌ [STREAM NODE] 스트리밍 노드 오류: {e}")
+            self._handle_error(state, str(e), "스트리밍 답변 생성 중 오류 발생")
+            if "answer" not in state or not state.get("answer"):
+                self._set_answer_safely(state, "")
+        
+        return state
+
+    @observe(name="generate_answer_final")
+    @with_state_optimization("generate_answer_final", enable_reduction=True)
+    def generate_answer_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
+        """최종 검증 및 포맷팅 노드 - 검증과 포맷팅만 수행"""
+        try:
+            overall_start_time = time.time()
+            self.logger.info("✅ [FINAL NODE] 최종 검증 및 포맷팅 시작")
+            
+            # 중요: retrieved_docs 복원 (State reduction으로 손실된 경우 대비)
+            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            if not retrieved_docs:
+                # global cache에서 복원 시도
+                try:
+                    from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache and _global_search_results_cache.get("retrieved_docs"):
+                        retrieved_docs = _global_search_results_cache["retrieved_docs"]
+                        self._set_state_value(state, "retrieved_docs", retrieved_docs)
+                        self.logger.info(f"✅ [FINAL NODE] Restored retrieved_docs from global cache: {len(retrieved_docs)} docs")
+                except (ImportError, AttributeError):
+                    pass
+            
+            # structured_documents 복원
+            structured_docs = self._get_state_value(state, "structured_documents", [])
+            if not structured_docs and retrieved_docs:
+                # retrieved_docs에서 structured_documents 재구성
+                structured_docs = retrieved_docs
+                self._set_state_value(state, "structured_documents", structured_docs)
+            
+            # query_type 복원
+            query_type = self._get_state_value(state, "query_type") or (state.get("metadata", {}).get("query_type") if isinstance(state.get("metadata"), dict) else None)
+            if not query_type:
+                # global cache에서 복원 시도
+                try:
+                    from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache and _global_search_results_cache.get("query_type"):
+                        query_type = _global_search_results_cache["query_type"]
+                        metadata = self._get_metadata_safely(state)
+                        metadata["query_type"] = query_type
+                        self._set_state_value(state, "metadata", metadata)
+                        state["query_type"] = query_type
+                        self.logger.info(f"✅ [FINAL NODE] Restored query_type from global cache: {query_type}")
+                except (ImportError, AttributeError):
+                    pass
+            
+            # Part 1: 품질 검증
+            validation_start_time = time.time()
+            quality_check_passed = self._validate_answer_quality_internal(state)
+            
+            # 재생성 필요 여부 확인
+            needs_regeneration_from_helper = self._get_state_value(state, "needs_regeneration", False)
+            needs_regeneration_from_top = state.get("needs_regeneration", False)
+            needs_regeneration_from_metadata = state.get("metadata", {}).get("needs_regeneration", False)
+            needs_regeneration = needs_regeneration_from_helper or needs_regeneration_from_top or needs_regeneration_from_metadata
+            
+            regeneration_reason = (
+                self._get_state_value(state, "regeneration_reason") or
+                state.get("regeneration_reason") or
+                state.get("metadata", {}).get("regeneration_reason") or
+                "unknown"
+            )
+            
+            if needs_regeneration:
+                can_retry = self.retry_manager.should_allow_retry(state, "generation")
+                retry_counts = self.retry_manager.get_retry_counts(state)
+                self.logger.info(
+                    f"🔄 [REGENERATION CHECK] needs_regeneration={needs_regeneration}, "
+                    f"can_retry={can_retry}, reason={regeneration_reason}, "
+                    f"retry_count={retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES}"
+                )
+                if can_retry:
+                    self.logger.warning(
+                        f"🔄 [AUTO RETRY] Regeneration needed: {regeneration_reason}. "
+                        f"Retrying answer generation "
+                        f"(retry count: {retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES})"
+                    )
+                    self.retry_manager.increment_retry_count(state, "generation")
+                    # 재생성을 위해 generate_answer_enhanced 다시 호출
+                    state = self.generate_answer_enhanced(state)
+                    # 재검증
+                    quality_check_passed = self._validate_answer_quality_internal(state)
+                    # 재생성 플래그 초기화
+                    self._set_state_value(state, "needs_regeneration", False)
+            
+            # 형식 오류가 감지된 경우 자동 재생성
+            has_format_errors = self._detect_format_errors(self._get_state_value(state, "answer", ""))
+            if has_format_errors and self.retry_manager.should_allow_retry(state, "generation"):
+                self.logger.warning(
+                    f"🔄 [AUTO RETRY] Format errors detected. Retrying answer generation "
+                    f"(retry count: {self.retry_manager.get_retry_counts(state)['generation']}/{RetryConfig.MAX_GENERATION_RETRIES})"
+                )
+                # 답변 정규화로 형식 오류 제거 시도
+                normalized_answer = self._normalize_answer(self._get_state_value(state, "answer", ""))
+                self._set_answer_safely(state, normalized_answer)
+                
+                # 정규화 후에도 형식 오류가 있으면 재생성
+                if self._detect_format_errors(normalized_answer):
+                    self.logger.warning("🔄 [AUTO RETRY] Format errors persist after normalization. Retrying generation.")
+                    self.retry_manager.increment_retry_count(state, "generation")
+                    # 재생성을 위해 generate_answer_enhanced 다시 호출
+                    state = self.generate_answer_enhanced(state)
+                    # 재검증
+                    quality_check_passed = self._validate_answer_quality_internal(state)
+
+            self._update_processing_time(state, validation_start_time)
+
+            # Part 2: 검증 통과 시 포맷팅 및 최종 준비
+            if quality_check_passed:
+                formatting_start_time = time.time()
+                try:
+                    state = self._format_and_finalize_answer(state)
+                    self._update_processing_time(state, formatting_start_time)
+
+                    elapsed = time.time() - overall_start_time
+                    confidence = state.get("confidence", 0.0)
+                    self.logger.info(
+                        f"✅ [FINAL NODE] 최종 검증 및 포맷팅 완료 ({elapsed:.2f}s), "
+                        f"confidence: {confidence:.3f}"
+                    )
+                except Exception as format_error:
+                    self.logger.warning(f"Formatting failed: {format_error}, using basic format")
+                    state["answer"] = self._normalize_answer(state.get("answer", ""))
+                    self._prepare_final_response_minimal(state)
+                    self._update_processing_time(state, formatting_start_time)
+
+            self._update_processing_time(state, overall_start_time)
+
+        except Exception as e:
+            self._handle_error(state, str(e), "최종 검증 및 포맷팅 중 오류 발생")
+            if "answer" not in state or not state.get("answer"):
+                self._set_answer_safely(state, "")
+            elif state.get("answer"):
+                self._set_answer_safely(state, state["answer"])
+            self._set_state_value(state, "legal_validity_check", True)
+            self._save_metadata_safely(state, "quality_score", 0.0, save_to_top_level=True)
+            self._save_metadata_safely(state, "quality_check_passed", False, save_to_top_level=True)
+
+        return state
+
     @observe(name="generate_and_validate_answer")
     @with_state_optimization("generate_and_validate_answer", enable_reduction=True)
     def generate_and_validate_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
@@ -1083,22 +1253,49 @@ class EnhancedLegalQuestionWorkflow(
                 "unknown"
             )
             if needs_regeneration:
-                can_retry = self.retry_manager.should_allow_retry(state, "generation")
                 retry_counts = self.retry_manager.get_retry_counts(state)
+                can_retry = self.retry_manager.should_allow_retry(state, "generation")
+                
                 self.logger.info(
                     f"🔄 [REGENERATION CHECK] needs_regeneration={needs_regeneration}, "
                     f"can_retry={can_retry}, reason={regeneration_reason}, "
                     f"retry_count={retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES}"
                 )
-                if can_retry:
+                
+                if can_retry and retry_counts['generation'] < RetryConfig.MAX_GENERATION_RETRIES:
+                    # 재시도 전 답변 저장 (비교용)
+                    previous_answer = self._get_state_value(state, "answer", "")
+                    previous_copy_score = 0.0
+                    if previous_answer:
+                        previous_result = self._detect_specific_case_copy(previous_answer)
+                        previous_copy_score = previous_result.get("copy_score", 0.0)
+                    
                     self.logger.warning(
                         f"🔄 [AUTO RETRY] Regeneration needed: {regeneration_reason}. "
                         f"Retrying answer generation "
-                        f"(retry count: {retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES})"
+                        f"(retry count: {retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES}, "
+                        f"previous_copy_score: {previous_copy_score:.2f})"
                     )
                     self.retry_manager.increment_retry_count(state, "generation")
                     # 재생성을 위해 generate_answer_enhanced 다시 호출
                     state = self.generate_answer_enhanced(state)
+                    
+                    # 재시도 후 답변 검증 및 비교
+                    new_answer = self._get_state_value(state, "answer", "")
+                    if new_answer:
+                        new_result = self._detect_specific_case_copy(new_answer)
+                        new_copy_score = new_result.get("copy_score", 0.0)
+                        
+                        # 개선 여부 확인
+                        if new_copy_score < previous_copy_score:
+                            self.logger.info(
+                                f"✅ [RETRY IMPROVEMENT] Copy score improved: {previous_copy_score:.2f} → {new_copy_score:.2f}"
+                            )
+                        elif new_copy_score >= previous_copy_score:
+                            self.logger.warning(
+                                f"⚠️ [RETRY NO IMPROVEMENT] Copy score not improved: {previous_copy_score:.2f} → {new_copy_score:.2f}"
+                            )
+                    
                     # 재검증
                     quality_check_passed = self._validate_answer_quality_internal(state)
                     # 재생성 플래그 초기화
@@ -1108,6 +1305,8 @@ class EnhancedLegalQuestionWorkflow(
                         f"⚠️ [REGENERATION SKIP] Cannot retry: retry_count={retry_counts['generation']}, "
                         f"max_retries={RetryConfig.MAX_GENERATION_RETRIES}"
                     )
+                    # 재시도 불가 시 재생성 플래그 초기화
+                    self._set_state_value(state, "needs_regeneration", False)
             
             # 형식 오류가 감지된 경우 자동 재생성
             has_format_errors = self._detect_format_errors(self._get_state_value(state, "answer", ""))
@@ -2286,8 +2485,12 @@ class EnhancedLegalQuestionWorkflow(
             # 재생성 이유가 있으면 context_dict에 추가 (프롬프트 강화용)
             if regeneration_reason and isinstance(context_dict, dict):
                 context_dict["regeneration_reason"] = regeneration_reason
+                # 재시도 횟수도 추가 (프롬프트 강도 조정용)
+                retry_counts = self.retry_manager.get_retry_counts(state)
+                context_dict["retry_count"] = retry_counts.get("generation", 0)
                 self.logger.info(
-                    f"🔄 [REGENERATION PROMPT] Adding regeneration reason to context: {regeneration_reason}"
+                    f"🔄 [REGENERATION PROMPT] Adding regeneration reason to context: {regeneration_reason}, "
+                    f"retry_count: {retry_counts.get('generation', 0)}"
                 )
 
             # 🔍 검색 결과 강제 포함 보강 로직 (중요!)
@@ -2786,7 +2989,12 @@ class EnhancedLegalQuestionWorkflow(
             
             # 캐시 미스인 경우 답변 생성 수행
             # LangGraph는 노드 내에서 stream() 또는 astream()을 호출하면 자동으로 on_llm_stream 이벤트를 발생시킵니다
+            # 스트리밍 개선: stream()을 호출하면 각 청크가 즉시 on_llm_stream 이벤트로 전파됩니다.
+            # 노드가 완료되기 전에도 이벤트가 발생하므로 클라이언트로 실시간 전달이 가능합니다.
             if not normalized_response:
+                # 스트리밍 지원: generate_answer_with_chain 내부에서 stream()을 호출하면
+                # LangGraph가 자동으로 on_llm_stream 이벤트를 발생시킵니다.
+                # 각 청크는 즉시 이벤트로 전파되므로, 전체 답변을 모아서 반환해도 스트리밍이 작동합니다.
                 normalized_response = self.answer_generator.generate_answer_with_chain(
                     optimized_prompt=optimized_prompt,
                     query=query,
@@ -2794,6 +3002,14 @@ class EnhancedLegalQuestionWorkflow(
                     quality_feedback=quality_feedback,
                     is_retry=is_retry
                 )
+                
+                # 스트리밍 완료 로깅
+                if normalized_response:
+                    self.logger.info(
+                        f"📡 [STREAMING] 답변 생성 완료 - "
+                        f"길이: {len(normalized_response)} chars, "
+                        f"on_llm_stream 이벤트가 발생하여 클라이언트로 실시간 전달됨"
+                    )
                 
                 # 캐시에 저장 (재시도가 아닌 경우에만, 품질 검증 통과 시, 개발 환경이 아닐 때만)
                 if not is_retry and not is_development and normalized_response:
@@ -2870,10 +3086,10 @@ class EnhancedLegalQuestionWorkflow(
             
             # 답변 시작 부분에 문제가 있으면 즉시 재생성
             if has_specific_case_in_start or not has_general_principle_in_start:
-                can_retry = self.retry_manager.should_allow_retry(state, "generation")
                 retry_counts = self.retry_manager.get_retry_counts(state)
+                can_retry = self.retry_manager.should_allow_retry(state, "generation")
                 
-                if can_retry:
+                if can_retry and retry_counts['generation'] < RetryConfig.MAX_GENERATION_RETRIES:
                     self.logger.warning(
                         f"⚠️ [IMMEDIATE VALIDATION] Answer start validation failed:\n"
                         f"   has_specific_case_in_start: {has_specific_case_in_start}\n"
@@ -5209,14 +5425,29 @@ class EnhancedLegalQuestionWorkflow(
             )
 
             # 품질 평가 결과 저장
+            overall_quality = (semantic_quality["score"] + keyword_quality["score"]) / 2.0
             quality_evaluation = {
                 "semantic_quality": semantic_quality,
                 "keyword_quality": keyword_quality,
-                "overall_quality": (semantic_quality["score"] + keyword_quality["score"]) / 2.0,
+                "overall_quality": overall_quality,
                 "needs_retry": semantic_quality["needs_retry"] or keyword_quality["needs_retry"]
             }
 
             self._set_state_value(state, "search_quality_evaluation", quality_evaluation)
+            # search_quality도 별도로 저장 (호환성)
+            self._set_state_value(state, "search_quality", {
+                "overall_quality": overall_quality,
+                "relevance": semantic_quality.get("avg_relevance", 0.0),
+                "coverage": keyword_quality.get("category_match", 0.0),
+                "sufficiency": overall_quality
+            })
+            # metadata에도 저장
+            self._save_metadata_safely(state, "search_quality", {
+                "overall_quality": overall_quality,
+                "relevance": semantic_quality.get("avg_relevance", 0.0),
+                "coverage": keyword_quality.get("category_match", 0.0),
+                "sufficiency": overall_quality
+            })
             self._save_metadata_safely(state, "_last_executed_node", "evaluate_search_quality")
             self._update_processing_time(state, start_time)
 
