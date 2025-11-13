@@ -406,24 +406,161 @@ class StreamHandler:
                 legal_references = state_values.get("legal_references", [])
                 sources_detail = state_values.get("sources_detail", [])
                 
+                logger.debug(
+                    f"[stream_final_answer] Sources extraction check: "
+                    f"state_sources={len(sources)}, "
+                    f"state_legal_references={len(legal_references)}, "
+                    f"state_sources_detail={len(sources_detail)}"
+                )
+                
                 if not sources and not sources_detail:
                     retrieved_docs = state_values.get("retrieved_docs", [])
+                    
+                    # state에 retrieved_docs가 없으면 global cache에서 가져오기 시도
+                    if not retrieved_docs:
+                        logger.debug(f"[stream_final_answer] State has no retrieved_docs, attempting to restore from global cache")
+                        try:
+                            # 여러 경로 시도
+                            _global_search_results_cache = None
+                            import_errors = []
+                            
+                            # 경로 1: core.shared.wrappers.node_wrappers (가장 일반적)
+                            try:
+                                from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                                logger.debug(f"[stream_final_answer] Successfully imported _global_search_results_cache from core.shared.wrappers.node_wrappers")
+                            except (ImportError, AttributeError) as e:
+                                import_errors.append(f"core.shared.wrappers.node_wrappers: {e}")
+                                
+                                # 경로 2: lawfirm_langgraph.core.shared.wrappers.node_wrappers
+                                try:
+                                    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import _global_search_results_cache
+                                    logger.debug(f"[stream_final_answer] Successfully imported _global_search_results_cache from lawfirm_langgraph.core.shared.wrappers.node_wrappers")
+                                except (ImportError, AttributeError) as e2:
+                                    import_errors.append(f"lawfirm_langgraph.core.shared.wrappers.node_wrappers: {e2}")
+                                    
+                                    # 경로 3: core.agents.node_wrappers
+                                    try:
+                                        from core.agents.node_wrappers import _global_search_results_cache
+                                        logger.debug(f"[stream_final_answer] Successfully imported _global_search_results_cache from core.agents.node_wrappers")
+                                    except (ImportError, AttributeError) as e3:
+                                        import_errors.append(f"core.agents.node_wrappers: {e3}")
+                            
+                            if _global_search_results_cache is not None:
+                                logger.debug(f"[stream_final_answer] Global cache exists: {type(_global_search_results_cache).__name__}, keys: {list(_global_search_results_cache.keys()) if isinstance(_global_search_results_cache, dict) else 'N/A'}")
+                                
+                                # search 그룹에서 확인
+                                if isinstance(_global_search_results_cache, dict) and "search" in _global_search_results_cache:
+                                    cached_search = _global_search_results_cache["search"]
+                                    if isinstance(cached_search, dict):
+                                        cached_docs = cached_search.get("retrieved_docs", [])
+                                        if isinstance(cached_docs, list) and len(cached_docs) > 0:
+                                            retrieved_docs = cached_docs
+                                            logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} retrieved_docs from global cache search group")
+                                        else:
+                                            cached_merged = cached_search.get("merged_documents", [])
+                                            if isinstance(cached_merged, list) and len(cached_merged) > 0:
+                                                retrieved_docs = cached_merged
+                                                logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} merged_documents from global cache search group")
+                                
+                                # 최상위 레벨에서 확인
+                                if not retrieved_docs and isinstance(_global_search_results_cache, dict):
+                                    cached_docs = _global_search_results_cache.get("retrieved_docs", [])
+                                    if isinstance(cached_docs, list) and len(cached_docs) > 0:
+                                        retrieved_docs = cached_docs
+                                        logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} retrieved_docs from global cache top level")
+                                
+                                if not retrieved_docs:
+                                    logger.debug(f"[stream_final_answer] Global cache exists but no retrieved_docs found in it")
+                            else:
+                                logger.debug(f"[stream_final_answer] Global cache is None after import attempts")
+                                
+                        except Exception as e:
+                            logger.warning(f"[stream_final_answer] Failed to access global cache: {e}", exc_info=True)
+                    
+                    logger.debug(
+                        f"[stream_final_answer] Attempting to extract sources: "
+                        f"retrieved_docs_count={len(retrieved_docs) if retrieved_docs else 0}, "
+                        f"sources_extractor={self.sources_extractor is not None}"
+                    )
+                    
                     if retrieved_docs and self.sources_extractor:
                         try:
-                            sources_data = self.sources_extractor._extract_sources(state_values)
-                            legal_references_data = self.sources_extractor._extract_legal_references(state_values)
-                            sources_detail_data = self.sources_extractor._extract_sources_detail(state_values)
+                            # retrieved_docs를 state_values에 임시로 추가하여 추출 함수가 사용할 수 있게 함
+                            temp_state = {**state_values, "retrieved_docs": retrieved_docs}
                             
-                            if sources_detail_data:
-                                sources_detail = sources_detail_data
-                                state_values["sources_detail"] = sources_detail_data
-                            if sources_data:
-                                sources = sources_data
-                                state_values["sources"] = sources_data
-                            if legal_references_data:
-                                legal_references = legal_references_data
+                            # sources 추출 시 예외가 발생해도 스트리밍이 중단되지 않도록 각각 try-except 처리
+                            try:
+                                sources_data = self.sources_extractor._extract_sources(temp_state)
+                                if sources_data:
+                                    sources = sources_data
+                                    state_values["sources"] = sources_data
+                            except Exception as e:
+                                logger.warning(f"[stream_final_answer] Failed to extract sources: {e}", exc_info=True)
+                            
+                            try:
+                                legal_references_data = self.sources_extractor._extract_legal_references(temp_state)
+                                if legal_references_data:
+                                    legal_references = legal_references_data
+                            except Exception as e:
+                                logger.warning(f"[stream_final_answer] Failed to extract legal_references: {e}", exc_info=True)
+                            
+                            try:
+                                sources_detail_data = self.sources_extractor._extract_sources_detail(temp_state)
+                                if sources_detail_data:
+                                    sources_detail = sources_detail_data
+                                    state_values["sources_detail"] = sources_detail_data
+                            except Exception as e:
+                                logger.warning(f"[stream_final_answer] Failed to extract sources_detail: {e}", exc_info=True)
+                            
+                            logger.debug(
+                                f"[stream_final_answer] Sources extraction result: "
+                                f"sources={len(sources) if sources else 0}, "
+                                f"legal_references={len(legal_references) if legal_references else 0}, "
+                                f"sources_detail={len(sources_detail) if sources_detail else 0}"
+                            )
                         except Exception as e:
                             logger.warning(f"[stream_final_answer] Failed to extract sources from retrieved_docs: {e}", exc_info=True)
+                    else:
+                        logger.debug(
+                            f"[stream_final_answer] Skipping sources extraction from state: "
+                            f"retrieved_docs={retrieved_docs is not None and len(retrieved_docs) > 0}, "
+                            f"sources_extractor={self.sources_extractor is not None}"
+                        )
+                        
+                        # state에 retrieved_docs가 없으면 extract_from_message_metadata와 extract_from_state를 시도
+                        if not retrieved_docs and self.sources_extractor and session_id:
+                            try:
+                                logger.debug(f"[stream_final_answer] Attempting to extract sources from session: session_id={session_id}")
+                                
+                                # 먼저 메시지 metadata에서 가져오기 시도
+                                message_id = state_values.get("metadata", {}).get("message_id") if isinstance(state_values.get("metadata"), dict) else None
+                                session_sources = await self.sources_extractor.extract_from_message_metadata(session_id, message_id)
+                                
+                                # 없으면 state에서 가져오기 시도
+                                if not any(session_sources.values()):
+                                    logger.debug(f"[stream_final_answer] No sources in message metadata, trying extract_from_state")
+                                    session_sources = await self.sources_extractor.extract_from_state(session_id)
+                                
+                                if session_sources:
+                                    session_sources_list = session_sources.get("sources", [])
+                                    session_legal_refs = session_sources.get("legal_references", [])
+                                    session_sources_detail = session_sources.get("sources_detail", [])
+                                    
+                                    logger.debug(
+                                        f"[stream_final_answer] Sources extracted from session: "
+                                        f"sources={len(session_sources_list)}, "
+                                        f"legal_references={len(session_legal_refs)}, "
+                                        f"sources_detail={len(session_sources_detail)}"
+                                    )
+                                    
+                                    if session_sources_list:
+                                        sources = session_sources_list
+                                    if session_legal_refs:
+                                        legal_references = session_legal_refs
+                                    if session_sources_detail:
+                                        sources_detail = session_sources_detail
+                            except Exception as e:
+                                logger.warning(f"[stream_final_answer] Failed to extract sources from session: {e}", exc_info=True)
                 
                 related_questions = []
                 if self.extract_related_questions_fn:
@@ -433,13 +570,23 @@ class StreamHandler:
                 
                 llm_validation_result = state_values.get("metadata", {}).get("llm_validation_result", {})
                 
-                return {
+                final_metadata = {
                     "sources": sources,
                     "legal_references": legal_references,
                     "sources_detail": sources_detail,
                     "related_questions": related_questions,
                     "llm_validation": llm_validation_result if llm_validation_result else None
                 }
+                
+                logger.debug(
+                    f"[stream_final_answer] Final metadata: "
+                    f"sources={len(final_metadata['sources'])}, "
+                    f"legal_references={len(final_metadata['legal_references'])}, "
+                    f"sources_detail={len(final_metadata['sources_detail'])}, "
+                    f"related_questions={len(final_metadata['related_questions'])}"
+                )
+                
+                return final_metadata
         except asyncio.TimeoutError:
             logger.warning(f"[stream_final_answer] Timeout getting state, using empty metadata")
         except Exception as e:
