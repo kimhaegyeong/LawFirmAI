@@ -2022,19 +2022,193 @@ class AnswerFormatterHandler:
                                     detail_dict["content"] = content
                                 
                                 final_sources_detail.append(detail_dict)
-            elif source_type and source_type in ["case_paragraph", "decision_paragraph"]:
-                # source_type이 있지만 source가 생성되지 않은 경우 디버깅
+            elif source_type and source_type in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+                # source_type이 있지만 source가 생성되지 않은 경우 fallback 로직 추가
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
+                if doc_id:
+                    # doc_id만으로라도 source 생성
+                    if source_type == "case_paragraph":
+                        source = f"판례 ({doc_id})"
+                    elif source_type == "decision_paragraph":
+                        source = f"결정례 ({doc_id})"
+                    elif source_type == "interpretation_paragraph":
+                        source = f"해석례 ({doc_id})"
+                    
+                    if source and source not in seen_sources:
+                        final_sources_list.append(source)
+                        seen_sources.add(source)
+                        
+                        # sources_detail fallback 생성
+                        if not source_info_detail:
+                            detail_dict = {
+                                "name": source,
+                                "type": source_type,
+                                "url": "",
+                                "metadata": metadata
+                            }
+                            content = doc.get("content") or doc.get("text") or ""
+                            if content:
+                                detail_dict["content"] = content
+                            final_sources_detail.append(detail_dict)
+                
                 self.logger.debug(f"[SOURCES DEBUG] source_type={source_type}, but source is None. doc_id={doc.get('doc_id') or metadata.get('doc_id') or metadata.get('case_id') or metadata.get('decision_id') or metadata.get('id')}")
+            
+            # source_type이 있지만 source가 생성되지 않은 경우 추가 fallback
+            if source_type and not source:
+                # 최소한의 source 생성 시도
+                if source_type == "statute_article":
+                    source = "법령"
+                elif source_type == "case_paragraph":
+                    source = "판례"
+                elif source_type == "decision_paragraph":
+                    source = "결정례"
+                elif source_type == "interpretation_paragraph":
+                    source = "해석례"
+                
+                if source and source not in seen_sources:
+                    final_sources_list.append(source)
+                    seen_sources.add(source)
+                    
+                    # sources_detail fallback 생성
+                    if not source_info_detail:
+                        detail_dict = {
+                            "name": source,
+                            "type": source_type,
+                            "url": "",
+                            "metadata": metadata
+                        }
+                        content = doc.get("content") or doc.get("text") or ""
+                        if content:
+                            detail_dict["content"] = content
+                        final_sources_detail.append(detail_dict)
+            
+            # source_type이 없어도 최소한의 source 생성 (모든 retrieved_docs를 sources로 변환 보장)
+            if not source:
+                # doc의 다른 필드에서 source 추출 시도
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
+                title = doc.get("title") or metadata.get("title") or metadata.get("case_name") or metadata.get("casenames")
+                content = doc.get("content", "") or doc.get("text", "")
+                
+                # doc_id가 있으면 "문서 (doc_id)" 형태로 생성
+                if doc_id:
+                    source = f"문서 ({doc_id})"
+                # title이 있으면 title 사용
+                elif title and isinstance(title, str) and len(title.strip()) >= 2:
+                    source = title.strip()
+                # content에서 법령명 추출 시도
+                elif content and isinstance(content, str):
+                    import re
+                    law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
+                    if law_pattern:
+                        source = law_pattern.group(1)
+                    # 법령명이 없으면 content의 처음 50자 사용
+                    elif len(content.strip()) > 10:
+                        source = content[:50].strip() + "..."
+                
+                # 최종 fallback: "문서" + 인덱스
+                if not source:
+                    doc_index = len(final_sources_list) + 1
+                    source = f"문서 {doc_index}"
+                
+                # source가 생성되었으면 추가
+                if source:
+                    source_str = str(source).strip()
+                    source_lower = source_str.lower().strip()
+                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                    
+                    # 유효성 검증 (더 관대하게)
+                    if source_lower not in invalid_sources and len(source_lower) >= 1:
+                        if source_str not in seen_sources and source_str != "Unknown":
+                            final_sources_list.append(source_str)
+                            seen_sources.add(source_str)
+                            
+                            # sources_detail fallback 생성
+                            if not source_info_detail:
+                                detail_dict = {
+                                    "name": source_str,
+                                    "type": source_type or "unknown",
+                                    "url": "",
+                                    "metadata": metadata
+                                }
+                                if content:
+                                    detail_dict["content"] = content
+                                final_sources_detail.append(detail_dict)
+                            
+                            self.logger.debug(f"[SOURCES] Generated fallback source for doc: {source_str} (source_type: {source_type or 'none'})")
 
-        state["sources"] = final_sources_list[:10]  # 최대 10개만 (하위 호환성)
+        # sources_detail이 없으면 sources에서 생성 시도
+        if len(final_sources_detail) == 0 and len(final_sources_list) > 0:
+            for source_str in final_sources_list[:10]:
+                # 해당 source_str에 해당하는 doc 찾기
+                for doc in state.get("retrieved_docs", []):
+                    if not isinstance(doc, dict):
+                        continue
+                    doc_source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                    doc_metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+                    
+                    # source_str과 매칭되는 doc 찾기
+                    doc_source = None
+                    if doc_source_type == "statute_article":
+                        statute_name = doc.get("statute_name") or doc.get("law_name") or doc_metadata.get("statute_name") or doc_metadata.get("law_name")
+                        article_no = doc.get("article_no") or doc.get("article_number") or doc_metadata.get("article_no") or doc_metadata.get("article_number")
+                        if statute_name and article_no:
+                            doc_source = f"{statute_name} 제{article_no}조"
+                        elif statute_name:
+                            doc_source = statute_name
+                    elif doc_source_type == "case_paragraph":
+                        doc_id = doc.get("doc_id") or doc_metadata.get("doc_id") or doc_metadata.get("case_id")
+                        if doc_id:
+                            doc_source = f"판례 ({doc_id})"
+                    elif doc_source_type == "decision_paragraph":
+                        doc_id = doc.get("doc_id") or doc_metadata.get("doc_id") or doc_metadata.get("decision_id")
+                        if doc_id:
+                            doc_source = f"결정례 ({doc_id})"
+                    elif doc_source_type == "interpretation_paragraph":
+                        title = doc.get("title") or doc_metadata.get("title")
+                        if title:
+                            doc_source = title
+                    
+                    if doc_source and doc_source == source_str:
+                        detail_dict = {
+                            "name": source_str,
+                            "type": doc_source_type or "unknown",
+                            "url": "",
+                            "metadata": doc_metadata
+                        }
+                        content = doc.get("content") or doc.get("text") or ""
+                        if content:
+                            detail_dict["content"] = content
+                        final_sources_detail.append(detail_dict)
+                        break
+        
+        # sources 정규화: 딕셔너리 형태가 있으면 문자열로 변환
+        normalized_sources = []
+        for source in final_sources_list[:10]:
+            if isinstance(source, dict):
+                # 딕셔너리에서 source 필드 추출
+                source_str = source.get("source") or source.get("name") or str(source.get("type", "Unknown"))
+                if source_str and isinstance(source_str, str):
+                    normalized_sources.append(source_str)
+            elif isinstance(source, str):
+                normalized_sources.append(source)
+            else:
+                # 기타 타입은 문자열로 변환
+                try:
+                    normalized_sources.append(str(source))
+                except Exception:
+                    pass
+        
+        state["sources"] = normalized_sources[:10]  # 최대 10개만 (하위 호환성)
         state["sources_detail"] = final_sources_detail[:10]  # 최대 10개만 (신규 필드)
         
         # 디버깅: sources 생성 결과 로깅
+        retrieved_docs_count = len(state.get("retrieved_docs", []))
         if len(final_sources_list) > 0:
-            self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources: {final_sources_list[:5]}")
+            self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources from {retrieved_docs_count} retrieved_docs: {final_sources_list[:5]}")
+            if len(final_sources_list) < retrieved_docs_count:
+                self.logger.warning(f"[SOURCES] Only {len(final_sources_list)}/{retrieved_docs_count} retrieved_docs converted to sources ({retrieved_docs_count - len(final_sources_list)} lost)")
         else:
-            retrieved_docs_count = len(state.get("retrieved_docs", []))
-            self.logger.debug(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
+            self.logger.warning(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
 
         # 법적 참조 정보 추가 (retrieved_docs에서 statute_article 타입 문서 추출)
         retrieved_docs_for_legal = state.get("retrieved_docs", [])
@@ -2042,11 +2216,25 @@ class AnswerFormatterHandler:
         
         # 디버깅: retrieved_docs의 타입 분포 확인
         type_counts = {}
+        statute_article_docs = []
         for doc in retrieved_docs_for_legal:
             if isinstance(doc, dict):
                 doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
                 type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
-        self.logger.debug(f"[LEGAL_REFERENCES] Retrieved docs type distribution: {type_counts}")
+                if doc_type == "statute_article":
+                    statute_article_docs.append(doc)
+        self.logger.info(f"[LEGAL_REFERENCES] Retrieved docs type distribution: {type_counts}")
+        if len(statute_article_docs) > 0:
+            self.logger.info(f"[LEGAL_REFERENCES] Found {len(statute_article_docs)} statute_article documents")
+            # 첫 번째 statute_article 문서의 필드 확인
+            sample_doc = statute_article_docs[0]
+            sample_metadata = sample_doc.get("metadata", {}) if isinstance(sample_doc.get("metadata"), dict) else {}
+            self.logger.debug(f"[LEGAL_REFERENCES] Sample statute_article doc fields:")
+            self.logger.debug(f"  - statute_name: {sample_doc.get('statute_name') or sample_metadata.get('statute_name')}")
+            self.logger.debug(f"  - law_name: {sample_doc.get('law_name') or sample_metadata.get('law_name')}")
+            self.logger.debug(f"  - article_no: {sample_doc.get('article_no') or sample_metadata.get('article_no')}")
+            self.logger.debug(f"  - article_number: {sample_doc.get('article_number') or sample_metadata.get('article_number')}")
+            self.logger.debug(f"  - metadata keys: {list(sample_metadata.keys())}")
         
         # 샘플 문서 구조 확인
         if retrieved_docs_for_legal and isinstance(retrieved_docs_for_legal[0], dict):
@@ -2155,6 +2343,48 @@ class AnswerFormatterHandler:
                 else:
                     self.logger.debug(f"[LEGAL_REFERENCES] Skipping statute_article doc: statute_name is missing (doc keys: {list(doc.keys())})")
         
+        # sources에서 legal_references 추출 (추가 fallback)
+        if len(legal_refs) == 0 and len(final_sources_list) > 0:
+            import re
+            for source_str in final_sources_list:
+                # 법령 조문 패턴 확인 (예: "민법 제750조", "민사소송법 제147조" 등)
+                statute_pattern = r'([가-힣]+법)\s*(?:제\s*(\d+)\s*조)?'
+                match = re.search(statute_pattern, source_str)
+                if match:
+                    statute_name = match.group(1)
+                    article_no = match.group(2)
+                    if article_no:
+                        legal_ref = f"{statute_name} 제{article_no}조"
+                    else:
+                        legal_ref = statute_name
+                    
+                    if legal_ref and legal_ref not in seen_legal_refs:
+                        legal_refs.append(legal_ref)
+                        seen_legal_refs.add(legal_ref)
+                        self.logger.debug(f"[LEGAL_REFERENCES] Extracted from sources: {legal_ref}")
+        
+        # sources_detail에서 legal_references 추출 (추가 fallback)
+        if len(legal_refs) == 0 and len(final_sources_detail) > 0:
+            for detail in final_sources_detail:
+                if not isinstance(detail, dict):
+                    continue
+                detail_type = detail.get("type", "")
+                if detail_type == "statute_article":
+                    detail_meta = detail.get("metadata", {})
+                    statute_name = detail.get("statute_name") or detail_meta.get("statute_name") or detail_meta.get("law_name")
+                    article_no = detail.get("article_no") or detail_meta.get("article_no") or detail_meta.get("article_number")
+                    
+                    if statute_name:
+                        if article_no:
+                            legal_ref = f"{statute_name} 제{article_no}조"
+                        else:
+                            legal_ref = statute_name
+                        
+                        if legal_ref and legal_ref not in seen_legal_refs:
+                            legal_refs.append(legal_ref)
+                            seen_legal_refs.add(legal_ref)
+                            self.logger.debug(f"[LEGAL_REFERENCES] Extracted from sources_detail: {legal_ref}")
+        
         state["legal_references"] = legal_refs[:10]  # 최대 10개만
         
         # 디버깅: legal_references 생성 결과 로깅
@@ -2169,7 +2399,7 @@ class AnswerFormatterHandler:
                 # statute_article 문서의 필드 확인
                 sample_doc = statute_articles[0]
                 statute_name = sample_doc.get("statute_name") or sample_doc.get("law_name") or sample_doc.get("metadata", {}).get("statute_name") or sample_doc.get("metadata", {}).get("law_name")
-                self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
+                self.logger.warning(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
                 self.logger.debug(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata={sample_doc.get('metadata', {})}")
             else:
                 self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (no statute_article documents)")

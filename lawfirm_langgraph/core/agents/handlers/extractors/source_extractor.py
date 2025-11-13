@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 class SourceExtractor:
     """소스 및 legal_references 추출 담당"""
     
-    STATUTE_FIELDS = ["statute_name", "law_name", "abbrv"]
-    ARTICLE_FIELDS = ["article_no", "article_number"]
+    STATUTE_FIELDS = ["statute_name", "law_name", "abbrv", "statute_abbrv", "law_abbrv", "name"]
+    ARTICLE_FIELDS = ["article_no", "article_number", "article", "article_num"]
     
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
@@ -21,13 +21,21 @@ class SourceExtractor:
         
         detail_metadata = detail.get("metadata", {}) if isinstance(detail.get("metadata"), dict) else {}
         
-        statute_name = self._extract_field(detail, detail_metadata, self.STATUTE_FIELDS)
+        # detail의 최상위 레벨 필드도 확인 (강화)
+        merged_metadata = {**detail_metadata}
+        for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                   "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+            if key in detail and detail[key] is not None and detail[key] != "":
+                if not merged_metadata.get(key):
+                    merged_metadata[key] = detail[key]
+        
+        statute_name = self._extract_field(detail, merged_metadata, self.STATUTE_FIELDS)
         
         # statute_name이 없으면 abbrv를 fallback으로 사용
         if not statute_name:
-            statute_name = self._extract_field(detail, detail_metadata, ["abbrv"])
+            statute_name = self._extract_field(detail, merged_metadata, ["abbrv", "statute_abbrv", "law_abbrv"])
         
-        article_no = self._extract_field(detail, detail_metadata, self.ARTICLE_FIELDS)
+        article_no = self._extract_field(detail, merged_metadata, self.ARTICLE_FIELDS)
         
         return (statute_name, article_no) if statute_name else None
     
@@ -108,8 +116,17 @@ class SourceExtractor:
             statute_name, article_no = statute_info
             
             detail_metadata = detail.get("metadata", {}) if isinstance(detail.get("metadata"), dict) else {}
-            clause_no = self._extract_field(detail, detail_metadata, ["clause_no"])
-            item_no = self._extract_field(detail, detail_metadata, ["item_no"])
+            
+            # detail의 최상위 레벨 필드도 확인 (강화)
+            merged_metadata = {**detail_metadata}
+            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                       "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+                if key in detail and detail[key] is not None and detail[key] != "":
+                    if not merged_metadata.get(key):
+                        merged_metadata[key] = detail[key]
+            
+            clause_no = self._extract_field(detail, merged_metadata, ["clause_no", "clause", "clause_number"])
+            item_no = self._extract_field(detail, merged_metadata, ["item_no", "item", "item_number"])
             
             self.logger.debug(
                 f"[LEGAL_REFERENCES] Found statute_article in sources_detail: "
@@ -143,7 +160,7 @@ class SourceExtractor:
             source_type = (
                 doc.get("type") or 
                 doc.get("source_type") or 
-                doc.get("metadata", {}).get("source_type", "")
+                doc.get("metadata", {}).get("source_type", "") if isinstance(doc.get("metadata"), dict) else ""
             )
             
             if source_type != "statute_article":
@@ -152,15 +169,23 @@ class SourceExtractor:
             metadata_raw = doc.get("metadata", {})
             metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
             
-            statute_name = self._extract_field(doc, metadata, self.STATUTE_FIELDS)
+            # doc의 최상위 레벨 필드도 확인 (강화)
+            merged_metadata = {**metadata}
+            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                       "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+                if key in doc and doc[key] is not None and doc[key] != "":
+                    if not merged_metadata.get(key):
+                        merged_metadata[key] = doc[key]
+            
+            statute_name = self._extract_field(doc, merged_metadata, self.STATUTE_FIELDS)
             
             # statute_name이 없으면 abbrv를 fallback으로 사용
             if not statute_name:
-                statute_name = self._extract_field(doc, metadata, ["abbrv"])
+                statute_name = self._extract_field(doc, merged_metadata, ["abbrv", "statute_abbrv", "law_abbrv"])
             
-            article_no = self._extract_field(doc, metadata, self.ARTICLE_FIELDS)
-            clause_no = self._extract_field(doc, metadata, ["clause_no"])
-            item_no = self._extract_field(doc, metadata, ["item_no"])
+            article_no = self._extract_field(doc, merged_metadata, self.ARTICLE_FIELDS)
+            clause_no = self._extract_field(doc, merged_metadata, ["clause_no", "clause", "clause_number"])
+            item_no = self._extract_field(doc, merged_metadata, ["item_no", "item", "item_number"])
             
             if statute_name:
                 legal_ref = self.format_legal_reference(statute_name, article_no, clause_no, item_no)
@@ -175,9 +200,10 @@ class SourceExtractor:
             else:
                 self.logger.debug(
                     f"[LEGAL_REFERENCES] Skipping statute_article doc: statute_name is missing. "
-                    f"doc has statute_name={doc.get('statute_name')}, "
-                    f"metadata has statute_name={metadata.get('statute_name') if isinstance(metadata, dict) else 'N/A'}, "
-                    f"metadata keys: {list(metadata.keys())[:10] if isinstance(metadata, dict) else 'N/A'}"
+                    f"doc keys: {list(doc.keys())[:15]}, "
+                    f"doc has statute_name={doc.get('statute_name')}, law_name={doc.get('law_name')}, abbrv={doc.get('abbrv')}, "
+                    f"metadata has statute_name={merged_metadata.get('statute_name') if isinstance(merged_metadata, dict) else 'N/A'}, "
+                    f"metadata keys: {list(merged_metadata.keys())[:15] if isinstance(merged_metadata, dict) else 'N/A'}"
                 )
         
         return legal_refs
