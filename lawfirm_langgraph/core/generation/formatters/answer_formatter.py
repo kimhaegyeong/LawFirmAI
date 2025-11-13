@@ -1433,7 +1433,7 @@ class AnswerFormatterHandler:
             state["retrieved_docs"] = retrieved_docs
             self.logger.info(f"[SOURCES] Restored {len(retrieved_docs)} retrieved_docs in prepare_final_response_part")
         else:
-            self.logger.warning(f"[SOURCES] No retrieved_docs found in prepare_final_response_part")
+            self.logger.debug(f"[SOURCES] No retrieved_docs found in prepare_final_response_part")
 
         sources_list = []
         for doc in retrieved_docs:
@@ -1481,9 +1481,22 @@ class AnswerFormatterHandler:
             final_confidence = existing_confidence
 
         # 기본 신뢰도 보장 (개선: 검색 품질 점수 반영)
-        # search_quality를 여러 위치에서 찾기 (개선: search 그룹과 common 그룹도 확인)
+        # search_quality를 여러 위치에서 찾기 (개선: get_field 사용)
         search_quality_score = 0.0
-        search_quality_dict = state.get("search_quality", {})
+        search_quality_dict = None
+        
+        # 1순위: get_field를 통해 search_quality 조회
+        try:
+            from core.workflow.state.state_helpers import get_field
+            search_quality_dict = get_field(state, "search_quality")
+            if not search_quality_dict or not isinstance(search_quality_dict, dict):
+                search_quality_dict = get_field(state, "search_quality_evaluation")
+        except Exception as e:
+            self.logger.debug(f"Failed to get search_quality via get_field: {e}")
+        
+        # 2순위: 직접 state에서 찾기
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            search_quality_dict = state.get("search_quality", {})
         if not search_quality_dict or not isinstance(search_quality_dict, dict):
             # search 그룹에서 찾기
             if "search" in state and isinstance(state.get("search"), dict):
@@ -1502,7 +1515,7 @@ class AnswerFormatterHandler:
             if isinstance(metadata, dict):
                 search_quality_dict = metadata.get("search_quality", {}) or metadata.get("search_quality_evaluation", {})
         
-        # 전역 캐시에서도 찾기 (우선순위 높임 - 개선)
+        # 3순위: 전역 캐시에서 찾기 (우선순위 높임 - 개선)
         if not search_quality_dict or not isinstance(search_quality_dict, dict):
             try:
                 from core.agents.node_wrappers import _global_search_results_cache
@@ -1518,9 +1531,12 @@ class AnswerFormatterHandler:
         
         if search_quality_dict and isinstance(search_quality_dict, dict):
             search_quality_score = search_quality_dict.get("overall_quality", 0.0)
+        elif search_quality_dict and isinstance(search_quality_dict, (int, float)):
+            # overall_quality가 직접 저장된 경우
+            search_quality_score = float(search_quality_dict)
         
         # 로깅 추가
-        self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f} (from search_quality dict: {bool(search_quality_dict)}, keys: {list(search_quality_dict.keys()) if search_quality_dict else []})")
+        self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f} (from search_quality dict: {bool(search_quality_dict)}, keys: {list(search_quality_dict.keys()) if isinstance(search_quality_dict, dict) else 'N/A'})")
         
         quality_boost = search_quality_score * 0.3  # 검색 품질 점수 30% 반영 (20% -> 30%로 상향)
         
@@ -2018,11 +2034,11 @@ class AnswerFormatterHandler:
             self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources: {final_sources_list[:5]}")
         else:
             retrieved_docs_count = len(state.get("retrieved_docs", []))
-            self.logger.warning(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
+            self.logger.debug(f"[SOURCES] No sources generated from {retrieved_docs_count} retrieved_docs")
 
         # 법적 참조 정보 추가 (retrieved_docs에서 statute_article 타입 문서 추출)
         retrieved_docs_for_legal = state.get("retrieved_docs", [])
-        self.logger.warning(f"[LEGAL_REFERENCES] Starting legal_references generation from {len(retrieved_docs_for_legal)} retrieved_docs")
+        self.logger.debug(f"[LEGAL_REFERENCES] Starting legal_references generation from {len(retrieved_docs_for_legal)} retrieved_docs")
         
         # 디버깅: retrieved_docs의 타입 분포 확인
         type_counts = {}
@@ -2030,13 +2046,13 @@ class AnswerFormatterHandler:
             if isinstance(doc, dict):
                 doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
                 type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
-        self.logger.warning(f"[LEGAL_REFERENCES] Retrieved docs type distribution: {type_counts}")
+        self.logger.debug(f"[LEGAL_REFERENCES] Retrieved docs type distribution: {type_counts}")
         
         # 샘플 문서 구조 확인
         if retrieved_docs_for_legal and isinstance(retrieved_docs_for_legal[0], dict):
             sample_doc = retrieved_docs_for_legal[0]
-            self.logger.warning(f"[LEGAL_REFERENCES] Sample doc keys: {list(sample_doc.keys())}")
-            self.logger.warning(f"[LEGAL_REFERENCES] Sample doc type: {sample_doc.get('type')}, source_type: {sample_doc.get('source_type')}, metadata: {sample_doc.get('metadata', {})}")
+            self.logger.debug(f"[LEGAL_REFERENCES] Sample doc keys: {list(sample_doc.keys())}")
+            self.logger.debug(f"[LEGAL_REFERENCES] Sample doc type: {sample_doc.get('type')}, source_type: {sample_doc.get('source_type')}, metadata: {sample_doc.get('metadata', {})}")
         
         legal_refs = []
         seen_legal_refs = set()
@@ -2077,6 +2093,27 @@ class AnswerFormatterHandler:
                     metadata.get("law_name")
                 )
                 
+                # statute_name이 없으면 content나 text에서 추출 시도
+                if not statute_name:
+                    content = doc.get("content", "") or doc.get("text", "") or ""
+                    if content:
+                        import re
+                        # 법령명 패턴 추출 개선 (예: "민법", "형법", "가사소송법", "대법원규칙", "인지법" 등)
+                        # 짧은 법령명(2-3자)보다 긴 법령명 우선 매칭
+                        law_name_patterns = [
+                            r'([가-힣]{4,}법)',  # 4자 이상 법령명 우선 (예: "가사소송법", "민사소송법")
+                            r'([가-힣]{2,3}법)',  # 2-3자 법령명 (예: "민법", "형법")
+                            r'(대법원규칙)',  # 특수 케이스
+                            r'(인지법)',  # 특수 케이스
+                        ]
+                        for pattern in law_name_patterns:
+                            law_matches = re.findall(pattern, content[:500])  # 처음 500자만 확인
+                            if law_matches:
+                                # 가장 긴 법령명 선택
+                                statute_name = max(law_matches, key=len)
+                                self.logger.debug(f"[LEGAL_REFERENCES] Extracted statute_name from content: {statute_name}")
+                                break
+                
                 if statute_name:
                     article_no = (
                         doc.get("article_no") or
@@ -2084,6 +2121,18 @@ class AnswerFormatterHandler:
                         metadata.get("article_no") or
                         metadata.get("article_number")
                     )
+                    
+                    # article_no가 없으면 content나 text에서 추출 시도
+                    if not article_no:
+                        content = doc.get("content", "") or doc.get("text", "") or ""
+                        if content and statute_name:
+                            import re
+                            # 법령명과 조문번호 패턴 추출 (예: "민법 제750조", "민사소송법 제147조" 등)
+                            article_pattern = rf'{re.escape(statute_name)}\s*제?\s*(\d+)\s*조'
+                            article_matches = re.findall(article_pattern, content[:500])  # 처음 500자만 확인
+                            if article_matches:
+                                article_no = f"제{article_matches[0]}조"  # 첫 번째 매칭 사용
+                                self.logger.debug(f"[LEGAL_REFERENCES] Extracted article_no from content: {article_no}")
                     clause_no = doc.get("clause_no") or metadata.get("clause_no")
                     item_no = doc.get("item_no") or metadata.get("item_no")
                     
@@ -2120,18 +2169,35 @@ class AnswerFormatterHandler:
                 # statute_article 문서의 필드 확인
                 sample_doc = statute_articles[0]
                 statute_name = sample_doc.get("statute_name") or sample_doc.get("law_name") or sample_doc.get("metadata", {}).get("statute_name") or sample_doc.get("metadata", {}).get("law_name")
-                self.logger.warning(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
-                self.logger.warning(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata={sample_doc.get('metadata', {})}")
+                self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
+                self.logger.debug(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata={sample_doc.get('metadata', {})}")
             else:
                 self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (no statute_article documents)")
 
-        # related_questions 추출 (metadata에서 또는 phase_info에서)
+        # related_questions 추출 (여러 위치에서 찾기)
         related_questions = []
+        
+        # 1순위: metadata에서 찾기 (여러 경로 확인)
         metadata = state.get("metadata", {})
         if isinstance(metadata, dict) and "related_questions" in metadata:
             related_questions = metadata.get("related_questions", [])
             if isinstance(related_questions, list) and len(related_questions) > 0:
-                self.logger.warning(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
+                self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
+        
+        # 2순위: common.metadata에서 찾기
+        if not related_questions:
+            if "common" in state and isinstance(state.get("common"), dict):
+                common_metadata = state["common"].get("metadata", {})
+                if isinstance(common_metadata, dict) and "related_questions" in common_metadata:
+                    related_questions = common_metadata.get("related_questions", [])
+                    if isinstance(related_questions, list) and len(related_questions) > 0:
+                        self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in common.metadata")
+        
+        # 3순위: top-level에서 직접 찾기
+        if not related_questions and "related_questions" in state:
+            related_questions = state.get("related_questions", [])
+            if isinstance(related_questions, list) and len(related_questions) > 0:
+                self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in top-level state")
         else:
             # phase_info에서 추출 시도
             phase_info = state.get("phase_info", {})
@@ -2219,7 +2285,7 @@ class AnswerFormatterHandler:
     def format_and_prepare_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅 및 최종 준비 (format_answer + prepare_final_response)"""
         try:
-            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Starting format_and_prepare_final")
+            self.logger.debug("[FORMAT_AND_PREPARE_FINAL] Starting format_and_prepare_final")
             overall_start_time = time.time()
 
             # 보존할 값 추출
@@ -2228,9 +2294,9 @@ class AnswerFormatterHandler:
             needs_search = preserved_values["needs_search"]
 
             # Part 1: 포맷팅
-            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Calling format_answer_part")
+            self.logger.debug("[FORMAT_AND_PREPARE_FINAL] Calling format_answer_part")
             formatted_answer = self.format_answer_part(state)
-            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] format_answer_part completed")
+            self.logger.debug(f"[FORMAT_AND_PREPARE_FINAL] format_answer_part completed")
             # Phase 1/Phase 3: _set_answer_safely는 legal_workflow_enhanced에 있으므로,
             # 여기서는 정규화만 확인하고 필요시 업데이트 (format_answer_part에서 이미 정규화되었을 수 있음)
             if not isinstance(formatted_answer, str):
@@ -2238,9 +2304,9 @@ class AnswerFormatterHandler:
             state["answer"] = formatted_answer
 
             # Part 2: 최종 준비
-            self.logger.warning("[FORMAT_AND_PREPARE_FINAL] Calling prepare_final_response_part")
+            self.logger.debug("[FORMAT_AND_PREPARE_FINAL] Calling prepare_final_response_part")
             self.prepare_final_response_part(state, query_complexity, needs_search)
-            self.logger.warning(f"[FORMAT_AND_PREPARE_FINAL] prepare_final_response_part completed, legal_references={len(state.get('legal_references', []))}")
+            self.logger.debug(f"[FORMAT_AND_PREPARE_FINAL] prepare_final_response_part completed, legal_references={len(state.get('legal_references', []))}")
 
             # Part 3: 최종 후처리 (개선: 중복 헤더, 빈 섹션, 불필요한 형식 제거)
             final_answer = state.get("answer", "")

@@ -158,6 +158,14 @@ class ContextValidator:
             # 충분성 점수 계산 (문서 개수, 길이 등)
             document_count = context.get("document_count", 0)
             context_length = context.get("context_length", 0)
+            # context_length가 0이면 context_text 길이 직접 계산
+            if context_length == 0 and context_text:
+                context_length = len(context_text)
+            # document_count가 0이면 retrieved_docs에서 계산
+            if document_count == 0:
+                retrieved_docs = context.get("retrieved_docs", [])
+                if retrieved_docs:
+                    document_count = len(retrieved_docs)
 
             # 최소 문서 개수 확인
             min_docs_required = 2 if query_type != "simple" else 1
@@ -277,17 +285,30 @@ class AnswerValidator:
                             "original": citation
                         }
         
-        # 2. 판례 패턴
-        precedent_pattern = r'(대법원|법원).*?(\d{4}[다나마]\d+)'
-        precedent_match = re.search(precedent_pattern, citation)
-        if precedent_match:
-            return {
-                "type": "precedent",
-                "court": precedent_match.group(1),
-                "case_number": precedent_match.group(2),
-                "normalized": f"{precedent_match.group(1)} {precedent_match.group(2)}",
-                "original": citation
-            }
+        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
+        # "대법원 2007. 12. 27. 선고 2006다9408 판결" 형식 지원
+        precedent_patterns = [
+            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # 날짜 포함 형식
+            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # 기본 형식
+        ]
+        
+        for pattern, has_date in precedent_patterns:
+            precedent_match = re.search(pattern, citation)
+            if precedent_match:
+                if has_date:
+                    court = precedent_match.group(1)
+                    case_number = precedent_match.group(3)
+                else:
+                    court = precedent_match.group(1)
+                    case_number = precedent_match.group(2)
+                
+                return {
+                    "type": "precedent",
+                    "court": court,
+                    "case_number": case_number,
+                    "normalized": f"{court} {case_number}",
+                    "original": citation
+                }
         
         # 3. 매칭 실패 시 원본 반환
         return {
@@ -877,18 +898,33 @@ class SearchValidator:
 
             # 평균 관련도 점수 계산
             relevance_scores = []
+            doc_types = {}
             for doc in search_results:
                 if isinstance(doc, dict):
                     score = doc.get("relevance_score") or doc.get("final_weighted_score", 0.0)
                     relevance_scores.append(score)
+                    
+                    doc_type = doc.get("doc_type") or doc.get("source_type", "unknown")
+                    doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
 
             avg_relevance = sum(relevance_scores) / max(1, len(relevance_scores)) if relevance_scores else 0.0
+            max_relevance = max(relevance_scores) if relevance_scores else 0.0
+            min_relevance = min(relevance_scores) if relevance_scores else 0.0
 
-            # 품질 점수 계산
+            # 문서 타입 다양성 점수 계산
+            type_diversity = min(1.0, len(doc_types) / 3.0)  # 최대 3가지 타입 기대
+            
+            # 품질 점수 계산 (개선된 가중치)
             doc_adequacy = min(1.0, doc_count / max(1, min_docs_required))
             relevance_adequacy = avg_relevance
-
-            quality_score = (doc_adequacy * 0.4 + relevance_adequacy * 0.6)
+            top_relevance_bonus = max_relevance * 0.2  # 최고 관련도 보너스
+            
+            quality_score = (
+                doc_adequacy * 0.35 +
+                relevance_adequacy * 0.45 +
+                type_diversity * 0.15 +
+                top_relevance_bonus * 0.05
+            )
 
             # 문제점 확인
             issues = []
@@ -896,6 +932,10 @@ class SearchValidator:
                 issues.append(f"검색 결과가 부족합니다 ({doc_count}/{min_docs_required})")
             if avg_relevance < 0.3:
                 issues.append(f"평균 관련도가 낮습니다 ({avg_relevance:.2f})")
+            if max_relevance < 0.5:
+                issues.append(f"최고 관련도가 낮습니다 ({max_relevance:.2f})")
+            if type_diversity < 0.3:
+                issues.append(f"문서 타입 다양성이 부족합니다 ({len(doc_types)}가지 타입)")
 
             # 권고사항 생성
             recommendations = []
@@ -903,14 +943,26 @@ class SearchValidator:
                 recommendations.append("검색 쿼리를 확장하거나 검색 범위를 넓히세요")
             if avg_relevance < 0.3:
                 recommendations.append("검색 쿼리를 더 구체적으로 작성하거나 다른 키워드를 시도하세요")
+            if max_relevance < 0.5:
+                recommendations.append("검색 쿼리를 더 정확하게 작성하거나 관련 키워드를 추가하세요")
+            if type_diversity < 0.3:
+                recommendations.append("다양한 문서 타입을 포함하도록 검색 파라미터를 조정하세요")
 
-            is_valid = doc_count >= min_docs_required and avg_relevance >= 0.3
+            is_valid = (
+                doc_count >= min_docs_required and
+                avg_relevance >= 0.3 and
+                max_relevance >= 0.4
+            )
 
             return {
                 "is_valid": is_valid,
                 "quality_score": quality_score,
                 "doc_count": doc_count,
                 "avg_relevance": avg_relevance,
+                "max_relevance": max_relevance,
+                "min_relevance": min_relevance,
+                "type_diversity": type_diversity,
+                "doc_types": doc_types,
                 "min_docs_required": min_docs_required,
                 "issues": issues,
                 "recommendations": recommendations

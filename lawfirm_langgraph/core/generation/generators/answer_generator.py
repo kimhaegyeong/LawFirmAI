@@ -589,7 +589,8 @@ class AnswerGenerator:
         query: str,
         context_dict: Dict[str, Any],
         quality_feedback: Optional[Dict[str, Any]] = None,
-        is_retry: bool = False
+        is_retry: bool = False,
+        callbacks: Optional[List[Any]] = None
     ) -> str:
         """
         체인을 사용한 답변 생성 (스트리밍 지원)
@@ -602,6 +603,7 @@ class AnswerGenerator:
             context_dict: 컨텍스트 딕셔너리
             quality_feedback: 품질 피드백 (선택적)
             is_retry: 재시도 여부
+            callbacks: 콜백 핸들러 리스트 (선택적)
             
         Returns:
             str: 생성된 답변
@@ -618,19 +620,51 @@ class AnswerGenerator:
             
             # 스트리밍으로 답변 생성
             # stream() 우선 사용 - LangGraph가 on_llm_stream 이벤트 발생
+            # 중요: stream()을 호출하면 LangGraph가 자동으로 on_llm_stream 이벤트를 발생시킵니다.
+            # 각 청크는 즉시 이벤트로 전파되므로, 전체 답변을 모아서 반환해도 스트리밍이 작동합니다.
             try:
                 # stream() 사용 (동기 스트리밍) - LangGraph가 on_llm_stream 이벤트 발생
                 if hasattr(self.llm, 'stream'):
                     try:
                         full_answer = ""
-                        for chunk in self.llm.stream(optimized_prompt):
+                        chunk_count = 0
+                        # 콜백이 있으면 stream 호출 시 전달
+                        stream_kwargs = {}
+                        if callbacks:
+                            stream_kwargs["callbacks"] = callbacks
+                            self.logger.debug(f"Using {len(callbacks)} callback(s) for streaming")
+                        
+                        for chunk in self.llm.stream(optimized_prompt, **stream_kwargs):
+                            chunk_count += 1
+                            # 각 청크 추출
+                            chunk_content = ""
                             if hasattr(chunk, 'content'):
-                                full_answer += chunk.content
+                                chunk_content = chunk.content
                             elif isinstance(chunk, str):
-                                full_answer += chunk
+                                chunk_content = chunk
+                            elif hasattr(chunk, 'text'):
+                                chunk_content = chunk.text
                             else:
-                                full_answer += str(chunk)
-                        self.logger.debug("stream() 사용 성공 - on_llm_stream 이벤트 발생 예상")
+                                chunk_content = str(chunk)
+                            
+                            # 전체 답변에 누적 (최종 반환용)
+                            if chunk_content:
+                                full_answer += chunk_content
+                            
+                            # 디버그 로깅 (처음 5개 청크만)
+                            if chunk_count <= 5:
+                                self.logger.debug(
+                                    f"📡 [STREAM CHUNK #{chunk_count}] "
+                                    f"Received chunk: {chunk_content[:50]}... "
+                                    f"(total so far: {len(full_answer)} chars)"
+                                )
+                        
+                        self.logger.info(
+                            f"✅ [STREAM COMPLETE] stream() 사용 성공 - "
+                            f"총 {chunk_count}개 청크 수신, "
+                            f"최종 답변 길이: {len(full_answer)} chars, "
+                            f"on_llm_stream 이벤트 발생 예상"
+                        )
                         return full_answer
                     except Exception as stream_error:
                         # stream() 실패 시 로그만 남기고 invoke()로 폴백
@@ -640,7 +674,11 @@ class AnswerGenerator:
                 # invoke() 폴백 (stream()이 없거나 실패한 경우)
                 if hasattr(self.llm, 'invoke'):
                     self.logger.debug("invoke() 사용 - on_chain_stream 이벤트만 발생 예상")
-                    response = self.llm.invoke(optimized_prompt)
+                    invoke_kwargs = {}
+                    if callbacks:
+                        invoke_kwargs["callbacks"] = callbacks
+                        self.logger.debug(f"Using {len(callbacks)} callback(s) for invoke")
+                    response = self.llm.invoke(optimized_prompt, **invoke_kwargs)
                     if hasattr(response, 'content'):
                         return response.content
                     elif isinstance(response, str):

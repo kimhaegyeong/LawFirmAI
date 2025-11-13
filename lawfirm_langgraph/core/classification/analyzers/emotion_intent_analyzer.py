@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from .conversation_manager import ConversationContext, ConversationTurn
+from core.conversation.conversation_manager import ConversationContext, ConversationTurn
 
 logger = logging.getLogger(__name__)
 

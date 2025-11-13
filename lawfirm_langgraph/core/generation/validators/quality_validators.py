@@ -155,9 +155,17 @@ class ContextValidator:
                     context_text, extracted_keywords, legal_references, citations
                 )
 
-            # 충분성 점수 계산 (문서 개수, 길이 등)
+            # 충분성 점수 계산 (문서 개수, 길이 등) - 개선: 직접 계산
             document_count = context.get("document_count", 0)
             context_length = context.get("context_length", 0)
+            # context_length가 0이면 context_text 길이 직접 계산
+            if context_length == 0 and context_text:
+                context_length = len(context_text)
+            # document_count가 0이면 retrieved_docs에서 계산
+            if document_count == 0:
+                retrieved_docs = context.get("retrieved_docs", [])
+                if retrieved_docs:
+                    document_count = len(retrieved_docs)
 
             # 최소 문서 개수 확인
             min_docs_required = 2 if query_type != "simple" else 1
@@ -277,17 +285,30 @@ class AnswerValidator:
                             "original": citation
                         }
         
-        # 2. 판례 패턴
-        precedent_pattern = r'(대법원|법원).*?(\d{4}[다나마]\d+)'
-        precedent_match = re.search(precedent_pattern, citation)
-        if precedent_match:
-            return {
-                "type": "precedent",
-                "court": precedent_match.group(1),
-                "case_number": precedent_match.group(2),
-                "normalized": f"{precedent_match.group(1)} {precedent_match.group(2)}",
-                "original": citation
-            }
+        # 2. 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
+        # "대법원 2007. 12. 27. 선고 2006다9408 판결" 형식 지원
+        precedent_patterns = [
+            (r'(대법원|법원)\s+(\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.)\s*선고\s+(\d{4}[다나마]\d+)', True),  # 날짜 포함 형식
+            (r'(대법원|법원).*?(\d{4}[다나마]\d+)', False),  # 기본 형식
+        ]
+        
+        for pattern, has_date in precedent_patterns:
+            precedent_match = re.search(pattern, citation)
+            if precedent_match:
+                if has_date:
+                    court = precedent_match.group(1)
+                    case_number = precedent_match.group(3)
+                else:
+                    court = precedent_match.group(1)
+                    case_number = precedent_match.group(2)
+                
+                return {
+                    "type": "precedent",
+                    "court": court,
+                    "case_number": case_number,
+                    "normalized": f"{court} {case_number}",
+                    "original": citation
+                }
         
         # 3. 매칭 실패 시 원본 반환
         return {
@@ -394,9 +415,17 @@ class AnswerValidator:
             if normalized.get("type") != "unknown":
                 normalized_citations.append(normalized)
         
-        # 판례 패턴
-        precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
-        precedent_matches = re.findall(precedent_pattern, answer)
+        # 판례 패턴 (개선: 날짜/판결 형식 변형 처리)
+        precedent_patterns = [
+            r'(?:대법원|법원)\s+\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+\d{4}[다나마]\d+',  # 날짜 포함 형식
+            r'(?:대법원|법원).*?\d{4}[다나마]\d+',  # 기본 형식
+        ]
+        
+        precedent_matches = []
+        for pattern in precedent_patterns:
+            matches = re.finditer(pattern, answer)
+            for match in matches:
+                precedent_matches.append(match.group(0))
         
         for match in precedent_matches:
             normalized = AnswerValidator._normalize_citation(match)
@@ -700,20 +729,26 @@ class AnswerValidator:
                 citation_coverage = found_citations / len(normalized_expected_citations)
                 
                 # 답변에 Citation이 있지만 expected_citations와 매칭되지 않은 경우
-                # 부분 점수 부여 (최대 0.3까지)
+                # 부분 점수 부여 (최대 0.4까지 증가)
                 unmatched_answer_citations = len(normalized_answer_citations) - found_citations
                 if unmatched_answer_citations > 0:
-                    bonus = min(0.3, unmatched_answer_citations * 0.1)
+                    # 답변에 법령 인용이 있으면 더 높은 보너스 부여
+                    bonus = min(0.4, unmatched_answer_citations * 0.15)
                     citation_coverage = min(1.0, citation_coverage + bonus)
                 
                 # 매칭 실패 시 부분 점수 로직 개선
                 if found_citations == 0:
-                    # 답변에 Citation이 있으면 최소 0.2 점수 부여
+                    # 답변에 Citation이 있으면 최소 0.3 점수 부여 (0.2 -> 0.3으로 증가)
                     if normalized_answer_citations:
-                        citation_coverage = min(0.5, len(normalized_answer_citations) * 0.1)
+                        # 법령 인용이 있으면 더 높은 점수 부여
+                        law_citations = [c for c in normalized_answer_citations if c.get("type") == "law"]
+                        if law_citations:
+                            citation_coverage = min(0.6, 0.3 + len(law_citations) * 0.1)
+                        else:
+                            citation_coverage = min(0.5, len(normalized_answer_citations) * 0.15)
                         logger.debug(
                             f"[CITATION DEBUG] No matches but answer has citations: "
-                            f"{len(normalized_answer_citations)}, coverage: {citation_coverage}"
+                            f"{len(normalized_answer_citations)}, law_citations: {len(law_citations)}, coverage: {citation_coverage}"
                         )
                     else:
                         citation_coverage = 0.0
