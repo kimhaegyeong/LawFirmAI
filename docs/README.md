@@ -8,6 +8,7 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 
 **현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
 
+
 ## 📁 문서 디렉토리
 
 ### 01. 시작하기 (`01_getting_started/`)
