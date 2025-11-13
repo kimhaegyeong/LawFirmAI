@@ -34,6 +34,34 @@ def get_kst_date() -> datetime.date:
     return get_kst_now().date()
 
 
+def get_user_info(request: Request, current_user: dict) -> tuple[Optional[str], str]:
+    """
+    요청에서 user_id와 ip_address 추출
+    
+    Returns:
+        tuple: (user_id, ip_address)
+    """
+    # 클라이언트 IP 주소 가져오기
+    client_ip = request.client.host if request.client else None
+    if not client_ip:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = "unknown"
+    
+    # 사용자 ID 가져오기
+    user_id = None
+    if current_user and current_user.get("authenticated"):
+        user_id = current_user.get("user_id")
+    else:
+        anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
+        if anonymous_session_id:
+            user_id = f"anonymous_{anonymous_session_id}"
+    
+    return user_id, client_ip
+
+
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(
     request: Request,
@@ -238,30 +266,12 @@ async def create_session(
 ):
     """새 세션 생성"""
     try:
-        # 클라이언트 IP 주소 가져오기
-        client_ip = request.client.host if request.client else None
-        if not client_ip:
-            # X-Forwarded-For 헤더 확인 (프록시 뒤에 있는 경우)
-            forwarded_for = request.headers.get("X-Forwarded-For")
-            if forwarded_for:
-                client_ip = forwarded_for.split(",")[0].strip()
-            else:
-                client_ip = "unknown"
-        
-        # 사용자 ID 가져오기
-        user_id = None
-        if current_user and current_user.get("authenticated"):
-            user_id = current_user.get("user_id")
-        else:
-            # 비로그인 사용자의 경우 익명 세션 ID 사용
-            anonymous_session_id = request.headers.get("X-Anonymous-Session-Id")
-            if anonymous_session_id:
-                user_id = f"anonymous_{anonymous_session_id}"
+        user_id, client_ip = get_user_info(request, current_user)
         
         session_id = session_service.create_session(
             title=session.title,
             user_id=user_id,
-            ip_address=client_ip if not user_id else None
+            ip_address=client_ip
         )
         
         created_session = session_service.get_session(session_id)

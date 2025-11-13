@@ -174,10 +174,12 @@ class SessionService:
             self._ensure_columns_exist(conn)
             cursor = conn.cursor()
             
+            now_kst = get_kst_now()
+            now_kst_str = now_kst.isoformat()
             cursor.execute("""
                 INSERT INTO sessions (session_id, title, created_at, updated_at, user_id, ip_address)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (session_id, title, get_kst_now(), get_kst_now(), user_id, ip_address))
+            """, (session_id, title, now_kst_str, now_kst_str, user_id, ip_address))
             
             conn.commit()
             conn.close()
@@ -253,7 +255,7 @@ class SessionService:
                 return False
             
             updates.append("updated_at = ?")
-            params.append(get_kst_now())
+            params.append(get_kst_now().isoformat())
             params.append(session_id)
             
             query = "UPDATE sessions SET " + ", ".join(updates) + " WHERE session_id = ?"
@@ -388,10 +390,7 @@ class SessionService:
                         params.append(user_id)
                 else:
                     if has_user_id:
-                        if has_ip_address:
-                            where_clauses.append("user_id = ? AND (ip_address IS NULL OR ip_address = '')")
-                        else:
-                            where_clauses.append("user_id = ?")
+                        where_clauses.append("user_id = ?")
                         params.append(user_id)
             elif ip_address:
                 if has_ip_address:
@@ -407,27 +406,29 @@ class SessionService:
                 params.append(f"%{search}%")
             
             # 날짜 필터 추가 (KST 기준)
-            # 데이터는 이미 KST로 저장되므로 DATE() 함수만 사용
+            # SQLite strftime() 함수를 사용하여 날짜 비교 (더 안정적)
             if date_from:
                 try:
                     # 날짜 형식 검증
                     datetime.strptime(date_from, "%Y-%m-%d")
-                    where_clauses.append("DATE(updated_at) >= ?")
+                    # strftime을 사용하여 날짜 부분만 추출하여 비교
+                    where_clauses.append("strftime('%Y-%m-%d', updated_at) >= ?")
                     params.append(date_from)
                 except ValueError:
-                    logger.warning(f"Invalid date_from format: {date_from}, using DATE() function")
-                    where_clauses.append("DATE(updated_at) >= ?")
+                    logger.warning(f"Invalid date_from format: {date_from}, using strftime() function")
+                    where_clauses.append("strftime('%Y-%m-%d', updated_at) >= ?")
                     params.append(date_from)
             
             if date_to:
                 try:
                     # 날짜 형식 검증
                     datetime.strptime(date_to, "%Y-%m-%d")
-                    where_clauses.append("DATE(updated_at) <= ?")
+                    # strftime을 사용하여 날짜 부분만 추출하여 비교
+                    where_clauses.append("strftime('%Y-%m-%d', updated_at) <= ?")
                     params.append(date_to)
                 except ValueError:
-                    logger.warning(f"Invalid date_to format: {date_to}, using DATE() function")
-                    where_clauses.append("DATE(updated_at) <= ?")
+                    logger.warning(f"Invalid date_to format: {date_to}, using strftime() function")
+                    where_clauses.append("strftime('%Y-%m-%d', updated_at) <= ?")
                     params.append(date_to)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -437,20 +438,29 @@ class SessionService:
             sort_field = sort_by if sort_by in valid_sort_fields else "updated_at"
             sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
             
+            # 디버깅을 위한 로깅
+            logger.debug(f"list_sessions query: WHERE {where_sql}, params: {params}, user_id: {user_id}, date_from: {date_from}, date_to: {date_to}")
+            
             # 전체 개수 조회 (파라미터화된 쿼리 사용)
             count_query = "SELECT COUNT(*) FROM sessions WHERE " + where_sql
             cursor.execute(count_query, params)
             total = cursor.fetchone()[0]
+            
+            logger.debug(f"list_sessions total count: {total}")
             
             # 페이지네이션
             offset = (page - 1) * page_size
             # 파라미터화된 쿼리 사용 (정렬 필드는 화이트리스트로 검증됨)
             # 정렬 필드는 화이트리스트로 검증되었으므로 안전하게 사용 가능
             query = "SELECT * FROM sessions WHERE " + where_sql + " ORDER BY " + sort_field + " " + sort_dir + " LIMIT ? OFFSET ?"
-            params.extend([page_size, offset])
+            query_params = params + [page_size, offset]
             
-            cursor.execute(query, params)
+            logger.debug(f"list_sessions full query: {query}, params: {query_params}")
+            
+            cursor.execute(query, query_params)
             rows = cursor.fetchall()
+            
+            logger.debug(f"list_sessions returned {len(rows)} rows")
             
             conn.close()
             
@@ -489,17 +499,19 @@ class SessionService:
             import json
             metadata_str = json.dumps(metadata) if metadata else None
             
+            now_kst = get_kst_now()
+            now_kst_str = now_kst.isoformat()
             cursor.execute("""
                 INSERT INTO messages (message_id, session_id, role, content, timestamp, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (message_id, session_id, role, content, get_kst_now(), metadata_str))
+            """, (message_id, session_id, role, content, now_kst_str, metadata_str))
             
             # 메시지 개수 업데이트
             cursor.execute("""
                 UPDATE sessions 
                 SET message_count = message_count + 1, updated_at = ?
                 WHERE session_id = ?
-            """, (get_kst_now(), session_id))
+            """, (now_kst_str, session_id))
             
             conn.commit()
             conn.close()
