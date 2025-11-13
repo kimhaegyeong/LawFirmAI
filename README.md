@@ -59,6 +59,46 @@ LawFirmAI/
 
 자세한 프로젝트 구조는 [프로젝트 구조 문서](docs/01_getting_started/project_structure.md)를 참조하세요.
 
+## 📊 모니터링 시스템
+
+### Grafana + Prometheus 기반 실시간 모니터링
+
+LawFirmAI는 법률 수집 성능을 실시간으로 모니터링하는 시스템을 제공합니다.
+
+#### 주요 기능
+- **실시간 메트릭 수집**: 페이지 처리, 법률 수집, 에러율 등
+- **지속적 메트릭 누적**: 여러 실행에 걸쳐 메트릭 값 누적
+- **Grafana 대시보드**: 시각적 모니터링 및 알림
+- **성능 분석**: 처리량, 메모리 사용량, CPU 사용률 추적
+
+#### 빠른 시작
+
+```bash
+# 1. 모니터링 스택 시작
+cd monitoring
+docker-compose up -d
+
+# 2. 메트릭 서버 독립 실행
+python scripts/monitoring/metrics_collector.py --port 8000
+
+# 3. 법률 수집 실행 (메트릭 포함)
+python scripts/assembly/collect_laws_optimized.py --sample 50 --enable-metrics
+```
+
+#### 접근 URL
+- **Grafana**: http://localhost:3000 (admin/admin123)
+- **Prometheus**: http://localhost:9090
+- **메트릭 엔드포인트**: http://localhost:8000/metrics
+
+#### 수집되는 메트릭
+- `law_collection_pages_processed_total`: 처리된 총 페이지 수
+- `law_collection_laws_collected_total`: 수집된 총 법률 수
+- `law_collection_page_processing_seconds`: 페이지 처리 시간
+- `law_collection_memory_usage_bytes`: 메모리 사용량
+- `law_collection_cpu_usage_percent`: CPU 사용률
+
+자세한 내용은 [Windows 모니터링 가이드](docs/development/windows_monitoring_guide.md)를 참조하세요.
+
 ## 🚀 빠른 시작
 
 ### 1. 저장소 클론
@@ -81,7 +121,7 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (선택사항)
 
 프로젝트 루트에 `.env` 파일을 생성하고 필요한 환경 변수를 설정하세요:
 
@@ -104,7 +144,7 @@ npm install
 npm run dev
 ```
 
-### 5. 접속
+### 6. 접속
 
 - **React 프론트엔드**: http://localhost:3000
 - **FastAPI 서버**: http://localhost:8000
