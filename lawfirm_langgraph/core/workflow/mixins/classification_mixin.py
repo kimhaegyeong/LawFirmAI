@@ -92,7 +92,7 @@ class ClassificationMixin:
         confidence: float,
         legal_field: str
     ) -> None:
-        """분류 결과를 State에 저장 (중복 코드 제거)"""
+        """분류 결과를 State에 저장 (중복 코드 제거 - 개선: 여러 위치 및 global cache에 저장)"""
         self._set_state_value(state, "query_type", query_type_str)
         self._set_state_value(state, "confidence", confidence)
         self._set_state_value(state, "legal_field", legal_field)
@@ -110,12 +110,36 @@ class ClassificationMixin:
             state["common"]["classification"] = {}
         state["common"]["classification"]["query_type"] = query_type_str
         state["common"]["classification"]["confidence"] = confidence
+        state["common"]["classification"]["legal_field"] = legal_field
+        # common 최상위에도 저장
+        state["common"]["query_type"] = query_type_str
         
         if "metadata" not in state:
             state["metadata"] = {}
         state["metadata"]["query_type"] = query_type_str
         state["metadata"]["confidence"] = confidence
         state["metadata"]["legal_field"] = legal_field
+        
+        # Global cache에도 저장 (복구를 위해)
+        try:
+            from core.shared.wrappers.node_wrappers import _global_search_results_cache
+            if not _global_search_results_cache:
+                _global_search_results_cache = {}
+            _global_search_results_cache["query_type"] = query_type_str
+            _global_search_results_cache["confidence"] = confidence
+            _global_search_results_cache["legal_field"] = legal_field
+            if "common" not in _global_search_results_cache:
+                _global_search_results_cache["common"] = {}
+            if "classification" not in _global_search_results_cache["common"]:
+                _global_search_results_cache["common"]["classification"] = {}
+            _global_search_results_cache["common"]["classification"]["query_type"] = query_type_str
+            _global_search_results_cache["common"]["classification"]["confidence"] = confidence
+            if "metadata" not in _global_search_results_cache:
+                _global_search_results_cache["metadata"] = {}
+            _global_search_results_cache["metadata"]["query_type"] = query_type_str
+            self.logger.debug(f"✅ [CLASSIFICATION] Saved query_type to global cache: {query_type_str}")
+        except (ImportError, AttributeError, TypeError) as e:
+            self.logger.debug(f"Could not save to global cache: {e}")
         
         if "metadata" not in state["common"]:
             state["common"]["metadata"] = {}
@@ -225,18 +249,16 @@ class ClassificationMixin:
             classified_type, confidence = self._classify_with_llm(query)
 
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)
-            self._set_state_value(state, "query_type", query_type_str)
-            self._set_state_value(state, "confidence", confidence)
+            legal_field = self._extract_legal_field(query_type_str, query)
+            
+            # 개선: _save_classification_results 호출하여 여러 위치에 저장
+            self._save_classification_results(state, query_type_str, confidence, legal_field)
 
             self.logger.info(
                 f"✅ [QUESTION CLASSIFICATION] "
                 f"QuestionType={classified_type.name if hasattr(classified_type, 'name') else classified_type} "
                 f"(confidence: {confidence:.2f})"
             )
-
-            legal_field = self._extract_legal_field(query_type_str, query)
-            self._set_state_value(state, "legal_field", legal_field)
-            self._set_state_value(state, "legal_domain", self._map_to_legal_domain(legal_field))
 
             processing_time = self._update_processing_time(state, start_time)
             self._add_step(state, "질문 분류 완료",
