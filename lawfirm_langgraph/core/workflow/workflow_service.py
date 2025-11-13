@@ -1446,11 +1446,71 @@ class LangGraphWorkflowService:
             final_related_questions = metadata.get("related_questions", [])
             self.logger.info(f"[workflow_service] Final check: related_questions count={len(final_related_questions)}")
             
+            # sources_detail 추출: flat_result에서 여러 위치에서 찾기
+            sources_detail = []
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                sources_detail = flat_result.get("sources_detail", [])
+                
+                # 2. common 그룹에서 확인
+                if (not sources_detail or len(sources_detail) == 0) and "common" in flat_result:
+                    if isinstance(flat_result["common"], dict):
+                        sources_detail = flat_result["common"].get("sources_detail", [])
+                
+                # 3. metadata에서 확인
+                if (not sources_detail or len(sources_detail) == 0) and "metadata" in flat_result:
+                    if isinstance(flat_result["metadata"], dict):
+                        sources_detail = flat_result["metadata"].get("sources_detail", [])
+            
+            # legal_references 추출: flat_result에서 여러 위치에서 찾기
+            legal_references = []
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                legal_references = flat_result.get("legal_references", [])
+                
+                # 2. common 그룹에서 확인
+                if (not legal_references or len(legal_references) == 0) and "common" in flat_result:
+                    if isinstance(flat_result["common"], dict):
+                        legal_references = flat_result["common"].get("legal_references", [])
+                
+                # 3. metadata에서 확인
+                if (not legal_references or len(legal_references) == 0) and "metadata" in flat_result:
+                    if isinstance(flat_result["metadata"], dict):
+                        legal_references = flat_result["metadata"].get("legal_references", [])
+            
+            self.logger.info(f"[WORKFLOW_SERVICE] Extracted sources_detail: {len(sources_detail)} items, legal_references: {len(legal_references)} items")
+            
+            # related_questions 추출: flat_result에서 여러 위치에서 찾기
+            related_questions = []
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                related_questions = flat_result.get("related_questions", [])
+                
+                # 2. metadata에서 확인
+                if (not related_questions or len(related_questions) == 0) and "metadata" in flat_result:
+                    if isinstance(flat_result["metadata"], dict):
+                        related_questions = flat_result["metadata"].get("related_questions", [])
+                
+                # 3. common 그룹에서 확인
+                if (not related_questions or len(related_questions) == 0) and "common" in flat_result:
+                    if isinstance(flat_result["common"], dict):
+                        common_metadata = flat_result["common"].get("metadata", {})
+                        if isinstance(common_metadata, dict):
+                            related_questions = common_metadata.get("related_questions", [])
+            
+            # metadata에서도 확인 (이미 추출한 경우 재확인)
+            if (not related_questions or len(related_questions) == 0) and isinstance(metadata, dict):
+                related_questions = metadata.get("related_questions", [])
+            
+            self.logger.info(f"[WORKFLOW_SERVICE] Extracted related_questions: {len(related_questions)} items")
+            
             response = {
                 "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
                 "sources": sources,
+                "sources_detail": sources_detail,
                 "confidence": flat_result.get("confidence", 0.0) if isinstance(flat_result, dict) else 0.0,
-                "legal_references": flat_result.get("legal_references", []) if isinstance(flat_result, dict) else [],
+                "legal_references": legal_references,
+                "related_questions": related_questions,  # related_questions 추가
                 "processing_steps": processing_steps,
                 "session_id": session_id,
                 "processing_time": processing_time,
