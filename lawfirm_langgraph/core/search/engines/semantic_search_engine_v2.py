@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -780,13 +780,19 @@ class SemanticSearchEngineV2:
 
     def __init__(self,
                  db_path: Optional[str] = None,
-                 model_name: Optional[str] = None):
+                 model_name: Optional[str] = None,
+                 external_index_path: Optional[str] = None,
+                 vector_store_version: Optional[str] = None,
+                 use_external_index: bool = False):
         """
         검색 엔진 초기화
 
         Args:
             db_path: lawfirm_v2.db 경로 (None이면 환경변수 DATABASE_PATH 사용)
             model_name: 임베딩 모델명 (None이면 데이터베이스에서 자동 감지)
+            external_index_path: 외부 FAISS 인덱스 경로 (선택)
+            vector_store_version: 벡터스토어 버전 번호 (선택)
+            use_external_index: 외부 인덱스 사용 여부
         """
         if db_path is None:
             from core.utils.config import Config
@@ -794,6 +800,36 @@ class SemanticSearchEngineV2:
             db_path = config.database_path
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+        
+        # 설정에서 외부 인덱스 사용 여부 확인
+        if not use_external_index:
+            try:
+                from core.utils.config import Config
+                config = Config()
+                use_external_index = config.use_external_vector_store if hasattr(config, 'use_external_vector_store') else False
+                if use_external_index:
+                    external_index_path = external_index_path or (config.external_vector_store_base_path if hasattr(config, 'external_vector_store_base_path') else None)
+                    vector_store_version = vector_store_version or (config.vector_store_version if hasattr(config, 'vector_store_version') else None)
+            except Exception as e:
+                self.logger.debug(f"Could not load config for external index settings: {e}")
+        
+        self.use_external_index = use_external_index
+        self.external_index_path = external_index_path
+        self.vector_store_version = vector_store_version
+        
+        # 버전 자동 감지 (버전이 지정되지 않고 외부 인덱스를 사용하는 경우)
+        if self.use_external_index and not self.vector_store_version and not self.external_index_path:
+            try:
+                from scripts.ml_training.vector_embedding.version_manager import VectorStoreVersionManager
+                base_path = Path(self.db_path).parent / "embeddings"
+                if base_path.exists():
+                    version_manager = VectorStoreVersionManager(base_path)
+                    latest_version = version_manager.get_latest_version()
+                    if latest_version:
+                        self.vector_store_version = latest_version
+                        self.logger.info(f"Auto-detected latest vector store version: {self.vector_store_version}")
+            except Exception as e:
+                self.logger.debug(f"Could not auto-detect vector store version: {e}")
 
         # 모델명이 제공되지 않으면 데이터베이스에서 자동 감지
         if model_name is None:
@@ -806,10 +842,20 @@ class SemanticSearchEngineV2:
         self.model_name = model_name
 
         # FAISS 인덱스 관련 속성
-        self.index_path = str(Path(db_path).parent / f"{Path(db_path).stem}_faiss.index")
+        if self.use_external_index and self.external_index_path:
+            # external_index_path가 디렉토리인 경우 파일 경로로 변환
+            external_path = Path(self.external_index_path)
+            if external_path.is_dir():
+                self.index_path = str(external_path / "ml_enhanced_faiss_index.faiss")
+            else:
+                self.index_path = self.external_index_path
+        else:
+            self.index_path = str(Path(db_path).parent / f"{Path(db_path).stem}_faiss.index")
+        
         self.index = None
         self._chunk_ids = []  # 인덱스와 chunk_id 매핑
         self._chunk_metadata = {}  # chunk_id -> metadata 매핑 (초기화)
+        self._external_metadata = []  # 외부 인덱스 메타데이터 (외부 인덱스 사용 시)
         self._index_building = False  # 백그라운드 빌드 중 플래그
         self._build_thread = None  # 빌드 스레드
 
@@ -826,11 +872,28 @@ class SemanticSearchEngineV2:
             self.logger.warning(f"Database {db_path} not found")
 
         # FAISS 인덱스 로드 또는 빌드
+        # 예외 처리를 강화하여 초기화 실패 시에도 서비스가 계속되도록 함
         if FAISS_AVAILABLE and self.embedder:
-            if Path(self.index_path).exists():
-                self._load_faiss_index()
-            else:
-                self.logger.info("FAISS index not found, will build on first search")
+            try:
+                if self.use_external_index:
+                    # 외부 인덱스 사용 시 외부 인덱스 로드
+                    # 예외 발생 시에도 초기화는 계속되며, 첫 검색 시 재시도
+                    try:
+                        self._load_external_index()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load external index during initialization: {e}. Will retry on first search.")
+                        self.index = None
+                elif Path(self.index_path).exists():
+                    try:
+                        self._load_faiss_index()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load FAISS index during initialization: {e}. Will retry on first search.")
+                        self.index = None
+                else:
+                    self.logger.info("FAISS index not found, will build on first search")
+            except Exception as e:
+                self.logger.error(f"Unexpected error during index initialization: {e}", exc_info=True)
+                self.index = None
     
     def _initialize_embedder(self, model_name: str, retry_count: int = 0, max_retries: int = 2) -> bool:
         """
@@ -1260,6 +1323,18 @@ class SemanticSearchEngineV2:
         Returns:
             검색 결과 리스트 [{text, score, metadata, ...}]
         """
+        # 인덱스가 없으면 자동으로 로드 시도 (초기화 실패 시 재시도)
+        if self.index is None and FAISS_AVAILABLE and self.embedder:
+            try:
+                if self.use_external_index:
+                    self._load_external_index()
+                elif Path(self.index_path).exists():
+                    self._load_faiss_index()
+            except Exception as e:
+                self.logger.warning(f"Failed to load index during search: {e}")
+                # 인덱스 로드 실패 시 빈 결과 반환 (스트리밍 블로킹 방지)
+                return []
+        
         # Embedder 초기화 상태 확인 및 필요시 재초기화
         if not self._ensure_embedder_initialized():
             self.logger.error("Embedder not initialized and re-initialization failed")
@@ -1380,28 +1455,55 @@ class SemanticSearchEngineV2:
             # 2. FAISS 인덱스 사용 또는 전체 벡터 로드
             if FAISS_AVAILABLE and self.index is not None:
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
-                optimal_nprobe = self._calculate_optimal_nprobe(k, self.index.ntotal)
-                if self.index.nprobe != optimal_nprobe:
-                    self.index.nprobe = optimal_nprobe
-                    self.logger.debug(f"Adjusted nprobe to {optimal_nprobe} for k={k}")
-
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
                 search_k = k * 2  # 여유 있게 검색
+                
+                # nprobe 설정 (IndexIVF 계열만 지원)
+                if hasattr(self.index, 'nprobe'):
+                    optimal_nprobe = self._calculate_optimal_nprobe(k, self.index.ntotal)
+                    if self.index.nprobe != optimal_nprobe:
+                        self.index.nprobe = optimal_nprobe
+                        self.logger.debug(f"Adjusted nprobe to {optimal_nprobe} for k={k}")
+                
                 distances, indices = self.index.search(query_vec_np, search_k)
 
                 similarities = []
                 for distance, idx in zip(distances[0], indices[0]):
-                    if idx < len(self._chunk_ids):
+                    if idx < 0 or idx >= len(self._chunk_ids):
+                        continue
+                    
+                    # 외부 인덱스 사용 시 chunk_id는 인덱스 번호 자체
+                    if self.use_external_index:
+                        chunk_id = idx  # 외부 인덱스에서는 인덱스 번호가 chunk_id
+                    else:
                         chunk_id = self._chunk_ids[idx]
-                        # L2 거리를 코사인 유사도로 변환 (정규화된 벡터의 경우)
-                        # distance = 2 - 2*cosine_similarity
-                        # cosine_similarity = 1 - distance/2
-                        similarity = 1.0 - (distance / 2.0)
-                        similarity = max(0.0, min(1.0, similarity))  # 0-1 범위로 제한
+                    
+                    # IndexFlatIP는 내적을 반환하므로 직접 사용 가능
+                    # IndexIVF나 다른 인덱스는 거리를 반환하므로 변환 필요
+                    try:
+                        if hasattr(self.index, 'metric_type'):
+                            if self.index.metric_type == faiss.METRIC_INNER_PRODUCT:
+                                # 내적 값: 정규화된 벡터의 경우 -1~1 범위
+                                # 0-1 범위로 변환: (distance + 1) / 2
+                                similarity = (float(distance) + 1.0) / 2.0
+                            else:
+                                # L2 거리를 코사인 유사도로 변환 (정규화된 벡터의 경우)
+                                # distance = 2 - 2*cosine_similarity
+                                # cosine_similarity = 1 - distance/2
+                                similarity = 1.0 - (distance / 2.0)
+                        else:
+                            # 기본적으로 내적로 가정 (IndexFlatIP)
+                            # 내적 값을 0-1 범위로 변환
+                            similarity = (float(distance) + 1.0) / 2.0
+                    except Exception as e:
+                        self.logger.debug(f"Error calculating similarity: {e}, using distance as-is")
+                        similarity = (float(distance) + 1.0) / 2.0
+                    
+                    similarity = max(0.0, min(1.0, similarity))  # 0-1 범위로 제한
 
-                        if similarity >= similarity_threshold:
-                            similarities.append((chunk_id, similarity))
+                    if similarity >= similarity_threshold:
+                        similarities.append((chunk_id, similarity))
 
                 # 유사도 기준 정렬
                 similarities.sort(key=lambda x: x[1], reverse=True)
@@ -1434,11 +1536,90 @@ class SemanticSearchEngineV2:
 
             # 5. 상위 K개 결과 구성
             results = []
+            
+            # 텍스트 복원을 위해 DB 연결 필요 (외부 인덱스 사용 시에도)
             conn = self._get_connection()
 
+            self.logger.debug(f"Processing {len(similarities)} similarities, top {k} results")
+            
             for chunk_id, score in similarities[:k]:
-                # 청크 메타데이터 조회 (없으면 DB에서 조회)
-                if chunk_id not in self._chunk_metadata:
+                # 외부 인덱스 사용 시 메타데이터는 이미 로드됨
+                if self.use_external_index:
+                    # chunk_id는 외부 인덱스에서의 인덱스 번호 (0부터 시작)
+                    if chunk_id >= 0 and chunk_id < len(self._external_metadata):
+                        metadata = self._external_metadata[chunk_id]
+                        text = metadata.get('content', '') or metadata.get('text', '')
+                        source_type = metadata.get('type') or metadata.get('source_type', '')
+                        
+                        # source_type이 없으면 메타데이터에서 추론
+                        if not source_type:
+                            if metadata.get('case_id') or metadata.get('case_number') or metadata.get('doc_id'):
+                                source_type = 'case_paragraph'
+                            elif metadata.get('law_id') or metadata.get('law_name') or metadata.get('article_number'):
+                                source_type = 'statute_article'
+                            elif metadata.get('decision_id') or metadata.get('org'):
+                                source_type = 'decision_paragraph'
+                            elif metadata.get('interpretation_id'):
+                                source_type = 'interpretation_paragraph'
+                        
+                        # source_meta에 모든 메타데이터 포함
+                        source_meta = metadata.copy()
+                        source_meta['source_type'] = source_type
+                        # source_id 추출: 실제 DB ID를 찾기 위해 text_chunks에서 조회
+                        # 외부 인덱스 메타데이터에는 case_number, doc_id 등이 있을 수 있지만 실제 DB ID는 다를 수 있음
+                        potential_source_id = metadata.get('case_id') or metadata.get('law_id') or metadata.get('doc_id', '')
+                        
+                        # DB에서 실제 source_id 찾기 (text_chunks 테이블 사용)
+                        actual_source_id = None
+                        if conn and source_type and potential_source_id:
+                            try:
+                                # text_chunks에서 source_type과 다른 필드로 조회
+                                if source_type == 'case_paragraph':
+                                    # case_number나 doc_id로 조회
+                                    case_number = metadata.get('case_number') or metadata.get('doc_id')
+                                    if case_number:
+                                        cursor = conn.execute(
+                                            "SELECT DISTINCT source_id FROM text_chunks WHERE source_type = ? AND (metadata LIKE ? OR metadata LIKE ?) LIMIT 1",
+                                            (source_type, f'%{case_number}%', f'%doc_id%{case_number}%')
+                                        )
+                                        row = cursor.fetchone()
+                                        if row:
+                                            actual_source_id = row[0]
+                                elif source_type == 'statute_article':
+                                    # law_id와 article_number로 조회
+                                    law_id = metadata.get('law_id')
+                                    article_no = metadata.get('article_number') or metadata.get('article_no')
+                                    if law_id and article_no:
+                                        cursor = conn.execute(
+                                            "SELECT DISTINCT source_id FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? LIMIT 1",
+                                            (source_type, f'%law_id%{law_id}%', f'%article_number%{article_no}%')
+                                        )
+                                        row = cursor.fetchone()
+                                        if row:
+                                            actual_source_id = row[0]
+                                
+                                # 조회 실패 시 potential_source_id가 숫자면 그대로 사용
+                                if actual_source_id is None:
+                                    try:
+                                        actual_source_id = int(potential_source_id)
+                                    except (ValueError, TypeError):
+                                        # 문자열이면 None으로 설정 (복원 시도하지 않음)
+                                        actual_source_id = None
+                            except Exception as e:
+                                self.logger.debug(f"Failed to find actual source_id for chunk_id={chunk_id}: {e}")
+                                actual_source_id = None
+                        
+                        # _chunk_metadata에도 저장 (일관성 유지)
+                        self._chunk_metadata[chunk_id] = {
+                            'source_type': source_type,
+                            'source_id': actual_source_id if actual_source_id is not None else potential_source_id,
+                            'text': text,
+                            **metadata
+                        }
+                    else:
+                        self.logger.debug(f"chunk_id {chunk_id} out of range (0-{len(self._external_metadata)-1})")
+                        continue
+                elif chunk_id not in self._chunk_metadata:
                     # 메타데이터가 없으면 DB에서 직접 조회 (전체 텍스트 가져오기)
                     cursor = conn.execute(
                         "SELECT source_type, source_id, text FROM text_chunks WHERE id = ?",
@@ -1462,19 +1643,60 @@ class SemanticSearchEngineV2:
                             'text': text_content
                         }
 
-                metadata = self._chunk_metadata.get(chunk_id, {})
-                source_type = metadata.get('source_type')
-                source_id = metadata.get('source_id')
-                text = metadata.get('text', '')
+                chunk_metadata = self._chunk_metadata.get(chunk_id, {})
+                source_type = chunk_metadata.get('source_type')
+                source_id = chunk_metadata.get('source_id')
+                text = chunk_metadata.get('text', '')
+                # 텍스트 복원을 위해 전체 메타데이터도 필요
+                full_metadata = chunk_metadata.copy()
 
                 # text가 비어있거나 짧으면 원본 테이블에서 복원 시도 (최소 100자 보장)
+                # 외부 인덱스 사용 시에도 DB에서 텍스트 복원 시도
                 if not text or len(text.strip()) < 100:
                     if not text or len(text.strip()) == 0:
                         self.logger.warning(f"Empty text content for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}. Attempting to restore from source table...")
                     else:
                         self.logger.debug(f"Short text content for chunk_id={chunk_id} (length: {len(text)} chars), attempting to restore longer text from source table...")
                     
-                    restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                    # DB 연결이 없으면 새로 생성
+                    if not conn:
+                        conn = self._get_connection()
+                    
+                    # source_id가 문자열이면 숫자로 변환 시도
+                    if conn and source_type and source_id:
+                        try:
+                            # source_id가 문자열이면 숫자로 변환 시도
+                            if isinstance(source_id, str):
+                                # 숫자 문자열인지 확인
+                                if source_id.isdigit():
+                                    actual_source_id = int(source_id)
+                                    restored_text = self._restore_text_from_source(conn, source_type, actual_source_id)
+                                else:
+                                    # 문자열이면 text_chunks에서 직접 조회
+                                    # 외부 인덱스의 source_id 형식 처리 (예: case_2015도19521)
+                                    self.logger.debug(f"source_id is string format: {source_id}, trying metadata lookup")
+                                    restored_text = self._restore_text_from_chunks_by_metadata(conn, source_type, full_metadata)
+                                    
+                                    # metadata 조회 실패 시 source_id에서 직접 추출 시도
+                                    if not restored_text:
+                                        # source_id에서 실제 ID 추출 시도 (예: case_2015도19521 -> 2015도19521)
+                                        extracted_id = self._extract_id_from_source_id_string(source_id, source_type)
+                                        if extracted_id:
+                                            self.logger.debug(f"Extracted ID from source_id string: {extracted_id}")
+                                            # 숫자로 변환 가능하면 숫자 ID로 조회 시도
+                                            if isinstance(extracted_id, int):
+                                                restored_text = self._restore_text_from_source(conn, source_type, extracted_id)
+                                            else:
+                                                # 여전히 문자열이면 metadata 조회만 가능
+                                                restored_text = self._restore_text_from_chunks_by_metadata(conn, source_type, full_metadata)
+                            else:
+                                # 이미 숫자면 그대로 사용
+                                restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                        except (ValueError, TypeError) as e:
+                            self.logger.debug(f"Invalid source_id format: {source_id}, trying text_chunks lookup: {e}")
+                            restored_text = self._restore_text_from_chunks_by_metadata(conn, source_type, full_metadata)
+                    else:
+                        restored_text = None
                     if restored_text:
                         # 복원된 텍스트가 더 길면 사용
                         if len(restored_text.strip()) > len(text.strip()) if text else True:
@@ -1487,30 +1709,43 @@ class SemanticSearchEngineV2:
                     else:
                         if not text or len(text.strip()) == 0:
                             self.logger.error(f"Failed to restore text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
+                            # 상세 디버깅 정보
+                            if isinstance(source_id, str) and not source_id.isdigit():
+                                self.logger.debug(f"  - source_id is string format: {source_id}, may need metadata lookup")
+                                self.logger.debug(f"  - metadata keys: {list(full_metadata.keys())[:10] if full_metadata else 'N/A'}")
                         else:
-                            self.logger.warning(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
+                            # 경고를 debug 레벨로 낮춰서 로그 노이즈 감소
+                            self.logger.debug(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
+                            # 상세 디버깅 정보 (debug 레벨)
+                            if isinstance(source_id, str) and not source_id.isdigit():
+                                self.logger.debug(f"  - source_id is string format: {source_id}, metadata lookup may have failed")
+                                self.logger.debug(f"  - available metadata keys: {list(full_metadata.keys())[:10] if full_metadata else 'N/A'}")
 
-                # 소스별 상세 메타데이터 조회
-                source_meta = self._get_source_metadata(conn, source_type, source_id)
-                # content 필드가 비어있으면 경고 및 복원 시도
-                if not text or len(text.strip()) == 0:
-                    self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
-                    # 복원 시도
-                    if source_type and source_id:
+                # 소스별 상세 메타데이터 조회 (외부 인덱스 사용 시 건너뛰기)
+                if not self.use_external_index and conn:
+                    source_meta = self._get_source_metadata(conn, source_type, source_id)
+                    # content 필드가 비어있으면 경고 및 복원 시도
+                    if not text or len(text.strip()) == 0:
+                        self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
+                        # 복원 시도
+                        if source_type and source_id:
+                            restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                            if restored_text:
+                                text = restored_text
+                                self.logger.info(f"✅ [SEMANTIC SEARCH] Restored text for chunk_id={chunk_id} (length: {len(text)} chars)")
+                            else:
+                                self.logger.error(f"❌ [SEMANTIC SEARCH] Failed to restore text for chunk_id={chunk_id}")
+                                continue  # text가 없으면 건너뛰기
+                    
+                    # 최소 길이 보장 (100자 이상)
+                    if text and len(text.strip()) < 100:
                         restored_text = self._restore_text_from_source(conn, source_type, source_id)
-                        if restored_text:
+                        if restored_text and len(restored_text.strip()) > len(text.strip()):
                             text = restored_text
-                            self.logger.info(f"✅ [SEMANTIC SEARCH] Restored text for chunk_id={chunk_id} (length: {len(text)} chars)")
-                        else:
-                            self.logger.error(f"❌ [SEMANTIC SEARCH] Failed to restore text for chunk_id={chunk_id}")
-                            continue  # text가 없으면 건너뛰기
-                
-                # 최소 길이 보장 (100자 이상)
-                if text and len(text.strip()) < 100:
-                    restored_text = self._restore_text_from_source(conn, source_type, source_id)
-                    if restored_text and len(restored_text.strip()) > len(text.strip()):
-                        text = restored_text
-                        self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
+                            self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
+                else:
+                    # 외부 인덱스 사용 시 메타데이터는 이미 로드됨
+                    source_meta = metadata if self.use_external_index else {}
                 
                 # text가 비어있으면 건너뛰기
                 if not text or len(text.strip()) == 0:
@@ -1603,7 +1838,8 @@ class SemanticSearchEngineV2:
                 
                 results.append(result)
 
-            conn.close()
+            if conn:
+                conn.close()
             self.logger.info(f"Semantic search found {len(results)} results for query: {query[:50]}")
             return results
 
@@ -1771,8 +2007,95 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Error in incremental index update: {e}", exc_info=True)
 
+    def _load_external_index(self):
+        """외부 FAISS 인덱스 로드 (버전 관리 시스템 사용)"""
+        if not FAISS_AVAILABLE:
+            return
+        
+        try:
+            from scripts.ml_training.vector_embedding.version_manager import VectorStoreVersionManager
+            
+            if self.external_index_path:
+                # external_index_path가 디렉토리인 경우 파일 경로로 변환
+                external_path = Path(self.external_index_path)
+                if external_path.is_dir():
+                    index_path = external_path / "ml_enhanced_faiss_index.faiss"
+                else:
+                    index_path = external_path
+            elif self.vector_store_version:
+                base_path = Path(self.external_index_path) if self.external_index_path else Path(self.db_path).parent / "embeddings"
+                version_manager = VectorStoreVersionManager(base_path)
+                version_path = version_manager.get_version_path(self.vector_store_version)
+                index_path = version_path / "ml_enhanced_faiss_index.faiss"
+            else:
+                # 버전 자동 감지
+                base_path = Path(self.external_index_path) if self.external_index_path else Path(self.db_path).parent / "embeddings"
+                if base_path.exists():
+                    version_manager = VectorStoreVersionManager(base_path)
+                    latest_version = version_manager.get_latest_version()
+                    if latest_version:
+                        version_path = version_manager.get_version_path(latest_version)
+                        index_path = version_path / "ml_enhanced_faiss_index.faiss"
+                        self.vector_store_version = latest_version
+                        self.logger.info(f"Auto-detected version in _load_external_index: {latest_version}")
+                    else:
+                        self.logger.warning("No versions found in vector store")
+                        return
+                else:
+                    self.logger.warning("External index path or version not specified, and base path does not exist")
+                    return
+            
+            if not index_path.exists():
+                self.logger.warning(f"External FAISS index not found: {index_path}")
+                return
+            
+            self.index = faiss.read_index(str(index_path))
+            
+            metadata_path = index_path.parent / "ml_enhanced_faiss_index.json"
+            if metadata_path.exists():
+                import json
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata_content = json.load(f)
+                
+                if isinstance(metadata_content, dict):
+                    if 'documents' in metadata_content:
+                        metadata_list = metadata_content['documents']
+                    elif 'document_metadata' in metadata_content and 'document_texts' in metadata_content:
+                        # document_metadata와 document_texts를 결합
+                        metadata_list_data = metadata_content['document_metadata']
+                        texts_list = metadata_content['document_texts']
+                        metadata_list = []
+                        for meta, text in zip(metadata_list_data, texts_list):
+                            combined = meta.copy()
+                            combined['content'] = text
+                            combined['text'] = text
+                            metadata_list.append(combined)
+                        self.logger.info(f"Combined {len(metadata_list)} metadata items with texts")
+                    else:
+                        metadata_list = []
+                else:
+                    metadata_list = metadata_content if isinstance(metadata_content, list) else []
+                
+                self._external_metadata = metadata_list
+                self._chunk_ids = list(range(len(metadata_list)))
+                
+                for idx, meta in enumerate(metadata_list):
+                    self._chunk_metadata[idx] = meta
+                
+                self.logger.info(f"External FAISS index loaded: {len(self._chunk_ids)} vectors from {index_path}")
+            else:
+                self.logger.warning(f"Metadata file not found: {metadata_path}")
+                self._chunk_ids = list(range(self.index.ntotal))
+                self.logger.info(f"External FAISS index loaded: {self.index.ntotal} vectors (no metadata)")
+        
+        except ImportError:
+            self.logger.warning("VectorStoreVersionManager not available. Cannot load external index.")
+        except Exception as e:
+            self.logger.warning(f"Failed to load external FAISS index: {e}, will use DB-based index")
+            self.index = None
+    
     def _load_faiss_index(self):
-        """저장된 FAISS 인덱스 로드"""
+        """저장된 FAISS 인덱스 로드 (DB 기반)"""
         if not FAISS_AVAILABLE:
             return
 
@@ -1934,6 +2257,227 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Error restoring text from text_chunks ({source_type}, {source_id}): {e}")
             return ""
+    
+    def _restore_text_from_chunks_by_metadata(self, conn: sqlite3.Connection, source_type: str, metadata: Dict[str, Any]) -> str:
+        """
+        text_chunks 테이블에서 메타데이터를 사용하여 text 조회 (source_id가 문자열인 경우)
+        """
+        try:
+            conn.row_factory = sqlite3.Row
+            import json
+            
+            # metadata를 JSON 문자열로 변환하여 조회 시도
+            metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else ""
+            
+            # source_type에 따라 다른 필드로 조회
+            if source_type == 'case_paragraph':
+                # 다양한 필드명 시도
+                case_number = (
+                    metadata.get('case_number') or 
+                    metadata.get('doc_id') or 
+                    metadata.get('case_id') or
+                    metadata.get('id')
+                )
+                
+                # source_id가 문자열인 경우 (예: case_2015도19521)
+                if isinstance(metadata.get('source_id'), str):
+                    source_id_str = metadata.get('source_id')
+                    # case_ 접두사 제거
+                    if source_id_str.startswith('case_'):
+                        case_number = source_id_str[5:]  # 'case_' 제거
+                
+                if case_number:
+                    # 방법 1: metadata JSON에 포함된 경우
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{case_number}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by metadata for {source_type} case_number={case_number} (length: {len(str(text))} chars)")
+                            return str(text)
+                    
+                    # 방법 2: text 필드에 포함된 경우
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND text LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{case_number}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by text field for {source_type} case_number={case_number} (length: {len(str(text))} chars)")
+                            return str(text)
+            
+            elif source_type == 'statute_article':
+                law_id = metadata.get('law_id') or metadata.get('statute_id')
+                article_no = metadata.get('article_number') or metadata.get('article_no') or metadata.get('article')
+                statute_name = metadata.get('statute_name') or metadata.get('law_name')
+                
+                # law_id와 article_no가 있으면 조회
+                if law_id and article_no:
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%law_id%{law_id}%', f'%article_number%{article_no}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by metadata for {source_type} law_id={law_id} article_no={article_no} (length: {len(str(text))} chars)")
+                            return str(text)
+                
+                # statute_name과 article_no로 조회 시도
+                if statute_name and article_no:
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{statute_name}%', f'%{article_no}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by statute_name for {source_type} statute_name={statute_name} article_no={article_no} (length: {len(str(text))} chars)")
+                            return str(text)
+            
+            elif source_type == 'decision_paragraph':
+                doc_id = metadata.get('doc_id') or metadata.get('decision_id') or metadata.get('id')
+                org = metadata.get('org')
+                
+                if doc_id:
+                    # 방법 1: metadata JSON에 포함된 경우
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{doc_id}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} (length: {len(str(text))} chars)")
+                            return str(text)
+                    
+                    # 방법 2: org와 함께 조회
+                    if org:
+                        cursor = conn.execute(
+                            "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                            (source_type, f'%{doc_id}%', f'%{org}%')
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            text = row['text'] if 'text' in row.keys() else None
+                            if text and len(str(text).strip()) > 0:
+                                self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} org={org} (length: {len(str(text))} chars)")
+                                return str(text)
+            
+            elif source_type == 'interpretation_paragraph':
+                doc_id = metadata.get('doc_id') or metadata.get('interpretation_id') or metadata.get('id')
+                title = metadata.get('title')
+                org = metadata.get('org')
+                
+                if doc_id:
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{doc_id}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} (length: {len(str(text))} chars)")
+                            return str(text)
+                
+                # title로 조회 시도
+                if title:
+                    cursor = conn.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = ? AND (metadata LIKE ? OR text LIKE ?) AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        (source_type, f'%{title}%', f'%{title}%')
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        text = row['text'] if 'text' in row.keys() else None
+                        if text and len(str(text).strip()) > 0:
+                            self.logger.info(f"Restored text from text_chunks by title for {source_type} title={title} (length: {len(str(text))} chars)")
+                            return str(text)
+            
+            # 모든 source_type에 대한 일반적인 조회 시도 (metadata JSON 전체 검색)
+            if metadata_json and len(metadata_json) > 10:
+                # metadata의 주요 키-값 쌍으로 조회 시도
+                search_terms = []
+                for key, value in metadata.items():
+                    if value and isinstance(value, (str, int, float)) and len(str(value)) > 2:
+                        search_terms.append(str(value))
+                
+                if search_terms:
+                    # 가장 긴 검색어부터 시도
+                    search_terms.sort(key=len, reverse=True)
+                    for term in search_terms[:3]:  # 상위 3개만 시도
+                        cursor = conn.execute(
+                            "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                            (source_type, f'%{term}%')
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            text = row['text'] if 'text' in row.keys() else None
+                            if text and len(str(text).strip()) > 0:
+                                self.logger.info(f"Restored text from text_chunks by general metadata search for {source_type} term={term} (length: {len(str(text))} chars)")
+                                return str(text)
+            
+            return ""
+        except Exception as e:
+            self.logger.debug(f"Error restoring text from text_chunks by metadata ({source_type}): {e}")
+            return ""
+    
+    def _extract_id_from_source_id_string(self, source_id: str, source_type: str) -> Optional[Union[int, str]]:
+        """
+        source_id 문자열에서 실제 ID 추출 (예: case_2015도19521 -> 2015도19521 또는 숫자 ID)
+        
+        Args:
+            source_id: source_id 문자열 (예: case_2015도19521, decision_12345)
+            source_type: 소스 타입
+            
+        Returns:
+            추출된 ID (int 또는 str), 추출 실패 시 None
+        """
+        try:
+            if not isinstance(source_id, str):
+                return None
+            
+            # source_type 접두사 제거 (예: case_, decision_, statute_)
+            prefixes = {
+                'case_paragraph': 'case_',
+                'decision_paragraph': 'decision_',
+                'statute_article': 'statute_',
+                'interpretation_paragraph': 'interpretation_'
+            }
+            
+            prefix = prefixes.get(source_type, '')
+            if prefix and source_id.startswith(prefix):
+                extracted = source_id[len(prefix):]
+            else:
+                extracted = source_id
+            
+            # 숫자만 포함된 경우 int로 변환
+            if extracted.isdigit():
+                return int(extracted)
+            
+            # 숫자가 포함된 경우 숫자 부분 추출 시도
+            import re
+            numbers = re.findall(r'\d+', extracted)
+            if numbers:
+                # 가장 긴 숫자 시퀀스 사용
+                longest_number = max(numbers, key=len)
+                if len(longest_number) >= 3:  # 최소 3자리 숫자
+                    return int(longest_number)
+            
+            # 숫자 추출 실패 시 원본 문자열 반환 (metadata 조회에 사용)
+            return extracted if extracted else None
+            
+        except Exception as e:
+            self.logger.debug(f"Error extracting ID from source_id string ({source_id}): {e}")
+            return None
 
     def _format_source(self, source_type: str, metadata: Dict[str, Any]) -> str:
         """소스 정보 포맷팅 (통일된 포맷터 사용)"""
