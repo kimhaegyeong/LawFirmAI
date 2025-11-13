@@ -52,31 +52,32 @@ LawFirmAI는 LangGraph를 활용하여 복잡한 법률 질문 처리 워크플�
 ```
 Entry Point
     ↓
-classify_query (질문 분류)
+classify_query_and_complexity (질문 분류 및 복잡도 평가)
     ↓
-assess_urgency (긴급도 평가)
+classification_parallel (병렬 분류)
     ↓
-analyze_document? (문서 분석 - 조건부)
+route_expert (전문가 라우팅)
     ↓
-resolve_multi_turn (멀티턴 처리)
+expand_keywords (키워드 확장)
     ↓
-extract_keywords (키워드 추출)
+prepare_search_query (검색 쿼리 준비)
     ↓
-retrieve_documents (문서 검색)
+execute_searches_parallel (병렬 검색 실행)
     ↓
-process_legal_terms (법률 용어 처리)
+process_search_results_combined (검색 결과 처리)
     ↓
-generate_answer_enhanced (답변 생성)
+prepare_documents_and_terms (문서 및 용어 준비)
     ↓
-validate_answer_quality (답변 검증)
-    ↓
-enhance_answer_structure (답변 구조화)
-    ↓
-apply_visual_formatting (시각적 포맷팅)
-    ↓
-prepare_final_response (최종 응답 준비)
-    ↓
-END
+[환경 변수에 따라 분기]
+    ├─ USE_STREAMING_MODE=true → generate_answer_stream (스트리밍 답변 생성)
+    │                                  ↓
+    │                            generate_answer_final (최종 검증)
+    │                                  ↓
+    └─ USE_STREAMING_MODE=false → generate_answer_final (검증 및 포맷팅 포함)
+                                          ↓
+                                    prepare_final_response (최종 응답 준비)
+                                          ↓
+                                        END
 ```
 
 ### 주요 노드 설명
@@ -123,9 +124,21 @@ END
 - **도구**: TermIntegrator
 
 #### 9. generate_answer_enhanced
-- **기능**: LLM 기반 답변 생성
+- **기능**: LLM 기반 답변 생성 (기본 노드)
 - **결과**: answer
 - **도구**: Google Gemini (우선), Ollama (백업)
+
+#### 9-1. generate_answer_stream
+- **기능**: 스트리밍 전용 답변 생성 노드 (API용)
+- **결과**: answer (스트리밍)
+- **특징**: LangGraph 콜백을 통한 실시간 토큰 스트리밍
+- **사용**: `USE_STREAMING_MODE=true` 환경에서 자동 선택
+
+#### 9-2. generate_answer_final
+- **기능**: 최종 검증 및 포맷팅 노드 (테스트용)
+- **결과**: answer (검증 및 포맷팅 완료)
+- **특징**: 답변 품질 검증, 법률 참조 추출, 포맷팅 포함
+- **사용**: `USE_STREAMING_MODE=false` 환경에서 자동 선택
 
 #### 10. validate_answer_quality
 - **기능**: 답변 품질 검증
@@ -275,6 +288,7 @@ OLLAMA_MODEL=qwen2.5:7b
 # LangGraph 설정
 LANGGRAPH_ENABLED=true
 RECURSION_LIMIT=100              # 워크플로우 복잡도에 맞게 증가
+USE_STREAMING_MODE=true          # true: 스트리밍 노드 사용, false: 최종 검증 노드 사용
 
 # State 최적화
 MAX_RETRIEVED_DOCS=10
@@ -632,10 +646,12 @@ print(f"LLM 제공자: {status.get('llm_provider', 'unknown')}")
 - [x] 기업법 전문가 서브그래프
 - [x] 지적재산권 전문가 서브그래프
 
-### Phase 2: 실시간 스트리밍
-- [ ] 스트리밍 워크플로우 구현
-- [ ] 점진적 답변 제공
-- [ ] WebSocket 통합
+### Phase 2: 실시간 스트리밍 ✅
+- [x] 스트리밍 워크플로우 구현
+- [x] LangGraph 콜백 기반 실시간 스트리밍
+- [x] StreamingCallbackHandler 구현
+- [x] API 통합 (Server-Sent Events)
+- [ ] WebSocket 통합 (향후 계획)
 
 ### Phase 3: 에이전트 시스템
 - [ ] 멀티 에이전트 아키텍처

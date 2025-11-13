@@ -9,6 +9,7 @@ LawFirmAI는 LangGraph 기반의 State 기반 워크플로우를 통해 법률 �
 ### 핵심 기능
 
 - ✅ **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
+- ✅ **실시간 스트리밍**: LLM 응답을 실시간으로 스트리밍하여 사용자 경험 향상
 - ✅ **하이브리드 검색**: FAISS 벡터 검색 + 키워드 검색 결합
 - ✅ **성능 최적화**: 응답 시간 최소화, 메모리 효율 관리
 - ✅ **통합 프롬프트 관리**: 법률 도메인별 최적화된 프롬프트 시스템
@@ -131,6 +132,7 @@ npm run dev
 ### API
 - [API 문서](docs/07_api/API_Documentation.md)
 - [API 사용 예제](docs/07_api/usage_examples.md)
+- [스트리밍 기능 가이드](docs/STREAMING_GUIDE.md)
 
 ### 배포
 - [배포 가이드](docs/06_deployment/Deployment_Guide.md)

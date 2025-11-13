@@ -79,12 +79,38 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 ```json
 {
   "message": "계약 해제 조건",
-  "session_id": "session_123",
-  "enable_checkpoint": true
+  "session_id": "session_123"
 }
 ```
 
 **Response:** Server-Sent Events (SSE) 형식으로 스트리밍
+
+**스트리밍 이벤트 타입:**
+- `progress`: 진행 상황 알림
+- `stream`: 실시간 답변 청크 (토큰 단위)
+- `final`: 최종 답변 및 메타데이터
+- `error`: 오류 발생 시
+
+**예시 응답:**
+```
+data: {"type":"progress","content":"답변 생성 중...","timestamp":"2025-11-12T09:30:00"}
+
+data: {"type":"stream","content":"계약","timestamp":"2025-11-12T09:30:01"}
+
+data: {"type":"stream","content":" 해제","timestamp":"2025-11-12T09:30:01"}
+
+data: {"type":"stream","content":" 조건은","timestamp":"2025-11-12T09:30:01"}
+
+...
+
+data: {"type":"final","content":"전체 답변...","sources":[...],"legal_references":[...]}
+```
+
+**구현 특징:**
+- LangGraph의 `astream_events()`를 사용하여 실시간 이벤트 스트리밍
+- `StreamingCallbackHandler`를 통한 LLM 토큰 단위 스트리밍
+- `generate_answer_stream` 노드 사용 (환경 변수 `USE_STREAMING_MODE=true`일 때)
+- 비동기 큐를 통한 콜백 이벤트 처리
 
 ### 3. 소스 조회 엔드포인트
 
@@ -152,12 +178,37 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 }
 ```
 
-### 참고: 레거시 엔드포인트
+### 스트리밍 구현 상세
 
-다음 엔드포인트는 문서에 언급되어 있으나 현재 구현되지 않았습니다:
-- `POST /chat/ml-enhanced` - ML 강화 채팅 (구현 예정)
-- `POST /chat/intelligent` - 지능형 채팅 (구현 예정)
-- `POST /chat/intelligent-v2` - 지능형 채팅 v2 (구현 예정)
+#### 아키텍처
+```
+Client Request
+    ↓
+ChatService.stream_final_answer()
+    ↓
+StreamingCallbackHandler 생성 (asyncio.Queue)
+    ↓
+LangGraphWorkflowService.app.astream_events()
+    ↓
+generate_answer_stream 노드 실행
+    ↓
+LLM.stream() → on_llm_stream 이벤트
+    ↓
+StreamingCallbackHandler.on_llm_stream()
+    ↓
+asyncio.Queue에 청크 저장
+    ↓
+ChatService에서 큐 모니터링 및 SSE 전송
+    ↓
+Client (실시간 스트리밍 수신)
+```
+
+#### 환경 변수 설정
+```bash
+# 스트리밍 모드 활성화 (기본값: true)
+USE_STREAMING_MODE=true   # API용: 스트리밍 노드 사용
+USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
+```
 
 **Request Body:**
 ```json

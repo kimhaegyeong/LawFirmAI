@@ -9,11 +9,14 @@
 ```
 lawfirm_langgraph/core/
 ├── workflow/        # LangGraph 워크플로우 (메인)
-├── agents/          # 레거시 에이전트 코드 (유틸리티)
-├── services/        # 비즈니스 서비스
-├── data/            # 데이터 레이어
-├── models/          # AI 모델
-└── utils/           # 유틸리티
+│   ├── callbacks/   # 스트리밍 콜백 핸들러
+│   └── ...
+├── agents/          # 에이전트 및 프롬프트 빌더
+├── search/          # 검색 엔진 및 핸들러
+├── generation/      # 답변 생성 및 포맷팅
+├── processing/      # 데이터 처리 및 검증
+├── classification/  # 분류 및 분석
+└── shared/          # 공유 유틸리티
 ```
 
 ## 1. Workflow 모듈 (`lawfirm_langgraph/core/workflow/`)
@@ -25,6 +28,12 @@ lawfirm_langgraph/core/
 
 **주요 클래스**:
 - `LangGraphWorkflowService`: 워크플로우 실행 서비스
+
+**주요 메서드**:
+- `process_query()`: 질문 처리 (동기)
+- `process_query_async()`: 질문 처리 (비동기)
+- `create_streaming_callback_handler()`: 스트리밍 콜백 핸들러 생성
+- `get_config_with_callbacks()`: 콜백이 포함된 config 생성
 
 **사용 예시**:
 ```python
@@ -41,6 +50,46 @@ workflow = LangGraphWorkflowService(config)
 result = await workflow.process_query_async("계약 해지 조건은?", "session_id")
 ```
 
+### 1.2 스트리밍 콜백 시스템
+
+#### callbacks/streaming_callback_handler.py
+**역할**: LangGraph 스트리밍 콜백 핸들러
+
+**주요 클래스**:
+- `StreamingCallbackHandler`: LLM 스트리밍 이벤트를 캡처하여 큐에 저장
+
+**주요 메서드**:
+- `on_llm_start()`: LLM 시작 시 호출
+- `on_llm_stream()`: LLM 스트리밍 청크 수신 시 호출
+- `on_llm_end()`: LLM 종료 시 호출
+- `get_stats()`: 스트리밍 통계 반환
+
+**사용 예시**:
+```python
+import asyncio
+from lawfirm_langgraph.core.workflow.callbacks.streaming_callback_handler import StreamingCallbackHandler
+
+# 큐 생성
+callback_queue = asyncio.Queue()
+
+# 콜백 핸들러 생성
+callback_handler = StreamingCallbackHandler(queue=callback_queue)
+
+# LangGraph config에 추가
+config = {
+    "configurable": {"thread_id": "session_123"},
+    "callbacks": [callback_handler]
+}
+
+# 워크플로우 실행 중 큐에서 청크 수신
+while True:
+    try:
+        chunk = callback_queue.get_nowait()
+        print(f"Received chunk: {chunk['content']}")
+    except asyncio.QueueEmpty:
+        break
+```
+
 #### legal_workflow_enhanced.py
 **역할**: 향상된 법률 질문 처리 워크플로우 구현
 
@@ -53,7 +102,13 @@ result = await workflow.process_query_async("계약 해지 조건은?", "session
 - `assess_urgency`: 긴급도 평가
 - `resolve_multi_turn`: 멀티턴 처리
 - `retrieve_documents`: 문서 검색
-- `generate_answer_enhanced`: 답변 생성
+- `generate_answer_enhanced`: 답변 생성 (기본)
+- `generate_answer_stream`: 스트리밍 답변 생성 (API용)
+- `generate_answer_final`: 최종 검증 및 포맷팅 (테스트용)
+
+**환경 변수 기반 노드 선택**:
+- `USE_STREAMING_MODE=true`: `generate_answer_stream` 사용 → 실시간 스트리밍
+- `USE_STREAMING_MODE=false`: `generate_answer_final` 사용 → 검증 및 포맷팅 포함
 
 ### 1.2 노드 모듈 (`nodes/`)
 
