@@ -223,10 +223,6 @@ class LangGraphConfig:
     google_api_key: str = ""
     google_model: str = "gemini-2.5-flash-lite"
     
-    # Ollama 설정
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b"
-    
     # 워크플로우 설정
     recursion_limit: int = 100
     enable_statistics: bool = True

@@ -445,7 +445,6 @@ USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
     },
     "answer_generator": {
       "status": "healthy",
-      "ollama_client": "active",
       "answer_formatter": "active",
       "context_builder": "active",
       "test_answer_length": 245
