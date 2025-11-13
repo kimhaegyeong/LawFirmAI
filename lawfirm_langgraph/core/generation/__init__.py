@@ -7,7 +7,10 @@ Generation Domain Module
 from .generators.answer_generator import AnswerGenerator
 from .generators.direct_answer_handler import DirectAnswerHandler
 from .generators.context_builder import ContextBuilder
-from .formatters.answer_formatter import AnswerFormatterHandler
+try:
+    from .formatters.answer_formatter import AnswerFormatterHandler
+except ImportError:
+    from ..agents.handlers.answer_formatter import AnswerFormatterHandler
 from .validators.quality_validators import AnswerValidator
 
 __all__ = [
