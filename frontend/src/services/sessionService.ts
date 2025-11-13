@@ -17,9 +17,6 @@ export async function getSessions(query?: SessionListQuery): Promise<SessionList
   try {
     const params = new URLSearchParams();
     
-    if (query?.category && query.category !== '전체') {
-      params.append('category', query.category);
-    }
     if (query?.search) {
       params.append('search', query.search);
     }
