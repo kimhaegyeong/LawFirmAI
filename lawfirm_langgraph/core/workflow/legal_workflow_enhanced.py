@@ -243,7 +243,18 @@ class EnhancedLegalQuestionWorkflow(
             # lawfirm_v2.db 기반으로 자동으로 ./data/lawfirm_v2_faiss.index 사용
             config = Config()
             db_path = config.database_path
-            self.semantic_search = SemanticSearchEngineV2(db_path=db_path)
+            
+            # 외부 인덱스 사용 설정 확인
+            use_external_index = getattr(config, 'use_external_vector_store', False)
+            vector_store_version = getattr(config, 'vector_store_version', None)
+            external_vector_store_base_path = getattr(config, 'external_vector_store_base_path', None)
+            
+            self.semantic_search = SemanticSearchEngineV2(
+                db_path=db_path,
+                use_external_index=use_external_index,
+                vector_store_version=vector_store_version,
+                external_index_path=external_vector_store_base_path
+            )
             
             if hasattr(self.semantic_search, 'diagnose'):
                 diagnosis = self.semantic_search.diagnose()

@@ -1287,13 +1287,42 @@ class LangGraphWorkflowService:
             # retrieved_docs 추출
             retrieved_docs = self._extract_retrieved_docs_from_result(flat_result)
             
-            # sources 추출: flat_result에서 직접 가져오거나 retrieved_docs에서 변환
-            sources = flat_result.get("sources", []) if isinstance(flat_result, dict) else []
+            # sources 추출: flat_result에서 여러 위치에서 찾기 (prepare_final_response_part에서 생성한 sources 포함)
+            sources = []
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                sources = flat_result.get("sources", [])
+                
+                # 2. common 그룹에서 확인 (state reduction으로 인해 여기로 이동했을 수 있음)
+                if (not sources or len(sources) == 0) and "common" in flat_result:
+                    if isinstance(flat_result["common"], dict):
+                        sources = flat_result["common"].get("sources", [])
+                
+                # 3. metadata에서 확인
+                if (not sources or len(sources) == 0) and "metadata" in flat_result:
+                    if isinstance(flat_result["metadata"], dict):
+                        sources = flat_result["metadata"].get("sources", [])
             
             # sources가 비어있고 retrieved_docs가 있으면 sources 생성
+            # 주의: prepare_final_response_part에서 이미 sources를 생성했을 수 있으므로,
+            # 여기서는 sources가 비어있을 때만 생성 (덮어쓰기 방지)
+            # 또한 flat_result에 sources가 이미 있으면 그대로 사용 (덮어쓰기 방지)
             if (not sources or len(sources) == 0) and retrieved_docs and len(retrieved_docs) > 0:
-                sources = self._extract_sources_from_retrieved_docs(retrieved_docs)
-                self.logger.debug(f"Extracted {len(sources)} sources from {len(retrieved_docs)} retrieved_docs")
+                self.logger.info(f"[WORKFLOW_SERVICE] Sources empty in flat_result, extracting from {len(retrieved_docs)} retrieved_docs")
+                extracted_sources = self._extract_sources_from_retrieved_docs(retrieved_docs)
+                # 딕셔너리 형태의 sources를 문자열 리스트로 변환
+                if extracted_sources and len(extracted_sources) > 0:
+                    if isinstance(extracted_sources[0], dict):
+                        # 딕셔너리 형태면 source 필드 추출
+                        sources = [s.get("source") or s.get("name") or str(s.get("type", "Unknown")) 
+                                  for s in extracted_sources if isinstance(s, dict) and (s.get("source") or s.get("name") or s.get("type"))]
+                    else:
+                        sources = extracted_sources
+                self.logger.info(f"[WORKFLOW_SERVICE] Extracted {len(sources)} sources from {len(retrieved_docs)} retrieved_docs")
+            elif sources and len(sources) > 0:
+                self.logger.info(f"[WORKFLOW_SERVICE] Using existing sources from flat_result: {len(sources)} sources")
+            else:
+                self.logger.debug(f"[WORKFLOW_SERVICE] No sources to extract (sources in flat_result: {len(sources) if sources else 0}, retrieved_docs: {len(retrieved_docs) if retrieved_docs else 0})")
             
             # metadata 추출 및 suggested_questions 변환
             metadata = flat_result.get("metadata", {}) if isinstance(flat_result, dict) else {}
