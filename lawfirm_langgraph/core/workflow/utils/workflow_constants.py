@@ -16,10 +16,10 @@ class WorkflowConstants:
     TEMPERATURE = 0.3
     TIMEOUT = 15
 
-    # 검색 설정
-    SEMANTIC_SEARCH_K = 10
-    MAX_DOCUMENTS = 5
-    CATEGORY_SEARCH_LIMIT = 3
+    # 검색 설정 (개선: 검색 결과 수 증가)
+    SEMANTIC_SEARCH_K = 15  # 10 -> 15 (더 많은 결과 검색)
+    MAX_DOCUMENTS = 10  # 5 -> 10 (최종 문서 수 증가)
+    CATEGORY_SEARCH_LIMIT = 5  # 3 -> 5 (카테고리별 검색 결과 증가)
 
     # 재시도 설정
     MAX_RETRIES = 3
