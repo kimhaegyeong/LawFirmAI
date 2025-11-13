@@ -97,6 +97,16 @@ class StreamHandler:
                 return
             except Exception as yield_error:
                 logger.error(f"Failed to yield error event: {yield_error}")
+            finally:
+                # 스트림이 제대로 종료되도록 보장
+                try:
+                    done_event = {
+                        "type": "done",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
                 return
     
     async def _setup_callback_handler(self, session_id: str):
