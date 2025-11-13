@@ -70,6 +70,10 @@ class Config(BaseSettings):
     active_model_version: str = Field(default="default@1.0", env="ACTIVE_MODEL_VERSION")
     embeddings_base_dir: str = Field(default="./data/embeddings", env="EMBEDDINGS_BASE_DIR")
     versioned_database_dir: str = Field(default="./data/database", env="VERSIONED_DATABASE_DIR")
+    # External Vector Store Configuration
+    vector_store_version: Optional[str] = Field(default=None, env="VECTOR_STORE_VERSION")
+    use_external_vector_store: bool = Field(default=False, env="USE_EXTERNAL_VECTOR_STORE")
+    external_vector_store_base_path: Optional[str] = Field(default=None, env="EXTERNAL_VECTOR_STORE_BASE_PATH")
 
     # Logging Configuration
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
