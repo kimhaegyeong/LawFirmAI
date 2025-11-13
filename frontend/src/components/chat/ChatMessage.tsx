@@ -60,6 +60,24 @@ export function ChatMessage({
   const isProgress = safeMessage.role === 'progress';
   const metadata = safeMessage.metadata || {};
   
+  // 스트리밍 완료 여부 확인 (isStreaming prop이 false이거나 undefined인 경우)
+  const isStreamingComplete = !isStreaming;
+  
+  if (import.meta.env.DEV && !isUser && !isProgress) {
+    logger.debug('[ChatMessage] Component render:', {
+      messageId: safeId,
+      isStreaming,
+      isStreamingComplete,
+      hasMetadata: !!metadata,
+      relatedQuestions: metadata.related_questions?.length || 0,
+      sources: metadata.sources?.length || 0,
+      legalReferences: metadata.legal_references?.length || 0,
+      sourcesDetail: metadata.sources_detail?.length || 0,
+      metadataKeys: Object.keys(metadata),
+      relatedQuestionsValue: metadata.related_questions,
+    });
+  }
+  
   // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
   const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
     content,
@@ -379,38 +397,71 @@ export function ChatMessage({
           </div>
         )}
 
-        {!isUser && (
-          <CompactReferencesBadge
-            references={metadata.sources}
-            legalReferences={metadata.legal_references}
-            sources={metadata.sources}
-            sourcesDetail={metadata.sources_detail}
-            onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
-          />
-        )}
+        {!isUser && !isStreaming && (() => {
+          const hasReferences = (metadata.sources && metadata.sources.length > 0) ||
+            (metadata.legal_references && metadata.legal_references.length > 0) ||
+            (metadata.sources_detail && metadata.sources_detail.length > 0);
+          
+          if (import.meta.env.DEV) {
+            logger.debug('[ChatMessage] References check:', {
+              messageId: safeMessage.id,
+              isStreaming,
+              isStreamingComplete,
+              hasReferences,
+              sources: metadata.sources?.length || 0,
+              legalReferences: metadata.legal_references?.length || 0,
+              sourcesDetail: metadata.sources_detail?.length || 0,
+              metadataKeys: Object.keys(metadata || {}),
+            });
+          }
+          
+          if (hasReferences) {
+            return (
+              <CompactReferencesBadge
+                references={metadata.sources}
+                legalReferences={metadata.legal_references}
+                sources={metadata.sources}
+                sourcesDetail={metadata.sources_detail}
+                onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
+              />
+            );
+          }
+          
+          return null;
+        })()}
 
-        {!isUser && (() => {
+        {!isUser && !isStreaming && (() => {
           const relatedQuestions = metadata.related_questions;
           const questionsArray = Array.isArray(relatedQuestions) 
             ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
             : undefined;
           
-          if (import.meta.env.DEV && questionsArray && questionsArray.length > 0) {
-            logger.debug('[ChatMessage] Related questions:', {
+          if (import.meta.env.DEV) {
+            logger.debug('[ChatMessage] Related questions check:', {
+              messageId: safeMessage.id,
+              isStreaming,
+              isStreamingComplete,
               hasQuestions: !!questionsArray,
-              questionsCount: questionsArray.length,
+              questionsCount: questionsArray?.length || 0,
               questions: questionsArray,
+              metadataKeys: Object.keys(metadata || {}),
             });
           }
           
-          return questionsArray && questionsArray.length > 0 ? (
-            <div className="mt-4">
-              <RelatedQuestions
-                questions={questionsArray}
-                onQuestionClick={onQuestionClick}
-              />
-            </div>
-          ) : null;
+          const shouldShowRelatedQuestions = questionsArray && questionsArray.length > 0;
+          
+          if (shouldShowRelatedQuestions) {
+            return (
+              <div className="mt-4">
+                <RelatedQuestions
+                  questions={questionsArray}
+                  onQuestionClick={onQuestionClick}
+                />
+              </div>
+            );
+          }
+          
+          return null;
         })()}
 
         <div className="flex items-center justify-between mt-2">

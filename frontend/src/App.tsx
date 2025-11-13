@@ -284,7 +284,6 @@ function App() {
       // 새 세션 생성
       const newSession = await createSession({
         title: `${session.title || '제목 없음'} (복사본)`,
-        category: session.category,
       });
       
       // 기존 세션의 메시지 가져오기 (현재는 사용하지 않음)
@@ -626,6 +625,7 @@ function App() {
               if (import.meta.env.DEV) {
                 logger.debug('[Stream] Sources event received:', {
                   messageId: sourcesMessageId,
+                  assistantMessageId,
                   sources: sourcesMetadata.sources,
                   legalReferences: sourcesMetadata.legal_references,
                   sourcesDetail: sourcesMetadata.sources_detail,
@@ -633,30 +633,62 @@ function App() {
                 });
               }
               
-              // message_id로 메시지 찾기
-              // sourcesMessageId가 있으면 그것을 우선 사용, 없으면 assistantMessageId 사용
-              // 메시지를 찾을 때는 여러 조건을 확인: id, metadata.message_id, 또는 가장 최근 assistant 메시지
+              // message_id로 메시지 찾기 (여러 방법 시도)
               setMessages((prev) => {
                 let messageIndex = -1;
+                let foundMessageId: string | null = null;
                 
+                // 1. sourcesMessageId로 metadata.message_id와 일치하는 메시지 찾기
                 if (sourcesMessageId) {
-                  // sourcesMessageId로 먼저 찾기
                   messageIndex = prev.findIndex((msg) => 
-                    msg.id === sourcesMessageId || 
                     msg.metadata?.message_id === sourcesMessageId
                   );
+                  if (messageIndex !== -1) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    foundMessageId = prev[messageIndex]?.id || null;
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Found message by metadata.message_id:', foundMessageId);
+                    }
+                  }
                 }
                 
-                // 찾지 못했으면 assistantMessageId로 찾기
-                if (messageIndex === -1) {
-                  messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                // 2. assistantMessageId로 메시지 찾기
+                if (messageIndex === -1 && assistantMessageId) {
+                  messageIndex = prev.findIndex((msg) => 
+                    msg.id === assistantMessageId
+                  );
+                  if (messageIndex !== -1) {
+                    foundMessageId = assistantMessageId;
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Found message by assistantMessageId:', foundMessageId);
+                    }
+                  }
                 }
                 
-                // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
+                // 3. sourcesMessageId를 id로 사용하는 메시지 찾기
+                if (messageIndex === -1 && sourcesMessageId) {
+                  messageIndex = prev.findIndex((msg) => 
+                    msg.id === sourcesMessageId
+                  );
+                  if (messageIndex !== -1) {
+                    foundMessageId = sourcesMessageId;
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Found message by sourcesMessageId as id:', foundMessageId);
+                    }
+                  }
+                }
+                
+                // 4. 마지막 assistant 메시지 찾기 (fallback)
                 if (messageIndex === -1) {
                   for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i]?.role === 'assistant') {
+                    // eslint-disable-next-line security/detect-object-injection
+                    const msg = prev[i];
+                    if (msg && msg.role === 'assistant') {
                       messageIndex = i;
+                      foundMessageId = msg.id;
+                      if (import.meta.env.DEV) {
+                        logger.debug('[Stream] Found message by last assistant message (fallback):', foundMessageId);
+                      }
                       break;
                     }
                   }
@@ -667,30 +699,99 @@ function App() {
                   // eslint-disable-next-line security/detect-object-injection
                   const existingMsg = updated[messageIndex];
                   if (existingMsg) {
+                    const sources = (sourcesMetadata.sources as string[] | undefined) || [];
+                    const legalReferences = (sourcesMetadata.legal_references as string[] | undefined) || [];
+                    const sourcesDetail = (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [];
+                    const finalRelatedQuestions = Array.isArray(relatedQuestions) ? relatedQuestions : (existingMsg.metadata?.related_questions || []);
+                    
                     // eslint-disable-next-line security/detect-object-injection
                     updated[messageIndex] = {
                       ...existingMsg,
                       metadata: {
                         ...existingMsg.metadata,
-                        sources: (sourcesMetadata.sources as string[] | undefined) || [],
-                        legal_references: (sourcesMetadata.legal_references as string[] | undefined) || [],
-                        sources_detail: (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [],
+                        sources: sources,
+                        legal_references: legalReferences,
+                        sources_detail: sourcesDetail,
                         message_id: sourcesMessageId || existingMsg.metadata?.message_id,
-                        related_questions: Array.isArray(relatedQuestions) ? relatedQuestions : existingMsg.metadata?.related_questions,
+                        related_questions: finalRelatedQuestions,
                       },
                     };
-                  }
-                  
-                  if (import.meta.env.DEV && existingMsg) {
-                    logger.debug('[Stream] Message metadata updated with sources:', {
-                      messageId: targetMessageId,
-                      updatedMetadata: updated[messageIndex]?.metadata,
-                    });
+                    
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Message metadata updated with sources:', {
+                        messageIndex,
+                        messageId: existingMsg?.id,
+                        metadataMessageId: existingMsg?.metadata?.message_id,
+                        sourcesMessageId,
+                        sourcesCount: sources.length,
+                        legalReferencesCount: legalReferences.length,
+                        sourcesDetailCount: sourcesDetail.length,
+                        relatedQuestionsCount: finalRelatedQuestions.length,
+                        hasRelatedQuestions: finalRelatedQuestions.length > 0,
+                      });
+                    }
                   }
                   
                   return updated;
+                } else {
+                  if (import.meta.env.DEV) {
+                    logger.warn('[Stream] Sources event: Message not found, attempting to add new message', {
+                      sourcesMessageId,
+                      assistantMessageId,
+                      messageIds: prev.map(msg => ({ id: msg.id, role: msg.role, metadataMessageId: msg.metadata?.message_id })),
+                    });
+                  }
+                  
+                  // 메시지를 찾지 못했으면 마지막 assistant 메시지에 추가하거나 새로 생성
+                  const lastAssistantIndex = prev.length - 1;
+                  if (lastAssistantIndex >= 0 && prev[lastAssistantIndex]?.role === 'assistant') {
+                    const updated = [...prev];
+                    // eslint-disable-next-line security/detect-object-injection
+                    const lastMsg = updated[lastAssistantIndex];
+                    if (lastMsg) {
+                      const sources = (sourcesMetadata.sources as string[] | undefined) || [];
+                      const legalReferences = (sourcesMetadata.legal_references as string[] | undefined) || [];
+                      const sourcesDetail = (sourcesMetadata.sources_detail as SourceInfo[] | undefined) || [];
+                      const finalRelatedQuestions = Array.isArray(relatedQuestions) ? relatedQuestions : [];
+                      
+                      // eslint-disable-next-line security/detect-object-injection
+                      updated[lastAssistantIndex] = {
+                        ...lastMsg,
+                        metadata: {
+                          ...lastMsg.metadata,
+                          sources: sources,
+                          legal_references: legalReferences,
+                          sources_detail: sourcesDetail,
+                          message_id: sourcesMessageId || lastMsg.metadata?.message_id,
+                          related_questions: finalRelatedQuestions,
+                        },
+                      };
+                      
+                      if (import.meta.env.DEV) {
+                        logger.debug('[Stream] Updated last assistant message with sources (fallback):', {
+                          messageId: lastMsg.id,
+                          sourcesCount: sources.length,
+                          relatedQuestionsCount: finalRelatedQuestions.length,
+                        });
+                      }
+                      
+                      return updated;
+                    }
+                  }
                 }
                 return prev;
+              });
+              
+              // sources 이벤트 수신 시 스트리밍 완료 처리 (done 이벤트가 오지 않은 경우 대비)
+              // sources 이벤트가 오면 무조건 스트리밍 완료로 간주
+              setStreamingMessageId((currentStreamingId) => {
+                if (currentStreamingId !== null) {
+                  if (import.meta.env.DEV) {
+                    logger.debug('[Stream] StreamingMessageId set to null after sources event, was:', currentStreamingId, 'sourcesMessageId:', sourcesMessageId, 'assistantMessageId:', assistantMessageId);
+                  }
+                  return null;
+                }
+                return currentStreamingId;
               });
             }
           } else if (parsed.metadata && 'sources' in parsed.metadata) {
@@ -710,34 +811,14 @@ function App() {
                 });
               }
               
-              // message_id로 메시지 찾기
-              // sourcesMessageId가 있으면 그것을 우선 사용, 없으면 assistantMessageId 사용
-              // 메시지를 찾을 때는 여러 조건을 확인: id, metadata.message_id, 또는 가장 최근 assistant 메시지
+              // message_id로 메시지 찾기 (assistantMessageId 또는 sourcesMessageId 사용)
+              const targetMessageId = sourcesMessageId || assistantMessageId;
+              
               setMessages((prev) => {
-                let messageIndex = -1;
-                
-                if (sourcesMessageId) {
-                  // sourcesMessageId로 먼저 찾기
-                  messageIndex = prev.findIndex((msg) => 
-                    msg.id === sourcesMessageId || 
-                    msg.metadata?.message_id === sourcesMessageId
-                  );
-                }
-                
-                // 찾지 못했으면 assistantMessageId로 찾기
-                if (messageIndex === -1) {
-                  messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-                }
-                
-                // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
-                if (messageIndex === -1) {
-                  for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i]?.role === 'assistant') {
-                      messageIndex = i;
-                      break;
-                    }
-                  }
-                }
+                const messageIndex = prev.findIndex((msg) => 
+                  msg.id === targetMessageId || 
+                  msg.metadata?.message_id === sourcesMessageId
+                );
                 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -771,45 +852,44 @@ function App() {
               });
             }
           } else if (parsed.type === 'final') {
-            // 최종 완료 처리 - 메타데이터만 업데이트 (content는 업데이트하지 않음)
-            // 남아있는 토큰 버퍼 처리 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
-            const remainingTokens = tokenBufferRef.current.get(assistantMessageId) || '';
-            if (remainingTokens) {
-              fullContent += remainingTokens;
-              tokenBufferRef.current.delete(assistantMessageId);
-            }
-            
-            // 기존 타이머 취소 (배치 업데이트 제거로 인해 더 이상 필요 없지만 안전을 위해 유지)
-            if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
-              clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
-              tokenBufferTimeoutRef.current.delete(assistantMessageId);
-            }
-            
-            // final 이벤트의 content는 빈 문자열이므로 무시하고, fullContent 사용
-            // final 이벤트는 메타데이터만 업데이트하는 용도
+            // final 이벤트: 이전 stream 데이터 삭제하고 final content로 전체 답변 교체
+            // final content가 비어있으면 fullContent 사용 (네트워크 에러 등으로 인한 fallback)
+            const finalContent = parsed.content && parsed.content.trim() ? parsed.content : fullContent;
             
             if (import.meta.env.DEV) {
-              logger.debug('[Stream] Final event received (metadata only), content length:', fullContent.length);
+              logger.debug('[Stream] Final event received, replacing content with final:', {
+                finalContentLength: finalContent.length,
+                parsedContentLength: parsed.content?.length || 0,
+                previousContentLength: fullContent.length,
+                hasMetadata: !!parsed.metadata,
+                usingFallback: !parsed.content || !parsed.content.trim(),
+              });
               if (parsed.metadata) {
                 logger.debug('[Stream] Final metadata:', parsed.metadata);
               }
             }
             
-            // 버퍼에 최종 내용 저장 (이미 누적된 fullContent 사용)
+            // 남아있는 토큰 버퍼 정리
+            tokenBufferRef.current.delete(assistantMessageId);
+            if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
+              clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
+              tokenBufferTimeoutRef.current.delete(assistantMessageId);
+            }
+            
+            // 버퍼에 final content 저장 (이전 stream 데이터 대체)
             setMessageBuffers(prev => {
               const newMap = new Map(prev);
-              newMap.set(assistantMessageId, fullContent);
+              newMap.set(assistantMessageId, finalContent);
               return newMap;
             });
             
-            // 스트리밍 완료 (메시지 ID 초기화)
-            // streamingMessageId를 null로 설정하여 isStreaming: false로 만들어
-            // ChatMessage에서 Markdown 렌더링 활성화
-            setStreamingMessageId(null);
+            // fullContent를 final content로 업데이트
+            fullContent = finalContent;
             
-            // 최종 메시지 메타데이터만 업데이트 (content는 변경하지 않음)
-            // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
-            // metadata에서 sources, legal_references, sources_detail, message_id, related_questions 추출
+            // 스트리밍은 계속 진행 중이므로 streamingMessageId는 유지
+            // (done 이벤트에서 null로 설정)
+            
+            // 메시지 content를 final content로 교체 (이전 stream 데이터 삭제)
             const metadata = parsed.metadata || {};
             const sources = metadata.sources || [];
             const legalReferences = metadata.legal_references || [];
@@ -818,34 +898,9 @@ function App() {
             const relatedQuestions = metadata.related_questions as string[] | undefined;
             
             setMessages((prev) => {
-              let messageIndex = -1;
-              
-              // messageId가 있으면 먼저 그것으로 찾기
-              if (messageId) {
-                messageIndex = prev.findIndex((msg) => 
-                  msg.id === messageId || 
-                  msg.metadata?.message_id === messageId
-                );
-              }
-              
-              // 찾지 못했으면 assistantMessageId로 찾기
-              if (messageIndex === -1) {
-                messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-              }
-              
-              // 여전히 찾지 못했으면 가장 최근 assistant 메시지 찾기
-              if (messageIndex === -1) {
-                for (let i = prev.length - 1; i >= 0; i--) {
-                  if (prev[i]?.role === 'assistant') {
-                    messageIndex = i;
-                    break;
-                  }
-                }
-              }
+              const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
               
               if (messageIndex !== -1) {
-                // 기존 메시지의 메타데이터만 업데이트 (content는 변경하지 않음)
-                // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
                 const updated = [...prev];
                 // eslint-disable-next-line security/detect-object-injection
                 const existingMsg = updated[messageIndex];
@@ -853,7 +908,7 @@ function App() {
                   // eslint-disable-next-line security/detect-object-injection
                   updated[messageIndex] = {
                     ...existingMsg,
-                    // content는 변경하지 않음 (이미 stream 이벤트에서 업데이트됨)
+                    content: finalContent,  // final content로 교체 (이전 stream 데이터 삭제)
                     metadata: {
                       ...existingMsg.metadata,
                       ...metadata,
@@ -867,11 +922,9 @@ function App() {
                 }
                 return updated;
               } else {
-                // 메시지가 없으면 추가 (fallback)
-                // streamingMessageId가 null이므로 isStreaming: false가 되어 Markdown 렌더링됨
                 return [...prev, {
                   ...assistantMessage,
-                  content: fullContent,
+                  content: finalContent,
                   metadata: {
                     ...metadata,
                     sources: sources,
@@ -886,7 +939,8 @@ function App() {
             
           } else if (parsed.type === 'done') {
             // done 이벤트: 서버에서 보낸 최종 답변으로 교체 (타이핑 효과 없이)
-            const finalContent = parsed.content || fullContent;
+            // done content가 비어있으면 fullContent 사용 (네트워크 에러 등으로 인한 fallback)
+            const finalContent = parsed.content && parsed.content.trim() ? parsed.content : fullContent;
             
             if (import.meta.env.DEV) {
               logger.debug('[Stream] Done event received, final content length:', finalContent.length);
@@ -904,6 +958,10 @@ function App() {
             
             // 스트리밍 완료 (타이핑 효과 비활성화)
             setStreamingMessageId(null);
+            
+            if (import.meta.env.DEV) {
+              logger.debug('[Stream] StreamingMessageId set to null after done event');
+            }
             
             // 최종 메시지 업데이트 (서버에서 보낸 최종 답변으로 교체)
             const metadata = parsed.metadata || {};
@@ -1081,6 +1139,49 @@ function App() {
     } catch (error) {
       logger.error('[Stream] Streaming error:', error);
       
+      // 에러 발생 시에도 스트리밍 상태 해제 및 받은 데이터 저장
+      // streamingMessageId가 설정되어 있으면 해제 (에러 발생 시 항상 해제)
+      setStreamingMessageId((currentId) => {
+        if (currentId === assistantMessageId || currentId !== null) {
+          if (import.meta.env.DEV) {
+            logger.debug('[Stream] StreamingMessageId set to null due to error, was:', currentId);
+          }
+          return null;
+        }
+        return currentId;
+      });
+      
+      // 받은 데이터가 있으면 최종 메시지로 저장
+      if (fullContent.trim()) {
+        setMessages((prev) => {
+          const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+          
+          if (messageIndex !== -1) {
+            const updated = [...prev];
+            const existingMsg = updated[messageIndex];
+            if (existingMsg) {
+              updated[messageIndex] = {
+                ...existingMsg,
+                content: fullContent,
+              };
+            }
+            return updated;
+          }
+          return prev;
+        });
+        
+        // 버퍼에도 저장
+        setMessageBuffers(prev => {
+          const newMap = new Map(prev);
+          newMap.set(assistantMessageId, fullContent);
+          return newMap;
+        });
+        
+        if (import.meta.env.DEV) {
+          logger.debug('[Stream] Saved partial content due to error, length:', fullContent.length);
+        }
+      }
+      
       // 429 에러 처리 - 쿼터 정보 업데이트 (익명 사용자만)
       if (error && typeof error === 'object' && 'status' in error) {
         const apiError = error as any;
@@ -1088,14 +1189,32 @@ function App() {
           // 에러 객체에서 쿼터 정보 추출
           if (apiError.quotaInfo) {
             setQuotaInfo(apiError.quotaInfo);
+            logger.debug('[Stream] Quota info updated from error:', apiError.quotaInfo);
+          } else if (apiError.response?.headers) {
+            // 응답 헤더에서 쿼터 정보 추출
+            const quotaRemaining = apiError.response.headers['x-quota-remaining'];
+            const quotaLimit = apiError.response.headers['x-quota-limit'];
+            if (quotaRemaining !== undefined && quotaLimit !== undefined) {
+              setQuotaInfo({ 
+                remaining: parseInt(quotaRemaining, 10), 
+                limit: parseInt(quotaLimit, 10) 
+              });
+              logger.debug('[Stream] Quota info updated from headers:', { remaining: quotaRemaining, limit: quotaLimit });
+            } else {
+              // 기본값 설정
+              setQuotaInfo({ remaining: 0, limit: 3 });
+              logger.debug('[Stream] Quota info set to default (0, 3)');
+            }
           } else {
             // 기본값 설정
             setQuotaInfo({ remaining: 0, limit: 3 });
+            logger.debug('[Stream] Quota info set to default (0, 3)');
           }
         }
       } else if (error instanceof Error && error.message.includes('429') && !isAuthenticated) {
         // fallback: 메시지에 429가 포함된 경우
         setQuotaInfo({ remaining: 0, limit: 3 });
+        logger.debug('[Stream] Quota info set to default (0, 3) from error message');
       }
       
       // 남아있는 토큰 버퍼 처리

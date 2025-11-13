@@ -39,6 +39,7 @@ export function ChatHistory({
   const containerRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const autoScrollEnabledRef = useRef(true);
+  const previousStreamingMessageIdRef = useRef<string | null>(null);
 
   const checkIfNearBottom = (container: HTMLElement): boolean => {
     const threshold = 100;
@@ -87,9 +88,22 @@ export function ChatHistory({
       const container = containerRef.current.closest('.overflow-y-auto');
       if (container && container instanceof HTMLElement) {
         const lastMessage = messages[messages.length - 1];
-        const isStreaming = isLoading || lastMessage?.role === 'progress' || currentProgress !== null;
+        const isStreaming = streamingMessageId !== null && 
+          lastMessage?.role === 'assistant' && 
+          lastMessage?.id === streamingMessageId;
         
-        if (isStreaming) {
+        const isFirstChunk = streamingMessageId !== null && 
+          previousStreamingMessageIdRef.current !== streamingMessageId;
+        
+        if (isFirstChunk) {
+          previousStreamingMessageIdRef.current = streamingMessageId;
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'auto'
+          });
+          autoScrollEnabledRef.current = true;
+          setShowScrollToBottom(false);
+        } else if (isStreaming) {
           const isNearBottom = checkIfNearBottom(container);
           if (isNearBottom) {
             container.scrollTo({
@@ -109,7 +123,11 @@ export function ChatHistory({
         messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
       }
     }
-  }, [messages, currentProgress, isLoading]);
+    
+    if (streamingMessageId === null) {
+      previousStreamingMessageIdRef.current = null;
+    }
+  }, [messages, streamingMessageId]);
 
   if (messages.length === 0 && !isLoading) {
     return null;

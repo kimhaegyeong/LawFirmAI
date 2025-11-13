@@ -25,7 +25,7 @@ export function QuotaIndicator({ remaining, limit, isAuthenticated, onLoginClick
           <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-lg">
             <div className="flex items-center gap-2 text-amber-800">
               <AlertCircle className="w-5 h-5" />
-              <span className="text-sm font-medium">무료 질의 3회를 모두 사용하셨습니다.</span>
+              <span className="text-sm font-medium">무료 질의 {limit}회를 모두 사용하셨습니다.</span>
             </div>
             <button
               onClick={onLoginClick}
