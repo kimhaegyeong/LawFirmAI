@@ -160,7 +160,7 @@ class QueryEnhancer:
         if llm_variants:
             keyword_queries.extend(llm_variants[:3])  # 최대 3개만
 
-        # Citation 포함 쿼리 추가 생성
+        # 개선 #5: Citation 포함 쿼리 추가 생성 (1개 → 3-5개로 확대)
         citation_queries = []
         if query_type in ["law_inquiry", "precedent_inquiry"]:
             import re
@@ -168,8 +168,8 @@ class QueryEnhancer:
             law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
             law_matches = re.findall(law_pattern, base_query)
             if law_matches:
-                # 법령 조문이 있으면 해당 조문으로 검색 쿼리 생성
-                for law in law_matches[:2]:  # 최대 2개
+                # 개선 #5: 법령 조문이 있으면 해당 조문으로 검색 쿼리 생성 (최대 2개 → 3개)
+                for law in law_matches[:3]:
                     if law not in citation_queries:
                         citation_queries.append(law)
             
@@ -177,18 +177,29 @@ class QueryEnhancer:
             precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
             precedent_matches = re.findall(precedent_pattern, base_query)
             if precedent_matches:
-                for precedent in precedent_matches[:1]:  # 최대 1개
+                # 개선 #5: 판례 쿼리 확대 (최대 1개 → 2개)
+                for precedent in precedent_matches[:2]:
                     if precedent not in citation_queries:
                         citation_queries.append(precedent)
             
             # extracted_keywords에서 법령 조문 추출
             if extracted_keywords:
+                # 개선 #5: extracted_keywords에서 더 많은 법령 조문 추출 (최대 1개 → 2개)
                 for kw in extracted_keywords:
                     if isinstance(kw, str):
                         kw_law_matches = re.findall(law_pattern, kw)
-                        for law in kw_law_matches[:1]:  # 최대 1개
-                            if law not in citation_queries:
+                        for law in kw_law_matches[:2]:
+                            if law not in citation_queries and len(citation_queries) < 5:
                                 citation_queries.append(law)
+            
+            # 개선 #5: 질문에서 관련 법률 용어 추출하여 추가 쿼리 생성
+            if query_type == "law_inquiry" and len(citation_queries) < 5:
+                legal_terms = ["손해배상", "불법행위", "계약", "해지", "해제", "소멸시효", "채권", "채무"]
+                for term in legal_terms:
+                    if term in base_query and term not in citation_queries:
+                        citation_queries.append(term)
+                        if len(citation_queries) >= 5:
+                            break
         
         # Citation 쿼리를 keyword_queries에 추가
         if citation_queries:
@@ -1245,8 +1256,12 @@ class QueryEnhancer:
         # 복잡도에 따른 조정
         if query_complexity > 100:
             multiplier += 0.3
+        elif query_complexity > 50:
+            multiplier += 0.15
         if keyword_count > 10:
             multiplier += 0.2
+        elif keyword_count > 5:
+            multiplier += 0.1
 
         # 재시도 시 더 많은 결과
         if is_retry:
@@ -1258,9 +1273,17 @@ class QueryEnhancer:
         # 유사도 임계값 동적 조정
         min_relevance = self.config.similarity_threshold
         if query_type == "precedent_search":
-            min_relevance = max(0.6, min_relevance - 0.1)  # 판례 검색: 완화
+            min_relevance = max(0.55, min_relevance - 0.15)  # 판례 검색: 더 완화
         elif query_type == "law_inquiry":
-            min_relevance = max(0.65, min_relevance - 0.05)  # 법령 조회: 약간 완화
+            min_relevance = max(0.6, min_relevance - 0.1)  # 법령 조회: 완화
+        elif query_type == "legal_advice":
+            min_relevance = max(0.65, min_relevance - 0.05)  # 법률 상담: 약간 완화
+        
+        # 복잡도에 따른 임계값 조정
+        if query_complexity > 100:
+            min_relevance = max(0.5, min_relevance - 0.1)
+        elif query_complexity > 50:
+            min_relevance = max(0.55, min_relevance - 0.05)
 
         return {
             "semantic_k": min(25, semantic_k),  # 최대 25개

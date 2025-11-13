@@ -108,6 +108,13 @@ class SearchHandler:
                     if not text_content:
                         continue  # content가 없으면 건너뛰기
                 
+                # 개선 #2: Semantic search 결과에 대한 기본 relevance score 보정 (0.0 → 최소 0.3)
+                relevance_score = result.get('relevance_score') or result.get('similarity') or result.get('score', 0.0)
+                if relevance_score <= 0.0:
+                    relevance_score = 0.3  # 최소 점수 보정
+                elif relevance_score < 0.3:
+                    relevance_score = max(0.3, relevance_score * 1.2)  # 낮은 점수 보정
+                
                 # metadata에 content 필드 명시적으로 저장
                 metadata = result.get('metadata', {})
                 if not isinstance(metadata, dict):
@@ -120,7 +127,7 @@ class SearchHandler:
                     'content': text_content,  # content 필드 보장
                     'text': text_content,  # text 필드도 추가 (호환성)
                     'source': result.get('source', 'Vector Search'),
-                    'relevance_score': result.get('score', 0.8),
+                    'relevance_score': relevance_score,  # 개선 #2: 보정된 relevance_score 사용
                     'type': result.get('type', 'unknown'),
                     'metadata': metadata,  # content 필드가 포함된 metadata 저장
                     'search_type': 'semantic'

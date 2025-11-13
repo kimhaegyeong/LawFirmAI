@@ -91,7 +91,7 @@ class SourceExtractor:
         legal_refs = []
         seen_legal_refs = set()
         
-        self.logger.warning(f"[LEGAL_REFERENCES] Checking {len(sources_detail)} sources_detail for statute_article documents")
+        self.logger.debug(f"[LEGAL_REFERENCES] Checking {len(sources_detail)} sources_detail for statute_article documents")
         
         for detail in sources_detail:
             if not isinstance(detail, dict):
@@ -111,7 +111,7 @@ class SourceExtractor:
             clause_no = self._extract_field(detail, detail_metadata, ["clause_no"])
             item_no = self._extract_field(detail, detail_metadata, ["item_no"])
             
-            self.logger.warning(
+            self.logger.debug(
                 f"[LEGAL_REFERENCES] Found statute_article in sources_detail: "
                 f"statute_name={statute_name}, article_no={article_no}, "
                 f"detail keys={list(detail.keys())}, "
@@ -134,7 +134,7 @@ class SourceExtractor:
         legal_refs = []
         seen_legal_refs = set()
         
-        self.logger.warning(f"[LEGAL_REFERENCES] No legal_references found in sources_detail, trying retrieved_docs directly")
+        self.logger.debug(f"[LEGAL_REFERENCES] No legal_references found in sources_detail, trying retrieved_docs directly")
         
         for doc in retrieved_docs:
             if not isinstance(doc, dict):

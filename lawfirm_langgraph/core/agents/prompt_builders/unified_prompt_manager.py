@@ -1251,17 +1251,31 @@ class UnifiedPromptManager:
                 
                 # 재생성 이유 확인 및 프롬프트 강화
                 regeneration_reason = context.get("regeneration_reason") if (isinstance(context, dict) and context) else None
+                retry_count = context.get("retry_count", 0) if (isinstance(context, dict) and context) else 0
                 regeneration_note = ""
                 if regeneration_reason:
+                    # 재시도 횟수에 따라 강도 조정
+                    urgency_level = "CRITICAL" if retry_count >= 2 else "HIGH" if retry_count >= 1 else "NORMAL"
+                    emphasis = "**절대적으로**" if retry_count >= 2 else "**반드시**" if retry_count >= 1 else ""
+                    
                     if regeneration_reason == "specific_case_copy" or regeneration_reason == "specific_case_in_start":
-                        regeneration_note = """
-### ⚠️ 재생성 사유: 특정 사건 내용 복사 감지
-이전 답변에서 특정 사건의 내용이 그대로 복사되었습니다. 다음 사항을 반드시 준수하세요:
-- ❌ 특정 사건번호(예: "2014가단3882")를 답변에 포함하지 마세요
-- ❌ 특정 당사자명(예: "피고 엘지", "원고 본인")을 답변에 포함하지 마세요
+                        regeneration_note = f"""
+### ⚠️ 재생성 사유: 특정 사건 내용 복사 감지 ({urgency_level} - {emphasis} 준수)
+이전 답변에서 특정 사건의 내용이 그대로 복사되었습니다. 다음 사항을 {emphasis} 준수하세요:
+
+**절대 금지 사항:**
+- ❌ 특정 사건번호(예: "2014가단3882", "2006다9408")를 답변에 포함하지 마세요
+- ❌ 특정 당사자명(예: "피고 엘지", "원고 본인", "피고", "원고")을 답변에 포함하지 마세요
 - ❌ "[문서: 대전지방법원-2014가단3882]" 같은 형식으로 시작하지 마세요
+- ❌ "이 사건", "이 사건 각 계약서", "이 사건 계약" 같은 특정 사건 지시어를 사용하지 마세요
+- ❌ "나아가", "위와 같은 법리에 비추어 보건대" 같은 판례 문구를 그대로 복사하지 마세요
+{f'- ⚠️ **이미 {retry_count}번 재시도했습니다. 이번에는 반드시 일반적인 법적 원칙만 설명하세요.**' if retry_count >= 1 else ''}
+
+**필수 준수 사항:**
 - ✅ 판례의 법적 원칙만 추출하여 일반적으로 설명하세요
-- ✅ 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요
+- ✅ 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요 (예: "계약 위약금에 대해 궁금하시군요...")
+- ✅ 특정 사건의 사실관계를 서술하지 말고, 법적 원칙과 일반적인 조언만 제공하세요
+- ✅ 판례를 인용할 때는 법적 원칙만 설명하고, 특정 사건의 세부사항은 언급하지 마세요
 """
                     elif regeneration_reason == "general_principle_not_first" or regeneration_reason == "general_principle_not_in_start":
                         regeneration_note = """
@@ -1445,6 +1459,8 @@ class UnifiedPromptManager:
    - 단순히 "법령에 따르면"이 아닌 **구체적인 법령명과 조문번호를 포함하세요**
    - 문서에서 법령 조문을 찾을 수 없어도, 질문과 관련된 일반적인 법령 조문을 인용하세요
    - 예: "계약 해지" 질문 → "민법 제550조", "민법 제551조" 등 관련 조문 인용 필수
+   - **법령 조문 인용 시 조문의 핵심 내용을 간략히 설명하세요** (단순 인용만 하지 말고 내용 설명 포함)
+   - **법령 조문 인용은 답변의 핵심 부분에 배치하세요** (답변 시작 부분이나 주요 설명 부분)
 
 2. **판례 인용**: 관련 판례가 있으면 인용 (가능한 경우)
    - 형식: "대법원 2020다12345 판결에 의하면..." 또는 "[판례: 대법원 2020다12345]"

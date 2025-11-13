@@ -605,6 +605,133 @@ class LegalDataConnectorV2:
             self.logger.error(f"Error in FTS statute search for query '{query}': {e}", exc_info=True)
             return []
     
+    def search_statute_article_direct(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        법령 조문 직접 검색 (개선 #10)
+        질문에서 법령명과 조문번호를 추출하여 해당 조문을 직접 검색
+        
+        Args:
+            query: 검색 쿼리 (예: "민법 제750조 손해배상에 대해 설명해주세요")
+            limit: 최대 결과 수
+            
+        Returns:
+            검색 결과 리스트 (relevance_score: 1.0으로 설정)
+        """
+        import re
+        results = []
+        seen_ids = set()
+        
+        try:
+            # 법령명 추출 (민법, 형법, 상법 등)
+            law_pattern = re.compile(r'(민법|형법|상법|행정법|헌법|노동법|가족법|민사소송법|형사소송법|상사법|공법|사법)')
+            law_match = law_pattern.search(query)
+            
+            # 조문번호 추출 (제750조, 제 750 조 등)
+            article_pattern = re.compile(r'제\s*(\d+)\s*조')
+            article_match = article_pattern.search(query)
+            
+            if not law_match or not article_match:
+                self.logger.debug(f"법령 조문 직접 검색: 법령명 또는 조문번호를 찾을 수 없음 (query: '{query}')")
+                return []
+            
+            law_name = law_match.group(1)
+            article_no = article_match.group(1)
+            
+            self.logger.info(f"⚖️ [DIRECT STATUTE SEARCH] 법령명: {law_name}, 조문번호: {article_no}")
+            
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # 법령명으로 statute_id 찾기
+            cursor.execute("""
+                SELECT id, name, abbrv 
+                FROM statutes 
+                WHERE name LIKE ? OR abbrv LIKE ? OR name = ?
+                LIMIT 1
+            """, (f"%{law_name}%", f"%{law_name}%", law_name))
+            
+            statute_row = cursor.fetchone()
+            if not statute_row:
+                self.logger.warning(f"법령을 찾을 수 없음: {law_name}")
+                conn.close()
+                return []
+            
+            statute_id = statute_row['id']
+            statute_name = statute_row['name']
+            
+            # 해당 조문 직접 조회 (SQLite는 NULLS LAST 미지원, CASE 문 사용)
+            cursor.execute("""
+                SELECT 
+                    sa.id,
+                    sa.statute_id,
+                    sa.article_no,
+                    sa.clause_no,
+                    sa.item_no,
+                    sa.heading,
+                    sa.text,
+                    s.name as statute_name,
+                    s.abbrv as statute_abbrv,
+                    s.statute_type,
+                    s.category
+                FROM statute_articles sa
+                JOIN statutes s ON sa.statute_id = s.id
+                WHERE sa.statute_id = ? AND sa.article_no = ?
+                ORDER BY 
+                    CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
+                    sa.clause_no,
+                    CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
+                    sa.item_no
+                LIMIT ?
+            """, (statute_id, article_no, limit * 2))
+            
+            for row in cursor.fetchall():
+                if row['id'] not in seen_ids:
+                    seen_ids.add(row['id'])
+                    text_content = row['text'] if row['text'] else ""
+                    
+                    if not text_content:
+                        continue
+                    
+                    # 직접 검색된 조문은 최고 relevance score 부여
+                    results.append({
+                        "id": f"statute_article_{row['id']}",
+                        "type": "statute_article",
+                        "source_type": "statute_article",
+                        "content": text_content,
+                        "text": text_content,
+                        "source": row['statute_name'],
+                        "metadata": {
+                            "statute_id": row['statute_id'],
+                            "statute_name": row['statute_name'],
+                            "law_name": row['statute_name'],
+                            "article_no": row['article_no'],
+                            "clause_no": row['clause_no'],
+                            "item_no": row['item_no'],
+                            "heading": row['heading'],
+                            "statute_abbrv": row['statute_abbrv'],
+                            "statute_type": row['statute_type'],
+                            "category": row['category'],
+                            "source_type": "statute_article"
+                        },
+                        "relevance_score": 1.0,
+                        "final_weighted_score": 1.0,
+                        "search_type": "direct_statute",
+                        "direct_match": True
+                    })
+            
+            conn.close()
+            
+            if results:
+                self.logger.info(f"✅ [DIRECT STATUTE SEARCH] {len(results)}개 조문 직접 검색 성공: {law_name} 제{article_no}조")
+            else:
+                self.logger.warning(f"⚠️ [DIRECT STATUTE SEARCH] 조문을 찾을 수 없음: {law_name} 제{article_no}조")
+            
+            return results[:limit]
+            
+        except Exception as e:
+            self.logger.error(f"법령 조문 직접 검색 오류: {e}", exc_info=True)
+            return []
+    
     def _fallback_statute_search(self, original_query: str, safe_query: str, words: List[str], limit: int = 20) -> List[Dict[str, Any]]:
         """
         폴백 검색 전략: 결과가 없을 때 여러 방법으로 재시도
