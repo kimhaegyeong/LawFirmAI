@@ -33,6 +33,10 @@ if sys.platform == 'win32':
             pass
     os.environ['PYTHONIOENCODING'] = 'utf-8'
 
+# 테스트 모드: 스트리밍 비활성화하여 generate_answer_final 사용
+# API에서는 USE_STREAMING_MODE=true로 설정하여 generate_answer_stream 사용
+os.environ['USE_STREAMING_MODE'] = 'false'
+
 # 프로젝트 경로 설정
 # 스크립트 위치: lawfirm_langgraph/tests/scripts/run_query_test.py
 script_dir = Path(__file__).parent
