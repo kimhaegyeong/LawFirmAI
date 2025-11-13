@@ -17,6 +17,7 @@ from api.services.file_processor import process_file
 from api.middleware.auth_middleware import require_auth
 from api.middleware.rate_limit import limiter, is_rate_limit_enabled
 from api.services.anonymous_quota_service import anonymous_quota_service
+from api.routers.session import get_user_info
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -170,13 +171,31 @@ async def _generate_stream_response(
                                 full_answer = content
                             final_metadata = event_data.get("metadata", {})
                             
+                            logger.debug(
+                                f"[_generate_stream_response] Final event received: "
+                                f"sources={len(final_metadata.get('sources', []))}, "
+                                f"legal_references={len(final_metadata.get('legal_references', []))}, "
+                                f"sources_detail={len(final_metadata.get('sources_detail', []))}, "
+                                f"related_questions={len(final_metadata.get('related_questions', []))}, "
+                                f"has_sources_data={_has_sources_data(final_metadata)}"
+                            )
+                            
                             # sources 데이터가 없으면 세션에서 가져오기
                             if not _has_sources_data(final_metadata):
+                                logger.debug(f"[_generate_stream_response] No sources data in final metadata, attempting to fetch from session")
                                 try:
                                     sources_data = await chat_service.get_sources_from_session(
                                         session_id=session_id,
                                         message_id=final_metadata.get("message_id")
                                     )
+                                    
+                                    logger.debug(
+                                        f"[_generate_stream_response] Sources fetched from session: "
+                                        f"sources={len(sources_data.get('sources', []))}, "
+                                        f"legal_references={len(sources_data.get('legal_references', []))}, "
+                                        f"sources_detail={len(sources_data.get('sources_detail', []))}"
+                                    )
+                                    
                                     if sources_data:
                                         final_metadata["sources"] = sources_data.get("sources", [])
                                         final_metadata["legal_references"] = sources_data.get("legal_references", [])
@@ -184,12 +203,14 @@ async def _generate_stream_response(
                                         
                                         if _has_sources_data(final_metadata):
                                             sources_event = _create_sources_event(final_metadata)
+                                            logger.debug(f"[_generate_stream_response] Sending sources event with data")
                                             yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
                                 except Exception as e:
                                     logger.warning(f"Failed to get sources after final event: {e}")
                             
                             # related_questions만 있는 경우 sources 이벤트 전송
                             if final_metadata.get("related_questions") and not _has_sources_data(final_metadata):
+                                logger.debug(f"[_generate_stream_response] Sending sources event with related_questions only")
                                 sources_event = _create_sources_event(final_metadata)
                                 yield f"data: {json.dumps(sources_event, ensure_ascii=False)}\n\n"
                 except (json.JSONDecodeError, ValueError) as e:
@@ -263,7 +284,11 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         
         # 세션이 없으면 생성
         if not chat_request.session_id:
-            chat_request.session_id = session_service.create_session()
+            user_id, client_ip = get_user_info(request, current_user)
+            chat_request.session_id = session_service.create_session(
+                user_id=user_id,
+                ip_address=client_ip
+            )
         
         # 이미지 또는 파일 처리
         final_message = _process_file_and_image(
@@ -336,7 +361,11 @@ async def chat_stream(
         
         # 세션이 없으면 생성
         if not stream_request.session_id:
-            stream_request.session_id = session_service.create_session()
+            user_id, client_ip = get_user_info(request, current_user)
+            stream_request.session_id = session_service.create_session(
+                user_id=user_id,
+                ip_address=client_ip
+            )
         
         # 이미지 또는 파일 처리
         final_message = _process_file_and_image(

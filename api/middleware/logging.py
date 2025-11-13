@@ -137,6 +137,13 @@ def setup_file_logging():
         error_handler.setFormatter(formatter)
         error_handler.setLevel(logging.ERROR)
         
+        # ERROR 레벨만 통과하는 필터 추가
+        class ErrorLevelFilter(logging.Filter):
+            def filter(self, record):
+                return record.levelno >= logging.ERROR
+        
+        error_handler.addFilter(ErrorLevelFilter())
+        
         root_logger.addHandler(error_handler)
         
         logger.info(f"롤링 파일 로깅 설정 완료: {log_file}")

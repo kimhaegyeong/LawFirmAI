@@ -3,6 +3,7 @@ FastAPI 메인 애플리케이션
 """
 import sys
 import logging
+import logging.handlers
 import os
 from pathlib import Path
 
@@ -69,8 +70,13 @@ root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 root_logger.disabled = False  # 명시적으로 활성화
 
-# 모든 핸들러의 레벨도 설정
+# 모든 핸들러의 레벨도 설정 (에러 핸들러는 제외)
 for handler in root_logger.handlers:
+    # 에러 로그 파일 핸들러는 ERROR 레벨 유지
+    if isinstance(handler, logging.handlers.RotatingFileHandler):
+        handler_path = getattr(handler, 'baseFilename', '')
+        if 'api_error_' in str(handler_path):
+            continue
     handler.setLevel(log_level)
 
 # 핸들러가 없으면 추가
@@ -339,8 +345,13 @@ async def startup_event():
             )
             root_logger.addHandler(handler)
         
-        # 모든 핸들러의 레벨 설정
+        # 모든 핸들러의 레벨 설정 (에러 핸들러는 제외)
         for handler in root_logger.handlers:
+            # 에러 로그 파일 핸들러는 ERROR 레벨 유지
+            if isinstance(handler, logging.handlers.RotatingFileHandler):
+                handler_path = getattr(handler, 'baseFilename', '')
+                if 'api_error_' in str(handler_path):
+                    continue
             handler.setLevel(log_level)
         
         # 로깅 보호
