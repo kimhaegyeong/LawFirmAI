@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from core.utils.config import Config
 from .exact_search_engine_v2 import ExactSearchEngineV2
-from core.classification.classifiers.question_classifier import QuestionType
+from core.classification.classifiers.question_classifier import QuestionClassifier, QuestionType
 from core.search.processors.result_merger import ResultMerger, ResultRanker
 from .semantic_search_engine_v2 import SemanticSearchEngineV2
 
@@ -36,9 +36,21 @@ class HybridSearchEngineV2:
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)
 
+        # 외부 인덱스 사용 설정 확인
+        config = Config()
+        use_external_index = getattr(config, 'use_external_vector_store', False)
+        vector_store_version = getattr(config, 'vector_store_version', None)
+        external_vector_store_base_path = getattr(config, 'external_vector_store_base_path', None)
+
         # 검색 엔진 초기화
         self.exact_search = ExactSearchEngineV2(db_path)
-        self.semantic_search = SemanticSearchEngineV2(db_path, model_name)
+        self.semantic_search = SemanticSearchEngineV2(
+            db_path=db_path,
+            model_name=model_name,
+            use_external_index=use_external_index,
+            vector_store_version=vector_store_version,
+            external_index_path=external_vector_store_base_path
+        )
         self.question_classifier = QuestionClassifier()
         self.result_merger = ResultMerger()
         self.result_ranker = ResultRanker()

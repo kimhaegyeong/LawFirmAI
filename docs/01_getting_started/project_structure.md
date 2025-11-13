@@ -167,7 +167,6 @@ lawfirm_langgraph/core/utils/
 ├── langchain_config.py              # LangChain 설정
 ├── logger.py                         # 로깅
 ├── config.py                        # 일반 설정
-├── ollama_client.py                  # Ollama 클라이언트
 └── ... (기타 유틸리티)
 ```
 

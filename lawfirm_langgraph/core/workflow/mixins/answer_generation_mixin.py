@@ -46,23 +46,34 @@ class AnswerGenerationMixin:
         return is_retry, time.time()
     
     def _restore_query_type(self, state: LegalWorkflowState) -> str:
-        """query_type 검색 및 복원 (강화된 버전)"""
+        """query_type 검색 및 복원 (강화된 버전 - 개선: 여러 위치에서 복구)"""
         query_type = self._get_state_value(state, "query_type", "")
         
-        # State에서 여러 경로로 검색
+        # State에서 여러 경로로 검색 (우선순위 순)
         if not query_type:
-            # classification 그룹 확인
-            if "classification" in state and isinstance(state["classification"], dict):
+            # 1. metadata 최상위에서 확인
+            metadata = state.get("metadata", {})
+            if isinstance(metadata, dict):
+                query_type = metadata.get("query_type", "")
+            
+            # 2. classification 그룹 확인
+            if not query_type and "classification" in state and isinstance(state["classification"], dict):
                 query_type = state["classification"].get("query_type", "")
-            # common.classification 그룹 확인
+            
+            # 3. common 그룹 확인
             if not query_type and "common" in state and isinstance(state.get("common"), dict):
                 common = state["common"]
+                # common.classification 그룹 확인
                 if "classification" in common and isinstance(common["classification"], dict):
                     query_type = common["classification"].get("query_type", "")
                 # common.metadata 그룹 확인
                 if not query_type and "metadata" in common and isinstance(common["metadata"], dict):
                     query_type = common["metadata"].get("query_type", "")
-            # analysis 그룹 확인
+                # common 최상위 확인
+                if not query_type:
+                    query_type = common.get("query_type", "")
+            
+            # 4. analysis 그룹 확인
             if not query_type and "analysis" in state and isinstance(state["analysis"], dict):
                 query_type = state["analysis"].get("query_type", "")
         
@@ -83,7 +94,11 @@ class AnswerGenerationMixin:
                     if cached_query_type:
                         query_type = cached_query_type
                         self.logger.info(f"✅ [QUESTION TYPE] Found query_type in global cache: {query_type}")
+                        # 복구된 query_type을 여러 위치에 저장
                         self._set_state_value(state, "query_type", query_type)
+                        metadata = self._get_metadata_safely(state)
+                        metadata["query_type"] = query_type
+                        self._set_state_value(state, "metadata", metadata)
             except (ImportError, AttributeError, TypeError) as e:
                 self.logger.debug(f"Could not access global cache: {e}")
         
@@ -91,9 +106,17 @@ class AnswerGenerationMixin:
         if not query_type:
             query_type = "general_question"
             self.logger.warning(f"⚠️ [QUESTION TYPE] query_type not found in state or global cache, using default: {query_type}")
+            # 기본값도 여러 위치에 저장
             self._set_state_value(state, "query_type", query_type)
+            metadata = self._get_metadata_safely(state)
+            metadata["query_type"] = query_type
+            self._set_state_value(state, "metadata", metadata)
         else:
             self.logger.info(f"✅ [QUESTION TYPE] Using query_type: {query_type}")
+            # 복구된 query_type을 여러 위치에 저장 (다음 노드에서 손실 방지)
+            metadata = self._get_metadata_safely(state)
+            metadata["query_type"] = query_type
+            self._set_state_value(state, "metadata", metadata)
         
         return query_type
     

@@ -533,11 +533,13 @@ async def run_query_test(query: str):
         logger.error("\n필요한 패키지가 설치되어 있는지 확인하세요.")
         logger.error(f"   프로젝트 루트: {project_root}")
         logger.error(f"   lawfirm_langgraph 디렉토리: {lawfirm_langgraph_dir}")
-        raise
+        import sys
+        sys.exit(1)
         
     except Exception as e:
         logger.error(f"\n❌ 오류 발생: {type(e).__name__}: {e}", exc_info=True)
-        raise
+        import sys
+        sys.exit(1)
 
 
 def main():

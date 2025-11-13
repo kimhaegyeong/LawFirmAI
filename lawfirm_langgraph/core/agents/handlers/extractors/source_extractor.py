@@ -2,14 +2,15 @@
 """소스 추출 클래스"""
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
 class SourceExtractor:
     """소스 및 legal_references 추출 담당"""
     
-    STATUTE_FIELDS = ["statute_name", "law_name", "abbrv"]
-    ARTICLE_FIELDS = ["article_no", "article_number"]
+    STATUTE_FIELDS = ["statute_name", "law_name", "abbrv", "statute_abbrv", "law_abbrv", "name"]
+    ARTICLE_FIELDS = ["article_no", "article_number", "article", "article_num"]
     
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
@@ -21,13 +22,21 @@ class SourceExtractor:
         
         detail_metadata = detail.get("metadata", {}) if isinstance(detail.get("metadata"), dict) else {}
         
-        statute_name = self._extract_field(detail, detail_metadata, self.STATUTE_FIELDS)
+        # detail의 최상위 레벨 필드도 확인 (강화)
+        merged_metadata = {**detail_metadata}
+        for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                   "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+            if key in detail and detail[key] is not None and detail[key] != "":
+                if not merged_metadata.get(key):
+                    merged_metadata[key] = detail[key]
+        
+        statute_name = self._extract_field(detail, merged_metadata, self.STATUTE_FIELDS)
         
         # statute_name이 없으면 abbrv를 fallback으로 사용
         if not statute_name:
-            statute_name = self._extract_field(detail, detail_metadata, ["abbrv"])
+            statute_name = self._extract_field(detail, merged_metadata, ["abbrv", "statute_abbrv", "law_abbrv"])
         
-        article_no = self._extract_field(detail, detail_metadata, self.ARTICLE_FIELDS)
+        article_no = self._extract_field(detail, merged_metadata, self.ARTICLE_FIELDS)
         
         return (statute_name, article_no) if statute_name else None
     
@@ -108,8 +117,17 @@ class SourceExtractor:
             statute_name, article_no = statute_info
             
             detail_metadata = detail.get("metadata", {}) if isinstance(detail.get("metadata"), dict) else {}
-            clause_no = self._extract_field(detail, detail_metadata, ["clause_no"])
-            item_no = self._extract_field(detail, detail_metadata, ["item_no"])
+            
+            # detail의 최상위 레벨 필드도 확인 (강화)
+            merged_metadata = {**detail_metadata}
+            for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                       "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+                if key in detail and detail[key] is not None and detail[key] != "":
+                    if not merged_metadata.get(key):
+                        merged_metadata[key] = detail[key]
+            
+            clause_no = self._extract_field(detail, merged_metadata, ["clause_no", "clause", "clause_number"])
+            item_no = self._extract_field(detail, merged_metadata, ["item_no", "item", "item_number"])
             
             self.logger.debug(
                 f"[LEGAL_REFERENCES] Found statute_article in sources_detail: "
@@ -134,7 +152,16 @@ class SourceExtractor:
         legal_refs = []
         seen_legal_refs = set()
         
-        self.logger.debug(f"[LEGAL_REFERENCES] No legal_references found in sources_detail, trying retrieved_docs directly")
+        self.logger.debug(f"[LEGAL_REFERENCES] Extracting legal_references from {len(retrieved_docs)} retrieved_docs")
+        
+        # 개선: content에서 법률 조항 인용을 추출하는 패턴 (더 다양한 패턴 추가)
+        citation_patterns = [
+            r'([가-힣]+법)\s*제\s*(\d+)\s*조',  # 민법 제750조
+            r'([가-힣]+법)\s*제?\s*(\d+)\s*조',  # 민법 750조
+            r'([가-힣]+법)\s*제?\s*(\d+)\s*조\s*제?\s*(\d+)\s*항',  # 민법 제750조 제1항
+            r'([가-힣]+법)\s*제?\s*(\d+)\s*조\s*제?\s*(\d+)\s*항\s*제?\s*(\d+)\s*호',  # 민법 제750조 제1항 제1호
+            r'제\s*(\d+)\s*조',  # 제750조 (법령명 없음)
+        ]
         
         for doc in retrieved_docs:
             if not isinstance(doc, dict):
@@ -143,42 +170,78 @@ class SourceExtractor:
             source_type = (
                 doc.get("type") or 
                 doc.get("source_type") or 
-                doc.get("metadata", {}).get("source_type", "")
+                doc.get("metadata", {}).get("source_type", "") if isinstance(doc.get("metadata"), dict) else ""
             )
             
-            if source_type != "statute_article":
-                continue
-            
-            metadata_raw = doc.get("metadata", {})
-            metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
-            
-            statute_name = self._extract_field(doc, metadata, self.STATUTE_FIELDS)
-            
-            # statute_name이 없으면 abbrv를 fallback으로 사용
-            if not statute_name:
-                statute_name = self._extract_field(doc, metadata, ["abbrv"])
-            
-            article_no = self._extract_field(doc, metadata, self.ARTICLE_FIELDS)
-            clause_no = self._extract_field(doc, metadata, ["clause_no"])
-            item_no = self._extract_field(doc, metadata, ["item_no"])
-            
-            if statute_name:
-                legal_ref = self.format_legal_reference(statute_name, article_no, clause_no, item_no)
+            # statute_article 타입인 경우 metadata에서 추출
+            if source_type == "statute_article":
+                metadata_raw = doc.get("metadata", {})
+                metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
                 
-                if legal_ref and legal_ref not in seen_legal_refs:
-                    legal_refs.append(legal_ref)
-                    seen_legal_refs.add(legal_ref)
+                # doc의 최상위 레벨 필드도 확인 (강화)
+                merged_metadata = {**metadata}
+                for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                           "law_id", "statute_id", "abbrv", "statute_abbrv", "law_abbrv", "name", "article", "article_num"]:
+                    if key in doc and doc[key] is not None and doc[key] != "":
+                        if not merged_metadata.get(key):
+                            merged_metadata[key] = doc[key]
+                
+                statute_name = self._extract_field(doc, merged_metadata, self.STATUTE_FIELDS)
+                
+                # statute_name이 없으면 abbrv를 fallback으로 사용
+                if not statute_name:
+                    statute_name = self._extract_field(doc, merged_metadata, ["abbrv", "statute_abbrv", "law_abbrv"])
+                
+                article_no = self._extract_field(doc, merged_metadata, self.ARTICLE_FIELDS)
+                clause_no = self._extract_field(doc, merged_metadata, ["clause_no", "clause", "clause_number"])
+                item_no = self._extract_field(doc, merged_metadata, ["item_no", "item", "item_number"])
+                
+                if statute_name:
+                    legal_ref = self.format_legal_reference(statute_name, article_no, clause_no, item_no)
+                    
+                    if legal_ref and legal_ref not in seen_legal_refs:
+                        legal_refs.append(legal_ref)
+                        seen_legal_refs.add(legal_ref)
+                        self.logger.debug(
+                            f"[LEGAL_REFERENCES] Added legal reference: {legal_ref} "
+                            f"(statute_name={statute_name}, article_no={article_no})"
+                        )
+                else:
                     self.logger.debug(
-                        f"[LEGAL_REFERENCES] Added legal reference: {legal_ref} "
-                        f"(statute_name={statute_name}, article_no={article_no})"
+                        f"[LEGAL_REFERENCES] Skipping statute_article doc: statute_name is missing. "
+                        f"doc keys: {list(doc.keys())[:15]}, "
+                        f"doc has statute_name={doc.get('statute_name')}, law_name={doc.get('law_name')}, abbrv={doc.get('abbrv')}, "
+                        f"metadata has statute_name={merged_metadata.get('statute_name') if isinstance(merged_metadata, dict) else 'N/A'}, "
+                        f"metadata keys: {list(merged_metadata.keys())[:15] if isinstance(merged_metadata, dict) else 'N/A'}"
                     )
             else:
-                self.logger.debug(
-                    f"[LEGAL_REFERENCES] Skipping statute_article doc: statute_name is missing. "
-                    f"doc has statute_name={doc.get('statute_name')}, "
-                    f"metadata has statute_name={metadata.get('statute_name') if isinstance(metadata, dict) else 'N/A'}, "
-                    f"metadata keys: {list(metadata.keys())[:10] if isinstance(metadata, dict) else 'N/A'}"
-                )
+                # 개선: statute_article이 아닌 경우 content에서 법률 조항 인용 추출
+                content = doc.get("content", "") or doc.get("text", "")
+                if content and isinstance(content, str):
+                    for pattern in citation_patterns:
+                        matches = re.finditer(pattern, content)
+                        for match in matches:
+                            if len(match.groups()) >= 2:
+                                # "민법 제750조" 형식
+                                statute_name = match.group(1)
+                                article_no = match.group(2)
+                                if statute_name and article_no:
+                                    legal_ref = f"{statute_name} 제{article_no}조"
+                                    if legal_ref not in seen_legal_refs:
+                                        legal_refs.append(legal_ref)
+                                        seen_legal_refs.add(legal_ref)
+                                        self.logger.debug(
+                                            f"[LEGAL_REFERENCES] Extracted from content ({source_type}): {legal_ref}"
+                                        )
+                            elif len(match.groups()) == 1:
+                                # "제750조" 형식만 있는 경우 (statute_name이 없음)
+                                article_no = match.group(1)
+                                # 이 경우는 statute_name이 없어서 legal_reference로 사용하기 어려움
+                                # 하지만 로깅은 남김
+                                self.logger.debug(
+                                    f"[LEGAL_REFERENCES] Found article number only in content ({source_type}): 제{article_no}조 (statute_name missing)"
+                                )
         
+        self.logger.info(f"[LEGAL_REFERENCES] Extracted {len(legal_refs)} legal references from retrieved_docs (including content-based extraction)")
         return legal_refs
 

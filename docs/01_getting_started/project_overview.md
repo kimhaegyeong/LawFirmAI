@@ -47,6 +47,8 @@
 - **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
 - **UnifiedPromptManager**: 법률 도메인별 프롬프트 통합 관리
 - **Gemini 클라이언트**: `lawfirm_langgraph/core/services/gemini_client.py`
+- **State 최적화**: State reduction으로 메모리 효율성 향상
+- **성능 최적화**: 컨텍스트 확장 스킵, 검증 간소화로 응답 시간 단축
 
 ## 🔧 기술 스택
 
@@ -54,9 +56,9 @@
 - **LangGraph**: State 기반 워크플로우 관리
 - **LangChain**: LLM 통합 프레임워크
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
-- **Sentence-BERT**: 텍스트 임베딩 모델 (jhgan/ko-sroberta-multitask)
-- **FAISS**: 벡터 검색 엔진
-- **Ollama Qwen2.5:7b**: 로컬 LLM 모델 (선택적 사용)
+- **Sentence-BERT**: 텍스트 임베딩 모델 (snunlp/KR-SBERT-V40K-klueNLI-augSTS)
+- **FAISS**: 벡터 검색 엔진 (외부 인덱스 지원, 버전 관리)
+- **SemanticSearchEngineV2**: 최적화된 의미적 검색 엔진
 
 ### Backend
 - **FastAPI**: RESTful API 서버 (선택적)
@@ -110,22 +112,6 @@ LawFirmAI/
 └── README.md               # 프로젝트 문서
 ```
 
-## 🎉 주요 성과
-
-### 시스템 완성도
-- ✅ **LangGraph 워크플로우**: State 기반 법률 질문 처리 시스템
-- ✅ **하이브리드 검색**: 의미적 검색 + 정확 매칭 통합
-- ✅ **지능형 답변 생성**: 질문 유형별 최적화된 답변 시스템
-- ✅ **통합 프롬프트 관리**: 법률 도메인별 최적화된 프롬프트 시스템
-- ✅ **완전한 테스트 시스템**: 단위 테스트 및 통합 테스트 완료
-
-### 기술적 혁신
-- ✅ **규칙 기반 파서**: 안정적인 법률 문서 구조 분석
-- ✅ **하이브리드 아키텍처**: 다중 검색 방식 통합
-- ✅ **확장 가능한 설계**: 모듈화된 서비스 아키텍처
-- ✅ **지능형 질문 분류**: 질문 유형 자동 분류 및 최적화
-- ✅ **컨텍스트 최적화**: 토큰 제한 내에서 관련성 높은 정보 선별
-
 ## 🚀 빠른 시작
 
 ### 1. 환경 설정
@@ -169,23 +155,6 @@ python run_all_tests.py
 # 특정 테스트
 pytest lawfirm_langgraph/tests/test_workflow_service.py -v
 ```
-
-## 📚 다음 단계
-
-### 1. 데이터 확장 (우선순위: 높음)
-- 추가 판례 데이터 수집 및 처리
-- 헌재결정례 데이터 수집 및 임베딩
-- 법령해석례 데이터 수집 및 임베딩
-
-### 2. 시스템 고도화 (우선순위: 중간)
-- API 성능 최적화
-- 법률 용어 사전 확장 및 업데이트
-- 질문 유형 분류 정확도 향상
-
-### 3. 기능 확장 (우선순위: 중간)
-- 계약서 분석 기능 고도화
-- 다국어 지원 (영어, 일본어)
-- 개인화된 답변 시스템
 
 ## 📖 관련 문서
 

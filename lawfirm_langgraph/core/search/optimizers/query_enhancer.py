@@ -74,12 +74,13 @@ class QueryEnhancer:
                 "llm_enhanced": bool  # LLM 강화 사용 여부
             }
         """
-        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (기준 완화)
+        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (기준 완화 - 더 적극적으로 스킵)
         # 쿼리가 짧고 키워드가 충분하면 LLM 강화 생략
         should_skip_llm = (
-            (len(query) < 50 and len(extracted_keywords) >= 2) or  # 짧은 쿼리 + 키워드 2개 이상
-            (len(query) < 30 and len(extracted_keywords) >= 1) or  # 매우 짧은 쿼리 + 키워드 1개 이상
-            (query_type in ["general_question", "definition_question"] and len(extracted_keywords) >= 2)  # 간단한 질문 유형 + 키워드 2개 이상
+            (len(query) < 80 and len(extracted_keywords) >= 2) or  # 50 -> 80으로 증가, 짧은 쿼리 + 키워드 2개 이상
+            (len(query) < 50 and len(extracted_keywords) >= 1) or  # 30 -> 50으로 증가, 매우 짧은 쿼리 + 키워드 1개 이상
+            (query_type in ["general_question", "definition_question", "simple_question"] and len(extracted_keywords) >= 1) or  # 간단한 질문 유형 + 키워드 1개 이상 (2 -> 1로 감소)
+            (len(extracted_keywords) >= 3)  # 키워드가 3개 이상이면 LLM 스킵
         )
         
         # LLM 쿼리 강화 시도 (간단한 쿼리는 스킵)
@@ -145,11 +146,41 @@ class QueryEnhancer:
             self.logger.warning(f"optimize_search_query: semantic_query is empty, using base_query: '{base_query[:50]}...'")
             semantic_query = base_query
         
+        # 개선: 판례/결정례 문서 포함을 위한 키워드 추가
+        # 쿼리에 판례/결정례 관련 키워드가 없으면 추가
+        semantic_query_lower = semantic_query.lower()
+        has_precedent_keyword = any(kw in semantic_query_lower for kw in ["판례", "대법원", "법원", "판결", "선고", "사건", "precedent", "case"])
+        has_decision_keyword = any(kw in semantic_query_lower for kw in ["결정", "결정례", "심판", "재결", "decision"])
+        
+        # 판례/결정례 관련 키워드가 없으면 추가 (다양성 보장)
+        if not has_precedent_keyword and not has_decision_keyword:
+            # 일반적인 법률 질문에는 판례 및 결정례 관련 키워드를 추가하여 문서 다양성 보장
+            if query_type not in ["law_inquiry", "statute_search"]:
+                semantic_query = f"{semantic_query} 판례 결정례"
+                self.logger.debug(f"Added '판례 결정례' keywords to semantic_query for diversity")
+        elif not has_decision_keyword:
+            # 판례 키워드는 있지만 결정례 키워드가 없는 경우 결정례 키워드 추가
+            if query_type not in ["law_inquiry", "statute_search"]:
+                semantic_query = f"{semantic_query} 결정례"
+                self.logger.debug(f"Added '결정례' keyword to semantic_query for diversity")
+        
         # 쿼리 길이 최적화 적용
         semantic_query = self.optimize_query_length(semantic_query, max_length=100)
 
         # 4. 키워드 쿼리 생성 (법률 조항, 판례 검색용)
         keyword_queries = self.build_keyword_queries(base_query, expanded_terms, query_type)
+        
+        # 개선: 판례/결정례 검색을 위한 추가 키워드 쿼리 생성
+        if query_type not in ["law_inquiry", "statute_search"]:
+            # 판례 검색용 쿼리 추가
+            precedent_query = f"{base_query} 판례"
+            if precedent_query not in keyword_queries:
+                keyword_queries.append(precedent_query)
+            
+            # 결정례 검색용 쿼리 추가
+            decision_query = f"{base_query} 결정례"
+            if decision_query not in keyword_queries:
+                keyword_queries.append(decision_query)
 
         # keyword_queries 검증 및 수정
         if not keyword_queries or len(keyword_queries) == 0:

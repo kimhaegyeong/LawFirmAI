@@ -8,12 +8,19 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import faiss
 from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
+
+try:
+    from scripts.ml_training.vector_embedding.version_manager import VectorStoreVersionManager
+    VERSION_MANAGER_AVAILABLE = True
+except ImportError:
+    VERSION_MANAGER_AVAILABLE = False
+    logger.warning("VectorStoreVersionManager not available. Version support disabled.")
 
 
 @dataclass
@@ -36,12 +43,59 @@ class SemanticSearchEngine:
     def __init__(self,
                  model_name: str = "jhgan/ko-sroberta-multitask",
                  index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
-                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
-        """검색 엔진 초기화"""
+                 metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json",
+                 version: Optional[str] = None,
+                 base_path: Optional[str] = None):
+        """
+        검색 엔진 초기화
+        
+        Args:
+            model_name: 모델명
+            index_path: 인덱스 파일 경로 (버전 미지정 시 사용)
+            metadata_path: 메타데이터 파일 경로 (버전 미지정 시 사용)
+            version: 버전 번호 (예: "v2.0.0"). None이면 최신 버전 사용
+            base_path: 벡터스토어 기본 경로 (버전 관리 사용 시)
+        """
         self.logger = logging.getLogger(__name__)
         self.model_name = model_name
-        self.index_path = Path(index_path)
-        self.metadata_path = Path(metadata_path)
+        
+        if VERSION_MANAGER_AVAILABLE and base_path and version:
+            version_manager = VectorStoreVersionManager(Path(base_path))
+            version_path = version_manager.get_version_path(version)
+            
+            if version_path.exists():
+                index_filename = "ml_enhanced_faiss_index.faiss"
+                metadata_filename = "ml_enhanced_faiss_index.json"
+                
+                self.index_path = version_path / index_filename
+                self.metadata_path = version_path / metadata_filename
+                self.logger.info(f"Using version {version} from {version_path}")
+            else:
+                self.logger.warning(f"Version path does not exist: {version_path}. Using provided paths.")
+                self.index_path = Path(index_path)
+                self.metadata_path = Path(metadata_path)
+        elif VERSION_MANAGER_AVAILABLE and base_path:
+            version_manager = VectorStoreVersionManager(Path(base_path))
+            current_version = version_manager.get_current_version() or version
+            
+            if current_version:
+                version_path = version_manager.get_version_path(current_version)
+                if version_path.exists():
+                    index_filename = "ml_enhanced_faiss_index.faiss"
+                    metadata_filename = "ml_enhanced_faiss_index.json"
+                    
+                    self.index_path = version_path / index_filename
+                    self.metadata_path = version_path / metadata_filename
+                    self.logger.info(f"Using current version {current_version} from {version_path}")
+                else:
+                    self.index_path = Path(index_path)
+                    self.metadata_path = Path(metadata_path)
+            else:
+                self.index_path = Path(index_path)
+                self.metadata_path = Path(metadata_path)
+        else:
+            self.index_path = Path(index_path)
+            self.metadata_path = Path(metadata_path)
 
         # 벡터 인덱스와 메타데이터 로드
         self.index = None

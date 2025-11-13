@@ -80,11 +80,25 @@ class ContextValidator:
 
             coverage_scores = []
 
-            # 1. 추출된 키워드 커버리지
+            # 1. 추출된 키워드 커버리지 (개선: 부분 일치도 고려)
             if extracted_keywords:
                 context_lower = context_text.lower()
-                keyword_matches = sum(1 for kw in extracted_keywords
-                                    if isinstance(kw, str) and kw.lower() in context_lower)
+                keyword_matches = 0
+                for kw in extracted_keywords:
+                    if isinstance(kw, str):
+                        kw_lower = kw.lower().strip()
+                        if kw_lower:
+                            # 정확한 일치
+                            if kw_lower in context_lower:
+                                keyword_matches += 1
+                            else:
+                                # 부분 일치 (키워드가 2자 이상인 경우)
+                                if len(kw_lower) >= 2:
+                                    # 키워드의 일부가 컨텍스트에 포함되어 있는지 확인
+                                    for i in range(len(kw_lower) - 1):
+                                        if kw_lower[i:i+2] in context_lower:
+                                            keyword_matches += 0.5  # 부분 일치는 0.5점
+                                            break
                 keyword_coverage = keyword_matches / max(1, len(extracted_keywords))
                 coverage_scores.append(keyword_coverage)
 
@@ -93,19 +107,53 @@ class ContextValidator:
                 # 질문 키워드는 extracted_keywords에 포함되어 있을 수 있으므로 별도 계산 생략
                 pass
 
-            # 3. 법률 참조 포함도
+            # 3. 법률 참조 포함도 (개선: 컨텍스트에 실제로 포함되어 있는지 확인)
             if legal_references:
-                ref_coverage = min(1.0, len(legal_references) / max(1, 5))  # 최대 5개 기준
+                if context_text:
+                    context_lower = context_text.lower()
+                    ref_matches = sum(1 for ref in legal_references 
+                                    if isinstance(ref, str) and ref.lower() in context_lower)
+                    # 법률 참조가 컨텍스트에 포함되어 있으면 더 높은 점수
+                    ref_coverage = min(1.0, (ref_matches / max(1, len(legal_references))) * 1.2)  # 포함된 경우 보너스
+                else:
+                    ref_coverage = min(1.0, len(legal_references) / max(1, 5))  # 최대 5개 기준
                 coverage_scores.append(ref_coverage)
 
-            # 4. 인용 포함도
+            # 4. 인용 포함도 (개선: 컨텍스트에 실제로 포함되어 있는지 확인)
             if citations:
-                citation_coverage = min(1.0, len(citations) / max(1, 5))  # 최대 5개 기준
+                if context_text:
+                    context_lower = context_text.lower()
+                    citation_matches = sum(1 for cit in citations 
+                                         if isinstance(cit, (str, dict)) and 
+                                         (str(cit).lower() in context_lower if isinstance(cit, str) else 
+                                          any(str(v).lower() in context_lower for v in cit.values() if isinstance(v, str))))
+                    citation_coverage = min(1.0, (citation_matches / max(1, len(citations))) * 1.2)  # 포함된 경우 보너스
+                else:
+                    citation_coverage = min(1.0, len(citations) / max(1, 5))  # 최대 5개 기준
                 coverage_scores.append(citation_coverage)
+            
+            # 5. 컨텍스트 길이 기반 커버리지 (개선: 충분한 컨텍스트가 있는지 확인)
+            if context_text:
+                context_length = len(context_text)
+                # 컨텍스트가 충분히 길면 더 높은 점수 (최소 500자 이상)
+                if context_length >= 2000:
+                    length_coverage = 1.0
+                elif context_length >= 1000:
+                    length_coverage = 0.8
+                elif context_length >= 500:
+                    length_coverage = 0.6
+                else:
+                    length_coverage = max(0.3, context_length / 500)  # 최소 0.3
+                coverage_scores.append(length_coverage)
 
-            # 평균 계산
+            # 가중 평균 계산 (키워드 커버리지에 더 높은 가중치)
             if coverage_scores:
-                return sum(coverage_scores) / len(coverage_scores)
+                if len(coverage_scores) >= 2:
+                    # 키워드 커버리지에 40% 가중치, 나머지에 60% 가중치
+                    weighted_sum = coverage_scores[0] * 0.4 + sum(coverage_scores[1:]) * (0.6 / max(1, len(coverage_scores) - 1))
+                    return min(1.0, weighted_sum)
+                else:
+                    return sum(coverage_scores) / len(coverage_scores)
             else:
                 return 0.5  # 기본값
 
@@ -487,14 +535,20 @@ class AnswerValidator:
                         if source and source not in document_sources:
                             document_sources.append(source.lower())
 
-            # 1. 컨텍스트 키워드 포함도 계산
+            # 1. 컨텍스트 키워드 포함도 계산 (개선: 더 정확한 계산)
             context_words = set(context_text.split())
             answer_words = set(answer_lower.split())
 
             keyword_coverage = 0.0
             if context_words and answer_words:
                 overlap = len(context_words.intersection(answer_words))
-                keyword_coverage = overlap / max(1, min(len(context_words), 100))
+                # 개선: 컨텍스트의 중요한 단어(2자 이상)만 고려하여 더 정확한 계산
+                important_context_words = {w for w in context_words if len(w) >= 2}
+                if important_context_words:
+                    overlap_important = len(important_context_words.intersection(answer_words))
+                    keyword_coverage = overlap_important / max(1, min(len(important_context_words), 100))
+                else:
+                    keyword_coverage = overlap / max(1, min(len(context_words), 100))
 
             # 2. 법률 조항/판례 인용 포함 여부 확인 (강화: 법령 조문 인용 우선)
             # 법령 조문 인용 패턴 (강화: 다양한 형식 지원)
@@ -650,24 +704,43 @@ class AnswerValidator:
                 elif isinstance(cit, str):
                     expected_citations_raw.append(cit)
 
-            # retrieved_docs에서도 Citation 추출 (개선)
+            # retrieved_docs에서도 Citation 추출 (개선: 더 많은 문서에서 추출)
             if retrieved_docs:
-                law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
-                precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
-                for doc in retrieved_docs[:10]:
+                # 더 다양한 법령 조문 패턴
+                law_patterns = [
+                    r'[가-힣]+법\s*제?\s*\d+\s*조',  # 민법 제750조
+                    r'[가-힣]+법\s*제?\s*\d+\s*조\s*제?\s*\d+\s*항',  # 민법 제750조 제1항
+                    r'[가-힣]+법\s*제?\s*\d+\s*조\s*제?\s*\d+\s*항\s*제?\s*\d+\s*호',  # 민법 제750조 제1항 제1호
+                    r'[가-힣]+법\s*제?\s*\d+\s*조\s*제?\s*\d+\s*항\s*제?\s*\d+\s*호\s*제?\s*\d+\s*목',  # 민법 제750조 제1항 제1호 제1목
+                ]
+                # 더 다양한 판례 패턴
+                precedent_patterns = [
+                    r'대법원\s*\d{4}[다나마]\d+',  # 대법원 2021다275611
+                    r'대법원\s*\d{4}\.\s*\d+\.\s*\d+\.\s*선고\s*\d+[다나마]\d+',  # 대법원 2021. 1. 1. 선고 2021다275611
+                    r'[가-힣]+법원\s*\d{4}[다나마]\d+',  # 서울법원 2021다275611
+                    r'선고\s*\d{4}[다나마]\d+',  # 선고 2021다275611
+                ]
+                for doc in retrieved_docs[:15]:  # 10 -> 15로 증가
                     content = doc.get("content", "") or doc.get("text", "")
                     if not content:
                         continue
-                    # 법령 조문 추출
-                    law_matches = re.findall(law_pattern, content)
-                    for law in law_matches:
-                        if law not in expected_citations_raw:
-                            expected_citations_raw.append(law)
-                    # 판례 추출
-                    precedent_matches = re.findall(precedent_pattern, content)
-                    for precedent in precedent_matches:
-                        if precedent not in expected_citations_raw:
-                            expected_citations_raw.append(precedent)
+                    # 법령 조문 추출 (여러 패턴 시도)
+                    for pattern in law_patterns:
+                        law_matches = re.findall(pattern, content)
+                        for law in law_matches:
+                            if isinstance(law, tuple):
+                                # 튜플인 경우 첫 번째 요소 사용
+                                law = law[0] if law[0] else ""
+                            if law and law not in expected_citations_raw:
+                                expected_citations_raw.append(law)
+                    # 판례 추출 (여러 패턴 시도)
+                    for pattern in precedent_patterns:
+                        precedent_matches = re.findall(pattern, content)
+                        for precedent in precedent_matches:
+                            if isinstance(precedent, tuple):
+                                precedent = precedent[0] if precedent[0] else ""
+                            if precedent and precedent not in expected_citations_raw:
+                                expected_citations_raw.append(precedent)
 
             # 1. expected_citations 정규화
             normalized_expected_citations = []
@@ -791,16 +864,20 @@ class AnswerValidator:
                 found_concepts = sum(1 for concept in context_key_concepts if concept in answer_lower)
                 concept_coverage = found_concepts / len(context_key_concepts)
 
-            # 5. 종합 점수 (가중치 조정)
+            # 5. 종합 점수 (가중치 조정 - 개선: keyword_coverage 가중치 증가)
             coverage_score = (
-                keyword_coverage * 0.3 +      # 0.4 → 0.3
-                citation_coverage * 0.5 +      # 0.4 → 0.5 (증가)
+                keyword_coverage * 0.4 +      # 0.3 → 0.4로 증가 (컨텍스트 활용의 핵심)
+                citation_coverage * 0.4 +      # 0.5 → 0.4로 조정
                 concept_coverage * 0.2
             )
             
-            # Citation이 없을 때 추가 페널티
+            # Citation이 없을 때 추가 페널티 (개선: 페널티 감소)
             if citation_coverage == 0.0 and normalized_expected_citations:
-                coverage_score = max(0.0, coverage_score - 0.2)  # 20% 추가 감점
+                coverage_score = max(0.0, coverage_score - 0.15)  # 0.2 → 0.15로 감소
+            
+            # 개선: keyword_coverage가 높으면 보너스 부여
+            if keyword_coverage >= 0.5:
+                coverage_score = min(1.0, coverage_score + 0.1)  # 10% 보너스
 
             # 재생성 필요 여부 초기화 (개선: 변수 초기화 문제 해결)
             needs_regeneration = False

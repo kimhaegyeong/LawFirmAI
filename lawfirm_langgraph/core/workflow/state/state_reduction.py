@@ -92,7 +92,7 @@ class StateReducer:
         critical_nodes = ["generate_answer_stream", "generate_answer_final", "generate_answer_enhanced"]
         if node_name in critical_nodes:
             # 이 노드들은 retrieved_docs, query_type, structured_documents가 필요
-            required_groups = required_groups | {"search", "common"}
+            required_groups = required_groups | {"search", "common", "metadata", "classification"}
 
         reduced = {}
 
@@ -146,7 +146,10 @@ class StateReducer:
             "merge_and_rerank_with_keyword_weights",
             "filter_and_validate_results",
             "update_search_metadata",
-            "prepare_document_context_for_prompt"
+            "prepare_document_context_for_prompt",
+            "generate_answer_stream",
+            "generate_answer_final",
+            "generate_answer_enhanced"
         ]
 
         if "search" in required_groups and node_name in search_dependent_nodes:
@@ -183,6 +186,58 @@ class StateReducer:
 
             if node_name == "classify_query":
                 print(f"[DEBUG] state_reduction: Preserved input after reduction: query='{reduced['input'].get('query', '')[:50] if reduced['input'].get('query') else 'EMPTY'}...'")
+        
+        # 중요: reduction 후에 query_type과 retrieved_docs 보존 (critical nodes에 대해)
+        if node_name in critical_nodes:
+            # query_type 보존
+            preserved_query_type = (
+                state.get("query_type") or
+                (state.get("metadata", {}).get("query_type") if isinstance(state.get("metadata"), dict) else None) or
+                (state.get("common", {}).get("classification", {}).get("query_type") if isinstance(state.get("common"), dict) and isinstance(state["common"].get("classification"), dict) else None) or
+                (state.get("classification", {}).get("query_type") if isinstance(state.get("classification"), dict) else None)
+            )
+            if preserved_query_type:
+                if "query_type" not in reduced:
+                    reduced["query_type"] = preserved_query_type
+                if "metadata" not in reduced:
+                    reduced["metadata"] = {}
+                if not isinstance(reduced["metadata"], dict):
+                    reduced["metadata"] = {}
+                if "query_type" not in reduced["metadata"]:
+                    reduced["metadata"]["query_type"] = preserved_query_type
+                if "common" not in reduced:
+                    reduced["common"] = {}
+                if not isinstance(reduced["common"], dict):
+                    reduced["common"] = {}
+                if "classification" not in reduced["common"]:
+                    reduced["common"]["classification"] = {}
+                if "query_type" not in reduced["common"]["classification"]:
+                    reduced["common"]["classification"]["query_type"] = preserved_query_type
+            
+            # retrieved_docs 보존
+            preserved_retrieved_docs = (
+                state.get("retrieved_docs") or
+                (state.get("search", {}).get("retrieved_docs") if isinstance(state.get("search"), dict) else None) or
+                (state.get("common", {}).get("search", {}).get("retrieved_docs") if isinstance(state.get("common"), dict) and isinstance(state["common"].get("search"), dict) else None) or
+                (state.get("metadata", {}).get("retrieved_docs") if isinstance(state.get("metadata"), dict) else None)
+            )
+            if preserved_retrieved_docs:
+                if "retrieved_docs" not in reduced:
+                    reduced["retrieved_docs"] = preserved_retrieved_docs
+                if "search" not in reduced:
+                    reduced["search"] = {}
+                if not isinstance(reduced["search"], dict):
+                    reduced["search"] = {}
+                if "retrieved_docs" not in reduced["search"]:
+                    reduced["search"]["retrieved_docs"] = preserved_retrieved_docs
+                if "common" not in reduced:
+                    reduced["common"] = {}
+                if not isinstance(reduced["common"], dict):
+                    reduced["common"] = {}
+                if "search" not in reduced["common"]:
+                    reduced["common"]["search"] = {}
+                if "retrieved_docs" not in reduced["common"]["search"]:
+                    reduced["common"]["search"]["retrieved_docs"] = preserved_retrieved_docs
 
         # 추가 보장: input 그룹이 필요한데 없으면 생성 (이중 체크)
         if "input" in required_groups and not reduced.get("input"):

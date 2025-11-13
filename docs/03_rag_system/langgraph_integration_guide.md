@@ -126,7 +126,7 @@ prepare_documents_and_terms (문서 및 용어 준비)
 #### 9. generate_answer_enhanced
 - **기능**: LLM 기반 답변 생성 (기본 노드)
 - **결과**: answer
-- **도구**: Google Gemini (우선), Ollama (백업)
+- **도구**: Google Gemini 2.5 Flash Lite
 
 #### 9-1. generate_answer_stream
 - **기능**: 스트리밍 전용 답변 생성 노드 (API용)
@@ -277,13 +277,9 @@ pip install langchain-google-genai
 
 ```bash
 # LLM 설정
-LLM_PROVIDER=google              # google 또는 ollama
+LLM_PROVIDER=google              # Google Gemini 사용
 GOOGLE_API_KEY=your_api_key      # Google Gemini API 키
 GOOGLE_MODEL=gemini-2.5-flash-lite
-
-# Ollama 설정 (백업)
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:7b
 
 # LangGraph 설정
 LANGGRAPH_ENABLED=true

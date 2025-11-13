@@ -272,6 +272,17 @@ async def _generate_stream_response(
             return
         except Exception as yield_error:
             logger.error(f"Error yielding error message: {yield_error}")
+        finally:
+            # 스트림이 제대로 종료되도록 보장
+            try:
+                # done 이벤트 전송 시도
+                done_event = {
+                    "type": "done",
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
 
 
 @router.post("/chat", response_model=ChatResponse)

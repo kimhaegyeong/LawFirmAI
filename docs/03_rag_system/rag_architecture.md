@@ -224,10 +224,7 @@ core/data/database.py (메타데이터 저장)
 - **SQLite**: 정확한 매칭 검색 및 메타데이터 저장 (Python 내장 모듈)
 
 ### LLM 지원
-- **OpenAI**: GPT-3.5-turbo, GPT-4
-- **Anthropic**: Claude 모델
-- **Google**: Gemini Pro, Gemini Pro Vision
-- **클라우드 LLM**: Google Gemini 2.5 Flash Lite
+- **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델 (현재 사용 중)
 
 ### 벡터 저장소 옵션
 - **FAISS**: 고성능 벡터 검색
