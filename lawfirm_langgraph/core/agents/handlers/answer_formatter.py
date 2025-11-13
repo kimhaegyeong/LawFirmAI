@@ -23,6 +23,12 @@ from .formatters.length_adjuster import AnswerLengthAdjuster
 # Constants for processing steps
 MAX_PROCESSING_STEPS = 50
 
+# 개선: 검색 결과 수 증가에 맞춰 제한 상수 정의
+MAX_SOURCES_LIMIT = 15  # sources, sources_detail 제한 (10 → 15)
+MAX_LEGAL_REFERENCES_LIMIT = 15  # legal_references 제한 (10 → 15)
+MAX_RELATED_QUESTIONS_LIMIT = 10  # related_questions 제한 (5 → 10)
+MAX_SOURCES_DISPLAY_LIMIT = 10  # 답변 내 sources 표시 제한 (5 → 10)
+
 # 답변 길이 목표 (질의 유형별) - 개선: 최대 길이 추가 증가 (하위 호환성 유지)
 ANSWER_LENGTH_TARGETS = {
     "simple_question": (500, 3000),
@@ -592,7 +598,6 @@ class AnswerFormatterHandler:
             # 주의: prepare_final_response_part에서 이미 sources를 생성했을 수 있으므로,
             # sources가 이미 있으면 덮어쓰지 않음
             existing_sources = state.get("sources", [])
-            existing_sources_detail = state.get("sources_detail", [])
             
             if existing_sources and len(existing_sources) > 0:
                 # sources가 이미 있으면 그대로 사용 (덮어쓰기 방지)
@@ -778,8 +783,8 @@ class AnswerFormatterHandler:
                                         })
                 
                 # sources가 없어서 생성한 경우에만 state에 저장
-                state["sources"] = final_sources_list[:10]  # 최대 10개만 (하위 호환성)
-                state["sources_detail"] = final_sources_detail[:10]  # 최대 10개만 (신규 필드)
+                state["sources"] = final_sources_list[:MAX_SOURCES_LIMIT]
+                state["sources_detail"] = final_sources_detail[:MAX_SOURCES_LIMIT]
 
             # 법적 참조 정보 추가
             if "legal_references" not in state:
@@ -833,14 +838,14 @@ class AnswerFormatterHandler:
                                 seen.add(s.lower())
                                 norm.append(s)
 
-                        # 최대 10개로 제한하고 정렬 (긴 이름 우선)
-                        state["sources"] = sorted(norm[:10], key=len, reverse=True)
+                        # 정렬 (긴 이름 우선) 및 제한
+                        state["sources"] = sorted(norm[:MAX_SOURCES_LIMIT], key=len, reverse=True)
                     # 이미 문자열 리스트인 경우 정규화 불필요 (prepare_final_response_part에서 이미 정규화됨)
                 except Exception as e:
                     self.logger.warning(f"Error formatting sources: {e}")
                     pass
             else:
-                self.logger.debug(f"[PREPARE_FINAL_RESPONSE] Skipping sources normalization (existing sources preserved)")
+                self.logger.debug("[PREPARE_FINAL_RESPONSE] Skipping sources normalization (existing sources preserved)")
 
             WorkflowUtils.update_processing_time(state, start_time)
             WorkflowUtils.add_step(state, "최종 준비", "최종 응답 준비 완료")
@@ -1142,17 +1147,15 @@ class AnswerFormatterHandler:
         try:
             self.logger.info("[PREPARE_FINAL_RESPONSE_PART] Starting prepare_final_response_part")
             self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] State keys: {list(state.keys())[:15]}")
-            final_start_time = time.time()
 
-            # query_complexity 보존 및 저장
+            query_type = self._restore_query_type_enhanced(state)
+            
             if query_complexity:
                 self.preserve_and_store_values(state, query_complexity, needs_search)
 
-            # 파이프라인 품질 추적
             if self.answer_generator:
                 self.answer_generator.track_search_to_answer_pipeline(state)
 
-            # Final pruning
             if len(state.get("processing_steps", [])) > MAX_PROCESSING_STEPS:
                 state["processing_steps"] = prune_processing_steps(
                     state["processing_steps"],
@@ -1163,1333 +1166,32 @@ class AnswerFormatterHandler:
             if len(errors) > 10:
                 WorkflowUtils.set_state_value(state, "errors", errors[-10:])
 
-            # 신뢰도 계산
-            answer_value = WorkflowUtils.normalize_answer(state.get("answer", ""))
-
-            # retrieved_docs 복구 (여러 위치에서 검색)
-            retrieved_docs = state.get("retrieved_docs", [])
-            if not retrieved_docs:
-                # search 그룹에서 확인
-                if "search" in state and isinstance(state["search"], dict):
-                    retrieved_docs = state["search"].get("retrieved_docs", [])
-            if not retrieved_docs:
-                # common.search 그룹에서 확인
-                if "common" in state and isinstance(state["common"], dict):
-                    if "search" in state["common"] and isinstance(state["common"]["search"], dict):
-                        retrieved_docs = state["common"]["search"].get("retrieved_docs", [])
-            if not retrieved_docs:
-                # state_helpers의 get_retrieved_docs 사용
-                try:
-                    from core.agents.state_helpers import get_retrieved_docs
-                    retrieved_docs = get_retrieved_docs(state)
-                except (ImportError, AttributeError):
-                    pass
-            if not retrieved_docs:
-                # global cache에서 확인
-                try:
-                    from core.agents.node_wrappers import _global_search_results_cache
-                    if _global_search_results_cache:
-                        retrieved_docs = _global_search_results_cache.get("retrieved_docs", [])
-                except (ImportError, AttributeError):
-                    pass
+            answer_value = self._recover_and_validate_answer(state)
             
-            # 복구된 retrieved_docs를 state에 저장
-            if retrieved_docs:
-                state["retrieved_docs"] = retrieved_docs
-                self.logger.info(f"[SOURCES] Restored {len(retrieved_docs)} retrieved_docs in prepare_final_response_part")
-            else:
-                self.logger.debug(f"[SOURCES] No retrieved_docs found in prepare_final_response_part")
-
-            sources_list = []
-            for doc in retrieved_docs:
-                if isinstance(doc, dict):
-                    sources_list.append(doc)
+            retrieved_docs = self._restore_retrieved_docs_enhanced(state)
+            sources_list = [doc for doc in retrieved_docs if isinstance(doc, dict)]
 
             query_type = WorkflowUtils.get_state_value(state, "query_type", "general")
             query_complexity = WorkflowUtils.get_state_value(state, "query_complexity", "moderate")
-
-            # needs_search 확인 (direct_answer 노드의 경우 검색이 없음)
             needs_search = WorkflowUtils.get_state_value(state, "needs_search", True)
 
-            # ConfidenceCalculator를 사용하여 신뢰도 계산
-            # direct_answer 노드의 경우 (needs_search=False) ConfidenceCalculator가 낮은 신뢰도를 계산할 수 있으므로 조정
-            calculated_confidence = None
-            if self.confidence_calculator and answer_value:
-                try:
-                    confidence_info = self.confidence_calculator.calculate_confidence(
-                        answer=answer_value,
-                        sources=sources_list,
-                        question_type=query_type
-                    )
-                    calculated_confidence = confidence_info.confidence
-                    
-                    # direct_answer 노드의 경우 (검색 없음) 신뢰도 보정
-                    if not needs_search and not sources_list:
-                        # 검색 없이 직접 답변 생성한 경우 신뢰도 보정
-                        # ConfidenceCalculator는 소스가 없으면 낮게 계산하므로, 직접 답변의 경우 보정 필요
-                        if calculated_confidence < 0.60:
-                            # 낮은 신뢰도는 직접 답변의 특성을 고려하여 보정
-                            calculated_confidence = max(calculated_confidence * 1.2, 0.60)  # 최소 60% 보장
-                            self.logger.info(f"[CONFIDENCE CALC] Direct answer confidence adjusted: {calculated_confidence:.3f} (no search)")
-                        else:
-                            self.logger.info(f"[CONFIDENCE CALC] Direct answer confidence: {calculated_confidence:.3f} (no search)")
-                    
-                    self.logger.info(f"ConfidenceCalculator: confidence={calculated_confidence:.3f}, factors={confidence_info.factors}")
-                except Exception as e:
-                    self.logger.warning(f"ConfidenceCalculator failed: {e}")
-
-            existing_confidence = state.get("structure_confidence") or state.get("confidence", 0.0)
-
-            if calculated_confidence is not None:
-                final_confidence = calculated_confidence
-            else:
-                final_confidence = existing_confidence
-
-            # 기본 신뢰도 보장 (개선: 검색 품질 점수 반영)
-            # search_quality를 여러 위치에서 찾기 (개선: _get_state_value 사용)
-            search_quality_score = 0.0
-            search_quality_dict = None
-        
-            # 1순위: _get_state_value를 통해 search_quality 조회
-            try:
-                from core.workflow.state.state_helpers import get_field
-                search_quality_dict = get_field(state, "search_quality")
-                if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                    search_quality_dict = get_field(state, "search_quality_evaluation")
-            except Exception as e:
-                self.logger.debug(f"Failed to get search_quality via get_field: {e}")
-        
-            # 2순위: 직접 state에서 찾기
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                search_quality_dict = state.get("search_quality", {})
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                # search 그룹에서 찾기
-                if "search" in state and isinstance(state.get("search"), dict):
-                    search_quality_dict = state["search"].get("search_quality", {}) or state["search"].get("search_quality_evaluation", {})
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                # common.search 그룹에서 찾기
-                if "common" in state and isinstance(state.get("common"), dict):
-                    if "search" in state["common"] and isinstance(state["common"]["search"], dict):
-                        search_quality_dict = state["common"]["search"].get("search_quality", {}) or state["common"]["search"].get("search_quality_evaluation", {})
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                # search_quality_evaluation에서 찾기
-                search_quality_dict = state.get("search_quality_evaluation", {})
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                # metadata에서 찾기
-                metadata = state.get("metadata", {})
-                if isinstance(metadata, dict):
-                    search_quality_dict = metadata.get("search_quality", {}) or metadata.get("search_quality_evaluation", {})
-        
-            # 3순위: 전역 캐시에서 찾기 (우선순위 높임 - 개선)
-            if not search_quality_dict or not isinstance(search_quality_dict, dict):
-                try:
-                    from core.agents.node_wrappers import _global_search_results_cache
-                    if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
-                        if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
-                            cached_quality = _global_search_results_cache["search"].get("search_quality", {}) or \
-                                            _global_search_results_cache["search"].get("search_quality_evaluation", {})
-                            if cached_quality and isinstance(cached_quality, dict):
-                                search_quality_dict = cached_quality
-                                self.logger.info(f"✅ [CONFIDENCE CALC] Found search_quality in global cache: {list(cached_quality.keys())}")
-                except Exception as e:
-                    self.logger.debug(f"Failed to get search_quality from global cache: {e}")
-        
-            if search_quality_dict and isinstance(search_quality_dict, dict):
-                search_quality_score = search_quality_dict.get("overall_quality", 0.0)
-            elif search_quality_dict and isinstance(search_quality_dict, (int, float)):
-                # overall_quality가 직접 저장된 경우
-                search_quality_score = float(search_quality_dict)
-        
-            # 로깅 추가
-            self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f} (from search_quality dict: {bool(search_quality_dict)}, keys: {list(search_quality_dict.keys()) if isinstance(search_quality_dict, dict) else 'N/A'})")
-        
-            quality_boost = search_quality_score * 0.3  # 검색 품질 점수 30% 반영 (20% -> 30%로 상향)
-        
-            # 검색 결과가 있고 품질이 좋으면 기본 신뢰도 상향
-            # 검색 결과가 없을 때도 기본 신뢰도 보장 (개선)
-            # direct_answer 노드의 경우 (needs_search=False) 다른 기준 적용
-            search_failed = state.get("search_failed", False)
-            if not needs_search:
-                # direct_answer 노드: 검색 없이 직접 답변 생성
-                # 답변 품질에 따라 기본 신뢰도 설정
-                if answer_value:
-                    answer_length = len(answer_value)
-                    if answer_length >= 200:
-                        base_min_confidence = 0.70  # 충분한 길이의 답변
-                    elif answer_length >= 100:
-                        base_min_confidence = 0.65  # 적절한 길이의 답변
-                    elif answer_length >= 50:
-                        base_min_confidence = 0.60  # 짧은 답변
-                    else:
-                        base_min_confidence = 0.55  # 너무 짧은 답변
-                    self.logger.info(f"[CONFIDENCE CALC] Direct answer (no search): base_min_confidence={base_min_confidence:.3f}, answer_length={answer_length}")
-                else:
-                    base_min_confidence = 0.50
-            elif search_failed:
-                # 검색 실패(데이터베이스 문제 등)인 경우 기본 신뢰도 낮게 설정
-                base_min_confidence = 0.20 if answer_value else 0.10
-                self.logger.warning(f"[CONFIDENCE CALC] Search failed, using lower base confidence: {base_min_confidence}")
-            else:
-                # 정상적인 경우 (기본 신뢰도 상향)
-                base_min_confidence = 0.35 if (answer_value and sources_list and len(sources_list) >= 3 and search_quality_score > 0.3) else \
-                                       0.30 if (answer_value and sources_list) else \
-                                       0.25 if answer_value else 0.15  # 검색 결과가 없어도 답변이 있으면 최소 25% (0.20 -> 0.25)
-        
-            final_confidence = max(final_confidence, base_min_confidence) + quality_boost
-
-            # 키워드 포함도 기반 보정
-            keyword_coverage = self.calculate_keyword_coverage(state, answer_value)
-            keyword_boost = keyword_coverage * 0.3
-            adjusted_confidence = min(0.95, final_confidence + keyword_boost)
-
-            # 소스 개수 기반 추가 보정 (개선: 더 많은 소스일수록 높은 보정)
-            if sources_list:
-                source_count = len(sources_list)
-                if source_count >= 5:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.08)  # 0.05 -> 0.08
-                elif source_count >= 3:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.05)  # 0.03 -> 0.05
-                elif source_count >= 1:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.02)  # 0.01 -> 0.02
-
-            # 답변 길이 기반 추가 보정
-            if answer_value:
-                answer_length = len(answer_value)
-                if answer_length >= 500:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.05)
-                elif answer_length >= 200:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.03)
-                elif answer_length >= 100:
-                    adjusted_confidence = min(0.95, adjusted_confidence + 0.01)
-
-            # 일관된 신뢰도 계산 적용 (검증 점수 반영)
-            # 검색 결과 기반 검증 점수 가져오기 (있는 경우)
-            grounding_score = state.get("grounding_score")
-            source_coverage = state.get("source_coverage")
-        
-            # 문서 인용 점수 계산 (개선: 2개 이상 인용 시 보정 추가)
-            citation_count = 0
-            if answer_value:
-                import re
-                # 법령 조문 인용 패턴
-                citation_patterns = [
-                    r'[가-힣]+법\s*제?\s*\d+\s*조',
-                    r'\[법령:\s*[^\]]+\]',
-                    r'제\d+조',
-                ]
-                unique_citations = set()
-                for pattern in citation_patterns:
-                    matches = re.findall(pattern, answer_value)
-                    for match in matches:
-                        unique_citations.add(match)
-                citation_count = len(unique_citations)
-        
-            # 문서 인용 점수 보정 증가 (개선: 2개 이상 인용 시 +0.08)
-            citation_boost = 0.0
-            if citation_count >= 3:
-                citation_boost = 0.10  # 0.05 -> 0.10
-                self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
-            elif citation_count >= 2:
-                citation_boost = 0.08  # 0.05 -> 0.08
-                self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
-            elif citation_count >= 1:
-                citation_boost = 0.03  # 0.02 -> 0.03
-                self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citation found (+{citation_boost})")
-        
-            # grounding_score 반영 비율 증가 (개선: 10% -> 15%)
-            grounding_boost = 0.0
-            if grounding_score is not None:
-                grounding_boost = float(grounding_score) * 0.15  # 0.10 -> 0.15
-                self.logger.info(f"[CONFIDENCE CALC] Grounding boost applied: grounding_score={grounding_score:.3f} (+{grounding_boost:.3f})")
-        
-            adjusted_confidence_with_validation = min(0.95, adjusted_confidence + citation_boost + grounding_boost)
-
-            # 일관된 신뢰도로 최종 조정
-            # direct_answer 노드의 경우 (needs_search=False) grounding_score가 None이므로 패널티 적용 안 함
-            # grounding_score가 None이고 검색이 없는 경우에는 패널티를 적용하지 않도록 함
-            final_adjusted_confidence = self._calculate_consistent_confidence(
-                base_confidence=adjusted_confidence_with_validation,
-                query_type=query_type,
-                query_complexity=query_complexity or "moderate",
-                grounding_score=grounding_score if (needs_search or grounding_score is not None) else None,  # 검색 없으면 None으로 전달하여 패널티 방지
-                source_coverage=source_coverage if (needs_search or source_coverage is not None) else None  # 검색 없으면 None으로 전달하여 패널티 방지
+            keyword_coverage = self._calculate_and_set_confidence(
+                state, answer_value, sources_list, query_type, query_complexity, needs_search
             )
 
-            state["confidence"] = final_adjusted_confidence
+            final_sources_list, final_sources_detail, legal_refs = self._extract_and_process_sources(state)
 
-            # 신뢰도 값 설정 직후 답변 텍스트의 신뢰도 값 교체 (리팩토링된 메서드 사용)
-            current_answer = state.get("answer", "")
-            if current_answer and isinstance(current_answer, str) and final_adjusted_confidence > 0:
-                state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
-
-            # 최종 answer를 문자열로 수렴
-            try:
-                state["answer"] = WorkflowUtils.normalize_answer(state.get("answer", ""))
-            except Exception:
-                state["answer"] = str(state.get("answer", ""))
-
-            # normalize_answer 호출 이후 신뢰도 값 다시 교체 (정규화로 인한 손실 방지, 리팩토링된 메서드 사용)
-            if final_adjusted_confidence > 0 and state.get("answer"):
-                current_answer = state.get("answer", "")
-                if isinstance(current_answer, str):
-                    state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
-
-            # sources 추출 (prepare_final_response와 동일한 로직 사용)
-            final_sources_list = []
-            final_sources_detail = []
-            seen_sources = set()
-            legal_refs = []
-            seen_legal_refs = set()
-
-            # 통일된 포맷터 및 검증기 초기화
-            try:
-                from ...services.unified_source_formatter import UnifiedSourceFormatter
-                from ...services.source_validator import SourceValidator
-                formatter = UnifiedSourceFormatter()
-                validator = SourceValidator()
-            except ImportError:
-                formatter = None
-                validator = None
-
-            # retrieved_docs 복구 (여러 위치에서 검색) - sources 생성 전에 먼저 복구
-            retrieved_docs_list = state.get("retrieved_docs", [])
-            if not retrieved_docs_list:
-                # search 그룹에서 확인
-                if "search" in state and isinstance(state["search"], dict):
-                    retrieved_docs_list = state["search"].get("retrieved_docs", [])
-            if not retrieved_docs_list:
-                # common.search 그룹에서 확인
-                if "common" in state and isinstance(state["common"], dict):
-                    if "search" in state["common"] and isinstance(state["common"]["search"], dict):
-                        retrieved_docs_list = state["common"]["search"].get("retrieved_docs", [])
-            if not retrieved_docs_list:
-                # state_helpers의 get_retrieved_docs 사용
-                try:
-                    from core.agents.state_helpers import get_retrieved_docs
-                    retrieved_docs_list = get_retrieved_docs(state)
-                except (ImportError, AttributeError):
-                    pass
-            if not retrieved_docs_list:
-                # global cache에서 확인
-                try:
-                    from core.agents.node_wrappers import _global_search_results_cache
-                    if _global_search_results_cache:
-                        retrieved_docs_list = _global_search_results_cache.get("retrieved_docs", [])
-                except (ImportError, AttributeError):
-                    pass
-        
-            # 복구된 retrieved_docs를 state에 저장
-            if retrieved_docs_list:
-                state["retrieved_docs"] = retrieved_docs_list
-                self.logger.info(f"[SOURCES] Restored {len(retrieved_docs_list)} retrieved_docs before processing")
-            else:
-                self.logger.warning(f"[SOURCES] No retrieved_docs found in prepare_final_response_part (state keys: {list(state.keys())[:10]})")
-        
-            total_docs = len(retrieved_docs_list)
-            self.logger.info(f"[SOURCES] Processing {total_docs} retrieved_docs in prepare_final_response_part")
-        
-            # 손실 추적을 위한 리스트
-            lost_docs_info = []
-            sources_created_count = 0
-            sources_failed_count = 0
-        
-            for doc_index, doc in enumerate(retrieved_docs_list, 1):
-                if not isinstance(doc, dict):
-                    self.logger.warning(f"[SOURCES] Doc {doc_index}/{total_docs} is not a dict, skipping")
-                    sources_failed_count += 1
-                    continue
-
-                source = None
-                source_created = False
-                source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
-                metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
+            state["sources"] = final_sources_list[:MAX_SOURCES_LIMIT]
+            state["sources_detail"] = final_sources_detail[:MAX_SOURCES_LIMIT]
+            state["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
             
-                self.logger.info(f"[SOURCES] Processing doc {doc_index}/{total_docs}: type={source_type or 'none'}, doc_id={doc_id or 'none'}, has_content={bool(doc.get('content') or doc.get('text'))}")
-            
-                # 통일된 포맷터로 상세 정보 생성
-                source_info_detail = None
-                formatter_error = None
-                if formatter and source_type:
-                    try:
-                        merged_metadata = {**metadata}
-                        for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
-                                   "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
-                            if key in doc:
-                                merged_metadata[key] = doc[key]
-                        
-                        source_info_detail = formatter.format_source(source_type, merged_metadata)
-                        
-                        if validator:
-                            validation_result = validator.validate_source(source_type, merged_metadata)
-                            source_info_detail.validation = validation_result
-                    except Exception as e:
-                        formatter_error = str(e)
-                        self.logger.warning(f"[SOURCES_DETAIL] Error formatting source detail for doc {doc_index}/{total_docs}: {e}")
-                elif not formatter:
-                    self.logger.debug(f"[SOURCES_DETAIL] UnifiedSourceFormatter not available for doc {doc_index}/{total_docs}, will use fallback")
-                elif not source_type:
-                    self.logger.debug(f"[SOURCES_DETAIL] source_type not found for doc {doc_index}/{total_docs}, will use fallback")
-            
-                # 1. statute_article (법령 조문) 처리
-                if source_type == "statute_article":
-                    statute_name = (
-                        doc.get("statute_name") or
-                        doc.get("law_name") or
-                        metadata.get("statute_name") or
-                        metadata.get("law_name")
-                    )
-                    
-                    if statute_name:
-                        article_no = (
-                            doc.get("article_no") or
-                            doc.get("article_number") or
-                            metadata.get("article_no") or
-                            metadata.get("article_number")
-                        )
-                        clause_no = doc.get("clause_no") or metadata.get("clause_no")
-                        item_no = doc.get("item_no") or metadata.get("item_no")
-                        
-                        source_parts = [statute_name]
-                        if article_no:
-                            # article_no가 문자열이 아니면 문자열로 변환
-                            article_no_str = str(article_no) if article_no else ""
-                            # article_no가 이미 "제2조" 형식이면 그대로 사용, 아니면 "제{article_no}조" 형식으로 변환
-                            if article_no_str.startswith("제") and article_no_str.endswith("조"):
-                                source_parts.append(article_no_str)
-                            else:
-                                # article_no에서 숫자만 추출
-                                article_no_clean = article_no_str.strip()
-                                if article_no_clean:
-                                    source_parts.append(f"제{article_no_clean}조")
-                        if clause_no:
-                            source_parts.append(f"제{clause_no}항")
-                        if item_no:
-                            source_parts.append(f"제{item_no}호")
-                        
-                        source = " ".join(source_parts)
-            
-                # 2. case_paragraph (판례) 처리
-                elif source_type == "case_paragraph":
-                    court = doc.get("court") or metadata.get("court")
-                    casenames = doc.get("casenames") or metadata.get("casenames")
-                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or doc.get("id") or metadata.get("id")
-                
-                # court나 casenames가 없으면 다른 필드에서 찾기
-                if not court and not casenames:
-                    # metadata에서 추가 필드 확인
-                    court = metadata.get("court_name") or metadata.get("court_type")
-                    casenames = metadata.get("case_name") or metadata.get("title")
-                
-                if court or casenames or doc_id:
-                    source_parts = []
-                    if court:
-                        source_parts.append(court)
-                    if casenames:
-                        source_parts.append(casenames)
-                    if doc_id:
-                        source_parts.append(f"({doc_id})")
-                    # court나 casenames가 없어도 doc_id만 있으면 "판례 (doc_id)" 형태로 생성
-                    if not court and not casenames and doc_id:
-                        source_parts.insert(0, "판례")
-                    source = " ".join(source_parts) if source_parts else None
-            
-                # 3. decision_paragraph (결정례) 처리
-                elif source_type == "decision_paragraph":
-                    org = doc.get("org") or metadata.get("org")
-                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id") or doc.get("id") or metadata.get("id")
-                
-                # org가 없으면 다른 필드에서 찾기
-                if not org:
-                    org = metadata.get("org_name") or metadata.get("organization")
-                
-                if org or doc_id:
-                    source_parts = []
-                    if org:
-                        source_parts.append(org)
-                    if doc_id:
-                        source_parts.append(f"({doc_id})")
-                    # org가 없어도 doc_id만 있으면 "결정례 (doc_id)" 형태로 생성
-                    if not org and doc_id:
-                        source_parts.insert(0, "결정례")
-                    source = " ".join(source_parts) if source_parts else None
-            
-                # 4. interpretation_paragraph (해석례) 처리
-                elif source_type == "interpretation_paragraph":
-                    org = doc.get("org") or metadata.get("org")
-                    title = doc.get("title") or metadata.get("title")
-                
-                if org or title:
-                    source_parts = []
-                    if org:
-                        source_parts.append(org)
-                    if title:
-                        source_parts.append(title)
-                    source = " ".join(source_parts)
-            
-                # 5. 기존 로직 (source_type이 없는 경우 또는 위에서 source를 찾지 못한 경우)
-                if not source:
-                    source_raw = (
-                        doc.get("statute_name") or
-                        doc.get("law_name") or
-                        doc.get("source_name") or
-                        doc.get("source")
-                    )
-                
-                if source_raw and isinstance(source_raw, str):
-                    source_lower = source_raw.lower().strip()
-                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
-                    # 조건 완화: 1자 이상이면 유효 (2자 -> 1자)
-                    if source_lower not in invalid_sources and len(source_lower) >= 1:
-                        source = source_raw.strip()
-                
-                if not source:
-                    source = (
-                        metadata.get("statute_name") or
-                        metadata.get("statute_abbrv") or
-                        metadata.get("law_name") or
-                        metadata.get("court") or
-                        metadata.get("court_name") or
-                        metadata.get("org") or
-                        metadata.get("org_name") or
-                        metadata.get("title") or
-                        metadata.get("case_name")
-                    )
-                
-                if not source:
-                    content = doc.get("content", "") or doc.get("text", "")
-                    if isinstance(content, str) and content:
-                        import re
-                        law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
-                        if law_pattern:
-                            source = law_pattern.group(1)
+            final_sources_detail = self._generate_fallback_sources_detail_if_needed(
+                final_sources_detail, final_sources_list, retrieved_docs, answer_value
+            )
+            state["sources_detail"] = final_sources_detail[:MAX_SOURCES_LIMIT]
 
-                # 소스 문자열 변환 및 중복 제거
-                if source:
-                    if isinstance(source, str):
-                        source_str = source.strip()
-                    else:
-                        try:
-                            source_str = str(source).strip()
-                        except Exception:
-                            source_str = None
-                
-                # 검색 타입 필터링 (최종 검증)
-                if source_str:
-                    source_lower = source_str.lower().strip()
-                    invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
-                    # source_type이 있으면 더 관대하게 처리 (source_type 기반으로 생성된 source는 유효)
-                    is_valid_source = False
-                    if source_type and source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
-                        # source_type 기반으로 생성된 source는 유효한 것으로 간주 (최소 1자 이상, invalid_sources만 체크)
-                        if source_lower not in invalid_sources and len(source_lower) >= 1:
-                            is_valid_source = True
-                        # source_type이 있으면 더 관대하게: invalid_sources만 체크하고 길이는 체크하지 않음
-                        elif source_lower not in invalid_sources:
-                            is_valid_source = True
-                    else:
-                        # source_type이 없거나 일반적인 경우에도 더 관대하게 (최소 1자 이상)
-                        # fallback 로직에서 생성된 source는 무조건 유효한 것으로 간주
-                        if source_lower not in invalid_sources and len(source_lower) >= 1:
-                            is_valid_source = True
-                        # 한글 또는 숫자가 포함된 경우도 유효한 것으로 간주 (더 관대하게)
-                        elif any(ord(c) >= 0xAC00 and ord(c) <= 0xD7A3 for c in source_lower) or any(c.isdigit() for c in source_lower):
-                            is_valid_source = True
-                    
-                    if is_valid_source:
-                        # 중복 제거: source_str이 같아도 doc_id가 다르면 다른 source로 처리
-                        source_key = f"{source_str}::{doc_id}" if doc_id else source_str
-                        if source_key not in seen_sources and source_str != "Unknown":
-                            final_sources_list.append(source_str)
-                            seen_sources.add(source_key)
-                            source_created = True
-                            sources_created_count += 1
-                            self.logger.info(f"[SOURCES] ✅ Successfully created source for doc {doc_index}/{total_docs}: {source_str}")
-                        elif source_str == "Unknown":
-                            self.logger.warning(f"[SOURCES] ❌ Source rejected (Unknown): doc {doc_index}/{total_docs}")
-                        else:
-                            # 중복이지만 doc_id가 다르면 다른 이름으로 추가 시도
-                            if doc_id:
-                                alternative_source = f"{source_str} ({doc_id})"
-                                if alternative_source not in seen_sources:
-                                    final_sources_list.append(alternative_source)
-                                    seen_sources.add(f"{alternative_source}::{doc_id}")
-                                    source_created = True
-                                    sources_created_count += 1
-                                    self.logger.info(f"[SOURCES] ✅ Created alternative source for doc {doc_index}/{total_docs}: {alternative_source} (duplicate source_str but different doc_id)")
-                            else:
-                                self.logger.warning(f"[SOURCES] ❌ Source rejected (duplicate, no doc_id): {source_str} for doc {doc_index}/{total_docs}")
-                            
-                            # statute_article 타입 문서의 경우 legal_references에도 추가
-                            if source_type == "statute_article":
-                                # source_str이 있으면 사용, 없으면 doc에서 직접 추출
-                                if source_str:
-                                    if source_str not in seen_legal_refs:
-                                        legal_refs.append(source_str)
-                                        seen_legal_refs.add(source_str)
-                                else:
-                                    # source_str이 없어도 doc에서 직접 추출 시도
-                                    doc_metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                                    statute_name = (
-                                        doc.get("statute_name") or
-                                        doc.get("law_name") or
-                                        doc_metadata.get("statute_name") or
-                                        doc_metadata.get("law_name") or
-                                        doc_metadata.get("abbrv")
-                                    )
-                                    article_no = (
-                                        doc.get("article_no") or
-                                        doc.get("article_number") or
-                                        doc_metadata.get("article_no") or
-                                        doc_metadata.get("article_number")
-                                    )
-                                    if statute_name:
-                                        if article_no:
-                                            legal_ref = f"{statute_name} 제{article_no}조"
-                                        else:
-                                            legal_ref = statute_name
-                                        if legal_ref and legal_ref not in seen_legal_refs:
-                                            legal_refs.append(legal_ref)
-                                            seen_legal_refs.add(legal_ref)
-                                            self.logger.debug(f"[LEGAL_REFERENCES] Added from doc (no source_str): {legal_ref}")
-                            
-                            # sources_detail 추가 (source_info_detail이 있으면 사용, 없으면 fallback)
-                            if source_info_detail:
-                                detail_dict = {
-                                    "name": source_info_detail.name,
-                                    "type": source_info_detail.type,
-                                    "url": source_info_detail.url or "",
-                                    "metadata": source_info_detail.metadata or {}
-                                }
-                                
-                                # metadata의 정보를 최상위 레벨로 추출
-                                if source_info_detail.metadata:
-                                    meta = source_info_detail.metadata
-                                    
-                                    # 법령 조문인 경우
-                                    if source_type == "statute_article":
-                                        if meta.get("statute_name"):
-                                            detail_dict["statute_name"] = meta["statute_name"]
-                                        if meta.get("article_no"):
-                                            detail_dict["article_no"] = meta["article_no"]
-                                        if meta.get("clause_no"):
-                                            detail_dict["clause_no"] = meta["clause_no"]
-                                        if meta.get("item_no"):
-                                            detail_dict["item_no"] = meta["item_no"]
-                                    
-                                    # 판례인 경우
-                                    elif source_type == "case_paragraph":
-                                        if meta.get("doc_id"):
-                                            detail_dict["case_number"] = meta["doc_id"]
-                                        if meta.get("court"):
-                                            detail_dict["court"] = meta["court"]
-                                        if meta.get("casenames"):
-                                            detail_dict["case_name"] = meta["casenames"]
-                                    
-                                    # 결정례인 경우
-                                    elif source_type == "decision_paragraph":
-                                        if meta.get("doc_id"):
-                                            detail_dict["decision_number"] = meta["doc_id"]
-                                        if meta.get("org"):
-                                            detail_dict["org"] = meta["org"]
-                                        if meta.get("decision_date"):
-                                            detail_dict["decision_date"] = meta["decision_date"]
-                                        if meta.get("result"):
-                                            detail_dict["result"] = meta["result"]
-                                    
-                                    # 해석례인 경우
-                                    elif source_type == "interpretation_paragraph":
-                                        if meta.get("doc_id"):
-                                            detail_dict["interpretation_number"] = meta["doc_id"]
-                                        if meta.get("org"):
-                                            detail_dict["org"] = meta["org"]
-                                        if meta.get("title"):
-                                            detail_dict["title"] = meta["title"]
-                                        if meta.get("response_date"):
-                                            detail_dict["response_date"] = meta["response_date"]
-                                
-                                # 상세본문 추가 (doc에서 text 또는 content 가져오기)
-                                content = doc.get("content") or doc.get("text") or ""
-                                if content:
-                                    detail_dict["content"] = content
-                                
-                                final_sources_detail.append(detail_dict)
-                            else:
-                                # source_info_detail이 없어도 sources_detail 생성 (fallback)
-                                detail_dict = {
-                                    "name": source_str,
-                                    "type": source_type or "unknown",
-                                    "url": "",
-                                    "metadata": metadata
-                                }
-                                
-                                # source_type별로 최상위 레벨 필드 추출
-                                if source_type == "statute_article":
-                                    statute_name = doc.get("statute_name") or doc.get("law_name") or metadata.get("statute_name") or metadata.get("law_name")
-                                    article_no = doc.get("article_no") or doc.get("article_number") or metadata.get("article_no") or metadata.get("article_number")
-                                    if statute_name:
-                                        detail_dict["statute_name"] = statute_name
-                                    if article_no:
-                                        detail_dict["article_no"] = article_no
-                                elif source_type == "case_paragraph":
-                                    if doc_id:
-                                        detail_dict["case_number"] = doc_id
-                                    if doc.get("court") or metadata.get("court"):
-                                        detail_dict["court"] = doc.get("court") or metadata.get("court")
-                                elif source_type == "decision_paragraph":
-                                    if doc_id:
-                                        detail_dict["decision_number"] = doc_id
-                                    if doc.get("org") or metadata.get("org"):
-                                        detail_dict["org"] = doc.get("org") or metadata.get("org")
-                                elif source_type == "interpretation_paragraph":
-                                    if doc.get("title") or metadata.get("title"):
-                                        detail_dict["title"] = doc.get("title") or metadata.get("title")
-                                
-                                content = doc.get("content") or doc.get("text") or ""
-                                if content:
-                                    detail_dict["content"] = content
-                                
-                                final_sources_detail.append(detail_dict)
-                                self.logger.debug(f"[SOURCES_DETAIL] Created fallback sources_detail for doc {doc_index}/{total_docs} (formatter_error: {formatter_error or 'N/A'})")
-                    else:
-                        self.logger.warning(f"[SOURCES] ❌ Source validation failed for doc {doc_index}/{total_docs}: {source_str} (invalid: {source_lower in invalid_sources}, length: {len(source_lower)})")
-                elif source_type and source_type in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
-                    # source_type이 있지만 source가 생성되지 않은 경우 fallback 로직 추가
-                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
-                    if doc_id:
-                        # doc_id만으로라도 source 생성
-                        if source_type == "case_paragraph":
-                            source = f"판례 ({doc_id})"
-                        elif source_type == "decision_paragraph":
-                            source = f"결정례 ({doc_id})"
-                        elif source_type == "interpretation_paragraph":
-                            source = f"해석례 ({doc_id})"
-                        
-                        if source:
-                            source_key = f"{source}::{doc_id}" if doc_id else source
-                            if source_key not in seen_sources:
-                                final_sources_list.append(source)
-                                seen_sources.add(source_key)
-                                source_created = True
-                                sources_created_count += 1
-                                self.logger.info(f"[SOURCES] ✅ Generated fallback source (type-based) for doc {doc_index}/{total_docs}: {source}")
-                            elif doc_id:
-                                # 중복이지만 doc_id가 다르면 다른 이름으로 추가
-                                alternative_source = f"{source} ({doc_id})"
-                                if alternative_source not in seen_sources:
-                                    final_sources_list.append(alternative_source)
-                                    seen_sources.add(f"{alternative_source}::{doc_id}")
-                                    source_created = True
-                                    sources_created_count += 1
-                                    self.logger.info(f"[SOURCES] ✅ Created alternative type-based source for doc {doc_index}/{total_docs}: {alternative_source}")
-                            
-                            # sources_detail fallback 생성
-                            if not source_info_detail:
-                                detail_dict = {
-                                    "name": source,
-                                    "type": source_type,
-                                    "url": "",
-                                    "metadata": metadata
-                                }
-                                content = doc.get("content") or doc.get("text") or ""
-                                if content:
-                                    detail_dict["content"] = content
-                                final_sources_detail.append(detail_dict)
-                        else:
-                            self.logger.warning(f"[SOURCES] Failed to create type-based fallback for doc {doc_index}/{total_docs} (source_type={source_type}, doc_id={doc_id or 'none'})")
-                
-                if not source_created:
-                    self.logger.debug(f"[SOURCES] source_type={source_type}, but source is None. doc_id={doc_id}")
-            
-                # source_type이 있지만 source가 생성되지 않은 경우 추가 fallback
-                if source_type and not source:
-                    # 최소한의 source 생성 시도
-                    if source_type == "statute_article":
-                        source = "법령"
-                    elif source_type == "case_paragraph":
-                        source = "판례"
-                    elif source_type == "decision_paragraph":
-                        source = "결정례"
-                    elif source_type == "interpretation_paragraph":
-                        source = "해석례"
-                
-                if source:
-                    source_key = f"{source}::{doc_id}" if doc_id else source
-                    if source_key not in seen_sources:
-                        final_sources_list.append(source)
-                        seen_sources.add(source_key)
-                        source_created = True
-                        sources_created_count += 1
-                        self.logger.info(f"[SOURCES] ✅ Generated minimal fallback source for doc {doc_index}/{total_docs}: {source}")
-                    elif doc_id:
-                        # 중복이지만 doc_id가 다르면 다른 이름으로 추가
-                        alternative_source = f"{source} ({doc_id})"
-                        if alternative_source not in seen_sources:
-                            final_sources_list.append(alternative_source)
-                            seen_sources.add(f"{alternative_source}::{doc_id}")
-                            source_created = True
-                            sources_created_count += 1
-                            self.logger.info(f"[SOURCES] ✅ Created alternative minimal source for doc {doc_index}/{total_docs}: {alternative_source}")
-                    
-                    # sources_detail fallback 생성
-                    if not source_info_detail:
-                        detail_dict = {
-                            "name": source,
-                            "type": source_type,
-                            "url": "",
-                            "metadata": metadata
-                        }
-                        content = doc.get("content") or doc.get("text") or ""
-                        if content:
-                            detail_dict["content"] = content
-                        final_sources_detail.append(detail_dict)
-            
-                # source_type이 없어도 최소한의 source 생성 (모든 retrieved_docs를 sources로 변환 보장)
-                # source가 생성되지 않았으면 강제로 fallback 실행
-                if not source_created:
-                    import re
-                    import hashlib
-                    
-                    # doc의 다른 필드에서 source 추출 시도 (복합 필드 조합 방식)
-                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
-                    title = doc.get("title") or metadata.get("title") or metadata.get("case_name") or metadata.get("casenames")
-                    content = doc.get("content", "") or doc.get("text", "")
-                    
-                    # 필드 우선순위 방식: 여러 필드를 순차적으로 시도
-                    field_priority = [
-                        # 1순위: doc_id 기반
-                        (lambda: f"문서 ({doc_id})" if doc_id else None),
-                        # 2순위: title 기반
-                        (lambda: title.strip() if title and isinstance(title, str) and len(title.strip()) >= 2 else None),
-                        # 3순위: content 기반 키워드 추출 (강화)
-                        (lambda: self._extract_source_from_content(content) if content and isinstance(content, str) else None),
-                        # 4순위: 복합 필드 조합
-                        (lambda: self._combine_fields_for_source(doc, metadata, source_type) if doc or metadata else None),
-                        # 5순위: 해시 기반 고유 식별자 (doc_id 없을 때)
-                        (lambda: self._generate_hash_based_source(content, doc_index) if content else None),
-                        # 6순위: 최종 fallback (인덱스 기반)
-                        (lambda: f"문서 {doc_index}")
-                    ]
-                    
-                    # 우선순위에 따라 source 생성 시도
-                    for source_generator in field_priority:
-                        try:
-                            source = source_generator()
-                            if source and isinstance(source, str) and source.strip():
-                                break
-                        except Exception as e:
-                            self.logger.debug(f"[SOURCES] Source generation failed: {e}")
-                            continue
-                    
-                    # source가 생성되었으면 추가
-                    if source:
-                        source_str = str(source).strip()
-                        source_lower = source_str.lower().strip()
-                        invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
-                        
-                        # 유효성 검증 (더 관대하게 - invalid_sources만 체크)
-                        # fallback source는 무조건 유효한 것으로 간주 (최소한의 source 생성 보장)
-                        if source_lower not in invalid_sources:
-                            # 중복 제거: source_str이 같아도 doc_id가 다르면 다른 source로 처리
-                            source_key = f"{source_str}::{doc_id}" if doc_id else source_str
-                            if source_key not in seen_sources and source_str != "Unknown":
-                                final_sources_list.append(source_str)
-                                seen_sources.add(source_key)
-                                
-                                # sources_detail fallback 생성
-                                if not source_info_detail:
-                                    detail_dict = {
-                                        "name": source_str,
-                                        "type": source_type or "unknown",
-                                        "url": "",
-                                        "metadata": metadata
-                                    }
-                                    if content:
-                                        detail_dict["content"] = content
-                                    final_sources_detail.append(detail_dict)
-                                
-                                self.logger.info(f"[SOURCES] ✅ Generated final fallback source for doc {doc_index}/{total_docs}: {source_str} (source_type: {source_type or 'none'}, doc_id: {doc_id or 'none'})")
-                                source_created = True
-                                sources_created_count += 1
-                            elif source_str == "Unknown":
-                                self.logger.warning(f"[SOURCES] Fallback source rejected (Unknown): doc {doc_index}/{total_docs}")
-                            else:
-                                # 중복이지만 doc_id가 다르면 다른 이름으로 추가 시도
-                                if doc_id:
-                                    alternative_source = f"{source_str} ({doc_id})"
-                                    if alternative_source not in seen_sources:
-                                        final_sources_list.append(alternative_source)
-                                        seen_sources.add(f"{alternative_source}::{doc_id}")
-                                        source_created = True
-                                        self.logger.info(f"[SOURCES] Created alternative fallback source for doc {doc_index}/{total_docs}: {alternative_source} (duplicate source_str but different doc_id)")
-                                else:
-                                    # 중복이고 doc_id도 없으면 해시 기반으로 구분 시도
-                                    if content:
-                                        import hashlib
-                                        content_hash = hashlib.md5(content[:50].encode('utf-8')).hexdigest()[:6]
-                                        alternative_source = f"{source_str} #{content_hash}"
-                                        if alternative_source not in seen_sources:
-                                            final_sources_list.append(alternative_source)
-                                            seen_sources.add(alternative_source)
-                                            source_created = True
-                                            sources_created_count += 1
-                                            self.logger.info(f"[SOURCES] ✅ Created hash-based alternative source for doc {doc_index}/{total_docs}: {alternative_source}")
-                                    else:
-                                        # content도 없으면 인덱스 기반으로 구분
-                                        alternative_source = f"{source_str} [{doc_index}]"
-                                        if alternative_source not in seen_sources:
-                                            final_sources_list.append(alternative_source)
-                                            seen_sources.add(alternative_source)
-                                            source_created = True
-                                            sources_created_count += 1
-                                            self.logger.info(f"[SOURCES] ✅ Created index-based alternative source for doc {doc_index}/{total_docs}: {alternative_source}")
-                        else:
-                            # invalid_sources에 포함되어도 최소한의 source 생성 시도
-                            # 1. doc_id가 있으면 사용
-                            if doc_id:
-                                minimal_source = f"문서 ({doc_id})"
-                                source_key = f"{minimal_source}::{doc_id}"
-                                if source_key not in seen_sources:
-                                    final_sources_list.append(minimal_source)
-                                    seen_sources.add(source_key)
-                                    source_created = True
-                                    sources_created_count += 1
-                                    self.logger.info(f"[SOURCES] ✅ Generated minimal source for doc {doc_index}/{total_docs}: {minimal_source} (invalid source_str but has doc_id)")
-                            # 2. content가 있으면 해시 기반
-                            elif content:
-                                import hashlib
-                                content_hash = hashlib.md5(content[:50].encode('utf-8')).hexdigest()[:8]
-                                minimal_source = f"문서 #{content_hash}"
-                                if minimal_source not in seen_sources:
-                                    final_sources_list.append(minimal_source)
-                                    seen_sources.add(minimal_source)
-                                    source_created = True
-                                    sources_created_count += 1
-                                    self.logger.info(f"[SOURCES] ✅ Generated hash-based source for doc {doc_index}/{total_docs}: {minimal_source}")
-                            # 3. 최후의 수단: 인덱스 기반
-                            else:
-                                minimal_source = f"문서 {doc_index}"
-                                if minimal_source not in seen_sources:
-                                    final_sources_list.append(minimal_source)
-                                    seen_sources.add(minimal_source)
-                                    source_created = True
-                                    sources_created_count += 1
-                                    self.logger.info(f"[SOURCES] ✅ Generated index-based source for doc {doc_index}/{total_docs}: {minimal_source}")
-                else:
-                    self.logger.error(f"[SOURCES] CRITICAL: Failed to generate ANY fallback source for doc {doc_index}/{total_docs} (source_type: {source_type or 'none'}, doc_id: {doc_id or 'none'}, title: {title or 'none'})")
-            
-                # 최종 확인: source가 생성되지 않았으면 원본 Doc 정보 보존 방식 적용
-                if not source_created:
-                    # 원본 Doc 정보 보존: 해시 기반 또는 인덱스 기반으로 최소한의 source 생성
-                    import hashlib
-                    content_for_hash = doc.get("content") or doc.get("text") or ""
-                    
-                    # 해시 기반 또는 인덱스 기반으로 최소한의 source 생성
-                    if content_for_hash and len(content_for_hash.strip()) > 10:
-                        # content 해시 기반 source 생성
-                        content_hash = hashlib.md5(content_for_hash[:100].encode('utf-8')).hexdigest()[:8]
-                        source_from_detail = f"문서 #{content_hash}"
-                    elif doc_id:
-                        # doc_id 기반 source 생성
-                        source_from_detail = f"문서 ({doc_id})"
-                    else:
-                        # 인덱스 기반 source 생성
-                        source_from_detail = f"문서 {doc_index}"
-                    
-                    # 중복 체크
-                    source_key_final = f"{source_from_detail}::{doc_id}" if doc_id else source_from_detail
-                    if source_key_final not in seen_sources:
-                        final_sources_list.append(source_from_detail)
-                        seen_sources.add(source_key_final)
-                        source_created = True
-                        sources_created_count += 1
-                        self.logger.info(f"[SOURCES] ✅ Generated source from preserved doc info for doc {doc_index}/{total_docs}: {source_from_detail}")
-                    
-                    # sources_detail에 원본 정보 보존 (항상 생성)
-                    detail_dict = {
-                        "name": source_from_detail,
-                        "type": source_type or "unknown",
-                        "url": "",
-                        "metadata": {**metadata, "original_doc_index": doc_index}  # 원본 doc 전체는 너무 클 수 있으므로 인덱스만
-                    }
-                    
-                    # source_type별로 최상위 레벨 필드 추출
-                    if source_type == "statute_article":
-                        statute_name = doc.get("statute_name") or doc.get("law_name") or metadata.get("statute_name") or metadata.get("law_name")
-                        article_no = doc.get("article_no") or doc.get("article_number") or metadata.get("article_no") or metadata.get("article_number")
-                        if statute_name:
-                            detail_dict["statute_name"] = statute_name
-                        if article_no:
-                            detail_dict["article_no"] = article_no
-                    elif source_type == "case_paragraph":
-                        if doc_id:
-                            detail_dict["case_number"] = doc_id
-                        if doc.get("court") or metadata.get("court"):
-                            detail_dict["court"] = doc.get("court") or metadata.get("court")
-                    elif source_type == "decision_paragraph":
-                        if doc_id:
-                            detail_dict["decision_number"] = doc_id
-                        if doc.get("org") or metadata.get("org"):
-                            detail_dict["org"] = doc.get("org") or metadata.get("org")
-                    elif source_type == "interpretation_paragraph":
-                        if doc.get("title") or metadata.get("title"):
-                            detail_dict["title"] = doc.get("title") or metadata.get("title")
-                    
-                    if content_for_hash:
-                        detail_dict["content"] = content_for_hash[:500]  # 일부만 보존
-                    
-                    final_sources_detail.append(detail_dict)
-                self.logger.debug(f"[SOURCES_DETAIL] Created sources_detail from preserved doc info for doc {doc_index}/{total_docs}")
-                
-                lost_doc_info = {
-                    "index": doc_index,
-                    "type": source_type or "unknown",
-                    "doc_id": doc_id or "none",
-                    "title": doc.get("title") or metadata.get("title") or "none",
-                    "has_content": bool(content_for_hash),
-                    "preserved_in_detail": True,
-                    "generated_source": source_from_detail
-                }
-                lost_docs_info.append(lost_doc_info)
-                
-                if not source_created:
-                    sources_failed_count += 1
-                    # 최후의 수단: 인덱스 기반으로 무조건 source 생성
-                    final_fallback_source = f"문서 {doc_index}"
-                    if final_fallback_source not in seen_sources:
-                        final_sources_list.append(final_fallback_source)
-                        seen_sources.add(final_fallback_source)
-                        source_created = True
-                        sources_created_count += 1
-                        self.logger.warning(f"[SOURCES] ⚠️ CRITICAL: Using final fallback for doc {doc_index}/{total_docs}: {final_fallback_source} (type={source_type or 'none'}, doc_id={doc_id or 'none'})")
-                    else:
-                        self.logger.error(f"[SOURCES] ❌ CRITICAL: Doc {doc_index}/{total_docs} has NO source created even after all fallbacks! (type={source_type or 'none'}, doc_id={doc_id or 'none'})")
+            self._extract_and_store_related_questions(state)
 
-            # sources_detail이 없으면 sources에서 생성 시도
-            if len(final_sources_detail) == 0 and len(final_sources_list) > 0:
-                for source_str in final_sources_list[:10]:
-                    # 해당 source_str에 해당하는 doc 찾기
-                    for doc in state.get("retrieved_docs", []):
-                        if not isinstance(doc, dict):
-                            continue
-                        doc_source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
-                        doc_metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                        
-                        # source_str과 매칭되는 doc 찾기
-                        doc_source = None
-                        if doc_source_type == "statute_article":
-                            statute_name = doc.get("statute_name") or doc.get("law_name") or doc_metadata.get("statute_name") or doc_metadata.get("law_name")
-                            article_no = doc.get("article_no") or doc.get("article_number") or doc_metadata.get("article_no") or doc_metadata.get("article_number")
-                            if statute_name and article_no:
-                                doc_source = f"{statute_name} 제{article_no}조"
-                            elif statute_name:
-                                doc_source = statute_name
-                        elif doc_source_type == "case_paragraph":
-                            doc_id = doc.get("doc_id") or doc_metadata.get("doc_id") or doc_metadata.get("case_id")
-                            if doc_id:
-                                doc_source = f"판례 ({doc_id})"
-                        elif doc_source_type == "decision_paragraph":
-                            doc_id = doc.get("doc_id") or doc_metadata.get("doc_id") or doc_metadata.get("decision_id")
-                            if doc_id:
-                                doc_source = f"결정례 ({doc_id})"
-                        elif doc_source_type == "interpretation_paragraph":
-                            title = doc.get("title") or doc_metadata.get("title")
-                            if title:
-                                doc_source = title
-                        
-                        if doc_source and doc_source == source_str:
-                            detail_dict = {
-                                "name": source_str,
-                                "type": doc_source_type or "unknown",
-                                "url": "",
-                                "metadata": doc_metadata
-                            }
-                            content = doc.get("content") or doc.get("text") or ""
-                            if content:
-                                detail_dict["content"] = content
-                            final_sources_detail.append(detail_dict)
-                            break
-        
-            # sources 생성 통계 로깅
-            conversion_rate = (sources_created_count / total_docs * 100) if total_docs > 0 else 0
-            self.logger.info(f"[SOURCES] 📊 Conversion statistics: {sources_created_count}/{total_docs} docs converted ({conversion_rate:.1f}%), failed: {sources_failed_count}")
-            if sources_created_count < total_docs:
-                self.logger.warning(f"[SOURCES] ⚠️ {total_docs - sources_created_count} docs were not converted to sources!")
-        
-            # sources 정규화: 딕셔너리 형태가 있으면 문자열로 변환
-            normalized_sources = []
-            for source in final_sources_list[:10]:
-                if isinstance(source, dict):
-                    # 딕셔너리에서 source 필드 추출
-                    source_str = source.get("source") or source.get("name") or str(source.get("type", "Unknown"))
-                    if source_str and isinstance(source_str, str):
-                        normalized_sources.append(source_str)
-                elif isinstance(source, str):
-                    normalized_sources.append(source)
-                else:
-                    # 기타 타입은 문자열로 변환
-                    try:
-                        normalized_sources.append(str(source))
-                    except Exception:
-                        pass
-        
-            # numpy 타입을 Python 기본 타입으로 변환 (직렬화 문제 해결)
-            def convert_numpy_types(obj):
-                """numpy 타입을 Python 기본 타입으로 변환"""
-                import numpy as np
-                if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
-                    return int(obj)
-                elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
-                    return float(obj)
-                elif isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                elif isinstance(obj, dict):
-                    return {k: convert_numpy_types(v) for k, v in obj.items()}
-                elif isinstance(obj, (list, tuple)):
-                    return [convert_numpy_types(item) for item in obj]
-                return obj
-        
-            # sources와 sources_detail의 numpy 타입 변환
-            normalized_sources_clean = [convert_numpy_types(s) for s in normalized_sources[:10]]
-            final_sources_detail_clean = [convert_numpy_types(d) for d in final_sources_detail[:10]]
-        
-            state["sources"] = normalized_sources_clean  # 최대 10개만 (하위 호환성)
-            state["sources_detail"] = final_sources_detail_clean  # 최대 10개만 (신규 필드)
-        
-            # state reduction으로 인한 손실 방지: common 그룹과 metadata에도 저장
-            if "common" not in state:
-                state["common"] = {}
-            if not isinstance(state["common"], dict):
-                state["common"] = {}
-            state["common"]["sources"] = normalized_sources_clean
-        
-            metadata = state.get("metadata", {})
-            if not isinstance(metadata, dict):
-                metadata = {}
-            metadata["sources"] = normalized_sources_clean
-            state["metadata"] = metadata
-        
-            self.logger.info(f"[SOURCES] ✅ Final sources saved to state: {len(normalized_sources_clean)} sources (also saved to common and metadata groups)")
-        
-            # 디버깅: sources_detail 생성 결과 로깅
-            retrieved_docs_count = len(state.get("retrieved_docs", []))
-            if len(final_sources_detail) > 0:
-                conversion_rate = (len(final_sources_detail) / retrieved_docs_count * 100) if retrieved_docs_count > 0 else 0
-                self.logger.info(f"[SOURCES_DETAIL] Generated {len(final_sources_detail)} sources_detail entries from {retrieved_docs_count} retrieved_docs (conversion rate: {conversion_rate:.1f}%)")
-                for i, detail in enumerate(final_sources_detail[:3], 1):
-                    if isinstance(detail, dict):
-                        self.logger.debug(f"[SOURCES_DETAIL] {i}. {detail.get('name', 'N/A')} (type: {detail.get('type', 'N/A')})")
-            else:
-                self.logger.warning(f"[SOURCES_DETAIL] No sources_detail generated from {retrieved_docs_count} retrieved_docs (sources: {len(final_sources_list)})")
-            # sources_detail 생성 실패 원인 파악을 위한 상세 로깅
-            if len(final_sources_list) > 0:
-                self.logger.warning(f"[SOURCES_DETAIL] sources_detail 생성 실패: sources는 {len(final_sources_list)}개 있지만 sources_detail이 0개")
-                # formatter 상태 확인
-                if formatter:
-                    self.logger.debug(f"[SOURCES_DETAIL] UnifiedSourceFormatter is available but sources_detail was not created")
-                else:
-                    self.logger.warning(f"[SOURCES_DETAIL] UnifiedSourceFormatter is NOT available - fallback should have created sources_detail")
-            else:
-                self.logger.warning(f"[SOURCES_DETAIL] Both sources and sources_detail are empty - check source generation logic")
-        
-            # 디버깅: sources 생성 결과 로깅 (개선: 상세 정보 추가)
-            retrieved_docs_count = len(retrieved_docs_list)
-            if len(final_sources_list) > 0:
-                conversion_rate = (len(final_sources_list) / retrieved_docs_count * 100) if retrieved_docs_count > 0 else 0
-                self.logger.info(f"[SOURCES] Generated {len(final_sources_list)} sources from {retrieved_docs_count} retrieved_docs (conversion rate: {conversion_rate:.1f}%): {final_sources_list[:5]}")
-                if len(final_sources_list) < retrieved_docs_count:
-                    lost_count = retrieved_docs_count - len(final_sources_list)
-                    self.logger.warning(f"[SOURCES] Only {len(final_sources_list)}/{retrieved_docs_count} retrieved_docs converted to sources ({lost_count} lost, {100 - conversion_rate:.1f}% loss)")
-                    # 손실된 doc 상세 정보 로깅
-                    if lost_docs_info:
-                        self.logger.warning(f"[SOURCES] Lost docs details:")
-                        for lost_doc in lost_docs_info:
-                            self.logger.warning(f"  - Doc {lost_doc['index']}: type={lost_doc['type']}, doc_id={lost_doc['doc_id']}, title={lost_doc['title']}, has_content={lost_doc['has_content']}")
-                    else:
-                        # lost_docs_info가 비어있으면 다른 원인 (중복 제거 등)
-                        self.logger.debug(f"[SOURCES] Lost docs may be due to duplicate removal or validation failure")
-                elif len(final_sources_list) == retrieved_docs_count:
-                    self.logger.info(f"[SOURCES] ✅ Perfect conversion: All {retrieved_docs_count} retrieved_docs converted to sources")
-            else:
-                self.logger.error(f"[SOURCES] CRITICAL: No sources generated from {retrieved_docs_count} retrieved_docs!")
-
-            # 법적 참조 정보 추가 (sources 생성 시점에 함께 생성)
-            # statute_article 타입 문서의 sources를 legal_references로 사용
-            # sources_detail에서 legal_references 추출 (리팩토링된 메서드 사용)
-            legal_refs_from_detail = self.source_extractor.extract_legal_references_from_sources_detail(final_sources_detail)
-            for ref in legal_refs_from_detail:
-                if ref and ref not in seen_legal_refs:
-                    legal_refs.append(ref)
-                    seen_legal_refs.add(ref)
-        
-            # retrieved_docs에서 직접 추출 (항상 실행하여 누락 방지)
-            retrieved_docs_for_legal = state.get("retrieved_docs", [])
-            if retrieved_docs_for_legal:
-                # statute_article 타입 문서 개수 확인
-                statute_articles_count = sum(1 for doc in retrieved_docs_for_legal 
-                                          if isinstance(doc, dict) and 
-                                          (doc.get("type") == "statute_article" or 
-                                           doc.get("source_type") == "statute_article" or 
-                                           (isinstance(doc.get("metadata"), dict) and 
-                                            doc.get("metadata", {}).get("source_type") == "statute_article")))
-                if statute_articles_count > 0:
-                    self.logger.debug(f"[LEGAL_REFERENCES] Found {statute_articles_count} statute_article documents in retrieved_docs, extracting legal_references...")
-                legal_refs_from_docs = self.source_extractor.extract_legal_references_from_docs(retrieved_docs_for_legal)
-                if legal_refs_from_docs:
-                    self.logger.info(f"[LEGAL_REFERENCES] Extracted {len(legal_refs_from_docs)} legal_references from retrieved_docs: {legal_refs_from_docs[:5]}")
-                    for ref in legal_refs_from_docs:
-                        if ref and ref not in seen_legal_refs:
-                            legal_refs.append(ref)
-                            seen_legal_refs.add(ref)
-                            self.logger.debug(f"[LEGAL_REFERENCES] Added from retrieved_docs: {ref}")
-                elif statute_articles_count > 0:
-                    self.logger.warning(f"[LEGAL_REFERENCES] Found {statute_articles_count} statute_article documents but extracted 0 legal_references. Check field extraction logic.")
-        
-            # sources에서 legal_references 추출 (추가 fallback)
-            if len(legal_refs) == 0 and len(final_sources_list) > 0:
-                import re
-                for source_str in final_sources_list:
-                    # 법령 조문 패턴 확인 (예: "민법 제750조", "민사소송법 제147조" 등)
-                    statute_pattern = r'([가-힣]+법)\s*(?:제\s*(\d+)\s*조)?'
-                    match = re.search(statute_pattern, source_str)
-                    if match:
-                        statute_name = match.group(1)
-                        article_no = match.group(2)
-                        if article_no:
-                            legal_ref = f"{statute_name} 제{article_no}조"
-                        else:
-                            legal_ref = statute_name
-                        
-                        if legal_ref and legal_ref not in seen_legal_refs:
-                            legal_refs.append(legal_ref)
-                            seen_legal_refs.add(legal_ref)
-                            self.logger.debug(f"[LEGAL_REFERENCES] Extracted from sources: {legal_ref}")
-        
-            # sources_detail에서 legal_references 추출 (추가 fallback)
-            if len(legal_refs) == 0 and len(final_sources_detail) > 0:
-                for detail in final_sources_detail:
-                    if not isinstance(detail, dict):
-                        continue
-                    detail_type = detail.get("type", "")
-                    if detail_type == "statute_article":
-                        detail_meta = detail.get("metadata", {})
-                        statute_name = detail.get("statute_name") or detail_meta.get("statute_name") or detail_meta.get("law_name")
-                        article_no = detail.get("article_no") or detail_meta.get("article_no") or detail_meta.get("article_number")
-                        
-                        if statute_name:
-                            if article_no:
-                                legal_ref = f"{statute_name} 제{article_no}조"
-                            else:
-                                legal_ref = statute_name
-                            
-                            if legal_ref and legal_ref not in seen_legal_refs:
-                                legal_refs.append(legal_ref)
-                                seen_legal_refs.add(legal_ref)
-                                self.logger.debug(f"[LEGAL_REFERENCES] Extracted from sources_detail: {legal_ref}")
-        
-            state["legal_references"] = legal_refs[:10]  # 최대 10개만
-        
-            # 디버깅: legal_references 생성 결과 로깅
-            retrieved_docs_count = len(state.get("retrieved_docs", []))
-            if len(legal_refs) > 0:
-                self.logger.info(f"[LEGAL_REFERENCES] Generated {len(legal_refs)} legal references: {legal_refs[:5]}")
-            else:
-                # statute_article 타입 문서 개수 확인
-                statute_articles = [doc for doc in state.get("retrieved_docs", []) if isinstance(doc, dict) and (doc.get("type") == "statute_article" or doc.get("source_type") == "statute_article" or doc.get("metadata", {}).get("source_type") == "statute_article")]
-                statute_articles_count = len(statute_articles)
-                if statute_articles_count > 0:
-                    # statute_article 문서의 필드 확인
-                    sample_doc = statute_articles[0]
-                    sample_metadata = sample_doc.get("metadata", {}) if isinstance(sample_doc.get("metadata"), dict) else {}
-                    statute_name = sample_doc.get("statute_name") or sample_doc.get("law_name") or sample_metadata.get("statute_name") or sample_metadata.get("law_name")
-                    self.logger.warning(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (statute_article: {statute_articles_count}개)")
-                    self.logger.debug(f"[LEGAL_REFERENCES] Sample statute_article doc: type={sample_doc.get('type')}, statute_name={statute_name}, article_no={sample_doc.get('article_no')}, metadata keys: {list(sample_metadata.keys())}")
-                else:
-                    self.logger.debug(f"[LEGAL_REFERENCES] No legal references generated from {retrieved_docs_count} retrieved_docs (no statute_article documents)")
-
-            # related_questions 추출 (여러 위치에서 찾기)
-            related_questions = []
-        
-            # 1순위: metadata에서 찾기 (여러 경로 확인)
-            metadata = state.get("metadata", {})
-            if isinstance(metadata, dict) and "related_questions" in metadata:
-                related_questions = metadata.get("related_questions", [])
-                if isinstance(related_questions, list) and len(related_questions) > 0:
-                    self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
-        
-            # 2순위: common.metadata에서 찾기
-            if not related_questions:
-                if "common" in state and isinstance(state.get("common"), dict):
-                    common_metadata = state["common"].get("metadata", {})
-                    if isinstance(common_metadata, dict) and "related_questions" in common_metadata:
-                        related_questions = common_metadata.get("related_questions", [])
-                        if isinstance(related_questions, list) and len(related_questions) > 0:
-                            self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in common.metadata")
-        
-            # 3순위: top-level에서 직접 찾기
-            if not related_questions and "related_questions" in state:
-                related_questions = state.get("related_questions", [])
-                if isinstance(related_questions, list) and len(related_questions) > 0:
-                    self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in top-level state")
-            else:
-                # phase_info에서 추출 시도
-                phase_info = state.get("phase_info", {})
-                self.logger.debug(f"[RELATED_QUESTIONS] Checking phase_info: {'present' if phase_info else 'missing'}, type: {type(phase_info)}")
-                if isinstance(phase_info, dict):
-                    self.logger.debug(f"[RELATED_QUESTIONS] phase_info keys: {list(phase_info.keys())}")
-                    if "phase2" in phase_info:
-                        phase2 = phase_info.get("phase2", {})
-                        self.logger.debug(f"[RELATED_QUESTIONS] phase2 keys: {list(phase2.keys()) if isinstance(phase2, dict) else 'N/A'}")
-                        if isinstance(phase2, dict) and "flow_tracking_info" in phase2:
-                            flow_tracking = phase2.get("flow_tracking_info", {})
-                            self.logger.debug(f"[RELATED_QUESTIONS] flow_tracking_info keys: {list(flow_tracking.keys()) if isinstance(flow_tracking, dict) else 'N/A'}")
-                            if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
-                                suggested_questions = flow_tracking.get("suggested_questions", [])
-                                self.logger.debug(f"[RELATED_QUESTIONS] suggested_questions: {len(suggested_questions) if isinstance(suggested_questions, list) else 'N/A'} items")
-                                if isinstance(suggested_questions, list) and len(suggested_questions) > 0:
-                                    # 각 항목이 딕셔너리인 경우 "question" 필드 추출
-                                    if isinstance(suggested_questions[0], dict):
-                                        related_questions = [q.get("question", "") for q in suggested_questions if q.get("question")]
-                                    else:
-                                        related_questions = [str(q) for q in suggested_questions if q]
-                                    self.logger.info(f"[RELATED_QUESTIONS] Extracted {len(related_questions)} related_questions from phase_info")
-                            else:
-                                self.logger.debug(f"[RELATED_QUESTIONS] suggested_questions not found in flow_tracking_info")
-                        else:
-                            self.logger.debug(f"[RELATED_QUESTIONS] flow_tracking_info not found in phase2")
-                    else:
-                        self.logger.debug(f"[RELATED_QUESTIONS] phase2 not found in phase_info")
-        
-            # related_questions가 없으면 템플릿 기반 생성 시도 (phase_info에 의존하지 않음)
-            if not related_questions:
-                try:
-                    query = state.get("query", "")
-                    answer = state.get("answer", "")
-                    self.logger.debug(f"[RELATED_QUESTIONS] Attempting to generate related_questions: query={query[:50] if query else 'None'}, answer={answer[:50] if answer else 'None'}")
-                    if query:
-                        # answer가 없어도 query만으로 관련 질문 생성 가능
-                        if not answer:
-                            answer = ""  # 빈 문자열로 설정
-                        # 간단한 템플릿 기반 관련 질문 생성
-                        related_questions = self._generate_related_questions(query, answer)
-                        if related_questions:
-                            self.logger.info(f"[RELATED_QUESTIONS] Generated {len(related_questions)} related_questions using template: {related_questions[:3]}")
-                    else:
-                        self.logger.debug(f"[RELATED_QUESTIONS] Cannot generate related_questions: query is empty")
-                except Exception as e:
-                    self.logger.warning(f"[RELATED_QUESTIONS] Failed to generate related_questions: {e}", exc_info=True)
-        
-            # related_questions를 metadata에 저장
-            if related_questions:
-                if not isinstance(metadata, dict):
-                    metadata = {}
-                metadata["related_questions"] = related_questions
-                state["metadata"] = metadata
-                self.logger.info(f"[RELATED_QUESTIONS] Saved {len(related_questions)} related_questions to metadata")
-            else:
-                self.logger.debug(f"[RELATED_QUESTIONS] No related_questions found (metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'N/A'})")
-
-            # 메타데이터 설정
             self.set_metadata(state, answer_value, keyword_coverage)
         except Exception as e:
             self.logger.error(f"[PREPARE_FINAL_RESPONSE_PART] Error in prepare_final_response_part: {e}", exc_info=True)
@@ -2503,35 +1205,1193 @@ class AnswerFormatterHandler:
             if "sources_detail" not in state:
                 state["sources_detail"] = []
     
+    def _recover_and_validate_answer(self, state: LegalWorkflowState) -> str:
+        """답변 복구 및 검증"""
+        answer_value = WorkflowUtils.normalize_answer(state.get("answer", ""))
+        
+        if not answer_value or len(answer_value.strip()) < 10:
+            raw_answer = state.get("answer", "")
+            self.logger.warning(
+                f"[PREPARE_FINAL_RESPONSE_PART] ⚠️ Answer is too short or empty: "
+                f"normalized_length={len(answer_value) if answer_value else 0}, "
+                f"raw_answer_length={len(raw_answer) if raw_answer else 0}, "
+                f"raw_answer_preview={repr(raw_answer[:100]) if raw_answer else 'None'}, "
+                f"state_answer_type={type(state.get('answer')).__name__ if state.get('answer') else 'None'}"
+            )
+            
+            answer_value = self._recover_answer_from_state(state, answer_value)
+            
+            if not answer_value or len(answer_value.strip()) < 10:
+                answer_value = self._generate_fallback_answer(state, answer_value)
+        
+        return answer_value
+    
+    def _recover_answer_from_state(self, state: LegalWorkflowState, current_answer: str) -> str:
+        """여러 위치에서 답변 복구 시도"""
+        answer_candidates = [
+            state.get("answer", ""),
+            state.get("common", {}).get("answer", "") if isinstance(state.get("common"), dict) else "",
+            state.get("metadata", {}).get("answer", "") if isinstance(state.get("metadata"), dict) else "",
+        ]
+        
+        for i, candidate in enumerate(answer_candidates):
+            if candidate and len(str(candidate).strip()) > len(current_answer):
+                recovered = WorkflowUtils.normalize_answer(str(candidate))
+                self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Recovered answer from candidate {i}: length={len(recovered)}")
+                return recovered
+        
+        return current_answer
+    
+    def _generate_fallback_answer(self, state: LegalWorkflowState, current_answer: str) -> str:
+        """Fallback 답변 생성"""
+        self.logger.warning(f"[PREPARE_FINAL_RESPONSE_PART] ⚠️ Answer recovery failed, attempting fallback answer generation")
+        
+        try:
+            if self.answer_generator:
+                fallback_answer = self.answer_generator.generate_fallback_answer(state)
+                if fallback_answer and len(fallback_answer.strip()) >= 10:
+                    answer_value = WorkflowUtils.normalize_answer(fallback_answer)
+                    state["answer"] = answer_value
+                    self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Generated fallback answer: length={len(answer_value)}")
+                    return answer_value
+            
+            return self._generate_simple_fallback_answer(state)
+        except Exception as e:
+            self.logger.error(f"[PREPARE_FINAL_RESPONSE_PART] Fallback answer generation failed: {e}")
+            query = state.get("query", "")
+            answer_value = f"질문 '{query}'에 대한 답변을 준비 중입니다."
+            state["answer"] = answer_value
+            return answer_value
+    
+    def _generate_simple_fallback_answer(self, state: LegalWorkflowState) -> str:
+        """retrieved_docs 기반 간단한 답변 생성"""
+        retrieved_docs_temp = self._restore_retrieved_docs_enhanced(state)
+        if not retrieved_docs_temp or len(retrieved_docs_temp) == 0:
+            query = state.get("query", "")
+            return f"질문 '{query}'에 대한 답변을 준비 중입니다."
+        
+        query = state.get("query", "")
+        doc_summaries = []
+        for doc in retrieved_docs_temp[:3]:
+            if isinstance(doc, dict):
+                content = doc.get("content", "") or doc.get("text", "")
+                if content and len(content) > 50:
+                    summary = content[:200] + "..." if len(content) > 200 else content
+                    doc_summaries.append(summary)
+        
+        if doc_summaries:
+            simple_answer = f"질문 '{query}'에 대한 답변을 준비했습니다.\n\n" + "\n\n".join(doc_summaries)
+        else:
+            simple_answer = f"질문 '{query}'에 대한 답변을 생성하는 중 문제가 발생했습니다. 검색된 문서 {len(retrieved_docs_temp)}개를 참고하여 답변을 준비했습니다."
+        
+        state["answer"] = simple_answer
+        self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Generated simple fallback answer: length={len(simple_answer)}")
+        return simple_answer
+    
+    def _generate_fallback_sources_detail_if_needed(
+        self,
+        final_sources_detail: List[Dict[str, Any]],
+        final_sources_list: List[str],
+        retrieved_docs: List[Dict[str, Any]],
+        answer_value: str
+    ) -> List[Dict[str, Any]]:
+        """sources_detail이 비어있을 때 fallback 생성"""
+        if final_sources_detail and len(final_sources_detail) > 0:
+            return final_sources_detail
+        
+        self.logger.warning(
+            f"[PREPARE_FINAL_RESPONSE_PART] ⚠️ sources_detail is empty: "
+            f"sources_count={len(final_sources_list)}, "
+            f"retrieved_docs_count={len(retrieved_docs)}, "
+            f"answer_length={len(answer_value) if answer_value else 0}"
+        )
+        
+        if not final_sources_list or len(final_sources_list) == 0:
+            return []
+        
+        self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Attempting to generate sources_detail from sources")
+        fallback_sources_detail = []
+        
+        for source_str in final_sources_list[:MAX_SOURCES_LIMIT]:
+            if not source_str or not isinstance(source_str, str) or len(source_str.strip()) == 0:
+                continue
+            
+            matching_doc = self._find_matching_doc_for_source(source_str, retrieved_docs)
+            detail_dict = self._create_source_detail_dict(source_str, matching_doc)
+            fallback_sources_detail.append(detail_dict)
+        
+        if fallback_sources_detail:
+            self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Generated {len(fallback_sources_detail)} fallback sources_detail from sources")
+        else:
+            self.logger.warning(f"[PREPARE_FINAL_RESPONSE_PART] Failed to generate fallback sources_detail")
+        
+        return fallback_sources_detail
+    
+    def _find_matching_doc_for_source(self, source_str: str, retrieved_docs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """retrieved_docs에서 source와 매칭되는 doc 찾기"""
+        for doc in retrieved_docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            doc_source = doc.get("source") or doc.get("title") or doc.get("doc_id") or ""
+            if source_str in str(doc_source) or str(doc_source) in source_str:
+                return doc
+        
+        return None
+    
+    def _create_source_detail_dict(self, source_str: str, matching_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """source detail 딕셔너리 생성"""
+        detail_dict = {
+            "name": source_str,
+            "type": matching_doc.get("type") or matching_doc.get("source_type") or "unknown" if matching_doc else "unknown",
+            "url": "",
+            "metadata": matching_doc.get("metadata", {}) if matching_doc else {}
+        }
+        
+        if matching_doc:
+            content = matching_doc.get("content") or matching_doc.get("text") or ""
+            if content:
+                detail_dict["content"] = content
+        
+        return detail_dict
+    
+    def _calculate_and_set_confidence(
+        self,
+        state: LegalWorkflowState,
+        answer_value: str,
+        sources_list: List[Dict[str, Any]],
+        query_type: str,
+        query_complexity: str,
+        needs_search: bool
+    ) -> float:
+        """신뢰도 계산 및 설정"""
+        calculated_confidence = None
+        if self.confidence_calculator and answer_value:
+            try:
+                confidence_info = self.confidence_calculator.calculate_confidence(
+                    answer=answer_value,
+                    sources=sources_list,
+                    question_type=query_type
+                )
+                calculated_confidence = confidence_info.confidence
+                
+                if not needs_search and not sources_list:
+                    if calculated_confidence < 0.60:
+                        calculated_confidence = max(calculated_confidence * 1.2, 0.60)
+                        self.logger.info(f"[CONFIDENCE CALC] Direct answer confidence adjusted: {calculated_confidence:.3f} (no search)")
+                    else:
+                        self.logger.info(f"[CONFIDENCE CALC] Direct answer confidence: {calculated_confidence:.3f} (no search)")
+                
+                self.logger.info(f"ConfidenceCalculator: confidence={calculated_confidence:.3f}, factors={confidence_info.factors}")
+            except Exception as e:
+                self.logger.warning(f"ConfidenceCalculator failed: {e}")
+
+        existing_confidence = state.get("structure_confidence") or state.get("confidence", 0.0)
+        final_confidence = calculated_confidence if calculated_confidence is not None else existing_confidence
+
+        search_quality_score = self._get_search_quality_score(state)
+        quality_boost = search_quality_score * 0.3
+
+        search_failed = state.get("search_failed", False)
+        if not needs_search:
+            if answer_value:
+                answer_length = len(answer_value)
+                if answer_length >= 200:
+                    base_min_confidence = 0.70
+                elif answer_length >= 100:
+                    base_min_confidence = 0.65
+                elif answer_length >= 50:
+                    base_min_confidence = 0.60
+                else:
+                    base_min_confidence = 0.55
+                self.logger.info(f"[CONFIDENCE CALC] Direct answer (no search): base_min_confidence={base_min_confidence:.3f}, answer_length={answer_length}")
+            else:
+                base_min_confidence = 0.50
+        elif search_failed:
+            base_min_confidence = 0.20 if answer_value else 0.10
+            self.logger.warning(f"[CONFIDENCE CALC] Search failed, using lower base confidence: {base_min_confidence}")
+        else:
+            base_min_confidence = 0.35 if (answer_value and sources_list and len(sources_list) >= 3 and search_quality_score > 0.3) else \
+                                   0.30 if (answer_value and sources_list) else \
+                                   0.25 if answer_value else 0.15
+
+        final_confidence = max(final_confidence, base_min_confidence) + quality_boost
+
+        keyword_coverage = self.calculate_keyword_coverage(state, answer_value)
+        keyword_boost = keyword_coverage * 0.3
+        adjusted_confidence = min(0.95, final_confidence + keyword_boost)
+
+        if sources_list:
+            source_count = len(sources_list)
+            if source_count >= 5:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.08)
+            elif source_count >= 3:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.05)
+            elif source_count >= 1:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.02)
+
+        if answer_value:
+            answer_length = len(answer_value)
+            if answer_length >= 500:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.05)
+            elif answer_length >= 200:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.03)
+            elif answer_length >= 100:
+                adjusted_confidence = min(0.95, adjusted_confidence + 0.01)
+
+        grounding_score = state.get("grounding_score")
+        source_coverage = state.get("source_coverage")
+
+        citation_count = 0
+        if answer_value:
+            citation_patterns = [
+                r'[가-힣]+법\s*제?\s*\d+\s*조',
+                r'\[법령:\s*[^\]]+\]',
+                r'제\d+조',
+            ]
+            unique_citations = set()
+            for pattern in citation_patterns:
+                matches = re.findall(pattern, answer_value)
+                for match in matches:
+                    unique_citations.add(match)
+            citation_count = len(unique_citations)
+
+        citation_boost = 0.0
+        if citation_count >= 3:
+            citation_boost = 0.10
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
+        elif citation_count >= 2:
+            citation_boost = 0.08
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citations found (+{citation_boost})")
+        elif citation_count >= 1:
+            citation_boost = 0.03
+            self.logger.info(f"[CONFIDENCE CALC] Citation boost applied: {citation_count} citation found (+{citation_boost})")
+
+        grounding_boost = 0.0
+        if grounding_score is not None:
+            grounding_boost = float(grounding_score) * 0.15
+            self.logger.info(f"[CONFIDENCE CALC] Grounding boost applied: grounding_score={grounding_score:.3f} (+{grounding_boost:.3f})")
+
+        adjusted_confidence_with_validation = min(0.95, adjusted_confidence + citation_boost + grounding_boost)
+
+        final_adjusted_confidence = self._calculate_consistent_confidence(
+            base_confidence=adjusted_confidence_with_validation,
+            query_type=query_type,
+            query_complexity=query_complexity or "moderate",
+            grounding_score=grounding_score if (needs_search or grounding_score is not None) else None,
+            source_coverage=source_coverage if (needs_search or source_coverage is not None) else None
+        )
+
+        state["confidence"] = final_adjusted_confidence
+
+        current_answer = state.get("answer", "")
+        if current_answer and isinstance(current_answer, str) and final_adjusted_confidence > 0:
+            state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
+
+        try:
+            state["answer"] = WorkflowUtils.normalize_answer(state.get("answer", ""))
+        except Exception:
+            state["answer"] = str(state.get("answer", ""))
+
+        if final_adjusted_confidence > 0 and state.get("answer"):
+            current_answer = state.get("answer", "")
+            if isinstance(current_answer, str):
+                state["answer"] = self.confidence_manager.replace_in_text(current_answer, final_adjusted_confidence)
+
+        return keyword_coverage
+
+    def _get_search_quality_score(self, state: LegalWorkflowState) -> float:
+        """search_quality 점수 추출"""
+        search_quality_dict = None
+        
+        try:
+            from core.workflow.state.state_helpers import get_field
+            search_quality_dict = get_field(state, "search_quality")
+            if not search_quality_dict or not isinstance(search_quality_dict, dict):
+                search_quality_dict = get_field(state, "search_quality_evaluation")
+        except Exception as e:
+            self.logger.debug(f"Failed to get search_quality via get_field: {e}")
+        
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            search_quality_dict = state.get("search_quality", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            if "search" in state and isinstance(state.get("search"), dict):
+                search_quality_dict = state["search"].get("search_quality", {}) or state["search"].get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            if "common" in state and isinstance(state.get("common"), dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    search_quality_dict = state["common"]["search"].get("search_quality", {}) or state["common"]["search"].get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            search_quality_dict = state.get("search_quality_evaluation", {})
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            metadata = state.get("metadata", {})
+            if isinstance(metadata, dict):
+                search_quality_dict = metadata.get("search_quality", {}) or metadata.get("search_quality_evaluation", {})
+        
+        if not search_quality_dict or not isinstance(search_quality_dict, dict):
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                    if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                        cached_quality = _global_search_results_cache["search"].get("search_quality", {}) or \
+                                        _global_search_results_cache["search"].get("search_quality_evaluation", {})
+                        if cached_quality and isinstance(cached_quality, dict):
+                            search_quality_dict = cached_quality
+                            self.logger.info(f"✅ [CONFIDENCE CALC] Found search_quality in global cache: {list(cached_quality.keys())}")
+            except Exception as e:
+                self.logger.debug(f"Failed to get search_quality from global cache: {e}")
+        
+        if search_quality_dict and isinstance(search_quality_dict, dict):
+            search_quality_score = search_quality_dict.get("overall_quality", 0.0)
+        elif search_quality_dict and isinstance(search_quality_dict, (int, float)):
+            search_quality_score = float(search_quality_dict)
+        else:
+            search_quality_score = 0.0
+        
+        self.logger.info(f"[CONFIDENCE CALC] search_quality_score: {search_quality_score:.3f}")
+        return search_quality_score
+
+    def _extract_and_process_sources(
+        self,
+        state: LegalWorkflowState
+    ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
+        """sources 추출 및 처리"""
+        final_sources_list = []
+        final_sources_detail = []
+        seen_sources = set()
+        legal_refs = []
+        seen_legal_refs = set()
+
+        try:
+            from ...services.unified_source_formatter import UnifiedSourceFormatter
+            from ...services.source_validator import SourceValidator
+            formatter = UnifiedSourceFormatter()
+            validator = SourceValidator()
+        except ImportError:
+            formatter = None
+            validator = None
+
+        retrieved_docs_list = self._restore_retrieved_docs_enhanced(state)
+        total_docs = len(retrieved_docs_list)
+        self.logger.info(f"[SOURCES] Processing {total_docs} retrieved_docs in prepare_final_response_part")
+
+        sources_created_count = 0
+        sources_failed_count = 0
+
+        for doc_index, doc in enumerate(retrieved_docs_list, 1):
+            if not isinstance(doc, dict):
+                self.logger.warning(f"[SOURCES] Doc {doc_index}/{total_docs} is not a dict, skipping")
+                sources_failed_count += 1
+                continue
+
+            source = None
+            source_created = False
+            source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+            doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
+        
+            if not source_type:
+                content_for_inference = doc.get("content", "") or doc.get("text", "")
+                if isinstance(content_for_inference, str) and len(content_for_inference) > 10:
+                    if re.search(r'[가-힣]+법\s*제\s*\d+\s*조', content_for_inference[:500]):
+                        source_type = "statute_article"
+                    elif re.search(r'(대법원|지방법원|고등법원|법원)\s*\d+[가-힣]+\s*\d+', content_for_inference[:500]) or \
+                         re.search(r'선고\s*\d+[가-힣]+\s*\d+', content_for_inference[:500]):
+                        source_type = "case_paragraph"
+                    elif re.search(r'(결정|의결)', content_for_inference[:500]):
+                        source_type = "decision_paragraph"
+                    elif re.search(r'(해석|의견|질의)', content_for_inference[:500]):
+                        source_type = "interpretation_paragraph"
+        
+            self.logger.info(f"[SOURCES] Processing doc {doc_index}/{total_docs}: type={source_type or 'none'}, doc_id={doc_id or 'none'}")
+
+            source_info_detail = None
+            formatter_error = None
+            if formatter and source_type:
+                try:
+                    merged_metadata = {**metadata}
+                    for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
+                               "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
+                        if key in doc:
+                            merged_metadata[key] = doc[key]
+                    
+                    source_info_detail = formatter.format_source(source_type, merged_metadata)
+                    
+                    if validator:
+                        validation_result = validator.validate_source(source_type, merged_metadata)
+                        source_info_detail.validation = validation_result
+                except Exception as e:
+                    formatter_error = str(e)
+                    self.logger.warning(f"[SOURCES_DETAIL] Error formatting source detail for doc {doc_index}/{total_docs}: {e}")
+
+            source = self._create_source_from_doc(doc, metadata, source_type, doc_id)
+            
+            if source:
+                source_str = str(source).strip() if isinstance(source, str) else str(source).strip()
+                source_lower = source_str.lower().strip()
+                invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+                
+                is_valid_source = False
+                if source_type and source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+                    if source_lower not in invalid_sources and len(source_lower) >= 1:
+                        is_valid_source = True
+                    elif source_lower not in invalid_sources:
+                        is_valid_source = True
+                else:
+                    if source_lower not in invalid_sources and len(source_lower) >= 1:
+                        is_valid_source = True
+                    elif any(ord(c) >= 0xAC00 and ord(c) <= 0xD7A3 for c in source_lower) or any(c.isdigit() for c in source_lower):
+                        is_valid_source = True
+                
+                if is_valid_source:
+                    source_key = f"{source_str}::{doc_id}" if doc_id else source_str
+                    if source_key not in seen_sources and source_str != "Unknown":
+                        final_sources_list.append(source_str)
+                        seen_sources.add(source_key)
+                        source_created = True
+                        sources_created_count += 1
+                        self.logger.info(f"[SOURCES] ✅ Successfully created source for doc {doc_index}/{total_docs}: {source_str}")
+                        
+                        if source_type == "statute_article":
+                            legal_ref = self._extract_legal_ref_from_source(source_str, doc, metadata)
+                            if legal_ref and legal_ref not in seen_legal_refs:
+                                legal_refs.append(legal_ref)
+                                seen_legal_refs.add(legal_ref)
+                        
+                        detail_dict = self._create_source_detail_dict(
+                            source_str, source_type, source_info_detail, doc, metadata, formatter_error
+                        )
+                        if detail_dict:
+                            final_sources_detail.append(detail_dict)
+            
+            if not source_created:
+                source = self._create_fallback_source(doc, metadata, source_type, doc_id, doc_index)
+                if source:
+                    source_str = str(source).strip()
+                    source_key = f"{source_str}::{doc_id}" if doc_id else source_str
+                    if source_key not in seen_sources:
+                        final_sources_list.append(source_str)
+                        seen_sources.add(source_key)
+                        source_created = True
+                        sources_created_count += 1
+                        self.logger.info(f"[SOURCES] ✅ Generated fallback source for doc {doc_index}/{total_docs}: {source_str}")
+                        
+                        detail_dict = self._create_source_detail_dict(
+                            source_str, source_type, None, doc, metadata, None
+                        )
+                        if detail_dict:
+                            final_sources_detail.append(detail_dict)
+            
+            if not source_created:
+                # 개선: final fallback으로 source가 생성되므로 sources_failed_count 증가하지 않음
+                # 더 구체적인 fallback source 생성 (doc_id, content 일부 등 활용)
+                content_preview = ""
+                if isinstance(doc, dict):
+                    content = doc.get("content", "") or doc.get("text", "")
+                    if content and isinstance(content, str) and len(content) > 10:
+                        content_preview = content[:50].strip().replace("\n", " ")
+                
+                if doc_id:
+                    final_fallback_source = f"문서 {doc_id}"
+                elif content_preview:
+                    final_fallback_source = f"문서 {doc_index}: {content_preview}"
+                else:
+                    final_fallback_source = f"문서 {doc_index}"
+                
+                # 중복 체크를 위해 더 구체적인 키 사용
+                source_key = f"{final_fallback_source}::{doc_id}::{doc_index}" if doc_id else f"{final_fallback_source}::{doc_index}"
+                
+                if source_key not in seen_sources:
+                    final_sources_list.append(final_fallback_source)
+                    seen_sources.add(source_key)
+                    source_created = True
+                    sources_created_count += 1
+                    self.logger.warning(f"[SOURCES] ⚠️ CRITICAL: Using final fallback for doc {doc_index}/{total_docs}: {final_fallback_source}")
+                    
+                    # final fallback으로도 detail 생성 보장
+                    detail_dict = self._create_source_detail_dict(
+                        final_fallback_source, source_type, None, doc, metadata, None
+                    )
+                    if detail_dict:
+                        final_sources_detail.append(detail_dict)
+                else:
+                    # 중복이지만 다른 형태로 source 생성 시도
+                    alt_fallback_source = f"참고문서 {doc_index}"
+                    alt_source_key = f"{alt_fallback_source}::{doc_id}::{doc_index}" if doc_id else f"{alt_fallback_source}::{doc_index}"
+                    if alt_source_key not in seen_sources:
+                        final_sources_list.append(alt_fallback_source)
+                        seen_sources.add(alt_source_key)
+                        source_created = True
+                        sources_created_count += 1
+                        self.logger.warning(f"[SOURCES] ⚠️ CRITICAL: Using alternative fallback for doc {doc_index}/{total_docs}: {alt_fallback_source}")
+                        
+                        detail_dict = self._create_source_detail_dict(
+                            alt_fallback_source, source_type, None, doc, metadata, None
+                        )
+                        if detail_dict:
+                            final_sources_detail.append(detail_dict)
+                    else:
+                        # 실제로 source가 생성되지 않은 경우에만 실패 카운트 증가
+                        sources_failed_count += 1
+                        self.logger.error(f"[SOURCES] ❌ Failed to create source for doc {doc_index}/{total_docs} (even with final fallback)")
+            
+            # 최종 검증: source_created가 False이면 강제로 source 생성
+            if not source_created:
+                forced_source = f"참고자료 {doc_index}"
+                forced_source_key = f"{forced_source}::{doc_id}::{doc_index}" if doc_id else f"{forced_source}::{doc_index}"
+                if forced_source_key not in seen_sources:
+                    final_sources_list.append(forced_source)
+                    seen_sources.add(forced_source_key)
+                    sources_created_count += 1
+                    self.logger.warning(f"[SOURCES] ⚠️ FORCED: Created source for doc {doc_index}/{total_docs}: {forced_source}")
+                    
+                    detail_dict = self._create_source_detail_dict(
+                        forced_source, source_type, None, doc, metadata, None
+                    )
+                    if detail_dict:
+                        final_sources_detail.append(detail_dict)
+                else:
+                    sources_failed_count += 1
+                    self.logger.error(f"[SOURCES] ❌ Failed to create source for doc {doc_index}/{total_docs} (even with forced creation)")
+
+        conversion_rate = (sources_created_count / total_docs * 100) if total_docs > 0 else 0
+        self.logger.info(f"[SOURCES] 📊 Conversion statistics: {sources_created_count}/{total_docs} docs converted ({conversion_rate:.1f}%), failed: {sources_failed_count}")
+
+        normalized_sources = self._normalize_sources(final_sources_list)
+        
+        # 개선: Legal References 추출 로깅 강화
+        legal_refs_from_sources = self.source_extractor.extract_legal_references_from_sources_detail(final_sources_detail)
+        legal_refs_from_docs = self.source_extractor.extract_legal_references_from_docs(retrieved_docs_list)
+        
+        self.logger.info(f"[LEGAL_REFS] Extracted {len(legal_refs_from_sources)} legal references from sources_detail")
+        self.logger.info(f"[LEGAL_REFS] Extracted {len(legal_refs_from_docs)} legal references from retrieved_docs")
+        
+        legal_refs.extend(legal_refs_from_sources)
+        legal_refs.extend(legal_refs_from_docs)
+        
+        # 중복 제거
+        seen_legal_refs_set = set(seen_legal_refs)
+        unique_legal_refs = []
+        for ref in legal_refs:
+            if ref not in seen_legal_refs_set:
+                unique_legal_refs.append(ref)
+                seen_legal_refs_set.add(ref)
+        
+        legal_refs = unique_legal_refs
+        self.logger.info(f"[LEGAL_REFS] Total unique legal references: {len(legal_refs)}")
+
+        def convert_numpy_types(obj):
+            import numpy as np
+            if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                return int(obj)
+            elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_numpy_types(item) for item in obj]
+            return obj
+
+        normalized_sources_clean = [convert_numpy_types(s) for s in normalized_sources[:MAX_SOURCES_LIMIT]]
+        final_sources_detail_clean = [convert_numpy_types(d) for d in final_sources_detail[:MAX_SOURCES_LIMIT]]
+
+        if "common" not in state:
+            state["common"] = {}
+        if not isinstance(state["common"], dict):
+            state["common"] = {}
+        state["common"]["sources"] = normalized_sources_clean
+
+        metadata = state.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["sources"] = normalized_sources_clean
+        metadata["sources_detail"] = final_sources_detail_clean
+        metadata["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+        state["metadata"] = metadata
+        
+        # 최상위 레벨에도 저장 (workflow_service에서 추출하기 위해)
+        state["sources_detail"] = final_sources_detail_clean
+        state["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+        
+        # common 그룹에도 저장
+        if "common" not in state:
+            state["common"] = {}
+        if not isinstance(state["common"], dict):
+            state["common"] = {}
+        state["common"]["sources_detail"] = final_sources_detail_clean
+        state["common"]["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+
+        self.logger.info(f"[SOURCES] ✅ Final sources saved to state: {len(normalized_sources_clean)} sources, {len(final_sources_detail_clean)} details, {len(legal_refs[:MAX_LEGAL_REFERENCES_LIMIT])} legal refs")
+
+        return normalized_sources_clean, final_sources_detail_clean, legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+
+    def _create_source_from_doc(
+        self,
+        doc: Dict[str, Any],
+        metadata: Dict[str, Any],
+        source_type: str,
+        doc_id: Optional[str]
+    ) -> Optional[str]:
+        """doc에서 source 생성"""
+        if source_type == "statute_article":
+            statute_name = (
+                doc.get("statute_name") or
+                doc.get("law_name") or
+                metadata.get("statute_name") or
+                metadata.get("law_name")
+            )
+            if statute_name:
+                article_no = (
+                    doc.get("article_no") or
+                    doc.get("article_number") or
+                    metadata.get("article_no") or
+                    metadata.get("article_number")
+                )
+                clause_no = doc.get("clause_no") or metadata.get("clause_no")
+                item_no = doc.get("item_no") or metadata.get("item_no")
+                
+                source_parts = [statute_name]
+                if article_no:
+                    article_no_str = str(article_no) if article_no else ""
+                    if article_no_str.startswith("제") and article_no_str.endswith("조"):
+                        source_parts.append(article_no_str)
+                    else:
+                        article_no_clean = article_no_str.strip()
+                        if article_no_clean:
+                            source_parts.append(f"제{article_no_clean}조")
+                if clause_no:
+                    source_parts.append(f"제{clause_no}항")
+                if item_no:
+                    source_parts.append(f"제{item_no}호")
+                return " ".join(source_parts)
+        
+        elif source_type == "case_paragraph":
+            court = doc.get("court") or metadata.get("court") or metadata.get("court_name") or metadata.get("court_type")
+            casenames = doc.get("casenames") or metadata.get("casenames") or metadata.get("case_name") or metadata.get("title")
+            if court or casenames or doc_id:
+                source_parts = []
+                if court:
+                    source_parts.append(court)
+                if casenames:
+                    source_parts.append(casenames)
+                if doc_id:
+                    source_parts.append(f"({doc_id})")
+                if not court and not casenames and doc_id:
+                    source_parts.insert(0, "판례")
+                return " ".join(source_parts) if source_parts else None
+        
+        elif source_type == "decision_paragraph":
+            org = doc.get("org") or metadata.get("org") or metadata.get("org_name") or metadata.get("organization")
+            if org or doc_id:
+                source_parts = []
+                if org:
+                    source_parts.append(org)
+                if doc_id:
+                    source_parts.append(f"({doc_id})")
+                if not org and doc_id:
+                    source_parts.insert(0, "결정례")
+                return " ".join(source_parts) if source_parts else None
+        
+        elif source_type == "interpretation_paragraph":
+            org = doc.get("org") or metadata.get("org")
+            title = doc.get("title") or metadata.get("title")
+            if org or title:
+                source_parts = []
+                if org:
+                    source_parts.append(org)
+                if title:
+                    source_parts.append(title)
+                return " ".join(source_parts)
+        
+        source_raw = (
+            doc.get("statute_name") or
+            doc.get("law_name") or
+            doc.get("source_name") or
+            doc.get("source")
+        )
+        
+        if source_raw and isinstance(source_raw, str):
+            source_lower = source_raw.lower().strip()
+            invalid_sources = ["semantic", "keyword", "unknown", "fts", "vector", "search", "text2sql", ""]
+            if source_lower not in invalid_sources and len(source_lower) >= 1:
+                return source_raw.strip()
+        
+        source = (
+            metadata.get("statute_name") or
+            metadata.get("statute_abbrv") or
+            metadata.get("law_name") or
+            metadata.get("court") or
+            metadata.get("org") or
+            metadata.get("title")
+        )
+        
+        if not source:
+            content = doc.get("content", "") or doc.get("text", "")
+            if isinstance(content, str) and content:
+                law_pattern = re.search(r'([가-힣]+법)\s*(?:제\d+조)?', content[:200])
+                if law_pattern:
+                    return law_pattern.group(1)
+        
+        return source
+
+    def _create_fallback_source(
+        self,
+        doc: Dict[str, Any],
+        metadata: Dict[str, Any],
+        source_type: Optional[str],
+        doc_id: Optional[str],
+        doc_index: int
+    ) -> Optional[str]:
+        """fallback source 생성"""
+        if source_type == "case_paragraph" and doc_id:
+            return f"판례 ({doc_id})"
+        elif source_type == "decision_paragraph" and doc_id:
+            return f"결정례 ({doc_id})"
+        elif source_type == "interpretation_paragraph" and doc_id:
+            return f"해석례 ({doc_id})"
+        
+        title = doc.get("title") or metadata.get("title") or metadata.get("case_name") or metadata.get("casenames")
+        content = doc.get("content", "") or doc.get("text", "")
+        
+        if doc_id:
+            return f"문서 ({doc_id})"
+        elif title and isinstance(title, str) and len(title.strip()) >= 2:
+            return title.strip()
+        elif content and isinstance(content, str):
+            extracted = self._extract_source_from_content(content)
+            if extracted:
+                return extracted
+            return self._generate_hash_based_source(content, doc_index)
+        else:
+            return f"문서 {doc_index}"
+
+    def _create_source_detail_dict(
+        self,
+        source_str: str,
+        source_type: Optional[str],
+        source_info_detail: Any,
+        doc: Dict[str, Any],
+        metadata: Dict[str, Any],
+        formatter_error: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """source_detail 딕셔너리 생성"""
+        if source_info_detail:
+            detail_dict = {
+                "name": source_info_detail.name,
+                "type": source_info_detail.type,
+                "url": source_info_detail.url or "",
+                "metadata": source_info_detail.metadata or {}
+            }
+            
+            if source_info_detail.metadata:
+                meta = source_info_detail.metadata
+                if source_type == "statute_article":
+                    if meta.get("statute_name"):
+                        detail_dict["statute_name"] = meta["statute_name"]
+                    if meta.get("article_no"):
+                        detail_dict["article_no"] = meta["article_no"]
+                elif source_type == "case_paragraph":
+                    if meta.get("doc_id"):
+                        detail_dict["case_number"] = meta["doc_id"]
+                    if meta.get("court"):
+                        detail_dict["court"] = meta["court"]
+                elif source_type == "decision_paragraph":
+                    if meta.get("doc_id"):
+                        detail_dict["decision_number"] = meta["doc_id"]
+                    if meta.get("org"):
+                        detail_dict["org"] = meta["org"]
+                elif source_type == "interpretation_paragraph":
+                    if meta.get("doc_id"):
+                        detail_dict["interpretation_number"] = meta["doc_id"]
+                    if meta.get("org"):
+                        detail_dict["org"] = meta["org"]
+            
+            content = doc.get("content") or doc.get("text") or ""
+            if content:
+                detail_dict["content"] = content
+            
+            return detail_dict
+        else:
+            detail_dict = {
+                "name": source_str,
+                "type": source_type or "unknown",
+                "url": "",
+                "metadata": metadata
+            }
+            
+            if source_type == "statute_article":
+                statute_name = doc.get("statute_name") or doc.get("law_name") or metadata.get("statute_name") or metadata.get("law_name")
+                article_no = doc.get("article_no") or doc.get("article_number") or metadata.get("article_no") or metadata.get("article_number")
+                if statute_name:
+                    detail_dict["statute_name"] = statute_name
+                if article_no:
+                    detail_dict["article_no"] = article_no
+            elif source_type == "case_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
+                if doc_id:
+                    detail_dict["case_number"] = doc_id
+                if doc.get("court") or metadata.get("court"):
+                    detail_dict["court"] = doc.get("court") or metadata.get("court")
+            elif source_type == "decision_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id")
+                if doc_id:
+                    detail_dict["decision_number"] = doc_id
+                if doc.get("org") or metadata.get("org"):
+                    detail_dict["org"] = doc.get("org") or metadata.get("org")
+            
+            content = doc.get("content") or doc.get("text") or ""
+            if content:
+                detail_dict["content"] = content
+            
+            return detail_dict
+
+    def _extract_legal_ref_from_source(
+        self,
+        source_str: str,
+        doc: Dict[str, Any],
+        metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """source_str에서 legal_reference 추출"""
+        statute_pattern = r'([가-힣]+법)\s*(?:제\s*(\d+)\s*조)?'
+        match = re.search(statute_pattern, source_str)
+        if match:
+            statute_name = match.group(1)
+            article_no = match.group(2)
+            if article_no:
+                return f"{statute_name} 제{article_no}조"
+            else:
+                return statute_name
+        
+        statute_name = (
+            doc.get("statute_name") or
+            doc.get("law_name") or
+            metadata.get("statute_name") or
+            metadata.get("law_name")
+        )
+        article_no = (
+            doc.get("article_no") or
+            doc.get("article_number") or
+            metadata.get("article_no") or
+            metadata.get("article_number")
+        )
+        if statute_name:
+            if article_no:
+                return f"{statute_name} 제{article_no}조"
+            else:
+                return statute_name
+        
+        return None
+
+    def _normalize_sources(self, sources_list: List[str]) -> List[str]:
+        """sources 정규화"""
+        normalized_sources = []
+        for source in sources_list[:MAX_SOURCES_LIMIT]:
+            try:
+                if isinstance(source, dict):
+                    source_str = (source.get("source") or 
+                                 source.get("name") or 
+                                 source.get("title") or 
+                                 str(source.get("type", "Unknown")))
+                    if source_str and isinstance(source_str, str) and source_str.strip():
+                        normalized_sources.append(source_str.strip())
+                elif isinstance(source, str):
+                    if source.strip():
+                        normalized_sources.append(source.strip())
+                else:
+                    source_str = str(source)
+                    if source_str.strip():
+                        normalized_sources.append(source_str.strip())
+            except Exception as e:
+                self.logger.warning(f"[SOURCES] Error normalizing source: {e}")
+                continue
+        
+        normalized_sources = [s for s in normalized_sources if s and len(s.strip()) > 0]
+        seen_normalized = set()
+        normalized_sources_unique = []
+        for s in normalized_sources:
+            if s not in seen_normalized:
+                normalized_sources_unique.append(s)
+                seen_normalized.add(s)
+        
+        return normalized_sources_unique
+
+    def _extract_and_store_related_questions(self, state: LegalWorkflowState) -> None:
+        """related_questions 추출 및 저장"""
+        related_questions = []
+        
+        metadata = state.get("metadata", {})
+        if isinstance(metadata, dict) and "related_questions" in metadata:
+            related_questions = metadata.get("related_questions", [])
+            if isinstance(related_questions, list) and len(related_questions) > 0:
+                self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in metadata")
+        
+        if not related_questions:
+            if "common" in state and isinstance(state.get("common"), dict):
+                common_metadata = state["common"].get("metadata", {})
+                if isinstance(common_metadata, dict) and "related_questions" in common_metadata:
+                    related_questions = common_metadata.get("related_questions", [])
+                    if isinstance(related_questions, list) and len(related_questions) > 0:
+                        self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in common.metadata")
+        
+        if not related_questions and "related_questions" in state:
+            related_questions = state.get("related_questions", [])
+            if isinstance(related_questions, list) and len(related_questions) > 0:
+                self.logger.info(f"[RELATED_QUESTIONS] Found {len(related_questions)} related_questions in top-level state")
+        else:
+            phase_info = state.get("phase_info", {})
+            if isinstance(phase_info, dict) and "phase2" in phase_info:
+                phase2 = phase_info.get("phase2", {})
+                if isinstance(phase2, dict) and "flow_tracking_info" in phase2:
+                    flow_tracking = phase2.get("flow_tracking_info", {})
+                    if isinstance(flow_tracking, dict) and "suggested_questions" in flow_tracking:
+                        suggested_questions = flow_tracking.get("suggested_questions", [])
+                        if isinstance(suggested_questions, list) and len(suggested_questions) > 0:
+                            if isinstance(suggested_questions[0], dict):
+                                related_questions = [q.get("question", "") for q in suggested_questions if q.get("question")]
+                            else:
+                                related_questions = [str(q) for q in suggested_questions if q]
+                            self.logger.info(f"[RELATED_QUESTIONS] Extracted {len(related_questions)} related_questions from phase_info")
+        
+        if not related_questions:
+            try:
+                query = state.get("query", "")
+                answer = state.get("answer", "")
+                if query:
+                    related_questions = self._generate_related_questions(query, answer or "")
+                    if related_questions:
+                        self.logger.info(f"[RELATED_QUESTIONS] Generated {len(related_questions)} related_questions using template: {related_questions[:3]}")
+            except Exception as e:
+                self.logger.warning(f"[RELATED_QUESTIONS] Failed to generate related_questions: {e}", exc_info=True)
+        
+        if related_questions:
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["related_questions"] = related_questions
+            state["metadata"] = metadata
+            # 성능 최적화: 여러 위치에 저장하여 손실 방지
+            state["related_questions"] = related_questions
+            if "common" not in state:
+                state["common"] = {}
+            if "metadata" not in state["common"]:
+                state["common"]["metadata"] = {}
+            state["common"]["metadata"]["related_questions"] = related_questions
+            self.logger.info(f"[RELATED_QUESTIONS] Saved {len(related_questions)} related_questions to multiple locations: {related_questions[:3]}")
+        else:
+            self.logger.warning("[RELATED_QUESTIONS] No related_questions found after all attempts")
+
+    def _restore_retrieved_docs_enhanced(self, state: LegalWorkflowState) -> List[Dict[str, Any]]:
+        """
+        retrieved_docs를 여러 위치에서 복구 (공통 로직)
+        
+        Returns:
+            복구된 retrieved_docs 리스트
+        """
+        retrieved_docs_list = state.get("retrieved_docs", [])
+        restore_locations = []
+        
+        if not retrieved_docs_list:
+            # 1. search 그룹에서 확인
+            if "search" in state and isinstance(state["search"], dict):
+                retrieved_docs_list = state["search"].get("retrieved_docs", [])
+                if retrieved_docs_list:
+                    restore_locations.append("search.retrieved_docs")
+        
+        if not retrieved_docs_list:
+            # 2. common.search 그룹에서 확인
+            if "common" in state and isinstance(state["common"], dict):
+                if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                    retrieved_docs_list = state["common"]["search"].get("retrieved_docs", [])
+                    if retrieved_docs_list:
+                        restore_locations.append("common.search.retrieved_docs")
+        
+        if not retrieved_docs_list:
+            # 3. merged_documents에서 확인
+            merged_docs = state.get("merged_documents", [])
+            if merged_docs:
+                retrieved_docs_list = merged_docs
+                restore_locations.append("merged_documents")
+        
+        if not retrieved_docs_list:
+            # 4. search.merged_documents에서 확인
+            if "search" in state and isinstance(state["search"], dict):
+                merged_docs = state["search"].get("merged_documents", [])
+                if merged_docs:
+                    retrieved_docs_list = merged_docs
+                    restore_locations.append("search.merged_documents")
+        
+        if not retrieved_docs_list:
+            # 5. state_helpers의 get_retrieved_docs 사용
+            try:
+                from core.agents.state_helpers import get_retrieved_docs
+                retrieved_docs_list = get_retrieved_docs(state)
+                if retrieved_docs_list:
+                    restore_locations.append("state_helpers.get_retrieved_docs")
+            except (ImportError, AttributeError) as e:
+                self.logger.debug(f"[SOURCES] Could not use state_helpers.get_retrieved_docs: {e}")
+        
+        if not retrieved_docs_list:
+            # 6. global cache에서 확인 (여러 경로)
+            try:
+                from core.agents.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache:
+                    # 여러 경로에서 시도
+                    cached_docs = (
+                        _global_search_results_cache.get("retrieved_docs", []) or
+                        _global_search_results_cache.get("search", {}).get("retrieved_docs", []) if isinstance(_global_search_results_cache.get("search"), dict) else [] or
+                        _global_search_results_cache.get("common", {}).get("search", {}).get("retrieved_docs", []) if isinstance(_global_search_results_cache.get("common"), dict) and isinstance(_global_search_results_cache["common"].get("search"), dict) else []
+                    )
+                    if cached_docs:
+                        retrieved_docs_list = cached_docs
+                        restore_locations.append("global_cache")
+            except (ImportError, AttributeError) as e:
+                self.logger.debug(f"[SOURCES] Could not access global cache: {e}")
+        
+        # 복구된 retrieved_docs를 state에 저장 (표준화)
+        if retrieved_docs_list:
+            # 표준화: 항상 state["retrieved_docs"]에 저장
+            state["retrieved_docs"] = retrieved_docs_list
+            # 다른 위치에도 저장하여 일관성 보장
+            if "search" not in state:
+                state["search"] = {}
+            state["search"]["retrieved_docs"] = retrieved_docs_list
+            if "common" not in state:
+                state["common"] = {}
+            if "search" not in state["common"]:
+                state["common"]["search"] = {}
+            state["common"]["search"]["retrieved_docs"] = retrieved_docs_list
+            
+            self.logger.info(f"[SOURCES] ✅ Restored {len(retrieved_docs_list)} retrieved_docs from: {', '.join(restore_locations) if restore_locations else 'top-level'}")
+        else:
+            self.logger.warning(f"[SOURCES] ⚠️ No retrieved_docs found (state keys: {list(state.keys())[:10]})")
+        
+        return retrieved_docs_list
+    
+    def _restore_query_type_enhanced(self, state: LegalWorkflowState) -> str:
+        """
+        query_type을 여러 위치에서 복구 (공통 로직)
+        
+        Returns:
+            복구된 query_type 문자열
+        """
+        query_type = state.get("query_type", "")
+        if not query_type:
+            # classification 그룹에서 확인
+            if "classification" in state and isinstance(state["classification"], dict):
+                query_type = state["classification"].get("query_type", "")
+            # common.classification 그룹에서 확인
+            if not query_type and "common" in state and isinstance(state["common"], dict):
+                if "classification" in state["common"] and isinstance(state["common"]["classification"], dict):
+                    query_type = state["common"]["classification"].get("query_type", "")
+            # metadata에서 확인
+            if not query_type:
+                metadata = state.get("metadata", {})
+                if isinstance(metadata, dict):
+                    query_type = metadata.get("query_type", "")
+            # global cache에서 확인
+            if not query_type:
+                try:
+                    from core.agents.node_wrappers import _global_search_results_cache
+                    if _global_search_results_cache:
+                        query_type = (
+                            _global_search_results_cache.get("common", {}).get("classification", {}).get("query_type", "") or
+                            _global_search_results_cache.get("metadata", {}).get("query_type", "") or
+                            _global_search_results_cache.get("classification", {}).get("query_type", "") or
+                            _global_search_results_cache.get("query_type", "") or
+                            ""
+                        )
+                except (ImportError, AttributeError):
+                    pass
+            # 기본값 설정
+            if not query_type:
+                query_type = "general_question"
+                self.logger.warning(f"[QUERY_TYPE] ⚠️ query_type not found, using default: {query_type}")
+            else:
+                self.logger.info(f"[QUERY_TYPE] ✅ Restored query_type: {query_type}")
+                # state에 저장
+                state["query_type"] = query_type
+        
+        return query_type
+    
     def _generate_related_questions(self, query: str, answer: str) -> List[str]:
-        """관련 질문 생성 (템플릿 기반)"""
+        """관련 질문 생성 (템플릿 기반 - 개선: 더 다양하고 관련성 높은 질문 생성)"""
         related_questions = []
         
         # 질문에서 핵심 키워드 추출
         query_lower = query.lower()
         
+        # 답변에서 핵심 키워드 추출 (개선)
+        answer_keywords = []
+        if answer:
+            # 법령 조문 추출
+            law_pattern = r'([가-힣]+법)\s*제?\s*(\d+)\s*조'
+            law_matches = re.findall(law_pattern, answer)
+            for law_name, article_no in law_matches[:3]:
+                answer_keywords.append(f"{law_name} 제{article_no}조")
+        
         # 법령 관련 질문 패턴
         if any(keyword in query_lower for keyword in ["법령", "법률", "조문", "조", "항"]):
-            related_questions.append(f"{query}에 대한 다른 법령도 확인해볼까요?")
-            related_questions.append(f"{query}와 관련된 판례도 찾아볼까요?")
+            if answer_keywords:
+                for law_ref in answer_keywords[:2]:
+                    related_questions.append(f"{law_ref}의 구체적인 내용은 무엇인가요?")
+                    related_questions.append(f"{law_ref}와 관련된 판례는 무엇이 있나요?")
+            else:
+                related_questions.append(f"{query}에 대한 다른 법령도 확인해볼까요?")
+                related_questions.append(f"{query}와 관련된 판례도 찾아볼까요?")
+            related_questions.append(f"{query}의 적용 요건은 무엇인가요?")
+            related_questions.append(f"{query}와 관련된 실무 사례는 무엇이 있나요?")
         
         # 판례 관련 질문 패턴
         elif any(keyword in query_lower for keyword in ["판례", "판결", "사건", "대법원"]):
             related_questions.append(f"{query}와 유사한 사건의 판례도 찾아볼까요?")
             related_questions.append(f"{query}에 대한 법령 조문도 확인해볼까요?")
+            related_questions.append(f"{query}의 판결 요지는 무엇인가요?")
+            related_questions.append(f"{query}와 관련된 다른 판례는 무엇이 있나요?")
         
         # 손해배상 관련 질문 패턴
         elif any(keyword in query_lower for keyword in ["손해배상", "배상", "손해", "청구"]):
             related_questions.append("손해배상 청구의 절차는 어떻게 되나요?")
             related_questions.append("손해배상의 범위는 어떻게 결정되나요?")
             related_questions.append("손해배상과 관련된 판례도 찾아볼까요?")
+            related_questions.append("손해배상 청구 시 필요한 증거는 무엇인가요?")
+            related_questions.append("손해배상의 소멸시효는 어떻게 되나요?")
         
-        # 일반적인 관련 질문
+        # 전세금 관련 질문 패턴
+        elif any(keyword in query_lower for keyword in ["전세금", "전세", "보증금", "반환"]):
+            related_questions.append("전세금 반환 보증의 가입 조건은 어떻게 되나요?")
+            related_questions.append("전세금 반환 보증을 통해 보증받을 수 있는 최대 금액은 얼마인가요?")
+            related_questions.append("전세 계약 만료 시 전세금을 돌려받지 못했을 때, 전세금 반환 보증을 통해 어떻게 보상받을 수 있나요?")
+            related_questions.append("전세금 반환 보증 가입 시 필요한 서류는 무엇인가요?")
+            related_questions.append("전세금 반환 보증의 종류에는 어떤 것들이 있나요?")
+        
+        # 임대차 관련 질문 패턴
+        elif any(keyword in query_lower for keyword in ["임대차", "임대", "계약", "해지"]):
+            related_questions.append("임대차 계약 해지 시 주의사항은 무엇인가요?")
+            related_questions.append("임대차 계약 해지 시 보증금 반환은 어떻게 되나요?")
+            related_questions.append("임대차 계약 해지와 관련된 판례는 무엇이 있나요?")
+            related_questions.append("임대차 계약 해지 시 손해배상은 어떻게 되나요?")
+            related_questions.append("임대차 계약 해지 시 필요한 절차는 무엇인가요?")
+        
+        # 일반적인 관련 질문 (개선: 더 구체적인 질문)
         if len(related_questions) < 3:
-            related_questions.append(f"{query}에 대한 더 자세한 정보가 필요하신가요?")
-            related_questions.append(f"{query}와 관련된 다른 질문이 있으신가요?")
+            # query에서 핵심 키워드 추출
+            core_keywords = []
+            for keyword in ["법령", "조문", "판례", "계약", "손해", "보증", "반환", "해지", "청구"]:
+                if keyword in query:
+                    core_keywords.append(keyword)
+            
+            if core_keywords:
+                keyword_str = core_keywords[0]
+                related_questions.append(f"{keyword_str}와 관련된 다른 질문이 있으신가요?")
+                related_questions.append(f"{keyword_str}에 대한 더 자세한 정보가 필요하신가요?")
+                related_questions.append(f"{keyword_str}의 실무 적용 사례는 무엇이 있나요?")
+            else:
+                related_questions.append(f"{query}에 대한 더 자세한 정보가 필요하신가요?")
+                related_questions.append(f"{query}와 관련된 다른 질문이 있으신가요?")
+                related_questions.append(f"{query}의 실무 적용 사례는 무엇이 있나요?")
         
-        return related_questions[:5]
+        return related_questions[:MAX_RELATED_QUESTIONS_LIMIT]
 
     def format_and_prepare_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅 및 최종 준비 (format_answer + prepare_final_response)"""
@@ -2558,25 +2418,29 @@ class AnswerFormatterHandler:
             sources_after = len(state.get("sources", []))
             self.logger.info(f"[FORMAT_AND_PREPARE_FINAL] prepare_final_response_part completed: sources {sources_before} -> {sources_after}, legal_references={len(state.get('legal_references', []))}")
 
-            # Part 3: 최종 후처리 (리팩토링된 메서드 사용)
+            # Part 3: 최종 후처리 (성능 최적화: 필수 작업만 수행)
             final_answer = state.get("answer", "")
-            if final_answer:
+            if final_answer and len(final_answer) > 100:  # 성능 최적화: 짧은 답변은 후처리 스킵
                 import re
 
                 # 중복 헤더 제거 (리팩토링된 메서드 사용)
                 final_answer = self.answer_cleaner.remove_duplicate_headers(final_answer)
 
-                # 연속된 빈 줄 정리 (3개 이상 -> 2개)
-                final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
+                # 연속된 빈 줄 정리 (3개 이상 -> 2개) - 성능 최적화: 한 번만 수행
+                if '\n\n\n' in final_answer:
+                    final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
 
-                # 공백 없는 텍스트 수정 (예: "민사법상계약해지의요건" -> "민사법상 계약 해지의 요건")
-                # 한글 + 영문/숫자 사이에 공백 추가
-                final_answer = re.sub(r'([가-힣])([A-Za-z0-9])', r'\1 \2', final_answer)
-                final_answer = re.sub(r'([A-Za-z0-9])([가-힣])', r'\1 \2', final_answer)
-                # 특정 패턴 수정 (법령명 + 조항)
-                final_answer = re.sub(r'([가-힣]+법)([가-힣])', r'\1 \2', final_answer)
-                # "의", "및", "와", "과" 앞뒤 공백 보장
-                final_answer = re.sub(r'([가-힣])(의|및|와|과|에서|으로|에게)([가-힣])', r'\1 \2 \3', final_answer)
+                # 공백 없는 텍스트 수정 (성능 최적화: 패턴이 있을 때만 수행)
+                # 한글 + 영문/숫자 사이에 공백 추가 (패턴이 있을 때만)
+                if re.search(r'[가-힣][A-Za-z0-9]', final_answer) or re.search(r'[A-Za-z0-9][가-힣]', final_answer):
+                    final_answer = re.sub(r'([가-힣])([A-Za-z0-9])', r'\1 \2', final_answer)
+                    final_answer = re.sub(r'([A-Za-z0-9])([가-힣])', r'\1 \2', final_answer)
+                # 특정 패턴 수정 (법령명 + 조항) - 패턴이 있을 때만
+                if re.search(r'[가-힣]+법[가-힣]', final_answer):
+                    final_answer = re.sub(r'([가-힣]+법)([가-힣])', r'\1 \2', final_answer)
+                # "의", "및", "와", "과" 앞뒤 공백 보장 - 패턴이 있을 때만
+                if re.search(r'[가-힣](의|및|와|과|에서|으로|에게)[가-힣]', final_answer):
+                    final_answer = re.sub(r'([가-힣])(의|및|와|과|에서|으로|에게)([가-힣])', r'\1 \2 \3', final_answer)
 
                 # 답변 내부의 하드코딩된 신뢰도 값 교체 (리팩토링된 메서드 사용)
                 current_confidence = state.get("confidence", 0.0)
@@ -2591,7 +2455,7 @@ class AnswerFormatterHandler:
                                    s.lower() not in ["semantic", "keyword", "unknown", "fts", "vector", ""]]
 
                     if valid_sources:
-                        sources_text = "\n".join([f"- {source}" for source in valid_sources[:5]])
+                        sources_text = "\n".join([f"- {source}" for source in valid_sources[:MAX_SOURCES_DISPLAY_LIMIT]])
                         # "참고자료" 섹션 교체
                         final_answer = re.sub(
                             r'###\s*📚\s*참고자료.*?관련 정보를 찾을 수 없습니다\.',
@@ -2730,8 +2594,8 @@ class AnswerFormatterHandler:
                     # direct_answer 노드: 검색 없이 직접 답변 생성
                     # grounding_score는 None으로 설정하여 신뢰도 계산 시 패널티 방지
                     self.logger.info(
-                        f"답변 검증 결과: grounding_score=N/A (direct_answer, no search), "
-                        f"unverified_count=0"
+                        "답변 검증 결과: grounding_score=N/A (direct_answer, no search), "
+                        "unverified_count=0"
                     )
                     state["grounding_score"] = None  # None으로 설정하여 패널티 방지
                     state["source_coverage"] = None  # None으로 설정하여 패널티 방지
