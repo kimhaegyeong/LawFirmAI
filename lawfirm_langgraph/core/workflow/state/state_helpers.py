@@ -287,7 +287,8 @@ def get_control(state: LegalWorkflowState) -> ControlState:
 
 def set_control(state: LegalWorkflowState, data: Dict[str, Any]):
     """제어 상태 설정"""
-    if state["control"] is None:
+    # 개선: state에 "control" 키가 없을 때 처리
+    if "control" not in state or state.get("control") is None:
         from .modular_states import create_default_control
         state["control"] = create_default_control()
 

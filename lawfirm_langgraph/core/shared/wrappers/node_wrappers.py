@@ -372,6 +372,54 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 else:
                     working_state = converted_state
 
+                # 중요: state_reduction 후에도 query_type과 retrieved_docs 보존
+                # State reduction으로 인한 손실 방지
+                preserved_query_type = (
+                    converted_state.get("query_type") or
+                    (converted_state.get("metadata", {}).get("query_type") if isinstance(converted_state.get("metadata"), dict) else None) or
+                    (converted_state.get("common", {}).get("classification", {}).get("query_type") if isinstance(converted_state.get("common"), dict) and isinstance(converted_state["common"].get("classification"), dict) else None) or
+                    (converted_state.get("classification", {}).get("query_type") if isinstance(converted_state.get("classification"), dict) else None)
+                )
+                preserved_retrieved_docs = (
+                    converted_state.get("retrieved_docs") or
+                    (converted_state.get("search", {}).get("retrieved_docs") if isinstance(converted_state.get("search"), dict) else None) or
+                    (converted_state.get("common", {}).get("search", {}).get("retrieved_docs") if isinstance(converted_state.get("common"), dict) and isinstance(converted_state["common"].get("search"), dict) else None) or
+                    (converted_state.get("metadata", {}).get("retrieved_docs") if isinstance(converted_state.get("metadata"), dict) else None)
+                )
+                
+                # working_state에 보존된 필드 복원
+                if preserved_query_type and not working_state.get("query_type"):
+                    working_state["query_type"] = preserved_query_type
+                    if "metadata" not in working_state:
+                        working_state["metadata"] = {}
+                    if not isinstance(working_state["metadata"], dict):
+                        working_state["metadata"] = {}
+                    working_state["metadata"]["query_type"] = preserved_query_type
+                    if "common" not in working_state:
+                        working_state["common"] = {}
+                    if not isinstance(working_state["common"], dict):
+                        working_state["common"] = {}
+                    if "classification" not in working_state["common"]:
+                        working_state["common"]["classification"] = {}
+                    working_state["common"]["classification"]["query_type"] = preserved_query_type
+                    logger.debug(f"Preserved query_type={preserved_query_type} for node {node_name} after reduction")
+                
+                if preserved_retrieved_docs and not working_state.get("retrieved_docs"):
+                    working_state["retrieved_docs"] = preserved_retrieved_docs
+                    if "search" not in working_state:
+                        working_state["search"] = {}
+                    if not isinstance(working_state["search"], dict):
+                        working_state["search"] = {}
+                    working_state["search"]["retrieved_docs"] = preserved_retrieved_docs
+                    if "common" not in working_state:
+                        working_state["common"] = {}
+                    if not isinstance(working_state["common"], dict):
+                        working_state["common"] = {}
+                    if "search" not in working_state["common"]:
+                        working_state["common"]["search"] = {}
+                    working_state["common"]["search"]["retrieved_docs"] = preserved_retrieved_docs
+                    logger.debug(f"Preserved {len(preserved_retrieved_docs)} retrieved_docs for node {node_name} after reduction")
+                
                 # 중요: state_reduction 후에도 전역 캐시에서 검색 결과 복원
                 # search_dependent 노드들에 대해 working_state에 검색 결과 추가
                 # is_search_dependent 변수는 위에서 정의됨
