@@ -888,6 +888,90 @@ class SemanticSearchEngineV2:
         else:
             self.logger.error("Cannot re-initialize embedder: model_name is not set")
             return False
+    
+    def is_available(self) -> bool:
+        """
+        Semantic Search 엔진 사용 가능 여부 확인
+        
+        Returns:
+            사용 가능 여부
+        """
+        if not Path(self.db_path).exists():
+            return False
+        
+        if not self._ensure_embedder_initialized():
+            return False
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM embeddings LIMIT 1")
+            row = cursor.fetchone()
+            conn.close()
+            return row is not None and row[0] > 0
+        except Exception as e:
+            self.logger.debug(f"Error checking embeddings table: {e}")
+            return False
+    
+    def diagnose(self) -> Dict[str, Any]:
+        """
+        Semantic Search 엔진 상태 진단
+        
+        Returns:
+            진단 결과 딕셔너리
+        """
+        diagnosis = {
+            "available": False,
+            "db_exists": False,
+            "embedder_initialized": False,
+            "faiss_available": FAISS_AVAILABLE,
+            "faiss_index_exists": False,
+            "embeddings_count": 0,
+            "model_name": self.model_name,
+            "dim": self.dim,
+            "issues": [],
+            "recommendations": []
+        }
+        
+        diagnosis["db_exists"] = Path(self.db_path).exists()
+        if not diagnosis["db_exists"]:
+            diagnosis["issues"].append(f"Database not found: {self.db_path}")
+            diagnosis["recommendations"].append("Check database path configuration")
+            return diagnosis
+        
+        diagnosis["embedder_initialized"] = self._ensure_embedder_initialized()
+        if not diagnosis["embedder_initialized"]:
+            diagnosis["issues"].append("Embedder not initialized")
+            diagnosis["recommendations"].append("Check embedding model availability")
+            return diagnosis
+        
+        diagnosis["faiss_index_exists"] = Path(self.index_path).exists()
+        if not diagnosis["faiss_index_exists"]:
+            diagnosis["issues"].append(f"FAISS index not found: {self.index_path}")
+            diagnosis["recommendations"].append("FAISS index will be built on first search")
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM embeddings")
+            row = cursor.fetchone()
+            conn.close()
+            diagnosis["embeddings_count"] = row[0] if row else 0
+            
+            if diagnosis["embeddings_count"] == 0:
+                diagnosis["issues"].append("No embeddings found in database")
+                diagnosis["recommendations"].append("Run embedding generation script")
+        except Exception as e:
+            diagnosis["issues"].append(f"Error checking embeddings: {e}")
+            diagnosis["recommendations"].append("Check database schema")
+        
+        diagnosis["available"] = (
+            diagnosis["db_exists"] and
+            diagnosis["embedder_initialized"] and
+            diagnosis["embeddings_count"] > 0
+        )
+        
+        return diagnosis
 
     def _detect_model_from_database(self) -> Optional[str]:
         """

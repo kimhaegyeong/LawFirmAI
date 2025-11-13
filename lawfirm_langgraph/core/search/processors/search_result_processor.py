@@ -192,6 +192,13 @@ class SearchResultProcessor:
         total_weight = 0.0
         matched_weight = 0.0
         
+        # 개선 #2: 법률 용어 보너스 점수를 위한 패턴 정의
+        legal_term_patterns = [
+            (r'제\s*\d+\s*조', 1.5),  # 조문번호 패턴
+            (r'[가-힣]+법', 1.3),  # 법령명 패턴
+            (r'손해배상|불법행위|계약|해지|해제', 1.2),  # 주요 법률 용어
+        ]
+        
         for keyword, weight in keyword_weights.items():
             if not keyword:
                 continue
@@ -206,6 +213,12 @@ class SearchResultProcessor:
                 keyword_count = doc_content_lower.count(keyword_lower)
                 if keyword_count > 1:
                     matched_weight += weight * 0.1 * min(2, keyword_count - 1)
+                
+                # 개선 #2: 법률 용어 보너스 점수 추가
+                for pattern, bonus_multiplier in legal_term_patterns:
+                    if re.search(pattern, keyword):
+                        matched_weight += weight * (bonus_multiplier - 1.0) * 0.3
+                        break
         
         keyword_coverage = len(matched_keywords) / max(1, len(keyword_weights))
         keyword_match_score = matched_weight / max(0.1, total_weight) if total_weight > 0 else 0.0
@@ -238,8 +251,23 @@ class SearchResultProcessor:
         type_weight = 1.4 if search_type == "semantic" else 0.9
         
         doc_type = document.get("type", "").lower() if document.get("type") else ""
+        source_type = document.get("source_type", "").lower() if document.get("source_type") else ""
+        
+        # 개선 #7: 법령 조문 타입 문서에 대한 가중치 증가
+        is_statute_article = (
+            doc_type == "statute_article" or 
+            source_type == "statute_article" or
+            "statute_article" in doc_type or
+            "statute_article" in source_type or
+            document.get("direct_match", False) or
+            document.get("search_type") == "direct_statute"
+        )
+        
         doc_type_weight = 1.0
-        if "법령" in doc_type or "law" in doc_type:
+        if is_statute_article:
+            # 개선 #7: statute_article 타입 문서 가중치 증가 (1.3 → 1.5)
+            doc_type_weight = 1.5
+        elif "법령" in doc_type or "law" in doc_type:
             doc_type_weight = 1.3
         elif "판례" in doc_type or "precedent" in doc_type:
             doc_type_weight = 1.15
@@ -250,8 +278,12 @@ class SearchResultProcessor:
         if query_type:
             if query_type == "precedent_search" and ("판례" in doc_type or "precedent" in doc_type):
                 query_type_weight = 1.4
-            elif query_type == "law_inquiry" and ("법령" in doc_type or "law" in doc_type):
-                query_type_weight = 1.4
+            elif query_type == "law_inquiry":
+                if is_statute_article:
+                    # 개선 #7: law_inquiry와 statute_article 매칭 시 가중치 추가 (1.4 → 1.6)
+                    query_type_weight = 1.6
+                elif "법령" in doc_type or "law" in doc_type:
+                    query_type_weight = 1.4
         
         category_boost = document.get("category_boost", 1.0)
         field_match_score = document.get("field_match_score", 0.5)
@@ -270,16 +302,31 @@ class SearchResultProcessor:
             document_count=search_params.get("document_count", 10)
         )
         
+        # 개선 #7: 법령 조문 문서에 대한 보너스 점수 추가
+        statute_bonus = 0.0
+        if is_statute_article:
+            # 법령명과 조문번호 매칭 시 보너스 점수 추가
+            metadata = document.get("metadata", {})
+            if metadata.get("statute_name") and metadata.get("article_no"):
+                statute_bonus = 0.2
+            else:
+                statute_bonus = 0.1
+        
         final_score = (
             normalized_relevance * dynamic_weights["relevance"] +
             keyword_match * dynamic_weights["keyword"] +
             (normalized_relevance * doc_type_weight * query_type_weight) * dynamic_weights["type"] +
             (type_weight - 1.0) * dynamic_weights["search_type"] +
-            category_bonus * dynamic_weights["category"]
+            category_bonus * dynamic_weights["category"] +
+            statute_bonus
         )
         
         if normalized_relevance <= 0.0 and keyword_match <= 0.0:
-            final_score = 0.15
+            # 개선 #7: 법령 조문은 최소 점수 보정
+            if is_statute_article:
+                final_score = max(0.3, final_score)
+            else:
+                final_score = 0.15
         else:
             final_score = max(0.0, final_score)
         

@@ -77,6 +77,14 @@ class SearchHandler:
             self.logger.info("Semantic search not available")
             return [], 0
 
+        if hasattr(self.semantic_search_engine, 'is_available'):
+            if not self.semantic_search_engine.is_available():
+                self.logger.warning("Semantic search engine is not available")
+                if hasattr(self.semantic_search_engine, 'diagnose'):
+                    diagnosis = self.semantic_search_engine.diagnose()
+                    self.logger.warning(f"Semantic search diagnosis: {diagnosis}")
+                return [], 0
+
         try:
             search_k = k if k is not None else WorkflowConstants.SEMANTIC_SEARCH_K
             
@@ -387,20 +395,43 @@ class SearchHandler:
                     seen_texts.add(content_hash)
                     unique_results.append(doc)
 
-            # 2. 유사도 점수 정규화 및 통합
+            # 2. 유사도 점수 정규화 및 통합 (개선: 동적 가중치 조정)
+            query_type = optimized_queries.get("query_type", "")
+            
             for doc in unique_results:
                 semantic_score = doc.get("relevance_score", 0.0)
                 keyword_score = doc.get("score", doc.get("relevance_score", 0.0))
-
-                # 검색 타입별 가중치
-                if doc.get("search_type") == "semantic":
-                    combined_score = 0.7 * semantic_score + 0.3 * keyword_score
+                
+                # 질문 타입별 동적 가중치 조정
+                if query_type == "law_inquiry":
+                    # 법령 조회: 키워드 검색 강조 (정확한 법령명/조문번호 매칭)
+                    if doc.get("search_type") == "semantic":
+                        combined_score = 0.5 * semantic_score + 0.5 * keyword_score
+                    else:
+                        combined_score = 0.3 * semantic_score + 0.7 * keyword_score
+                elif query_type == "precedent_search":
+                    # 판례 검색: 의미적 검색 강조 (의미적 유사도 중요)
+                    if doc.get("search_type") == "semantic":
+                        combined_score = 0.8 * semantic_score + 0.2 * keyword_score
+                    else:
+                        combined_score = 0.6 * semantic_score + 0.4 * keyword_score
                 else:
-                    combined_score = 0.5 * semantic_score + 0.5 * keyword_score
+                    # 기본: 검색 타입별 가중치
+                    if doc.get("search_type") == "semantic":
+                        combined_score = 0.7 * semantic_score + 0.3 * keyword_score
+                    else:
+                        combined_score = 0.5 * semantic_score + 0.5 * keyword_score
 
                 # 카테고리 부스트 적용
                 category_boost = doc.get("category_boost", 1.0)
                 combined_score *= category_boost
+                
+                # 문서 타입별 추가 보너스
+                doc_type = doc.get("doc_type", "").lower() if doc.get("doc_type") else ""
+                if doc_type == "statute_article" and query_type == "law_inquiry":
+                    combined_score *= 1.2  # 법령 조회 시 법령 조문 20% 보너스
+                elif "case" in doc_type and query_type == "precedent_search":
+                    combined_score *= 1.15  # 판례 검색 시 판례 15% 보너스
 
                 doc["combined_score"] = combined_score
 
@@ -562,19 +593,34 @@ class SearchHandler:
             self.logger.debug(f"All results are of the same type, returning as-is")
             return results[:max_results]
         
-        # 타입별로 균형있게 재분배
-        # 각 타입에서 최소 1개씩은 포함하되, 전체적으로는 점수 순서 유지
+        # 개선 #6: 타입별로 균형있게 재분배 (타입별 최소 할당량 설정)
+        # 타입별 최소 할당량: statute_article 3개, case_paragraph 2개, decision_paragraph 1개
+        min_allocations = {
+            "law": 3,  # statute_article
+            "precedent": 2,  # case_paragraph
+            "decision": 1,  # decision_paragraph
+            "interpretation": 0  # 선택적
+        }
+        
         diverse_results = []
         seen_ids = set()
         
-        # 1단계: 각 타입에서 최상위 1개씩 선택 (다양성 보장)
+        # 1단계: 각 타입에서 최소 할당량만큼 선택 (다양성 보장)
         for doc_type in ["law", "precedent", "decision", "interpretation"]:
-            if results_by_type[doc_type]:
-                top_result = results_by_type[doc_type][0]
-                result_id = top_result.get("id") or str(hash(str(top_result)))
-                if result_id not in seen_ids:
-                    diverse_results.append(top_result)
-                    seen_ids.add(result_id)
+            min_count = min_allocations.get(doc_type, 0)
+            if results_by_type[doc_type] and min_count > 0:
+                # 해당 타입에서 최소 할당량만큼 선택
+                for i, result in enumerate(results_by_type[doc_type][:min_count]):
+                    result_id = result.get("id") or str(hash(str(result)))
+                    if result_id not in seen_ids:
+                        diverse_results.append(result)
+                        seen_ids.add(result_id)
+                        if len(diverse_results) >= max_results:
+                            break
+                    if len(diverse_results) >= max_results:
+                        break
+                if len(diverse_results) >= max_results:
+                    break
         
         # 2단계: 나머지 결과를 점수 순서대로 추가
         remaining_results = []

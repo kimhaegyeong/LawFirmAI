@@ -336,7 +336,7 @@ class ResultRanker:
                 doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
                 doc["recency_score"] = recency_score
         
-        # Stage 4: MMR 기반 다양성 적용 (개선: 검색 결과 품질 기반 동적 조정)
+        # Stage 4: MMR 기반 다양성 적용 (개선: 검색 결과 품질 및 질문 타입 기반 동적 조정)
         # 검색 품질에 따른 lambda_score 조정
         if search_quality < 0.5:
             # 품질 낮음: 키워드 매칭 강화 (다양성 감소)
@@ -347,6 +347,14 @@ class ResultRanker:
         else:
             # 품질 중간: 균형잡힌 재정렬
             lambda_score = 0.7
+        
+        # 질문 타입별 다양성 조정
+        if query_type == "law_inquiry":
+            # 법령 조회: 관련성 우선 (다양성 약간 감소)
+            lambda_score = min(0.85, lambda_score + 0.1)
+        elif query_type == "precedent_search":
+            # 판례 검색: 다양성 강화 (다양한 판례 포함)
+            lambda_score = max(0.5, lambda_score - 0.1)
         
         diverse_docs = self._apply_mmr_diversity(
             citation_docs + non_citation_docs,
