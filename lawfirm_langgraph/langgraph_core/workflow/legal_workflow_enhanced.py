@@ -24,14 +24,8 @@ from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
-# Langfuse observe 데코레이터 추가
-try:
-    from langfuse import observe
-    LANGFUSE_OBSERVE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_OBSERVE_AVAILABLE = False
-    # Mock observe decorator
-    def observe(**kwargs):
+# Mock observe decorator (Langfuse 제거됨)
+def observe(**kwargs):
         def decorator(func):
             return func
         return decorator
