@@ -24,14 +24,8 @@ from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
-# Langfuse observe 데코레이터 추가
-try:
-    from langfuse import observe
-    LANGFUSE_OBSERVE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_OBSERVE_AVAILABLE = False
-    # Mock observe decorator
-    def observe(**kwargs):
+# Mock observe decorator (Langfuse 제거됨)
+def observe(**kwargs):
         def decorator(func):
             return func
         return decorator
@@ -3005,6 +2999,29 @@ class EnhancedLegalQuestionWorkflow:
             # 프롬프트 최적화된 컨텍스트 사용 (있는 경우)
             prompt_optimized_context = self._get_state_value(state, "prompt_optimized_context", {})
             retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            
+            # interpretation_paragraph 확인
+            if retrieved_docs:
+                interpretation_in_retrieved = [d for d in retrieved_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                if interpretation_in_retrieved:
+                    print(f"[GENERATE_ANSWER] retrieved_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 발견")
+                    self.logger.info(f"🔍 [GENERATE_ANSWER] retrieved_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 발견")
+                else:
+                    print(f"[GENERATE_ANSWER] retrieved_docs에 interpretation_paragraph 없음 (총 {len(retrieved_docs)}개)")
+                    # 전역 캐시에서 확인
+                    try:
+                        from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                        if _global_search_results_cache:
+                            cached_retrieved = _global_search_results_cache.get("retrieved_docs", [])
+                            if cached_retrieved:
+                                interpretation_in_cached = [d for d in cached_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                if interpretation_in_cached:
+                                    print(f"[GENERATE_ANSWER] 전역 캐시의 retrieved_docs에 interpretation_paragraph {len(interpretation_in_cached)}개 발견, retrieved_docs 업데이트")
+                                    self.logger.info(f"🔍 [GENERATE_ANSWER] 전역 캐시의 retrieved_docs에 interpretation_paragraph {len(interpretation_in_cached)}개 발견, retrieved_docs 업데이트")
+                                    retrieved_docs = cached_retrieved
+                                    self._set_state_value(state, "retrieved_docs", retrieved_docs)
+                    except (ImportError, AttributeError):
+                        pass
 
             # 개선 사항 9: retrieved_docs를 최종 state에 명확하게 보존
             if retrieved_docs:
@@ -3130,19 +3147,58 @@ class EnhancedLegalQuestionWorkflow:
                     structured_docs = prompt_optimized_context.get("structured_documents", {})
 
                     # retrieved_docs가 있는데 structured_documents가 비어있거나 적으면 보강
+                    # 샘플링된 문서가 있는지 확인
+                    sample_docs_in_retrieved = [d for d in retrieved_docs if d.get("metadata", {}).get("is_sample", False) or d.get("search_type") == "type_sample"]
+                    interpretation_samples = [d for d in sample_docs_in_retrieved if (d.get("source_type") or d.get("type")) == "interpretation_paragraph"]
+                    
+                    if interpretation_samples:
+                        self.logger.info(f"🔍 [STRUCTURED_DOCS] retrieved_docs에 interpretation_paragraph 샘플 {len(interpretation_samples)}개 발견")
+                    
                     if retrieved_docs and len(retrieved_docs) > 0:
                         docs_in_structured = structured_docs.get("documents", []) if isinstance(structured_docs, dict) else []
                         # 최소 요구사항: retrieved_docs의 50% 이상 또는 최소 1개
                         min_required = max(1, min(3, int(len(retrieved_docs) * 0.5))) if len(retrieved_docs) > 5 else 1
+                        
+                        # 샘플링된 문서가 있으면 항상 보강 (타입 다양성 보장)
+                        has_samples = len(sample_docs_in_retrieved) > 0
+                        interpretation_in_structured = [d for d in docs_in_structured if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                        
+                        if interpretation_samples and len(interpretation_in_structured) == 0:
+                            self.logger.warning(f"⚠️ [STRUCTURED_DOCS] interpretation_paragraph 샘플이 retrieved_docs에 있지만 structured_docs에 없음. 보강 필요.")
 
-                        if not docs_in_structured or len(docs_in_structured) < min_required:
+                        if not docs_in_structured or len(docs_in_structured) < min_required or (has_samples and len(interpretation_in_structured) == 0):
                             # retrieved_docs를 structured_documents 형태로 강제 변환하여 보강
+                            # 샘플링된 문서는 항상 포함 (타입 다양성 보장)
                             normalized_documents = []
-                            for idx, doc in enumerate(retrieved_docs[:10], 1):
+                            sample_docs = []
+                            normal_docs = []
+                            
+                            # 샘플링된 문서와 일반 문서 분리
+                            for doc in retrieved_docs:
+                                if not isinstance(doc, dict):
+                                    continue
+                                is_sample = doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample"
+                                if is_sample:
+                                    sample_docs.append(doc)
+                                else:
+                                    normal_docs.append(doc)
+                            
+                            # 일반 문서는 관련도 순으로 정렬하여 상위 10개 선택
+                            sorted_normal_docs = sorted(
+                                normal_docs,
+                                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                                reverse=True
+                            )[:10]
+                            
+                            # 샘플링된 문서는 항상 포함
+                            all_docs = sorted_normal_docs + sample_docs
+                            
+                            for idx, doc in enumerate(all_docs, 1):
                                 if isinstance(doc, dict):
                                     content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
                                     source = doc.get("source") or doc.get("title") or f"Document_{idx}"
                                     relevance_score = doc.get("relevance_score") or doc.get("final_weighted_score", 0.0)
+                                    source_type = doc.get("source_type") or doc.get("type") or doc.get("metadata", {}).get("source_type") or doc.get("metadata", {}).get("type")
 
                                     if content and len(content.strip()) > 10:
                                         normalized_documents.append({
@@ -3150,8 +3206,16 @@ class EnhancedLegalQuestionWorkflow:
                                             "source": source,
                                             "content": content[:2000],
                                             "relevance_score": float(relevance_score),
+                                            "type": source_type,  # 타입 정보 추가
+                                            "source_type": source_type,  # 타입 정보 추가
                                             "metadata": doc.get("metadata", {})
                                         })
+                            
+                            if sample_docs:
+                                self.logger.info(
+                                    f"✅ [SEARCH RESULTS ENFORCED] 샘플링된 문서 {len(sample_docs)}개 포함 "
+                                    f"(interpretation_paragraph: {len([d for d in sample_docs if (d.get('source_type') or d.get('type')) == 'interpretation_paragraph'])})"
+                                )
 
                             if normalized_documents:
                                 if not isinstance(structured_docs, dict):
