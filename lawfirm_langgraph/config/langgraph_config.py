@@ -78,13 +78,6 @@ class LangGraphConfig:
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
 
-    # Langfuse 설정 (답변 품질 추적)
-    langfuse_enabled: bool = False
-    langfuse_secret_key: str = ""
-    langfuse_public_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
-    langfuse_debug: bool = False
-
     # LangSmith 설정 (LangChain 모니터링)
     langsmith_enabled: bool = False
     langsmith_endpoint: str = "https://api.smith.langchain.com"
@@ -157,13 +150,6 @@ class LangGraphConfig:
         config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
         config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
-        # Langfuse 설정
-        config.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-        config.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY", config.langfuse_secret_key)
-        config.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY", config.langfuse_public_key)
-        config.langfuse_host = os.getenv("LANGFUSE_HOST", config.langfuse_host)
-        config.langfuse_debug = os.getenv("LANGFUSE_DEBUG", "false").lower() == "true"
-
         # LangSmith 설정 (LangSmith 환경 변수 사용, 하위 호환성을 위해 LANGCHAIN_*도 지원)
         config.langsmith_enabled = (
             os.getenv("LANGSMITH_TRACING", "false").lower() == "true" or
@@ -212,7 +198,7 @@ class LangGraphConfig:
         # Agentic AI 모드 설정
         config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langfuse_enabled={config.langfuse_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
+        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
         return config
 
     def validate(self) -> List[str]:

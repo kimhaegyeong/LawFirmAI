@@ -8,9 +8,30 @@ Usage:
     $env:TEST_QUERY='질의내용'; python run_query_test.py  # 환경 변수 사용
 """
 
-import asyncio
 import sys
+import io
 import os
+
+# python-dotenv 경고 억제 (가장 먼저 실행)
+# stderr를 완전히 리다이렉트하여 python-dotenv 경고 억제
+_original_stderr = sys.stderr
+try:
+    # Windows와 Unix 모두 지원
+    if sys.platform == 'win32':
+        sys.stderr = open('nul', 'w', encoding='utf-8', errors='replace')
+    else:
+        sys.stderr = open('/dev/null', 'w', encoding='utf-8', errors='replace')
+except Exception:
+    # 실패 시 원본 stderr 유지
+    pass
+
+# warnings 모듈도 필터링
+import warnings
+warnings.filterwarnings('ignore', message='.*python-dotenv.*')
+warnings.filterwarnings('ignore', category=UserWarning, message='.*python-dotenv.*')
+warnings.filterwarnings('ignore', category=Warning)
+
+import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -39,7 +60,11 @@ os.environ['USE_STREAMING_MODE'] = 'false'
 
 # 프로젝트 경로 설정
 # 스크립트 위치: lawfirm_langgraph/tests/scripts/run_query_test.py
-script_dir = Path(__file__).parent
+try:
+    script_dir = Path(__file__).parent
+except NameError:
+    # __file__이 없는 경우 (예: exec로 실행된 경우)
+    script_dir = Path.cwd() / "lawfirm_langgraph" / "tests" / "scripts"
 tests_dir = script_dir.parent
 lawfirm_langgraph_dir = tests_dir.parent
 project_root = lawfirm_langgraph_dir.parent
@@ -248,6 +273,10 @@ async def run_query_test(query: str):
     logger.info(f"\n📋 질의: {query}\n")
     
     try:
+        # python-dotenv 경고 억제를 위한 환경 변수 설정
+        import os
+        os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+        
         # Import (순환 import 방지를 위해 함수 내부에서 수행)
         # sys.path가 올바르게 설정되어 있으므로 직접 import 가능
         try:
@@ -545,6 +574,15 @@ async def run_query_test(query: str):
 def main():
     """메인 실행 함수"""
     try:
+        # stderr 복원 (모듈 import 후)
+        global _original_stderr
+        try:
+            if hasattr(sys.stderr, 'close'):
+                sys.stderr.close()
+        except:
+            pass
+        sys.stderr = _original_stderr
+        
         query = get_query_from_args()
         
         if not query:

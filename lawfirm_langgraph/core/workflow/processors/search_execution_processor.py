@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.workflow.state.state_definitions import LegalWorkflowState
 from core.workflow.state.state_helpers import ensure_state_group
 from core.workflow.utils.workflow_constants import WorkflowConstants
+from core.workflow.utils.query_diversifier import QueryDiversifier
+from core.workflow.utils.search_result_balancer import SearchResultBalancer
 
 
 class SearchExecutionProcessor:
@@ -30,7 +32,8 @@ class SearchExecutionProcessor:
         determine_search_parameters_func=None,
         save_metadata_safely_func=None,
         update_processing_time_func=None,
-        handle_error_func=None
+        handle_error_func=None,
+        semantic_search_engine=None
     ):
         self.search_handler = search_handler
         self.logger = logger
@@ -43,6 +46,13 @@ class SearchExecutionProcessor:
         self._save_metadata_safely_func = save_metadata_safely_func
         self._update_processing_time_func = update_processing_time_func
         self._handle_error_func = handle_error_func
+        
+        # semantic_search_engine 저장 (타입별 검색용)
+        self.semantic_search_engine = semantic_search_engine
+        
+        # 검색 쿼리 다변화 및 결과 균형 조정 유틸리티
+        self.query_diversifier = QueryDiversifier()
+        self.result_balancer = SearchResultBalancer(min_per_type=1, max_per_type=5)
 
     def get_search_params(self, state: LegalWorkflowState) -> Dict[str, Any]:
         """검색에 필요한 모든 파라미터를 한 번에 가져오기 (State 접근 최적화)"""
@@ -258,6 +268,121 @@ class SearchExecutionProcessor:
             except Exception as e:
                 self.logger.warning(f"법령 조문 직접 검색 실패: {e}")
 
+            # 검색 결과 타입 균형 조정 (개선)
+            try:
+                # numpy 타입 변환 함수 (msgpack 직렬화 오류 방지)
+                def convert_numpy_types(obj):
+                    import numpy as np
+                    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                        return int(obj)
+                    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                        return float(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, dict):
+                        return {k: convert_numpy_types(v) for k, v in obj.items()}
+                    elif isinstance(obj, (list, tuple)):
+                        return [convert_numpy_types(item) for item in obj]
+                    return obj
+                
+                # 검색 결과에 numpy 타입 변환 적용
+                semantic_results = [convert_numpy_types(doc) for doc in semantic_results]
+                keyword_results = [convert_numpy_types(doc) for doc in keyword_results]
+                
+                # semantic_results와 keyword_results를 타입별로 그룹화
+                all_results = semantic_results + keyword_results
+                grouped_results = self.result_balancer.group_results_by_type(all_results)
+                
+                # Phase 3: 타입별 분포 확인 및 경고
+                type_distribution = {}
+                for doc_type, docs in grouped_results.items():
+                    count = len(docs)
+                    type_distribution[doc_type] = count
+                    self.logger.info(f"📊 [SEARCH BALANCE] {doc_type}: {count}개")
+                
+                # 단일 타입만 검색된 경우 경고
+                non_zero_types = [t for t, c in type_distribution.items() if c > 0]
+                if len(non_zero_types) == 1:
+                    single_type = non_zero_types[0]
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 단일 타입만 검색됨: {single_type} ({type_distribution[single_type]}개). "
+                        f"다른 타입의 문서가 검색되지 않았습니다. 데이터 불균형 또는 검색 쿼리 최적화가 필요할 수 있습니다."
+                    )
+                elif len(non_zero_types) == 0:
+                    self.logger.warning(
+                        f"⚠️ [TYPE DIVERSITY] 검색 결과가 없습니다. 검색 쿼리나 데이터를 확인하세요."
+                    )
+                else:
+                    # 타입 다양성 점수 계산 (0.0 ~ 1.0)
+                    total_docs = sum(type_distribution.values())
+                    if total_docs > 0:
+                        # 엔트로피 기반 다양성 점수
+                        import math
+                        entropy = 0.0
+                        for count in type_distribution.values():
+                            if count > 0:
+                                p = count / total_docs
+                                entropy -= p * math.log2(p)
+                        max_entropy = math.log2(len(non_zero_types)) if len(non_zero_types) > 1 else 1.0
+                        diversity_score = entropy / max_entropy if max_entropy > 0 else 0.0
+                        
+                        self.logger.info(
+                            f"✅ [TYPE DIVERSITY] 타입 다양성 점수: {diversity_score:.2f} "
+                            f"(검색된 타입: {len(non_zero_types)}개, 총 문서: {total_docs}개)"
+                        )
+                        
+                        if diversity_score < 0.5:
+                            self.logger.warning(
+                                f"⚠️ [TYPE DIVERSITY] 타입 다양성이 낮습니다 (점수: {diversity_score:.2f}). "
+                                f"검색 쿼리 다변화 또는 데이터 균형 조정을 고려하세요."
+                            )
+                
+                # 균형 조정된 결과 생성
+                semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K)
+                keyword_k = search_params.get("keyword_k", WorkflowConstants.KEYWORD_SEARCH_K)
+                balanced_results = self.result_balancer.balance_search_results(
+                    grouped_results,
+                    total_limit=semantic_k + keyword_k
+                )
+                
+                # 균형 조정된 결과를 semantic_results와 keyword_results로 재분배
+                # (기존 로직과의 호환성을 위해 유지하되, 균형 조정된 결과를 우선 사용)
+                if balanced_results:
+                    # semantic_results와 keyword_results를 균형 조정된 결과로 업데이트
+                    # 관련도가 높은 결과를 semantic_results에, 나머지를 keyword_results에 배치
+                    semantic_results_balanced = [
+                        doc for doc in balanced_results 
+                        if doc.get("relevance_score", 0.0) >= 0.5
+                    ]
+                    keyword_results_balanced = [
+                        doc for doc in balanced_results 
+                        if doc.get("relevance_score", 0.0) < 0.5 or doc not in semantic_results_balanced
+                    ]
+                    
+                    # 기존 결과와 병합 (중복 제거)
+                    existing_semantic_ids = {id(doc) for doc in semantic_results}
+                    existing_keyword_ids = {id(doc) for doc in keyword_results}
+                    
+                    semantic_results = semantic_results + [
+                        doc for doc in semantic_results_balanced 
+                        if id(doc) not in existing_semantic_ids
+                    ]
+                    keyword_results = keyword_results + [
+                        doc for doc in keyword_results_balanced 
+                        if id(doc) not in existing_keyword_ids and id(doc) not in existing_semantic_ids
+                    ]
+                    
+                    semantic_count = len(semantic_results)
+                    keyword_count = len(keyword_results)
+                    
+                    self.logger.info(
+                        f"✅ [SEARCH BALANCE] 균형 조정 완료: "
+                        f"semantic={semantic_count}, keyword={keyword_count}, "
+                        f"타입별 분포={dict((k, len(v)) for k, v in grouped_results.items())}"
+                    )
+            except Exception as e:
+                self.logger.warning(f"검색 결과 균형 조정 실패 (기존 결과 사용): {e}")
+
             ensure_state_group(state, "search")
 
             if debug_mode:
@@ -422,6 +547,155 @@ class SearchExecutionProcessor:
                     f"🔍 [DEBUG] Keyword-based semantic search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
                 )
                 print(f"[DEBUG] _execute_semantic_search_internal: Added {kw_count} results from keyword query #{i}")
+
+        # Phase 1 + Phase 2: 타입별 별도 검색 수행 및 쿼리 다변화 적용 (타입 다양성 개선)
+        document_types = {
+            "statute_article": "statute",
+            "case_paragraph": "case",
+            "decision_paragraph": "decision",
+            "interpretation_paragraph": "interpretation"
+        }
+        type_specific_results = {}
+        type_specific_count = 0
+        
+        # semantic_search_engine 확인 (여러 방법 시도)
+        semantic_engine = None
+        if self.semantic_search_engine:
+            semantic_engine = self.semantic_search_engine
+            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from self: {type(semantic_engine).__name__}")
+        elif hasattr(self.search_handler, 'semantic_search_engine') and self.search_handler.semantic_search_engine:
+            semantic_engine = self.search_handler.semantic_search_engine
+            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from search_handler: {type(semantic_engine).__name__}")
+        elif hasattr(self.search_handler, 'semantic_search') and self.search_handler.semantic_search:
+            semantic_engine = self.search_handler.semantic_search
+            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
+        else:
+            self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine not found: self.semantic_search_engine={self.semantic_search_engine}, search_handler.semantic_search_engine={getattr(self.search_handler, 'semantic_search_engine', 'N/A')}, search_handler.semantic_search={getattr(self.search_handler, 'semantic_search', 'N/A')}")
+        
+        if semantic_engine:
+            # Phase 2: QueryDiversifier로 타입별 쿼리 생성
+            try:
+                diversified_queries = self.query_diversifier.diversify_search_queries(original_query or enhanced_semantic_query)
+                self.logger.info(
+                    f"🔍 [TYPE DIVERSITY] 다변화된 쿼리 생성: "
+                    f"statute={len(diversified_queries.get('statute', []))}, "
+                    f"case={len(diversified_queries.get('case', []))}, "
+                    f"decision={len(diversified_queries.get('decision', []))}, "
+                    f"interpretation={len(diversified_queries.get('interpretation', []))}"
+                )
+            except Exception as e:
+                self.logger.warning(f"⚠️ [TYPE DIVERSITY] 쿼리 다변화 실패: {e}")
+                diversified_queries = {}
+            
+            self.logger.info("🔍 [TYPE DIVERSITY] 타입별 검색 시작")
+            for doc_type, query_type in document_types.items():
+                try:
+                    # Phase 2: 타입별 최적화된 쿼리 사용
+                    type_queries = diversified_queries.get(query_type, [])
+                    search_query = enhanced_semantic_query  # 기본 쿼리
+                    
+                    # 타입별 최적화된 쿼리가 있으면 사용
+                    if type_queries:
+                        search_query = type_queries[0]  # 첫 번째 최적화된 쿼리 사용
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 최적화된 쿼리 사용: '{search_query[:50]}...'")
+                    else:
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 기본 쿼리 사용: '{search_query[:50]}...'")
+                    
+                    # 각 타입별로 별도 의미적 검색 수행 (재시도 로직 활용)
+                    self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type} 검색 시작 (k=20, threshold=0.05, source_types=[{doc_type}])")
+                    type_results = semantic_engine.search(
+                        search_query,
+                        k=20,  # 더 많은 결과 검색
+                        source_types=[doc_type],  # 타입별 필터 적용
+                        similarity_threshold=0.05,  # 낮은 임계값으로 시작 (재시도 로직이 더 낮춤)
+                        min_results=1,  # 최소 1개는 보장
+                        disable_retry=False  # 재시도 로직 활성화 (임계값 자동 조정)
+                    )
+                    
+                    # 결과가 없으면 더 일반적인 쿼리로 재시도
+                    if not type_results:
+                        # 원본 쿼리에서 핵심 키워드만 추출하여 재시도
+                        core_keywords = original_query.split()[:3] if original_query else search_query.split()[:3]
+                        fallback_query = " ".join(core_keywords)
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 폴백 쿼리로 재시도: '{fallback_query}'")
+                        try:
+                            type_results = semantic_engine.search(
+                                fallback_query,
+                                k=20,
+                                source_types=[doc_type],
+                                similarity_threshold=0.0,  # 최소 임계값
+                                min_results=1,
+                                disable_retry=False  # 재시도 로직 활성화
+                            )
+                            if type_results:
+                                self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: 폴백 쿼리로 {len(type_results)}개 검색 성공")
+                        except Exception as e:
+                            self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 폴백 검색 실패: {e}")
+                    
+                    # 결과가 여전히 없으면 매우 일반적인 키워드로 재시도
+                    if not type_results:
+                        # 타입별 일반 키워드 사용
+                        type_keywords = {
+                            "statute_article": "법령 조문",
+                            "case_paragraph": "판례",
+                            "decision_paragraph": "결정례",
+                            "interpretation_paragraph": "해석례"
+                        }
+                        general_query = type_keywords.get(doc_type, "법률")
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 일반 키워드로 재시도: '{general_query}'")
+                        try:
+                            type_results = semantic_engine.search(
+                                general_query,
+                                k=5,  # 최소한 5개만
+                                source_types=[doc_type],
+                                similarity_threshold=0.0,
+                                min_results=1,
+                                disable_retry=False
+                            )
+                            if type_results:
+                                self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: 일반 키워드로 {len(type_results)}개 검색 성공")
+                        except Exception as e:
+                            self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 일반 키워드 검색 실패: {e}")
+                    
+                    self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 최종 {len(type_results)}개 검색됨")
+                    
+                    # 최종 방안: 검색 결과가 없으면 타입별 샘플링으로 대체
+                    if not type_results:
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 샘플링으로 대체 시도")
+                        try:
+                            type_results = self._get_type_sample(semantic_engine, doc_type, k=2)
+                            if type_results:
+                                self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: 샘플링으로 {len(type_results)}개 가져옴")
+                        except Exception as e:
+                            self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 샘플링 실패: {e}")
+                    
+                    if type_results:
+                        type_specific_results[doc_type] = type_results
+                        semantic_results.extend(type_results)
+                        type_specific_count += len(type_results)
+                        self.logger.info(
+                            f"✅ [TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 (쿼리: '{search_query[:30]}...')"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ [TYPE DIVERSITY] {doc_type}: 검색 결과 없음 (데이터 없음 또는 쿼리 관련성 낮음, 쿼리: '{search_query[:30]}...')"
+                        )
+                except Exception as e:
+                    self.logger.error(f"❌ [TYPE DIVERSITY] 타입별 검색 실패 ({doc_type}): {e}")
+                    import traceback
+                    self.logger.debug(f"타입별 검색 예외 상세: {traceback.format_exc()}")
+        else:
+            self.logger.warning("⚠️ [TYPE DIVERSITY] semantic_search_engine을 찾을 수 없어 타입별 검색을 수행할 수 없습니다")
+        
+        semantic_count += type_specific_count
+        
+        if type_specific_count > 0:
+            self.logger.info(
+                f"✅ [TYPE DIVERSITY] 타입별 검색 완료: 총 {type_specific_count}개 추가 "
+                f"(타입별 분포: {dict((k, len(v)) for k, v in type_specific_results.items())})"
+            )
+        else:
+            self.logger.info("⚠️ [TYPE DIVERSITY] 타입별 검색 결과 없음 (데이터 불균형 또는 검색 실패)")
 
         self.logger.info(
             f"🔍 [DEBUG] Total semantic search results: {semantic_count} (unique: {len(semantic_results)})"
@@ -609,6 +883,139 @@ class SearchExecutionProcessor:
             if "processing_time" not in state["metadata"]:
                 state["metadata"]["processing_time"] = 0.0
             state["metadata"]["processing_time"] += elapsed
+
+    def _get_type_sample(self, semantic_engine, doc_type: str, k: int = 2) -> List[Dict[str, Any]]:
+        """
+        특정 타입의 랜덤 샘플 가져오기 (검색 실패 시 사용)
+        
+        Args:
+            semantic_engine: SemanticSearchEngineV2 인스턴스
+            doc_type: 문서 타입
+            k: 가져올 샘플 수
+            
+        Returns:
+            List[Dict[str, Any]]: 샘플 문서 리스트
+        """
+        try:
+            # DB에서 해당 타입의 랜덤 문서 가져오기 (성능 최적화: 인덱스 활용)
+            conn = semantic_engine._get_connection()
+            
+            # 먼저 해당 타입의 문서 수 확인
+            count_cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM text_chunks WHERE source_type = ? AND text IS NOT NULL AND LENGTH(text) > 50",
+                (doc_type,)
+            )
+            count_row = count_cursor.fetchone()
+            total_count = count_row['count'] if count_row else 0
+            
+            if total_count == 0:
+                self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type}: 샘플링할 문서 없음 (총 0개)")
+                return []
+            
+            # 랜덤 샘플링 (성능 최적화: LIMIT 사용)
+            cursor = conn.execute(
+                """
+                SELECT id, text, source_id, source_type
+                FROM text_chunks
+                WHERE source_type = ? AND text IS NOT NULL AND LENGTH(text) > 50
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (doc_type, k)
+            )
+            rows = cursor.fetchall()
+            
+            if not rows:
+                self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type}: 샘플링 결과 없음 (총 {total_count}개 중)")
+                return []
+            
+            self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: {len(rows)}개 샘플링 성공 (총 {total_count}개 중)")
+            
+            # 검색 결과 형식으로 변환
+            samples = []
+            for row in rows:
+                chunk_id = row['id']
+                text = row['text'] or ""
+                source_id = row['source_id']
+                
+                # 메타데이터 조회 (오류 처리 강화)
+                source_meta = {}
+                try:
+                    if hasattr(semantic_engine, '_get_source_metadata'):
+                        source_meta = semantic_engine._get_source_metadata(conn, doc_type, source_id)
+                        if not source_meta:
+                            # 메타데이터 조회 실패 시 text_chunks에서 기본 정보 가져오기
+                            cursor_meta = conn.execute(
+                                "SELECT source_type, source_id, text FROM text_chunks WHERE id = ?",
+                                (chunk_id,)
+                            )
+                            row_meta = cursor_meta.fetchone()
+                            if row_meta:
+                                source_meta = {
+                                    "source_type": row_meta['source_type'],
+                                    "source_id": row_meta['source_id'],
+                                    "text": row_meta['text']
+                                }
+                except Exception as e:
+                    self.logger.debug(f"⚠️ [TYPE DIVERSITY] 메타데이터 조회 실패 ({doc_type}, source_id={source_id}): {e}")
+                    # 기본 메타데이터 설정
+                    source_meta = {
+                        "source_type": doc_type,
+                        "source_id": source_id
+                    }
+                
+                # UnifiedSourceFormatter로 출처 정보 생성 (메타데이터 기반 개선)
+                try:
+                    from core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+                    formatter = UnifiedSourceFormatter()
+                    source_info = formatter.format_source(doc_type, source_meta)
+                    source_name = source_info.name
+                    source_url = source_info.url
+                    
+                    # source_name이 비어있거나 기본값이면 메타데이터에서 추출 시도
+                    if not source_name or source_name == doc_type:
+                        if doc_type == "statute_article":
+                            source_name = source_meta.get("statute_name") or source_meta.get("name") or "법령 조문"
+                        elif doc_type == "case_paragraph":
+                            source_name = source_meta.get("casenames") or source_meta.get("doc_id") or "판례"
+                        elif doc_type == "decision_paragraph":
+                            source_name = f"{source_meta.get('org', '')} {source_meta.get('doc_id', '')}".strip() or "결정례"
+                        elif doc_type == "interpretation_paragraph":
+                            source_name = f"{source_meta.get('org', '')} {source_meta.get('title', '')}".strip() or "해석례"
+                except Exception as e:
+                    self.logger.debug(f"⚠️ [TYPE DIVERSITY] 출처 정보 생성 실패 ({doc_type}): {e}")
+                    source_name = doc_type
+                    source_url = ""
+                
+                samples.append({
+                    "id": f"chunk_{chunk_id}",
+                    "text": text,
+                    "content": text,
+                    "score": 0.3,  # 낮은 점수 (강제 샘플링)
+                    "similarity": 0.3,
+                    "type": doc_type,
+                    "source_type": doc_type,
+                    "source": source_name,
+                    "source_url": source_url,
+                    "source_id": source_id,
+                    "metadata": {
+                        "chunk_id": chunk_id,
+                        "source_type": doc_type,
+                        "source_id": source_id,
+                        "text": text,
+                        "is_sample": True,  # 샘플링된 문서 표시
+                        **source_meta
+                    },
+                    "relevance_score": 0.3,
+                    "search_type": "type_sample"
+                })
+            
+            return samples
+        except Exception as e:
+            self.logger.warning(f"⚠️ [TYPE DIVERSITY] 타입 샘플링 실패 ({doc_type}): {e}")
+            import traceback
+            self.logger.debug(f"타입 샘플링 예외 상세: {traceback.format_exc()}")
+            return []
 
     def _handle_error(self, state: LegalWorkflowState, error_msg: str, context: str) -> None:
         """에러 처리"""

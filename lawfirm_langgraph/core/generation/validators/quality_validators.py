@@ -536,8 +536,22 @@ class AnswerValidator:
                             document_sources.append(source.lower())
 
             # 1. 컨텍스트 키워드 포함도 계산 (개선: 더 정확한 계산)
-            context_words = set(context_text.split())
-            answer_words = set(answer_lower.split())
+            import re
+            # 문장 단위로 분리하여 더 정확한 매칭
+            context_sentences = re.split(r'[.!?。！？\n]+', context_text)
+            answer_sentences = re.split(r'[.!?。！？\n]+', answer_lower)
+            
+            # 중요한 키워드 추출 (2자 이상, 불용어 제외)
+            stop_words = {'의', '가', '이', '은', '는', '을', '를', '에', '에서', '와', '과', '도', '로', '으로', '에서', '에게', '께', '한테', '더', '또', '그', '이', '저', '그것', '이것', '저것', '그런', '이런', '저런', '그렇게', '이렇게', '저렇게'}
+            context_words = set()
+            for sentence in context_sentences:
+                words = re.findall(r'\b\w+\b', sentence.lower())
+                context_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
+            
+            answer_words = set()
+            for sentence in answer_sentences:
+                words = re.findall(r'\b\w+\b', sentence.lower())
+                answer_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
 
             keyword_coverage = 0.0
             if context_words and answer_words:
@@ -546,9 +560,10 @@ class AnswerValidator:
                 important_context_words = {w for w in context_words if len(w) >= 2}
                 if important_context_words:
                     overlap_important = len(important_context_words.intersection(answer_words))
-                    keyword_coverage = overlap_important / max(1, min(len(important_context_words), 100))
+                    # 정규화: 최대 200개 단어까지만 고려하여 더 정확한 비율 계산
+                    keyword_coverage = overlap_important / max(1, min(len(important_context_words), 200))
                 else:
-                    keyword_coverage = overlap / max(1, min(len(context_words), 100))
+                    keyword_coverage = overlap / max(1, min(len(context_words), 200))
 
             # 2. 법률 조항/판례 인용 포함 여부 확인 (강화: 법령 조문 인용 우선)
             # 법령 조문 인용 패턴 (강화: 다양한 형식 지원)

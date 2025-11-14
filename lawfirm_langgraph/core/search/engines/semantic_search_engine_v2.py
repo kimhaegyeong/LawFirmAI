@@ -87,7 +87,7 @@ except ImportError:
                         model_kwargs={
                             "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                             "device_map": None,  # device_map 사용 안 함
-                            "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                            "dtype": torch.float32,  # 명시적 dtype 설정 (torch_dtype deprecated)
                             "use_safetensors": False,  # safetensors 사용 안 함 (meta tensor 문제 방지)
                             "ignore_mismatched_sizes": True,  # 크기 불일치 무시
                             "trust_remote_code": True,  # 원격 코드 신뢰
@@ -186,7 +186,7 @@ except ImportError:
                             # 모델 로딩 (메타 디바이스 방지를 위한 최적 옵션)
                             model = AutoModel.from_pretrained(
                                 model_name,
-                                torch_dtype=torch.float32,  # dtype 대신 torch_dtype 사용 (호환성)
+                                dtype=torch.float32,  # dtype 사용 (torch_dtype deprecated)
                                 low_cpu_mem_usage=False,  # 핵심: meta device 방지 (False로 설정)
                                 device_map=None,  # 핵심: device_map 사용 안 함
                                 use_safetensors=False,  # safetensors 사용 안 함 (일부 모델에서 메타 디바이스 문제 발생)
@@ -326,7 +326,7 @@ except ImportError:
                                     # 모델 재로딩
                                     model = AutoModel.from_pretrained(
                                         model_name,
-                                        torch_dtype=torch.float32,
+                                        dtype=torch.float32,  # torch_dtype deprecated
                                         low_cpu_mem_usage=False,  # 핵심: meta device 방지
                                         device_map=None,  # 핵심: device_map 사용 안 함
                                         use_safetensors=False,  # safetensors 사용 안 함
@@ -590,7 +590,7 @@ except ImportError:
                             model_kwargs={
                                 "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                                 "device_map": None,  # device_map 사용 안 함
-                                "torch_dtype": torch.float32,  # 명시적 dtype 설정
+                                "dtype": torch.float32,  # 명시적 dtype 설정 (torch_dtype deprecated)
                                 "use_safetensors": False,  # safetensors 사용 안 함
                                 "trust_remote_code": True,  # 원격 코드 신뢰
                                 "local_files_only": False,  # 로컬 파일만 사용 안 함
@@ -1479,6 +1479,34 @@ class SemanticSearchEngineV2:
                     else:
                         chunk_id = self._chunk_ids[idx]
                     
+                    # source_types 필터링 (FAISS 인덱스 사용 시 사전 필터링)
+                    if source_types:
+                        # chunk_id의 source_type을 먼저 확인
+                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                        chunk_source_type = chunk_meta.get('source_type')
+                        
+                        # source_type이 없으면 DB에서 조회
+                        if not chunk_source_type:
+                            try:
+                                conn_temp = self._get_connection()
+                                cursor_temp = conn_temp.execute(
+                                    "SELECT source_type FROM text_chunks WHERE id = ?",
+                                    (chunk_id,)
+                                )
+                                row_temp = cursor_temp.fetchone()
+                                if row_temp:
+                                    chunk_source_type = row_temp['source_type']
+                                    # 캐시에 저장
+                                    if chunk_id not in self._chunk_metadata:
+                                        self._chunk_metadata[chunk_id] = {}
+                                    self._chunk_metadata[chunk_id]['source_type'] = chunk_source_type
+                            except Exception as e:
+                                self.logger.debug(f"Failed to get source_type for chunk_id={chunk_id}: {e}")
+                        
+                        # source_type이 source_types에 없으면 건너뛰기
+                        if chunk_source_type and chunk_source_type not in source_types:
+                            continue
+                    
                     # IndexFlatIP는 내적을 반환하므로 직접 사용 가능
                     # IndexIVF나 다른 인덱스는 거리를 반환하므로 변환 필요
                     try:
@@ -1647,6 +1675,12 @@ class SemanticSearchEngineV2:
                 source_type = chunk_metadata.get('source_type')
                 source_id = chunk_metadata.get('source_id')
                 text = chunk_metadata.get('text', '')
+                
+                # source_types 필터링 (FAISS 인덱스 사용 시 필수)
+                if source_types and source_type not in source_types:
+                    self.logger.debug(f"Filtered chunk {chunk_id}: source_type {source_type} not in {source_types}")
+                    continue
+                
                 # 텍스트 복원을 위해 전체 메타데이터도 필요
                 full_metadata = chunk_metadata.copy()
 
@@ -2122,6 +2156,15 @@ class SemanticSearchEngineV2:
             except Exception:
                 pass
 
+    def _column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+        """테이블에 컬럼이 존재하는지 확인"""
+        try:
+            cursor = conn.execute(f"PRAGMA table_info({table_name})")
+            columns = [row[1] for row in cursor.fetchall()]
+            return column_name in columns
+        except Exception:
+            return False
+
     def _get_source_metadata(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> Dict[str, Any]:
         """
         소스 타입별 상세 메타데이터 조회
@@ -2129,33 +2172,65 @@ class SemanticSearchEngineV2:
         """
         try:
             if source_type == "statute_article":
-                cursor = conn.execute("""
-                    SELECT sa.*, s.name as statute_name, s.abbrv, s.category, s.statute_type,
-                           s.law_id, s.mst, s.proclamation_number, s.effective_date
+                base_columns = "sa.*, s.name as statute_name, s.abbrv, s.category, s.statute_type"
+                optional_columns = []
+                
+                if self._column_exists(conn, "statutes", "law_id"):
+                    optional_columns.append("s.law_id")
+                if self._column_exists(conn, "statutes", "mst"):
+                    optional_columns.append("s.mst")
+                if self._column_exists(conn, "statutes", "proclamation_number"):
+                    optional_columns.append("s.proclamation_number")
+                if self._column_exists(conn, "statutes", "effective_date"):
+                    optional_columns.append("s.effective_date")
+                
+                select_clause = base_columns
+                if optional_columns:
+                    select_clause += ", " + ", ".join(optional_columns)
+                
+                cursor = conn.execute(f"""
+                    SELECT {select_clause}
                     FROM statute_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
                     WHERE sa.id = ?
                 """, (source_id,))
             elif source_type == "case_paragraph":
-                cursor = conn.execute("""
-                    SELECT cp.*, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date,
-                           c.precedent_serial_number
+                base_columns = "cp.*, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date"
+                optional_columns = []
+                
+                if self._column_exists(conn, "cases", "precedent_serial_number"):
+                    optional_columns.append("c.precedent_serial_number")
+                
+                select_clause = base_columns
+                if optional_columns:
+                    select_clause += ", " + ", ".join(optional_columns)
+                
+                cursor = conn.execute(f"""
+                    SELECT {select_clause}
                     FROM case_paragraphs cp
                     JOIN cases c ON cp.case_id = c.id
                     WHERE cp.id = ?
                 """, (source_id,))
             elif source_type == "decision_paragraph":
-                cursor = conn.execute("""
-                    SELECT dp.*, d.org, d.doc_id, d.decision_date, d.result,
-                           d.decision_serial_number
+                base_columns = "dp.*, d.org, d.doc_id, d.decision_date, d.result"
+                optional_columns = []
+                
+                if self._column_exists(conn, "decisions", "decision_serial_number"):
+                    optional_columns.append("d.decision_serial_number")
+                
+                select_clause = base_columns
+                if optional_columns:
+                    select_clause += ", " + ", ".join(optional_columns)
+                
+                cursor = conn.execute(f"""
+                    SELECT {select_clause}
                     FROM decision_paragraphs dp
                     JOIN decisions d ON dp.decision_id = d.id
                     WHERE dp.id = ?
                 """, (source_id,))
             elif source_type == "interpretation_paragraph":
                 cursor = conn.execute("""
-                    SELECT ip.*, i.org, i.doc_id, i.title, i.response_date,
-                           i.interpretation_serial_number
+                    SELECT ip.*, i.org, i.doc_id, i.title, i.response_date
                     FROM interpretation_paragraphs ip
                     JOIN interpretations i ON ip.interpretation_id = i.id
                     WHERE ip.id = ?

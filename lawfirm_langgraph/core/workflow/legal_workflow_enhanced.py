@@ -31,14 +31,8 @@ from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
-# Langfuse observe 데코레이터 추가
-try:
-    from langfuse import observe
-    LANGFUSE_OBSERVE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_OBSERVE_AVAILABLE = False
-    # Mock observe decorator
-    def observe(**kwargs):
+# Mock observe decorator (Langfuse 제거됨)
+def observe(**kwargs):
         def decorator(func):
             return func
         return decorator
@@ -411,7 +405,8 @@ class EnhancedLegalQuestionWorkflow(
                 determine_search_parameters_func=self._determine_search_parameters,
                 save_metadata_safely_func=self._save_metadata_safely,
                 update_processing_time_func=self._update_processing_time,
-                handle_error_func=self._handle_error
+                handle_error_func=self._handle_error,
+                semantic_search_engine=self.semantic_search  # 타입별 검색용
             )
             self.logger.info("SearchExecutionProcessor initialized")
         except Exception as e:
@@ -749,29 +744,30 @@ class EnhancedLegalQuestionWorkflow(
                             )
                         )
                         
-                        # 캐시에 저장 (개발 환경이 아닐 때만)
-                        if not is_development:
+                        # 캐시 저장 (개발 환경이 아닐 때만)
+                        if expansion_result and expansion_result.api_call_success and not is_development:
                             try:
                                 keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
                                 cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
-                                expansion_data = {
-                                    "api_call_success": expansion_result.api_call_success,
-                                    "expanded_keywords": expansion_result.expanded_keywords if hasattr(expansion_result, 'expanded_keywords') else [],
-                                    "domain": domain,
-                                    "base_keywords": keywords,
-                                    "confidence": expansion_result.confidence if hasattr(expansion_result, 'confidence') else 0.9,
-                                    "expansion_method": expansion_result.expansion_method if hasattr(expansion_result, 'expansion_method') else "ai"
+                                cache_data = {
+                                    "expansion_result": {
+                                        "api_call_success": expansion_result.api_call_success,
+                                        "expanded_keywords": expansion_result.expanded_keywords,
+                                        "domain": expansion_result.domain,
+                                        "base_keywords": expansion_result.base_keywords,
+                                        "confidence": expansion_result.confidence,
+                                        "expansion_method": expansion_result.expansion_method
+                                    }
                                 }
-                                self.performance_optimizer.cache.cache_answer(
+                                self.performance_optimizer.cache.save_cached_answer(
                                     f"keyword_exp:{cache_key}",
-                                    query_type_str,
-                                    {"expansion_result": expansion_data},
-                                    confidence=1.0,
-                                    sources=[]
+                                    cache_data,
+                                    query_type_str
                                 )
-                                self.logger.debug(f"✅ [CACHE STORE] 키워드 확장 결과 캐시 저장: {cache_key[:16]}...")
+                                self.logger.debug(f"✅ [CACHE SAVE] 키워드 확장 결과 캐시 저장: {cache_key[:16]}...")
                             except Exception as e:
                                 self.logger.debug(f"키워드 확장 캐시 저장 중 오류 (무시): {e}")
+                        
                     except Exception as e:
                         self.logger.warning(f"AI keyword expansion failed: {e}")
                         expansion_result = None

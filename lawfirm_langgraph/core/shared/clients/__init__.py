@@ -14,14 +14,8 @@ try:
 except ImportError as e:
     OllamaClient = None
 
-try:
-    from .langfuse_client import LangfuseClient
-except ImportError as e:
-    LangfuseClient = None
-
 __all__ = [
     "GeminiClient",
     "OllamaClient",
-    "LangfuseClient",
 ]
 

@@ -1708,7 +1708,7 @@ class AnswerFormatterHandler:
                     sources_created_count += 1
                     self.logger.warning(f"[SOURCES] ⚠️ CRITICAL: Using final fallback for doc {doc_index}/{total_docs}: {final_fallback_source}")
                     
-                    # final fallback으로도 detail 생성 보장
+                    # final fallback으로도 detail 생성 보장 (source와 동시에 추가)
                     detail_dict = self._create_source_detail_dict(
                         final_fallback_source, source_type, None, doc, metadata, None
                     )
@@ -1758,6 +1758,152 @@ class AnswerFormatterHandler:
         self.logger.info(f"[SOURCES] 📊 Conversion statistics: {sources_created_count}/{total_docs} docs converted ({conversion_rate:.1f}%), failed: {sources_failed_count}")
 
         normalized_sources = self._normalize_sources(final_sources_list)
+        
+        # sources와 sources_detail 개수 동기화 보장 (개선: 더 정확한 매칭)
+        # sources_detail이 더 많으면 sources에 맞춰 조정
+        if len(final_sources_detail) > len(normalized_sources):
+            self.logger.warning(f"[SOURCES] ⚠️ sources_detail({len(final_sources_detail)}) > sources({len(normalized_sources)}), trimming sources_detail")
+            # sources와 매칭되는 sources_detail만 유지 (이름 기반 매칭)
+            matched_details = []
+            for source_str in normalized_sources:
+                matched = False
+                for detail in final_sources_detail:
+                    detail_name = detail.get("name", "")
+                    if source_str == detail_name or source_str in detail_name or detail_name in source_str:
+                        matched_details.append(detail)
+                        matched = True
+                        break
+                if not matched:
+                    # 매칭되지 않은 경우 기본 detail 생성
+                    matched_details.append({
+                        "name": source_str,
+                        "type": "unknown",
+                        "url": "",
+                        "metadata": {}
+                    })
+            final_sources_detail = matched_details[:len(normalized_sources)]
+        # sources가 더 많으면 sources_detail을 생성
+        elif len(normalized_sources) > len(final_sources_detail):
+            self.logger.warning(f"[SOURCES] ⚠️ sources({len(normalized_sources)}) > sources_detail({len(final_sources_detail)}), generating missing sources_detail")
+            # 기존 sources_detail과 매칭되지 않은 sources에 대해 detail 생성
+            existing_names = {detail.get("name", "") for detail in final_sources_detail}
+            for idx in range(len(final_sources_detail), len(normalized_sources)):
+                source_str = normalized_sources[idx]
+                if source_str and source_str not in existing_names:
+                    # retrieved_docs에서 해당 source와 매칭되는 doc 찾기
+                    matching_doc = None
+                    for doc in retrieved_docs_list:
+                        if isinstance(doc, dict):
+                            doc_source = self._create_source_from_doc(
+                                doc, 
+                                doc.get("metadata", {}), 
+                                doc.get("type") or doc.get("source_type", ""),
+                                doc.get("doc_id")
+                            )
+                            if doc_source and str(doc_source).strip() == source_str:
+                                matching_doc = doc
+                                break
+                    
+                    # 매칭된 doc이 있으면 상세 정보 포함하여 detail 생성
+                    if matching_doc:
+                        detail_dict = self._create_source_detail_dict(
+                            source_str,
+                            matching_doc.get("type") or matching_doc.get("source_type", ""),
+                            None,
+                            matching_doc,
+                            matching_doc.get("metadata", {}),
+                            None
+                        )
+                    else:
+                        # 기본 sources_detail 생성
+                        detail_dict = {
+                            "name": source_str,
+                            "type": "unknown",
+                            "url": "",
+                            "metadata": {}
+                        }
+                    if detail_dict:
+                        final_sources_detail.append(detail_dict)
+                        self.logger.info(f"[SOURCES] Generated missing sources_detail[{idx}]: {source_str}")
+        
+        # sources 배열에서 판례명 추출하여 sources_detail의 name 및 metadata 보완
+        if len(normalized_sources) > 0 and len(final_sources_detail) > 0:
+            import re
+            for idx, detail in enumerate(final_sources_detail):
+                if idx >= len(normalized_sources):
+                    continue
+                    
+                source_str = normalized_sources[idx]
+                if not source_str or not str(source_str).strip() or source_str == "판례":
+                    continue
+                
+                detail_name = detail.get("name") or ""
+                detail_type = detail.get("type", "")
+                metadata = detail.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    detail["metadata"] = metadata
+                
+                # name이 "판례"이거나 비어있는 경우, 또는 metadata가 비어있는 경우 보완
+                needs_name_update = detail_name in ("판례", "")
+                needs_metadata_update = (
+                    detail_type == "case_paragraph" and 
+                    (not str(metadata.get("court", "")).strip() and 
+                     not str(metadata.get("doc_id", "")).strip() and 
+                     not str(metadata.get("casenames", "")).strip())
+                )
+                
+                if needs_name_update or needs_metadata_update:
+                    # "판례명 (case_xxx)" 형식에서 판례명 추출 (정규표현식 사용)
+                    pattern = r'^(.+?)\s*\(([^)]+)\)\s*$'
+                    match = re.match(pattern, str(source_str).strip())
+                    
+                    if match:
+                        case_name = match.group(1).strip()
+                        doc_id_match = match.group(2).strip()
+                        
+                        # case_ 접두사 제거
+                        clean_doc_id = doc_id_match.replace("case_", "").strip()
+                        
+                        # metadata 보완
+                        if clean_doc_id:
+                            if not detail.get("case_number"):
+                                detail["case_number"] = clean_doc_id
+                            if not metadata.get("doc_id"):
+                                metadata["doc_id"] = clean_doc_id
+                        
+                        # name 보완
+                        if case_name and needs_name_update:
+                            detail["name"] = case_name
+                            if not detail.get("case_name"):
+                                detail["case_name"] = case_name
+                            if not metadata.get("casenames"):
+                                metadata["casenames"] = case_name
+                        elif case_name and needs_metadata_update:
+                            # name은 이미 있지만 metadata가 비어있는 경우
+                            if not metadata.get("casenames"):
+                                metadata["casenames"] = case_name
+                            if not detail.get("case_name"):
+                                detail["case_name"] = case_name
+                        
+                        # URL 생성 (doc_id가 있으면)
+                        if not detail.get("url") and clean_doc_id:
+                            from core.generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+                            formatter = UnifiedSourceFormatter()
+                            detail["url"] = formatter._generate_case_url(clean_doc_id, metadata)
+                    else:
+                        # 괄호가 없으면 전체를 판례명으로 사용
+                        clean_source = str(source_str).strip()
+                        if clean_source:
+                            if needs_name_update:
+                                detail["name"] = clean_source
+                            if not detail.get("case_name"):
+                                detail["case_name"] = clean_source
+                            if not metadata.get("casenames"):
+                                metadata["casenames"] = clean_source
+                    
+                    if detail.get("name") and detail.get("name") != "판례":
+                        self.logger.info(f"[SOURCES] Enhanced source detail[{idx}] from sources array: name={detail.get('name')}, case_name={detail.get('case_name')}, case_number={detail.get('case_number')}")
         
         # 개선: Legal References 추출 로깅 강화
         legal_refs_from_sources = self.source_extractor.extract_legal_references_from_sources_detail(final_sources_detail)
@@ -1824,6 +1970,54 @@ class AnswerFormatterHandler:
         state["common"]["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
 
         self.logger.info(f"[SOURCES] ✅ Final sources saved to state: {len(normalized_sources_clean)} sources, {len(final_sources_detail_clean)} details, {len(legal_refs[:MAX_LEGAL_REFERENCES_LIMIT])} legal refs")
+        
+        # sources 데이터 상세 로깅 (개발 모드에서만)
+        import os
+        if os.getenv("DEBUG_SOURCES", "false").lower() == "true" or self.logger.level <= logging.DEBUG:
+            self.logger.info(f"[SOURCES_TEST] ===== Sources Data Analysis =====")
+            self.logger.info(f"[SOURCES_TEST] Sources count: {len(normalized_sources_clean)}")
+            self.logger.info(f"[SOURCES_TEST] Sources detail count: {len(final_sources_detail_clean)}")
+            self.logger.info(f"[SOURCES_TEST] Legal references count: {len(legal_refs[:MAX_LEGAL_REFERENCES_LIMIT])}")
+            
+            # sources 배열 상세 로깅
+            for idx, source in enumerate(normalized_sources_clean[:5], 1):
+                self.logger.info(f"[SOURCES_TEST] Source[{idx}]: {source}")
+            
+            # sources_detail 상세 로깅
+            for idx, detail in enumerate(final_sources_detail_clean[:5], 1):
+                detail_info = {
+                    "name": detail.get("name"),
+                    "type": detail.get("type"),
+                    "case_name": detail.get("case_name"),
+                    "case_number": detail.get("case_number"),
+                    "court": detail.get("court"),
+                    "url": detail.get("url"),
+                    "metadata": detail.get("metadata", {}),
+                }
+                self.logger.info(f"[SOURCES_TEST] SourceDetail[{idx}]: {detail_info}")
+            
+            # sources와 sources_detail 매칭 확인
+            if len(normalized_sources_clean) != len(final_sources_detail_clean):
+                self.logger.warning(f"[SOURCES_TEST] ⚠️ Count mismatch: sources={len(normalized_sources_clean)}, sources_detail={len(final_sources_detail_clean)}")
+            
+            # 비어있는 metadata 확인
+            empty_metadata_count = 0
+            for detail in final_sources_detail_clean:
+                metadata = detail.get("metadata", {})
+                if isinstance(metadata, dict):
+                    # 판례의 경우 court, doc_id, casenames가 모두 비어있는지 확인
+                    if detail.get("type") == "case_paragraph":
+                        court = metadata.get("court") or ""
+                        doc_id = metadata.get("doc_id") or ""
+                        casenames = metadata.get("casenames") or ""
+                        if not str(court).strip() and not str(doc_id).strip() and not str(casenames).strip():
+                            empty_metadata_count += 1
+                            self.logger.warning(f"[SOURCES_TEST] ⚠️ Empty metadata detected: {detail.get('name')}")
+            
+            if empty_metadata_count > 0:
+                self.logger.warning(f"[SOURCES_TEST] ⚠️ Total empty metadata count: {empty_metadata_count}")
+            
+            self.logger.info(f"[SOURCES_TEST] ===== End Sources Data Analysis =====")
 
         return normalized_sources_clean, final_sources_detail_clean, legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
 
@@ -1997,6 +2191,9 @@ class AnswerFormatterHandler:
                         detail_dict["case_number"] = meta["doc_id"]
                     if meta.get("court"):
                         detail_dict["court"] = meta["court"]
+                    # casenames를 case_name으로 변환
+                    if meta.get("casenames"):
+                        detail_dict["case_name"] = meta["casenames"]
                 elif source_type == "decision_paragraph":
                     if meta.get("doc_id"):
                         detail_dict["decision_number"] = meta["doc_id"]
@@ -2034,6 +2231,10 @@ class AnswerFormatterHandler:
                     detail_dict["case_number"] = doc_id
                 if doc.get("court") or metadata.get("court"):
                     detail_dict["court"] = doc.get("court") or metadata.get("court")
+                # casenames를 case_name으로 변환
+                casenames = doc.get("casenames") or metadata.get("casenames")
+                if casenames:
+                    detail_dict["case_name"] = casenames
             elif source_type == "decision_paragraph":
                 doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id")
                 if doc_id:
