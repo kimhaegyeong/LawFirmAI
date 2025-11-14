@@ -20,26 +20,30 @@ interface ChatHistoryProps {
   onRetryMessage?: (messageId: string) => void; // 재시도 핸들러
   onDocumentClick?: (message: ChatMessageType, documentIndex: number) => void; // 문서 클릭 핸들러
   onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void; // 참고자료 사이드바 열기 핸들러
+  onRetryQuestion?: (question: string, messageId: string) => void; // 질문 재전송 핸들러
 }
 
 export function ChatHistory({ 
   messages, 
   sessionId, 
   isLoading = false, 
-  currentProgress, 
+  currentProgress: _currentProgress, 
   progressHistory: _progressHistory = [], 
   onQuestionClick, 
   streamingMessageId = null,
   streamErrors = new Map(),
   onRetryMessage,
   onDocumentClick,
-  onOpenReferencesSidebar
+  onOpenReferencesSidebar,
+  onRetryQuestion
 }: ChatHistoryProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const autoScrollEnabledRef = useRef(true);
   const previousStreamingMessageIdRef = useRef<string | null>(null);
+  const previousMessagesCountRef = useRef<number>(0);
+  const previousDoneMessageIdsRef = useRef<Set<string>>(new Set());
 
   const checkIfNearBottom = (container: HTMLElement): boolean => {
     const threshold = 100;
@@ -90,12 +94,23 @@ export function ChatHistory({
         const lastMessage = messages[messages.length - 1];
         const isStreaming = streamingMessageId !== null && 
           lastMessage?.role === 'assistant' && 
-          lastMessage?.id === streamingMessageId;
+          lastMessage?.id === streamingMessageId &&
+          lastMessage?.metadata?._isDone !== true;
         
-        const isFirstChunk = streamingMessageId !== null && 
+        // 첫 stream 이벤트로 메시지 생성 감지
+        const isFirstStreamChunk = streamingMessageId !== null && 
           previousStreamingMessageIdRef.current !== streamingMessageId;
         
-        if (isFirstChunk) {
+        // done 이벤트로 새 메시지 생성 감지
+        const currentMessagesCount = messages.length;
+        const messagesCountIncreased = currentMessagesCount > previousMessagesCountRef.current;
+        const lastMessageIsDone = lastMessage?.metadata?._isDone === true;
+        const isNewDoneMessage = lastMessageIsDone && 
+          messagesCountIncreased && 
+          !previousDoneMessageIdsRef.current.has(lastMessage.id);
+        
+        // 첫 메시지 생성 시 (stream 또는 done 이벤트)
+        if (isFirstStreamChunk) {
           previousStreamingMessageIdRef.current = streamingMessageId;
           container.scrollTo({
             top: container.scrollHeight,
@@ -103,7 +118,17 @@ export function ChatHistory({
           });
           autoScrollEnabledRef.current = true;
           setShowScrollToBottom(false);
+        } else if (isNewDoneMessage) {
+          // done 이벤트로 새 메시지가 생성된 경우
+          previousDoneMessageIdsRef.current.add(lastMessage.id);
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'auto'
+          });
+          autoScrollEnabledRef.current = true;
+          setShowScrollToBottom(false);
         } else if (isStreaming) {
+          // 스트리밍 중: 하단 근처에 있을 때만 스크롤
           const isNearBottom = checkIfNearBottom(container);
           if (isNearBottom) {
             container.scrollTo({
@@ -112,13 +137,36 @@ export function ChatHistory({
             });
           }
         } else {
-          if (autoScrollEnabledRef.current) {
+          // done 이벤트로 기존 메시지 업데이트된 경우
+          const isDoneUpdate = lastMessage?.metadata?._isDone === true && 
+            previousDoneMessageIdsRef.current.has(lastMessage.id);
+          
+          if (isDoneUpdate) {
+            // 하단 근처에 있을 때만 스크롤
+            const isNearBottom = checkIfNearBottom(container);
+            if (isNearBottom) {
+              container.scrollTo({
+                top: container.scrollHeight,
+                behavior: 'smooth'
+              });
+            }
+          } else if (autoScrollEnabledRef.current) {
+            // 일반 메시지 추가 시
             container.scrollTo({
               top: container.scrollHeight,
               behavior: 'smooth'
             });
           }
         }
+        
+        // done 이벤트를 받은 메시지 ID 추적
+        messages.forEach(msg => {
+          if (msg.metadata?._isDone === true) {
+            previousDoneMessageIdsRef.current.add(msg.id);
+          }
+        });
+        
+        previousMessagesCountRef.current = currentMessagesCount;
       } else if (messagesEndRef.current) {
         messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
       }
@@ -133,16 +181,49 @@ export function ChatHistory({
     return null;
   }
 
+  // 다음 답변에 오류가 있는지 확인하는 함수
+  const checkIfResponseHasError = (messageIndex: number): boolean => {
+    if (messageIndex >= messages.length - 1) {
+      return false;
+    }
+    
+    const nextMessage = messages[messageIndex + 1];
+    if (!nextMessage || nextMessage.role !== 'assistant') {
+      return false;
+    }
+    
+    // 오류가 있는지 확인
+    const hasError = streamErrors.has(nextMessage.id);
+    
+    // 스트리밍 중이 아닐 때만 확인
+    const isNotStreaming = streamingMessageId !== nextMessage.id;
+    
+    return hasError && isNotStreaming;
+  };
+
   return (
     <div ref={containerRef} className="h-full bg-gradient-to-b from-slate-50 to-white relative">
       <div className="max-w-4xl mx-auto px-6 py-8">
         <div className="space-y-4">
-          {messages.map((message) => {
+          {messages.map((message, index) => {
+            // isStreaming 계산: streamingMessageId가 일치하고, done 이벤트를 받지 않았을 때만 true
+            const isDone = message.metadata?._isDone === true;
             const isStreaming = message.role === 'assistant' && 
               streamingMessageId !== null &&
-              message.id === streamingMessageId;
+              message.id === streamingMessageId &&
+              !isDone; // done 이벤트를 받으면 스트리밍 중이 아님
             
             const error = streamErrors.get(message.id);
+            
+            // 사용자 메시지인 경우 다음 답변에 오류가 있는지 확인
+            const hasErrorResponse = message.role === 'user' 
+              ? checkIfResponseHasError(index)
+              : false;
+            
+            // 질문 재전송 핸들러
+            const handleRetryQuestion = message.role === 'user' && onRetryQuestion
+              ? () => onRetryQuestion(message.content, message.id)
+              : undefined;
             
             return (
               <ErrorBoundary
@@ -164,6 +245,8 @@ export function ChatHistory({
                   isStreaming={isStreaming}
                   error={error}
                   onRetry={error && error.canRetry && onRetryMessage ? () => onRetryMessage(message.id) : undefined}
+                  onRetryQuestion={handleRetryQuestion}
+                  hasEmptyOrErrorResponse={hasErrorResponse}
                 />
               </ErrorBoundary>
             );
