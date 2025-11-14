@@ -11,6 +11,140 @@ import type { AxiosError } from 'axios';
 import type { ChatMessage, FileAttachment } from '../types/chat';
 import type { StreamError } from '../types/error';
 
+interface MessageSearchResult {
+  messageIndex: number;
+  foundMessageId: string | null;
+  searchMethod: string;
+}
+
+function findMessageByIdentifiers(
+  messages: ChatMessage[],
+  options: {
+    sourcesMessageId?: string;
+    assistantMessageId?: string;
+    streamingMessageId?: string | null;
+  }
+): MessageSearchResult {
+  const { sourcesMessageId, assistantMessageId, streamingMessageId } = options;
+  let messageIndex = -1;
+  let foundMessageId: string | null = null;
+  let searchMethod = '';
+
+  if (sourcesMessageId) {
+    messageIndex = messages.findIndex((msg) => msg.metadata?.message_id === sourcesMessageId);
+    if (messageIndex !== -1) {
+      foundMessageId = messages[messageIndex]?.id || null;
+      searchMethod = 'metadata.message_id';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Found message by metadata.message_id:', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  if (assistantMessageId) {
+    messageIndex = messages.findIndex((msg) => msg.id === assistantMessageId);
+    if (messageIndex !== -1) {
+      foundMessageId = assistantMessageId;
+      searchMethod = 'assistantMessageId';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Found message by assistantMessageId:', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  if (sourcesMessageId) {
+    messageIndex = messages.findIndex((msg) => msg.id === sourcesMessageId);
+    if (messageIndex !== -1) {
+      foundMessageId = sourcesMessageId;
+      searchMethod = 'sourcesMessageId as id';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Found message by sourcesMessageId as id:', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  if (streamingMessageId) {
+    messageIndex = messages.findIndex((msg) => msg.id === streamingMessageId);
+    if (messageIndex !== -1) {
+      foundMessageId = streamingMessageId;
+      searchMethod = 'streamingMessageId';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Found message by streamingMessageId:', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg && msg.role === 'assistant') {
+      messageIndex = i;
+      foundMessageId = msg.id;
+      searchMethod = 'last assistant message (fallback)';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Found message by last assistant message (fallback):', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  return { messageIndex: -1, foundMessageId: null, searchMethod: '' };
+}
+
+function findMessageForDoneEvent(
+  messages: ChatMessage[],
+  assistantMessageId: string,
+  streamingMessageId: string | null
+): MessageSearchResult {
+  let messageIndex = messages.findIndex((msg) => msg.id === assistantMessageId);
+  let foundMessageId: string | null = assistantMessageId;
+  let searchMethod = 'assistantMessageId';
+
+  if (messageIndex === -1 && streamingMessageId) {
+    messageIndex = messages.findIndex((msg) => msg.id === streamingMessageId);
+    if (messageIndex !== -1) {
+      foundMessageId = streamingMessageId;
+      searchMethod = 'streamingMessageId';
+      if (import.meta.env.DEV) {
+        logger.debug('[Stream] Done event: Found message by streamingMessageId:', foundMessageId);
+      }
+      return { messageIndex, foundMessageId, searchMethod };
+    }
+  }
+
+  if (messageIndex === -1) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg && msg.role === 'assistant') {
+        messageIndex = i;
+        foundMessageId = msg.id;
+        searchMethod = 'last assistant message (fallback)';
+        if (import.meta.env.DEV) {
+          logger.debug('[Stream] Done event: Found message by last assistant message (fallback):', foundMessageId);
+        }
+        return { messageIndex, foundMessageId, searchMethod };
+      }
+    }
+  }
+
+  return { messageIndex, foundMessageId, searchMethod };
+}
+
+function shouldClearStreamingId(
+  streamingMessageId: string | null,
+  assistantMessageId: string,
+  foundMessageId: string | null
+): boolean {
+  if (!streamingMessageId) return false;
+  return (
+    streamingMessageId === assistantMessageId ||
+    streamingMessageId === foundMessageId
+  );
+}
+
 interface UseStreamingMessageOptions {
   isAuthenticated: boolean;
   streamingMessageId: string | null;
@@ -266,77 +400,19 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                 }
 
                 let messageFound = false;
+                let searchResult: MessageSearchResult = {
+                  messageIndex: -1,
+                  foundMessageId: null,
+                  searchMethod: '',
+                };
                 updateMessages((prev) => {
-                  let messageIndex = -1;
-                  let foundMessageId: string | null = null;
-                  let searchMethod = '';
-
-                  if (sourcesMessageId) {
-                    messageIndex = prev.findIndex((msg) =>
-                      msg.metadata?.message_id === sourcesMessageId
-                    );
-                    if (messageIndex !== -1) {
-                      foundMessageId = prev[messageIndex]?.id || null;
-                      searchMethod = 'metadata.message_id';
-                      if (import.meta.env.DEV) {
-                        logger.debug('[Stream] Found message by metadata.message_id:', foundMessageId);
-                      }
-                    }
-                  }
-
-                  if (messageIndex === -1 && assistantMessageId) {
-                    messageIndex = prev.findIndex((msg) =>
-                      msg.id === assistantMessageId
-                    );
-                    if (messageIndex !== -1) {
-                      foundMessageId = assistantMessageId;
-                      searchMethod = 'assistantMessageId';
-                      if (import.meta.env.DEV) {
-                        logger.debug('[Stream] Found message by assistantMessageId:', foundMessageId);
-                      }
-                    }
-                  }
-
-                  if (messageIndex === -1 && sourcesMessageId) {
-                    messageIndex = prev.findIndex((msg) =>
-                      msg.id === sourcesMessageId
-                    );
-                    if (messageIndex !== -1) {
-                      foundMessageId = sourcesMessageId;
-                      searchMethod = 'sourcesMessageId as id';
-                      if (import.meta.env.DEV) {
-                        logger.debug('[Stream] Found message by sourcesMessageId as id:', foundMessageId);
-                      }
-                    }
-                  }
-
-                  if (messageIndex === -1 && streamingMessageId) {
-                    messageIndex = prev.findIndex((msg) =>
-                      msg.id === streamingMessageId
-                    );
-                    if (messageIndex !== -1) {
-                      foundMessageId = streamingMessageId;
-                      searchMethod = 'streamingMessageId';
-                      if (import.meta.env.DEV) {
-                        logger.debug('[Stream] Found message by streamingMessageId:', foundMessageId);
-                      }
-                    }
-                  }
-
-                  if (messageIndex === -1) {
-                    for (let i = prev.length - 1; i >= 0; i--) {
-                      const msg = prev[i];
-                      if (msg && msg.role === 'assistant') {
-                        messageIndex = i;
-                        foundMessageId = msg.id;
-                        searchMethod = 'last assistant message (fallback)';
-                        if (import.meta.env.DEV) {
-                          logger.debug('[Stream] Found message by last assistant message (fallback):', foundMessageId);
-                        }
-                        break;
-                      }
-                    }
-                  }
+                  const result = findMessageByIdentifiers(prev, {
+                    sourcesMessageId,
+                    assistantMessageId,
+                    streamingMessageId,
+                  });
+                  searchResult = result;
+                  const { messageIndex, foundMessageId, searchMethod } = result;
 
                   if (messageIndex === -1) {
                     if (import.meta.env.DEV) {
@@ -547,18 +623,10 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                   return prev;
                 });
 
-                if (messageFound) {
-                  if (import.meta.env.DEV) {
-                    logger.debug('[Stream] Message found, clearing streamingMessageId after sources event:', {
-                      messageFound,
-                      wasStreamingMessageId: streamingMessageId,
-                      sourcesMessageId,
-                      assistantMessageId,
-                      willClear: streamingMessageId === assistantMessageId || streamingMessageId === sourcesMessageId || !streamingMessageId,
-                    });
-                  }
-                  if (streamingMessageId === assistantMessageId ||
-                    streamingMessageId === sourcesMessageId ||
+                if (messageFound && searchResult) {
+                  const foundId = searchResult.foundMessageId;
+                  if (shouldClearStreamingId(streamingMessageId, assistantMessageId, foundId) ||
+                    (sourcesMessageId && streamingMessageId === sourcesMessageId) ||
                     !streamingMessageId) {
                     setStreamingId(null);
                     if (import.meta.env.DEV) {
@@ -610,40 +678,11 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                 tokenBufferTimeoutRef.current.delete(assistantMessageId);
               }
 
-              // 메시지 업데이트를 먼저 수행하여 _isDone 플래그 설정
               const foundMessageIdRef = { value: assistantMessageId };
               updateMessages((prev) => {
-                let messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
-                foundMessageIdRef.value = assistantMessageId;
-                let searchMethod = 'assistantMessageId';
-
-                // 메시지를 찾지 못한 경우 fallback 로직 사용
-                if (messageIndex === -1 && streamingMessageId) {
-                  messageIndex = prev.findIndex((msg) => msg.id === streamingMessageId);
-                  if (messageIndex !== -1) {
-                    foundMessageIdRef.value = streamingMessageId;
-                    searchMethod = 'streamingMessageId';
-                    if (import.meta.env.DEV) {
-                      logger.debug('[Stream] Done event: Found message by streamingMessageId:', foundMessageIdRef.value);
-                    }
-                  }
-                }
-
-                // 여전히 찾지 못한 경우 마지막 assistant 메시지 찾기
-                if (messageIndex === -1) {
-                  for (let i = prev.length - 1; i >= 0; i--) {
-                    const msg = prev[i];
-                    if (msg && msg.role === 'assistant') {
-                      messageIndex = i;
-                      foundMessageIdRef.value = msg.id;
-                      searchMethod = 'last assistant message (fallback)';
-                      if (import.meta.env.DEV) {
-                        logger.debug('[Stream] Done event: Found message by last assistant message (fallback):', foundMessageIdRef.value);
-                      }
-                      break;
-                    }
-                  }
-                }
+                const searchResult = findMessageForDoneEvent(prev, assistantMessageId, streamingMessageId);
+                const { messageIndex, foundMessageId, searchMethod } = searchResult;
+                foundMessageIdRef.value = foundMessageId || assistantMessageId;
 
                 if (messageIndex !== -1) {
                   const updated = [...prev];
@@ -658,7 +697,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
 
                       if (import.meta.env.DEV) {
                         logger.debug('[Stream] Done event parsed sources:', {
-                          messageId: foundMessageIdRef.value,
+                          messageId: foundMessageId,
                           searchMethod,
                           sourcesCount: parsedSources.sources.length,
                           legalReferencesCount: parsedSources.legalReferences.length,
@@ -679,14 +718,13 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                     } else {
                       if (import.meta.env.DEV) {
                         logger.warn('[Stream] Done event received but no metadata in parsed data:', {
-                          messageId: foundMessageIdRef.value,
+                          messageId: foundMessageId,
                           searchMethod,
                           parsed,
                         });
                       }
                     }
 
-                    // done 이벤트 플래그 추가
                     mergedMetadata = {
                       ...mergedMetadata,
                       _isDone: true,
@@ -694,7 +732,7 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
 
                     if (import.meta.env.DEV) {
                       logger.debug('[Stream] Done event merged metadata:', {
-                        messageId: foundMessageIdRef.value,
+                        messageId: foundMessageId,
                         searchMethod,
                         mergedMetadata,
                         metadataKeys: Object.keys(mergedMetadata),
@@ -753,11 +791,8 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                 }
               });
 
-              // 메시지 업데이트 후 streamingMessageId를 null로 설정
-              // React 18의 자동 배치 처리로 같은 렌더 사이클에서 처리됨
-              // assistantMessageId 또는 streamingMessageId와 일치하면 null로 설정
               const finalFoundMessageId = foundMessageIdRef.value;
-              if (streamingMessageId === assistantMessageId || streamingMessageId === finalFoundMessageId) {
+              if (shouldClearStreamingId(streamingMessageId, assistantMessageId, finalFoundMessageId)) {
                 setStreamingId(null);
                 if (import.meta.env.DEV) {
                   logger.debug('[Stream] Done event: stopping typing effect, streamingMessageId set to null', {
@@ -765,17 +800,6 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                     streamingMessageId,
                     foundMessageId: finalFoundMessageId,
                   });
-                }
-              } else if (finalFoundMessageId && finalFoundMessageId !== assistantMessageId) {
-                // 찾은 메시지 ID가 assistantMessageId와 다르면 해당 ID도 확인
-                if (streamingMessageId === finalFoundMessageId) {
-                  setStreamingId(null);
-                  if (import.meta.env.DEV) {
-                    logger.debug('[Stream] Done event: stopping typing effect (found message), streamingMessageId set to null', {
-                      foundMessageId: finalFoundMessageId,
-                      streamingMessageId,
-                    });
-                  }
                 }
               }
 
