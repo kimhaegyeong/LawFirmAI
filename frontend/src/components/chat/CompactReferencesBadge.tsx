@@ -6,15 +6,16 @@ import { FileText, ChevronDown, ChevronUp, Scale, Bookmark } from 'lucide-react'
 import { useState, useMemo } from 'react';
 
 import type { SourceInfo } from '../../types/chat';
-import { getSourcesByType, extractLegalReferencesFromSourcesDetail } from '../../utils/sourcesParser';
+import { getSourcesByType, getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
 
 type ReferenceType = 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 
 interface CompactReferencesBadgeProps {
   references?: string[];
-  legalReferences?: string[];
-  sources?: string[];
-  sourcesDetail?: SourceInfo[];
+  legalReferences?: string[];  // deprecated
+  sources?: string[];  // deprecated
+  sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
+  sourcesByType?: SourcesByType;  // 우선 사용
   onOpenSidebar?: (selectedType: ReferenceType) => void;
 }
 
@@ -23,27 +24,35 @@ export function CompactReferencesBadge({
   legalReferences = [],
   sources = [],
   sourcesDetail = [],
+  sourcesByType: propSourcesByType,
   onOpenSidebar,
 }: CompactReferencesBadgeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // 전체 참고자료 개수 계산
+  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
+  const sourcesByType = useMemo(() => {
+    if (propSourcesByType) {
+      return propSourcesByType;
+    }
+    return getSourcesByType(sourcesDetail);
+  }, [propSourcesByType, sourcesDetail]);
+
+  const effectiveSourcesDetail = useMemo(() => {
+    if (propSourcesByType) {
+      return getSourcesDetailFromSourcesByType(propSourcesByType);
+    }
+    return sourcesDetail;
+  }, [propSourcesByType, sourcesDetail]);
+
   // sourcesDetail에서 legal_references 추출 (deprecated용)
   const extractedLegalRefs = useMemo(() => {
-    return extractLegalReferencesFromSourcesDetail(sourcesDetail);
-  }, [sourcesDetail]);
+    return extractLegalReferencesFromSourcesDetail(effectiveSourcesDetail);
+  }, [effectiveSourcesDetail]);
   
   // legalReferences와 extractedLegalRefs 병합 (하위 호환성)
   const allLegalRefs = useMemo(() => {
     return [...new Set([...legalReferences, ...extractedLegalRefs])];
   }, [legalReferences, extractedLegalRefs]);
-  
-  // sources_by_type 사용
-  const sourcesByType = useMemo(() => {
-    return getSourcesByType(sourcesDetail);
-  }, [sourcesDetail]);
-
-  const totalCount = references.length + allLegalRefs.length + sources.length + sourcesDetail.length;
 
   // 참고자료 파싱 개선 - 제목과 부제목 구조로 정보 표시
   const parsedReferences = useMemo(() => {
@@ -57,17 +66,17 @@ export function CompactReferencesBadge({
     }> = [];
     const seen = new Set<string>();
     
-    // sources_detail 우선 처리 (상세 정보 활용)
-    sourcesDetail.forEach((detail, idx) => {
+    // effectiveSourcesDetail 우선 처리 (상세 정보 활용, 중복 제거)
+    effectiveSourcesDetail.forEach((detail, idx) => {
       let type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' = 'regulation';
-      let title = '';
-      let subtitle = '';
+      let title: string = '';
+      let subtitle: string = '';
       
       if (detail.type === 'statute_article') {
         type = 'law';
         const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
         const articleNo = detail.article_no || detail.metadata?.article_no;
-        title = lawName;
+        title = lawName || '법령';
         subtitle = articleNo ? `제${articleNo}조` : '';
       } else if (detail.type === 'case_paragraph') {
         type = 'precedent';
@@ -87,7 +96,7 @@ export function CompactReferencesBadge({
                             detail.metadata?.decision_date ||
                             detail.metadata?.announce_date || '';
         
-        title = caseName || caseNumber || '판례';
+        title = (caseName || caseNumber || '판례') as string;
         subtitle = [caseNumber, court, decisionDate].filter(Boolean).join(' · ');
       } else if (detail.type === 'decision_paragraph') {
         type = 'decision';
@@ -98,7 +107,7 @@ export function CompactReferencesBadge({
         const decisionDate = detail.decision_date || 
                            detail.metadata?.decision_date || '';
         
-        title = org || decisionNumber || '결정례';
+        title = (org || decisionNumber || '결정례') as string;
         subtitle = [decisionNumber, decisionDate].filter(Boolean).join(' · ');
       } else if (detail.type === 'interpretation_paragraph') {
         type = 'interpretation';
@@ -110,12 +119,12 @@ export function CompactReferencesBadge({
         title = titleText || '해석례';
         subtitle = [org, responseDate].filter(Boolean).join(' · ');
       } else {
-        title = detail.name || detail.content || '';
+        title = detail.name || detail.content || '참고자료';
       }
       
       // 중복 체크용 키 생성
       const key = detail.case_number || 
-                 detail.article_number ||
+                 detail.article_no ||
                  detail.decision_number ||
                  detail.interpretation_number ||
                  detail.metadata?.doc_id || 
@@ -137,7 +146,7 @@ export function CompactReferencesBadge({
 
     // legal_references 처리 (sources_detail과 중복 제외, deprecated)
     allLegalRefs.forEach((ref, idx) => {
-      const matched = sourcesDetail.find(detail => {
+      const matched = effectiveSourcesDetail.find(detail => {
         const detailName = detail.name || detail.content || '';
         return detailName.includes(ref) || ref.includes(detailName);
       });
@@ -154,7 +163,7 @@ export function CompactReferencesBadge({
 
     // sources 처리 (sources_detail과 중복 제외)
     sources.forEach((src, idx) => {
-      const matched = sourcesDetail.find(detail => {
+      const matched = effectiveSourcesDetail.find(detail => {
         const detailName = detail.name || detail.content || '';
         return detailName.includes(src) || src.includes(detailName);
       });
@@ -183,16 +192,21 @@ export function CompactReferencesBadge({
     });
 
     return all;
-  }, [references, allLegalRefs, sources, sourcesDetail]);
+  }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
 
-  // 타입별 개수 계산 (sourcesByType 사용)
-  const counts = useMemo(() => ({
-    law: sourcesByType.statute_article.length,
-    precedent: sourcesByType.case_paragraph.length,
-    decision: sourcesByType.decision_paragraph.length,
-    interpretation: sourcesByType.interpretation_paragraph.length,
-    regulation: parsedReferences.filter(r => r.type === 'regulation').length,
-  }), [sourcesByType, parsedReferences]);
+  // 전체 참고자료 개수 계산 (중복 제거된 parsedReferences 사용)
+  const totalCount = parsedReferences.length;
+
+  // 타입별 개수 계산 (parsedReferences 기반으로 정확하게 계산)
+  const counts = useMemo(() => {
+    return {
+      law: parsedReferences.filter(r => r.type === 'law').length,
+      precedent: parsedReferences.filter(r => r.type === 'precedent').length,
+      decision: parsedReferences.filter(r => r.type === 'decision').length,
+      interpretation: parsedReferences.filter(r => r.type === 'interpretation').length,
+      regulation: parsedReferences.filter(r => r.type === 'regulation').length,
+    };
+  }, [parsedReferences]);
 
   // 첫 3개만 미리보기
   const previewReferences = parsedReferences.slice(0, 3);
