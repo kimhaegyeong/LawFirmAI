@@ -2,14 +2,14 @@
  * 채팅 메시지 컴포넌트
  */
 import { Copy, Check, ThumbsUp, ThumbsDown, Loader2, RefreshCw } from 'lucide-react';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { formatRelativeTime } from '../../utils/dateUtils';
 import { FileAttachment } from '../common/FileAttachment';
-import { CompactReferencesBadge } from './CompactReferencesBadge';
-import { RelatedQuestions } from './RelatedQuestions';
+import { MessageReferencesSection } from './MessageReferencesSection';
+import { MessageRelatedQuestionsSection } from './MessageRelatedQuestionsSection';
 import { ErrorMessage } from './ErrorMessage';
 import { DocumentReference } from './DocumentReference';
 import { sendFeedback, ratingToNumber } from '../../services/feedbackService';
@@ -17,6 +17,7 @@ import { useTypingEffect } from '../../hooks/useTypingEffect';
 import logger from '../../utils/logger';
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
 import type { StreamError } from '../../types/error';
+import { getSourcesDetailFromSourcesByType } from '../../utils/sourcesParser';
 
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
@@ -33,6 +34,8 @@ interface ChatMessageProps {
   isStreaming?: boolean; // 스트리밍 중인지 여부
   error?: StreamError; // 에러 상태
   onRetry?: () => void; // 재시도 핸들러
+  onRetryQuestion?: () => void; // 질문 재전송 핸들러
+  hasEmptyOrErrorResponse?: boolean; // 답변이 비어있거나 오류가 있는지 여부
 }
 
 export function ChatMessage({ 
@@ -43,13 +46,18 @@ export function ChatMessage({
   onOpenReferencesSidebar,
   isStreaming = false,
   error,
-  onRetry
+  onRetry,
+  onRetryQuestion,
+  hasEmptyOrErrorResponse = false
 }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'positive' | 'negative' | null>(null);
   
-  // 안전성 검사: message가 없거나 필수 필드가 없으면 기본값 설정
-  const safeMessage = message || { id: '', content: '', role: 'user' as const, timestamp: new Date() };
+  // 안전성 검사: message가 없거나 필수 필드가 없으면 기본값 설정 (useMemo로 최적화)
+  const safeMessage = useMemo(() => 
+    message || { id: '', content: '', role: 'user' as const, timestamp: new Date() },
+    [message]
+  );
   const safeId = safeMessage.id || '';
   
   // content가 없으면 빈 문자열로 처리
@@ -58,15 +66,21 @@ export function ChatMessage({
   // 메시지 타입 확인 (먼저 정의)
   const isUser = safeMessage.role === 'user';
   const isProgress = safeMessage.role === 'progress';
+  
+  // metadata를 명시적으로 추출하여 변경 감지 보장
   const metadata = safeMessage.metadata || {};
   
-  // 스트리밍 완료 여부 확인 (isStreaming prop이 false이거나 undefined인 경우)
-  const isStreamingComplete = !isStreaming;
+  // done 이벤트를 받았는지 확인 (직접 계산하여 변경 감지 보장)
+  const isDone = metadata._isDone === true;
+  
+  // 스트리밍 완료 여부 확인 (done 이벤트를 받았거나 isStreaming prop이 false인 경우)
+  const isStreamingComplete = isDone || !isStreaming;
   
   if (import.meta.env.DEV && !isUser && !isProgress) {
     logger.debug('[ChatMessage] Component render:', {
       messageId: safeId,
       isStreaming,
+      isDone,
       isStreamingComplete,
       hasMetadata: !!metadata,
       relatedQuestions: metadata.related_questions?.length || 0,
@@ -78,20 +92,36 @@ export function ChatMessage({
     });
   }
   
-  // 타이핑 효과 적용 (스트리밍 중일 때만 활성화)
-  const { displayed: displayedContent, isComplete: isTypingComplete } = useTypingEffect(
+  // 타이핑 효과 적용 (done 이벤트를 받지 않았을 때만 활성화)
+  // isDone이 true이면 isStreaming과 관계없이 타이핑 효과 비활성화
+  const typingEnabled = useMemo(() => !isDone && isStreaming, [isDone, isStreaming]);
+  
+  // isDone이 true이면 타이핑 효과를 완전히 우회하고 전체 content 사용
+  const typingEffectResult = useTypingEffect(
     content,
     {
       speed: 1, // ms마다 한 글자씩 표시
-      enabled: isStreaming // 스트리밍 중일 때만 타이핑 효과 활성화
+      enabled: typingEnabled
     }
   );
+  
+  // isDone이 true이면 즉시 전체 content 표시 (useMemo로 메모이제이션하여 즉시 반영)
+  const displayedContent = useMemo(() => {
+    if (isDone) {
+      return content;
+    }
+    return typingEffectResult.displayed;
+  }, [isDone, content, typingEffectResult.displayed]);
+  
+  const isTypingComplete = useMemo(() => {
+    return isDone ? true : typingEffectResult.isComplete;
+  }, [isDone, typingEffectResult.isComplete]);
 
   // 실시간 마크다운 렌더링을 위한 콘텐츠 결정
-  // 스트리밍 중이면 displayedContent 사용, 아니면 전체 content 사용
+  // displayedContent는 이미 isDone일 때 전체 content로 설정됨
   const markdownContent = useMemo(() => {
-    return isStreaming ? displayedContent : content;
-  }, [isStreaming, displayedContent, content]);
+    return displayedContent;
+  }, [displayedContent]);
   
   // 마크다운 렌더링 여부: assistant 메시지이고 콘텐츠가 있으면 렌더링
   const shouldRenderMarkdown = !isUser && markdownContent.length > 0;
@@ -107,8 +137,13 @@ export function ChatMessage({
     }
     
     let processed = markdownContent;
+    
+    // sources_by_type 우선 사용
+    const sourcesByType = metadata.sources_by_type;
+    const sourcesDetail = sourcesByType
+      ? getSourcesDetailFromSourcesByType(sourcesByType)
+      : (metadata.sources_detail || []);
     const sources = metadata.sources || [];
-    const sourcesDetail = metadata.sources_detail || [];
     
     // sources가 있으면 기존 로직 사용
     if (sources.length > 0) {
@@ -156,7 +191,6 @@ export function ChatMessage({
               return match;
             }
             // 링크로 변환
-            // eslint-disable-next-line security/detect-object-injection
             return `[문서 ${docNum}](#doc-${i} "문서 ${docNum}")`;
           });
         }
@@ -164,7 +198,7 @@ export function ChatMessage({
     }
     
     return processed;
-  }, [markdownContent, metadata.sources, metadata.sources_detail, onDocumentClick]);
+  }, [markdownContent, metadata.sources, metadata.sources_by_type, metadata.sources_detail, onDocumentClick]);
 
   // 마크다운 컴포넌트 메모이제이션
   const markdownComponents = useMemo(() => ({
@@ -198,10 +232,16 @@ export function ChatMessage({
       if (href?.startsWith('#doc-')) {
         const docIndex = parseInt(href.replace('#doc-', ''), 10);
         if (!isNaN(docIndex) && onDocumentClick) {
+          // sources 이벤트를 받았거나 done 이벤트를 받았는지 확인
+          const hasSourcesEvent = metadata._hasSourcesEvent === true;
+          const hasDoneEvent = metadata._isDone === true;
+          // sources 이벤트 또는 done 이벤트를 받았으면 활성화
+          const isEnabled = hasSourcesEvent || hasDoneEvent;
           return (
             <DocumentReference
               documentIndex={docIndex}
-              onClick={() => onDocumentClick(safeMessage, docIndex)}
+              onClick={() => onDocumentClick(message || safeMessage, docIndex)}
+              disabled={!isEnabled}
             />
           );
         }
@@ -269,7 +309,7 @@ export function ChatMessage({
     p: ({ ...props }: React.ComponentPropsWithoutRef<'p'>) => (
       <p className="my-2" {...props} />
     ),
-  }), [safeMessage, onDocumentClick]);
+  }), [message, safeMessage, onDocumentClick, metadata._hasSourcesEvent, metadata._isDone]);
 
   const handleCopy = async () => {
     try {
@@ -333,24 +373,108 @@ export function ChatMessage({
     );
   }
 
+  // 참고자료 및 연관질문 확인 (메타데이터가 있으면 스트리밍 중이어도 표시)
+  // sources_by_type 우선 사용, 없으면 sources_detail 사용
+  const sourcesByType = metadata.sources_by_type;
+  const sourcesDetailFromByType = (sourcesByType && typeof sourcesByType === 'object' && !Array.isArray(sourcesByType))
+    ? getSourcesDetailFromSourcesByType(sourcesByType as Parameters<typeof getSourcesDetailFromSourcesByType>[0])
+    : [];
+  
+  const sourcesArray = Array.isArray(metadata.sources) ? metadata.sources : [];
+  const legalReferencesArray = Array.isArray(metadata.legal_references) ? metadata.legal_references : [];
+  const sourcesDetailArray = sourcesDetailFromByType.length > 0
+    ? sourcesDetailFromByType
+    : (Array.isArray(metadata.sources_detail) ? metadata.sources_detail : []);
+  
+  const hasReferences = !isUser && (
+    sourcesArray.length > 0 ||
+    legalReferencesArray.length > 0 ||
+    sourcesDetailArray.length > 0 ||
+    (sourcesByType && Object.keys(sourcesByType).length > 0)
+  );
+
+  const relatedQuestions = !isUser ? metadata.related_questions : undefined;
+  const questionsArray = Array.isArray(relatedQuestions)
+    ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+    : [];
+  const hasRelatedQuestions = !isUser && questionsArray.length > 0;
+  
+  // 메타데이터 변경 감지를 위한 ref (디버깅용)
+  const prevMetadataRef = useRef<string>('');
+  
+  // 메타데이터 변경 감지 및 디버깅 로그
+  useEffect(() => {
+    if (import.meta.env.DEV && !isUser) {
+      const metadataString = JSON.stringify(metadata);
+      const metadataChanged = prevMetadataRef.current !== metadataString;
+      if (metadataChanged) {
+        prevMetadataRef.current = metadataString;
+        logger.debug('[ChatMessage] Metadata changed, component should re-render:', {
+          messageId: safeId,
+          hasReferences,
+          hasRelatedQuestions,
+          sourcesCount: sourcesArray.length,
+          sourcesDetailCount: sourcesDetailArray.length,
+          questionsCount: questionsArray.length,
+          isStreaming,
+          metadataKeys: Object.keys(metadata),
+        });
+      }
+    }
+  }, [metadata, safeId, hasReferences, hasRelatedQuestions, sourcesArray.length, sourcesDetailArray.length, questionsArray.length, isStreaming]);
+
+  if (import.meta.env.DEV && !isUser) {
+    logger.debug('[ChatMessage] References and questions check:', {
+      messageId: safeId,
+      hasReferences,
+      hasRelatedQuestions,
+      sourcesCount: sourcesArray.length,
+      legalReferencesCount: legalReferencesArray.length,
+      sourcesDetailCount: sourcesDetailArray.length,
+      questionsCount: questionsArray.length,
+      metadataKeys: Object.keys(metadata),
+      metadataSources: metadata.sources,
+      metadataSourcesDetail: metadata.sources_detail,
+      metadataRelatedQuestions: metadata.related_questions,
+      relatedQuestionsRaw: relatedQuestions,
+      questionsArrayFiltered: questionsArray,
+    });
+    
+    // related_questions가 있는데 표시되지 않는 경우 경고
+    if (metadata.related_questions && Array.isArray(metadata.related_questions) && metadata.related_questions.length > 0 && !hasRelatedQuestions) {
+      logger.warn('[ChatMessage] related_questions exists but not displayed:', {
+        messageId: safeId,
+        relatedQuestionsRaw: metadata.related_questions,
+        questionsArrayFiltered: questionsArray,
+        filterResult: metadata.related_questions.map(q => ({
+          original: q,
+          isString: typeof q === 'string',
+          trimmed: typeof q === 'string' ? q.trim() : q,
+          hasLength: typeof q === 'string' ? q.trim().length > 0 : false,
+        })),
+      });
+    }
+  }
+
   return (
-    <div
-      className={`flex gap-3 mb-4 ${
-        isUser ? 'justify-end' : 'justify-start'
-      }`}
-    >
-      {!isUser && (
-        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-          <span className="text-blue-600 text-sm">AI</span>
-        </div>
-      )}
+    <div className="flex flex-col gap-3 mb-4">
       <div
-        className={`max-w-[80%] rounded-xl p-5 shadow-sm border ${
-          isUser
-            ? 'bg-blue-50 border-blue-200'
-            : 'bg-white border-slate-200'
+        className={`flex gap-3 ${
+          isUser ? 'justify-end' : 'justify-start'
         }`}
       >
+        {!isUser && (
+          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+            <span className="text-blue-600 text-sm">AI</span>
+          </div>
+        )}
+        <div
+          className={`max-w-[80%] rounded-xl p-5 shadow-sm border ${
+            isUser
+              ? 'bg-blue-50 border-blue-200'
+              : 'bg-white border-slate-200'
+          }`}
+        >
         {safeMessage.attachments && safeMessage.attachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {safeMessage.attachments.map((att) => (
@@ -377,8 +501,8 @@ export function ChatMessage({
                 {processedMarkdown}
               </ReactMarkdown>
               
-              {/* 스트리밍 중일 때 커서 표시 */}
-              {isStreaming && !isTypingComplete && (
+              {/* 타이핑 효과가 활성화되어 있고 완료되지 않았을 때 커서 표시 */}
+              {typingEnabled && !isTypingComplete && (
                 <span className="inline-block w-0.5 h-4 bg-slate-600 ml-1 animate-blink">
                   |
                 </span>
@@ -396,73 +520,6 @@ export function ChatMessage({
             <ErrorMessage error={error} onRetry={onRetry} />
           </div>
         )}
-
-        {!isUser && !isStreaming && (() => {
-          const hasReferences = (metadata.sources && metadata.sources.length > 0) ||
-            (metadata.legal_references && metadata.legal_references.length > 0) ||
-            (metadata.sources_detail && metadata.sources_detail.length > 0);
-          
-          if (import.meta.env.DEV) {
-            logger.debug('[ChatMessage] References check:', {
-              messageId: safeMessage.id,
-              isStreaming,
-              isStreamingComplete,
-              hasReferences,
-              sources: metadata.sources?.length || 0,
-              legalReferences: metadata.legal_references?.length || 0,
-              sourcesDetail: metadata.sources_detail?.length || 0,
-              metadataKeys: Object.keys(metadata || {}),
-            });
-          }
-          
-          if (hasReferences) {
-            return (
-              <CompactReferencesBadge
-                references={metadata.sources}
-                legalReferences={metadata.legal_references}
-                sources={metadata.sources}
-                sourcesDetail={metadata.sources_detail}
-                onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
-              />
-            );
-          }
-          
-          return null;
-        })()}
-
-        {!isUser && !isStreaming && (() => {
-          const relatedQuestions = metadata.related_questions;
-          const questionsArray = Array.isArray(relatedQuestions) 
-            ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
-            : undefined;
-          
-          if (import.meta.env.DEV) {
-            logger.debug('[ChatMessage] Related questions check:', {
-              messageId: safeMessage.id,
-              isStreaming,
-              isStreamingComplete,
-              hasQuestions: !!questionsArray,
-              questionsCount: questionsArray?.length || 0,
-              questions: questionsArray,
-              metadataKeys: Object.keys(metadata || {}),
-            });
-          }
-          
-          const shouldShowRelatedQuestions = questionsArray && questionsArray.length > 0;
-          
-          if (shouldShowRelatedQuestions) {
-            return (
-              <div className="mt-4">
-                <RelatedQuestions
-                  questions={questionsArray}
-                  onQuestionClick={onQuestionClick}
-                />
-              </div>
-            );
-          }
-          
-          return null;
-        })()}
 
         <div className="flex items-center justify-between mt-2">
           <span className="text-xs text-slate-500">
@@ -521,11 +578,57 @@ export function ChatMessage({
             )}
           </div>
         </div>
+        </div>
+        {isUser && (
+          <div className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center flex-shrink-0">
+            <span className="text-slate-600 text-sm">U</span>
+          </div>
+        )}
       </div>
       
-      {isUser && (
-        <div className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center flex-shrink-0">
-          <span className="text-slate-600 text-sm">U</span>
+      {/* 사용자 메시지 밑에 새로고침 아이콘 표시 (답변에 오류가 있는 경우만) */}
+      {isUser && hasEmptyOrErrorResponse && onRetryQuestion && (
+        <div className="flex justify-end mt-1">
+          <button
+            onClick={onRetryQuestion}
+            className="p-1.5 hover:bg-blue-50 rounded-full transition-colors text-blue-600 group"
+            title="질문 다시 보내기"
+          >
+            <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-300" />
+          </button>
+        </div>
+      )}
+
+      {/* 메타데이터 섹션 (참고자료 및 연관질문) - 답변 표시 완료 후에만 표시 */}
+      {/* isDone이 false여도 isStreaming이 false이고 content가 있으면 표시 (done 이벤트가 오지 않았을 수 있음) */}
+      {!isUser && (isDone || (!isStreaming && content.trim().length > 0)) && (hasReferences || hasRelatedQuestions) && (
+        <div
+          className={`flex gap-3 ${
+            isUser ? 'justify-end' : 'justify-start'
+          }`}
+        >
+          {!isUser && (
+            <div className="w-8 h-8 flex-shrink-0" />
+          )}
+          <div className="max-w-[80%] rounded-xl p-5 shadow-sm border bg-white border-slate-200">
+            {hasReferences && (
+              <MessageReferencesSection
+                references={sourcesArray}
+                legalReferences={legalReferencesArray}
+                sources={sourcesArray}
+                sourcesDetail={sourcesDetailArray}
+                onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
+                defaultExpanded={false}
+              />
+            )}
+            {hasRelatedQuestions && (
+              <MessageRelatedQuestionsSection
+                questions={questionsArray}
+                onQuestionClick={onQuestionClick}
+                defaultExpanded={true}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

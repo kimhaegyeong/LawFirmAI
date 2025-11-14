@@ -6,6 +6,7 @@ import { FileText, ChevronDown, ChevronUp, Scale, Bookmark } from 'lucide-react'
 import { useState, useMemo } from 'react';
 
 import type { SourceInfo } from '../../types/chat';
+import { getSourcesByType, extractLegalReferencesFromSourcesDetail } from '../../utils/sourcesParser';
 
 type ReferenceType = 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 
@@ -27,78 +28,171 @@ export function CompactReferencesBadge({
   const [isExpanded, setIsExpanded] = useState(false);
 
   // 전체 참고자료 개수 계산
-  const totalCount = references.length + legalReferences.length + sources.length + sourcesDetail.length;
+  // sourcesDetail에서 legal_references 추출 (deprecated용)
+  const extractedLegalRefs = useMemo(() => {
+    return extractLegalReferencesFromSourcesDetail(sourcesDetail);
+  }, [sourcesDetail]);
+  
+  // legalReferences와 extractedLegalRefs 병합 (하위 호환성)
+  const allLegalRefs = useMemo(() => {
+    return [...new Set([...legalReferences, ...extractedLegalRefs])];
+  }, [legalReferences, extractedLegalRefs]);
+  
+  // sources_by_type 사용
+  const sourcesByType = useMemo(() => {
+    return getSourcesByType(sourcesDetail);
+  }, [sourcesDetail]);
 
-  // 참고자료 파싱 (간단한 버전) - hooks는 early return 전에 호출해야 함
+  const totalCount = references.length + allLegalRefs.length + sources.length + sourcesDetail.length;
+
+  // 참고자료 파싱 개선 - 제목과 부제목 구조로 정보 표시
   const parsedReferences = useMemo(() => {
-    const all: Array<{ id: string; type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation'; content: string; name?: string }> = [];
+    const all: Array<{ 
+      id: string; 
+      type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation'; 
+      title: string;
+      subtitle?: string;
+      metadata?: Record<string, unknown>;
+      sourceDetail?: SourceInfo;
+    }> = [];
+    const seen = new Set<string>();
     
-    // sources_detail 우선 처리
+    // sources_detail 우선 처리 (상세 정보 활용)
     sourcesDetail.forEach((detail, idx) => {
       let type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' = 'regulation';
+      let title = '';
+      let subtitle = '';
+      
       if (detail.type === 'statute_article') {
         type = 'law';
+        const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
+        const articleNo = detail.article_no || detail.metadata?.article_no;
+        title = lawName;
+        subtitle = articleNo ? `제${articleNo}조` : '';
       } else if (detail.type === 'case_paragraph') {
         type = 'precedent';
+        // 사건명 추출 (다양한 필드명 지원)
+        const caseName = detail.case_name || 
+                        detail.metadata?.case_name ||
+                        detail.metadata?.casenames || 
+                        detail.name || '';
+        // 사건번호 추출
+        const caseNumber = detail.case_number || 
+                          detail.metadata?.case_number ||
+                          detail.metadata?.doc_id || '';
+        // 법원 추출
+        const court = detail.court || detail.metadata?.court || '';
+        // 판결일 추출 (다양한 필드명 지원)
+        const decisionDate = detail.decision_date || 
+                            detail.metadata?.decision_date ||
+                            detail.metadata?.announce_date || '';
+        
+        title = caseName || caseNumber || '판례';
+        subtitle = [caseNumber, court, decisionDate].filter(Boolean).join(' · ');
       } else if (detail.type === 'decision_paragraph') {
         type = 'decision';
+        const org = detail.org || detail.metadata?.org || '';
+        const decisionNumber = detail.decision_number || 
+                              detail.metadata?.decision_number ||
+                              detail.metadata?.doc_id || '';
+        const decisionDate = detail.decision_date || 
+                           detail.metadata?.decision_date || '';
+        
+        title = org || decisionNumber || '결정례';
+        subtitle = [decisionNumber, decisionDate].filter(Boolean).join(' · ');
       } else if (detail.type === 'interpretation_paragraph') {
         type = 'interpretation';
+        const titleText = detail.title || detail.metadata?.title || detail.name || '';
+        const org = detail.org || detail.metadata?.org || '';
+        const responseDate = detail.response_date || 
+                           detail.metadata?.response_date || '';
+        
+        title = titleText || '해석례';
+        subtitle = [org, responseDate].filter(Boolean).join(' · ');
+      } else {
+        title = detail.name || detail.content || '';
       }
       
-      all.push({
-        id: `detail-${idx}`,
-        type,
-        content: detail.name || '',
-        name: detail.name,
-      });
-    });
-
-    // legal_references 처리
-    legalReferences.forEach((ref, idx) => {
-      if (!all.find(r => r.content === ref)) {
+      // 중복 체크용 키 생성
+      const key = detail.case_number || 
+                 detail.article_number ||
+                 detail.decision_number ||
+                 detail.interpretation_number ||
+                 detail.metadata?.doc_id || 
+                 title || 
+                 `detail-${idx}`;
+      
+      if (!seen.has(key)) {
+        seen.add(key);
         all.push({
-          id: `legal-${idx}`,
-          type: 'law',
-          content: ref,
+          id: `detail-${idx}`,
+          type,
+          title,
+          subtitle,
+          metadata: detail.metadata,
+          sourceDetail: detail,
         });
       }
     });
 
-    // sources 처리
+    // legal_references 처리 (sources_detail과 중복 제외, deprecated)
+    allLegalRefs.forEach((ref, idx) => {
+      const matched = sourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(ref) || ref.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(ref)) {
+        seen.add(ref);
+        all.push({
+          id: `legal-${idx}`,
+          type: 'law',
+          title: ref,
+        });
+      }
+    });
+
+    // sources 처리 (sources_detail과 중복 제외)
     sources.forEach((src, idx) => {
-      if (!all.find(r => r.content === src)) {
+      const matched = sourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(src) || src.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(src)) {
+        seen.add(src);
         const isPrecedent = /대법원|고등법원|지방법원|판결|선고|\d{4}[가-힣]\d+/.test(src);
         all.push({
           id: `source-${idx}`,
           type: isPrecedent ? 'precedent' : 'law',
-          content: src,
+          title: src,
         });
       }
     });
 
     // references 처리
     references.forEach((ref, idx) => {
-      if (!all.find(r => r.content === ref)) {
+      if (!seen.has(ref)) {
+        seen.add(ref);
         all.push({
           id: `ref-${idx}`,
           type: 'regulation',
-          content: ref,
+          title: ref,
         });
       }
     });
 
     return all;
-  }, [references, legalReferences, sources, sourcesDetail]);
+  }, [references, allLegalRefs, sources, sourcesDetail]);
 
-  // 타입별 개수 계산
+  // 타입별 개수 계산 (sourcesByType 사용)
   const counts = useMemo(() => ({
-    law: parsedReferences.filter(r => r.type === 'law').length,
-    precedent: parsedReferences.filter(r => r.type === 'precedent').length,
-    decision: parsedReferences.filter(r => r.type === 'decision').length,
-    interpretation: parsedReferences.filter(r => r.type === 'interpretation').length,
+    law: sourcesByType.statute_article.length,
+    precedent: sourcesByType.case_paragraph.length,
+    decision: sourcesByType.decision_paragraph.length,
+    interpretation: sourcesByType.interpretation_paragraph.length,
     regulation: parsedReferences.filter(r => r.type === 'regulation').length,
-  }), [parsedReferences]);
+  }), [sourcesByType, parsedReferences]);
 
   // 첫 3개만 미리보기
   const previewReferences = parsedReferences.slice(0, 3);
@@ -181,7 +275,7 @@ export function CompactReferencesBadge({
           )}
         </div>
 
-        {/* 인라인 미리보기 (첫 3개) */}
+        {/* 인라인 미리보기 (첫 3개) - 개선된 형식 */}
         {previewReferences.length > 0 && (
           <div className="space-y-1.5 mb-2">
             {previewReferences.map((ref) => (
@@ -195,16 +289,23 @@ export function CompactReferencesBadge({
                   {ref.type === 'decision' && <Bookmark className="w-3 h-3 text-orange-600 mt-0.5 flex-shrink-0" />}
                   {ref.type === 'interpretation' && <FileText className="w-3 h-3 text-indigo-600 mt-0.5 flex-shrink-0" />}
                   {ref.type === 'regulation' && <Bookmark className="w-3 h-3 text-purple-600 mt-0.5 flex-shrink-0" />}
-                  <span className="text-slate-700 line-clamp-2">
-                    {ref.name || ref.content}
-                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-slate-700 font-medium line-clamp-1">
+                      {ref.title}
+                    </div>
+                    {ref.subtitle && (
+                      <div className="text-slate-500 text-[10px] mt-0.5 line-clamp-1">
+                        {ref.subtitle}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* 확장 섹션 */}
+        {/* 확장 섹션 - 개선된 형식 */}
         {isExpanded && parsedReferences.length > 3 && (
           <div className="space-y-1.5 mb-2 max-h-60 overflow-y-auto">
             {parsedReferences.slice(3).map((ref) => (
@@ -218,9 +319,16 @@ export function CompactReferencesBadge({
                   {ref.type === 'decision' && <Bookmark className="w-3 h-3 text-orange-600 mt-0.5 flex-shrink-0" />}
                   {ref.type === 'interpretation' && <FileText className="w-3 h-3 text-indigo-600 mt-0.5 flex-shrink-0" />}
                   {ref.type === 'regulation' && <Bookmark className="w-3 h-3 text-purple-600 mt-0.5 flex-shrink-0" />}
-                  <span className="text-slate-700 line-clamp-2">
-                    {ref.name || ref.content}
-                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-slate-700 font-medium line-clamp-1">
+                      {ref.title}
+                    </div>
+                    {ref.subtitle && (
+                      <div className="text-slate-500 text-[10px] mt-0.5 line-clamp-1">
+                        {ref.subtitle}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
