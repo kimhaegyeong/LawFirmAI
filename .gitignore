@@ -149,3 +149,6 @@ reports/
 results/
 debug/
 test_outputs/
+
+# Portfolio documents (not for version control)
+portfolio/
