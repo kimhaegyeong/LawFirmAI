@@ -8,7 +8,6 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 
 **현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
 
-
 ## 📁 문서 디렉토리
 
 ### 01. 시작하기 (`01_getting_started/`)
@@ -22,8 +21,14 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 ### 02. 데이터 (`02_data/`)
 데이터 수집, 처리, 임베딩 관련 문서
 - **collection/**: 데이터 수집 가이드
+  - [데이터 수집 가이드](02_data/collection/data_collection_guide.md)
 - **processing/**: 데이터 전처리 가이드
+  - [데이터 전처리 가이드](02_data/processing/preprocessing_guide.md)
+  - [증분 파이프라인 가이드](02_data/processing/incremental_pipeline_guide.md)
 - **embedding/**: 벡터 임베딩 가이드
+  - [임베딩 가이드](02_data/embedding/embedding_guide.md)
+  - [버전 관리 가이드](02_data/embedding/version_management_guide.md)
+  - [외부 인덱스 설정 가이드](02_data/embedding/external_index_config_guide.md)
 
 ### 03. RAG 시스템 (`03_rag_system/`)
 LangGraph 기반 RAG 시스템 문서
@@ -41,19 +46,30 @@ AI 모델 성능 최적화 및 벤치마크
 - [키워드 확장 보고서](05_quality/keyword_expansion_report.md)
 - [하이브리드 키워드 시스템](05_quality/hybrid_keyword_management.md)
 - [프롬프트 시스템 강화](05_quality/prompt_system_enhancement.md)
+- [의미적 도메인 분류](05_quality/semantic_domain_classification.md)
 
 ### 06. 배포 (`06_deployment/`)
 배포 가이드 및 운영 문서
 - [배포 가이드](06_deployment/Deployment_Guide.md)
 - [AWS 배포 가이드](06_deployment/aws_deployment_quickstart.md)
+- [빠른 시작 가이드](06_deployment/quick_start.md)
+- [AWS 빠른 시작](06_deployment/QUICK_START_AWS.md)
+- [배포 체크리스트](06_deployment/DEPLOYMENT_CHECKLIST.md)
+- [프리 티어 최적화 가이드](06_deployment/FREE_TIER_OPTIMIZATION.md)
+- [PostgreSQL 마이그레이션 계획](06_deployment/POSTGRESQL_MIGRATION_PLAN.md)
+- [PostgreSQL 설정 가이드](06_deployment/POSTGRESQL_SETUP_GUIDE.md)
+- [데이터베이스 마이그레이션 가이드](06_deployment/DATABASE_MIGRATION_GUIDE.md)
 - [HuggingFace Spaces 최적화](06_deployment/huggingface_spaces_optimization_plan.md)
 
 ### 07. API (`07_api/`)
 API 문서 및 통합 가이드
 - [API 문서](07_api/API_Documentation.md)
 - [API 엔드포인트](07_api/api_endpoints.md)
+- [API 사용 예제](07_api/usage_examples.md)
+- [시작 가이드](07_api/START_GUIDE.md)
+- [보안 감사](07_api/SECURITY_AUDIT.md)
+- [보안 체크리스트](07_api/SECURITY_CHECKLIST.md)
 - **open_law/**: 국가법령정보센터 Open API 가이드
-- **integrations/**: 외부 시스템 통합 가이드
 
 ### 08. 기능 (`08_features/`)
 특정 기능 개발 계획
@@ -73,28 +89,45 @@ API 문서 및 통합 가이드
 - [인코딩 개발 규칙](10_technical_reference/encoding_development_rules.md)
 - [문제 해결 가이드](10_technical_reference/Troubleshooting_Guide.md)
 - [환경 변수 관리](10_technical_reference/environment_variables.md)
+- [FTS 성능 최적화 가이드](10_technical_reference/fts_performance_optimization_guide.md)
+- [프론트엔드 정적 분석 및 보안](10_technical_reference/frontend_static_analysis_and_security.md)
+
+### 모니터링 (`monitoring/`)
+모니터링 시스템 가이드
+- [모니터링 가이드](monitoring/monitoring_guide.md)
 
 ### 참고 자료 (`reference/`)
 참고 문서 및 개선 계획
 - **improvement_plans/**: 개선 계획서
-  - [LangGraph 워크플로우 개선 계획](reference/improvement_plans/langgraph_improvement.md)
-- [개선 사항 요약](reference/improvements_summary.md)
+
 
 ## 🔍 빠른 찾기
 
 ### 개발자용
 - 프로젝트 구조: [01_getting_started/project_structure.md](01_getting_started/project_structure.md)
+- 아키텍처: [01_getting_started/architecture.md](01_getting_started/architecture.md)
 - 프론트엔드 가이드: [01_getting_started/frontend_guide.md](01_getting_started/frontend_guide.md)
 - 개발 규칙: [10_technical_reference/development_rules.md](10_technical_reference/development_rules.md)
 - Core 모듈 가이드: [10_technical_reference/core_modules_guide.md](10_technical_reference/core_modules_guide.md)
+- LangGraph 통합: [03_rag_system/langgraph_integration_guide.md](03_rag_system/langgraph_integration_guide.md)
 
 ### 배포 관련
 - 배포 가이드: [06_deployment/Deployment_Guide.md](06_deployment/Deployment_Guide.md)
+- 빠른 시작: [06_deployment/quick_start.md](06_deployment/quick_start.md)
 - AWS 배포: [06_deployment/aws_deployment_quickstart.md](06_deployment/aws_deployment_quickstart.md)
 
 ### 사용자용
 - 사용자 가이드: [09_user_guide/user_guide.md](09_user_guide/user_guide.md)
 - API 문서: [07_api/API_Documentation.md](07_api/API_Documentation.md)
+- 스트리밍 가이드: [07_api/streaming_guide.md](07_api/streaming_guide.md)
+
+### 데이터 관리
+- 데이터 수집: [02_data/collection/data_collection_guide.md](02_data/collection/data_collection_guide.md)
+- 데이터 전처리: [02_data/processing/preprocessing_guide.md](02_data/processing/preprocessing_guide.md)
+- 자동 완료 스크립트: [02_data/processing/auto_complete_script_guide.md](02_data/processing/auto_complete_script_guide.md)
+- 임베딩 가이드: [02_data/embedding/embedding_guide.md](02_data/embedding/embedding_guide.md)
+- FAISS 버전 관리: [02_data/embedding/faiss_version_management_guide.md](02_data/embedding/faiss_version_management_guide.md)
+- FAISS 빠른 시작: [02_data/embedding/faiss_version_quick_start.md](02_data/embedding/faiss_version_quick_start.md)
 
 ## 📝 문서 작성 가이드
 

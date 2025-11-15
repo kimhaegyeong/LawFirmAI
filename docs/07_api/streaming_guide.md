@@ -203,7 +203,8 @@ def stream_chat(message, session_id):
 
 ## 관련 문서
 
-- [LangGraph 통합 가이드](docs/03_rag_system/langgraph_integration_guide.md)
-- [API 엔드포인트 문서](docs/07_api/api_endpoints.md)
-- [Core Modules 가이드](docs/10_technical_reference/core_modules_guide.md)
+- [LangGraph 통합 가이드](../03_rag_system/langgraph_integration_guide.md)
+- [API 엔드포인트 문서](api_endpoints.md)
+- [API 문서](API_Documentation.md)
+- [Core Modules 가이드](../10_technical_reference/core_modules_guide.md)
 
