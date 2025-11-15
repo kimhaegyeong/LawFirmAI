@@ -16,12 +16,23 @@ async def error_handler(request: Request, call_next):
         response = await call_next(request)
         return response
     except RequestValidationError as e:
-        logger.warning(f"Validation error: {e.errors()}")
+        error_details = e.errors()
+        error_messages = []
+        for error in error_details:
+            field = ".".join(str(loc) for loc in error.get("loc", []))
+            msg = error.get("msg", "Validation error")
+            error_messages.append(f"{field}: {msg}")
+        
+        error_summary = "; ".join(error_messages)
+        logger.warning(f"Validation error on {request.url.path}: {error_summary}")
+        logger.debug(f"Full validation errors: {error_details}")
+        
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "error": "입력 검증 실패",
-                "detail": "요청 데이터가 올바르지 않습니다"
+                "detail": error_summary,
+                "errors": error_details
             }
         )
     except StarletteHTTPException as e:

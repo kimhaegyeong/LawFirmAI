@@ -450,11 +450,31 @@ class SourcesExtractor:
         if not isinstance(metadata, dict):
             return ExtractionResult.empty().to_dict()
         
+        sources_detail = metadata.get("sources_detail", []) if isinstance(metadata.get("sources_detail"), list) else []
+        if sources_detail:
+            sources_detail = self._normalize_sources_detail(sources_detail)
+        
+        # legal_references는 sources_detail에서 추출 (deprecated)
+        extracted_legal_refs = self._extract_legal_references_from_sources_detail_only(sources_detail)
+        existing_legal_refs = metadata.get("legal_references", []) if isinstance(metadata.get("legal_references"), list) else []
+        all_legal_refs = list(set(extracted_legal_refs + existing_legal_refs))
+        
+        # 타입별 그룹화 (새로운 기능) - 판례의 참조 법령 포함
+        sources_by_type = self._get_sources_by_type_with_reference_statutes(sources_detail) if sources_detail else {
+            "statute_article": [],
+            "case_paragraph": [],
+            "decision_paragraph": [],
+            "interpretation_paragraph": []
+        }
+        
+        # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
         return {
-            "sources": metadata.get("sources", []) if isinstance(metadata.get("sources"), list) else [],
-            "legal_references": metadata.get("legal_references", []) if isinstance(metadata.get("legal_references"), list) else [],
-            "sources_detail": metadata.get("sources_detail", []) if isinstance(metadata.get("sources_detail"), list) else [],
-            "related_questions": metadata.get("related_questions", []) if isinstance(metadata.get("related_questions"), list) else []
+            "sources_by_type": sources_by_type,  # 유일한 필요한 필드
+            "related_questions": metadata.get("related_questions", []) if isinstance(metadata.get("related_questions"), list) else [],
+            # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
+            "sources": metadata.get("sources", []) if isinstance(metadata.get("sources"), list) else [],  # deprecated: sources_by_type에서 재구성 가능
+            "legal_references": all_legal_refs,  # deprecated: sources_by_type에서 재구성 가능
+            "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
         }
     
     async def extract_from_state(self, session_id: str) -> Dict[str, List[Any]]:
@@ -478,13 +498,52 @@ class SourcesExtractor:
             sources_detail = self._extract_sources_detail(state_values)
             related_questions = self._extract_related_questions(state_values)
             
-            logger.info(f"Sources extracted from session {session_id}: {len(sources)} sources, {len(legal_references)} legal_references, {len(sources_detail)} sources_detail, {len(related_questions)} related_questions")
+            sources_detail = self._enhance_sources_detail_with_sources(sources, sources_detail)
+            sources_detail = self._normalize_sources_detail(sources_detail)
             
+            # legal_references는 sources_detail에서 추출 (deprecated)
+            extracted_legal_refs = self._extract_legal_references_from_sources_detail_only(sources_detail)
+            
+            # 기존 legal_references와 병합 (하위 호환성)
+            existing_legal_refs = self._extract_legal_references(state_values)
+            legal_references = self._extract_legal_references_from_sources_detail(sources_detail, existing_legal_refs)
+            
+            # 모든 legal_references 병합 (중복 제거)
+            all_legal_refs = list(set(extracted_legal_refs + legal_references))
+            
+            # 타입별 그룹화 (새로운 기능)
+            sources_by_type = self._get_sources_by_type(sources_detail)
+            
+            # 판례/결정례/해석례에서 참조조문 추출하여 법령 추가
+            extracted_statutes = self._extract_statutes_from_reference_clauses(sources_detail)
+            
+            if extracted_statutes:
+                # 기존 statute_article과 병합 (중복 제거)
+                existing_statutes = sources_by_type.get("statute_article", [])
+                existing_keys = {
+                    f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
+                    for s in existing_statutes if isinstance(s, dict)
+                }
+                
+                for statute in extracted_statutes:
+                    statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
+                    if statute_key not in existing_keys:
+                        existing_statutes.append(statute)
+                        existing_keys.add(statute_key)
+                
+                sources_by_type["statute_article"] = existing_statutes
+                logger.info(f"Extracted {len(extracted_statutes)} statutes from reference clauses")
+            
+            logger.info(f"Sources extracted from session {session_id}: {len(sources_by_type.get('statute_article', []))} statutes, {len(sources_by_type.get('case_paragraph', []))} cases, {len(sources_by_type.get('decision_paragraph', []))} decisions, {len(sources_by_type.get('interpretation_paragraph', []))} interpretations, {len(related_questions)} related_questions")
+            
+            # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
             return {
-                "sources": sources,
-                "legal_references": legal_references,
-                "sources_detail": sources_detail,
-                "related_questions": related_questions
+                "sources_by_type": sources_by_type,  # 유일한 필요한 필드
+                "related_questions": related_questions,
+                # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
+                "sources": sources,  # deprecated: sources_by_type에서 재구성 가능
+                "legal_references": all_legal_refs,  # deprecated: sources_by_type에서 재구성 가능
+                "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
             }
         except Exception as e:
             logger.error(f"Error extracting sources from state: {e}", exc_info=True)
@@ -1035,6 +1094,65 @@ class SourcesExtractor:
         
         return legal_refs
     
+    def _extract_legal_references_from_sources_detail(
+        self,
+        sources_detail: List[Dict[str, Any]],
+        existing_legal_refs: List[str]
+    ) -> List[str]:
+        """sources_detail의 content에서 법조문 참조 추출하여 legal_references에 추가"""
+        if not sources_detail:
+            return existing_legal_refs
+        
+        seen_legal_refs = set(existing_legal_refs)
+        legal_refs = list(existing_legal_refs)
+        
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+            
+            content = detail.get("content", "")
+            if not isinstance(content, str):
+                continue
+            
+            # 개선된 법령 패턴: "구", "신", "개정" 등의 접두사 처리, 긴 법률명 지원
+            # 예: "구 지방세법 제131조 제1항 제2호"
+            # 예: "대부업 등의 등록 및 금융이용자 보호에 관한 법률 제2조 제1호"
+            statute_pattern = r'(?:구|신|개정|폐지)?\s*([가-힣\s]{1,50}법률?)\s*제\s*(\d+)\s*조(?:\s*제\s*(\d+)\s*항)?(?:\s*제\s*(\d+)\s*호)?'
+            matches = re.finditer(statute_pattern, content)
+            
+            for match in matches:
+                statute_name = match.group(1).strip()
+                article_no = match.group(2)
+                clause_no = match.group(3)
+                item_no = match.group(4)
+                
+                # 법률명 정리: 연속 공백을 하나로
+                statute_name = re.sub(r'\s+', ' ', statute_name).strip()
+                
+                # 법률명이 너무 짧거나 길면 제외 (최소 2자, 최대 50자)
+                if len(statute_name) < 2 or len(statute_name) > 50:
+                    continue
+                
+                # "법" 또는 "법률"로 끝나지 않으면 제외
+                if not statute_name.endswith('법') and not statute_name.endswith('법률'):
+                    continue
+                
+                # 조문 번호 구성
+                article_str = f"제{article_no}조"
+                if clause_no:
+                    article_str += f" 제{clause_no}항"
+                if item_no:
+                    article_str += f" 제{item_no}호"
+                
+                legal_ref = f"{statute_name} {article_str}"
+                
+                if legal_ref not in seen_legal_refs:
+                    legal_refs.append(legal_ref)
+                    seen_legal_refs.add(legal_ref)
+                    logger.debug(f"[sources_extractor] Extracted legal_reference from sources_detail: {legal_ref}")
+        
+        return legal_refs
+    
     def _extract_related_questions(self, state_values: Dict[str, Any]) -> List[str]:
         """state에서 related_questions 추출 및 생성 (LLM 우선)"""
         logger.debug(f"[sources_extractor] _extract_related_questions called, state_keys: {list(state_values.keys()) if isinstance(state_values, dict) else 'N/A'}")
@@ -1132,23 +1250,28 @@ class SourcesExtractor:
         return []
     
     def _extract_sources_detail(self, state_values: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """state에서 sources_detail 추출"""
+        """state에서 sources_detail 추출 및 정규화"""
+        sources_detail = []
+        
         if "sources_detail" in state_values:
             sources_detail_list = state_values.get("sources_detail", [])
             if isinstance(sources_detail_list, list):
-                return sources_detail_list
+                sources_detail = sources_detail_list
         
-        if "metadata" in state_values:
+        if not sources_detail and "metadata" in state_values:
             metadata = state_values.get("metadata", {})
             if isinstance(metadata, dict) and "sources_detail" in metadata:
                 metadata_sources_detail = metadata.get("sources_detail", [])
                 if isinstance(metadata_sources_detail, list):
-                    return metadata_sources_detail
+                    sources_detail = metadata_sources_detail
         
-        if "retrieved_docs" in state_values:
-            return self._generate_sources_detail_from_retrieved_docs(
+        if not sources_detail and "retrieved_docs" in state_values:
+            sources_detail = self._generate_sources_detail_from_retrieved_docs(
                 state_values.get("retrieved_docs", [])
             )
+        
+        if sources_detail:
+            return self._normalize_sources_detail(sources_detail)
         
         return []
     
@@ -1228,8 +1351,14 @@ class SourcesExtractor:
                         if meta.get("item_no"):
                             detail_dict["item_no"] = meta["item_no"]
                     elif source_type == "case_paragraph":
-                        if meta.get("doc_id"):
-                            detail_dict["case_number"] = meta["doc_id"]
+                        doc_id = (
+                            meta.get("doc_id") or 
+                            merged_metadata.get("doc_id") or 
+                            doc.get("doc_id") or 
+                            merged_metadata.get("case_id") or
+                            ""
+                        )
+                        detail_dict["case_number"] = doc_id
                         if meta.get("court"):
                             detail_dict["court"] = meta["court"]
                         if meta.get("casenames"):
@@ -1497,20 +1626,17 @@ class SourcesExtractor:
                         detail_dict["metadata"]["announce_date"] = announce_date
                         logger.debug(f"[sources_extractor] Extracted announce_date from content: {announce_date}")
                 
-                # 판례명 생성
-                name_parts = []
-                if court:
-                    name_parts.append(court)
-                if doc_id:
-                    name_parts.append(doc_id)
-                elif casenames:
-                    name_parts.append(casenames[:30])  # 너무 길면 자름
-                
-                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "판례"
+                # 판례명 생성 (case_number만 표시)
+                detail_dict["name"] = doc_id if doc_id else "판례"
                 detail_dict["court"] = court
                 detail_dict["case_number"] = doc_id
                 if casenames:
                     detail_dict["case_name"] = casenames
+                
+                if doc_id and not detail_dict.get("url"):
+                    url = self._generate_case_url(doc_id)
+                    if url:
+                        detail_dict["url"] = url
             
             elif source_type == "decision_paragraph":
                 # 결정례 정보 추출
@@ -1542,14 +1668,8 @@ class SourcesExtractor:
                         detail_dict["metadata"]["decision_date"] = decision_date
                         logger.debug(f"[sources_extractor] Extracted decision_date from content: {decision_date}")
                 
-                # 결정례명 생성
-                name_parts = []
-                if org:
-                    name_parts.append(org)
-                if doc_id:
-                    name_parts.append(doc_id)
-                
-                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "결정례"
+                # 결정례명 생성 (decision_number만 표시)
+                detail_dict["name"] = doc_id if doc_id else "결정례"
                 detail_dict["org"] = org
                 detail_dict["decision_number"] = doc_id
                 if decision_date:
@@ -1587,16 +1707,8 @@ class SourcesExtractor:
                         detail_dict["metadata"]["response_date"] = response_date
                         logger.debug(f"[sources_extractor] Extracted response_date from content: {response_date}")
                 
-                # 해석례명 생성
-                name_parts = []
-                if org:
-                    name_parts.append(org)
-                if title:
-                    name_parts.append(title[:30])  # 너무 길면 자름
-                elif doc_id:
-                    name_parts.append(doc_id)
-                
-                detail_dict["name"] = " ".join(name_parts).strip() if name_parts else "해석례"
+                # 해석례명 생성 (interpretation_number만 표시)
+                detail_dict["name"] = doc_id if doc_id else "해석례"
                 detail_dict["org"] = org
                 detail_dict["title"] = title
                 detail_dict["interpretation_number"] = doc_id
@@ -1608,5 +1720,746 @@ class SourcesExtractor:
                 detail_dict["content"] = content
             
             sources_detail.append(detail_dict)
+        
+        return sources_detail
+    
+    def _normalize_sources_detail(self, sources_detail: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """sources_detail을 타입별로 정규화하여 metadata 중첩 구조를 최상위 레벨로 이동"""
+        if not isinstance(sources_detail, list):
+            return []
+        
+        normalized = []
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+            
+            source_type = detail.get("type", "")
+            metadata = detail.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            
+            normalized_detail = {
+                "type": source_type,
+                "name": detail.get("name", ""),
+                "url": detail.get("url", ""),
+                "content": detail.get("content", "")
+            }
+            
+            if source_type == "statute_article":
+                normalized_detail["statute_name"] = (
+                    detail.get("statute_name") or 
+                    metadata.get("statute_name") or 
+                    metadata.get("law_name") or 
+                    ""
+                )
+                normalized_detail["article_no"] = (
+                    detail.get("article_no") or 
+                    metadata.get("article_no") or 
+                    metadata.get("article_number") or 
+                    ""
+                )
+                if detail.get("clause_no") or metadata.get("clause_no"):
+                    normalized_detail["clause_no"] = detail.get("clause_no") or metadata.get("clause_no")
+                if detail.get("item_no") or metadata.get("item_no"):
+                    normalized_detail["item_no"] = detail.get("item_no") or metadata.get("item_no")
+            
+            elif source_type == "case_paragraph":
+                normalized_detail["case_number"] = (
+                    detail.get("case_number") or 
+                    metadata.get("doc_id") or 
+                    metadata.get("case_id") or 
+                    ""
+                )
+                if detail.get("case_name") or metadata.get("casenames") or metadata.get("case_name"):
+                    normalized_detail["case_name"] = (
+                        detail.get("case_name") or 
+                        metadata.get("casenames") or 
+                        metadata.get("case_name") or 
+                        ""
+                    )
+                if detail.get("court") or metadata.get("court"):
+                    normalized_detail["court"] = detail.get("court") or metadata.get("court")
+                if detail.get("decision_date") or metadata.get("announce_date") or metadata.get("decision_date"):
+                    normalized_detail["decision_date"] = (
+                        detail.get("decision_date") or 
+                        metadata.get("announce_date") or 
+                        metadata.get("decision_date") or 
+                        ""
+                    )
+            
+            elif source_type == "decision_paragraph":
+                normalized_detail["decision_number"] = (
+                    detail.get("decision_number") or 
+                    metadata.get("doc_id") or 
+                    metadata.get("decision_id") or 
+                    ""
+                )
+                if detail.get("org") or metadata.get("org"):
+                    normalized_detail["org"] = detail.get("org") or metadata.get("org")
+                if detail.get("decision_date") or metadata.get("decision_date"):
+                    normalized_detail["decision_date"] = detail.get("decision_date") or metadata.get("decision_date")
+                if detail.get("result") or metadata.get("result"):
+                    normalized_detail["result"] = detail.get("result") or metadata.get("result")
+            
+            elif source_type == "interpretation_paragraph":
+                normalized_detail["interpretation_number"] = (
+                    detail.get("interpretation_number") or 
+                    metadata.get("doc_id") or 
+                    metadata.get("interpretation_id") or 
+                    ""
+                )
+                if detail.get("title") or metadata.get("title"):
+                    normalized_detail["title"] = detail.get("title") or metadata.get("title")
+                if detail.get("org") or metadata.get("org"):
+                    normalized_detail["org"] = detail.get("org") or metadata.get("org")
+                if detail.get("response_date") or metadata.get("response_date"):
+                    normalized_detail["response_date"] = detail.get("response_date") or metadata.get("response_date")
+            
+            normalized.append(normalized_detail)
+        
+        return normalized
+    
+    def _get_sources_by_type(
+        self,
+        sources_detail: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """sources_detail을 타입별로 그룹화"""
+        grouped = {
+            "statute_article": [],
+            "case_paragraph": [],
+            "decision_paragraph": [],
+            "interpretation_paragraph": []
+        }
+        
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+            
+            source_type = detail.get("type", "")
+            if source_type in grouped:
+                grouped[source_type].append(detail)
+        
+        return grouped
+    
+    def _get_sources_by_type_with_reference_statutes(
+        self,
+        sources_detail: List[Dict[str, Any]]
+    ) -> Dict[str, List[Any]]:
+        """
+        sources_by_type을 생성하고 판례의 참조 법령을 자동으로 추가하는 헬퍼 함수
+        """
+        try:
+            sources_by_type = self._get_sources_by_type(sources_detail) if sources_detail else {
+                "statute_article": [],
+                "case_paragraph": [],
+                "decision_paragraph": [],
+                "interpretation_paragraph": []
+            }
+            
+            if sources_detail:
+                try:
+                    extracted_statutes = self._extract_statutes_from_reference_clauses(sources_detail)
+                    
+                    if extracted_statutes:
+                        existing_statutes = sources_by_type.get("statute_article", [])
+                        existing_keys = {
+                            f"{s.get('statute_name', '')}_{s.get('article_no', '')}_{s.get('clause_no', '')}_{s.get('item_no', '')}"
+                            for s in existing_statutes if isinstance(s, dict)
+                        }
+                        
+                        for statute in extracted_statutes:
+                            statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
+                            if statute_key not in existing_keys:
+                                existing_statutes.append(statute)
+                                existing_keys.add(statute_key)
+                        
+                        sources_by_type["statute_article"] = existing_statutes
+                except Exception as extract_error:
+                    logger.warning(f"Failed to extract reference statutes: {extract_error}", exc_info=True)
+                    # 참조 법령 추출 실패해도 기본 sources_by_type은 반환
+            
+            return sources_by_type
+        except Exception as e:
+            logger.error(f"Failed to get sources_by_type_with_reference_statutes: {e}", exc_info=True)
+            # 최종 예외 발생 시 기본 구조 반환
+            return {
+                "statute_article": [],
+                "case_paragraph": [],
+                "decision_paragraph": [],
+                "interpretation_paragraph": []
+            }
+    
+    def _extract_statutes_from_reference_clauses(
+        self, 
+        sources_detail: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        판례/결정례/해석례에서 참조조문 추출하여 법령 정보 반환
+        데이터베이스에 저장된 참조조문 메타데이터를 사용
+        """
+        extracted_statutes = []
+        seen_statutes = set()
+        
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+                
+            source_type = detail.get("type", "")
+            metadata = detail.get("metadata", {})
+            
+            # 판례, 결정례, 해석례만 처리
+            if source_type not in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"]:
+                continue
+            
+            # 데이터베이스에서 참조조문 가져오기
+            reference_statutes = self._get_reference_statutes_from_db(detail, source_type)
+            
+            if not reference_statutes:
+                # Fallback: metadata에서 직접 가져오기 (이미 추출되어 있는 경우)
+                if isinstance(metadata, dict):
+                    reference_statutes = metadata.get("reference_statutes", [])
+            
+            # 법령 정보 구성
+            for statute in reference_statutes:
+                if isinstance(statute, str):
+                    # JSON 문자열인 경우 파싱
+                    import json
+                    try:
+                        statute = json.loads(statute)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                
+                if not isinstance(statute, dict):
+                    continue
+                
+                statute_name = statute.get("statute_name")
+                article_no = statute.get("article_no")
+                
+                if not statute_name or not article_no:
+                    continue
+                
+                # 중복 제거
+                key = f"{statute_name}_{article_no}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
+                if key in seen_statutes:
+                    continue
+                seen_statutes.add(key)
+                
+                # 법령 정보 구성
+                statute_info = {
+                    "type": "statute_article",
+                    "statute_name": statute_name,
+                    "article_no": article_no,
+                    "name": f"{statute_name} {article_no}",
+                    "source_from": source_type,
+                    "source_doc_id": detail.get("doc_id") or detail.get("case_number") or detail.get("decision_number") or detail.get("interpretation_number"),
+                }
+                
+                if statute.get("clause_no"):
+                    statute_info["clause_no"] = statute.get("clause_no")
+                    statute_info["name"] += f" 제{statute.get('clause_no')}항"
+                
+                if statute.get("item_no"):
+                    statute_info["item_no"] = statute.get("item_no")
+                    statute_info["name"] += f" 제{statute.get('item_no')}호"
+                
+                statute_info["url"] = self._generate_statute_url(statute_name, article_no)
+                
+                # 법령 본문 조회
+                statute_content = self._get_statute_content_from_db(statute_name, article_no, statute.get("clause_no"), statute.get("item_no"))
+                if statute_content:
+                    statute_info["content"] = statute_content
+                
+                if "metadata" not in statute_info:
+                    statute_info["metadata"] = {}
+                statute_info["metadata"]["source_from"] = source_type
+                statute_info["metadata"]["source_doc_id"] = statute_info["source_doc_id"]
+                
+                extracted_statutes.append(statute_info)
+        
+        return extracted_statutes
+    
+    def _get_reference_statutes_from_db(
+        self, 
+        detail: Dict[str, Any], 
+        source_type: str
+    ) -> List[Dict[str, Any]]:
+        """데이터베이스에서 참조조문 가져오기"""
+        try:
+            import sqlite3
+            import os
+            import json
+            from pathlib import Path
+            
+            # doc_id 추출
+            doc_id = (
+                detail.get("doc_id") or 
+                detail.get("metadata", {}).get("doc_id") or
+                detail.get("case_number") or
+                detail.get("decision_number") or
+                detail.get("interpretation_number")
+            )
+            
+            if not doc_id:
+                return []
+            
+            # 데이터베이스 경로 가져오기
+            db_path = os.getenv("DATABASE_PATH", "./data/lawfirm_v2.db")
+            if not os.path.isabs(db_path):
+                # 상대 경로인 경우 프로젝트 루트 기준으로 변환
+                project_root = Path(__file__).parent.parent.parent
+                db_path = str(project_root / db_path)
+            
+            if not os.path.exists(db_path):
+                logger.debug(f"Database not found at {db_path}, skipping reference statutes extraction")
+                return []
+            
+            try:
+                with sqlite3.connect(db_path, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    if source_type == "case_paragraph":
+                        cursor = conn.execute(
+                            "SELECT reference_statutes FROM cases WHERE doc_id = ?",
+                            (doc_id,)
+                        )
+                    elif source_type == "decision_paragraph":
+                        cursor = conn.execute(
+                            "SELECT reference_statutes FROM decisions WHERE doc_id = ?",
+                            (doc_id,)
+                        )
+                    elif source_type == "interpretation_paragraph":
+                        cursor = conn.execute(
+                            "SELECT reference_statutes FROM interpretations WHERE doc_id = ?",
+                            (doc_id,)
+                        )
+                    else:
+                        return []
+                    
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        try:
+                            return json.loads(row[0])
+                        except (json.JSONDecodeError, TypeError) as json_error:
+                            logger.warning(f"Failed to parse reference_statutes JSON for {doc_id}: {json_error}")
+                            return []
+                
+                return []
+            except sqlite3.Error as db_error:
+                logger.warning(f"Database error getting reference statutes for {doc_id}: {db_error}")
+                return []
+            
+        except Exception as e:
+            logger.warning(f"Failed to get reference statutes from DB for {source_type}: {e}", exc_info=True)
+            return []
+    
+    def _get_statute_content_from_db(
+        self,
+        statute_name: str,
+        article_no: str,
+        clause_no: Optional[str] = None,
+        item_no: Optional[str] = None
+    ) -> Optional[str]:
+        """데이터베이스에서 법령 본문 조회"""
+        try:
+            import sqlite3
+            import os
+            from pathlib import Path
+            
+            if not statute_name or not article_no:
+                return None
+            
+            # 데이터베이스 경로 가져오기
+            db_path = os.getenv("DATABASE_PATH", "./data/lawfirm_v2.db")
+            if not os.path.isabs(db_path):
+                project_root = Path(__file__).parent.parent.parent
+                db_path = str(project_root / db_path)
+            
+            if not os.path.exists(db_path):
+                return None
+            
+            try:
+                with sqlite3.connect(db_path, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    
+                    # statutes 테이블에서 statute_id 조회
+                    cursor = conn.execute(
+                        "SELECT id FROM statutes WHERE name = ? LIMIT 1",
+                        (statute_name,)
+                    )
+                    statute_row = cursor.fetchone()
+                    if not statute_row:
+                        return None
+                    
+                    statute_id = statute_row['id'] if isinstance(statute_row, sqlite3.Row) else statute_row[0]
+                    
+                    # statute_articles 테이블에서 본문 조회
+                    # 우선순위: 정확한 항/호 매칭 > 항만 매칭 > 조문 전체
+                    content = None
+                    
+                    # 1. 항과 호가 모두 있는 경우: 정확한 항/호 매칭
+                    if clause_no and item_no:
+                        cursor = conn.execute(
+                            """
+                            SELECT text FROM statute_articles
+                            WHERE statute_id = ? AND article_no = ? AND clause_no = ? AND item_no = ?
+                            LIMIT 1
+                            """,
+                            (statute_id, article_no, clause_no, item_no)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            content = row['text'] if isinstance(row, sqlite3.Row) else row[0]
+                    
+                    # 2. 항만 있는 경우: 항 매칭
+                    if not content and clause_no:
+                        cursor = conn.execute(
+                            """
+                            SELECT text FROM statute_articles
+                            WHERE statute_id = ? AND article_no = ? AND clause_no = ? AND item_no IS NULL
+                            LIMIT 1
+                            """,
+                            (statute_id, article_no, clause_no)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            content = row['text'] if isinstance(row, sqlite3.Row) else row[0]
+                    
+                    # 3. 조문 전체 조회 (항/호가 없거나 매칭 실패한 경우)
+                    if not content:
+                        # 조문 전체를 조회 (여러 항/호가 있으면 합침)
+                        cursor = conn.execute(
+                            """
+                            SELECT GROUP_CONCAT(text, '\n\n') as full_text
+                            FROM statute_articles
+                            WHERE statute_id = ? AND article_no = ?
+                            ORDER BY 
+                                CASE WHEN clause_no IS NULL THEN 1 ELSE 0 END,
+                                clause_no,
+                                CASE WHEN item_no IS NULL THEN 1 ELSE 0 END,
+                                item_no
+                            """,
+                            (statute_id, article_no)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            content = row['full_text'] if isinstance(row, sqlite3.Row) else row[0]
+                    
+                    if content and content.strip():
+                        return content.strip()
+                    
+                    return None
+            except sqlite3.Error as db_error:
+                logger.debug(f"Database error getting statute content: {db_error}")
+                return None
+            
+        except Exception as e:
+            logger.debug(f"Failed to get statute content from DB: {e}")
+            return None
+    
+    def _generate_statute_url(self, statute_name: str, article_no: str) -> str:
+        """법령 조문 URL 생성"""
+        if not statute_name or not article_no:
+            return ""
+        
+        # 법제처 URL 형식
+        encoded_name = statute_name.replace(" ", "")
+        return f"https://www.law.go.kr/LSW/lsInfoP.do?efYd=&lsiSeq=&ancYnChk=0&ancYnChk=0&lawNm={encoded_name}&articleNo={article_no}"
+    
+    def _format_legal_reference_from_detail(
+        self,
+        detail: Dict[str, Any]
+    ) -> Optional[str]:
+        """sources_detail 항목에서 legal_reference 문자열 생성"""
+        if detail.get("type") != "statute_article":
+            return None
+        
+        statute_name = detail.get("statute_name") or ""
+        article_no = detail.get("article_no") or ""
+        clause_no = detail.get("clause_no")
+        item_no = detail.get("item_no")
+        
+        if not statute_name and not article_no:
+            return None
+        
+        parts = []
+        if statute_name:
+            parts.append(statute_name)
+        if article_no:
+            parts.append(article_no)
+        if clause_no:
+            parts.append(f"제{clause_no}항")
+        if item_no:
+            parts.append(f"제{item_no}호")
+        
+        return " ".join(parts) if parts else None
+    
+    def _extract_legal_references_from_sources_detail_only(
+        self,
+        sources_detail: List[Dict[str, Any]]
+    ) -> List[str]:
+        """sources_detail에서만 legal_references 추출 (deprecated용)"""
+        legal_refs = []
+        seen = set()
+        
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+            
+            legal_ref = self._format_legal_reference_from_detail(detail)
+            if legal_ref and legal_ref not in seen:
+                legal_refs.append(legal_ref)
+                seen.add(legal_ref)
+        
+        return legal_refs
+    
+    def _parse_source_string(self, source_str: str) -> Dict[str, Any]:
+        """sources 배열의 문자열을 파싱하여 정보 추출"""
+        if not isinstance(source_str, str):
+            return {}
+        
+        parsed = {}
+        
+        case_pattern = r'case_([가-힣0-9]+)'
+        case_match = re.search(case_pattern, source_str)
+        if case_match:
+            parsed["doc_id"] = f"case_{case_match.group(1)}"
+            parsed["case_id"] = case_match.group(1)
+            parsed["source_type"] = "case_paragraph"
+        
+        decision_pattern = r'(?:decision_|detc_)([가-힣0-9\-]+)'
+        decision_match = re.search(decision_pattern, source_str)
+        if decision_match:
+            parsed["doc_id"] = f"decision_{decision_match.group(1)}"
+            parsed["decision_id"] = decision_match.group(1)
+            parsed["source_type"] = "decision_paragraph"
+        
+        interpretation_pattern = r'(?:interpretation_|interp_|expc_)([가-힣0-9\-]+)'
+        interpretation_match = re.search(interpretation_pattern, source_str)
+        if interpretation_match:
+            matched_id = interpretation_match.group(1)
+            if source_str.find("expc_") != -1:
+                parsed["doc_id"] = f"expc_{matched_id}"
+            elif source_str.find("interp_") != -1:
+                parsed["doc_id"] = f"interp_{matched_id}"
+            else:
+                parsed["doc_id"] = f"interpretation_{matched_id}"
+            parsed["interpretation_id"] = matched_id
+            parsed["source_type"] = "interpretation_paragraph"
+        
+        case_name_pattern = r'^(.+?)\s*\(case_'
+        case_name_match = re.search(case_name_pattern, source_str)
+        if case_name_match:
+            parsed["casenames"] = case_name_match.group(1).strip()
+            parsed["case_name"] = case_name_match.group(1).strip()
+        
+        return parsed
+    
+    def _generate_case_url(self, doc_id: str) -> str:
+        """판례 URL 생성"""
+        if not doc_id:
+            return ""
+        
+        if doc_id.startswith("case_"):
+            return f"http://www.law.go.kr/DRF/lawService.do?target=prec&ID={doc_id}&type=HTML"
+        
+        return ""
+    
+    def _generate_decision_url(self, doc_id: str, metadata: Dict[str, Any] = None) -> str:
+        """결정례 URL 생성"""
+        if not doc_id:
+            return ""
+        
+        if metadata is None:
+            metadata = {}
+        
+        decision_serial_number = (
+            metadata.get("decision_serial_number") or 
+            metadata.get("헌재결정례일련번호") or 
+            metadata.get("결정ID") or
+            doc_id
+        )
+        
+        if not decision_serial_number:
+            return ""
+        
+        return f"http://www.law.go.kr/DRF/lawService.do?target=detc&ID={decision_serial_number}&type=HTML"
+    
+    def _generate_interpretation_url(self, doc_id: str, metadata: Dict[str, Any] = None) -> str:
+        """해석례 URL 생성"""
+        if not doc_id:
+            return ""
+        
+        if metadata is None:
+            metadata = {}
+        
+        interpretation_serial_number = (
+            metadata.get("interpretation_serial_number") or 
+            metadata.get("법령해석례일련번호") or 
+            metadata.get("해석ID") or 
+            metadata.get("expcId") or
+            doc_id
+        )
+        
+        if not interpretation_serial_number:
+            return ""
+        
+        return f"http://www.law.go.kr/DRF/lawService.do?target=expc&ID={interpretation_serial_number}&type=HTML"
+    
+    def _enhance_sources_detail_with_sources(
+        self,
+        sources: List[str],
+        sources_detail: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """sources 배열의 정보를 사용하여 sources_detail 보완"""
+        if not sources:
+            return sources_detail if sources_detail else []
+        
+        sources_parsed = {}
+        for source_str in sources:
+            parsed = self._parse_source_string(source_str)
+            if parsed.get("doc_id"):
+                sources_parsed[parsed["doc_id"]] = parsed
+        
+        if not sources_detail:
+            sources_detail = []
+        
+        existing_doc_ids = set()
+        for detail in sources_detail:
+            if not isinstance(detail, dict):
+                continue
+            
+            source_type = detail.get("type", "")
+            metadata = detail.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+                detail["metadata"] = metadata
+            
+            if source_type == "case_paragraph":
+                doc_id = detail.get("case_number") or metadata.get("doc_id") or ""
+                
+                if doc_id:
+                    existing_doc_ids.add(doc_id)
+                
+                parsed_info = sources_parsed.get(doc_id) if doc_id else None
+                if parsed_info:
+                    if not metadata.get("doc_id") and parsed_info.get("doc_id"):
+                        metadata["doc_id"] = parsed_info["doc_id"]
+                        detail["case_number"] = parsed_info["doc_id"]
+                    
+                    if not metadata.get("casenames") and parsed_info.get("casenames"):
+                        metadata["casenames"] = parsed_info["casenames"]
+                        detail["case_name"] = parsed_info["casenames"]
+                    
+                    if not detail.get("name") or detail.get("name") == "판례":
+                        detail["name"] = doc_id if doc_id else "판례"
+                
+                if doc_id and not detail.get("url"):
+                    url = self._generate_case_url(doc_id)
+                    if url:
+                        detail["url"] = url
+                
+                if not detail.get("case_number") and doc_id:
+                    detail["case_number"] = doc_id
+                    metadata["doc_id"] = doc_id
+                
+                if not detail.get("case_name") and metadata.get("casenames"):
+                    detail["case_name"] = metadata["casenames"]
+            
+            elif source_type == "decision_paragraph":
+                doc_id = detail.get("decision_number") or metadata.get("doc_id") or ""
+                
+                if doc_id:
+                    existing_doc_ids.add(doc_id)
+                
+                if not detail.get("name") or detail.get("name") == "결정례":
+                    detail["name"] = doc_id if doc_id else "결정례"
+                
+                if doc_id and not detail.get("url"):
+                    url = self._generate_decision_url(doc_id, metadata)
+                    if url:
+                        detail["url"] = url
+                
+                if not detail.get("decision_number") and doc_id:
+                    detail["decision_number"] = doc_id
+                    metadata["doc_id"] = doc_id
+            
+            elif source_type == "interpretation_paragraph":
+                doc_id = detail.get("interpretation_number") or metadata.get("doc_id") or ""
+                
+                if doc_id:
+                    existing_doc_ids.add(doc_id)
+                
+                if not detail.get("name") or detail.get("name") == "해석례":
+                    detail["name"] = doc_id if doc_id else "해석례"
+                
+                if doc_id and not detail.get("url"):
+                    url = self._generate_interpretation_url(doc_id, metadata)
+                    if url:
+                        detail["url"] = url
+                
+                if not detail.get("interpretation_number") and doc_id:
+                    detail["interpretation_number"] = doc_id
+                    metadata["doc_id"] = doc_id
+        
+        for doc_id, parsed_info in sources_parsed.items():
+            if doc_id not in existing_doc_ids:
+                source_type_from_sources = parsed_info.get("source_type", "case_paragraph")
+                if not source_type_from_sources:
+                    if "case_" in doc_id:
+                        source_type_from_sources = "case_paragraph"
+                    elif "decision_" in doc_id or "detc_" in doc_id:
+                        source_type_from_sources = "decision_paragraph"
+                    elif "interp_" in doc_id or "expc_" in doc_id or "interpretation_" in doc_id:
+                        source_type_from_sources = "interpretation_paragraph"
+                
+                if source_type_from_sources == "case_paragraph":
+                    new_detail = {
+                        "name": doc_id if doc_id else "판례",
+                        "type": "case_paragraph",
+                        "url": self._generate_case_url(doc_id),
+                        "metadata": {
+                            "doc_id": doc_id,
+                            "casenames": parsed_info.get("casenames", ""),
+                            "court": "",
+                            "announce_date": "",
+                            "case_type": None
+                        },
+                        "case_number": doc_id
+                    }
+                    if parsed_info.get("casenames"):
+                        new_detail["case_name"] = parsed_info["casenames"]
+                    sources_detail.append(new_detail)
+                    logger.debug(f"[sources_extractor] Added missing case sources_detail from sources: {doc_id}")
+                
+                elif source_type_from_sources == "decision_paragraph":
+                    new_detail = {
+                        "name": doc_id if doc_id else "결정례",
+                        "type": "decision_paragraph",
+                        "url": self._generate_decision_url(doc_id, {}),
+                        "metadata": {
+                            "doc_id": doc_id,
+                            "org": "",
+                            "decision_date": "",
+                            "result": ""
+                        },
+                        "decision_number": doc_id
+                    }
+                    sources_detail.append(new_detail)
+                    logger.debug(f"[sources_extractor] Added missing decision sources_detail from sources: {doc_id}")
+                
+                elif source_type_from_sources == "interpretation_paragraph":
+                    new_detail = {
+                        "name": doc_id if doc_id else "해석례",
+                        "type": "interpretation_paragraph",
+                        "url": self._generate_interpretation_url(doc_id, {}),
+                        "metadata": {
+                            "doc_id": doc_id,
+                            "org": "",
+                            "title": "",
+                            "response_date": ""
+                        },
+                        "interpretation_number": doc_id
+                    }
+                    sources_detail.append(new_detail)
+                    logger.debug(f"[sources_extractor] Added missing interpretation sources_detail from sources: {doc_id}")
         
         return sources_detail

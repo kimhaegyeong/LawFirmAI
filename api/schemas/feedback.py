@@ -42,6 +42,8 @@ class FeedbackRequest(BaseModel):
     @field_validator('feedback_type')
     @classmethod
     def validate_feedback_type(cls, v):
+        if not v:
+            return "general"
         allowed_types = ['general', 'accuracy', 'helpfulness', 'speed', 'other']
         if v not in allowed_types:
             raise ValueError(f'피드백 유형은 {allowed_types} 중 하나여야 합니다')

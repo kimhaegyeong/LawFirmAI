@@ -2,8 +2,11 @@
 API 서버 설정 관리
 """
 import os
+import logging
 from typing import List, Optional
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class APIConfig(BaseSettings):
@@ -68,6 +71,11 @@ class APIConfig(BaseSettings):
     anonymous_quota_enabled: bool = True
     anonymous_quota_limit: int = 3
     anonymous_quota_reset_hour: int = 0
+    
+    # 스트리밍 캐싱 설정
+    enable_stream_cache: bool = False
+    stream_cache_ttl_seconds: int = 3600
+    stream_cache_max_size: int = 100
     
     def get_cors_origins(self) -> List[str]:
         """CORS origins 리스트 반환"""

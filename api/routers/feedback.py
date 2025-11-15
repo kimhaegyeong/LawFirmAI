@@ -56,7 +56,7 @@ async def submit_feedback(
         raise
     except ValueError as e:
         logger.warning(f"Validation error in submit_feedback: {e}")
-        raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error in submit_feedback: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="피드백 제출 중 오류가 발생했습니다")

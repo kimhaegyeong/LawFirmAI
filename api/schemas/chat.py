@@ -155,10 +155,18 @@ class AnswerChunkInfo(BaseModel):
 class ChatResponse(BaseModel):
     """채팅 응답 스키마"""
     answer: str = Field(..., description="AI 답변")
-    sources: List[str] = Field(default_factory=list, description="참고 출처 (문자열 배열 - 하위 호환성)")
-    sources_detail: List[SourceInfo] = Field(default_factory=list, description="참고 출처 상세 정보 (신규)")
+    sources_by_type: Optional[Dict[str, List[SourceInfo]]] = Field(default_factory=lambda: {
+        "statute_article": [],
+        "case_paragraph": [],
+        "decision_paragraph": [],
+        "interpretation_paragraph": []
+    }, description="참고 출처 타입별 그룹화 (유일한 필요한 필드)")
     confidence: float = Field(..., description="신뢰도 (0.0 ~ 1.0)")
-    legal_references: List[str] = Field(default_factory=list, description="법률 참조")
+    # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
+    sources: List[str] = Field(default_factory=list, description="참고 출처 (deprecated: sources_by_type에서 재구성 가능)")
+    sources_detail: List[SourceInfo] = Field(default_factory=list, description="참고 출처 상세 정보 (deprecated: sources_by_type에서 재구성 가능)")
+    legal_references: List[str] = Field(default_factory=list, description="법률 참조 (deprecated: sources_by_type에서 재구성 가능)")
+    related_questions: List[str] = Field(default_factory=list, description="연관 질문")
     processing_steps: List[str] = Field(default_factory=list, description="처리 단계")
     session_id: str = Field(..., description="세션 ID")
     processing_time: float = Field(..., description="처리 시간 (초)")
@@ -260,41 +268,4 @@ class StreamingChatRequest(BaseModel):
                 raise ValueError(error_msg)
         return v
 
-
-class ContinueAnswerRequest(BaseModel):
-    """계속 읽기 요청 스키마"""
-    session_id: str = Field(..., description="세션 ID")
-    message_id: str = Field(..., description="메시지 ID")
-    chunk_index: int = Field(..., description="요청할 청크 인덱스 (0부터 시작)")
-    
-    @field_validator('session_id')
-    @classmethod
-    def validate_session_id(cls, v):
-        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-        if not re.match(uuid_pattern, v, re.IGNORECASE):
-            raise ValueError('유효하지 않은 세션 ID 형식입니다')
-        return v
-    
-    @field_validator('message_id')
-    @classmethod
-    def validate_message_id(cls, v):
-        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-        if not re.match(uuid_pattern, v, re.IGNORECASE):
-            raise ValueError('유효하지 않은 메시지 ID 형식입니다')
-        return v
-    
-    @field_validator('chunk_index')
-    @classmethod
-    def validate_chunk_index(cls, v):
-        if v < 0:
-            raise ValueError('청크 인덱스는 0 이상이어야 합니다')
-        return v
-
-
-class ContinueAnswerResponse(BaseModel):
-    """계속 읽기 응답 스키마"""
-    content: str = Field(..., description="청크 내용")
-    chunk_index: int = Field(..., description="청크 인덱스")
-    total_chunks: int = Field(..., description="전체 청크 수")
-    has_more: bool = Field(..., description="더 많은 청크가 있는지 여부")
 

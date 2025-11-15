@@ -17,11 +17,6 @@ if sys.platform == "win32":
         # 이미 설정된 경우 무시
         pass
 
-# HuggingFace 로깅 비활성화 (가장 먼저 실행)
-os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
-
 # HuggingFace 관련 로거 비활성화
 logging.getLogger('transformers').setLevel(logging.ERROR)
 logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
@@ -318,9 +313,6 @@ async def startup_event():
             disable_external_logging()
         except ImportError:
             # fallback: 직접 비활성화
-            os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-            os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
             logging.getLogger('transformers').setLevel(logging.ERROR)
             logging.getLogger('sentence_transformers').setLevel(logging.ERROR)
             logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
@@ -410,6 +402,48 @@ async def startup_event():
             logger.error(f"Startup event error: {e}", exc_info=True)
         except:
             print(f"[ERROR] Startup event error: {e}", flush=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """서버 종료 시 정리 작업"""
+    import asyncio
+    
+    try:
+        logger = logging.getLogger("api.shutdown")
+        logger.info("🛑 서버 종료 중...")
+        
+        # 스트리밍 캐시 정리 (선택사항)
+        try:
+            from api.routers.chat import get_stream_cache
+            stream_cache = get_stream_cache()
+            if stream_cache:
+                stream_cache.clear()
+                logger.debug("Stream cache cleared")
+        except Exception as e:
+            logger.debug(f"Failed to clear stream cache: {e}")
+        
+        # ChatService 정리 (필요한 경우)
+        try:
+            from api.services.chat_service import get_chat_service
+            chat_service = get_chat_service()
+            # 필요한 정리 작업이 있다면 여기에 추가
+            logger.debug("ChatService cleanup completed")
+        except Exception as e:
+            logger.debug(f"ChatService cleanup error: {e}")
+        
+        logger.info("✅ 서버 종료 완료")
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # 종료 중 취소는 정상적인 동작
+        pass
+    except Exception as e:
+        # 종료 중 에러는 조용히 처리
+        try:
+            logger = logging.getLogger("api.shutdown")
+            logger.debug(f"Shutdown event error: {e}")
+        except:
+            pass
+
 
 # 라우터 등록
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])

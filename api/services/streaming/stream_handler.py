@@ -5,15 +5,23 @@ import json
 import asyncio
 import logging
 import uuid
-from typing import Dict, Any, Optional, AsyncGenerator
-from datetime import datetime
+from typing import Dict, Any, Optional, AsyncGenerator, List
 
 from .constants import StreamingConstants
 from .event_builder import StreamEventBuilder
 from .token_extractor import TokenExtractor
 from .node_filter import NodeFilter
+from api.utils.sse_formatter import format_sse_event
 
 logger = logging.getLogger(__name__)
+
+# 기본 sources_by_type 구조
+DEFAULT_SOURCES_BY_TYPE = {
+    "statute_article": [],
+    "case_paragraph": [],
+    "decision_paragraph": [],
+    "interpretation_paragraph": []
+}
 
 
 class StreamHandler:
@@ -49,7 +57,7 @@ class StreamHandler:
             error_event = self.event_builder.create_error_event(
                 "[오류] 서비스 초기화에 실패했습니다."
             )
-            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            yield format_sse_event(error_event)
             return
         
         try:
@@ -68,13 +76,13 @@ class StreamHandler:
                 error_event = self.event_builder.create_error_event(
                     "[오류] 질문이 제대로 전달되지 않았습니다."
                 )
-                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                yield format_sse_event(error_event)
                 return
             
             callback_handler, config = await self._setup_callback_handler(session_id)
             
             progress_event = self.event_builder.create_progress_event("답변 생성 중...")
-            yield f"data: {json.dumps(progress_event, ensure_ascii=False)}\n\n"
+            yield format_sse_event(progress_event)
             
             async for chunk in self._process_stream_events(
                 initial_state, config, callback_handler, message, session_id
@@ -91,23 +99,14 @@ class StreamHandler:
                     f"[오류] 스트리밍 중 오류가 발생했습니다: {str(e)}",
                     type(e).__name__
                 )
-                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+                yield format_sse_event(error_event)
             except GeneratorExit:
                 logger.debug("[stream_final_answer] Client disconnected during error handling")
                 return
             except Exception as yield_error:
                 logger.error(f"Failed to yield error event: {yield_error}")
-            finally:
-                # 스트림이 제대로 종료되도록 보장
-                try:
-                    done_event = {
-                        "type": "done",
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
-                return
+            # finally 블록에서 yield를 하면 제너레이터가 제대로 종료되지 않을 수 있으므로 제거
+            # done 이벤트는 정상 종료 시에만 전송됨 (373줄)
     
     async def _setup_callback_handler(self, session_id: str):
         """콜백 핸들러 설정"""
@@ -218,7 +217,7 @@ class StreamHandler:
                                         stream_event = self.event_builder.create_stream_event(
                                             content, source="callback"
                                         )
-                                        yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                                        yield format_sse_event(stream_event)
                                         
                                         if callback_chunks_received <= StreamingConstants.MAX_DEBUG_LOGS:
                                             logger.info(
@@ -301,7 +300,7 @@ class StreamHandler:
                                 f"stream_event_count={stream_event_count}"
                             )
                             stream_event = self.event_builder.create_stream_event(token)
-                            yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                            yield format_sse_event(stream_event)
                         else:
                             logger.debug(
                                 f"[stream_final_answer] 토큰 추출 실패: "
@@ -335,7 +334,7 @@ class StreamHandler:
                                             stream_event = self.event_builder.create_stream_event(
                                                 content, source="callback"
                                             )
-                                            yield f"data: {json.dumps(stream_event, ensure_ascii=False)}\n\n"
+                                            yield format_sse_event(stream_event)
                                 except asyncio.QueueEmpty:
                                     break
                         except Exception as e:
@@ -362,13 +361,13 @@ class StreamHandler:
                         validation_event = self.event_builder.create_validation_event(
                             final_metadata["llm_validation"]
                         )
-                        yield f"data: {json.dumps(validation_event, ensure_ascii=False)}\n\n"
+                        yield format_sse_event(validation_event)
                     
                     final_event = self.event_builder.create_final_event("", final_metadata)
-                    yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+                    yield format_sse_event(final_event)
                     
                     done_event = self.event_builder.create_done_event(full_answer, final_metadata)
-                    yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+                    yield format_sse_event(done_event)
                     break
         
         finally:
@@ -580,12 +579,17 @@ class StreamHandler:
                 
                 llm_validation_result = state_values.get("metadata", {}).get("llm_validation_result", {})
                 
+                # 타입별 그룹화 (새로운 기능) - 판례의 참조 법령 포함
+                sources_by_type = self._generate_sources_by_type(sources_detail)
+                
                 final_metadata = {
-                    "sources": sources,
-                    "legal_references": legal_references,
-                    "sources_detail": sources_detail,
+                    "sources_by_type": sources_by_type,  # 유일한 필요한 필드
                     "related_questions": related_questions,
-                    "llm_validation": llm_validation_result if llm_validation_result else None
+                    "llm_validation": llm_validation_result if llm_validation_result else None,
+                    # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
+                    "sources": sources,  # deprecated: sources_by_type에서 재구성 가능
+                    "legal_references": legal_references,  # deprecated: sources_by_type에서 재구성 가능
+                    "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
                 }
                 
                 logger.debug(
@@ -603,6 +607,28 @@ class StreamHandler:
             logger.warning(f"[stream_final_answer] Error getting state: {e}")
         
         return {}
+    
+    def _generate_sources_by_type(self, sources_detail: List[Dict[str, Any]]) -> Optional[Dict[str, List[Any]]]:
+        """
+        sources_by_type 생성 (판례의 참조 법령 포함)
+        예외 발생 시에도 안전하게 기본 구조 반환
+        """
+        if not sources_detail or not self.sources_extractor:
+            return None
+        
+        try:
+            sources_by_type = self.sources_extractor._get_sources_by_type_with_reference_statutes(sources_detail)
+            logger.debug(f"[stream_final_answer] Generated sources_by_type with reference statutes: {len(sources_by_type.get('statute_article', []))} statutes")
+            return sources_by_type
+        except Exception as e:
+            logger.warning(f"[stream_final_answer] Failed to generate sources_by_type: {e}", exc_info=True)
+            # 예외 발생 시 기본 sources_by_type 생성 (참조 법령 없이)
+            try:
+                sources_by_type = self.sources_extractor._get_sources_by_type(sources_detail) if sources_detail else DEFAULT_SOURCES_BY_TYPE.copy()
+                return sources_by_type
+            except Exception as fallback_error:
+                logger.error(f"[stream_final_answer] Failed to generate fallback sources_by_type: {fallback_error}", exc_info=True)
+                return DEFAULT_SOURCES_BY_TYPE.copy()
     
     def _validate_and_augment_state(
         self,
