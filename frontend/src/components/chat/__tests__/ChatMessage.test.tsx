@@ -91,7 +91,9 @@ describe('ChatMessage - Done 이벤트 처리', () => {
     );
 
     // 전체 content가 표시되어야 함
-    expect(screen.getByText(new RegExp(longContent.slice(0, 20)))).toBeInTheDocument();
+    const contentPrefix = longContent.slice(0, 20);
+    // eslint-disable-next-line security/detect-non-literal-regexp
+    expect(screen.getByText(new RegExp(contentPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,7 @@
 /**
  * 스트리밍 메시지 처리 훅
  */
+/* eslint-disable security/detect-object-injection */
 import { useRef, useCallback } from 'react';
 import { useChat } from './useChat';
 import { parseStreamChunk } from '../utils/streamParser';

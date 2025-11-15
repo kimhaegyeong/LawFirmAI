@@ -2,6 +2,7 @@
  * useStreamingMessage 훅 테스트
  * 포괄적인 기능 테스트 및 리팩토링 전 검증
  */
+/* eslint-disable security/detect-object-injection */
 import { describe, it, expect, vi } from 'vitest';
 // import { renderHook, act, waitFor } from '@testing-library/react';
 // import { useStreamingMessage } from '../useStreamingMessage';

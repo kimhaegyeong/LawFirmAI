@@ -67,8 +67,8 @@ export function ChatMessage({
   const isUser = safeMessage.role === 'user';
   const isProgress = safeMessage.role === 'progress';
   
-  // metadata를 명시적으로 추출하여 변경 감지 보장
-  const metadata = safeMessage.metadata || {};
+  // metadata를 명시적으로 추출하여 변경 감지 보장 (useMemo로 최적화)
+  const metadata = useMemo(() => safeMessage.metadata || {}, [safeMessage.metadata]);
   
   // done 이벤트를 받았는지 확인 (직접 계산하여 변경 감지 보장)
   const isDone = metadata._isDone === true;
