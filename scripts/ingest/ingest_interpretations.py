@@ -14,6 +14,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.embeddings import SentenceEmbedder
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
 def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
@@ -26,10 +27,20 @@ def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
 
 
 def insert_interpretation(conn: sqlite3.Connection, domain_id: int, meta: Dict[str, Any]) -> int:
+    """Interpretation ?? ? ID ?? (???? ?? ??)"""
+    # ???? ??
+    extractor = ReferenceStatuteExtractor()
+    full_text = meta.get("full_text", "") or meta.get("content", "")
+    if not full_text and meta.get("sentences"):
+        full_text = "\n".join(meta.get("sentences", []))
+    
+    reference_statutes = extractor.extract_from_content(full_text)
+    reference_statutes_json = extractor.to_json(reference_statutes) if reference_statutes else None
+    
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO interpretations(domain_id, org, doc_id, title, response_date)
-        VALUES(?,?,?,?,?)
+        INSERT OR IGNORE INTO interpretations(domain_id, org, doc_id, title, response_date, reference_statutes)
+        VALUES(?,?,?,?,?,?)
         """,
         (
             domain_id,
@@ -37,12 +48,19 @@ def insert_interpretation(conn: sqlite3.Connection, domain_id: int, meta: Dict[s
             meta.get("doc_id"),
             meta.get("title"),
             meta.get("response_date"),
+            reference_statutes_json,
         ),
     )
     if cur.lastrowid:
         interp_id = cur.lastrowid
     else:
         interp_id = conn.execute("SELECT id FROM interpretations WHERE doc_id=?", (meta.get("doc_id"),)).fetchone()[0]
+        # ?? ???? ??? ???? ????
+        if reference_statutes_json:
+            conn.execute(
+                "UPDATE interpretations SET reference_statutes = ? WHERE id = ?",
+                (reference_statutes_json, interp_id)
+            )
     return interp_id
 
 

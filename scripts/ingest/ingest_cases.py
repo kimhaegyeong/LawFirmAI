@@ -17,6 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.embeddings import SentenceEmbedder
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
 def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
@@ -51,7 +52,7 @@ def calculate_file_hash(file_path: str) -> str:
 
 def check_file_processed(conn: sqlite3.Connection, file_path: str, file_hash: str) -> bool:
     """
-    sources ?Œì´ë¸”ì—???Œì¼???´ë? ì²˜ë¦¬?˜ì—ˆ?”ì? ?•ì¸
+    sources ?Œì´ë¸”ì—???Œì¼???´ë? ì²˜ë¦¬?˜ì—ˆ?”ì? ?•ì¸
 
     Args:
         conn: ?°ì´?°ë² ?´ìŠ¤ ?°ê²°
@@ -69,11 +70,20 @@ def check_file_processed(conn: sqlite3.Connection, file_path: str, file_hash: st
 
 
 def insert_case(conn: sqlite3.Connection, domain_id: int, meta: Dict[str, Any]) -> int:
-    """Case ?½ìž… ë°?ID ë°˜í™˜"""
+    """Case ?? ? ID ?? (???? ?? ??)"""
+    # ???? ??
+    extractor = ReferenceStatuteExtractor()
+    full_text = meta.get("full_text", "") or meta.get("content", "")
+    if not full_text and meta.get("sentences"):
+        full_text = "\n".join(meta.get("sentences", []))
+    
+    reference_statutes = extractor.extract_from_content(full_text)
+    reference_statutes_json = extractor.to_json(reference_statutes) if reference_statutes else None
+    
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO cases(domain_id, doc_id, court, case_type, casenames, announce_date)
-        VALUES(?,?,?,?,?,?)
+        INSERT OR IGNORE INTO cases(domain_id, doc_id, court, case_type, casenames, announce_date, reference_statutes)
+        VALUES(?,?,?,?,?,?,?)
         """,
         (
             domain_id,
@@ -82,12 +92,19 @@ def insert_case(conn: sqlite3.Connection, domain_id: int, meta: Dict[str, Any]) 
             meta.get("casetype"),
             meta.get("casenames"),
             meta.get("announce_date"),
+            reference_statutes_json,
         ),
     )
     if cur.lastrowid:
         case_id = cur.lastrowid
     else:
         case_id = conn.execute("SELECT id FROM cases WHERE doc_id=?", (meta.get("doc_id"),)).fetchone()[0]
+        # ?? ???? ??? ???? ????
+        if reference_statutes_json:
+            conn.execute(
+                "UPDATE cases SET reference_statutes = ? WHERE id = ?",
+                (reference_statutes_json, case_id)
+            )
     return case_id
 
 
@@ -97,20 +114,20 @@ def is_case_complete(
     expected_para_count: int
 ) -> bool:
     """
-    Caseê°€ ?„ì „???ìž¬?˜ì—ˆ?”ì? ?•ì¸
+    Caseê°€ ?„ì „???ìž¬?˜ì—ˆ?”ì? ?•ì¸
 
     ?„ì „??ê²€ì¦???ª©:
-    1. paragraphs ê°œìˆ˜ê°€ ?ˆìƒ ê°œìˆ˜?€ ?¼ì¹˜
+    1. paragraphs ê°œìˆ˜ê°€ ?ˆìƒ ê°œìˆ˜?€ ?¼ì¹˜
     2. chunksê°€ ì¡´ìž¬
-    3. embeddingsê°€ chunksë§Œí¼ ì¡´ìž¬
+    3. embeddingsê°€ chunksë§Œí¼ ì¡´ìž¬
 
     Args:
         conn: ?°ì´?°ë² ?´ìŠ¤ ?°ê²°
         case_id: Case ID
-        expected_para_count: ?ˆìƒ paragraph ê°œìˆ˜
+        expected_para_count: ?ˆìƒ paragraph ê°œìˆ˜
 
     Returns:
-        bool: ?„ì „???ìž¬??ê²½ìš° True
+        bool: ?„ì „???ìž¬??ê²½ìš° True
     """
     # 1. Paragraphs ê°œìˆ˜ ?•ì¸
     para_count = conn.execute(
@@ -121,7 +138,7 @@ def is_case_complete(
     if para_count != expected_para_count:
         return False
 
-    # 2. Chunks ?•ì¸ (ìµœì†Œ 1ê°??´ìƒ ?ˆì–´????
+    # 2. Chunks ?•ì¸ (ìµœì†Œ 1ê°??´ìƒ ?ˆì–´????
     chunk_count = conn.execute(
         "SELECT COUNT(*) FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
         (case_id,)
@@ -143,9 +160,9 @@ def is_case_complete(
 
 def cleanup_incomplete_case(conn: sqlite3.Connection, case_id: int):
     """
-    ë¶€ë¶??ìž¬??case ?°ì´???•ë¦¬
+    ë¶€ë¶??ìž¬??case ?°ì´???•ë¦¬
 
-    CASCADEë¡??ë™ ?? œ?˜ì?ë§? ëª…ì‹œ?ìœ¼ë¡??•ë¦¬?˜ì—¬ ë¶€ë¶??? œ ?íƒœë¥?ë°©ì?
+    CASCADEë¡??ë™ ?? œ?˜ì?ë§? ëª…ì‹œ?ìœ¼ë¡??•ë¦¬?˜ì—¬ ë¶€ë¶??? œ ?íƒœë¥?ë°©ì?
 
     Args:
         conn: ?°ì´?°ë² ?´ìŠ¤ ?°ê²°
@@ -167,7 +184,7 @@ def cleanup_incomplete_case(conn: sqlite3.Connection, case_id: int):
         (case_id,)
     )
 
-    # 3. Case paragraphs ?? œ (CASCADEë¡??ë™ ?? œ?˜ì?ë§?ëª…ì‹œ??
+    # 3. Case paragraphs ?? œ (CASCADEë¡??ë™ ?? œ?˜ì?ë§?ëª…ì‹œ??
     conn.execute("DELETE FROM case_paragraphs WHERE case_id=?", (case_id,))
 
     # 4. Case ?? œ
@@ -175,18 +192,18 @@ def cleanup_incomplete_case(conn: sqlite3.Connection, case_id: int):
 
 
 def insert_paragraphs(conn: sqlite3.Connection, case_id: int, paragraphs: List[str]) -> List[int]:
-    """Paragraphs ë°°ì¹˜ ?½ìž… (?±ëŠ¥ ìµœì ??"""
+    """Paragraphs ë°°ì¹˜ ?½ìž… (?±ëŠ¥ ìµœì ??"""
     if not paragraphs:
         return []
 
-    # ë°°ì¹˜ INSERTë¡?ìµœì ??
+    # ë°°ì¹˜ INSERTë¡?ìµœì ??
     data = [(case_id, i, p) for i, p in enumerate(paragraphs)]
     conn.executemany(
         "INSERT OR REPLACE INTO case_paragraphs(case_id, para_index, text) VALUES(?,?,?)",
         data
     )
 
-    # ?½ìž…??ID ì¡°íšŒ (ë°°ì¹˜ ì¡°íšŒë¡?ìµœì ??
+    # ?½ìž…??ID ì¡°íšŒ (ë°°ì¹˜ ì¡°íšŒë¡?ìµœì ??
     placeholders = ",".join(["?"] * len(paragraphs))
     indices = list(range(len(paragraphs)))
     rows = conn.execute(
@@ -207,7 +224,7 @@ def insert_chunks_and_embeddings(
     batch: int = 128,
 ):
     """
-    Chunks ë°?Embeddings ë°°ì¹˜ ?½ìž… (?±ëŠ¥ ìµœì ??
+    Chunks ë°?Embeddings ë°°ì¹˜ ?½ìž… (?±ëŠ¥ ìµœì ??
 
     Args:
         conn: ?°ì´?°ë² ?´ìŠ¤ ?°ê²°
@@ -220,7 +237,7 @@ def insert_chunks_and_embeddings(
     if not chunks:
         return
 
-    # ê¸°ì¡´ chunksê°€ ?ˆëŠ” ê²½ìš° chunk_index ì¶©ëŒ ë°©ì?
+    # ê¸°ì¡´ chunksê°€ ?ˆëŠ” ê²½ìš° chunk_index ì¶©ëŒ ë°©ì?
     max_idx = conn.execute(
         "SELECT COALESCE(MAX(chunk_index), -1) FROM text_chunks WHERE source_type='case_paragraph' AND source_id=?",
         (case_id,)
@@ -291,7 +308,7 @@ def ingest_case_with_duplicate_protection(
     skip_hash: bool = False,
 ) -> Tuple[bool, str]:
     """
-    ì¤‘ë³µ ë°©ì? ë¡œì§???¬í•¨??case ?ìž¬ (?±ëŠ¥ ìµœì ??
+    ì¤‘ë³µ ë°©ì? ë¡œì§???¬í•¨??case ?ìž¬ (?±ëŠ¥ ìµœì ??
 
     Args:
         conn: ?°ì´?°ë² ?´ìŠ¤ ?°ê²°
@@ -299,9 +316,9 @@ def ingest_case_with_duplicate_protection(
         domain_name: ?„ë©”???´ë¦„
         meta: Case ë©”í??°ì´??
         embedder: Sentence embedder
-        force: ê°•ì œ ?¬ì ???¬ë?
+        force: ê°•ì œ ?¬ì ???¬ë?
         batch_size: Embedding ë°°ì¹˜ ?¬ê¸°
-        skip_hash: ?´ì‹œ ê³„ì‚° ?¤í‚µ (doc_id ì²´í¬ë§??˜í–‰)
+        skip_hash: ?´ì‹œ ê³„ì‚° ?¤í‚µ (doc_id ì²´í¬ë§??˜í–‰)
 
     Returns:
         Tuple[bool, str]: (?±ê³µ ?¬ë?, ë©”ì‹œì§€)
@@ -313,9 +330,9 @@ def ingest_case_with_duplicate_protection(
     expected_para_count = len(meta.get("sentences", []))
     file_hash = None
 
-    # ê°•ì œ ?¬ì ??ëª¨ë“œê°€ ?„ë‹Œ ê²½ìš° ì¤‘ë³µ ?•ì¸
+    # ê°•ì œ ?¬ì ??ëª¨ë“œê°€ ?„ë‹Œ ê²½ìš° ì¤‘ë³µ ?•ì¸
     if not force:
-        # Layer 1: doc_id ê¸°ë°˜ ì¤‘ë³µ ?•ì¸ (??ë¹ ë¦„ - ?¸ë±???¬ìš©)
+        # Layer 1: doc_id ê¸°ë°˜ ì¤‘ë³µ ?•ì¸ (??ë¹ ë¦„ - ?¸ë±???¬ìš©)
         existing_case = conn.execute(
             "SELECT id FROM cases WHERE doc_id=?", (doc_id,)
         ).fetchone()
@@ -323,7 +340,7 @@ def ingest_case_with_duplicate_protection(
         if existing_case:
             case_id = existing_case[0]
             if is_case_complete(conn, case_id, expected_para_count):
-                # ?„ì „???ìž¬??ê²½ìš° - ?´ì‹œ ê³„ì‚°???„ìš”??ê²½ìš°?ë§Œ ?˜í–‰
+                # ?„ì „???ìž¬??ê²½ìš° - ?´ì‹œ ê³„ì‚°???„ìš”??ê²½ìš°?ë§Œ ?˜í–‰
                 if not skip_hash:
                     try:
                         file_hash = calculate_file_hash(file_path)
@@ -332,35 +349,35 @@ def ingest_case_with_duplicate_protection(
                             ("case", file_path, file_hash)
                         )
                     except Exception:
-                        pass  # ?´ì‹œ ê³„ì‚° ?¤íŒ¨?´ë„ ?¤í‚µ?€ ê³„ì†
+                        pass  # ?´ì‹œ ê³„ì‚° ?¤íŒ¨?´ë„ ?¤í‚µ?€ ê³„ì†
                 return False, f"Case already fully ingested: {doc_id}"
             else:
-                # ë¶€ë¶??ìž¬??ê²½ìš° - ?•ë¦¬ ???¬ì ??
+                # ë¶€ë¶??ìž¬??ê²½ìš° - ?•ë¦¬ ???¬ì ??
                 cleanup_incomplete_case(conn, case_id)
         else:
-            # doc_idê°€ ?†ìœ¼ë©??Œì¼ ?´ì‹œ ê¸°ë°˜ ?•ì¸ (???ë¦¬ì§€ë§??•í™•)
+            # doc_idê°€ ?†ìœ¼ë©??Œì¼ ?´ì‹œ ê¸°ë°˜ ?•ì¸ (???ë¦¬ì§€ë§??•í™•)
             if not skip_hash:
                 try:
                     file_hash = calculate_file_hash(file_path)
                     if check_file_processed(conn, file_path, file_hash):
                         return False, f"File already processed: {file_path}"
                 except Exception as e:
-                    # ?´ì‹œ ê³„ì‚° ?¤íŒ¨ ??ê³„ì† ì§„í–‰
+                    # ?´ì‹œ ê³„ì‚° ?¤íŒ¨ ??ê³„ì† ì§„í–‰
                     pass
     else:
-        # ê°•ì œ ?¬ì ??ëª¨ë“œ - ê¸°ì¡´ ?°ì´???•ë¦¬
+        # ê°•ì œ ?¬ì ??ëª¨ë“œ - ê¸°ì¡´ ?°ì´???•ë¦¬
         existing_case = conn.execute(
             "SELECT id FROM cases WHERE doc_id=?", (doc_id,)
         ).fetchone()
         if existing_case:
             cleanup_incomplete_case(conn, existing_case[0])
-            # sources?ì„œ???œê±°
+            # sources?ì„œ???œê±°
             conn.execute(
                 "DELETE FROM sources WHERE source_type='case' AND path=?",
                 (file_path,)
             )
 
-    # ?¸ëžœ??…˜ ?œìž‘ (?ìž??ë³´ìž¥)
+    # ?¸ëžœ??…˜ ?œìž‘ (?ìž??ë³´ìž¥)
     try:
         # Domain ?•ì¸
         domain_id = ensure_domain(conn, domain_name)
@@ -376,12 +393,12 @@ def ingest_case_with_duplicate_protection(
             conn, case_id, meta.get("sentences", []), embedder, batch=batch_size
         )
 
-        # Sources ?Œì´ë¸”ì— ê¸°ë¡ (?±ê³µ ?œì—ë§? ?´ì‹œê°€ ?†ëŠ” ê²½ìš°?ë§Œ ê³„ì‚°)
+        # Sources ?Œì´ë¸”ì— ê¸°ë¡ (?±ê³µ ?œì—ë§? ?´ì‹œê°€ ?†ëŠ” ê²½ìš°?ë§Œ ê³„ì‚°)
         if file_hash is None:
             try:
                 file_hash = calculate_file_hash(file_path)
             except Exception:
-                file_hash = ""  # ?´ì‹œ ê³„ì‚° ?¤íŒ¨?´ë„ ê³„ì† ì§„í–‰
+                file_hash = ""  # ?´ì‹œ ê³„ì‚° ?¤íŒ¨?´ë„ ê³„ì† ì§„í–‰
 
         if file_hash:
             conn.execute(
@@ -389,7 +406,7 @@ def ingest_case_with_duplicate_protection(
                 ("case", file_path, file_hash)
             )
 
-        # ì»¤ë°‹?€ ?¸ì¶œ?ê? ë°°ì¹˜ë¡?ì²˜ë¦¬?????ˆë„ë¡?ì£¼ì„ ì²˜ë¦¬
+        # ì»¤ë°‹?€ ?¸ì¶œ?ê? ë°°ì¹˜ë¡?ì²˜ë¦¬?????ˆë„ë¡?ì£¼ì„ ì²˜ë¦¬
         # conn.commit()
         return True, f"Successfully ingested case: {doc_id}"
 
@@ -400,11 +417,11 @@ def ingest_case_with_duplicate_protection(
 
 def find_json_files(folder_path: str, recursive: bool = True) -> List[str]:
     """
-    ?´ë”?ì„œ JSON ?Œì¼ ì°¾ê¸°
+    ?´ë”?ì„œ JSON ?Œì¼ ì°¾ê¸°
 
     Args:
-        folder_path: ?´ë” ê²½ë¡œ
-        recursive: ?¬ê??ìœ¼ë¡?ê²€?‰í• ì§€ ?¬ë?
+        folder_path: ?´ë” ê²½ë¡œ
+        recursive: ?¬ê??ìœ¼ë¡?ê²€?‰í• ì§€ ?¬ë?
 
     Returns:
         List[str]: ì°¾ì? JSON ?Œì¼ ê²½ë¡œ ë¦¬ìŠ¤??
@@ -419,7 +436,7 @@ def find_json_files(folder_path: str, recursive: bool = True) -> List[str]:
     else:
         json_files = list(folder.glob("*.json"))
 
-    # complete ?´ë”???Œì¼?€ ?œì™¸
+    # complete ?´ë”???Œì¼?€ ?œì™¸
     json_files = [str(f) for f in json_files if "complete" not in str(f)]
 
     return sorted(json_files)
@@ -444,9 +461,9 @@ def process_single_file(
         file_path: JSON ?Œì¼ ê²½ë¡œ
         domain_name: ?„ë©”???´ë¦„
         embedder: Sentence embedder
-        force: ê°•ì œ ?¬ì ???¬ë?
+        force: ê°•ì œ ?¬ì ???¬ë?
         batch_size: Embedding ë°°ì¹˜ ?¬ê¸°
-        no_move: ?Œì¼ ?´ë™ ë¹„í™œ?±í™” ?¬ë?
+        no_move: ?Œì¼ ?´ë™ ë¹„í™œ?±í™” ?¬ë?
 
     Returns:
         Tuple[bool, str]: (?±ê³µ ?¬ë?, ë©”ì‹œì§€)
@@ -460,7 +477,7 @@ def process_single_file(
     except Exception as e:
         return False, f"Error loading JSON file: {e}"
 
-    # ?ìž¬ ?˜í–‰
+    # ?ìž¬ ?˜í–‰
     success, message = ingest_case_with_duplicate_protection(
         conn, abs_file_path, domain_name, meta, embedder, force, batch_size, skip_hash
     )
@@ -469,13 +486,13 @@ def process_single_file(
     if auto_commit and success:
         conn.commit()
 
-    # ?Œì¼ ?´ë™ ì²˜ë¦¬
+    # ?Œì¼ ?´ë™ ì²˜ë¦¬
     if success:
         if not no_move:
             move_to_complete_folder(abs_file_path)
         return True, message
     else:
-        # ?´ë? ?„ë£Œ???Œì¼???´ë™
+        # ?´ë? ?„ë£Œ???Œì¼???´ë™
         if not no_move and ("already" in message.lower() or "processed" in message.lower()):
             if Path(abs_file_path).exists():
                 move_to_complete_folder(abs_file_path)
@@ -484,13 +501,13 @@ def process_single_file(
 
 def move_to_complete_folder(file_path: str) -> Optional[str]:
     """
-    ?‘ì—… ?„ë£Œ???Œì¼??complete ?´ë”ë¡??´ë™
+    ?‘ì—… ?„ë£Œ???Œì¼??complete ?´ë”ë¡??´ë™
 
     Args:
-        file_path: ?´ë™???Œì¼ ê²½ë¡œ
+        file_path: ?´ë™???Œì¼ ê²½ë¡œ
 
     Returns:
-        Optional[str]: ?´ë™???Œì¼ ê²½ë¡œ (?¤íŒ¨ ??None)
+        Optional[str]: ?´ë™???Œì¼ ê²½ë¡œ (?¤íŒ¨ ??None)
     """
     try:
         file_path_obj = Path(file_path)
@@ -498,12 +515,12 @@ def move_to_complete_folder(file_path: str) -> Optional[str]:
             print(f"Warning: File does not exist: {file_path}")
             return None
 
-        # ?ë³¸ ?Œì¼???”ë ‰? ë¦¬ ê¸°ì??¼ë¡œ complete ?´ë” ?ì„±
+        # ?ë³¸ ?Œì¼???”ë ‰? ë¦¬ ê¸°ì??¼ë¡œ complete ?´ë” ?ì„±
         parent_dir = file_path_obj.parent
         complete_dir = parent_dir / "complete"
         complete_dir.mkdir(exist_ok=True)
 
-        # ?´ë™???Œì¼ ê²½ë¡œ
+        # ?´ë™???Œì¼ ê²½ë¡œ
         destination = complete_dir / file_path_obj.name
 
         # ?™ì¼???Œì¼???´ë? ?ˆëŠ” ê²½ìš° ì²˜ë¦¬
@@ -516,7 +533,7 @@ def move_to_complete_folder(file_path: str) -> Optional[str]:
             new_name = f"{stem}_{dt.strftime('%Y%m%d_%H%M%S')}{suffix}"
             destination = complete_dir / new_name
 
-        # ?Œì¼ ?´ë™
+        # ?Œì¼ ?´ë™
         shutil.move(str(file_path_obj), str(destination))
         print(f"??Moved to complete folder: {destination}")
         return str(destination)
@@ -532,35 +549,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # ?¨ì¼ ?Œì¼ ?ìž¬
-  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì‚¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì‚¬ë²?
+  # ?¨ì¼ ?Œì¼ ?ìž¬
+  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì‚¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì‚¬ë²?
 
-  # ?´ë” ë°°ì¹˜ ì²˜ë¦¬ (?¬ê? ê²€??
-  python scripts/ingest/ingest_cases.py --folder "data/aihub/.../TS_01. ë¯¼ì‚¬ë²?001. ?ê²°ë¬? --domain "ë¯¼ì‚¬ë²?
+  # ?´ë” ë°°ì¹˜ ì²˜ë¦¬ (?¬ê? ê²€??
+  python scripts/ingest/ingest_cases.py --folder "data/aihub/.../TS_01. ë¯¼ì‚¬ë²?001. ?ê²°ë¬? --domain "ë¯¼ì‚¬ë²?
 
-  # ?´ë” ë°°ì¹˜ ì²˜ë¦¬ (?„ìž¬ ?´ë”ë§? ?˜ìœ„ ?´ë” ?œì™¸)
+  # ?´ë” ë°°ì¹˜ ì²˜ë¦¬ (?„ìž¬ ?´ë”ë§? ?˜ìœ„ ?´ë” ?œì™¸)
   python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì‚¬ë²? --no-recursive
 
-  # ê°•ì œ ?¬ì ??
-  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì‚¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì‚¬ë²? --force
+  # ê°•ì œ ?¬ì ??
+  python scripts/ingest/ingest_cases.py --file "data/aihub/.../ë¯¼ì‚¬ë²??ê²°ë¬?1.json" --domain "ë¯¼ì‚¬ë²? --force
 
-  # ?„ë£Œ ?Œì¼ ?´ë™ ë¹„í™œ?±í™”
+  # ?„ë£Œ ?Œì¼ ?´ë™ ë¹„í™œ?±í™”
   python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì‚¬ë²? --no-move
 
   # ??ë°°ì¹˜ ?¬ê¸°ë¡?ë¹ ë¥´ê²?ì²˜ë¦¬
   python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì‚¬ë²? --batch-size 256
 
-  # ?ë„ ìµœì ???µì…˜ (ë¹ ë¥¸ ì²˜ë¦¬)
+  # ?ë„ ìµœì ???µì…˜ (ë¹ ë¥¸ ì²˜ë¦¬)
   python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì‚¬ë²? --commit-batch 20 --quiet
 
-  # ìµœë? ?ë„ (????ë°°ì¹˜ ì»¤ë°‹, quiet ëª¨ë“œ)
+  # ìµœë? ?ë„ (????ë°°ì¹˜ ì»¤ë°‹, quiet ëª¨ë“œ)
   python scripts/ingest/ingest_cases.py --folder "data/aihub/..." --domain "ë¯¼ì‚¬ë²? --commit-batch 50 --quiet --batch-size 256
         """
     )
     parser.add_argument("--db", default=os.path.join("data", "lawfirm_v2.db"),
                         help="Database path (default: data/lawfirm_v2.db)")
 
-    # ?…ë ¥ ?ŒìŠ¤ ?µì…˜ (?Œì¼ ?ëŠ” ?´ë”)
+    # ?…ë ¥ ?ŒìŠ¤ ?µì…˜ (?Œì¼ ?ëŠ” ?´ë”)
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("--file", "--json",
                              dest="input_path",
@@ -596,17 +613,17 @@ Examples:
     os.makedirs(os.path.dirname(args.db), exist_ok=True)
 
     with sqlite3.connect(args.db) as conn:
-        # ?°ì´?°ë² ?´ìŠ¤ ?±ëŠ¥ ìµœì ???¤ì •
+        # ?°ì´?°ë² ?´ìŠ¤ ?±ëŠ¥ ìµœì ???¤ì •
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging ëª¨ë“œ
-        conn.execute("PRAGMA synchronous = NORMAL")  # ?±ëŠ¥ ?¥ìƒ???„í•œ ?™ê¸°???ˆë²¨
-        conn.execute("PRAGMA cache_size = -64000")  # 64MB ìºì‹œ ?¬ê¸°
-        conn.execute("PRAGMA temp_store = MEMORY")  # ?„ì‹œ ?°ì´?°ë? ë©”ëª¨ë¦¬ì— ?€??
+        conn.execute("PRAGMA synchronous = NORMAL")  # ?±ëŠ¥ ?¥ìƒ???„í•œ ?™ê¸°???ˆë²¨
+        conn.execute("PRAGMA cache_size = -64000")  # 64MB ìºì‹œ ?¬ê¸°
+        conn.execute("PRAGMA temp_store = MEMORY")  # ?„ì‹œ ?°ì´?°ë? ë©”ëª¨ë¦¬ì— ?€??
 
         # Embedder ì´ˆê¸°??(??ë²ˆë§Œ ì´ˆê¸°?”í•˜???¬ì‚¬??
         embedder = SentenceEmbedder(args.model)
 
-        # ?Œì¼ ?ëŠ” ?´ë” ì²˜ë¦¬
+        # ?Œì¼ ?ëŠ” ?´ë” ì²˜ë¦¬
         input_path_obj = Path(args.input_path)
 
         if input_path_obj.is_file():
@@ -625,7 +642,7 @@ Examples:
                     print("  Use --force to re-ingest")
 
         elif input_path_obj.is_dir():
-            # ?´ë” ë°°ì¹˜ ì²˜ë¦¬
+            # ?´ë” ë°°ì¹˜ ì²˜ë¦¬
             json_files = find_json_files(args.input_path, recursive=not args.no_recursive)
 
             if not json_files:
@@ -649,16 +666,16 @@ Examples:
 
             start_time = datetime.now()
 
-            # ë°°ì¹˜ ì»¤ë°‹ ?¤ì • (?±ëŠ¥ ?¥ìƒ)
+            # ë°°ì¹˜ ì»¤ë°‹ ?¤ì • (?±ëŠ¥ ?¥ìƒ)
             commit_batch_size = args.commit_batch
             processed_count = 0
             last_progress_time = datetime.now()
-            progress_interval = 10 if args.quiet else 5  # quiet ëª¨ë“œ?ì„œ?????ê²Œ ì¶œë ¥
+            progress_interval = 10 if args.quiet else 5  # quiet ëª¨ë“œ?ì„œ?????ê²Œ ì¶œë ¥
 
             for idx, file_path in enumerate(json_files, 1):
                 file_name = Path(file_path).name
 
-                # ê°„ì†Œ?”ëœ ì§„í–‰ ?í™© ?œì‹œ (?ˆë¬´ ?ì£¼ ì¶œë ¥?˜ì? ?ŠìŒ)
+                # ê°„ì†Œ?”ëœ ì§„í–‰ ?í™© ?œì‹œ (?ˆë¬´ ?ì£¼ ì¶œë ¥?˜ì? ?ŠìŒ)
                 current_time = datetime.now()
                 time_since_last_progress = (current_time - last_progress_time).total_seconds()
 
@@ -680,7 +697,7 @@ Examples:
                     success, message = process_single_file(
                         conn, file_path, args.domain, embedder,
                         args.force, args.batch_size, args.no_move,
-                        skip_hash=True,  # ?´ì‹œ ê³„ì‚° ?¤í‚µ (?ë„ ?¥ìƒ)
+                        skip_hash=True,  # ?´ì‹œ ê³„ì‚° ?¤í‚µ (?ë„ ?¥ìƒ)
                         auto_commit=False  # ë°°ì¹˜ ì»¤ë°‹ ?¬ìš©
                     )
 
@@ -695,14 +712,14 @@ Examples:
                     else:
                         if "already" in message.lower() or "processed" in message.lower():
                             stats["skipped"] += 1
-                            # ?¤í‚µ??ê²½ìš°?ë„ sources ?…ë°?´íŠ¸ë¥??„í•´ ì»¤ë°‹ ?„ìš”?????ˆìŒ
+                            # ?¤í‚µ??ê²½ìš°?ë„ sources ?…ë°?´íŠ¸ë¥??„í•´ ì»¤ë°‹ ?„ìš”?????ˆìŒ
                             if processed_count > 0:
                                 conn.commit()
                                 processed_count = 0
                         else:
                             stats["failed"] += 1
                             stats["errors"].append({"file": file_name, "error": message})
-                            # ?ëŸ¬ ë°œìƒ ??ë¡¤ë°±?˜ì? ?Šê³  ê³„ì† ì§„í–‰
+                            # ?ëŸ¬ ë°œìƒ ??ë¡¤ë°±?˜ì? ?Šê³  ê³„ì† ì§„í–‰
                             if processed_count > 0:
                                 conn.commit()
                                 processed_count = 0
@@ -710,7 +727,7 @@ Examples:
                 except Exception as e:
                     stats["failed"] += 1
                     stats["errors"].append({"file": file_name, "error": str(e)})
-                    # ?ëŸ¬ ë°œìƒ ??ë¡¤ë°±?˜ì? ?Šê³  ê³„ì† ì§„í–‰
+                    # ?ëŸ¬ ë°œìƒ ??ë¡¤ë°±?˜ì? ?Šê³  ê³„ì† ì§„í–‰
                     if processed_count > 0:
                         conn.commit()
                         processed_count = 0
