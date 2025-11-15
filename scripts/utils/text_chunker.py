@@ -1,9 +1,9 @@
 import re
 from typing import Dict, List, Optional, Tuple
 
-ARTICLE_HEADER_RE = re.compile(r"^??s*(\d+)\s*�?)
-CLAUSE_RE = re.compile(r"^\s*(\d+)\s*\.")  # '1.' ?�태 ??번호가 ?�는 경우 보조
-ITEM_RE = re.compile(r"^\s*(?:??s*)?(\d+)\s*??)
+ARTICLE_HEADER_RE = re.compile(r"^\s*제\s*(\d+)\s*조")
+CLAUSE_RE = re.compile(r"^\s*(\d+)\s*\.")  # '1.' 형태로 번호가 있는 경우 보조
+ITEM_RE = re.compile(r"^\s*(?:제\s*)?(\d+)\s*항")
 
 
 def _normalize_text(text: str) -> str:
@@ -41,14 +41,14 @@ def explode_article_to_hierarchy(article_heading: str, article_body: str) -> Lis
     m = ARTICLE_HEADER_RE.match(article_heading)
     article_no = m.group(1) if m else None
 
-    # Split by line; detect subunits heuristically (?????�기 ?�양??고려)
+    # Split by line; detect subunits heuristically (항/목 형태 고려)
     lines = [ln for ln in article_body.splitlines() if ln.strip()]
 
-    # First attempt: detect '?�n?? boundaries
+    # First attempt: detect '항' boundaries
     clause_splits: List[Tuple[Optional[str], List[str]]] = []
     buffer: List[str] = []
     current_clause: Optional[str] = None
-    CLAUSE_HEADER_RE = re.compile(r"^??s*(\d+)\s*??)
+    CLAUSE_HEADER_RE = re.compile(r"^\s*(\d+)\s*항")
     for ln in lines:
         m2 = CLAUSE_HEADER_RE.match(ln)
         if m2:
@@ -71,7 +71,7 @@ def explode_article_to_hierarchy(article_heading: str, article_body: str) -> Lis
 
     results: List[Dict[str, Optional[str]]] = []
     for clause_no, clause_lines in clause_splits:
-        # Try to explode into items (??
+        # Try to explode into items (목)
         items: List[Tuple[Optional[str], List[str]]] = []
         buf2: List[str] = []
         current_item: Optional[str] = None
@@ -132,6 +132,48 @@ def chunk_statute(sentences: List[str], min_chars: int = 200, max_chars: int = 1
     """
     chunks: List[Dict] = []
     articles = split_statute_sentences_into_articles(sentences)
+    
+    # Fallback: article이 생성되지 않으면 원본 텍스트를 직접 청킹
+    if not articles:
+        full_text = "\n".join(sentences)
+        if not full_text or not full_text.strip():
+            return chunks
+        
+        # min_chars 이상이면 청크 생성 (너무 짧은 경우에도 최소 50자 이상이면 청크 생성)
+        text_stripped = full_text.strip()
+        # min_chars가 300이어도, 50자 이상이면 최소한 1개 청크는 생성
+        if len(text_stripped) >= 50:
+            # max_chars를 초과하면 분할
+            if len(full_text) > max_chars:
+                start = 0
+                i = 0
+                while start < len(full_text):
+                    end = min(len(full_text), start + max_chars)
+                    seg = full_text[start:end]
+                    chunks.append({
+                        "level": "article",
+                        "article_no": None,
+                        "clause_no": None,
+                        "item_no": None,
+                        "chunk_index": i,
+                        "text": seg,
+                    })
+                    if end >= len(full_text):
+                        break
+                    overlap = int(max_chars * overlap_ratio)
+                    start = end - overlap
+                    i += 1
+            else:
+                chunks.append({
+                    "level": "article",
+                    "article_no": None,
+                    "clause_no": None,
+                    "item_no": None,
+                    "chunk_index": 0,
+                    "text": full_text.strip(),
+                })
+        return chunks
+    
     for art in articles:
         rows = explode_article_to_hierarchy(art["heading"], art["text"])
         # Simple overlap: concatenate neighbor tail/head by ratio
@@ -202,3 +244,4 @@ def chunk_paragraphs(paragraphs: List[str], min_chars: int = 400, max_chars: int
         i = max(start_i + 1, i - overlap)
 
     return chunks
+

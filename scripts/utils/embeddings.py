@@ -1,4 +1,5 @@
 from typing import List
+import os
 
 import numpy as np
 import torch
@@ -7,6 +8,17 @@ from transformers import AutoModel, AutoTokenizer
 
 class SentenceEmbedder:
     def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
+        # PyTorch 스레드 수 최대화 (시스템 사양에 맞게)
+        cpu_count = os.cpu_count()
+        if cpu_count:
+            torch.set_num_threads(cpu_count)
+            torch.set_num_interop_threads(cpu_count)
+            
+            # BLAS 라이브러리 최적화
+            os.environ['MKL_NUM_THREADS'] = str(cpu_count)
+            os.environ['OMP_NUM_THREADS'] = str(cpu_count)
+            os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
+        
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         
@@ -109,6 +121,20 @@ class SentenceEmbedder:
                 norms = np.linalg.norm(vec, axis=1, keepdims=True) + 1e-9
                 vec = vec / norms
             embeddings.append(vec)
+            
+            # 메모리 정리: 중간 텐서 삭제
+            del encoded
+            del outputs
+            del last_hidden
+            del masked
+            del sum_vec
+            del lengths
+            del sent_vec
+            if self.device != "cpu" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
         if not embeddings:
             return np.zeros((0, self.dim), dtype=np.float32)
-        return np.vstack(embeddings).astype(np.float32)
+        result = np.vstack(embeddings).astype(np.float32)
+        del embeddings
+        return result
