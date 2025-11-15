@@ -40,8 +40,10 @@ export interface ParsedSources {
 function cleanEmptyFields(obj: Record<string, unknown>): Record<string, unknown> {
   const cleaned: Record<string, unknown> = {};
   Object.keys(obj).forEach((key) => {
+    // eslint-disable-next-line security/detect-object-injection
     const value = obj[key];
     if (value !== '' && value !== null && value !== undefined) {
+      // eslint-disable-next-line security/detect-object-injection
       cleaned[key] = value;
     }
   });

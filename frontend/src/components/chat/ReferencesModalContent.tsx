@@ -46,17 +46,6 @@ function formatDate(dateString?: string): string | undefined {
   }
 }
 
-/**
- * content에서 법령 참조 추출
- * 예: "구 지방세법 제131조 제1항 제2호" → "지방세법 제131조 제1항 제2호"
- * 예: "대부업 등의 등록 및 금융이용자 보호에 관한 법률 제2조 제1호"
- * @deprecated 사용되지 않음 - sources_by_type에 이미 포함되어 있음
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-// @ts-expect-error - deprecated function, not used
-function extractLegalReferencesFromContent(_content: string): LegalReferenceDetail[] {
-  return [];
-}
 
 /**
  * 참고자료 문자열을 구조화된 데이터로 변환

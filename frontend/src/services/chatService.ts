@@ -146,9 +146,6 @@ export async function* sendStreamingChatMessage(
 
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    // @ts-expect-error - variable is set but never read (used for debugging)
-    let streamCompleted = false;
     let readerClosed = false;
     let jsonBuffer = ''; // JSON 파싱을 위한 버퍼
     let inDataLine = false; // data: 라인 내부인지 추적
@@ -240,7 +237,6 @@ export async function* sendStreamingChatMessage(
             // ERR_INCOMPLETE_CHUNKED_ENCODING 오류는 정상적으로 처리되었으므로
             // 예외를 다시 던지지 않고 종료
             // 브라우저 콘솔에 경고가 표시되지만 실제 동작에는 문제가 없음
-            streamCompleted = true;
             if (import.meta.env.DEV) {
               logger.debug('[SSE] Stream ended with incomplete error, but data was processed');
             }
@@ -321,9 +317,6 @@ export async function* sendStreamingChatMessage(
             }
           }
           
-          // 스트림이 정상적으로 종료되었음을 표시
-          streamCompleted = true;
-          
           // 리더 명시적으로 닫기
           if (!readerClosed) {
             try {
@@ -362,7 +355,6 @@ export async function* sendStreamingChatMessage(
             
             // 완료 신호 확인
             if (content === '[스트리밍 완료]' || content === '[완료]') {
-              streamCompleted = true;
               if (import.meta.env.DEV) {
                 logger.debug('[SSE] Stream completion signal received');
               }
@@ -384,7 +376,6 @@ export async function* sendStreamingChatMessage(
               // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
               if (parsed.type === 'done') {
                 yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
-                streamCompleted = true;
                 if (import.meta.env.DEV) {
                   logger.debug('[SSE] Done event received with final answer, closing stream');
                 }
@@ -424,7 +415,6 @@ export async function* sendStreamingChatMessage(
                 // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
                 if (parsed.type === 'done') {
                   yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
-                  streamCompleted = true;
                   if (import.meta.env.DEV) {
                     logger.debug('[SSE] Done event received with final answer from buffer, closing stream');
                   }
@@ -473,7 +463,6 @@ export async function* sendStreamingChatMessage(
               // "done" 이벤트는 최종 답변을 포함하므로 yield 후 종료
               if (parsed.type === 'done') {
                 yield jsonBuffer;  // 최종 답변을 포함한 done 이벤트 yield
-                streamCompleted = true;
                 if (import.meta.env.DEV) {
                   logger.debug('[SSE] Done event received with final answer from multi-line, closing stream');
                 }
