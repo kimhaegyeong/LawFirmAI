@@ -90,6 +90,24 @@ AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립�
 - `backup_database.py` - 데이터베이스 백업
 - `analyze_database_content.py` - 데이터베이스 내용 분석
 
+### 📥 **ingest/** - 데이터 수집 및 저장
+데이터를 데이터베이스에 수집하고 저장하는 스크립트들
+
+- `ingest_cases.py` - 판례 데이터 수집 및 저장 (참조조문 자동 추출)
+- `ingest_decisions.py` - 결정례 데이터 수집 및 저장 (참조조문 자동 추출)
+- `ingest_interpretations.py` - 해석례 데이터 수집 및 저장 (참조조문 자동 추출)
+
+### 🔧 **utils/** - 유틸리티
+공통 유틸리티 및 헬퍼 함수들
+
+- `reference_statute_extractor.py` - 참조조문 추출기 (판례/결정례/해석례에서 법령 정보 추출)
+
+### 🔄 **migrations/** - 데이터베이스 마이그레이션
+데이터베이스 스키마 변경 및 데이터 마이그레이션 스크립트들
+
+- `003_add_reference_statutes.sql` - 참조조문 필드 추가 마이그레이션
+- `migrate_reference_statutes.py` - 기존 데이터 참조조문 재추출 마이그레이션
+
 ### 📊 **analysis/** - 데이터 분석
 데이터 품질 분석, 모델 성능 분석을 담당하는 스크립트들
 
@@ -170,6 +188,30 @@ python scripts/database/backup_database.py
 
 # 스키마 마이그레이션
 python scripts/database/migrate_database_schema.py
+```
+
+### 데이터 수집 및 저장
+```bash
+# 판례 수집 (참조조문 자동 추출)
+python scripts/ingest/ingest_cases.py --file data/... --domain "민사법"
+
+# 결정례 수집 (참조조문 자동 추출)
+python scripts/ingest/ingest_decisions.py --file data/... --domain "민사법"
+
+# 해석례 수집 (참조조문 자동 추출)
+python scripts/ingest/ingest_interpretations.py --file data/... --domain "민사법"
+```
+
+### 참조조문 마이그레이션
+```bash
+# 기존 데이터 참조조문 재추출
+python scripts/migrations/migrate_reference_statutes.py --db data/lawfirm_v2.db --force
+
+# 특정 타입만 재추출
+python scripts/migrations/migrate_reference_statutes.py --db data/lawfirm_v2.db --type cases --force
+
+# 추출 품질 검증
+python scripts/verify_reference_statutes.py --db data/lawfirm_v2.db
 ```
 
 ## 📝 주의사항
