@@ -146,6 +146,8 @@ export async function* sendStreamingChatMessage(
 
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // @ts-expect-error - variable is set but never read (used for debugging)
     let streamCompleted = false;
     let readerClosed = false;
     let jsonBuffer = ''; // JSON 파싱을 위한 버퍼

@@ -25,7 +25,7 @@ describe('getSourcesByType', () => {
     expect(result.case_paragraph).toHaveLength(1);
     expect(result.decision_paragraph).toHaveLength(1);
     expect(result.interpretation_paragraph).toHaveLength(1);
-    expect(result.statute_article[0].statute_name).toBe('민법');
+    expect(result.statute_article[0]?.statute_name).toBe('민법');
   });
   
   it('should return empty arrays for missing types', () => {
@@ -40,10 +40,10 @@ describe('getSourcesByType', () => {
   
   it('should handle multiple sources of same type', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', statute_name: '민법', article_no: '123' },
-      { type: 'statute_article', statute_name: '형법', article_no: '234' },
-      { type: 'case_paragraph', case_number: '2021다123' },
-      { type: 'case_paragraph', case_number: '2022다456' },
+      { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+      { name: '형법', type: 'statute_article', statute_name: '형법', article_no: '234' },
+      { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
+      { name: '2022다456', type: 'case_paragraph', case_number: '2022다456' },
     ];
     
     const result = getSourcesByType(sourcesDetail);
@@ -56,7 +56,7 @@ describe('getSourcesByType', () => {
   
   it('should filter out unknown types', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', statute_name: '민법' },
+      { name: '민법', type: 'statute_article', statute_name: '민법' },
       { type: 'unknown_type' as any, name: '알 수 없는 타입' },
       { type: '' as any, name: '타입 없음' },
     ];
@@ -71,9 +71,9 @@ describe('getSourcesByType', () => {
 describe('extractLegalReferencesFromSourcesDetail', () => {
   it('should extract legal references from statute_article sources', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', statute_name: '민법', article_no: '123' },
-      { type: 'statute_article', statute_name: '형법', article_no: '234', clause_no: '1' },
-      { type: 'case_paragraph', case_number: '2021다123' },
+      { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+      { name: '형법', type: 'statute_article', statute_name: '형법', article_no: '234', clause_no: '1' },
+      { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -85,7 +85,7 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   
   it('should return empty array when no statute_article sources', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'case_paragraph', case_number: '2021다123' },
+      { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -96,6 +96,7 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   it('should handle complete legal reference with clause and item', () => {
     const sourcesDetail: SourceInfo[] = [
       {
+        name: '민법',
         type: 'statute_article',
         statute_name: '민법',
         article_no: '123',
@@ -112,8 +113,8 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   
   it('should remove duplicates', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', statute_name: '민법', article_no: '123' },
-      { type: 'statute_article', statute_name: '민법', article_no: '123' },
+      { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+      { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -124,7 +125,7 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   
   it('should handle statute name only', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', statute_name: '민법' },
+      { name: '민법', type: 'statute_article', statute_name: '민법' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -135,7 +136,7 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   
   it('should handle article number only', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article', article_no: '123' },
+      { name: '123', type: 'statute_article', article_no: '123' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -146,7 +147,7 @@ describe('extractLegalReferencesFromSourcesDetail', () => {
   
   it('should skip sources without statute name or article number', () => {
     const sourcesDetail: SourceInfo[] = [
-      { type: 'statute_article' },
+      { name: '알 수 없음', type: 'statute_article' },
     ];
     
     const result = extractLegalReferencesFromSourcesDetail(sourcesDetail);
@@ -159,12 +160,12 @@ describe('parseSourcesMetadata', () => {
   it('should parse sources_by_type from metadata', () => {
     const metadata = {
       sources_detail: [
-        { type: 'statute_article', statute_name: '민법', article_no: '123' },
-        { type: 'case_paragraph', case_number: '2021다123' },
+        { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+        { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
       ],
       sources_by_type: {
-        statute_article: [{ type: 'statute_article', statute_name: '민법', article_no: '123' }],
-        case_paragraph: [{ type: 'case_paragraph', case_number: '2021다123' }],
+        statute_article: [{ name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' }],
+        case_paragraph: [{ name: '2021다123', type: 'case_paragraph', case_number: '2021다123' }],
         decision_paragraph: [],
         interpretation_paragraph: [],
       },
@@ -181,8 +182,8 @@ describe('parseSourcesMetadata', () => {
   it('should generate sources_by_type when not provided', () => {
     const metadata = {
       sources_detail: [
-        { type: 'statute_article', statute_name: '민법', article_no: '123' },
-        { type: 'case_paragraph', case_number: '2021다123' },
+        { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+        { name: '2021다123', type: 'case_paragraph', case_number: '2021다123' },
       ],
     };
     
@@ -196,8 +197,8 @@ describe('parseSourcesMetadata', () => {
   it('should extract legal_references from sources_detail', () => {
     const metadata = {
       sources_detail: [
-        { type: 'statute_article', statute_name: '민법', article_no: '123' },
-        { type: 'statute_article', statute_name: '형법', article_no: '234' },
+        { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
+        { name: '형법', type: 'statute_article', statute_name: '형법', article_no: '234' },
       ],
     };
     
@@ -211,7 +212,7 @@ describe('parseSourcesMetadata', () => {
   it('should merge existing legal_references with extracted ones', () => {
     const metadata = {
       sources_detail: [
-        { type: 'statute_article', statute_name: '민법', article_no: '123' },
+        { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
       ],
       legal_references: ['기존 법령'],
     };
@@ -237,7 +238,7 @@ describe('parseSourcesMetadata', () => {
   it('should handle invalid sources_by_type structure', () => {
     const metadata = {
       sources_detail: [
-        { type: 'statute_article', statute_name: '민법', article_no: '123' },
+        { name: '민법', type: 'statute_article', statute_name: '민법', article_no: '123' },
       ],
       sources_by_type: {
         invalid_key: [],
@@ -254,6 +255,6 @@ describe('parseSourcesMetadata', () => {
     expect(result.sourcesByType.statute_article).toBeDefined();
     // sources_detail은 정상적으로 파싱되어야 함
     expect(result.sourcesDetail).toHaveLength(1);
-    expect(result.sourcesDetail[0].statute_name).toBe('민법');
+    expect(result.sourcesDetail[0]?.statute_name).toBe('민법');
   });
 });

@@ -2,7 +2,7 @@
  * DocumentReference 컴포넌트 테스트
  * disabled prop 및 클릭 제한 테스트
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DocumentReference } from '../DocumentReference';
 

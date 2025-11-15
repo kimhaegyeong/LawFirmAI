@@ -53,62 +53,9 @@ function formatDate(dateString?: string): string | undefined {
  * @deprecated 사용되지 않음 - sources_by_type에 이미 포함되어 있음
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function extractLegalReferencesFromContent(content: string): LegalReferenceDetail[] {
-  if (!content || typeof content !== 'string') {
-    return [];
-  }
-  
-  const legalRefs: LegalReferenceDetail[] = [];
-  const seen = new Set<string>();
-  
-  // 법령 패턴 개선: 긴 법률명도 처리
-  // "구", "신", "개정" 등의 접두사 처리
-  // 법률명은 "법" 또는 "법률"로 끝나야 함
-  // eslint-disable-next-line security/detect-unsafe-regex
-  const statutePattern = /(?:구|신|개정|폐지)?\s*([가-힣\s]{1,50}법률?)\s*제\s*(\d+)\s*조(?:\s*제\s*(\d+)\s*항)?(?:\s*제\s*(\d+)\s*호)?/g;
-  
-  let match;
-  while ((match = statutePattern.exec(content)) !== null) {
-    let statuteName = match[1].trim();
-    const articleNo = match[2];
-    const clauseNo = match[3];
-    const itemNo = match[4];
-    
-    // 법률명 정리: 앞뒤 공백 제거, 연속 공백을 하나로
-    statuteName = statuteName.replace(/\s+/g, ' ').trim();
-    
-    // 법률명이 너무 짧거나 길면 제외 (최소 2자, 최대 50자)
-    if (statuteName.length < 2 || statuteName.length > 50) {
-      continue;
-    }
-    
-    // "법" 또는 "법률"로 끝나지 않으면 제외
-    if (!statuteName.endsWith('법') && !statuteName.endsWith('법률')) {
-      continue;
-    }
-    
-    let articleNumber = `제${articleNo}조`;
-    if (clauseNo) {
-      articleNumber += ` 제${clauseNo}항`;
-    }
-    if (itemNo) {
-      articleNumber += ` 제${itemNo}호`;
-    }
-    
-    const key = `${statuteName}-${articleNumber}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      legalRefs.push({
-        id: `extracted-law-${legalRefs.length}`,
-        type: 'law',
-        law_name: statuteName,
-        article_number: articleNumber,
-        content: `${statuteName} ${articleNumber}`,
-      });
-    }
-  }
-  
-  return legalRefs;
+// @ts-expect-error - deprecated function, not used
+function extractLegalReferencesFromContent(_content: string): LegalReferenceDetail[] {
+  return [];
 }
 
 /**
@@ -641,7 +588,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
   const formattedDate = useMemo(() => {
     const dateStr = precedent.decision_date || 
                    sourceDetail?.decision_date || 
-                   sourceDetail?.metadata?.announce_date;
+                   (typeof sourceDetail?.metadata?.announce_date === 'string' ? sourceDetail.metadata.announce_date : undefined);
     return formatDate(dateStr);
   }, [precedent, sourceDetail]);
   
@@ -781,7 +728,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
                   </span>
                 ))}
                 {/* 더 많은 법령이 있는 경우 표시 */}
-                {sourceDetail?.metadata?.reference_statutes && 
+                {Array.isArray(sourceDetail?.metadata?.reference_statutes) && 
                  sourceDetail.metadata.reference_statutes.length > 3 && (
                   <span className="text-xs text-slate-500 px-2 py-0.5">
                     +{sourceDetail.metadata.reference_statutes.length - 3}개
@@ -1216,7 +1163,7 @@ export function ReferencesModalContent({
           case_name: caseName,
           case_number: caseNumber,
           court: court,
-          decision_date: decisionDate,
+          decision_date: typeof decisionDate === 'string' ? decisionDate : undefined,
           summary: detail.content,
           relevance_score: relevanceScore,
           similarity: relevanceScore,
@@ -1232,9 +1179,9 @@ export function ReferencesModalContent({
         return {
           ...baseRef,
           type: 'decision',
-          decision_number: detail.decision_number || detail.metadata?.doc_id,
-          org: detail.org || detail.metadata?.org,
-          decision_date: detail.decision_date || detail.metadata?.decision_date || detail.metadata?.announce_date,
+          decision_number: detail.decision_number || (typeof detail.metadata?.doc_id === 'string' ? detail.metadata.doc_id : undefined),
+          org: detail.org || (typeof detail.metadata?.org === 'string' ? detail.metadata.org : undefined),
+          decision_date: detail.decision_date || (typeof detail.metadata?.decision_date === 'string' ? detail.metadata.decision_date : undefined) || (typeof detail.metadata?.announce_date === 'string' ? detail.metadata.announce_date : undefined),
           result: detail.result || detail.metadata?.result,
           content: detail.content || detail.name,
           relevance_score: relevanceScore,
@@ -1252,9 +1199,9 @@ export function ReferencesModalContent({
           ...baseRef,
           type: 'interpretation',
           interpretation_number: detail.interpretation_number || detail.metadata?.doc_id,
-          org: detail.org || detail.metadata?.org,
-          title: detail.title || detail.metadata?.title,
-          response_date: detail.response_date || detail.metadata?.response_date || detail.metadata?.announce_date,
+          org: detail.org || (typeof detail.metadata?.org === 'string' ? detail.metadata.org : undefined),
+          title: detail.title || (typeof detail.metadata?.title === 'string' ? detail.metadata.title : undefined),
+          response_date: detail.response_date || (typeof detail.metadata?.response_date === 'string' ? detail.metadata.response_date : undefined) || (typeof detail.metadata?.announce_date === 'string' ? detail.metadata.announce_date : undefined),
           content: detail.content || detail.name,
           relevance_score: relevanceScore,
           similarity: relevanceScore,

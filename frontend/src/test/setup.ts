@@ -14,13 +14,16 @@ afterEach(() => {
 });
 
 // 전역 모킹 설정
-global.console = {
-  ...console,
-  // 테스트 중 불필요한 로그 억제
-  log: () => {},
-  debug: () => {},
-  info: () => {},
-  warn: console.warn,
-  error: console.error,
-};
+declare const global: typeof globalThis;
+if (typeof global !== 'undefined') {
+  global.console = {
+    ...console,
+    // 테스트 중 불필요한 로그 억제
+    log: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: console.warn,
+    error: console.error,
+  };
+}
 

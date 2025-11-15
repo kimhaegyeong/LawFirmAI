@@ -125,7 +125,6 @@ function App() {
     setProgressHistory,
     setSessionListRefreshTrigger,
     showToast,
-    login,
     streamErrors,
   });
 

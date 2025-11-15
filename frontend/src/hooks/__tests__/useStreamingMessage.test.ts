@@ -50,7 +50,7 @@ vi.mock('../../utils/sourcesParser', () => ({
 vi.mock('../../utils/errorHandler', () => ({
   toStreamError: vi.fn((error: Error | unknown) => ({
     type: 'unknown',
-    message: error?.message || 'Unknown error',
+    message: (error instanceof Error ? error.message : undefined) || 'Unknown error',
     canRetry: false,
   })),
   extractQuotaInfo: vi.fn(),
@@ -91,7 +91,7 @@ describe('useStreamingMessage - Done 이벤트 처리', () => {
 
   it('should use stream content if done content is empty', () => {
     const streamContent = '스트리밍 중인 내용';
-    const doneContent = '';
+    const doneContent: string = '';
 
     const finalContent = doneContent && doneContent.trim() ? doneContent : streamContent;
 
@@ -349,7 +349,7 @@ describe('useStreamingMessage - Stream 이벤트 처리', () => {
     }
 
     expect(messages.length).toBe(1);
-    expect(messages[0].content).toBe('첫 토큰');
+    expect(messages[0]?.content).toBe('첫 토큰');
   });
 
   it('should update existing message on subsequent stream chunks', () => {
@@ -366,14 +366,14 @@ describe('useStreamingMessage - Stream 이벤트 처리', () => {
     const fullContent = '첫 토큰 두 번째 토큰';
 
     const messageIndex = messages.findIndex((msg) => msg.id === assistantMessageId);
-    if (messageIndex !== -1) {
+    if (messageIndex !== -1 && messages[messageIndex]) {
       messages[messageIndex] = {
         ...messages[messageIndex],
         content: fullContent,
       };
     }
 
-    expect(messages[0].content).toBe('첫 토큰 두 번째 토큰');
+    expect(messages[0]?.content).toBe('첫 토큰 두 번째 토큰');
   });
 
   it('should ignore stream events after final event', () => {
@@ -410,15 +410,19 @@ describe('useStreamingMessage - Progress 이벤트 처리', () => {
       }
     }
 
-    if (lastProgressIndex !== -1) {
-      messages[lastProgressIndex] = {
-        ...messages[lastProgressIndex],
-        content: parsed.content,
-        timestamp: new Date(),
-      };
+    if (lastProgressIndex !== -1 && messages[lastProgressIndex]) {
+      const existingMessage = messages[lastProgressIndex];
+      if (existingMessage) {
+        messages[lastProgressIndex] = {
+          ...existingMessage,
+          id: existingMessage.id,
+          content: parsed.content,
+          timestamp: new Date(),
+        };
+      }
     }
 
-    expect(messages[0].content).toBe('새 진행상황');
+    expect(messages[0]?.content).toBe('새 진행상황');
   });
 
   it('should create new progress message if none exists', () => {
@@ -444,7 +448,7 @@ describe('useStreamingMessage - Progress 이벤트 처리', () => {
     }
 
     expect(messages.length).toBe(1);
-    expect(messages[0].role).toBe('progress');
+    expect(messages[0]?.role).toBe('progress');
   });
 });
 
@@ -559,7 +563,7 @@ describe('useStreamingMessage - 메타데이터 병합', () => {
 
     const merged = {
       ...existingMetadata,
-      sources_by_type: newSources.sourcesByType,
+      sources_by_type: newSources.sources_by_type,
       sources: newSources.sources.length > 0 ? newSources.sources : existingMetadata.sources,
       related_questions: newSources.relatedQuestions,
     };
@@ -577,7 +581,7 @@ describe('useStreamingMessage - 메타데이터 병합', () => {
 
     const newSources = {
       sources: [],
-      sourcesByType: {
+      sources_by_type: {
         statute_article: [],
         case_paragraph: [],
         decision_paragraph: [],
@@ -588,7 +592,7 @@ describe('useStreamingMessage - 메타데이터 병합', () => {
 
     const merged = {
       ...existingMetadata,
-      sources_by_type: newSources.sourcesByType,
+      sources_by_type: newSources.sources_by_type,
       sources:
         newSources.sources.length > 0 ? newSources.sources : existingMetadata.sources,
       related_questions:

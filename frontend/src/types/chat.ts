@@ -42,6 +42,10 @@ export interface SourceInfo {
   // 상세본문
   content?: string;
   
+  // 소스 출처 정보
+  source_from?: string;
+  source_doc_id?: string;
+  
   // 기존 metadata (하위 호환성 유지)
   metadata?: {
     statute_name?: string;
@@ -56,6 +60,8 @@ export interface SourceInfo {
     decision_date?: string;
     response_date?: string;
     result?: string;
+    source_from?: string;
+    source_doc_id?: string;
     [key: string]: unknown;
   };
 }
