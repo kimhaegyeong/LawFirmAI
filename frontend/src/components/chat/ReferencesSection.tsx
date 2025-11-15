@@ -5,7 +5,8 @@ import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { Modal } from '../common/Modal';
 import type { SourceInfo } from '../../types/chat';
-import { getSourcesByType, extractLegalReferencesFromSourcesDetail } from '../../utils/sourcesParser';
+import { extractLegalReferencesFromSourcesDetail, getSourcesDetailFromSourcesByType } from '../../utils/sourcesParser';
+import type { SourcesByType } from '../../utils/sourcesParser';
 
 interface Reference {
   id: string;
@@ -56,7 +57,7 @@ export function ReferencesSection({
     return effectiveSourcesDetail.map((detail, idx): Reference => {
       let type: 'law' | 'case' | 'regulation' = 'regulation';
       let title = '';
-      let content = detail.content || detail.name || '';
+      const content = detail.content || detail.name || '';
       
       if (detail.type === 'statute_article') {
         type = 'law';

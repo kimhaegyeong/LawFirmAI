@@ -5,7 +5,7 @@ import { useRef, useCallback } from 'react';
 import { useChat } from './useChat';
 import { parseStreamChunk } from '../utils/streamParser';
 import { parseSourcesMetadata, mergeSourcesMetadata } from '../utils/sourcesParser';
-import { toStreamError, extractQuotaInfo } from '../utils/errorHandler';
+import { toStreamError } from '../utils/errorHandler';
 import logger from '../utils/logger';
 import type { AxiosError } from 'axios';
 import type { ChatMessage, FileAttachment } from '../types/chat';
@@ -157,7 +157,6 @@ interface UseStreamingMessageOptions {
   setProgressHistory: (history: string[]) => void;
   setSessionListRefreshTrigger: (updater: (prev: number) => number) => void;
   showToast: (toast: { message: string; type: 'error' | 'success' | 'warning'; action?: { label: string; onClick: () => void } }) => void;
-  login: () => void;
   streamErrors: Map<string, StreamError>;
 }
 
@@ -189,7 +188,6 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
         setProgressHistory,
         setSessionListRefreshTrigger,
         showToast,
-        login,
         streamErrors,
       } = options;
 

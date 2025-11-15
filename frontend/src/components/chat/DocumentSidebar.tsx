@@ -8,7 +8,7 @@ import type { SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
 import { getMetadataValue } from '../../utils/metadataUtils';
-import { getSourcesByType, getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
+import { getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
 
 interface DocumentSidebarProps {
   isOpen: boolean;
@@ -81,14 +81,6 @@ export function DocumentSidebar({
 
   const source = getSafeArrayItem(sources, documentIndex);
   const sourceDetail = getSafeArrayItem(effectiveSourcesDetail, documentIndex);
-  
-  // sources_by_type 사용 (타입별 그룹화)
-  const sourcesByType = useMemo(() => {
-    if (propSourcesByType) {
-      return propSourcesByType;
-    }
-    return getSourcesByType(effectiveSourcesDetail);
-  }, [propSourcesByType, effectiveSourcesDetail]);
 
   // 문서 타입 결정 (useMemo로 최적화)
   const documentType = useMemo((): 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' => {

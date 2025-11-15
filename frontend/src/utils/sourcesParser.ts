@@ -349,7 +349,7 @@ export function extractLegalReferencesFromSourcesDetail(
  */
 export function parseSourcesMetadata(
   metadata: SourcesMetadata | undefined,
-  options?: ParseSourcesOptions
+  _options?: ParseSourcesOptions
 ): ParsedSources {
   if (!metadata) {
     return {

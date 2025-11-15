@@ -7,7 +7,7 @@ import { useState, useMemo, useEffect } from 'react';
 import logger from '../../utils/logger';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl } from '../../utils/lawUrlGenerator';
-import { getSourcesByType, getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
+import { getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
 
 interface ReferencesModalContentProps {
   references?: string[];
@@ -50,7 +50,9 @@ function formatDate(dateString?: string): string | undefined {
  * content에서 법령 참조 추출
  * 예: "구 지방세법 제131조 제1항 제2호" → "지방세법 제131조 제1항 제2호"
  * 예: "대부업 등의 등록 및 금융이용자 보호에 관한 법률 제2조 제1호"
+ * @deprecated 사용되지 않음 - sources_by_type에 이미 포함되어 있음
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function extractLegalReferencesFromContent(content: string): LegalReferenceDetail[] {
   if (!content || typeof content !== 'string') {
     return [];
@@ -652,7 +654,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
   const referencedStatutes = useMemo(() => {
     const refStatutes = sourceDetail?.metadata?.reference_statutes;
     if (Array.isArray(refStatutes) && refStatutes.length > 0) {
-      return refStatutes.slice(0, 3).map((s: any) => ({
+      return refStatutes.slice(0, 3).map((s: { statute_name?: string; article_no?: string; article_number?: string; clause_no?: string; item_no?: string }) => ({
         name: s.statute_name,
         article: s.article_no || s.article_number,
         clause: s.clause_no,
@@ -1157,19 +1159,8 @@ export function ReferencesModalContent({
     return [...new Set([...legalReferences, ...extractedLegalRefStrings])];
   }, [legalReferences, extractedLegalRefStrings]);
 
-  // sources_by_type 사용 (propSourcesByType 우선, 없으면 effectiveSourcesDetail에서 재구성)
-  const sourcesByType = useMemo(() => {
-    if (propSourcesByType) {
-      return propSourcesByType;
-    }
-    return getSourcesByType(effectiveSourcesDetail);
-  }, [propSourcesByType, effectiveSourcesDetail]);
-  
   // content에서 법령 참조 추출 제거 (sources_by_type에 이미 포함되어 있으므로 불필요)
   // sources 이벤트의 sources_by_type을 직접 사용하므로 추가 추출 불필요
-  const extractedLegalRefs = useMemo(() => {
-    return [];
-  }, []);
 
   // sourcesDetail을 LegalReferenceDetail로 변환 (sourceDetail 정보도 함께 저장) - effectiveSourcesDetail 사용
   const sourcesDetailReferences = useMemo(() => {
@@ -1363,7 +1354,7 @@ export function ReferencesModalContent({
       const scoreB = b.relevance_score ?? b.similarity ?? 0;
       return scoreB - scoreA;
     });
-  }, [sourcesDetailReferences, references, allLegalRefs, sources, effectiveSourcesDetail, extractedLegalRefs]);
+  }, [sourcesDetailReferences, references, allLegalRefs, sources, effectiveSourcesDetail]);
 
   // 타입별 필터링 (모든 문서 표시)
   const filteredReferences = useMemo(() => {

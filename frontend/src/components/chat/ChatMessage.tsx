@@ -345,6 +345,55 @@ export function ChatMessage({
     }
   };
 
+  // 참고자료 및 연관질문 확인 (메타데이터가 있으면 스트리밍 중이어도 표시)
+  // sources_by_type 우선 사용, 없으면 sources_detail 사용
+  const sourcesByType = metadata.sources_by_type;
+  const sourcesDetailFromByType = (sourcesByType && typeof sourcesByType === 'object' && !Array.isArray(sourcesByType))
+    ? getSourcesDetailFromSourcesByType(sourcesByType as Parameters<typeof getSourcesDetailFromSourcesByType>[0])
+    : [];
+  
+  const sourcesArray = Array.isArray(metadata.sources) ? metadata.sources : [];
+  const legalReferencesArray = Array.isArray(metadata.legal_references) ? metadata.legal_references : [];
+  const sourcesDetailArray = sourcesDetailFromByType.length > 0
+    ? sourcesDetailFromByType
+    : (Array.isArray(metadata.sources_detail) ? metadata.sources_detail : []);
+  
+  const hasReferences = !isUser && (
+    sourcesArray.length > 0 ||
+    legalReferencesArray.length > 0 ||
+    sourcesDetailArray.length > 0 ||
+    (sourcesByType && Object.keys(sourcesByType).length > 0)
+  );
+
+  const relatedQuestions = !isUser ? metadata.related_questions : undefined;
+  const questionsArray = Array.isArray(relatedQuestions)
+    ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+    : [];
+  const hasRelatedQuestions = !isUser && questionsArray.length > 0;
+  
+  // 메타데이터 변경 감지를 위한 ref (디버깅용) - hooks는 early return 전에 호출되어야 함
+  const prevMetadataRef = useRef<string>('');
+  
+  // 메타데이터 변경 감지 및 디버깅 로그
+  useEffect(() => {
+    if (import.meta.env.DEV && !isUser) {
+      const metadataString = JSON.stringify(metadata);
+      const metadataChanged = prevMetadataRef.current !== metadataString;
+      if (metadataChanged) {
+        prevMetadataRef.current = metadataString;
+        logger.debug('[ChatMessage] Metadata changed, component should re-render:', {
+          messageId: safeId,
+          hasReferences,
+          hasRelatedQuestions,
+          sourcesCount: sourcesArray.length,
+          sourcesDetailCount: sourcesDetailArray.length,
+          questionsCount: questionsArray.length,
+          isStreaming,
+          metadataKeys: Object.keys(metadata),
+        });
+      }
+    }
+  }, [metadata, safeId, hasReferences, hasRelatedQuestions, sourcesArray.length, sourcesDetailArray.length, questionsArray.length, isStreaming, isUser]);
 
   // 안전성 검사: message가 없거나 필수 필드가 없으면 렌더링하지 않음
   if (!safeId) {
@@ -372,56 +421,6 @@ export function ChatMessage({
       </div>
     );
   }
-
-  // 참고자료 및 연관질문 확인 (메타데이터가 있으면 스트리밍 중이어도 표시)
-  // sources_by_type 우선 사용, 없으면 sources_detail 사용
-  const sourcesByType = metadata.sources_by_type;
-  const sourcesDetailFromByType = (sourcesByType && typeof sourcesByType === 'object' && !Array.isArray(sourcesByType))
-    ? getSourcesDetailFromSourcesByType(sourcesByType as Parameters<typeof getSourcesDetailFromSourcesByType>[0])
-    : [];
-  
-  const sourcesArray = Array.isArray(metadata.sources) ? metadata.sources : [];
-  const legalReferencesArray = Array.isArray(metadata.legal_references) ? metadata.legal_references : [];
-  const sourcesDetailArray = sourcesDetailFromByType.length > 0
-    ? sourcesDetailFromByType
-    : (Array.isArray(metadata.sources_detail) ? metadata.sources_detail : []);
-  
-  const hasReferences = !isUser && (
-    sourcesArray.length > 0 ||
-    legalReferencesArray.length > 0 ||
-    sourcesDetailArray.length > 0 ||
-    (sourcesByType && Object.keys(sourcesByType).length > 0)
-  );
-
-  const relatedQuestions = !isUser ? metadata.related_questions : undefined;
-  const questionsArray = Array.isArray(relatedQuestions)
-    ? relatedQuestions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
-    : [];
-  const hasRelatedQuestions = !isUser && questionsArray.length > 0;
-  
-  // 메타데이터 변경 감지를 위한 ref (디버깅용)
-  const prevMetadataRef = useRef<string>('');
-  
-  // 메타데이터 변경 감지 및 디버깅 로그
-  useEffect(() => {
-    if (import.meta.env.DEV && !isUser) {
-      const metadataString = JSON.stringify(metadata);
-      const metadataChanged = prevMetadataRef.current !== metadataString;
-      if (metadataChanged) {
-        prevMetadataRef.current = metadataString;
-        logger.debug('[ChatMessage] Metadata changed, component should re-render:', {
-          messageId: safeId,
-          hasReferences,
-          hasRelatedQuestions,
-          sourcesCount: sourcesArray.length,
-          sourcesDetailCount: sourcesDetailArray.length,
-          questionsCount: questionsArray.length,
-          isStreaming,
-          metadataKeys: Object.keys(metadata),
-        });
-      }
-    }
-  }, [metadata, safeId, hasReferences, hasRelatedQuestions, sourcesArray.length, sourcesDetailArray.length, questionsArray.length, isStreaming]);
 
   if (import.meta.env.DEV && !isUser) {
     logger.debug('[ChatMessage] References and questions check:', {

@@ -2,12 +2,13 @@
  * useStreamingMessage 훅 테스트
  * 포괄적인 기능 테스트 및 리팩토링 전 검증
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { useStreamingMessage } from '../useStreamingMessage';
-import { parseSourcesMetadata, mergeSourcesMetadata } from '../../utils/sourcesParser';
-import type { ChatMessage, FileAttachment } from '../../types/chat';
-import type { StreamError } from '../../types/error';
+import { describe, it, expect, vi } from 'vitest';
+// import { renderHook, act, waitFor } from '@testing-library/react';
+// import { useStreamingMessage } from '../useStreamingMessage';
+// import { parseSourcesMetadata, mergeSourcesMetadata } from '../../utils/sourcesParser';
+// import type { ChatMessage, FileAttachment } from '../../types/chat';
+// import type { StreamError } from '../../types/error';
+import type { ChatMessage } from '../../types/chat';
 
 // Mock dependencies
 vi.mock('../useChat', () => ({
@@ -27,7 +28,7 @@ vi.mock('../../utils/streamParser', () => ({
 }));
 
 vi.mock('../../utils/sourcesParser', () => ({
-  parseSourcesMetadata: vi.fn((metadata: any) => ({
+  parseSourcesMetadata: vi.fn((metadata: Record<string, unknown> | undefined) => ({
     sources: metadata?.sources || [],
     legalReferences: metadata?.legal_references || [],
     sourcesDetail: metadata?.sources_detail || [],
@@ -40,14 +41,14 @@ vi.mock('../../utils/sourcesParser', () => ({
     relatedQuestions: metadata?.related_questions || [],
     messageId: metadata?.message_id,
   })),
-  mergeSourcesMetadata: vi.fn((existing: any, newSources: any) => ({
+  mergeSourcesMetadata: vi.fn((existing: Record<string, unknown>, newSources: Record<string, unknown>) => ({
     ...existing,
     ...newSources,
   })),
 }));
 
 vi.mock('../../utils/errorHandler', () => ({
-  toStreamError: vi.fn((error: any) => ({
+  toStreamError: vi.fn((error: Error | unknown) => ({
     type: 'unknown',
     message: error?.message || 'Unknown error',
     canRetry: false,
@@ -178,12 +179,12 @@ describe('useStreamingMessage - Done 이벤트 처리', () => {
     ];
 
     const assistantMessageId = 'assistant-1';
-    const assistantMessage: ChatMessage = {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '최종 답변',
-      timestamp: new Date(),
-    };
+    // const assistantMessage: ChatMessage = {
+    //   id: assistantMessageId,
+    //   role: 'assistant',
+    //   content: '최종 답변',
+    //   timestamp: new Date(),
+    // };
 
     const messageIndex = messages.findIndex((msg) => msg.id === assistantMessageId);
     const shouldCreateNew = messageIndex === -1;
@@ -376,7 +377,7 @@ describe('useStreamingMessage - Stream 이벤트 처리', () => {
   });
 
   it('should ignore stream events after final event', () => {
-    let isFinalReceived = true;
+    const isFinalReceived = true;
     const parsed = { type: 'stream', content: '추가 토큰' };
 
     if (isFinalReceived && parsed.type === 'stream') {

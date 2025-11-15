@@ -30,7 +30,7 @@ describe('시나리오 1: 정상적인 스트리밍 플로우', () => {
       { type: 'done', content: '답변 내용' },
     ];
 
-    let state: MessageState = {
+    const state: MessageState = {
       content: '',
       metadata: {},
       isStreaming: true,
@@ -70,7 +70,7 @@ describe('시나리오 2: Sources 이벤트가 늦게 도착하는 경우', () =
       { type: 'sources', metadata: { sources: ['참고자료 1'] } },
     ];
 
-    let state: MessageState = {
+    const state: MessageState = {
       content: '',
       metadata: {},
       isStreaming: true,
@@ -109,7 +109,7 @@ describe('시나리오 3: Sources 이벤트가 없는 경우', () => {
       { type: 'done', content: '답변 내용' },
     ];
 
-    let state: MessageState = {
+    const state: MessageState = {
       content: '',
       metadata: {},
       isStreaming: true,

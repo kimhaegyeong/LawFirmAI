@@ -7,7 +7,7 @@ import { X } from 'lucide-react';
 import { ReferencesModalContent } from './ReferencesModalContent';
 import { ReferenceDetailView } from './ReferenceDetailView';
 import type { SourceInfo, LegalReferenceDetail } from '../../types/chat';
-import { extractLegalReferencesFromSourcesDetail, getSourcesByType, getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
+import { extractLegalReferencesFromSourcesDetail, getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
 
 interface ReferencesSidebarProps {
   isOpen: boolean;

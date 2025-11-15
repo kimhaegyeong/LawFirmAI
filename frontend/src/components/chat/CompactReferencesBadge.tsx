@@ -6,7 +6,7 @@ import { FileText, ChevronDown, ChevronUp, Scale, Bookmark } from 'lucide-react'
 import { useState, useMemo } from 'react';
 
 import type { SourceInfo } from '../../types/chat';
-import { getSourcesByType, getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
+import { getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
 
 type ReferenceType = 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 
@@ -28,14 +28,6 @@ export function CompactReferencesBadge({
   onOpenSidebar,
 }: CompactReferencesBadgeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-
-  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
-  const sourcesByType = useMemo(() => {
-    if (propSourcesByType) {
-      return propSourcesByType;
-    }
-    return getSourcesByType(sourcesDetail);
-  }, [propSourcesByType, sourcesDetail]);
 
   // sources_by_type을 직접 사용하여 참고자료 표시 (sources 이벤트 데이터와 일치)
   const effectiveSourcesDetail = useMemo(() => {
@@ -88,12 +80,13 @@ export function CompactReferencesBadge({
         // 판례에서 추출된 법령인지 확인
         const sourceFrom = detail.source_from || detail.metadata?.source_from;
         if (sourceFrom === 'case_paragraph' || sourceFrom === 'decision_paragraph' || sourceFrom === 'interpretation_paragraph') {
-          metadata = {
+          const updatedMetadata = {
             ...metadata,
             isFromPrecedent: true,
             sourceFrom: sourceFrom,
             sourceDocId: detail.source_doc_id || detail.metadata?.source_doc_id
           };
+          metadata = updatedMetadata;
         }
       } else if (detail.type === 'case_paragraph') {
         type = 'precedent';
