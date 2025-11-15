@@ -6,18 +6,108 @@ import { FileText, Scale, Bookmark, ExternalLink } from 'lucide-react';
 import { useState, useMemo, useEffect } from 'react';
 import logger from '../../utils/logger';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
-import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
+import { generateLawUrl, generateSearchUrl } from '../../utils/lawUrlGenerator';
+import { getSourcesByType, getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
 
 interface ReferencesModalContentProps {
   references?: string[];
   legalReferences?: string[];
   sources?: string[];
   sourcesDetail?: SourceInfo[];
+  sourcesByType?: SourcesByType;
   initialSelectedType?: ReferenceType;
   onReferenceClick?: (reference: LegalReferenceDetail, sourceDetail?: SourceInfo) => void;
 }
 
 type ReferenceType = 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
+
+/**
+ * 날짜 포맷팅 유틸리티
+ * ISO 형식 날짜를 가독성 있는 형식으로 변환
+ */
+function formatDate(dateString?: string): string | undefined {
+  if (!dateString) return undefined;
+  
+  try {
+    // ISO 형식 (2020-09-22T09:00:00.000+09:00) 또는 간단한 형식 (2020-09-22)
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      // 파싱 실패 시 원본 반환
+      return dateString;
+    }
+    
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    
+    return `${year}년 ${month}월 ${day}일`;
+  } catch {
+    return dateString;
+  }
+}
+
+/**
+ * content에서 법령 참조 추출
+ * 예: "구 지방세법 제131조 제1항 제2호" → "지방세법 제131조 제1항 제2호"
+ * 예: "대부업 등의 등록 및 금융이용자 보호에 관한 법률 제2조 제1호"
+ */
+function extractLegalReferencesFromContent(content: string): LegalReferenceDetail[] {
+  if (!content || typeof content !== 'string') {
+    return [];
+  }
+  
+  const legalRefs: LegalReferenceDetail[] = [];
+  const seen = new Set<string>();
+  
+  // 법령 패턴 개선: 긴 법률명도 처리
+  // "구", "신", "개정" 등의 접두사 처리
+  // 법률명은 "법" 또는 "법률"로 끝나야 함
+  // eslint-disable-next-line security/detect-unsafe-regex
+  const statutePattern = /(?:구|신|개정|폐지)?\s*([가-힣\s]{1,50}법률?)\s*제\s*(\d+)\s*조(?:\s*제\s*(\d+)\s*항)?(?:\s*제\s*(\d+)\s*호)?/g;
+  
+  let match;
+  while ((match = statutePattern.exec(content)) !== null) {
+    let statuteName = match[1].trim();
+    const articleNo = match[2];
+    const clauseNo = match[3];
+    const itemNo = match[4];
+    
+    // 법률명 정리: 앞뒤 공백 제거, 연속 공백을 하나로
+    statuteName = statuteName.replace(/\s+/g, ' ').trim();
+    
+    // 법률명이 너무 짧거나 길면 제외 (최소 2자, 최대 50자)
+    if (statuteName.length < 2 || statuteName.length > 50) {
+      continue;
+    }
+    
+    // "법" 또는 "법률"로 끝나지 않으면 제외
+    if (!statuteName.endsWith('법') && !statuteName.endsWith('법률')) {
+      continue;
+    }
+    
+    let articleNumber = `제${articleNo}조`;
+    if (clauseNo) {
+      articleNumber += ` 제${clauseNo}항`;
+    }
+    if (itemNo) {
+      articleNumber += ` 제${itemNo}호`;
+    }
+    
+    const key = `${statuteName}-${articleNumber}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      legalRefs.push({
+        id: `extracted-law-${legalRefs.length}`,
+        type: 'law',
+        law_name: statuteName,
+        article_number: articleNumber,
+        content: `${statuteName} ${articleNumber}`,
+      });
+    }
+  }
+  
+  return legalRefs;
+}
 
 /**
  * 참고자료 문자열을 구조화된 데이터로 변환
@@ -383,8 +473,26 @@ function parseOtherReference(ref: string): Partial<LegalReferenceDetail> {
 /**
  * 법령 카드 컴포넌트
  */
-function LawCard({ law, onClick, sourceDetail }: { law: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
+function LawCard({ law, onClick, sourceDetail }: { law: LegalReferenceDetail & { url?: string; source_from?: string; metadata?: { source_from?: string; isFromPrecedent?: boolean; sourceDocId?: string } }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const isFromPrecedent = useMemo(() => {
+    return law.source_from === 'case_paragraph' || 
+           law.source_from === 'decision_paragraph' || 
+           law.source_from === 'interpretation_paragraph' ||
+           law.metadata?.isFromPrecedent ||
+           law.metadata?.source_from === 'case_paragraph' ||
+           law.metadata?.source_from === 'decision_paragraph' ||
+           law.metadata?.source_from === 'interpretation_paragraph' ||
+           sourceDetail?.metadata?.source_from === 'case_paragraph';
+  }, [law, sourceDetail]);
+  
+  const sourceLabel = useMemo(() => {
+    if (law.source_from === 'case_paragraph' || law.metadata?.source_from === 'case_paragraph') return '판례 참조조문';
+    if (law.source_from === 'decision_paragraph' || law.metadata?.source_from === 'decision_paragraph') return '결정례 참조조문';
+    if (law.source_from === 'interpretation_paragraph' || law.metadata?.source_from === 'interpretation_paragraph') return '해석례 참조조문';
+    return null;
+  }, [law]);
   
   const cardUrl = useMemo(() => {
     if (law.url) return law.url;
@@ -427,9 +535,14 @@ function LawCard({ law, onClick, sourceDetail }: { law: LegalReferenceDetail & {
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <FileText className="w-4 h-4 text-blue-600 flex-shrink-0" />
             <span className="text-xs font-semibold text-blue-600">법령</span>
+            {isFromPrecedent && sourceLabel && (
+              <span className="text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded border border-blue-200 rounded">
+                {sourceLabel}
+              </span>
+            )}
             {law.relevance_score !== undefined && (
               <span className="text-xs text-slate-500">
                 관련도: {Math.round(law.relevance_score * 100)}%
@@ -512,29 +625,68 @@ function LawCard({ law, onClick, sourceDetail }: { law: LegalReferenceDetail & {
 function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalReferenceDetail & { url?: string }; onClick?: () => void; sourceDetail?: SourceInfo }) {
   const [isExpanded, setIsExpanded] = useState(false);
   
+  // 판례명 표시 우선순위: metadata.casenames → case_name → name → case_number
+  const displayCaseName = useMemo(() => {
+    return sourceDetail?.metadata?.casenames || 
+           precedent.case_name || 
+           sourceDetail?.case_name ||
+           sourceDetail?.name ||
+           precedent.case_number || 
+           '판례';
+  }, [precedent, sourceDetail]);
+  
+  // 판결일 포맷팅
+  const formattedDate = useMemo(() => {
+    const dateStr = precedent.decision_date || 
+                   sourceDetail?.decision_date || 
+                   sourceDetail?.metadata?.announce_date;
+    return formatDate(dateStr);
+  }, [precedent, sourceDetail]);
+  
+  // case_type 표시
+  const caseType = useMemo(() => {
+    return sourceDetail?.metadata?.case_type as string | undefined;
+  }, [sourceDetail]);
+  
+  // 이 판례가 참조하는 법령 목록
+  const referencedStatutes = useMemo(() => {
+    const refStatutes = sourceDetail?.metadata?.reference_statutes;
+    if (Array.isArray(refStatutes) && refStatutes.length > 0) {
+      return refStatutes.slice(0, 3).map((s: any) => ({
+        name: s.statute_name,
+        article: s.article_no || s.article_number,
+        clause: s.clause_no,
+        item: s.item_no
+      }));
+    }
+    return [];
+  }, [sourceDetail]);
+  
   const cardUrl = useMemo(() => {
+    // sourceDetail의 url 우선 사용
+    if (sourceDetail?.url) return sourceDetail.url;
     if (precedent.url) return precedent.url;
     
     const metadata = {
       ...sourceDetail?.metadata,
       ...precedent,
       precedent_serial_number: sourceDetail?.metadata?.precedent_serial_number,
-      doc_id: precedent.case_number || sourceDetail?.doc_id,
-      casenames: precedent.case_name || sourceDetail?.case_name,
+      doc_id: precedent.case_number || sourceDetail?.case_number || sourceDetail?.metadata?.doc_id,
+      casenames: displayCaseName,
     };
     
     return generateLawUrl('case', metadata);
-  }, [precedent, sourceDetail]);
+  }, [precedent, sourceDetail, displayCaseName]);
   
   const searchUrl = useMemo(() => {
     if (cardUrl) return null;
     
     const metadata = {
-      casenames: precedent.case_name || sourceDetail?.case_name || sourceDetail?.metadata?.casenames,
+      casenames: displayCaseName,
     };
     
     return generateSearchUrl('case', metadata);
-  }, [cardUrl, precedent, sourceDetail]);
+  }, [cardUrl, displayCaseName]);
   
   return (
     <div 
@@ -548,25 +700,31 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
       } : undefined}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-label={`판례: ${displayCaseName}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
             <Scale className="w-4 h-4 text-green-600 flex-shrink-0" />
             <span className="text-xs font-semibold text-green-600">판례</span>
+            {caseType && (
+              <span className="text-xs text-slate-500 bg-white px-1.5 py-0.5 rounded">
+                {caseType}
+              </span>
+            )}
             {precedent.relevance_score !== undefined && (
               <span className="text-xs text-slate-500">
                 관련도: {Math.round(precedent.relevance_score * 100)}%
               </span>
             )}
-            {precedent.similarity !== undefined && (
+            {precedent.similarity !== undefined && !precedent.relevance_score && (
               <span className="text-xs text-slate-500">
                 유사도: {Math.round(precedent.similarity * 100)}%
               </span>
             )}
           </div>
           <h4 className="font-semibold text-slate-800 mb-1">
-            {precedent.case_name || precedent.case_number || '판례'}
+            {displayCaseName}
           </h4>
           <div className="flex flex-wrap gap-2 text-xs text-slate-600 mb-2">
             {precedent.case_number && (
@@ -575,8 +733,8 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
             {precedent.court && (
               <span className="bg-white px-2 py-1 rounded">법원: {precedent.court}</span>
             )}
-            {precedent.decision_date && (
-              <span className="bg-white px-2 py-1 rounded">판결일: {precedent.decision_date}</span>
+            {formattedDate && (
+              <span className="bg-white px-2 py-1 rounded">판결일: {formattedDate}</span>
             )}
           </div>
           {precedent.summary ? (
@@ -586,7 +744,10 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
               </p>
               {precedent.summary.length > 200 && (
                 <button
-                  onClick={() => setIsExpanded(!isExpanded)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsExpanded(!isExpanded);
+                  }}
                   className="text-xs text-green-600 hover:text-green-700 mt-1"
                 >
                   {isExpanded ? '접기' : '더 보기'}
@@ -596,6 +757,37 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
           ) : precedent.content ? (
             <p className="text-sm text-slate-700 mt-2">{precedent.content}</p>
           ) : null}
+          
+          {/* 참조 법령 미리보기 (최대 3개) */}
+          {referencedStatutes.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-green-200">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-3 h-3 text-blue-500" />
+                <span className="text-xs font-semibold text-slate-600">
+                  참조 법령
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {referencedStatutes.map((statute, idx) => (
+                  <span
+                    key={idx}
+                    className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200"
+                  >
+                    {statute.name} 제{statute.article}조
+                    {statute.clause && ` 제${statute.clause}항`}
+                    {statute.item && ` 제${statute.item}호`}
+                  </span>
+                ))}
+                {/* 더 많은 법령이 있는 경우 표시 */}
+                {sourceDetail?.metadata?.reference_statutes && 
+                 sourceDetail.metadata.reference_statutes.length > 3 && (
+                  <span className="text-xs text-slate-500 px-2 py-0.5">
+                    +{sourceDetail.metadata.reference_statutes.length - 3}개
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         {cardUrl ? (
           <a
@@ -605,6 +797,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
             className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
             title="원문 보기"
             onClick={(e) => e.stopPropagation()}
+            aria-label={`${displayCaseName} 원문 보기`}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -616,6 +809,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
             className="text-green-600 hover:text-green-700 p-1 rounded hover:bg-green-100 transition-colors"
             title="검색하기"
             onClick={(e) => e.stopPropagation()}
+            aria-label={`${displayCaseName} 검색하기`}
           >
             <ExternalLink className="w-4 h-4" />
           </a>
@@ -627,6 +821,7 @@ function PrecedentCard({ precedent, onClick, sourceDetail }: { precedent: LegalR
               e.stopPropagation();
               onClick?.();
             }}
+            aria-label={`${displayCaseName} 상세 정보 보기`}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
@@ -649,7 +844,7 @@ function DecisionCard({ decision, onClick, sourceDetail }: { decision: LegalRefe
       ...sourceDetail?.metadata,
       ...decision,
       decision_serial_number: sourceDetail?.metadata?.decision_serial_number,
-      doc_id: decision.decision_number || sourceDetail?.doc_id,
+      doc_id: decision.decision_number || sourceDetail?.metadata?.doc_id,
       org: decision.org || sourceDetail?.org,
     };
     
@@ -772,7 +967,7 @@ function InterpretationCard({ interpretation, onClick, sourceDetail }: { interpr
       ...sourceDetail?.metadata,
       ...interpretation,
       interpretation_serial_number: sourceDetail?.metadata?.interpretation_serial_number,
-      doc_id: interpretation.interpretation_number || sourceDetail?.doc_id,
+      doc_id: interpretation.interpretation_number || sourceDetail?.metadata?.doc_id,
       title: interpretation.title || sourceDetail?.title,
     };
     
@@ -931,6 +1126,7 @@ export function ReferencesModalContent({
   legalReferences = [],
   sources = [],
   sourcesDetail = [],
+  sourcesByType: propSourcesByType,
   initialSelectedType = 'all',
   onReferenceClick,
 }: ReferencesModalContentProps) {
@@ -943,9 +1139,41 @@ export function ReferencesModalContent({
     }
   }, [initialSelectedType]);
 
-  // sourcesDetail을 LegalReferenceDetail로 변환 (sourceDetail 정보도 함께 저장)
+  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
+  const effectiveSourcesDetail = useMemo(() => {
+    if (propSourcesByType) {
+      return getSourcesDetailFromSourcesByType(propSourcesByType);
+    }
+    return sourcesDetail;
+  }, [propSourcesByType, sourcesDetail]);
+
+  // sourcesDetail에서 legal_references 추출 (deprecated용) - effectiveSourcesDetail 사용
+  const extractedLegalRefStrings = useMemo(() => {
+    return extractLegalReferencesFromSourcesDetail(effectiveSourcesDetail);
+  }, [effectiveSourcesDetail]);
+  
+  // legalReferences와 extractedLegalRefStrings 병합 (하위 호환성)
+  const allLegalRefs = useMemo(() => {
+    return [...new Set([...legalReferences, ...extractedLegalRefStrings])];
+  }, [legalReferences, extractedLegalRefStrings]);
+
+  // sources_by_type 사용 (propSourcesByType 우선, 없으면 effectiveSourcesDetail에서 재구성)
+  const sourcesByType = useMemo(() => {
+    if (propSourcesByType) {
+      return propSourcesByType;
+    }
+    return getSourcesByType(effectiveSourcesDetail);
+  }, [propSourcesByType, effectiveSourcesDetail]);
+  
+  // content에서 법령 참조 추출 제거 (sources_by_type에 이미 포함되어 있으므로 불필요)
+  // sources 이벤트의 sources_by_type을 직접 사용하므로 추가 추출 불필요
+  const extractedLegalRefs = useMemo(() => {
+    return [];
+  }, []);
+
+  // sourcesDetail을 LegalReferenceDetail로 변환 (sourceDetail 정보도 함께 저장) - effectiveSourcesDetail 사용
   const sourcesDetailReferences = useMemo(() => {
-    return sourcesDetail.map((detail, idx): LegalReferenceDetail & { sourceDetail?: SourceInfo } => {
+    return effectiveSourcesDetail.map((detail, idx): LegalReferenceDetail & { sourceDetail?: SourceInfo } => {
       const baseRef: LegalReferenceDetail & { sourceDetail?: SourceInfo } = {
         id: `source-detail-${idx}`,
         type: 'regulation',
@@ -955,6 +1183,9 @@ export function ReferencesModalContent({
 
       // 법령 정보
       if (detail.type === 'statute_article') {
+        const relevanceScore = (detail.metadata?.relevance_score as number) || 
+                               (detail.metadata?.similarity as number) || 
+                               undefined;
         return {
           ...baseRef,
           type: 'law',
@@ -963,68 +1194,113 @@ export function ReferencesModalContent({
             ? `제${detail.article_no}조${detail.clause_no ? ` 제${detail.clause_no}항` : ''}${detail.item_no ? ` 제${detail.item_no}호` : ''}`
             : detail.metadata?.article_no,
           article_content: detail.content,
+          relevance_score: relevanceScore,
+          similarity: relevanceScore,
           sourceDetail: detail,
         };
       }
 
       // 판례 정보
       if (detail.type === 'case_paragraph') {
+        const caseName = detail.case_name || 
+                        detail.metadata?.casenames || 
+                        detail.name || 
+                        undefined;
+        const caseNumber = detail.case_number || 
+                          detail.metadata?.doc_id || 
+                          undefined;
+        const court = detail.court || 
+                     detail.metadata?.court || 
+                     undefined;
+        const decisionDate = detail.decision_date || 
+                            detail.metadata?.announce_date || 
+                            undefined;
+        const relevanceScore = (detail.metadata?.relevance_score as number) || 
+                               (detail.metadata?.similarity as number) || 
+                               undefined;
+        
         return {
           ...baseRef,
           type: 'precedent',
-          case_name: detail.case_name || detail.metadata?.casenames,
-          case_number: detail.case_number || detail.metadata?.doc_id,
-          court: detail.court || detail.metadata?.court,
+          case_name: caseName,
+          case_number: caseNumber,
+          court: court,
+          decision_date: decisionDate,
           summary: detail.content,
+          relevance_score: relevanceScore,
+          similarity: relevanceScore,
           sourceDetail: detail,
         };
       }
 
       // 결정례 정보
       if (detail.type === 'decision_paragraph') {
+        const relevanceScore = (detail.metadata?.relevance_score as number) || 
+                               (detail.metadata?.similarity as number) || 
+                               undefined;
         return {
           ...baseRef,
           type: 'decision',
           decision_number: detail.decision_number || detail.metadata?.doc_id,
           org: detail.org || detail.metadata?.org,
-          decision_date: detail.decision_date || detail.metadata?.decision_date,
+          decision_date: detail.decision_date || detail.metadata?.decision_date || detail.metadata?.announce_date,
           result: detail.result || detail.metadata?.result,
           content: detail.content || detail.name,
+          relevance_score: relevanceScore,
+          similarity: relevanceScore,
           sourceDetail: detail,
         };
       }
 
       // 해석례 정보
       if (detail.type === 'interpretation_paragraph') {
+        const relevanceScore = (detail.metadata?.relevance_score as number) || 
+                               (detail.metadata?.similarity as number) || 
+                               undefined;
         return {
           ...baseRef,
           type: 'interpretation',
           interpretation_number: detail.interpretation_number || detail.metadata?.doc_id,
           org: detail.org || detail.metadata?.org,
           title: detail.title || detail.metadata?.title,
-          response_date: detail.response_date || detail.metadata?.response_date,
+          response_date: detail.response_date || detail.metadata?.response_date || detail.metadata?.announce_date,
           content: detail.content || detail.name,
+          relevance_score: relevanceScore,
+          similarity: relevanceScore,
           sourceDetail: detail,
         };
       }
 
       return baseRef;
     });
-  }, [sourcesDetail]);
+  }, [effectiveSourcesDetail]);
 
   // 참고자료 파싱 및 분류 (sourcesDetail 우선)
   const parsedReferences = useMemo(() => {
     const detailRefs = sourcesDetailReferences;
-    const stringRefs = parseReferences(references, legalReferences, sources);
+    const stringRefs = parseReferences(references, allLegalRefs, sources);  // allLegalRefs 사용
     
     // sourcesDetail을 우선하고, 중복 제거
+    // 고유 키 생성: doc_id, case_number, article_number 등을 조합
     const seen = new Set<string>();
     const result: LegalReferenceDetail[] = [];
     
-    // sourcesDetail 먼저 추가
+    // sourcesDetail 먼저 추가 (sources_by_type에서 재구성된 데이터)
     detailRefs.forEach(ref => {
-      // key 생성: case_number, article_number, law_name, content 순서로 시도
-      const key = ref.case_number || ref.article_number || ref.law_name || ref.content || ref.id || `detail-${result.length}`;
+      // 고유 키 생성: doc_id > case_number > article_number > interpretation_number > decision_number > law_name > content 순서
+      const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
+      const docId = sourceDetail?.metadata?.doc_id || sourceDetail?.case_number;
+      const key = docId || 
+                  ref.case_number || 
+                  (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
+                  ref.article_number || 
+                  ref.interpretation_number ||
+                  ref.decision_number ||
+                  ref.law_name || 
+                  ref.content || 
+                  ref.id || 
+                  `detail-${result.length}`;
+      
       if (!seen.has(key)) {
         seen.add(key);
         result.push(ref);
@@ -1032,51 +1308,103 @@ export function ReferencesModalContent({
     });
     
     // 문자열 참조 추가 (중복 제외)
+    // sources 배열의 항목과 sources_detail을 매칭 시도
     stringRefs.forEach(ref => {
-      const key = ref.case_number || ref.article_number || ref.law_name || ref.content || ref.id || `string-${result.length}`;
+      // sources 배열의 이름과 sources_detail의 name을 매칭 (effectiveSourcesDetail 사용)
+      const matchedDetail = effectiveSourcesDetail.find(detail => {
+        const detailName = detail.name || '';
+        const refContent = ref.content || '';
+        return detailName.includes(refContent) || refContent.includes(detailName);
+      });
+      
+      // 이미 매칭된 sources_detail이 있으면 건너뛰기
+      if (matchedDetail) {
+        const matchedRef = detailRefs.find(dr => {
+          const drSourceDetail = (dr as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;
+          return drSourceDetail === matchedDetail;
+        });
+        if (matchedRef) {
+          return; // 이미 추가된 항목이므로 건너뛰기
+        }
+      }
+      
+      // 고유 키 생성
+      const key = ref.case_number || 
+                  (ref.article_number && ref.law_name ? `${ref.law_name}-${ref.article_number}` : undefined) ||
+                  ref.article_number || 
+                  ref.law_name || 
+                  ref.content || 
+                  ref.id || 
+                  `string-${result.length}`;
+      
       if (!seen.has(key)) {
         seen.add(key);
         result.push(ref);
       }
     });
     
-    return result;
-  }, [sourcesDetailReferences, references, legalReferences, sources]);
+    // 타입별 정렬: 법령, 판례, 결정례, 해석례, 기타 순서
+    const typeOrder: Record<string, number> = {
+      'law': 1,
+      'precedent': 2,
+      'decision': 3,
+      'interpretation': 4,
+      'regulation': 5,
+    };
+    
+    return result.sort((a, b) => {
+      const orderA = typeOrder[a.type] || 999;
+      const orderB = typeOrder[b.type] || 999;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
+      // 같은 타입 내에서는 관련도 점수로 정렬
+      const scoreA = a.relevance_score ?? a.similarity ?? 0;
+      const scoreB = b.relevance_score ?? b.similarity ?? 0;
+      return scoreB - scoreA;
+    });
+  }, [sourcesDetailReferences, references, allLegalRefs, sources, effectiveSourcesDetail, extractedLegalRefs]);
 
-  // 타입별 필터링 및 상위 3개만 선택
+  // 타입별 필터링 (모든 문서 표시)
   const filteredReferences = useMemo(() => {
     let filtered: LegalReferenceDetail[] = [];
     
     if (selectedType === 'all') {
+      // 전체 선택 시 이미 타입별로 정렬된 parsedReferences 사용
       filtered = parsedReferences;
     } else {
       filtered = parsedReferences.filter((ref) => ref.type === selectedType);
-    }
-    
-    // 관련도 점수로 정렬 (relevance_score 우선, 없으면 similarity 사용)
-    filtered.sort((a, b) => {
-      const scoreA = a.relevance_score ?? a.similarity ?? 0;
-      const scoreB = b.relevance_score ?? b.similarity ?? 0;
-      return scoreB - scoreA; // 내림차순 정렬
-    });
-    
-    // 상위 3개만 반환 (전체가 아닌 경우에만)
-    if (selectedType !== 'all') {
-      return filtered.slice(0, 3);
+      
+      // 타입별 선택 시 관련도 점수로 정렬 (relevance_score 우선, 없으면 similarity 사용)
+      filtered.sort((a, b) => {
+        const scoreA = a.relevance_score ?? a.similarity ?? 0;
+        const scoreB = b.relevance_score ?? b.similarity ?? 0;
+        return scoreB - scoreA; // 내림차순 정렬
+      });
     }
     
     return filtered;
   }, [parsedReferences, selectedType]);
 
-  // 타입별 개수 계산
+  // 타입별 개수 계산 (parsedReferences 기반으로 정확하게 계산)
   const counts = useMemo(() => {
+    // parsedReferences는 이미 중복 제거되어 있으므로 length를 직접 사용
+    const allCount = parsedReferences.length;
+    
+    // 타입별 개수는 parsedReferences에서 계산 (sourcesByType은 원본 데이터이므로 중복 포함 가능)
+    const lawCount = parsedReferences.filter((r) => r.type === 'law').length;
+    const precedentCount = parsedReferences.filter((r) => r.type === 'precedent').length;
+    const decisionCount = parsedReferences.filter((r) => r.type === 'decision').length;
+    const interpretationCount = parsedReferences.filter((r) => r.type === 'interpretation').length;
+    const regulationCount = parsedReferences.filter((r) => r.type === 'regulation').length;
+    
     return {
-      all: parsedReferences.length,
-      law: parsedReferences.filter((r) => r.type === 'law').length,
-      precedent: parsedReferences.filter((r) => r.type === 'precedent').length,
-      decision: parsedReferences.filter((r) => r.type === 'decision').length,
-      interpretation: parsedReferences.filter((r) => r.type === 'interpretation').length,
-      regulation: parsedReferences.filter((r) => r.type === 'regulation').length,
+      all: allCount,
+      law: lawCount,
+      precedent: precedentCount,
+      decision: decisionCount,
+      interpretation: interpretationCount,
+      regulation: regulationCount,
     };
   }, [parsedReferences]);
 
@@ -1173,12 +1501,20 @@ export function ReferencesModalContent({
         ) : (
           <>
             {/* 상위 3개 제한 안내 (전체가 아닌 경우) */}
-            {/* eslint-disable-next-line security/detect-object-injection */}
-            {selectedType !== 'all' && counts[selectedType] > 3 && (
-              <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
-                관련도가 높은 상위 3개만 표시됩니다. (전체 {counts[selectedType]}개)
-              </div>
-            )}
+            {selectedType !== 'all' && (() => {
+              const typeCount = selectedType === 'law' ? counts.law :
+                                selectedType === 'precedent' ? counts.precedent :
+                                selectedType === 'decision' ? counts.decision :
+                                selectedType === 'interpretation' ? counts.interpretation :
+                                selectedType === 'regulation' ? counts.regulation : 0;
+              const displayedCount = filteredReferences.length;
+              
+              return typeCount > displayedCount ? (
+                <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                  관련도가 높은 상위 {displayedCount}개만 표시됩니다. (전체 {typeCount}개)
+                </div>
+              ) : null;
+            })()}
             
             {filteredReferences.map((ref) => {
               const sourceDetail = (ref as LegalReferenceDetail & { sourceDetail?: SourceInfo }).sourceDetail;

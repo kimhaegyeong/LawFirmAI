@@ -37,24 +37,29 @@ export function CompactReferencesBadge({
     return getSourcesByType(sourcesDetail);
   }, [propSourcesByType, sourcesDetail]);
 
+  // sources_by_type을 직접 사용하여 참고자료 표시 (sources 이벤트 데이터와 일치)
   const effectiveSourcesDetail = useMemo(() => {
     if (propSourcesByType) {
+      // sources_by_type을 직접 사용 (sources 이벤트 데이터와 일치)
       return getSourcesDetailFromSourcesByType(propSourcesByType);
     }
     return sourcesDetail;
   }, [propSourcesByType, sourcesDetail]);
 
   // sourcesDetail에서 legal_references 추출 (deprecated용)
-  const extractedLegalRefs = useMemo(() => {
+  const extractedLegalRefStrings = useMemo(() => {
     return extractLegalReferencesFromSourcesDetail(effectiveSourcesDetail);
   }, [effectiveSourcesDetail]);
   
-  // legalReferences와 extractedLegalRefs 병합 (하위 호환성)
+  // content에서 법령 참조 추출 제거 (sources_by_type에 이미 포함되어 있으므로 불필요)
+  // sources 이벤트의 sources_by_type을 직접 사용하므로 추가 추출 불필요
+  
+  // legalReferences와 extractedLegalRefStrings 병합 (하위 호환성)
   const allLegalRefs = useMemo(() => {
-    return [...new Set([...legalReferences, ...extractedLegalRefs])];
-  }, [legalReferences, extractedLegalRefs]);
+    return [...new Set([...legalReferences, ...extractedLegalRefStrings])];
+  }, [legalReferences, extractedLegalRefStrings]);
 
-  // 참고자료 파싱 개선 - 제목과 부제목 구조로 정보 표시
+  // 참고자료 파싱 - sources_by_type을 직접 사용 (sources 이벤트 데이터와 일치)
   const parsedReferences = useMemo(() => {
     const all: Array<{ 
       id: string; 
@@ -66,11 +71,12 @@ export function CompactReferencesBadge({
     }> = [];
     const seen = new Set<string>();
     
-    // effectiveSourcesDetail 우선 처리 (상세 정보 활용, 중복 제거)
+    // effectiveSourcesDetail 우선 처리 (sources_by_type에서 재구성된 데이터)
     effectiveSourcesDetail.forEach((detail, idx) => {
       let type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' = 'regulation';
       let title: string = '';
       let subtitle: string = '';
+      let metadata: Record<string, unknown> = detail.metadata || {};
       
       if (detail.type === 'statute_article') {
         type = 'law';
@@ -78,6 +84,17 @@ export function CompactReferencesBadge({
         const articleNo = detail.article_no || detail.metadata?.article_no;
         title = lawName || '법령';
         subtitle = articleNo ? `제${articleNo}조` : '';
+        
+        // 판례에서 추출된 법령인지 확인
+        const sourceFrom = detail.source_from || detail.metadata?.source_from;
+        if (sourceFrom === 'case_paragraph' || sourceFrom === 'decision_paragraph' || sourceFrom === 'interpretation_paragraph') {
+          metadata = {
+            ...metadata,
+            isFromPrecedent: true,
+            sourceFrom: sourceFrom,
+            sourceDocId: detail.source_doc_id || detail.metadata?.source_doc_id
+          };
+        }
       } else if (detail.type === 'case_paragraph') {
         type = 'precedent';
         // 사건명 추출 (다양한 필드명 지원)
@@ -122,12 +139,16 @@ export function CompactReferencesBadge({
         title = detail.name || detail.content || '참고자료';
       }
       
-      // 중복 체크용 키 생성
-      const key = detail.case_number || 
+      // 중복 체크용 키 생성 (ReferencesModalContent와 동일한 로직)
+      // doc_id > case_number > article_number > law_name > content 순서
+      const docId = detail.metadata?.doc_id || detail.case_number;
+      const key = docId || 
+                 detail.case_number || 
+                 (detail.article_no && detail.statute_name ? `${detail.statute_name}-${detail.article_no}` : undefined) ||
                  detail.article_no ||
                  detail.decision_number ||
                  detail.interpretation_number ||
-                 detail.metadata?.doc_id || 
+                 detail.statute_name ||
                  title || 
                  `detail-${idx}`;
       
@@ -191,7 +212,20 @@ export function CompactReferencesBadge({
       }
     });
 
-    return all;
+    // 타입별 정렬: 법령, 판례, 결정례, 해석례, 기타 순서
+    const typeOrder: Record<string, number> = {
+      'law': 1,
+      'precedent': 2,
+      'decision': 3,
+      'interpretation': 4,
+      'regulation': 5,
+    };
+    
+    return all.sort((a, b) => {
+      const orderA = typeOrder[a.type] || 999;
+      const orderB = typeOrder[b.type] || 999;
+      return orderA - orderB;
+    });
   }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
 
   // 전체 참고자료 개수 계산 (중복 제거된 parsedReferences 사용)

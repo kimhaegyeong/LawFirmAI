@@ -53,45 +53,75 @@ export function MessageReferencesSection({
   // 실제 표시되는 항목 수와 일치하도록 하기 위해 CompactReferencesBadge와 동일한 로직 사용
   const totalCount = useMemo(() => {
     const seen = new Set<string>();
-    let count = 0;
+    const all: string[] = [];
     
-    // effectiveSourcesDetail 처리 (중복 제거)
+    // effectiveSourcesDetail 우선 처리 (CompactReferencesBadge와 동일한 키 생성 로직)
     effectiveSourcesDetail.forEach((detail, idx) => {
+      let title = '';
+      
+      if (detail.type === 'statute_article') {
+        const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
+        title = lawName || '법령';
+      } else if (detail.type === 'case_paragraph') {
+        const caseName = detail.case_name || 
+                        detail.metadata?.case_name ||
+                        detail.metadata?.casenames || 
+                        detail.name || '';
+        const caseNumber = detail.case_number || 
+                          detail.metadata?.case_number ||
+                          detail.metadata?.doc_id || '';
+        title = (caseName || caseNumber || '판례') as string;
+      } else if (detail.type === 'decision_paragraph') {
+        const org = detail.org || detail.metadata?.org || '';
+        const decisionNumber = detail.decision_number || 
+                              detail.metadata?.decision_number ||
+                              detail.metadata?.doc_id || '';
+        title = (org || decisionNumber || '결정례') as string;
+      } else if (detail.type === 'interpretation_paragraph') {
+        const titleText = detail.title || detail.metadata?.title || detail.name || '';
+        title = titleText || '해석례';
+      } else {
+        title = detail.name || detail.content || '참고자료';
+      }
+      
+      // CompactReferencesBadge와 동일한 키 생성 로직
       const key = detail.case_number || 
                  detail.article_no ||
                  detail.decision_number ||
                  detail.interpretation_number ||
                  detail.metadata?.doc_id || 
-                 detail.name || 
-                 detail.content ||
+                 title || 
                  `detail-${idx}`;
+      
       if (!seen.has(key)) {
         seen.add(key);
-        count++;
+        all.push(key);
       }
     });
     
-    // legalReferences 처리 (sources_detail과 중복 제외)
+    // legalReferences 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
     allLegalRefs.forEach(ref => {
       const matched = effectiveSourcesDetail.find(detail => {
         const detailName = detail.name || detail.content || '';
         return detailName.includes(ref) || ref.includes(detailName);
       });
+      
       if (!matched && !seen.has(ref)) {
         seen.add(ref);
-        count++;
+        all.push(ref);
       }
     });
     
-    // sources 처리 (sources_detail과 중복 제외)
+    // sources 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
     sources.forEach(src => {
       const matched = effectiveSourcesDetail.find(detail => {
         const detailName = detail.name || detail.content || '';
         return detailName.includes(src) || src.includes(detailName);
       });
+      
       if (!matched && !seen.has(src)) {
         seen.add(src);
-        count++;
+        all.push(src);
       }
     });
     
@@ -99,11 +129,11 @@ export function MessageReferencesSection({
     references.forEach(ref => {
       if (!seen.has(ref)) {
         seen.add(ref);
-        count++;
+        all.push(ref);
       }
     });
     
-    return count;
+    return all.length;
   }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
 
   if (totalCount === 0) {

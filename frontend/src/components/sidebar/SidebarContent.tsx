@@ -17,6 +17,7 @@ interface SidebarContentProps {
   onExportSession?: (session: Session) => void;
   onDeleteSession?: (session: Session) => void;
   isLoading?: boolean;
+  refreshTrigger?: number;
 }
 
 export function SidebarContent({
@@ -29,6 +30,7 @@ export function SidebarContent({
   onExportSession,
   onDeleteSession,
   isLoading = false,
+  refreshTrigger,
 }: SidebarContentProps) {
 
   return (
@@ -67,6 +69,7 @@ export function SidebarContent({
         onCopy={onCopySession}
         onExport={onExportSession}
         onDelete={onDeleteSession}
+        refreshTrigger={refreshTrigger}
       />
     </>
   );

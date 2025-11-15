@@ -7,6 +7,7 @@ import { useMemo, useState, useEffect } from 'react';
 import type { LegalReferenceDetail, SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
+import { getMetadataValue } from '../../utils/metadataUtils';
 
 interface ReferenceDetailViewProps {
   reference: LegalReferenceDetail;
@@ -28,6 +29,7 @@ export function ReferenceDetailView({
       const timer = setTimeout(() => setCopiedField(null), 2000);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [copiedField]);
   
   // 문서 타입 결정
@@ -41,13 +43,13 @@ export function ReferenceDetailView({
     reference.content || 
     '참고자료';
 
-  // sourceDetail 또는 reference에서 정보 추출
-  const docMetadata = sourceDetail?.metadata || {};
+  // sourceDetail 또는 reference에서 정보 추출 (useMemo로 최적화)
+  const docMetadata = useMemo(() => sourceDetail?.metadata || {}, [sourceDetail?.metadata]);
   
   // URL 생성 (useMemo로 최적화)
   const generatedUrl = useMemo(() => {
-    if (reference.url || sourceDetail?.url) {
-      return reference.url || sourceDetail?.url || null;
+    if (sourceDetail?.url) {
+      return sourceDetail.url;
     }
     
     const metadata = {
@@ -61,7 +63,7 @@ export function ReferenceDetailView({
       precedent_serial_number: docMetadata.precedent_serial_number || sourceDetail?.metadata?.precedent_serial_number,
       decision_serial_number: docMetadata.decision_serial_number || sourceDetail?.metadata?.decision_serial_number,
       interpretation_serial_number: docMetadata.interpretation_serial_number || sourceDetail?.metadata?.interpretation_serial_number,
-      doc_id: reference.case_number || reference.decision_number || reference.interpretation_number || sourceDetail?.doc_id || docMetadata.doc_id,
+      doc_id: reference.case_number || reference.decision_number || reference.interpretation_number || docMetadata.doc_id,
       statute_name: reference.law_name || sourceDetail?.statute_name || docMetadata.statute_name,
       casenames: reference.case_name || sourceDetail?.case_name || docMetadata.casenames,
     };
@@ -234,30 +236,30 @@ export function ReferenceDetailView({
               />
               <InfoField
                 label="법령ID"
-                value={docMetadata.law_id || docMetadata.법령ID || docMetadata.ID}
+                value={getMetadataValue(docMetadata.law_id) || getMetadataValue(docMetadata.법령ID) || getMetadataValue(docMetadata.ID)}
                 fieldName="law_id"
                 isMonospace
               />
               <InfoField
                 label="법령 마스터번호 (MST)"
-                value={docMetadata.mst || docMetadata.MST || docMetadata.lsi_seq}
+                value={getMetadataValue(docMetadata.mst) || getMetadataValue(docMetadata.MST) || getMetadataValue(docMetadata.lsi_seq)}
                 fieldName="mst"
                 isMonospace
               />
               <InfoField
                 label="공포번호"
-                value={docMetadata.proclamation_number || docMetadata.공포번호}
+                value={getMetadataValue(docMetadata.proclamation_number) || getMetadataValue(docMetadata.공포번호)}
                 fieldName="proclamation_number"
               />
               <InfoField
                 label="시행일자"
-                value={docMetadata.effective_date || docMetadata.efYd || docMetadata.시행일자}
+                value={getMetadataValue(docMetadata.effective_date) || getMetadataValue(docMetadata.efYd) || getMetadataValue(docMetadata.시행일자)}
                 fieldName="effective_date"
               />
-              {docMetadata.title && (
+              {getMetadataValue(docMetadata.title) && (
                 <div>
                   <span className="text-xs font-medium text-slate-500">제목</span>
-                  <p className="text-sm text-slate-800 mt-1">{String(docMetadata.title)}</p>
+                  <p className="text-sm text-slate-800 mt-1">{String(getMetadataValue(docMetadata.title))}</p>
                 </div>
               )}
             </div>
@@ -283,13 +285,13 @@ export function ReferenceDetailView({
               />
               <InfoField
                 label="판례일련번호"
-                value={docMetadata.precedent_serial_number || docMetadata.판례일련번호 || docMetadata.판례정보일련번호}
+                value={getMetadataValue(docMetadata.precedent_serial_number) || getMetadataValue(docMetadata.판례일련번호) || getMetadataValue(docMetadata.판례정보일련번호)}
                 fieldName="precedent_serial_number"
                 isMonospace
               />
               <InfoField
                 label="판결일"
-                value={reference.decision_date || docMetadata.announce_date}
+                value={reference.decision_date || getMetadataValue(docMetadata.announce_date)}
                 fieldName="decision_date"
               />
             </div>
@@ -310,13 +312,13 @@ export function ReferenceDetailView({
               />
               <InfoField
                 label="헌재결정례일련번호"
-                value={docMetadata.decision_serial_number || docMetadata.헌재결정례일련번호}
+                value={getMetadataValue(docMetadata.decision_serial_number) || getMetadataValue(docMetadata.헌재결정례일련번호)}
                 fieldName="decision_serial_number"
                 isMonospace
               />
               <InfoField
                 label="결정일"
-                value={sourceDetail?.decision_date || docMetadata.decision_date}
+                value={sourceDetail?.decision_date || getMetadataValue(docMetadata.decision_date)}
                 fieldName="decision_date"
               />
               <InfoField
@@ -347,13 +349,13 @@ export function ReferenceDetailView({
               />
               <InfoField
                 label="법령해석례일련번호"
-                value={docMetadata.interpretation_serial_number || docMetadata.법령해석례일련번호 || docMetadata.해석ID || docMetadata.expcId}
+                value={getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(docMetadata.법령해석례일련번호) || getMetadataValue(docMetadata.해석ID) || getMetadataValue(docMetadata.expcId)}
                 fieldName="interpretation_serial_number"
                 isMonospace
               />
               <InfoField
                 label="회신일"
-                value={sourceDetail?.response_date || docMetadata.response_date}
+                value={sourceDetail?.response_date || getMetadataValue(docMetadata.response_date)}
                 fieldName="response_date"
               />
             </div>

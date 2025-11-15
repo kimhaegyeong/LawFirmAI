@@ -14,8 +14,11 @@ export function formatArticleNo(articleNo: string | number): string {
   const numbers = str.match(/\d+/g);
   if (!numbers || numbers.length === 0) return '';
   
-  const mainNo = parseInt(numbers[0], 10);
-  const subNo = numbers.length > 1 ? parseInt(numbers[1], 10) : 0;
+  const firstNumber = numbers[0];
+  if (!firstNumber) return '';
+  
+  const mainNo = parseInt(firstNumber, 10);
+  const subNo = numbers.length > 1 && numbers[1] ? parseInt(numbers[1], 10) : 0;
   
   return `${String(mainNo).padStart(4, '0')}${String(subNo).padStart(2, '0')}`;
 }
@@ -30,7 +33,7 @@ export function generateStatuteUrl(metadata: Record<string, unknown>): string | 
   if (lawId) {
     let url = `${baseUrl}?target=eflaw&ID=${lawId}&type=HTML`;
     const articleNo = metadata.article_no || metadata.article_number;
-    if (articleNo) {
+    if (articleNo && (typeof articleNo === 'string' || typeof articleNo === 'number')) {
       const joNo = formatArticleNo(articleNo);
       if (joNo) {
         url += `&JO=${joNo}`;
@@ -45,7 +48,7 @@ export function generateStatuteUrl(metadata: Record<string, unknown>): string | 
     const efYd = String(effectiveDate).replace(/-/g, '');
     let url = `${baseUrl}?target=eflaw&MST=${mst}&efYd=${efYd}&type=HTML`;
     const articleNo = metadata.article_no || metadata.article_number;
-    if (articleNo) {
+    if (articleNo && (typeof articleNo === 'string' || typeof articleNo === 'number')) {
       const joNo = formatArticleNo(articleNo);
       if (joNo) {
         url += `&JO=${joNo}`;

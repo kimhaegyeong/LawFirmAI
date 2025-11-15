@@ -7,13 +7,16 @@ import { useEffect, useState, useMemo } from 'react';
 import type { SourceInfo } from '../../types/chat';
 import { generateLawUrl, generateSearchUrl, type LawUrlType } from '../../utils/lawUrlGenerator';
 import { copyToClipboardWithFeedback } from '../../utils/copyToClipboard';
+import { getMetadataValue } from '../../utils/metadataUtils';
+import { getSourcesByType, getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
 
 interface DocumentSidebarProps {
   isOpen: boolean;
   onClose: () => void;
   documentIndex: number | null;
-  sources?: string[];
-  sourcesDetail?: SourceInfo[];
+  sources?: string[];  // deprecated
+  sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
+  sourcesByType?: SourcesByType;  // 우선 사용
   metadata?: Record<string, unknown>;
   sessionId?: string;
   messageId?: string;
@@ -25,24 +28,27 @@ export function DocumentSidebar({
   documentIndex,
   sources = [],
   sourcesDetail = [],
+  sourcesByType: propSourcesByType,
   metadata: _metadata,
   sessionId: _sessionId,
   messageId: _messageId
 }: DocumentSidebarProps) {
-  const [loadedSources, setLoadedSources] = useState<string[]>(sources);
-  const [loadedSourcesDetail, setLoadedSourcesDetail] = useState<SourceInfo[]>(sourcesDetail);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   
-  useEffect(() => {
-    setLoadedSources(sources);
-    setLoadedSourcesDetail(sourcesDetail);
-  }, [sources, sourcesDetail]);
+  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
+  const effectiveSourcesDetail = useMemo(() => {
+    if (propSourcesByType) {
+      return getSourcesDetailFromSourcesByType(propSourcesByType);
+    }
+    return sourcesDetail;
+  }, [propSourcesByType, sourcesDetail]);
   
   useEffect(() => {
     if (copiedField) {
       const timer = setTimeout(() => setCopiedField(null), 2000);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [copiedField]);
   
   // ESC 키로 닫기
@@ -64,54 +70,28 @@ export function DocumentSidebar({
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen || documentIndex === null) {
-    return null;
-  }
+  // 안전한 배열 접근 헬퍼 함수 (타입 안전, 인덱스 검증 완료)
+  const getSafeArrayItem = <T,>(array: T[], index: number | null): T | undefined => {
+    if (index === null || index < 0 || index >= array.length) {
+      return undefined;
+    }
+    // eslint-disable-next-line security/detect-object-injection
+    return array[index];
+  };
 
-  // eslint-disable-next-line security/detect-object-injection
-  const source = loadedSources[documentIndex];
-  // eslint-disable-next-line security/detect-object-injection
-  const sourceDetail = loadedSourcesDetail[documentIndex];
+  const source = getSafeArrayItem(sources, documentIndex);
+  const sourceDetail = getSafeArrayItem(effectiveSourcesDetail, documentIndex);
+  
+  // sources_by_type 사용 (타입별 그룹화)
+  const sourcesByType = useMemo(() => {
+    if (propSourcesByType) {
+      return propSourcesByType;
+    }
+    return getSourcesByType(effectiveSourcesDetail);
+  }, [propSourcesByType, effectiveSourcesDetail]);
 
-  // 문서 정보가 없으면 표시하지 않음
-  if (!source && !sourceDetail) {
-    return (
-      <>
-        {/* 오버레이 제거 (dim 처리 안함) */}
-        <div
-          className={`fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
-            isOpen ? 'translate-x-0' : 'translate-x-full'
-          }`}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="document-sidebar-title"
-        >
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50">
-              <h2 id="document-sidebar-title" className="text-lg font-semibold text-slate-800">
-                문서 {documentIndex + 1}
-              </h2>
-              <button
-                onClick={onClose}
-                className="p-1.5 rounded-md hover:bg-slate-200 transition-colors text-slate-600"
-                aria-label="사이드바 닫기"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-slate-500 text-sm">
-                참조자료 정보를 찾을 수 없습니다.
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
-
-  // 문서 타입 결정
-  const getDocumentType = (): 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' => {
+  // 문서 타입 결정 (useMemo로 최적화)
+  const documentType = useMemo((): 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' => {
     if (sourceDetail) {
       if (sourceDetail.type === 'statute_article') return 'law';
       if (sourceDetail.type === 'case_paragraph') return 'precedent';
@@ -127,15 +107,13 @@ export function DocumentSidebar({
     }
     
     return 'regulation';
-  };
-
-  const documentType = getDocumentType();
+  }, [sourceDetail, source]);
 
   // 문서 제목/이름
-  const documentName = sourceDetail?.name || source || `문서 ${documentIndex + 1}`;
+  const documentName = sourceDetail?.name || source || (documentIndex !== null ? `문서 ${documentIndex + 1}` : '');
 
-  // 문서 메타데이터
-  const docMetadata = sourceDetail?.metadata || {};
+  // 문서 메타데이터 (useMemo로 최적화)
+  const docMetadata = useMemo(() => sourceDetail?.metadata || {}, [sourceDetail?.metadata]);
   
   // URL 생성 (useMemo로 최적화)
   const generatedUrl = useMemo(() => {
@@ -151,7 +129,7 @@ export function DocumentSidebar({
       precedent_serial_number: docMetadata.precedent_serial_number || sourceDetail?.metadata?.precedent_serial_number,
       decision_serial_number: docMetadata.decision_serial_number || sourceDetail?.metadata?.decision_serial_number,
       interpretation_serial_number: docMetadata.interpretation_serial_number || sourceDetail?.metadata?.interpretation_serial_number,
-      doc_id: sourceDetail?.doc_id || docMetadata.doc_id,
+      doc_id: getMetadataValue(sourceDetail?.metadata?.doc_id) || getMetadataValue(docMetadata.doc_id),
     };
     
     const urlType: LawUrlType = 
@@ -252,7 +230,7 @@ export function DocumentSidebar({
               {documentType === 'interpretation' && <FileText className="w-5 h-5 text-indigo-600" />}
               {documentType === 'regulation' && <Bookmark className="w-5 h-5 text-purple-600" />}
               <h2 id="document-sidebar-title" className="text-lg font-semibold text-slate-800">
-                문서 {documentIndex + 1}
+                문서 {documentIndex !== null ? documentIndex + 1 : '?'}
               </h2>
             </div>
             <button
@@ -320,24 +298,24 @@ export function DocumentSidebar({
                   />
                   <InfoField
                     label="법령ID"
-                    value={docMetadata.law_id || docMetadata.법령ID || docMetadata.ID}
+                    value={getMetadataValue(docMetadata.law_id) || getMetadataValue(docMetadata.법령ID) || getMetadataValue(docMetadata.ID)}
                     fieldName="law_id"
                     isMonospace
                   />
                   <InfoField
                     label="법령 마스터번호 (MST)"
-                    value={docMetadata.mst || docMetadata.MST || docMetadata.lsi_seq}
+                    value={getMetadataValue(docMetadata.mst) || getMetadataValue(docMetadata.MST) || getMetadataValue(docMetadata.lsi_seq)}
                     fieldName="mst"
                     isMonospace
                   />
                   <InfoField
                     label="공포번호"
-                    value={docMetadata.proclamation_number || docMetadata.공포번호}
+                    value={getMetadataValue(docMetadata.proclamation_number) || getMetadataValue(docMetadata.공포번호)}
                     fieldName="proclamation_number"
                   />
                   <InfoField
                     label="시행일자"
-                    value={docMetadata.effective_date || docMetadata.efYd || docMetadata.시행일자}
+                    value={getMetadataValue(docMetadata.effective_date) || getMetadataValue(docMetadata.efYd) || getMetadataValue(docMetadata.시행일자)}
                     fieldName="effective_date"
                   />
                   {docMetadata.title && (
@@ -364,22 +342,25 @@ export function DocumentSidebar({
                   />
                   <InfoField
                     label="사건번호"
-                    value={sourceDetail?.case_number || docMetadata.doc_id}
+                    value={sourceDetail?.case_number || getMetadataValue(docMetadata.doc_id)}
                     fieldName="case_number"
                   />
                   <InfoField
                     label="판례일련번호"
-                    value={docMetadata.precedent_serial_number || docMetadata.판례일련번호 || docMetadata.판례정보일련번호}
+                    value={getMetadataValue(docMetadata.precedent_serial_number) || getMetadataValue(docMetadata.판례일련번호) || getMetadataValue(docMetadata.판례정보일련번호)}
                     fieldName="precedent_serial_number"
                     isMonospace
                   />
-                  {docMetadata.announce_date && (
-                    <InfoField
-                      label="선고일자"
-                      value={String(docMetadata.announce_date)}
-                      fieldName="announce_date"
-                    />
-                  )}
+                  {(() => {
+                    const announceDate = getMetadataValue(docMetadata.announce_date);
+                    return announceDate ? (
+                      <InfoField
+                        label="선고일자"
+                        value={announceDate}
+                        fieldName="announce_date"
+                      />
+                    ) : null;
+                  })()}
                 </div>
               )}
 
@@ -393,12 +374,12 @@ export function DocumentSidebar({
                   />
                   <InfoField
                     label="일련번호"
-                    value={sourceDetail?.decision_number || docMetadata.doc_id}
+                    value={sourceDetail?.decision_number || getMetadataValue(docMetadata.doc_id)}
                     fieldName="decision_number"
                   />
                   <InfoField
                     label="헌재결정례일련번호"
-                    value={docMetadata.decision_serial_number || docMetadata.헌재결정례일련번호}
+                    value={getMetadataValue(docMetadata.decision_serial_number) || getMetadataValue(docMetadata.헌재결정례일련번호)}
                     fieldName="decision_serial_number"
                     isMonospace
                   />
@@ -430,12 +411,12 @@ export function DocumentSidebar({
                   />
                   <InfoField
                     label="일련번호"
-                    value={sourceDetail?.interpretation_number || docMetadata.doc_id}
+                    value={sourceDetail?.interpretation_number || getMetadataValue(docMetadata.doc_id)}
                     fieldName="interpretation_number"
                   />
                   <InfoField
                     label="법령해석례일련번호"
-                    value={docMetadata.interpretation_serial_number || docMetadata.법령해석례일련번호 || docMetadata.해석ID || docMetadata.expcId}
+                    value={getMetadataValue(docMetadata.interpretation_serial_number) || getMetadataValue(docMetadata.법령해석례일련번호) || getMetadataValue(docMetadata.해석ID) || getMetadataValue(docMetadata.expcId)}
                     fieldName="interpretation_serial_number"
                     isMonospace
                   />

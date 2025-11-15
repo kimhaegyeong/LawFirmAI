@@ -43,19 +43,24 @@ export function SessionItem({
 
     if (showMenu) {
       // 약간의 지연을 두어 현재 클릭 이벤트가 완료된 후 리스너 추가
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         document.addEventListener('click', handleClickOutside);
       }, 0);
       
       return () => {
+        clearTimeout(timeoutId);
         document.removeEventListener('click', handleClickOutside);
       };
     }
+    return undefined;
   }, [showMenu]);
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (showMenu) {
+  const handleClick = (e?: React.MouseEvent | React.KeyboardEvent) => {
+    if (e) {
       e.stopPropagation();
+      e.preventDefault();
+    }
+    if (showMenu) {
       return;
     }
     onSelect?.(session);
@@ -79,7 +84,7 @@ export function SessionItem({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          handleClick();
+          handleClick(e);
         }
       }}
       role="button"

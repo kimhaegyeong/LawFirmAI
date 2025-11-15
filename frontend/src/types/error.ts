@@ -46,7 +46,7 @@ export function classifyStreamError(error: Error): StreamError {
   if (error.message.includes('HTTP error') || 
       error.message.includes('status:')) {
     const statusMatch = error.message.match(/status: (\d+)/);
-    const status = statusMatch ? parseInt(statusMatch[1]) : 0;
+    const status = statusMatch && statusMatch[1] ? parseInt(statusMatch[1], 10) : 0;
     
     if (status === 503) {
       return {

@@ -75,16 +75,66 @@ interface SessionListProps {
   onCopy?: (session: Session) => void;
   onExport?: (session: Session) => void;
   onDelete?: (session: Session) => void;
+  refreshTrigger?: number;
 }
 
-// 날짜 그룹 매핑
-const dateGroupMap: Record<DateGroup, 'today' | 'yesterday' | 'week' | 'month' | 'older'> = {
-  '오늘': 'today',
-  '어제': 'yesterday',
-  '지난 7일': 'week',
-  '지난 30일': 'month',
-  '이전': 'older',
-};
+// 날짜 그룹 매핑 함수 (타입 안전)
+function getDateGroupParam(group: DateGroup): 'today' | 'yesterday' | 'week' | 'month' | 'older' {
+  switch (group) {
+    case '오늘':
+      return 'today';
+    case '어제':
+      return 'yesterday';
+    case '지난 7일':
+      return 'week';
+    case '지난 30일':
+      return 'month';
+    case '이전':
+      return 'older';
+    default:
+      return 'older';
+  }
+}
+
+// 그룹 데이터 안전 접근 헬퍼 함수
+function getGroupData<T>(data: Record<DateGroup, T>, group: DateGroup): T {
+  switch (group) {
+    case '오늘':
+      return data['오늘'];
+    case '어제':
+      return data['어제'];
+    case '지난 7일':
+      return data['지난 7일'];
+    case '지난 30일':
+      return data['지난 30일'];
+    case '이전':
+      return data['이전'];
+    default:
+      return data['이전'];
+  }
+}
+
+// 그룹 데이터 안전 업데이트 헬퍼 함수
+function updateGroupData<T>(
+  data: Record<DateGroup, T>,
+  group: DateGroup,
+  updater: (current: T) => T
+): Record<DateGroup, T> {
+  switch (group) {
+    case '오늘':
+      return { ...data, '오늘': updater(data['오늘']) };
+    case '어제':
+      return { ...data, '어제': updater(data['어제']) };
+    case '지난 7일':
+      return { ...data, '지난 7일': updater(data['지난 7일']) };
+    case '지난 30일':
+      return { ...data, '지난 30일': updater(data['지난 30일']) };
+    case '이전':
+      return { ...data, '이전': updater(data['이전']) };
+    default:
+      return data;
+  }
+}
 
 // 날짜 그룹 순서
 const dateGroupOrder: DateGroup[] = ['오늘', '어제', '지난 7일', '지난 30일', '이전'];
@@ -105,6 +155,7 @@ export function SessionList({
   onCopy,
   onExport,
   onDelete,
+  refreshTrigger,
 }: SessionListProps) {
   // 초기에는 최근 2개 그룹 자동 펼치기
   const [expandedGroups, setExpandedGroups] = useState<Set<DateGroup>>(
@@ -135,8 +186,7 @@ export function SessionList({
   ) => {
     // 함수형 업데이트를 사용하여 현재 상태 확인
     setGroupData(prev => {
-      // eslint-disable-next-line security/detect-object-injection
-      const currentData = prev[group];
+      const currentData = getGroupData(prev, group);
       
       // 이미 로딩 중이거나 더 이상 로드할 데이터가 없으면 중단
       if (currentData.isLoading || (!currentData.hasMore && page > 1)) {
@@ -144,44 +194,38 @@ export function SessionList({
       }
 
       // 로딩 시작
-      return {
-        ...prev,
-        [group]: { 
-          ...prev[group], 
-          isLoading: true 
-        },
-      };
+      return updateGroupData(prev, group, (current) => ({
+        ...current,
+        isLoading: true
+      }));
     });
 
     try {
       const response = await getSessionsByDate(
-        dateGroupMap[group],
+        getDateGroupParam(group),
         page,
         DEFAULT_PAGE_SIZE,
         searchQuery
       );
 
-      setGroupData(prev => ({
-        ...prev,
-        [group]: {
+      setGroupData(prev => {
+        const prevGroupData = getGroupData(prev, group);
+        return updateGroupData(prev, group, () => ({
           sessions: append 
-            ? [...prev[group].sessions, ...response.sessions]
+            ? [...prevGroupData.sessions, ...response.sessions]
             : response.sessions,
-          hasMore: response.sessions.length === DEFAULT_PAGE_SIZE && response.total > prev[group].sessions.length + response.sessions.length,
+          hasMore: response.sessions.length === DEFAULT_PAGE_SIZE && response.total > prevGroupData.sessions.length + response.sessions.length,
           page,
           isLoading: false,
           total: response.total,
-        },
-      }));
+        }));
+      });
     } catch (error) {
       logger.error(`Failed to load ${group} sessions:`, error);
-      setGroupData(prev => ({
-        ...prev,
-        [group]: { 
-          ...prev[group], 
-          isLoading: false 
-        },
-      }));
+      setGroupData(prev => updateGroupData(prev, group, (current) => ({
+        ...current,
+        isLoading: false
+      })));
     }
   }, [searchQuery]);
 
@@ -221,6 +265,19 @@ export function SessionList({
     }
   }, [searchQuery, loadGroupSessions]);
 
+  // refreshTrigger 변경 시 세션 목록 새로고침
+  useEffect(() => {
+    if (refreshTrigger && refreshTrigger > 0) {
+      // 펼쳐진 그룹들만 새로고침
+      setExpandedGroups(currentExpanded => {
+        currentExpanded.forEach(group => {
+          loadGroupSessions(group, 1, false);
+        });
+        return currentExpanded;
+      });
+    }
+  }, [refreshTrigger, loadGroupSessions]);
+
   // 그룹 토글
   const toggleGroup = useCallback((group: DateGroup) => {
     const isExpanded = expandedGroups.has(group);
@@ -233,8 +290,7 @@ export function SessionList({
       
       // 처음 펼칠 때만 로딩 (함수형 업데이트 사용)
       setGroupData(prev => {
-        // eslint-disable-next-line security/detect-object-injection
-        const currentData = prev[group];
+        const currentData = getGroupData(prev, group);
         if (currentData.sessions.length === 0 && !currentData.isLoading) {
           // 비동기 로딩은 useEffect에서 처리
           setTimeout(() => {
@@ -288,28 +344,34 @@ export function SessionList({
 
   // 그룹 레이블 생성
   const getGroupLabel = (group: DateGroup): string => {
-    const groupLabels: Record<DateGroup, string> = {
-      '오늘': '오늘',
-      '어제': '어제',
-      '지난 7일': '지난 7일',
-      '지난 30일': '지난 30일',
-      '이전': '이전 대화',
+    const getGroupLabelText = (g: DateGroup): string => {
+      switch (g) {
+        case '오늘':
+          return '오늘';
+        case '어제':
+          return '어제';
+        case '지난 7일':
+          return '지난 7일';
+        case '지난 30일':
+          return '지난 30일';
+        case '이전':
+          return '이전 대화';
+        default:
+          return '이전 대화';
+      }
     };
     
-    // eslint-disable-next-line security/detect-object-injection
-    const data = groupData[group];
+    const data = getGroupData(groupData, group);
     // total이 있으면 total 사용, 없으면 sessions.length 사용
     // 데이터가 로드되지 않았으면 (total === 0 && sessions.length === 0) 빈 문자열로 표시
     const count = data.total > 0 ? data.total : (data.sessions.length > 0 ? data.sessions.length : 0);
     
     // 데이터가 로드되지 않았고 로딩 중이 아닌 경우 개수 표시 안 함
     if (count === 0 && !data.isLoading && data.sessions.length === 0) {
-      // eslint-disable-next-line security/detect-object-injection
-      return groupLabels[group];
+      return getGroupLabelText(group);
     }
     
-    // eslint-disable-next-line security/detect-object-injection
-    return `${groupLabels[group]} (${count}개)`;
+    return `${getGroupLabelText(group)} (${count}개)`;
   };
 
   // 모든 그룹을 항상 표시 (데이터가 없어도 그룹은 표시)
@@ -328,8 +390,7 @@ export function SessionList({
 
         {visibleGroups.map((group) => {
           const isExpanded = expandedGroups.has(group);
-          // eslint-disable-next-line security/detect-object-injection
-          const data = groupData[group];
+          const data = getGroupData(groupData, group);
 
           return (
             <div key={group} className="mb-3">
@@ -411,8 +472,7 @@ export function SessionList({
         {/* 전체 빈 상태 - 모든 그룹이 비어있을 때 */}
         {visibleGroups.length > 0 && 
          !visibleGroups.some(group => {
-           // eslint-disable-next-line security/detect-object-injection
-           const data = groupData[group];
+           const data = getGroupData(groupData, group);
            return data.sessions.length > 0 || data.isLoading;
          }) && 
          !searchQuery && (

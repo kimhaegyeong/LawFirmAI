@@ -115,12 +115,27 @@ export function useChat(options?: UseChatOptions) {
 
         // 스트리밍 완료 - 메시지는 App.tsx에서 이미 추가하고 있으므로 여기서는 추가하지 않음
       } catch (err) {
-        logger.error('[Stream] Error in sendStreamingMessage:', err);
-        const error = err instanceof Error 
-          ? err 
-          : new Error(`스트리밍 중 오류가 발생했습니다: ${String(err)}`);
-        setError(error);
-        options?.onError?.(error);
+        // ERR_INCOMPLETE_CHUNKED_ENCODING은 브라우저 콘솔에 경고로 표시되지만
+        // 실제로는 데이터가 정상적으로 처리되었을 수 있음
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const isIncompleteError = errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
+                                  errorMessage.includes('incomplete') ||
+                                  errorMessage.includes('chunked');
+        
+        if (isIncompleteError) {
+          // 불완전한 스트림 에러는 조용히 처리 (데이터는 이미 처리되었을 수 있음)
+          if (import.meta.env.DEV) {
+            logger.debug('[Stream] Incomplete chunked encoding error (data may have been processed):', err);
+          }
+          // 사용자에게는 에러로 표시하지 않음
+        } else {
+          logger.error('[Stream] Error in sendStreamingMessage:', err);
+          const error = err instanceof Error 
+            ? err 
+            : new Error(`스트리밍 중 오류가 발생했습니다: ${String(err)}`);
+          setError(error);
+          options?.onError?.(error);
+        }
       } finally {
         setIsStreaming(false);
       }

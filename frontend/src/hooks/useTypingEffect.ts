@@ -20,18 +20,48 @@ export function useTypingEffect(
   options: UseTypingEffectOptions = {}
 ): UseTypingEffectResult {
   const { speed = 30, enabled = true } = options;
-  const [displayed, setDisplayed] = useState('');
-  const [isComplete, setIsComplete] = useState(false);
   const frameRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
   const displayedLengthRef = useRef<number>(0);
   const bufferRef = useRef<string>(buffer);
   const animationActiveRef = useRef<boolean>(false);
   const previousBufferLengthRef = useRef<number>(0);
+  const enabledRef = useRef<boolean>(enabled);
+  
+  // enabled가 false이면 즉시 전체 버퍼를 표시하도록 상태 초기화
+  const [displayed, setDisplayed] = useState(() => enabled ? '' : buffer);
+  const [isComplete, setIsComplete] = useState(() => !enabled);
 
   useEffect(() => {
     bufferRef.current = buffer;
   }, [buffer]);
+
+  useEffect(() => {
+    const wasEnabled = enabledRef.current;
+    enabledRef.current = enabled;
+    
+    // enabled가 false로 변경되면 즉시 애니메이션 중단
+    if (!enabled) {
+      // 실행 중인 애니메이션 즉시 취소
+      if (frameRef.current) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      animationActiveRef.current = false;
+      // 전체 버퍼를 즉시 표시 (동기적으로 업데이트)
+      const currentBuffer = bufferRef.current;
+      setDisplayed(currentBuffer);
+      displayedLengthRef.current = currentBuffer.length;
+      previousBufferLengthRef.current = currentBuffer.length;
+      setIsComplete(true);
+    } else if (!wasEnabled && enabled) {
+      // enabled가 true로 변경되면 타이핑 효과 재시작
+      displayedLengthRef.current = 0;
+      previousBufferLengthRef.current = 0;
+      setDisplayed('');
+      setIsComplete(false);
+    }
+  }, [enabled]);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -79,6 +109,22 @@ export function useTypingEffect(
     });
 
     const animate = (currentTime: number) => {
+      // enabled가 false로 변경되었으면 즉시 중단 (매 프레임마다 확인)
+      if (!enabledRef.current) {
+        const currentBuffer = bufferRef.current;
+        // 즉시 전체 버퍼 표시
+        setDisplayed(currentBuffer);
+        displayedLengthRef.current = currentBuffer.length;
+        previousBufferLengthRef.current = currentBuffer.length;
+        setIsComplete(true);
+        animationActiveRef.current = false;
+        if (frameRef.current) {
+          cancelAnimationFrame(frameRef.current);
+          frameRef.current = null;
+        }
+        return;
+      }
+
       const currentBuffer = bufferRef.current;
       const currentDisplayedLength = displayedLengthRef.current;
 
@@ -145,6 +191,14 @@ export function useTypingEffect(
       animationActiveRef.current = false;
     };
   }, [buffer, speed, enabled]);
+
+  // enabled가 false이면 항상 전체 버퍼 반환 (즉시 반영)
+  if (!enabled) {
+    return {
+      displayed: buffer,
+      isComplete: true,
+    };
+  }
 
   return { displayed, isComplete };
 }

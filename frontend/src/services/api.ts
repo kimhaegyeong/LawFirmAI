@@ -290,7 +290,11 @@ export function extractApiError(error: unknown): Error {
     return error;
   }
   
-  return new Error(error?.message || '알 수 없는 에러가 발생했습니다.');
+  if (error && typeof error === 'object' && 'message' in error) {
+    return new Error(String(error.message));
+  }
+  
+  return new Error('알 수 없는 에러가 발생했습니다.');
 }
 
 

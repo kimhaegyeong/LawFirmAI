@@ -71,6 +71,7 @@ export function Modal({
       aria-label="모달 닫기"
     >
       <div
+        // eslint-disable-next-line security/detect-object-injection
         className={`bg-white rounded-lg shadow-xl ${sizeClasses[size]} w-full max-h-[90vh] overflow-hidden flex flex-col`}
         role="dialog"
         aria-modal="true"

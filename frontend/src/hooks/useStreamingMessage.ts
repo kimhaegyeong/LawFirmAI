@@ -478,8 +478,6 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                         ...sourcesMetadata,
                         sources_detail: finalSourcesDetail,
                         message_id: sourcesMessageId,
-                      }, {
-                        skipSourcesDetailReconstruction: true,  // sources_by_type 직접 사용
                       });
 
                       if (import.meta.env.DEV) {

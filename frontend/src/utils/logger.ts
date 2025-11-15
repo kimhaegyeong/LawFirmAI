@@ -36,16 +36,20 @@ const emojis = {
 
 // 스타일이 적용된 로거 생성
 const createStyledLogger = (level: keyof typeof originalMethods) => {
-  return (...args: any[]) => {
+  return (...args: unknown[]) => {
     if (isDev) {
       const timestamp = new Date().toISOString();
+      // eslint-disable-next-line security/detect-object-injection
       const prefix = `%c[${timestamp}] ${emojis[level]} [${level.toUpperCase()}]`;
-      console[level === 'trace' ? 'log' : level](
+      const consoleMethod = console[level === 'trace' ? 'log' : level];
+      consoleMethod(
         prefix,
+        // eslint-disable-next-line security/detect-object-injection
         styles[level],
         ...args
       );
     } else {
+      // eslint-disable-next-line security/detect-object-injection
       originalMethods[level](...args);
     }
   };
@@ -61,25 +65,25 @@ log.error = createStyledLogger('error');
 // 카테고리별 로거 헬퍼
 export const createCategoryLogger = (category: string, color: string) => {
   return {
-    trace: (...args: any[]) => {
+    trace: (...args: unknown[]) => {
       if (isDev) {
         console.trace(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },
-    debug: (...args: any[]) => {
+    debug: (...args: unknown[]) => {
       if (isDev) {
         console.debug(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },
-    info: (...args: any[]) => {
+    info: (...args: unknown[]) => {
       if (isDev) {
         console.info(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
       }
     },
-    warn: (...args: any[]) => {
+    warn: (...args: unknown[]) => {
       console.warn(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
     },
-    error: (...args: any[]) => {
+    error: (...args: unknown[]) => {
       console.error(`%c[${category}]`, `color: ${color}; font-weight: bold;`, ...args);
     },
   };

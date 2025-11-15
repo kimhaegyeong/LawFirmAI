@@ -2,11 +2,12 @@
  * 참고자료 사이드바 컴포넌트
  * 오른쪽에서 슬라이드되는 사이드바로 참고자료 목록을 표시합니다.
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { ReferencesModalContent } from './ReferencesModalContent';
 import { ReferenceDetailView } from './ReferenceDetailView';
 import type { SourceInfo, LegalReferenceDetail } from '../../types/chat';
+import { extractLegalReferencesFromSourcesDetail, getSourcesByType, getSourcesDetailFromSourcesByType, type SourcesByType } from '../../utils/sourcesParser';
 
 interface ReferencesSidebarProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ interface ReferencesSidebarProps {
   legalReferences?: string[];
   sources?: string[];
   sourcesDetail?: SourceInfo[];
+  sourcesByType?: SourcesByType;
   initialSelectedType?: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
 }
 
@@ -22,19 +24,123 @@ export function ReferencesSidebar({
   isOpen,
   onClose,
   references = [],
-  legalReferences = [],
+  legalReferences = [],  // deprecated
   sources = [],
   sourcesDetail = [],
+  sourcesByType: propSourcesByType,
   initialSelectedType = 'all',
 }: ReferencesSidebarProps) {
   const [selectedReference, setSelectedReference] = useState<LegalReferenceDetail | null>(null);
   const [selectedSourceDetail, setSelectedSourceDetail] = useState<SourceInfo | null>(null);
 
+  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
+  const effectiveSourcesDetail = useMemo(() => {
+    if (propSourcesByType) {
+      return getSourcesDetailFromSourcesByType(propSourcesByType);
+    }
+    return sourcesDetail;
+  }, [propSourcesByType, sourcesDetail]);
+
+  // sourcesDetail에서 legal_references 추출 (deprecated용)
+  const extractedLegalRefs = useMemo(() => {
+    return extractLegalReferencesFromSourcesDetail(effectiveSourcesDetail);
+  }, [effectiveSourcesDetail]);
+  
+  // legalReferences와 extractedLegalRefs 병합 (하위 호환성)
+  const allLegalRefs = useMemo(() => {
+    return [...new Set([...legalReferences, ...extractedLegalRefs])];
+  }, [legalReferences, extractedLegalRefs]);
+
+  // totalCount 계산 - CompactReferencesBadge와 동일한 로직 사용
+  // 실제 표시되는 parsedReferences 개수와 일치하도록 함
+  const totalCount = useMemo(() => {
+    const seen = new Set<string>();
+    const all: string[] = [];
+    
+    // effectiveSourcesDetail 우선 처리 (CompactReferencesBadge와 동일한 키 생성 로직)
+    effectiveSourcesDetail.forEach((detail, idx) => {
+      let title = '';
+      
+      if (detail.type === 'statute_article') {
+        const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
+        title = lawName || '법령';
+      } else if (detail.type === 'case_paragraph') {
+        const caseName = detail.case_name || 
+                        detail.metadata?.case_name ||
+                        detail.metadata?.casenames || 
+                        detail.name || '';
+        const caseNumber = detail.case_number || 
+                          detail.metadata?.case_number ||
+                          detail.metadata?.doc_id || '';
+        title = (caseName || caseNumber || '판례') as string;
+      } else if (detail.type === 'decision_paragraph') {
+        const org = detail.org || detail.metadata?.org || '';
+        const decisionNumber = detail.decision_number || 
+                              detail.metadata?.decision_number ||
+                              detail.metadata?.doc_id || '';
+        title = (org || decisionNumber || '결정례') as string;
+      } else if (detail.type === 'interpretation_paragraph') {
+        const titleText = detail.title || detail.metadata?.title || detail.name || '';
+        title = titleText || '해석례';
+      } else {
+        title = detail.name || detail.content || '참고자료';
+      }
+      
+      // CompactReferencesBadge와 동일한 키 생성 로직
+      const key = detail.case_number || 
+                 detail.article_no ||
+                 detail.decision_number ||
+                 detail.interpretation_number ||
+                 detail.metadata?.doc_id || 
+                 title || 
+                 `detail-${idx}`;
+      
+      if (!seen.has(key)) {
+        seen.add(key);
+        all.push(key);
+      }
+    });
+    
+    // legalReferences 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
+    allLegalRefs.forEach(ref => {
+      const matched = effectiveSourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(ref) || ref.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(ref)) {
+        seen.add(ref);
+        all.push(ref);
+      }
+    });
+    
+    // sources 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
+    sources.forEach(src => {
+      const matched = effectiveSourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(src) || src.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(src)) {
+        seen.add(src);
+        all.push(src);
+      }
+    });
+    
+    // references 처리
+    references.forEach(ref => {
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        all.push(ref);
+      }
+    });
+    
+    return all.length;
+  }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
+
   if (!isOpen) {
     return null;
   }
-
-  const totalCount = references.length + legalReferences.length + sources.length + sourcesDetail.length;
 
   // 참고자료 클릭 핸들러
   const handleReferenceClick = (reference: LegalReferenceDetail, sourceDetail?: SourceInfo) => {
@@ -52,7 +158,7 @@ export function ReferencesSidebar({
     <>
       {/* 사이드바 */}
       <div
-        className={`fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
+        className={`fixed right-0 top-0 h-full w-full sm:max-w-md bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         role="dialog"
@@ -88,9 +194,10 @@ export function ReferencesSidebar({
               <div className="flex-1 overflow-y-auto p-4">
                 <ReferencesModalContent
                   references={references}
-                  legalReferences={legalReferences}
+                  legalReferences={allLegalRefs}  // 병합된 legalReferences 사용
                   sources={sources}
-                  sourcesDetail={sourcesDetail}
+                  sourcesDetail={effectiveSourcesDetail}
+                  sourcesByType={propSourcesByType}
                   initialSelectedType={initialSelectedType}
                   onReferenceClick={handleReferenceClick}
                 />

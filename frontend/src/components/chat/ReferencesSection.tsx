@@ -2,8 +2,10 @@
  * 참고자료 섹션 컴포넌트
  */
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Modal } from '../common/Modal';
+import type { SourceInfo } from '../../types/chat';
+import { getSourcesByType, extractLegalReferencesFromSourcesDetail } from '../../utils/sourcesParser';
 
 interface Reference {
   id: string;
@@ -15,38 +17,148 @@ interface Reference {
 
 interface ReferencesSectionProps {
   references?: string[];
-  legalReferences?: string[];
-  sources?: string[];
+  legalReferences?: string[];  // deprecated
+  sources?: string[];  // deprecated
+  sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
+  sourcesByType?: SourcesByType;  // 우선 사용
 }
 
 export function ReferencesSection({
   references = [],
-  legalReferences = [],
+  legalReferences = [],  // deprecated
   sources = [],
+  sourcesDetail = [],
+  sourcesByType: propSourcesByType,
 }: ReferencesSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [selectedReference, setSelectedReference] = useState<Reference | null>(null);
 
-  const allReferences = [
-    ...legalReferences.map((ref, idx) => ({
-      id: `legal-${idx}`,
-      type: 'law' as const,
-      title: `법령: ${ref}`,
-      content: ref,
-    })),
-    ...sources.map((src, idx) => ({
-      id: `source-${idx}`,
-      type: 'case' as const,
-      title: `출처: ${src}`,
-      content: src,
-    })),
-    ...references.map((ref, idx) => ({
-      id: `ref-${idx}`,
-      type: 'regulation' as const,
-      title: `참고: ${ref}`,
-      content: ref,
-    })),
-  ];
+  // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
+  const effectiveSourcesDetail = useMemo(() => {
+    if (propSourcesByType) {
+      return getSourcesDetailFromSourcesByType(propSourcesByType);
+    }
+    return sourcesDetail;
+  }, [propSourcesByType, sourcesDetail]);
+
+  // sourcesDetail에서 legal_references 추출 (deprecated용)
+  const extractedLegalRefs = useMemo(() => {
+    return extractLegalReferencesFromSourcesDetail(effectiveSourcesDetail);
+  }, [effectiveSourcesDetail]);
+  
+  // legalReferences와 extractedLegalRefs 병합 (하위 호환성)
+  const allLegalRefs = useMemo(() => {
+    return [...new Set([...legalReferences, ...extractedLegalRefs])];
+  }, [legalReferences, extractedLegalRefs]);
+  
+  // sourcesDetail을 Reference로 변환
+  const sourcesDetailReferences = useMemo(() => {
+    return effectiveSourcesDetail.map((detail, idx): Reference => {
+      let type: 'law' | 'case' | 'regulation' = 'regulation';
+      let title = '';
+      let content = detail.content || detail.name || '';
+      
+      if (detail.type === 'statute_article') {
+        type = 'law';
+        const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
+        const articleNo = detail.article_no || detail.metadata?.article_no || '';
+        title = `법령: ${lawName}${articleNo ? ` 제${articleNo}조` : ''}`;
+      } else if (detail.type === 'case_paragraph') {
+        type = 'case';
+        const caseName = detail.case_name || detail.metadata?.case_name || detail.name || '';
+        const caseNumber = detail.case_number || detail.metadata?.case_number || '';
+        title = `판례: ${caseName}${caseNumber ? ` (${caseNumber})` : ''}`;
+      } else if (detail.type === 'decision_paragraph') {
+        type = 'case';
+        const org = detail.org || detail.metadata?.org || '';
+        const decisionNumber = detail.decision_number || detail.metadata?.decision_number || '';
+        title = `결정례: ${org}${decisionNumber ? ` (${decisionNumber})` : ''}`;
+      } else if (detail.type === 'interpretation_paragraph') {
+        type = 'case';
+        const titleText = detail.title || detail.metadata?.title || detail.name || '';
+        const org = detail.org || detail.metadata?.org || '';
+        title = `해석례: ${titleText}${org ? ` (${org})` : ''}`;
+      } else {
+        title = `참고: ${detail.name || '참고자료'}`;
+      }
+      
+      return {
+        id: `detail-${idx}`,
+        type,
+        title,
+        content,
+        link: detail.url,
+      };
+    });
+  }, [effectiveSourcesDetail]);
+
+  const allReferences: Reference[] = useMemo(() => {
+    const seen = new Set<string>();
+    const result: Reference[] = [];
+    
+    // sourcesDetail 우선 처리
+    sourcesDetailReferences.forEach(ref => {
+      const key = ref.id;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(ref);
+      }
+    });
+    
+    // legal_references 처리 (sources_detail과 중복 제외)
+    allLegalRefs.forEach((ref, idx) => {
+      const matched = sourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(ref) || ref.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(ref)) {
+        seen.add(ref);
+        result.push({
+          id: `legal-${idx}`,
+          type: 'law' as const,
+          title: `법령: ${ref}`,
+          content: ref,
+          link: undefined,
+        });
+      }
+    });
+    
+    // sources 처리 (sources_detail과 중복 제외)
+    sources.forEach((src, idx) => {
+      const matched = sourcesDetail.find(detail => {
+        const detailName = detail.name || detail.content || '';
+        return detailName.includes(src) || src.includes(detailName);
+      });
+      
+      if (!matched && !seen.has(src)) {
+        seen.add(src);
+        result.push({
+          id: `source-${idx}`,
+          type: 'case' as const,
+          title: `출처: ${src}`,
+          content: src,
+          link: undefined,
+        });
+      }
+    });
+    
+    // references 처리
+    references.forEach((ref, idx) => {
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        result.push({
+          id: `ref-${idx}`,
+          type: 'regulation' as const,
+          title: `참고: ${ref}`,
+          content: ref,
+          link: undefined,
+        });
+      }
+    });
+    
+    return result;
+  }, [sourcesDetailReferences, allLegalRefs, sources, references, sourcesDetail]);
 
   if (allReferences.length === 0) {
     return null;

@@ -16,6 +16,7 @@ import type { UserInfo } from '../types/auth';
 // 모듈 레벨에서 전역 호출 추적 (React StrictMode 대응)
 let globalLoadingPromise: Promise<UserInfo | null> | null = null;
 let globalHasLoaded = false;
+let globalInitialMountStarted = false; // 초기 마운트 시작 여부 추적
 
 export function useAuth() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -42,6 +43,18 @@ export function useAuth() {
    * 사용자 정보 조회
    */
   const loadUser = useCallback(async () => {
+    // 전역적으로 이미 로드되었으면 즉시 스킵 (가장 먼저 체크)
+    if (globalHasLoaded) {
+      logger.debug('loadUser: User already loaded globally, skipping duplicate call');
+      // 이미 로드된 사용자 정보가 있으면 상태 동기화
+      if (userRef.current) {
+        setUser(userRef.current);
+        setIsAuthenticated(isAuthenticatedRef.current);
+        hasLoadedUser.current = true;
+      }
+      return;
+    }
+
     // 전역 로딩 중이면 기존 Promise 반환
     if (globalLoadingPromise) {
       logger.debug('loadUser: Global loading in progress, waiting for existing call');
@@ -70,8 +83,8 @@ export function useAuth() {
     }
 
     // 사용자 정보가 이미 로드되었고 인증 상태가 유지되면 다시 호출하지 않음
-    if (globalHasLoaded && hasLoadedUser.current && userRef.current && isAuthenticatedRef.current) {
-      logger.debug('loadUser: User already loaded globally, skipping duplicate call');
+    if (hasLoadedUser.current && userRef.current && isAuthenticatedRef.current) {
+      logger.debug('loadUser: User already loaded, skipping duplicate call');
       return;
     }
 
@@ -83,43 +96,52 @@ export function useAuth() {
       return;
     }
 
+    // 전역 로딩 플래그를 먼저 설정하여 중복 호출 방지
     isLoadingUser.current = true;
     setIsLoading(true);
     setError(null);
 
-    // 전역 Promise 생성
-    globalLoadingPromise = (async () => {
-      try {
-        const userInfo = await getCurrentUser();
-        globalHasLoaded = true;
-        return userInfo;
-      } catch (err) {
-        globalHasLoaded = false;
-        throw err;
-      } finally {
-        globalLoadingPromise = null;
-      }
-    })();
+    // 전역 Promise 생성 (동기적으로 설정하여 경쟁 조건 방지)
+    if (!globalLoadingPromise) {
+      globalLoadingPromise = (async () => {
+        try {
+          const userInfo = await getCurrentUser();
+          globalHasLoaded = true;
+          return userInfo;
+        } catch (err) {
+          globalHasLoaded = false;
+          throw err;
+        } finally {
+          globalLoadingPromise = null;
+        }
+      })();
+    }
 
     try {
       const userInfo = await globalLoadingPromise;
-      setUser(userInfo);
-      setIsAuthenticated(userInfo.authenticated);
-      hasLoadedUser.current = true;
-      
-      // handleCallback이 실행 중이면 토큰을 삭제하지 않음
-      if (!userInfo.authenticated && !isHandlingCallback.current) {
-        logger.warn('User info indicates not authenticated, clearing tokens');
-        logoutService();
-        hasLoadedUser.current = false;
-        globalHasLoaded = false;
-      } else if (!userInfo.authenticated && isHandlingCallback.current) {
-        logger.debug('loadUser: Callback handling in progress, not clearing tokens');
+      if (userInfo) {
+        setUser(userInfo);
+        setIsAuthenticated(userInfo.authenticated);
+        hasLoadedUser.current = true;
+        
+        // handleCallback이 실행 중이면 토큰을 삭제하지 않음
+        if (!userInfo.authenticated && !isHandlingCallback.current) {
+          logger.warn('User info indicates not authenticated, clearing tokens');
+          logoutService();
+          hasLoadedUser.current = false;
+          globalHasLoaded = false;
+        } else if (!userInfo.authenticated && isHandlingCallback.current) {
+          logger.debug('loadUser: Callback handling in progress, not clearing tokens');
+        }
+      } else {
+        setIsAuthenticated(false);
+        hasLoadedUser.current = true;
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error('사용자 정보를 불러올 수 없습니다.');
       logger.error('Failed to load user:', error);
       
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const axiosError = err as any;
       hasLoadedUser.current = false;
       globalHasLoaded = false;
@@ -221,7 +243,7 @@ export function useAuth() {
       }
       
       // 전역 로딩 중이면 기다림
-      let userInfo: UserInfo;
+      let userInfo: UserInfo | null;
       if (globalLoadingPromise) {
         logger.debug('handleCallback: Global loading in progress, waiting for existing call');
         const result = await globalLoadingPromise;
@@ -244,6 +266,10 @@ export function useAuth() {
           }
         })();
         userInfo = await globalLoadingPromise;
+      }
+      
+      if (!userInfo) {
+        throw new Error('사용자 정보를 불러올 수 없습니다.');
       }
       
       logger.info('User info from /auth/me:', { authenticated: userInfo.authenticated, userId: userInfo.user_id });
@@ -292,6 +318,7 @@ export function useAuth() {
     hasLoadedUser.current = false;
     globalHasLoaded = false;
     globalLoadingPromise = null;
+    globalInitialMountStarted = false;
     isInitialMountComplete.current = false;
     // 로그아웃 후 페이지 새로고침하여 상태 초기화
     window.location.href = '/';
@@ -328,11 +355,70 @@ export function useAuth() {
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      // 전역적으로 이미 로드되었으면 스킵
-      if (globalHasLoaded && hasLoadedUser.current) {
+      
+      // 전역적으로 이미 초기 마운트가 시작되었으면 스킵 (StrictMode 대응)
+      if (globalInitialMountStarted) {
+        logger.debug('Initial mount: Already started globally, skipping duplicate mount');
+        // 이미 로딩 중이거나 로드 완료된 경우 상태 동기화
+        if (globalLoadingPromise) {
+          globalLoadingPromise.then((userInfo) => {
+            if (userInfo) {
+              setUser(userInfo);
+              setIsAuthenticated(userInfo.authenticated);
+              hasLoadedUser.current = true;
+            }
+            setIsLoading(false);
+            isInitialMountComplete.current = true;
+          }).catch(() => {
+            setIsLoading(false);
+            isInitialMountComplete.current = true;
+          });
+        } else if (globalHasLoaded) {
+          setIsLoading(false);
+          isInitialMountComplete.current = true;
+          if (userRef.current) {
+            setUser(userRef.current);
+            setIsAuthenticated(isAuthenticatedRef.current);
+            hasLoadedUser.current = true;
+          }
+        } else {
+          setIsLoading(false);
+          isInitialMountComplete.current = true;
+        }
+        return;
+      }
+      
+      // 전역 초기 마운트 플래그 설정
+      globalInitialMountStarted = true;
+      
+      // 전역적으로 이미 로드되었으면 스킵 (가장 먼저 체크)
+      if (globalHasLoaded) {
         logger.debug('Initial mount: User already loaded globally, skipping');
         setIsLoading(false);
         isInitialMountComplete.current = true;
+        // 이미 로드된 사용자 정보가 있으면 상태 동기화
+        if (userRef.current) {
+          setUser(userRef.current);
+          setIsAuthenticated(isAuthenticatedRef.current);
+          hasLoadedUser.current = true;
+        }
+        return;
+      }
+      // 이미 로딩 중이면 스킵
+      if (globalLoadingPromise) {
+        logger.debug('Initial mount: Already loading, waiting for existing call');
+        globalLoadingPromise.then((userInfo) => {
+          if (userInfo) {
+            setUser(userInfo);
+            setIsAuthenticated(userInfo.authenticated);
+            hasLoadedUser.current = true;
+          }
+          setIsLoading(false);
+          isInitialMountComplete.current = true;
+        }).catch(() => {
+          setIsLoading(false);
+          isInitialMountComplete.current = true;
+        });
         return;
       }
       if (checkAuthenticated()) {

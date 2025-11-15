@@ -92,9 +92,15 @@ export interface ChatMessage {
   timestamp: Date;
   attachments?: FileAttachment[];
   metadata?: {
-    sources?: string[];
-    sources_detail?: SourceInfo[];  // 신규 필드
-    legal_references?: string[];
+    sources_by_type?: {
+      statute_article: SourceInfo[];
+      case_paragraph: SourceInfo[];
+      decision_paragraph: SourceInfo[];
+      interpretation_paragraph: SourceInfo[];
+    };  // 우선 사용 필드
+    sources?: string[];  // deprecated
+    sources_detail?: SourceInfo[];  // deprecated, 하위 호환성
+    legal_references?: string[];  // deprecated
     confidence?: number;
     processing_steps?: string[];
     query_type?: string;

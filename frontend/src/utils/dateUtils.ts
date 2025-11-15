@@ -125,7 +125,23 @@ export function groupSessionsByDate(sessions: Session[]): DateGrouped[] {
     }
     
     const group = getDateGroup(dateStr);
-    grouped[group].push(session);
+    switch (group) {
+      case '오늘':
+        grouped['오늘'].push(session);
+        break;
+      case '어제':
+        grouped['어제'].push(session);
+        break;
+      case '지난 7일':
+        grouped['지난 7일'].push(session);
+        break;
+      case '지난 30일':
+        grouped['지난 30일'].push(session);
+        break;
+      case '이전':
+        grouped['이전'].push(session);
+        break;
+    }
   });
   
   // 순서대로 반환
