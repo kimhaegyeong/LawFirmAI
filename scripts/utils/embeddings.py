@@ -1,5 +1,6 @@
 from typing import List
 import os
+import threading
 
 import numpy as np
 import torch
@@ -7,17 +8,33 @@ from transformers import AutoModel, AutoTokenizer
 
 
 class SentenceEmbedder:
+    # 클래스 변수: 스레드 설정이 이미 완료되었는지 추적
+    _threads_configured = False
+    _threads_lock = threading.Lock()
+    
     def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
         # PyTorch 스레드 수 최대화 (시스템 사양에 맞게)
+        # 이미 설정된 경우 재설정 시도하지 않음 (스레드 설정 오류 방지)
         cpu_count = os.cpu_count()
         if cpu_count:
-            torch.set_num_threads(cpu_count)
-            torch.set_num_interop_threads(cpu_count)
-            
-            # BLAS 라이브러리 최적화
-            os.environ['MKL_NUM_THREADS'] = str(cpu_count)
-            os.environ['OMP_NUM_THREADS'] = str(cpu_count)
-            os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
+            # 스레드 설정은 한 번만 수행 (이미 설정된 경우 무시)
+            with SentenceEmbedder._threads_lock:
+                if not SentenceEmbedder._threads_configured:
+                    try:
+                        torch.set_num_threads(cpu_count)
+                        torch.set_num_interop_threads(cpu_count)
+                        SentenceEmbedder._threads_configured = True
+                    except RuntimeError as e:
+                        # 이미 스레드가 설정된 경우 무시
+                        if "cannot set number of interop threads" in str(e).lower():
+                            SentenceEmbedder._threads_configured = True
+                        else:
+                            raise
+                
+                # 환경 변수는 항상 설정 가능 (이미 설정되어 있어도 덮어쓰기 가능)
+                os.environ['MKL_NUM_THREADS'] = str(cpu_count)
+                os.environ['OMP_NUM_THREADS'] = str(cpu_count)
+                os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
         
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
