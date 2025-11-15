@@ -566,8 +566,6 @@ export async function* sendStreamingChatMessage(
           }
         }
         
-        // 스트림이 완료되지 않았을 수 있으므로 경고만 출력
-        // streamCompleted는 다른 곳에서 사용되지 않으므로 할당 제거
         if (import.meta.env.DEV) {
           logger.debug('[SSE] Stream ended with incomplete error, but data was processed');
         }

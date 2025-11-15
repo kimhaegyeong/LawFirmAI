@@ -55,12 +55,15 @@ describe('getSourcesByType', () => {
   });
   
   it('should filter out unknown types', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const unknownTypeSource: SourceInfo = { type: 'unknown_type' as any, name: '알 수 없는 타입' };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const emptyTypeSource: SourceInfo = { type: '' as any, name: '타입 없음' };
+    
     const sourcesDetail: SourceInfo[] = [
       { name: '민법', type: 'statute_article', statute_name: '민법' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { type: 'unknown_type' as any, name: '알 수 없는 타입' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { type: '' as any, name: '타입 없음' },
+      unknownTypeSource,
+      emptyTypeSource,
     ];
     
     const result = getSourcesByType(sourcesDetail);

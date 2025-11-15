@@ -37,18 +37,18 @@ export interface ParsedSources {
 /**
  * 빈 필드를 정리하는 유틸리티 함수
  */
+/* eslint-disable security/detect-object-injection */
 function cleanEmptyFields(obj: Record<string, unknown>): Record<string, unknown> {
   const cleaned: Record<string, unknown> = {};
   Object.keys(obj).forEach((key) => {
-    // eslint-disable-next-line security/detect-object-injection
     const value = obj[key];
     if (value !== '' && value !== null && value !== undefined) {
-      // eslint-disable-next-line security/detect-object-injection
       cleaned[key] = value;
     }
   });
   return cleaned;
 }
+/* eslint-enable security/detect-object-injection */
 
 /**
  * 판례 URL 생성 (doc_id 형식 처리 개선)
