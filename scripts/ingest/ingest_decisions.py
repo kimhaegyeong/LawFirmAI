@@ -13,7 +13,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts.utils.text_chunker import chunk_paragraphs
+from scripts.utils.chunking.factory import ChunkingFactory
 from scripts.utils.embeddings import SentenceEmbedder
+from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
@@ -83,28 +85,84 @@ def insert_chunks_and_embeddings(
     paragraphs: List[str],
     embedder: SentenceEmbedder,
     batch: int = 64,
+    chunking_strategy: str = "standard",
+    query_type: Optional[str] = None,
+    replace_existing: bool = True,
 ):
-    chunks = chunk_paragraphs(paragraphs)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # ?????? ?? ????
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    version_manager = EmbeddingVersionManager(db_path)
+    
+    # ?? ?? ?? ?? ??
+    active_version = version_manager.get_active_version(chunking_strategy)
+    if not active_version:
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        version_name = f"v1.0.0-{chunking_strategy}"
+        version_id = version_manager.register_version(
+            version_name=version_name,
+            chunking_strategy=chunking_strategy,
+            model_name=model_name,
+            description=f"{chunking_strategy} ?? ??",
+            set_active=True
+        )
+    else:
+        version_id = active_version['id']
+    
+    # ?? ?? ?? (?? ?? ??)
+    if replace_existing:
+        deleted_chunks, deleted_embeddings = version_manager.delete_chunks_by_version(
+            source_type="decision_paragraph",
+            source_id=decision_id
+        )
+        if deleted_chunks > 0:
+            logger.info(f"Deleted {deleted_chunks} existing chunks for decision_id={decision_id}")
+    
+    # ?? ?? ??
+    strategy = ChunkingFactory.create_strategy(
+        strategy_name=chunking_strategy,
+        query_type=query_type
+    )
+    
+    # ?? ??
+    chunk_results = strategy.chunk(
+        content=paragraphs,
+        source_type="decision_paragraph",
+        source_id=decision_id
+    )
+    
     rows_to_embed: List[Dict] = []
-    for ch in chunks:
+    for chunk_result in chunk_results:
+        metadata = chunk_result.metadata
         cur = conn.execute(
             """
-            INSERT INTO text_chunks(source_type, source_id, level, chunk_index, start_char, end_char, overlap_chars, text, token_count, meta)
-            VALUES(?,?,?,?,?,?,?,?,?,NULL)
+            INSERT INTO text_chunks(
+                source_type, source_id, level, chunk_index, 
+                start_char, end_char, overlap_chars, text, token_count, meta,
+                chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)
             """,
             (
                 "decision_paragraph",
                 decision_id,
                 "paragraph",
-                ch.get("chunk_index", 0),
+                chunk_result.chunk_index,
                 None,
                 None,
                 None,
-                ch.get("text"),
+                chunk_result.text,
                 None,
+                metadata.get("chunking_strategy"),
+                metadata.get("chunk_size_category"),
+                metadata.get("chunk_group_id"),
+                metadata.get("query_type"),
+                metadata.get("original_document_id"),
+                version_id
             ),
         )
-        rows_to_embed.append({"id": cur.lastrowid, "text": ch.get("text", "")})
+        rows_to_embed.append({"id": cur.lastrowid, "text": chunk_result.text})
 
     texts = [r["text"] for r in rows_to_embed]
     if not texts:
@@ -112,8 +170,8 @@ def insert_chunks_and_embeddings(
     vecs = embedder.encode(texts, batch_size=batch)
     for r, v in zip(rows_to_embed, vecs):
         conn.execute(
-            "INSERT INTO embeddings(chunk_id, model, dim, vector) VALUES(?,?,?,?)",
-            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes()),
+            "INSERT INTO embeddings(chunk_id, model, dim, vector, version_id) VALUES(?,?,?,?,?)",
+            (r["id"], embedder.model.name_or_path, vecs.shape[1], v.tobytes(), version_id),
         )
 
 
