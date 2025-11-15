@@ -8,11 +8,16 @@ export default {
     extend: {
       animation: {
         'blink': 'blink 1s infinite',
+        'fadeIn': 'fadeIn 0.2s ease-in-out forwards',
       },
       keyframes: {
         blink: {
           '0%, 50%': { opacity: '1' },
           '51%, 100%': { opacity: '0' },
+        },
+        fadeIn: {
+          '0%': { opacity: '0', transform: 'translateY(-4px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
         },
       },
     },
