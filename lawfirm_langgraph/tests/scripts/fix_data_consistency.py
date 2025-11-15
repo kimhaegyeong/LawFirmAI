@@ -178,19 +178,21 @@ def fix_metadata_fields(db_path: str, dry_run: bool = True) -> Dict[str, Any]:
             logger.info("✅ 모든 case_paragraph 청크에 메타데이터가 있습니다.")
             return stats
         
-        # case_paragraphs 테이블에서 메타데이터 조회 및 업데이트
+        # case_paragraphs와 cases 테이블을 JOIN하여 메타데이터 조회
         cursor.execute("""
             SELECT 
                 tc.id as chunk_id,
                 tc.source_id,
-                cp.doc_id,
-                cp.casenames,
-                cp.court
+                c.doc_id,
+                c.casenames,
+                c.court
             FROM text_chunks tc
             LEFT JOIN case_paragraphs cp ON tc.source_id = cp.id
+            LEFT JOIN cases c ON cp.case_id = c.id
             WHERE tc.source_type = 'case_paragraph'
             AND (tc.meta IS NULL OR tc.meta = '')
             AND cp.id IS NOT NULL
+            AND c.id IS NOT NULL
             LIMIT 100
         """)
         
