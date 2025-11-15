@@ -339,16 +339,41 @@ async def run_query_test(query: str):
             # 타입별 분포 확인
             type_counts = {}
             statute_articles = []
+            version_counts = {}
+            scores = []
             for doc in retrieved_docs:
                 if isinstance(doc, dict):
                     doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
                     type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
                     if doc_type == "statute_article":
                         statute_articles.append(doc)
+                    
+                    # 버전 정보 수집
+                    version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
+                    if version_id:
+                        version_counts[version_id] = version_counts.get(version_id, 0) + 1
+                    
+                    # 유사도 점수 수집
+                    score = doc.get("score") or doc.get("similarity") or doc.get("relevance_score")
+                    if score is not None:
+                        scores.append(float(score))
             
             logger.info(f"   타입 분포: {type_counts}")
             if statute_articles:
                 logger.info(f"   statute_article 타입 문서: {len(statute_articles)}개")
+            
+            # 버전 분포 출력
+            if version_counts:
+                logger.info(f"   📊 Embedding 버전 분포: {version_counts}")
+            else:
+                logger.warning("   ⚠️  검색 결과에 embedding_version_id가 없습니다!")
+            
+            # 유사도 점수 분포 분석
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                max_score = max(scores)
+                min_score = min(scores)
+                logger.info(f"   📊 유사도 점수 분포: 평균={avg_score:.3f}, 최대={max_score:.3f}, 최소={min_score:.3f}")
             
             for i, doc in enumerate(retrieved_docs[:10], 1):
                 if isinstance(doc, dict):
@@ -372,6 +397,12 @@ async def run_query_test(query: str):
                     # 상세 정보 (선택적)
                     if doc.get("score"):
                         logger.info(f"      - 점수: {doc.get('score'):.4f}")
+                    
+                    # 버전 정보 출력
+                    version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
+                    if version_id:
+                        logger.info(f"      - embedding_version_id: {version_id}")
+                    
                     if doc.get("metadata") and doc_type != "statute_article":
                         logger.info(f"      - 메타데이터: {doc.get('metadata')}")
                 else:

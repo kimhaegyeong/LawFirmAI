@@ -263,3 +263,120 @@ def setup_test_environment(monkeypatch):
     langgraph_logger.setLevel(log_level)
     langgraph_logger.propagate = True
 
+
+@pytest.fixture
+def workflow_config():
+    """EnhancedLegalQuestionWorkflow용 설정 픽스처"""
+    from lawfirm_langgraph.config.langgraph_config import LangGraphConfig, CheckpointStorageType
+    
+    return LangGraphConfig(
+        enable_checkpoint=True,
+        checkpoint_storage=CheckpointStorageType.MEMORY,
+        langgraph_enabled=True,
+        use_agentic_mode=False,
+        llm_provider="google",
+        google_model="gemini-2.5-flash-lite",
+        google_api_key="test_api_key",
+        max_iterations=10,
+        recursion_limit=25,
+    )
+
+
+@pytest.fixture
+def workflow_instance(workflow_config):
+    """EnhancedLegalQuestionWorkflow 인스턴스 픽스처"""
+    with patch('core.services.semantic_search_engine_v2.SemanticSearchEngineV2'):
+        with patch('core.services.multi_turn_handler.MultiTurnQuestionHandler'):
+            with patch('core.services.ai_keyword_generator.AIKeywordGenerator'):
+                with patch('core.agents.handlers.direct_answer_handler.DirectAnswerHandler'):
+                    with patch('core.agents.handlers.classification_handler.ClassificationHandler'):
+                        with patch('core.agents.handlers.answer_generator.AnswerGenerator'):
+                            with patch('core.agents.handlers.answer_formatter.AnswerFormatterHandler'):
+                                from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+                                return EnhancedLegalQuestionWorkflow(workflow_config)
+
+
+@pytest.fixture
+def workflow_state():
+    """표준 워크플로우 State 픽스처"""
+    return {
+        "input": {
+            "query": "전세금 반환 보증에 대해 설명해주세요",
+            "session_id": "test_session_123"
+        },
+        "query": "전세금 반환 보증에 대해 설명해주세요",
+        "query_type": "legal_advice",
+        "query_complexity": "moderate",
+        "needs_search": True,
+        "retrieved_docs": [
+            {
+                "content": "전세금 반환 보증 관련 내용입니다.",
+                "type": "statute_article",
+                "source": "주택임대차보호법",
+                "relevance_score": 0.9,
+                "source_type": "statute_article",
+                "source_id": "test-1"
+            }
+        ],
+        "semantic_results": [],
+        "keyword_results": [],
+        "semantic_count": 0,
+        "keyword_count": 0,
+        "search_params": {},
+        "extracted_keywords": ["전세금", "반환", "보증"],
+        "legal_field": "부동산법",
+        "legal_domain": "real_estate",
+        "confidence": 0.85,
+        "metadata": {},
+        "common": {
+            "metadata": {}
+        },
+        "search": {},
+        "processing_steps": [],
+        "errors": []
+    }
+
+
+@pytest.fixture
+def simple_query_state():
+    """간단한 질문용 State 픽스처"""
+    return {
+        "input": {
+            "query": "계약이란 무엇인가요?",
+            "session_id": "test_session_456"
+        },
+        "query": "계약이란 무엇인가요?",
+        "query_type": "definition",
+        "query_complexity": "simple",
+        "needs_search": False,
+        "processing_steps": [],
+        "errors": [],
+        "common": {
+            "metadata": {}
+        }
+    }
+
+
+@pytest.fixture
+def complex_query_state():
+    """복잡한 질문용 State 픽스처"""
+    return {
+        "input": {
+            "query": "전세 계약 시 발생할 수 있는 법적 분쟁과 해결 방법은?",
+            "session_id": "test_session_789"
+        },
+        "query": "전세 계약 시 발생할 수 있는 법적 분쟁과 해결 방법은?",
+        "query_type": "legal_advice",
+        "query_complexity": "complex",
+        "needs_search": True,
+        "retrieved_docs": [],
+        "semantic_results": [],
+        "keyword_results": [],
+        "extracted_keywords": ["전세", "계약", "법적", "분쟁"],
+        "legal_field": "부동산법",
+        "processing_steps": [],
+        "errors": [],
+        "common": {
+            "metadata": {}
+        }
+    }
