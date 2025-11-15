@@ -54,7 +54,11 @@
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
     "typescript": "^5.2.2",
-    "vite": "^5.0.0",
-    "vitest": "^1.6.1"
+    "vite": "^5.4.21",
+    "vitest": "^1.6.1",
+    "esbuild": "^0.27.0"
+  },
+  "overrides": {
+    "esbuild": "^0.27.0"
   }
 }
