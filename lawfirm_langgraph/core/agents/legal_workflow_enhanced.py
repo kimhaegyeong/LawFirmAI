@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 import time
@@ -282,6 +283,9 @@ class EnhancedLegalQuestionWorkflow:
 
         # 개선: 로거를 명시적으로 초기화하고 핸들러 보장
         self.logger = logging.getLogger(__name__)
+        
+        # 법률 용어 캐시 (성능 최적화)
+        self._legal_terms_cache = {}  # {keyword: [terms]}
 
         # 로거 레벨 설정 (명시적으로 설정)
         self.logger.setLevel(logging.DEBUG)
@@ -755,13 +759,36 @@ class EnhancedLegalQuestionWorkflow:
                 domain = self._get_domain_from_query_type(query_type_str)
 
                 try:
-                    expansion_result = asyncio.run(
-                        self.ai_keyword_generator.expand_domain_keywords(
-                            domain=domain,
-                            base_keywords=keywords,
-                            target_count=30
+                    # 현재 실행 중인 이벤트 루프 확인
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # 이미 실행 중인 루프가 있는 경우, 새 스레드에서 실행
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(
+                                lambda: asyncio.run(
+                                    asyncio.wait_for(
+                                        self.ai_keyword_generator.expand_domain_keywords(
+                                            domain=domain,
+                                            base_keywords=keywords,
+                                            target_count=30
+                                        ),
+                                        timeout=10.0
+                                    )
+                                )
+                            )
+                            expansion_result = future.result(timeout=15.0)
+                    except RuntimeError:
+                        # 실행 중인 루프가 없는 경우, 직접 실행
+                        expansion_result = asyncio.run(
+                            asyncio.wait_for(
+                                self.ai_keyword_generator.expand_domain_keywords(
+                                    domain=domain,
+                                    base_keywords=keywords,
+                                    target_count=30
+                                ),
+                                timeout=10.0
+                            )
                         )
-                    )
 
                     if expansion_result.api_call_success:
                         all_keywords = keywords + expansion_result.expanded_keywords
@@ -795,6 +822,10 @@ class EnhancedLegalQuestionWorkflow:
                         self.logger.info(
                             f"⚠️ [KEYWORD EXPANSION] Used fallback: {len(keywords)} → {len(all_keywords)} keywords"
                         )
+                except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as e:
+                    self.logger.warning(f"AI keyword expansion timeout (10s): {e}")
+                except asyncio.CancelledError as e:
+                    self.logger.warning(f"AI keyword expansion cancelled: {e}")
                 except Exception as e:
                     self.logger.warning(f"AI keyword expansion failed: {e}")
 
@@ -8120,41 +8151,201 @@ class EnhancedLegalQuestionWorkflow:
             invalid_docs_count = 0
             # 검색 타입별 다른 관련도 기준 적용
             # 키워드 검색 결과는 관련도가 낮아도 키워드 매칭이 있으면 포함
-            min_relevance_score_semantic = 0.3  # 의미적 검색: 0.3 이상
-            min_relevance_score_keyword = 0.15  # 키워드 검색: 0.15 이상 (키워드 매칭 시)
+            min_relevance_score_semantic = 0.4  # 의미적 검색: 0.4 이상 (0.3 -> 0.4로 상향 조정)
+            min_relevance_score_keyword = 0.25  # 키워드 검색: 0.25 이상 (0.15 -> 0.25로 상향 조정, 키워드 매칭 시)
+            
+            # 문서 타입별 최소 내용 길이 (일관성 개선)
+            MIN_CONTENT_LENGTH_STATUTE = 30  # 법령 조문: 30자 이상
+            MIN_CONTENT_LENGTH_CASE = 50      # 판례: 50자 이상
+            MIN_CONTENT_LENGTH_DECISION = 50  # 결정례: 50자 이상
+            MIN_CONTENT_LENGTH_INTERPRETATION = 50  # 해석례: 50자 이상
+            MIN_CONTENT_LENGTH_DEFAULT = 50   # 기본값: 50자 이상
 
+            # 필터링 순서 최적화: 빠른 검증부터 수행
+            # 1. 기본 검증 (가장 빠름)
+            # 2. 내용 길이 검증 (빠름)
+            # 3. 관련도 점수 검증 (중간)
+            # 4. 키워드 매칭 검증 (느림, 가장 마지막)
+            
+            # 키워드 추출은 한 번만 수행 (성능 최적화)
+            query_keywords = self._extract_keywords_from_query(query)
+            
+            # 핵심 키워드 식별도 한 번만 수행 (성능 최적화)
+            core_keywords = self._identify_core_keywords(query_keywords) if query_keywords else []
+            
             for doc in retrieved_docs:
+                # 1. 기본 검증 (dict 타입 확인)
                 if not isinstance(doc, dict):
                     invalid_docs_count += 1
                     continue
 
-                # content 필드 확인 (여러 가능한 필드명 지원)
+                # 2. content 필드 확인 (여러 가능한 필드명 지원)
                 content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
-                if not content or len(content.strip()) < 10:  # 최소 10자 이상
+                if not content:
                     invalid_docs_count += 1
-                    self.logger.debug(f"Document filtered: content too short or empty (source: {doc.get('source', 'Unknown')})")
+                    self.logger.debug(f"Document filtered: content is empty (source: {doc.get('source', 'Unknown')})")
+                    continue
+                
+                # 문서 타입별 최소 길이 확인
+                doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+                if doc_type == "statute_article":
+                    min_length = MIN_CONTENT_LENGTH_STATUTE
+                elif doc_type in ["case_paragraph", "precedent"]:
+                    min_length = MIN_CONTENT_LENGTH_CASE
+                elif doc_type == "decision_paragraph":
+                    min_length = MIN_CONTENT_LENGTH_DECISION
+                elif doc_type == "interpretation_paragraph":
+                    min_length = MIN_CONTENT_LENGTH_INTERPRETATION
+                else:
+                    min_length = MIN_CONTENT_LENGTH_DEFAULT
+                
+                if len(content.strip()) < min_length:
+                    invalid_docs_count += 1
+                    self.logger.debug(
+                        f"Document filtered: content too short ({len(content.strip())} < {min_length} chars, "
+                        f"type: {doc_type}, source: {doc.get('source', 'Unknown')})"
+                    )
+                    continue
+                
+                # 품질 검증 추가 (반복 문자, 의미 있는 단어 비율 확인)
+                # 법률 용어 확인은 관련도가 낮은 문서에만 선택적 적용
+                check_legal_terms = False  # 기본적으로는 비활성화 (성능 고려)
+                quality_result = self._validate_content_quality(content, check_legal_terms=check_legal_terms)
+                if not quality_result["is_valid"]:
+                    invalid_docs_count += 1
+                    self.logger.debug(
+                        f"Document filtered: content quality too low "
+                        f"(reasons: {', '.join(quality_result['reasons'])}) "
+                        f"(source: {doc.get('source', 'Unknown')})"
+                    )
                     continue
 
-                # 관련도 점수 확인 (검색 타입별 기준 적용)
+                # 3. 관련도 점수 확인 (검색 타입별 기준 적용)
                 search_type = doc.get("search_type", "semantic")  # 기본값은 semantic
-                relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
-                keyword_match_score = doc.get("keyword_match_score", 0.0)
-                has_keyword_match = keyword_match_score > 0.0 or len(doc.get("matched_keywords", [])) > 0
-
+                # 점수 통일: final_weighted_score 우선, 없으면 relevance_score 사용
+                relevance_score = doc.get("final_weighted_score", 0.0) or doc.get("relevance_score", 0.0)
+                # 점수 정규화 (0-1 범위로 제한)
+                relevance_score = max(0.0, min(1.0, float(relevance_score)))
+                
                 # 검색 타입별 필터링 기준
-                min_score = min_relevance_score_keyword if search_type == "keyword" else min_relevance_score_semantic
-
-                # 키워드 검색 결과는 키워드 매칭이 있으면 관련도 기준 완화
-                if search_type == "keyword" and has_keyword_match:
-                    min_score = min_relevance_score_keyword  # 0.15 이상
-                elif search_type == "semantic":
-                    min_score = min_relevance_score_semantic  # 0.3 이상
-
+                base_min_score = min_relevance_score_keyword if search_type == "keyword" else min_relevance_score_semantic
+                
+                # 문서 타입별 관련도 임계값 조정
+                if doc_type == "statute_article":
+                    # 법령 조문: 더 엄격하게 (의미적 검색 기준 + 0.05)
+                    min_score = base_min_score + 0.05 if search_type == "semantic" else base_min_score
+                elif doc_type in ["case_paragraph", "precedent"]:
+                    # 판례: 키워드 매칭이 중요하므로 기본값 유지
+                    min_score = base_min_score
+                elif doc_type in ["decision_paragraph", "interpretation_paragraph"]:
+                    # 결정례/해석례: 약간 완화
+                    min_score = max(0.2, base_min_score - 0.05)
+                else:
+                    min_score = base_min_score
+                
+                # 관련도 점수로 먼저 필터링 (키워드 매칭 계산 전에 빠르게 제거)
                 if relevance_score < min_score:
+                    # 관련도가 너무 낮으면 키워드 매칭 계산 없이 제거
                     invalid_docs_count += 1
                     self.logger.debug(
                         f"Document filtered: relevance score too low ({relevance_score:.3f} < {min_score}) "
                         f"(source: {doc.get('source', 'Unknown')}, type: {search_type})"
+                    )
+                    continue
+
+                # 4. 키워드 매칭 검증 (가장 느린 작업, 관련도가 높은 문서에만 수행)
+                # 관련도가 매우 높으면(0.9 이상) 키워드 매칭 계산 생략
+                if relevance_score >= 0.9:
+                    # 관련도가 매우 높으면 키워드 매칭 검증 없이 통과
+                    valid_docs.append(doc)
+                    continue
+                
+                keyword_match_score = doc.get("keyword_match_score", 0.0)
+                has_keyword_match = keyword_match_score > 0.0 or len(doc.get("matched_keywords", [])) > 0
+                
+                # 관련도가 높으면(0.8 이상) 간단한 키워드 매칭만 수행
+                content_lower = content.lower()
+                keyword_match_count = 0
+                matched_keywords = []
+                
+                if relevance_score >= 0.8:
+                    # 간단한 직접 매칭만 수행 (동의어/부분 매칭 생략)
+                    for kw in query_keywords:
+                        kw_lower = kw.lower()
+                        if kw_lower in content_lower:
+                            keyword_match_count += 1
+                            matched_keywords.append(kw)
+                else:
+                    # 관련도가 낮으면 상세한 키워드 매칭 수행
+                    for kw in query_keywords:
+                        kw_lower = kw.lower()
+                        # 직접 매칭
+                        if kw_lower in content_lower:
+                            keyword_match_count += 1
+                            matched_keywords.append(kw)
+                            continue
+                        
+                        # 동의어 매칭
+                        synonyms = self._get_keyword_synonyms(kw_lower)
+                        if any(syn in content_lower for syn in synonyms):
+                            keyword_match_count += 1
+                            matched_keywords.append(kw)
+                            continue
+                        
+                        # 부분 매칭 (키워드가 다른 단어의 일부로 포함된 경우)
+                        if self._check_partial_match(kw_lower, content_lower):
+                            keyword_match_count += 0.5  # 부분 매칭은 0.5점
+                            matched_keywords.append(kw)
+                
+                keyword_match_ratio = keyword_match_count / len(query_keywords) if query_keywords else 0.0
+                
+                # 핵심 키워드 가중치 적용 (관련도가 낮은 문서에만)
+                if relevance_score < 0.8:
+                    core_keyword_bonus = 0.0
+                    matched_core_count = 0
+                    for core_kw in core_keywords:
+                        if core_kw.lower() in [kw.lower() for kw in matched_keywords]:
+                            matched_core_count += 1
+                    
+                    # 핵심 키워드 보너스: 하나 이상 매칭되면 보너스 부여 (누적 제한)
+                    if matched_core_count > 0:
+                        # 핵심 키워드 중 하나만 매칭되어도 충분 (최대 0.3점)
+                        core_keyword_bonus = min(0.3, 0.2 * matched_core_count)
+                    
+                    # 가중치가 적용된 키워드 매칭 비율
+                    weighted_keyword_ratio = min(1.0, keyword_match_ratio + core_keyword_bonus)
+                else:
+                    # 관련도가 높으면 가중치 없이 기본 비율 사용
+                    weighted_keyword_ratio = keyword_match_ratio
+
+                # 키워드 검색 결과는 키워드 매칭이 있으면 관련도 기준 완화
+                if search_type == "keyword" and has_keyword_match:
+                    min_score = min_relevance_score_keyword  # 0.25 이상
+                elif search_type == "semantic":
+                    min_score = min_relevance_score_semantic  # 0.4 이상
+
+                # 동적 임계값 조정 (질문 길이에 따라)
+                # 짧은 질문(3개 이하 키워드)은 더 엄격하게, 긴 질문은 완화
+                dynamic_threshold = 0.3  # 기본값
+                if len(query_keywords) <= 2:
+                    dynamic_threshold = 0.4  # 짧은 질문: 40% 이상 (50% → 40%로 완화)
+                elif len(query_keywords) >= 5:
+                    dynamic_threshold = 0.2  # 긴 질문: 20% 이상
+
+                # 관련도가 높은 문서는 키워드 매칭 임계값 완화
+                # (0.9 이상은 이미 위에서 처리되었으므로 여기서는 0.8 이상만 처리)
+                if relevance_score >= 0.8:
+                    # 관련도 0.8 이상: 임계값 완화
+                    dynamic_threshold = max(0.2, dynamic_threshold - 0.1)
+
+                # 질문 핵심 키워드 매칭이 부족하면 관련도 기준 상향 (추가 필터링)
+                # 가중치가 적용된 비율 사용
+                # 관련도가 0.8 이상이면 키워드 매칭 검증 완화
+                if relevance_score < 0.8 and weighted_keyword_ratio < dynamic_threshold and relevance_score < min_score + 0.1:
+                    invalid_docs_count += 1
+                    self.logger.debug(
+                        f"Document filtered: insufficient keyword match (ratio: {weighted_keyword_ratio:.2f}, "
+                        f"threshold: {dynamic_threshold:.2f}, relevance: {relevance_score:.3f}) (source: {doc.get('source', 'Unknown')})"
                     )
                     continue
 
@@ -8163,7 +8354,7 @@ class EnhancedLegalQuestionWorkflow:
             if invalid_docs_count > 0:
                 self.logger.warning(
                     f"_build_prompt_optimized_context: Filtered {invalid_docs_count} invalid documents "
-                    f"(no content, content too short, or relevance < 0.3). Valid docs: {len(valid_docs)}"
+                    f"(no content, content too short, relevance < threshold, or insufficient keyword match). Valid docs: {len(valid_docs)}"
                 )
 
             # 유효한 문서가 없으면 에러 반환
@@ -8177,21 +8368,42 @@ class EnhancedLegalQuestionWorkflow:
                 }
 
             # 최종 가중치 점수로 정렬 (이미 reranked되어 있을 수 있음)
+            # 점수 통일 및 정규화 적용
+            for doc in valid_docs:
+                if "final_weighted_score" not in doc or doc.get("final_weighted_score", 0.0) == 0.0:
+                    # final_weighted_score가 없으면 relevance_score로 설정
+                    doc["final_weighted_score"] = doc.get("relevance_score", 0.0)
+                # 점수 정규화
+                doc["final_weighted_score"] = max(0.0, min(1.0, float(doc.get("final_weighted_score", 0.0))))
+            
             sorted_docs = sorted(
                 valid_docs,
                 key=lambda x: (
-                    x.get("final_weighted_score", x.get("relevance_score", 0.0)),
+                    x.get("final_weighted_score", 0.0),
                     x.get("keyword_match_score", 0.0)
                 ),
                 reverse=True
             )
 
-            # 의미적 검색과 키워드 검색 결과의 균형을 맞춰서 선택
-            balanced_docs = self._select_balanced_documents(sorted_docs, max_docs=10)
+            # 의미적 검색과 키워드 검색 결과의 균형을 맞춰서 선택 (관련도 우선)
+            # 관련도 상위 70%만 고려하여 품질 보장
+            top_percentile = max(1, int(len(sorted_docs) * 0.7))
+            top_docs = sorted_docs[:top_percentile] if len(sorted_docs) > 1 else sorted_docs
+            balanced_docs = self._select_balanced_documents(top_docs, max_docs=10)
 
-            # 최소 1개 문서 보장
+            # 최소 문서 보장 (관련도 임계값 적용)
             if not balanced_docs and sorted_docs:
-                balanced_docs = sorted_docs[:min(8, len(sorted_docs))]
+                # 관련도가 높은 문서만 선택 (최소 임계값 적용)
+                min_relevance_for_fallback = min(min_relevance_score_semantic, min_relevance_score_keyword)
+                high_quality_docs = [
+                    doc for doc in sorted_docs
+                    if doc.get("final_weighted_score", doc.get("relevance_score", 0.0)) >= min_relevance_for_fallback
+                ]
+                if high_quality_docs:
+                    balanced_docs = high_quality_docs[:min(8, len(high_quality_docs))]
+                else:
+                    # 관련도가 높은 문서가 없으면 상위 문서만 선택 (최대 5개)
+                    balanced_docs = sorted_docs[:min(5, len(sorted_docs))]
 
             sorted_docs = balanced_docs
 
@@ -8371,6 +8583,376 @@ class EnhancedLegalQuestionWorkflow:
                 "total_context_length": 0
             }
 
+    def _extract_keywords_from_query(self, query: str) -> List[str]:
+        """질문에서 핵심 키워드 추출 (개선 버전)"""
+        import re
+        if not query:
+            return []
+        
+        # 불용어 제거 (법률 도메인 특화)
+        stopwords = {
+            # 기본 조사
+            "에", "를", "을", "의", "와", "과", "은", "는", "이", "가", 
+            # 추가 조사
+            "도", "만", "조차", "까지", "부터", "에게", "한테", "께", "에서", "에게서",
+            # 복합 조사
+            "에 대해", "에 대해서", "대해", "대해서", "에 관한", "에 대한", "에 관하여",
+            # 질문/요청 표현
+            "알려주세요", "알려주시기", "알려", "주세요", "주시기", "부탁", "드립니다", 
+            "합니다", "입니다", "인가요", "인지", "인가", "인지요",
+            # 법률 도메인 일반 불용어
+            "법률", "규정", "조항", "법령", "법", "법률", "규칙"
+        }
+        
+        # 복합 조사 패턴 (먼저 제거)
+        query_clean = query
+        complex_particles = [
+            r'에\s+대해\s*서?', r'에\s+관한', r'에\s+대한', r'에\s+관하여',
+            r'에\s+대해', r'에\s+대해서'
+        ]
+        for pattern in complex_particles:
+            query_clean = re.sub(pattern, ' ', query_clean, flags=re.IGNORECASE)
+        
+        # 한글 단어 추출 (2자 이상)
+        words = re.findall(r'[가-힣]+', query_clean)
+        
+        # 조사 제거 및 불용어 필터링
+        keywords = []
+        seen_keywords = set()  # 중복 제거
+        
+        # 확장된 조사 목록
+        particles = [
+            r'(에|를|을|의|와|과|은|는|이|가|도|만|조차|까지|부터|에게|한테|께|에서|에게서)$'
+        ]
+        
+        for word in words:
+            if len(word) < 2:
+                continue
+            
+            # 조사 제거
+            word_clean = word
+            for particle_pattern in particles:
+                word_clean = re.sub(particle_pattern, '', word_clean)
+            
+            # 불용어 필터링 및 중복 제거
+            if len(word_clean) >= 2 and word_clean not in stopwords:
+                word_lower = word_clean.lower()
+                if word_lower not in seen_keywords:
+                    keywords.append(word_clean)
+                    seen_keywords.add(word_lower)
+        
+        return keywords if keywords else [query.strip()]  # 키워드가 없으면 전체 질문 반환
+    
+    def _get_keyword_synonyms(self, keyword: str) -> List[str]:
+        """키워드의 동의어 목록 반환 (LLM 사용)"""
+        if not keyword or not keyword.strip():
+            return []
+        
+        try:
+            # LLM을 사용하여 동의어 추출
+            prompt = f"""법률 도메인에서 "{keyword}"의 동의어, 유사어, 관련 용어를 추출해주세요.
+다음 형식으로 JSON 배열로 응답해주세요:
+["동의어1", "동의어2", "동의어3"]
+
+예시:
+- "전세금" → ["전세 보증금", "보증금", "전세금액"]
+- "반환" → ["반환받다", "반환하다", "돌려받다", "돌려주다"]
+
+키워드: {keyword}
+동의어 목록:"""
+            
+            # LLM 호출 (동기 방식)
+            response = self.llm.invoke(prompt)
+            
+            # 응답에서 동의어 추출
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+            
+            # JSON 배열 파싱 시도
+            import json
+            import re
+            
+            # JSON 배열 추출
+            json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
+            if json_match:
+                synonyms = json.loads(json_match.group())
+                if isinstance(synonyms, list):
+                    # 빈 문자열 제거 및 중복 제거
+                    synonyms = [s.strip() for s in synonyms if s.strip() and s.strip() != keyword]
+                    return list(set(synonyms))[:10]  # 최대 10개로 제한
+            
+            # JSON 파싱 실패 시 쉼표로 구분된 목록 추출
+            synonyms = []
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('[') and not line.startswith('{'):
+                    # 따옴표 제거 및 쉼표로 분리
+                    items = re.findall(r'["\']([^"\']+)["\']', line)
+                    synonyms.extend(items)
+            
+            # 빈 문자열 제거 및 중복 제거
+            synonyms = [s.strip() for s in synonyms if s.strip() and s.strip() != keyword]
+            return list(set(synonyms))[:10]  # 최대 10개로 제한
+            
+        except Exception as e:
+            self.logger.warning(f"LLM을 사용한 동의어 추출 실패 ({keyword}): {e}")
+            return []  # 실패 시 빈 리스트 반환
+    
+    def _get_legal_terms_containing_keyword(self, keyword: str) -> List[str]:
+        """LLM을 사용하여 키워드가 포함된 법률 용어 목록 추출 (캐싱 지원)"""
+        if not keyword or len(keyword) < 2:
+            return []
+        
+        # 캐시 확인
+        keyword_lower = keyword.lower()
+        if keyword_lower in self._legal_terms_cache:
+            return self._legal_terms_cache[keyword_lower]
+        
+        try:
+            # LLM을 사용하여 키워드가 포함된 법률 용어 추출
+            prompt = f"""법률 도메인에서 "{keyword}"가 포함된 법률 용어, 복합어, 관련 용어를 추출해주세요.
+다음 형식으로 JSON 배열로 응답해주세요:
+["용어1", "용어2", "용어3"]
+
+예시:
+- "반환" → ["반환받다", "반환하다", "반환청구", "반환의무", "반환금", "반환보증금"]
+- "전세금" → ["전세금액", "전세금반환", "전세금보증", "전세금청구"]
+- "보증" → ["보증금", "보증서", "보증보험", "보증제도", "보증책임"]
+
+주의: 키워드가 다른 단어의 일부로 잘못 포함되는 경우는 제외해주세요.
+예: "반환"이 "반대"에 포함되는 것은 제외
+
+키워드: {keyword}
+법률 용어 목록:"""
+            
+            # LLM 호출 (동기 방식)
+            response = self.llm.invoke(prompt)
+            
+            # 응답에서 용어 추출
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+            
+            # JSON 배열 파싱 시도
+            import json
+            import re
+            
+            # JSON 배열 추출
+            json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
+            if json_match:
+                terms = json.loads(json_match.group())
+                if isinstance(terms, list):
+                    # 빈 문자열 제거 및 중복 제거, 키워드 자체 제외
+                    terms = [t.strip() for t in terms if t.strip() and t.strip() != keyword and keyword in t.strip()]
+                    return list(set(terms))[:15]  # 최대 15개로 제한
+            
+            # JSON 파싱 실패 시 쉼표로 구분된 목록 추출
+            terms = []
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('[') and not line.startswith('{'):
+                    # 따옴표 제거 및 쉼표로 분리
+                    items = re.findall(r'["\']([^"\']+)["\']', line)
+                    terms.extend([item for item in items if keyword in item and item != keyword])
+            
+            # 빈 문자열 제거 및 중복 제거
+            terms = [t.strip() for t in terms if t.strip() and t.strip() != keyword]
+            result = list(set(terms))[:15]  # 최대 15개로 제한
+            
+            # 캐시에 저장
+            self._legal_terms_cache[keyword_lower] = result
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"LLM을 사용한 법률 용어 추출 실패 ({keyword}): {e}")
+            # 실패 시 빈 리스트를 캐시에 저장하여 반복 호출 방지
+            self._legal_terms_cache[keyword_lower] = []
+            return []  # 실패 시 빈 리스트 반환
+    
+    def _check_partial_match(self, keyword: str, content: str) -> bool:
+        """키워드가 내용에 부분적으로 포함되어 있는지 확인 (개선 버전)"""
+        import re
+        
+        if not keyword or not content or len(keyword) < 2:
+            return False
+        
+        keyword_lower = keyword.lower()
+        content_lower = content.lower()
+        
+        # 1. 직접 매칭 확인 (단어 경계 고려)
+        # 한글 단어 경계를 고려한 직접 매칭
+        word_boundary_pattern = rf'(?:^|[^\w가-힣]){re.escape(keyword_lower)}(?:[^\w가-힣]|$)'
+        if re.search(word_boundary_pattern, content_lower):
+            return True
+        
+        # 2. LLM을 사용하여 키워드가 포함된 법률 용어 목록 추출
+        legal_terms = self._get_legal_terms_containing_keyword(keyword)
+        
+        if legal_terms:
+            # 법률 용어 중 하나라도 내용에 포함되어 있는지 확인
+            for term in legal_terms:
+                term_lower = term.lower()
+                # 단어 경계를 고려한 매칭
+                term_pattern = rf'(?:^|[^\w가-힣]){re.escape(term_lower)}(?:[^\w가-힣]|$)'
+                if re.search(term_pattern, content_lower):
+                    return True
+        
+        # 3. 키워드가 다른 단어의 일부인 경우 (3자 이상 키워드만)
+        # 단, 법률 용어 목록이 있는 경우에만 허용 (오탐 방지)
+        if len(keyword) >= 3:
+            # 키워드로 시작하는 한글 단어 찾기 (단어 경계 강화)
+            # 예: "반환"이 "반환받다", "반환하다"에 포함
+            # 하지만 "반대"에는 포함되지 않도록 확인
+            word_start_pattern = rf'(?:^|[^\w가-힣]){re.escape(keyword_lower)}[가-힣]+(?:[^\w가-힣]|$)'
+            matches = re.findall(word_start_pattern, content_lower)
+            
+            if matches:
+                # 매칭된 단어가 실제 법률 용어인지 확인
+                # 법률 용어 목록이 있으면 그것과 비교, 없으면 기본 검증만 수행
+                for match in matches:
+                    matched_word = re.sub(r'[^\w가-힣]', '', match)
+                    # 법률 용어 목록에 포함되어 있거나, 키워드가 명확히 포함된 경우
+                    if matched_word in [t.lower() for t in legal_terms] or len(matched_word) <= len(keyword) + 3:
+                        return True
+        
+        return False
+    
+    def _check_repeated_characters(self, content: str, max_repeat_ratio: float = 0.3) -> bool:
+        """반복 문자 비율 확인"""
+        if not content or len(content) < 10:
+            return True  # 짧은 내용은 스킵
+        
+        import re
+        # 연속된 같은 문자가 전체의 30% 이상이면 제외
+        # 연속된 같은 문자 패턴 (3자 이상)
+        repeated_pattern = r'(.)\1{2,}'
+        repeated_chars = sum(len(match.group()) for match in re.finditer(repeated_pattern, content))
+        repeat_ratio = repeated_chars / len(content) if len(content) > 0 else 0
+        
+        return repeat_ratio < max_repeat_ratio
+    
+    def _check_meaningful_words(self, content: str, min_meaningful_ratio: float = 0.5) -> bool:
+        """의미 있는 단어 비율 확인"""
+        if not content:
+            return False
+        
+        import re
+        # 한글 단어 추출 (2자 이상)
+        korean_words = re.findall(r'[가-힣]{2,}', content)
+        # 숫자와 영문 제외한 전체 문자 수
+        meaningful_chars = len(re.sub(r'[^\w가-힣]', '', content))
+        total_chars = len(content.strip())
+        
+        if total_chars == 0:
+            return False
+        
+        # 의미 있는 문자 비율
+        meaningful_ratio = meaningful_chars / total_chars
+        
+        # 최소 단어 수 확인 (2자 이상 단어가 3개 이상)
+        return meaningful_ratio >= min_meaningful_ratio and len(korean_words) >= 3
+    
+    def _check_legal_terms(self, content: str) -> bool:
+        """법률 용어 포함 여부 확인 (LLM 사용, 선택적)"""
+        if not content or len(content) < 20:
+            return True  # 짧은 내용은 스킵
+        
+        try:
+            # LLM을 사용하여 법률 용어 포함 여부 확인
+            prompt = f"""다음 텍스트가 법률 관련 내용인지 확인해주세요.
+법률 용어, 법령 조문, 판례, 법률 개념 등이 포함되어 있으면 "yes", 
+그렇지 않으면 "no"로만 응답해주세요.
+
+텍스트: {content[:200]}
+
+응답:"""
+            
+            response = self.llm.invoke(prompt)
+            response_text = str(response.content).strip().lower() if hasattr(response, 'content') else str(response).strip().lower()
+            
+            return "yes" in response_text or "예" in response_text or "맞" in response_text or "맞습니다" in response_text
+            
+        except Exception as e:
+            self.logger.warning(f"법률 용어 확인 실패: {e}")
+            return True  # 실패 시 통과 (기존 동작 유지)
+    
+    def _validate_content_quality(self, content: str, check_legal_terms: bool = False) -> Dict[str, Any]:
+        """문서 내용 품질 검증"""
+        
+        validation_result = {
+            "is_valid": True,
+            "reasons": [],
+            "scores": {}
+        }
+        
+        # 1. 반복 문자 비율 확인
+        if not self._check_repeated_characters(content):
+            validation_result["is_valid"] = False
+            validation_result["reasons"].append("반복 문자 비율이 너무 높음")
+            validation_result["scores"]["repeat_ratio"] = 0.0
+        else:
+            validation_result["scores"]["repeat_ratio"] = 1.0
+        
+        # 2. 의미 있는 단어 비율 확인
+        if not self._check_meaningful_words(content):
+            validation_result["is_valid"] = False
+            validation_result["reasons"].append("의미 있는 단어 비율이 너무 낮음")
+            validation_result["scores"]["meaningful_ratio"] = 0.0
+        else:
+            validation_result["scores"]["meaningful_ratio"] = 1.0
+        
+        # 3. 법률 용어 포함 여부 확인 (선택적, 성능 고려)
+        # 긴 문서에만 적용하거나, 관련도가 낮은 문서에만 적용
+        if check_legal_terms and len(content) > 100:
+            has_legal_terms = self._check_legal_terms(content)
+            validation_result["scores"]["has_legal_terms"] = 1.0 if has_legal_terms else 0.5
+            if not has_legal_terms:
+                validation_result["reasons"].append("법률 용어가 포함되지 않음 (경고)")
+                # 법률 용어가 없어도 필터링하지 않음 (경고만)
+        
+        return validation_result
+    
+    def _identify_core_keywords(self, keywords: List[str]) -> List[str]:
+        """핵심 키워드 식별 (법률 도메인 특화)"""
+        if not keywords:
+            return []
+        
+        # 법률 도메인 핵심 키워드 패턴
+        core_patterns = [
+            # 금액/재산 관련
+            r'.*금$', r'.*비용$', r'.*손해$', r'.*배상$',
+            # 행위 관련
+            r'.*반환$', r'.*해지$', r'.*해제$', r'.*취소$',
+            # 제도 관련
+            r'.*보증$', r'.*보험$', r'.*제도$',
+            # 계약 관련
+            r'.*계약$', r'.*합의$',
+        ]
+        
+        import re
+        core_keywords = []
+        
+        for keyword in keywords:
+            # 패턴 매칭
+            for pattern in core_patterns:
+                if re.match(pattern, keyword, re.IGNORECASE):
+                    core_keywords.append(keyword)
+                    break
+            
+            # 특정 핵심 키워드 직접 매칭
+            if keyword.lower() in ["전세금", "보증금", "반환", "보증", "계약", "해지"]:
+                if keyword not in core_keywords:
+                    core_keywords.append(keyword)
+        
+        # 핵심 키워드가 없으면 첫 번째 키워드를 핵심으로 간주
+        if not core_keywords and keywords:
+            core_keywords = [keywords[0]]
+        
+        return core_keywords
+    
     def _extract_query_relevant_sentences(
         self,
         doc_content: str,

@@ -306,10 +306,35 @@ class ConversationManager:
             relevant_turns = []
             current_topics = self._identify_topics(current_query)
             
+            # 대명사 패턴 감지 (그거, 그때, 그 사람, 그쪽, 두 번째 거 등)
+            pronoun_patterns = ["그거", "그때", "그 사람", "그쪽", "거", "그", "그것", "그것은", "그것이"]
+            has_pronoun = any(pattern in current_query for pattern in pronoun_patterns)
+            
+            # 주제 기반 관련성 검사
             for turn in reversed(recent_turns):
-                # 주제 기반 관련성 검사
                 turn_topics = self._identify_topics(turn.user_query)
-                if any(topic in current_topics for topic in turn_topics):
+                is_topic_relevant = any(topic in current_topics for topic in turn_topics)
+                
+                # 대명사가 포함된 경우 최근 턴 우선 포함
+                if has_pronoun:
+                    # 최근 턴이면 무조건 포함 (대명사 해결을 위해)
+                    if turn == recent_turns[-1] or (len(relevant_turns) == 0 and turn in recent_turns[-2:]):
+                        relevant_turns.append({
+                            "user_query": turn.user_query,
+                            "bot_response": turn.bot_response[:200] + "..." if len(turn.bot_response) > 200 else turn.bot_response,
+                            "timestamp": turn.timestamp.isoformat(),
+                            "question_type": turn.question_type,
+                            "topics": turn_topics
+                        })
+                    elif is_topic_relevant:
+                        relevant_turns.append({
+                            "user_query": turn.user_query,
+                            "bot_response": turn.bot_response[:200] + "..." if len(turn.bot_response) > 200 else turn.bot_response,
+                            "timestamp": turn.timestamp.isoformat(),
+                            "question_type": turn.question_type,
+                            "topics": turn_topics
+                        })
+                elif is_topic_relevant:
                     relevant_turns.append({
                         "user_query": turn.user_query,
                         "bot_response": turn.bot_response[:200] + "..." if len(turn.bot_response) > 200 else turn.bot_response,
@@ -317,9 +342,20 @@ class ConversationManager:
                         "question_type": turn.question_type,
                         "topics": turn_topics
                     })
-                    
-                    if len(relevant_turns) >= max_turns:
-                        break
+                
+                if len(relevant_turns) >= max_turns:
+                    break
+            
+            # 관련 턴이 없고 대명사가 포함된 경우 최근 턴 반환
+            if not relevant_turns and has_pronoun and recent_turns:
+                latest_turn = recent_turns[-1]
+                relevant_turns.append({
+                    "user_query": latest_turn.user_query,
+                    "bot_response": latest_turn.bot_response[:200] + "..." if len(latest_turn.bot_response) > 200 else latest_turn.bot_response,
+                    "timestamp": latest_turn.timestamp.isoformat(),
+                    "question_type": latest_turn.question_type,
+                    "topics": self._identify_topics(latest_turn.user_query)
+                })
             
             # 시간순으로 정렬
             relevant_turns.reverse()

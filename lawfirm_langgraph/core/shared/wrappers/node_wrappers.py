@@ -117,14 +117,38 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             if "keyword_results" not in state:
                                 state["keyword_results"] = _global_search_results_cache.get("keyword_results", [])
                             # retrieved_docs와 merged_documents도 복원 (답변 생성에 필요)
+                            cached_retrieved = _global_search_results_cache.get("retrieved_docs", [])
+                            cached_merged = _global_search_results_cache.get("merged_documents", [])
+                            
+                            # interpretation_paragraph 확인
+                            if cached_retrieved:
+                                interpretation_in_cached = [d for d in cached_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                if interpretation_in_cached:
+                                    print(f"[DEBUG] node_wrappers ({node_name}): 전역 캐시의 retrieved_docs에 interpretation_paragraph {len(interpretation_in_cached)}개 발견")
+                            
                             if "retrieved_docs" not in state or not state.get("retrieved_docs"):
-                                state["retrieved_docs"] = _global_search_results_cache.get("retrieved_docs", [])
+                                state["retrieved_docs"] = cached_retrieved
+                            elif cached_retrieved:
+                                # state에 retrieved_docs가 있지만 interpretation_paragraph가 없으면 캐시로 교체
+                                state_retrieved = state.get("retrieved_docs", [])
+                                interpretation_in_state = [d for d in state_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                if not interpretation_in_state and interpretation_in_cached:
+                                    print(f"[DEBUG] node_wrappers ({node_name}): state의 retrieved_docs에 interpretation_paragraph 없음, 캐시로 교체")
+                                    state["retrieved_docs"] = cached_retrieved
+                            
                             if "merged_documents" not in state or not state.get("merged_documents"):
-                                state["merged_documents"] = _global_search_results_cache.get("merged_documents", [])
+                                state["merged_documents"] = cached_merged
+                            elif cached_merged:
+                                state_merged = state.get("merged_documents", [])
+                                interpretation_in_state_merged = [d for d in state_merged if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                if not interpretation_in_state_merged and interpretation_in_cached:
+                                    state["merged_documents"] = cached_merged
+                            
                             restored_semantic = len(state["search"].get("semantic_results", []))
                             restored_keyword = len(state["search"].get("keyword_results", []))
                             restored_docs = len(state.get("retrieved_docs", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restored to state BEFORE execution - semantic={restored_semantic}, keyword={restored_keyword}, retrieved_docs={restored_docs}")
+                            restored_interpretation = len([d for d in state.get("retrieved_docs", []) if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"])
+                            print(f"[DEBUG] node_wrappers ({node_name}): Restored to state BEFORE execution - semantic={restored_semantic}, keyword={restored_keyword}, retrieved_docs={restored_docs}, interpretation={restored_interpretation}")
 
                     # search 그룹이 없으면 state에서 직접 찾기 (flat 구조에서)
                     if "search" not in state or not isinstance(state.get("search"), dict):
@@ -614,20 +638,47 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
 
                         # result에 search 그룹이 있으면 확인 및 로깅
                         if result_search:
-                            semantic_count = len(result_search.get("semantic_results", []))
-                            keyword_count = len(result_search.get("keyword_results", []))
+                            semantic_results = result_search.get("semantic_results", [])
+                            keyword_results = result_search.get("keyword_results", [])
+                            semantic_count = len(semantic_results)
+                            keyword_count = len(keyword_results)
                             print(f"[DEBUG] node_wrappers ({node_name}): result has search group - semantic_results={semantic_count}, keyword_results={keyword_count}")
+                            
+                            # 전역 캐시에 저장 (astream에서 사용)
+                            if not _global_search_results_cache:
+                                _global_search_results_cache = {}
+                            _global_search_results_cache["semantic_results"] = semantic_results
+                            _global_search_results_cache["keyword_results"] = keyword_results
+                            _global_search_results_cache["semantic_count"] = semantic_count
+                            _global_search_results_cache["keyword_count"] = keyword_count
+                            
+                            # interpretation_paragraph 확인
+                            interpretation_in_semantic = [d for d in semantic_results if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                            if interpretation_in_semantic:
+                                print(f"[DEBUG] node_wrappers ({node_name}): 전역 캐시에 interpretation_paragraph {len(interpretation_in_semantic)}개 저장")
+                                logger.info(f"🔍 [NODE_WRAPPERS] execute_searches_parallel에서 전역 캐시 저장: interpretation_paragraph {len(interpretation_in_semantic)}개 포함")
+                            
                             # result에 명시적으로 보존 (LangGraph 병합 보장)
                             if "search" not in result or not isinstance(result.get("search"), dict):
                                 result["search"] = {}
-                            result["search"]["semantic_results"] = result_search.get("semantic_results", [])
-                            result["search"]["keyword_results"] = result_search.get("keyword_results", [])
-                            result["search"]["semantic_count"] = result_search.get("semantic_count", semantic_count)
-                            result["search"]["keyword_count"] = result_search.get("keyword_count", keyword_count)
+                            result["search"]["semantic_results"] = semantic_results
+                            result["search"]["keyword_results"] = keyword_results
+                            result["search"]["semantic_count"] = semantic_count
+                            result["search"]["keyword_count"] = keyword_count
                         elif state_search:
                             # state에 search 그룹이 있으면 result에도 복사
                             print(f"[DEBUG] node_wrappers ({node_name}): Copying search group from state to result")
                             result["search"] = state_search.copy()
+                            
+                            # 전역 캐시에도 저장
+                            if not _global_search_results_cache:
+                                _global_search_results_cache = {}
+                            semantic_results = state_search.get("semantic_results", [])
+                            keyword_results = state_search.get("keyword_results", [])
+                            if semantic_results:
+                                _global_search_results_cache["semantic_results"] = semantic_results
+                            if keyword_results:
+                                _global_search_results_cache["keyword_results"] = keyword_results
 
                     # processing_steps 전역 캐시에 저장 (state reduction 손실 방지)
                     if isinstance(result, dict):
@@ -708,6 +759,13 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                         result_search = result.get("search") if isinstance(result.get("search"), dict) else {}
                         retrieved_docs = result_search.get("retrieved_docs", [])
                         merged_documents = result_search.get("merged_documents", [])
+                        
+                        # interpretation_paragraph 확인
+                        if retrieved_docs:
+                            interpretation_in_retrieved = [d for d in retrieved_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                            if interpretation_in_retrieved:
+                                print(f"[DEBUG] node_wrappers ({node_name}): retrieved_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 발견")
+                                logger.info(f"🔍 [NODE_WRAPPERS] {node_name}에서 retrieved_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 발견")
 
                         # 최상위 레벨에서도 확인
                         top_retrieved_docs = result.get("retrieved_docs", [])

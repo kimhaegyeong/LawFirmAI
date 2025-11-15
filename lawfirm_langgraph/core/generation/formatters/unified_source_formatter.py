@@ -85,23 +85,20 @@ class UnifiedSourceFormatter:
         )
     
     def _format_case_paragraph(self, metadata: Dict[str, Any]) -> SourceInfo:
-        """판례 포맷팅"""
+        """판례 포맷팅 (casenames 우선, doc_id fallback)"""
         court = metadata.get("court", "")
         doc_id = metadata.get("doc_id", "")
         casenames = metadata.get("casenames", "")
         announce_date = metadata.get("announce_date", "")
         
-        parts = []
-        if court:
-            parts.append(court)
-        if casenames:
-            parts.append(casenames)
-        if doc_id:
-            parts.append(f"({doc_id})")
-        if announce_date:
-            parts.append(f"[{announce_date}]")
+        # name 우선순위: casenames > doc_id > "판례"
+        if casenames and casenames.strip():
+            name = casenames.strip()
+        elif doc_id and doc_id.strip():
+            name = doc_id.strip()
+        else:
+            name = "판례"
         
-        name = " ".join(parts) if parts else "판례"
         url = self._generate_case_url(doc_id, metadata)
         
         return SourceInfo(
@@ -118,20 +115,12 @@ class UnifiedSourceFormatter:
         )
     
     def _format_decision_paragraph(self, metadata: Dict[str, Any]) -> SourceInfo:
-        """결정례 포맷팅"""
+        """결정례 포맷팅 (decision_number만 표시)"""
         org = metadata.get("org", "")
         doc_id = metadata.get("doc_id", "")
         decision_date = metadata.get("decision_date", "")
         
-        parts = []
-        if org:
-            parts.append(org)
-        if doc_id:
-            parts.append(f"({doc_id})")
-        if decision_date:
-            parts.append(f"[{decision_date}]")
-        
-        name = " ".join(parts) if parts else "결정례"
+        name = doc_id if doc_id else "결정례"
         url = self._generate_decision_url(doc_id, metadata)
         
         return SourceInfo(
@@ -147,23 +136,13 @@ class UnifiedSourceFormatter:
         )
     
     def _format_interpretation_paragraph(self, metadata: Dict[str, Any]) -> SourceInfo:
-        """해석례 포맷팅"""
+        """해석례 포맷팅 (interpretation_number만 표시)"""
         org = metadata.get("org", "")
         title = metadata.get("title", "")
         doc_id = metadata.get("doc_id", "")
         response_date = metadata.get("response_date", "")
         
-        parts = []
-        if org:
-            parts.append(org)
-        if title:
-            parts.append(title)
-        if doc_id:
-            parts.append(f"({doc_id})")
-        if response_date:
-            parts.append(f"[{response_date}]")
-        
-        name = " ".join(parts) if parts else "해석례"
+        name = doc_id if doc_id else "해석례"
         url = self._generate_interpretation_url(doc_id, metadata)
         
         return SourceInfo(

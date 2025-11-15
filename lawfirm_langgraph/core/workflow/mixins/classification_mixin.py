@@ -11,13 +11,11 @@ from core.workflow.state.state_definitions import LegalWorkflowState
 from core.workflow.state.workflow_types import QueryComplexity
 from core.shared.wrappers.node_wrappers import with_state_optimization
 
-try:
-    from langfuse import observe
-except ImportError:
-    def observe(**kwargs):
-        def decorator(func):
-            return func
-        return decorator
+# Mock observe decorator (Langfuse 제거됨)
+def observe(**kwargs):
+    def decorator(func):
+        return func
+    return decorator
 
 
 class ClassificationMixin:

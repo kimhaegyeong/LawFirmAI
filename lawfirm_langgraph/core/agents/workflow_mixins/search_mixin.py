@@ -16,13 +16,11 @@ from core.shared.wrappers.node_wrappers import with_state_optimization
 from core.generation.validators.quality_validators import SearchValidator
 from core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
 
-try:
-    from langfuse import observe
-except ImportError:
-    def observe(**kwargs):
-        def decorator(func):
-            return func
-        return decorator
+# Mock observe decorator (Langfuse 제거됨)
+def observe(**kwargs):
+    def decorator(func):
+        return func
+    return decorator
 
 # 성능 최적화: 정규식 패턴 컴파일 (모듈 레벨)
 LAW_PATTERN = re.compile(r'[가-힣]+법\s*제?\s*\d+\s*조')

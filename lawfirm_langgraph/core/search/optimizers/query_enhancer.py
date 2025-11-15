@@ -15,6 +15,7 @@ from core.agents.parsers.response_parsers import QueryParser
 from core.agents.state_definitions import LegalWorkflowState
 from core.agents.workflow_constants import WorkflowConstants
 from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.query_diversifier import QueryDiversifier
 
 
 class QueryEnhancer:
@@ -50,6 +51,9 @@ class QueryEnhancer:
 
         # 쿼리 강화 캐시
         self._query_enhancement_cache: Dict[str, Dict[str, Any]] = {}
+        
+        # 검색 쿼리 다변화 유틸리티
+        self.query_diversifier = QueryDiversifier()
 
     def optimize_search_query(
         self,
@@ -170,17 +174,51 @@ class QueryEnhancer:
         # 4. 키워드 쿼리 생성 (법률 조항, 판례 검색용)
         keyword_queries = self.build_keyword_queries(base_query, expanded_terms, query_type)
         
-        # 개선: 판례/결정례 검색을 위한 추가 키워드 쿼리 생성
-        if query_type not in ["law_inquiry", "statute_search"]:
-            # 판례 검색용 쿼리 추가
-            precedent_query = f"{base_query} 판례"
-            if precedent_query not in keyword_queries:
-                keyword_queries.append(precedent_query)
+        # 개선: 쿼리 다변화 로직 추가 (문서 타입별 최적화된 쿼리 생성)
+        try:
+            diversified_queries = self.query_diversifier.diversify_search_queries(base_query)
             
-            # 결정례 검색용 쿼리 추가
-            decision_query = f"{base_query} 결정례"
-            if decision_query not in keyword_queries:
-                keyword_queries.append(decision_query)
+            # 법령 조문 검색 쿼리 추가
+            for statute_query in diversified_queries.get("statute", [])[:2]:  # 최대 2개
+                if statute_query not in keyword_queries:
+                    keyword_queries.append(statute_query)
+            
+            # 판례 검색 쿼리 추가
+            for case_query in diversified_queries.get("case", [])[:2]:  # 최대 2개
+                if case_query not in keyword_queries:
+                    keyword_queries.append(case_query)
+            
+            # 결정례 검색 쿼리 추가
+            for decision_query in diversified_queries.get("decision", [])[:1]:  # 최대 1개
+                if decision_query not in keyword_queries:
+                    keyword_queries.append(decision_query)
+            
+            # 해석례 검색 쿼리 추가
+            for interpretation_query in diversified_queries.get("interpretation", [])[:1]:  # 최대 1개
+                if interpretation_query not in keyword_queries:
+                    keyword_queries.append(interpretation_query)
+            
+            self.logger.info(
+                f"✅ [QUERY DIVERSIFICATION] Added diversified queries: "
+                f"statute={len(diversified_queries.get('statute', []))}, "
+                f"case={len(diversified_queries.get('case', []))}, "
+                f"decision={len(diversified_queries.get('decision', []))}, "
+                f"interpretation={len(diversified_queries.get('interpretation', []))}"
+            )
+        except Exception as e:
+            self.logger.warning(f"쿼리 다변화 실패 (기존 로직 사용): {e}")
+            
+            # 기존 로직 유지 (폴백)
+            if query_type not in ["law_inquiry", "statute_search"]:
+                # 판례 검색용 쿼리 추가
+                precedent_query = f"{base_query} 판례"
+                if precedent_query not in keyword_queries:
+                    keyword_queries.append(precedent_query)
+                
+                # 결정례 검색용 쿼리 추가
+                decision_query = f"{base_query} 결정례"
+                if decision_query not in keyword_queries:
+                    keyword_queries.append(decision_query)
 
         # keyword_queries 검증 및 수정
         if not keyword_queries or len(keyword_queries) == 0:

@@ -75,10 +75,6 @@ except ImportError:
     except ImportError:
         from core.utils.langgraph_config import LangGraphConfig
 
-# Langfuse 클라이언트 통합 (지연 import - __init__에서 실제 사용)
-LANGFUSE_CLIENT_AVAILABLE = False
-LANGFUSE_TRACE_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 # 안전한 로깅 유틸리티 import (멀티스레딩 안전)
@@ -155,9 +151,6 @@ try:
     _ = safe_log_error
 except NameError:
     safe_log_error = _safe_log_fallback_error
-
-if not LANGFUSE_CLIENT_AVAILABLE:
-    safe_log_warning(logger, "LangfuseClient not available for LangGraph workflow tracking")
 
 # CheckpointManager import
 try:
@@ -334,22 +327,6 @@ class LangGraphWorkflowService:
         if self.app is None:
             safe_log_error(self.logger, "Failed to compile workflow")
             raise RuntimeError("워크플로우 컴파일에 실패했습니다")
-
-        # LangfuseClient 초기화 (답변 품질 추적)
-        self.langfuse_client_service = None
-        if LANGFUSE_CLIENT_AVAILABLE and self.config.langfuse_enabled:
-            try:
-                try:
-                    from core.shared.clients.langfuse_client import LangfuseClient
-                except ImportError:
-                    # 호환성을 위한 fallback
-                    from core.services.langfuse_client import LangfuseClient
-                self.langfuse_client_service = LangfuseClient(self.config)
-                if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
-                    safe_log_info(self.logger, "LangfuseClient initialized for answer quality tracking")
-            except Exception as e:
-                safe_log_warning(self.logger, f"Failed to initialize LangfuseClient: {e}")
-                self.langfuse_client_service = None
 
         # A/B 테스트 관리자 초기화
         self.ab_test_manager = None
@@ -680,25 +657,111 @@ class LangGraphWorkflowService:
                                     semantic_results_for_cache = node_state["semantic_results"] if isinstance(node_state["semantic_results"], list) else []
                                 if not keyword_results_for_cache and "keyword_results" in node_state:
                                     keyword_results_for_cache = node_state["keyword_results"] if isinstance(node_state["keyword_results"], list) else []
+                                
+                                # 캐시에 저장 (이후 노드에서 사용)
+                                print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache={len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0}, keyword_results_for_cache={len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0}")
+                                if semantic_results_for_cache or keyword_results_for_cache:
+                                    if not self._search_results_cache:
+                                        self._search_results_cache = {}
+                                    if semantic_results_for_cache:
+                                        self._search_results_cache["semantic_results"] = semantic_results_for_cache
+                                        # interpretation_paragraph 확인
+                                        interpretation_in_cache = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                        print(f"[CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: 총 {len(semantic_results_for_cache)}개, interpretation_paragraph {len(interpretation_in_cache)}개")
+                                        if interpretation_in_cache:
+                                            self.logger.info(f"🔍 [CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: interpretation_paragraph {len(interpretation_in_cache)}개 포함")
+                                    if keyword_results_for_cache:
+                                        self._search_results_cache["keyword_results"] = keyword_results_for_cache
+                                    if search_group_for_cache:
+                                        if "search" not in self._search_results_cache:
+                                            self._search_results_cache["search"] = {}
+                                        self._search_results_cache["search"].update(search_group_for_cache)
+                                else:
+                                    print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache와 keyword_results_for_cache가 모두 비어있음")
+                                    print(f"   node_state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                                    if isinstance(node_state, dict) and "search" in node_state:
+                                        print(f"   search 그룹 keys: {list(node_state['search'].keys()) if isinstance(node_state['search'], dict) else 'N/A'}")
 
                                 # semantic_results와 keyword_results를 retrieved_docs로 변환
+                                # 캐시에서 가져오기 (stream_mode="updates"로 인해 node_state에 없을 수 있음)
+                                if not semantic_results_for_cache:
+                                    # 1. _search_results_cache에서 확인
+                                    if self._search_results_cache:
+                                        semantic_results_for_cache = self._search_results_cache.get("semantic_results", [])
+                                        if semantic_results_for_cache:
+                                            self.logger.debug(f"astream: Using _search_results_cache for retrieved_docs conversion: {len(semantic_results_for_cache)} docs")
+                                    # 2. 전역 캐시에서 확인
+                                    if not semantic_results_for_cache:
+                                        try:
+                                            from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                                            if _global_search_results_cache:
+                                                semantic_results_for_cache = _global_search_results_cache.get("semantic_results", [])
+                                                if semantic_results_for_cache:
+                                                    print(f"[RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
+                                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
+                                                    # interpretation_paragraph 확인
+                                                    interpretation_in_global = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                                    if interpretation_in_global:
+                                                        print(f"[RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
+                                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
+                                        except (ImportError, AttributeError):
+                                            pass
+                                
                                 combined_docs = []
                                 if isinstance(semantic_results_for_cache, list):
                                     combined_docs.extend(semantic_results_for_cache)
+                                    # interpretation_paragraph 확인
+                                    interpretation_in_semantic = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                    if interpretation_in_semantic:
+                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results_for_cache에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                                        for idx, doc in enumerate(interpretation_in_semantic, 1):
+                                            is_sample = doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample"
+                                            self.logger.info(f"   interpretation #{idx}: id={doc.get('id')}, is_sample={is_sample}, source_type={doc.get('source_type')}")
                                 if isinstance(keyword_results_for_cache, list):
                                     combined_docs.extend(keyword_results_for_cache)
 
-                                # 중복 제거 (id 기반)
+                                # 중복 제거 (id 기반, 샘플링된 문서는 항상 포함)
                                 seen_ids = set()
                                 unique_docs = []
+                                sample_docs = []  # 샘플링된 문서는 별도로 보관
+                                
+                                print(f"[RETRIEVED_DOCS] combined_docs 총 개수: {len(combined_docs)}")
+                                interpretation_in_combined = [d for d in combined_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                print(f"[RETRIEVED_DOCS] combined_docs에 interpretation_paragraph: {len(interpretation_in_combined)}개")
+                                
                                 for doc in combined_docs:
+                                    # 샘플링된 문서는 항상 포함
+                                    is_sample = doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample"
+                                    doc_type = doc.get("type") or doc.get("source_type")
+                                    if is_sample:
+                                        sample_docs.append(doc)
+                                        print(f"[RETRIEVED_DOCS] 샘플링된 문서 포함: id={doc.get('id')}, type={doc_type}")
+                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 샘플링된 문서 포함: {doc.get('id')}, type={doc_type}")
+                                        continue
+                                    
                                     doc_id = doc.get("id") or doc.get("content_id") or str(doc.get("content", ""))[:100]
                                     if doc_id not in seen_ids:
                                         seen_ids.add(doc_id)
                                         unique_docs.append(doc)
+                                
+                                # 샘플링된 문서를 마지막에 추가 (타입 다양성 보장)
+                                unique_docs.extend(sample_docs)
+                                if sample_docs:
+                                    interpretation_samples = [d for d in sample_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                    print(f"[RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
+                                    self.logger.info(f"✅ [RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
+                                    if interpretation_samples:
+                                        for idx, doc in enumerate(interpretation_samples, 1):
+                                            self.logger.info(f"   interpretation 샘플 #{idx}: id={doc.get('id')}, source_type={doc.get('source_type')}")
 
                                 # retrieved_docs를 캐시에 저장
                                 if unique_docs:
+                                    # interpretation_paragraph 확인
+                                    interpretation_in_retrieved = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                    if interpretation_in_retrieved:
+                                        print(f"[RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
+                                        self.logger.info(f"✅ [RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
+                                    
                                     if not self._search_results_cache:
                                         self._search_results_cache = {}
                                     self._search_results_cache["retrieved_docs"] = unique_docs
@@ -707,6 +770,23 @@ class LangGraphWorkflowService:
                                         self._search_results_cache["search"] = {}
                                     self._search_results_cache["search"]["retrieved_docs"] = unique_docs
                                     self._search_results_cache["search"]["merged_documents"] = unique_docs
+                                    
+                                    # 전역 캐시에도 저장 (node_wrappers에서 사용)
+                                    try:
+                                        from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                                        if not _global_search_results_cache:
+                                            _global_search_results_cache = {}
+                                        _global_search_results_cache["retrieved_docs"] = unique_docs
+                                        _global_search_results_cache["merged_documents"] = unique_docs
+                                        
+                                        # interpretation_paragraph 확인
+                                        interpretation_in_unique = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                        if interpretation_in_unique:
+                                            print(f"[RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
+                                            self.logger.info(f"✅ [RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
+                                    except (ImportError, AttributeError):
+                                        pass
+                                    
                                     self.logger.debug(f"astream: Converted semantic_results to retrieved_docs: {len(unique_docs)} docs")
                                 
                                 # search 그룹에서 카운트 확인 (변경된 경우에만 포함)
@@ -799,6 +879,28 @@ class LangGraphWorkflowService:
                                                    top_retrieved_docs if isinstance(top_retrieved_docs, list) and len(top_retrieved_docs) > 0 else
                                                    merged_documents if isinstance(merged_documents, list) and len(merged_documents) > 0 else
                                                    top_merged_docs if isinstance(top_merged_docs, list) and len(top_merged_docs) > 0 else [])
+                            
+                            # interpretation_paragraph 확인
+                            if final_retrieved_docs:
+                                interpretation_in_final = [d for d in final_retrieved_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                if interpretation_in_final:
+                                    print(f"[RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
+                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
+                            
+                            # 전역 캐시에서 확인 (final_retrieved_docs에 interpretation_paragraph가 없는 경우)
+                            if not final_retrieved_docs or not any((d.get("type") or d.get("source_type")) == "interpretation_paragraph" for d in final_retrieved_docs):
+                                try:
+                                    from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                                    if _global_search_results_cache:
+                                        cached_retrieved = _global_search_results_cache.get("retrieved_docs", [])
+                                        if cached_retrieved:
+                                            interpretation_in_cached = [d for d in cached_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                            if interpretation_in_cached:
+                                                print(f"[RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                final_retrieved_docs = cached_retrieved
+                                except (ImportError, AttributeError):
+                                    pass
 
                             if isinstance(final_retrieved_docs, list) and len(final_retrieved_docs) > 0:
                                 # 캐시 초기화 (없으면 생성)
@@ -822,7 +924,7 @@ class LangGraphWorkflowService:
 
                         # 중요: execute_searches_parallel 이후 노드들에 대해 캐시된 search 결과 복원
                         # stream_mode="updates" 사용 시 search 그룹이 변경되지 않은 노드에는 포함되지 않을 수 있음
-                        if node_name in ["merge_and_rerank_with_keyword_weights", "filter_and_validate_results", "update_search_metadata", "prepare_document_context_for_prompt"]:
+                        if node_name in ["merge_and_rerank_with_keyword_weights", "filter_and_validate_results", "update_search_metadata", "prepare_document_context_for_prompt", "process_search_results_combined"]:
                             if self._search_results_cache and isinstance(node_state, dict):
                                 # node_state에 search 그룹이 변경되었는지 확인
                                 search_group = {}
@@ -837,6 +939,23 @@ class LangGraphWorkflowService:
                                              len(search_group.get("keyword_results", [])) > 0 or
                                              (isinstance(top_semantic, list) and len(top_semantic) > 0) or
                                              (isinstance(top_keyword, list) and len(top_keyword) > 0))
+
+                                if not has_results:
+                                    # 캐시에서 복원
+                                    cached_semantic = self._search_results_cache.get("semantic_results", [])
+                                    cached_keyword = self._search_results_cache.get("keyword_results", [])
+                                    if cached_semantic or cached_keyword:
+                                        if "search" not in node_state:
+                                            node_state["search"] = {}
+                                        if cached_semantic:
+                                            node_state["search"]["semantic_results"] = cached_semantic
+                                            # interpretation_paragraph 확인
+                                            interpretation_in_cached = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                                            if interpretation_in_cached:
+                                                self.logger.info(f"🔍 [CACHE] {node_name}에서 캐시된 semantic_results 복원: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                        if cached_keyword:
+                                            node_state["search"]["keyword_results"] = cached_keyword
+                                        self.logger.debug(f"astream: Restored search results from cache for {node_name}")
 
                                 if not has_results:
                                     self.logger.debug(f"astream: Restoring search results for {node_name} from cache")
@@ -1504,18 +1623,97 @@ class LangGraphWorkflowService:
             
             self.logger.info(f"[WORKFLOW_SERVICE] Extracted related_questions: {len(related_questions)} items")
             
+            # numpy 타입 변환 함수
+            def convert_numpy_types(obj):
+                import numpy as np
+                if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                    return int(obj)
+                elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, dict):
+                    return {k: convert_numpy_types(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [convert_numpy_types(item) for item in obj]
+                return obj
+            
+            # numpy 타입 변환 적용
+            sources_detail_clean = [convert_numpy_types(d) for d in sources_detail] if sources_detail else []
+            legal_references_clean = [convert_numpy_types(r) for r in legal_references] if legal_references else []
+            related_questions_clean = [convert_numpy_types(q) for q in related_questions] if related_questions else []
+            metadata_clean = convert_numpy_types(metadata) if metadata else {}
+            
+            # ConversationManager에 턴 추가 및 conversation_history 업데이트
+            answer = flat_result.get("answer", "") if isinstance(flat_result, dict) else ""
+            query_type = flat_result.get("query_type", "general_question") if isinstance(flat_result, dict) else "general_question"
+            
+            if session_id and query and answer:
+                try:
+                    # legal_workflow에서 conversation_manager 가져오기
+                    conversation_manager = None
+                    if hasattr(self.legal_workflow, 'conversation_manager'):
+                        conversation_manager = self.legal_workflow.conversation_manager
+                    
+                    # ConversationManager에 턴 추가
+                    if conversation_manager:
+                        conversation_manager.add_turn(
+                            session_id=session_id,
+                            user_query=query,
+                            bot_response=answer,
+                            question_type=query_type
+                        )
+                        self.logger.debug(f"Added turn to ConversationManager for session {session_id}")
+                        
+                        # ConversationContext를 conversation_history 형식으로 변환하여 state에 저장
+                        # 토큰 기반으로 정리된 턴 사용 (최대 2000 토큰)
+                        context = conversation_manager.sessions.get(session_id)
+                        if context and context.turns:
+                            # 토큰 기반으로 턴 선택
+                            selected_turns = []
+                            if hasattr(self.legal_workflow, '_prune_conversation_history_by_tokens'):
+                                try:
+                                    selected_turns = self.legal_workflow._prune_conversation_history_by_tokens(
+                                        context,
+                                        max_tokens=2000
+                                    )
+                                except Exception as e:
+                                    self.logger.warning(f"Failed to prune by tokens: {e}, using recent turns")
+                                    selected_turns = context.turns[-5:]
+                            else:
+                                # 폴백: 최근 5개
+                                selected_turns = context.turns[-5:]
+                            
+                            conversation_history = []
+                            for turn in selected_turns:
+                                conversation_history.append({
+                                    "user_message": turn.user_query,
+                                    "assistant_response": turn.bot_response,
+                                    "timestamp": turn.timestamp.isoformat() if hasattr(turn.timestamp, 'isoformat') else str(turn.timestamp),
+                                    "question_type": turn.question_type
+                                })
+                            
+                            # flat_result의 multi_turn 그룹에 conversation_history 업데이트
+                            if isinstance(flat_result, dict):
+                                if "multi_turn" not in flat_result:
+                                    flat_result["multi_turn"] = {}
+                                flat_result["multi_turn"]["conversation_history"] = conversation_history
+                                self.logger.debug(f"Updated conversation_history in state: {len(conversation_history)} turns")
+                except Exception as e:
+                    self.logger.warning(f"Failed to update conversation history: {e}", exc_info=True)
+            
             response = {
                 "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
                 "sources": sources,
-                "sources_detail": sources_detail,
+                "sources_detail": sources_detail_clean,
                 "confidence": flat_result.get("confidence", 0.0) if isinstance(flat_result, dict) else 0.0,
-                "legal_references": legal_references,
-                "related_questions": related_questions,  # related_questions 추가
+                "legal_references": legal_references_clean,
+                "related_questions": related_questions_clean,  # related_questions 추가
                 "processing_steps": processing_steps,
                 "session_id": session_id,
                 "processing_time": processing_time,
                 "query_type": flat_result.get("query_type", "") if isinstance(flat_result, dict) else "",
-                "metadata": metadata,
+                "metadata": metadata_clean,
                 "errors": flat_result.get("errors", []) if isinstance(flat_result, dict) else [],
                 # 새로 추가된 필드들
                 "legal_field": flat_result.get("legal_field", "unknown") if isinstance(flat_result, dict) else "unknown",
@@ -1535,10 +1733,6 @@ class LangGraphWorkflowService:
                 # retrieved_docs는 search 그룹 또는 최상위 레벨에 있을 수 있음
                 "retrieved_docs": retrieved_docs
             }
-
-            # Langfuse에 답변 품질 추적
-            if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
-                self._track_answer_quality(query, response, processing_time)
 
             self.logger.info(f"Query processed successfully in {processing_time:.2f}s")
             return response
@@ -1670,6 +1864,10 @@ class LangGraphWorkflowService:
                 # semantic_results를 retrieved_docs로 변환 (최상위 레벨)
                 cached_semantic = _global_search_results_cache.get("semantic_results", [])
                 if isinstance(cached_semantic, list) and len(cached_semantic) > 0:
+                    # interpretation_paragraph 확인
+                    interpretation_in_semantic = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                    if interpretation_in_semantic:
+                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                     self.logger.debug(f"Converting semantic_results to retrieved_docs (top level): {len(cached_semantic)}")
                     return cached_semantic
         except (ImportError, AttributeError, TypeError):
@@ -1680,6 +1878,10 @@ class LangGraphWorkflowService:
             search_group = flat_result["search"]
             semantic_results = search_group.get("semantic_results", [])
             if isinstance(semantic_results, list) and len(semantic_results) > 0:
+                # interpretation_paragraph 확인
+                interpretation_in_semantic = [d for d in semantic_results if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                if interpretation_in_semantic:
+                    self.logger.info(f"🔍 [RETRIEVED_DOCS] search 그룹의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                 self.logger.debug(f"Converting semantic_results to retrieved_docs from search group: {len(semantic_results)}")
                 return semantic_results
 
@@ -1687,6 +1889,10 @@ class LangGraphWorkflowService:
         if "semantic_results" in flat_result:
             semantic_results = flat_result.get("semantic_results", [])
             if isinstance(semantic_results, list) and len(semantic_results) > 0:
+                # interpretation_paragraph 확인
+                interpretation_in_semantic = [d for d in semantic_results if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
+                if interpretation_in_semantic:
+                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 최상위 레벨의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                 self.logger.debug(f"Converting semantic_results to retrieved_docs from top level: {len(semantic_results)}")
                 return semantic_results
 
@@ -1858,6 +2064,18 @@ class LangGraphWorkflowService:
         try:
             self.logger.info(f"Resuming session: {session_id}")
 
+            # 체크포인트에서 이전 상태 확인 및 대화 맥락 복원
+            if self.checkpoint_manager and self.app:
+                try:
+                    config = {"configurable": {"thread_id": session_id}}
+                    current_state = await self.app.aget_state(config)
+                    
+                    if current_state and current_state.values:
+                        # conversation_history를 ConversationManager에 복원
+                        self._restore_conversation_from_checkpoint(session_id, current_state.values)
+                except Exception as e:
+                    self.logger.warning(f"Failed to restore conversation from checkpoint: {e}")
+
             # 체크포인트에서 이전 상태 확인 (checkpoint_manager가 있는 경우)
             if self.checkpoint_manager:
                 checkpoints = self.checkpoint_manager.list_checkpoints(session_id)
@@ -1926,6 +2144,9 @@ class LangGraphWorkflowService:
                         {"continue": True},
                         config={"recursion_limit": 50, **config}
                     )
+                    
+                    # conversation_history를 ConversationManager에 복원
+                    self._restore_conversation_from_checkpoint(session_id, current_state.values)
                     
                     # 결과에서 답변 추출
                     continued_answer = result.get("answer", "")
@@ -2157,87 +2378,6 @@ class LangGraphWorkflowService:
                 "timestamp": datetime.now().isoformat()
             }
 
-    def _track_answer_quality(self, query: str, response: Dict[str, Any], processing_time: float):
-        """
-        Langfuse에 답변 품질 추적
-
-        Args:
-            query: 사용자 질문
-            response: 응답 결과
-            processing_time: 처리 시간
-        """
-        if not self.langfuse_client_service or not self.langfuse_client_service.is_enabled():
-            return
-
-        try:
-            # 답변 품질 점수 계산 (종합 점수)
-            quality_score = self._calculate_quality_score(response)
-
-            # 답변 품질 메트릭 추적
-            trace_id = self.langfuse_client_service.track_answer_quality_metrics(
-                query=query,
-                answer=response.get("answer", ""),
-                confidence=response.get("confidence", 0.0),
-                sources_count=len(response.get("sources", [])),
-                legal_refs_count=len(response.get("legal_references", [])),
-                processing_time=processing_time,
-                has_errors=len(response.get("errors", [])) > 0,
-                overall_quality=quality_score
-            )
-
-            self.logger.info(f"Answer quality tracked in Langfuse: quality_score={quality_score:.2f}, trace_id={trace_id}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to track answer quality in Langfuse: {e}")
-
-    def _calculate_quality_score(self, response: Dict[str, Any]) -> float:
-        """
-        답변 품질 점수 계산
-
-        Args:
-            response: 응답 결과
-
-        Returns:
-            float: 품질 점수 (0.0 ~ 1.0)
-        """
-        score = 0.0
-        max_score = 0.0
-
-        # 답변 길이 (20점)
-        answer = response.get("answer", "")
-        if len(answer) >= 50:
-            score += 10
-        if len(answer) >= 100:
-            score += 10
-        max_score += 20
-
-        # 신뢰도 (30점)
-        confidence = response.get("confidence", 0.0)
-        score += confidence * 30
-        max_score += 30
-
-        # 소스 제공 (20점)
-        sources_count = len(response.get("sources", []))
-        if sources_count > 0:
-            score += min(20, sources_count * 5)
-        max_score += 20
-
-        # 법률 참조 (20점)
-        legal_refs_count = len(response.get("legal_references", []))
-        if legal_refs_count > 0:
-            score += min(20, legal_refs_count * 10)
-        max_score += 20
-
-        # 에러 없음 (10점)
-        errors_count = len(response.get("errors", []))
-        if errors_count == 0:
-            score += 10
-        max_score += 10
-
-        # 정규화된 점수
-        quality_score = score / max_score if max_score > 0 else 0.0
-        return round(quality_score, 2)
-
     def _prepare_and_validate_initial_state(self, query: str, session_id: str) -> Dict[str, Any]:
         """초기 상태 준비 및 검증"""
         initial_state = create_initial_legal_state(query, session_id)
@@ -2288,6 +2428,71 @@ class LangGraphWorkflowService:
         
         return True
     
+    def _restore_conversation_from_checkpoint(
+        self, 
+        session_id: str, 
+        state: Dict[str, Any]
+    ):
+        """
+        체크포인트에서 복원된 state의 conversation_history를 ConversationManager에 동기화
+        
+        Args:
+            session_id: 세션 ID
+            state: 체크포인트에서 복원된 state
+        """
+        try:
+            # legal_workflow에서 conversation_manager 가져오기
+            conversation_manager = None
+            if hasattr(self.legal_workflow, 'conversation_manager'):
+                conversation_manager = self.legal_workflow.conversation_manager
+            
+            if not conversation_manager:
+                return
+            
+            # conversation_history 추출
+            conversation_history = []
+            
+            # multi_turn 그룹에서 확인
+            if "multi_turn" in state and isinstance(state["multi_turn"], dict):
+                conversation_history = state["multi_turn"].get("conversation_history", [])
+            
+            # 최상위 레벨에서 확인 (fallback)
+            if not conversation_history and "conversation_history" in state:
+                conversation_history = state["conversation_history"]
+            
+            if not conversation_history:
+                self.logger.debug(f"No conversation_history found in checkpoint for session {session_id}")
+                return
+            
+            # ConversationManager에 턴 복원
+            for turn_data in conversation_history:
+                if isinstance(turn_data, dict):
+                    user_message = turn_data.get("user_message", "")
+                    assistant_response = turn_data.get("assistant_response", "")
+                    question_type = turn_data.get("question_type")
+                    
+                    if user_message and assistant_response:
+                        # 이미 존재하는 턴인지 확인 (중복 방지)
+                        context = conversation_manager.sessions.get(session_id)
+                        if context and context.turns:
+                            # 마지막 턴과 비교하여 중복 확인
+                            last_turn = context.turns[-1]
+                            if (last_turn.user_query == user_message and 
+                                last_turn.bot_response == assistant_response):
+                                continue
+                        
+                        conversation_manager.add_turn(
+                            session_id=session_id,
+                            user_query=user_message,
+                            bot_response=assistant_response,
+                            question_type=question_type
+                        )
+            
+            self.logger.info(f"Restored {len(conversation_history)} turns from checkpoint for session {session_id}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to restore conversation from checkpoint: {e}", exc_info=True)
+
     def _restore_input_group(self, node_state: Dict[str, Any], node_name: str) -> None:
         """input 그룹 복원 (State Reduction으로 인한 데이터 손실 방지)"""
         if not isinstance(node_state, dict) or not self._initial_input:

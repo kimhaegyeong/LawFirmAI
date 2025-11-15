@@ -1942,6 +1942,33 @@ class AnswerFormatterHandler:
 
         normalized_sources_clean = [convert_numpy_types(s) for s in normalized_sources[:MAX_SOURCES_LIMIT]]
         final_sources_detail_clean = [convert_numpy_types(d) for d in final_sources_detail[:MAX_SOURCES_LIMIT]]
+        
+        if final_sources_detail_clean:
+            full_texts_map = self._get_full_texts_batch(final_sources_detail_clean)
+            
+            for detail in final_sources_detail_clean:
+                source_type = detail.get("type")
+                doc_id = detail.get("case_number") or detail.get("decision_number") or detail.get("interpretation_number")
+                metadata = detail.get("metadata", {})
+                
+                if not detail.get("content") or len(detail.get("content", "")) < 500:
+                    if source_type == "case_paragraph" and doc_id and doc_id in full_texts_map:
+                        detail["content"] = full_texts_map[doc_id]
+                        self.logger.debug(f"Added full text to case detail: {len(detail['content'])} chars")
+                    elif source_type == "decision_paragraph" and doc_id and doc_id in full_texts_map:
+                        detail["content"] = full_texts_map[doc_id]
+                        self.logger.debug(f"Added full text to decision detail: {len(detail['content'])} chars")
+                    elif source_type == "interpretation_paragraph" and doc_id and doc_id in full_texts_map:
+                        detail["content"] = full_texts_map[doc_id]
+                        self.logger.debug(f"Added full text to interpretation detail: {len(detail['content'])} chars")
+                    elif source_type == "statute_article":
+                        statute_id = metadata.get("statute_id")
+                        article_no = detail.get("article_no") or metadata.get("article_no")
+                        if statute_id and article_no:
+                            key = f"{statute_id}_{article_no}"
+                            if key in full_texts_map:
+                                detail["content"] = full_texts_map[key]
+                                self.logger.debug(f"Added full text to statute detail: {len(detail['content'])} chars")
 
         if "common" not in state:
             state["common"] = {}
@@ -2161,6 +2188,206 @@ class AnswerFormatterHandler:
         else:
             return f"문서 {doc_index}"
 
+    def _get_full_text_from_database(
+        self,
+        source_type: Optional[str],
+        doc: Dict[str, Any],
+        metadata: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        데이터베이스에서 전체 본문 조회
+        
+        Args:
+            source_type: 문서 타입 (case_paragraph, decision_paragraph, interpretation_paragraph, statute_article)
+            doc: 검색 결과 문서
+            metadata: 메타데이터
+        
+        Returns:
+            전체 본문 텍스트 또는 None
+        """
+        try:
+            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+            from core.utils.config import Config
+            
+            config = Config()
+            connector = LegalDataConnectorV2(config.database_path)
+            conn = connector._get_connection()
+            cursor = conn.cursor()
+            
+            full_text = None
+            
+            if source_type == "case_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
+                if doc_id:
+                    cursor.execute("""
+                        SELECT COALESCE(full_text, searchable_text) as full_text
+                        FROM cases
+                        WHERE doc_id = ?
+                    """, (doc_id,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        full_text = row[0]
+            
+            elif source_type == "decision_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id")
+                if doc_id:
+                    cursor.execute("""
+                        SELECT GROUP_CONCAT(dp.text, '\n\n') as full_text
+                        FROM decision_paragraphs dp
+                        JOIN decisions d ON dp.decision_id = d.id
+                        WHERE d.doc_id = ?
+                        GROUP BY d.doc_id
+                        ORDER BY dp.para_index
+                    """, (doc_id,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        full_text = row[0]
+            
+            elif source_type == "interpretation_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("interpretation_id")
+                if doc_id:
+                    cursor.execute("""
+                        SELECT GROUP_CONCAT(ip.text, '\n\n') as full_text
+                        FROM interpretation_paragraphs ip
+                        JOIN interpretations i ON ip.interpretation_id = i.id
+                        WHERE i.doc_id = ?
+                        GROUP BY i.doc_id
+                        ORDER BY ip.para_index
+                    """, (doc_id,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        full_text = row[0]
+            
+            elif source_type == "statute_article":
+                statute_id = doc.get("statute_id") or metadata.get("statute_id")
+                article_no = doc.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
+                if statute_id and article_no:
+                    cursor.execute("""
+                        SELECT text
+                        FROM statute_articles
+                        WHERE statute_id = ? AND article_no = ?
+                    """, (statute_id, article_no))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        full_text = row[0]
+            
+            conn.close()
+            return full_text if full_text and len(full_text.strip()) > 0 else None
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to get full text from database: {e}")
+            return None
+
+    def _get_full_texts_batch(
+        self,
+        source_details: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        여러 문서의 전체 본문을 배치로 조회
+        
+        Args:
+            source_details: source_detail 딕셔너리 리스트
+        
+        Returns:
+            {doc_id: full_text} 딕셔너리
+        """
+        try:
+            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+            from core.utils.config import Config
+            
+            config = Config()
+            connector = LegalDataConnectorV2(config.database_path)
+            conn = connector._get_connection()
+            cursor = conn.cursor()
+            
+            full_texts = {}
+            
+            cases = []
+            decisions = []
+            interpretations = []
+            statutes = []
+            
+            for detail in source_details:
+                source_type = detail.get("type")
+                doc_id = detail.get("case_number") or detail.get("decision_number") or detail.get("interpretation_number")
+                metadata = detail.get("metadata", {})
+                
+                if source_type == "case_paragraph" and doc_id:
+                    cases.append((doc_id, detail))
+                elif source_type == "decision_paragraph" and doc_id:
+                    decisions.append((doc_id, detail))
+                elif source_type == "interpretation_paragraph" and doc_id:
+                    interpretations.append((doc_id, detail))
+                elif source_type == "statute_article":
+                    statute_id = metadata.get("statute_id")
+                    article_no = detail.get("article_no") or metadata.get("article_no")
+                    if statute_id and article_no:
+                        statutes.append((statute_id, article_no, detail))
+            
+            if cases:
+                doc_ids = [doc_id for doc_id, _ in cases]
+                if doc_ids:
+                    placeholders = ','.join(['?'] * len(doc_ids))
+                    cursor.execute(f"""
+                        SELECT doc_id, COALESCE(full_text, searchable_text) as full_text
+                        FROM cases
+                        WHERE doc_id IN ({placeholders})
+                    """, doc_ids)
+                    for row in cursor.fetchall():
+                        if row[0] and row[1]:
+                            full_texts[row[0]] = row[1]
+            
+            if decisions:
+                doc_ids = [doc_id for doc_id, _ in decisions]
+                if doc_ids:
+                    placeholders = ','.join(['?'] * len(doc_ids))
+                    cursor.execute(f"""
+                        SELECT d.doc_id, GROUP_CONCAT(dp.text, '\n\n') as full_text
+                        FROM decision_paragraphs dp
+                        JOIN decisions d ON dp.decision_id = d.id
+                        WHERE d.doc_id IN ({placeholders})
+                        GROUP BY d.doc_id
+                        ORDER BY d.doc_id, dp.para_index
+                    """, doc_ids)
+                    for row in cursor.fetchall():
+                        if row[0] and row[1]:
+                            full_texts[row[0]] = row[1]
+            
+            if interpretations:
+                doc_ids = [doc_id for doc_id, _ in interpretations]
+                if doc_ids:
+                    placeholders = ','.join(['?'] * len(doc_ids))
+                    cursor.execute(f"""
+                        SELECT i.doc_id, GROUP_CONCAT(ip.text, '\n\n') as full_text
+                        FROM interpretation_paragraphs ip
+                        JOIN interpretations i ON ip.interpretation_id = i.id
+                        WHERE i.doc_id IN ({placeholders})
+                        GROUP BY i.doc_id
+                        ORDER BY i.doc_id, ip.para_index
+                    """, doc_ids)
+                    for row in cursor.fetchall():
+                        if row[0] and row[1]:
+                            full_texts[row[0]] = row[1]
+            
+            if statutes:
+                for statute_id, article_no, detail in statutes:
+                    cursor.execute("""
+                        SELECT text
+                        FROM statute_articles
+                        WHERE statute_id = ? AND article_no = ?
+                    """, (statute_id, article_no))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        key = f"{statute_id}_{article_no}"
+                        full_texts[key] = row[0]
+            
+            conn.close()
+            return full_texts
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to get full texts in batch: {e}")
+            return {}
+
     def _create_source_detail_dict(
         self,
         source_str: str,
@@ -2187,8 +2414,14 @@ class AnswerFormatterHandler:
                     if meta.get("article_no"):
                         detail_dict["article_no"] = meta["article_no"]
                 elif source_type == "case_paragraph":
-                    if meta.get("doc_id"):
-                        detail_dict["case_number"] = meta["doc_id"]
+                    doc_id = (
+                        meta.get("doc_id") or 
+                        doc.get("doc_id") or 
+                        metadata.get("doc_id") or 
+                        metadata.get("case_id") or
+                        ""
+                    )
+                    detail_dict["case_number"] = doc_id
                     if meta.get("court"):
                         detail_dict["court"] = meta["court"]
                     # casenames를 case_name으로 변환
@@ -2206,6 +2439,13 @@ class AnswerFormatterHandler:
                         detail_dict["org"] = meta["org"]
             
             content = doc.get("content") or doc.get("text") or ""
+            
+            if not content or len(content.strip()) < 500:
+                full_text = self._get_full_text_from_database(source_type, doc, source_info_detail.metadata or {})
+                if full_text:
+                    content = full_text
+                    self.logger.debug(f"Retrieved full text from database for {source_type}: {len(content)} chars")
+            
             if content:
                 detail_dict["content"] = content
             
@@ -2226,9 +2466,13 @@ class AnswerFormatterHandler:
                 if article_no:
                     detail_dict["article_no"] = article_no
             elif source_type == "case_paragraph":
-                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
-                if doc_id:
-                    detail_dict["case_number"] = doc_id
+                doc_id = (
+                    doc.get("doc_id") or 
+                    metadata.get("doc_id") or 
+                    metadata.get("case_id") or
+                    ""
+                )
+                detail_dict["case_number"] = doc_id
                 if doc.get("court") or metadata.get("court"):
                     detail_dict["court"] = doc.get("court") or metadata.get("court")
                 # casenames를 case_name으로 변환
@@ -2241,8 +2485,21 @@ class AnswerFormatterHandler:
                     detail_dict["decision_number"] = doc_id
                 if doc.get("org") or metadata.get("org"):
                     detail_dict["org"] = doc.get("org") or metadata.get("org")
+            elif source_type == "interpretation_paragraph":
+                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("interpretation_id")
+                if doc_id:
+                    detail_dict["interpretation_number"] = doc_id
+                if doc.get("org") or metadata.get("org"):
+                    detail_dict["org"] = doc.get("org") or metadata.get("org")
             
             content = doc.get("content") or doc.get("text") or ""
+            
+            if not content or len(content.strip()) < 500:
+                full_text = self._get_full_text_from_database(source_type, doc, metadata)
+                if full_text:
+                    content = full_text
+                    self.logger.debug(f"Retrieved full text from database for {source_type}: {len(content)} chars")
+            
             if content:
                 detail_dict["content"] = content
             

@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import concurrent.futures
 import hashlib
 import logging
 import os
@@ -736,13 +737,36 @@ class EnhancedLegalQuestionWorkflow(
                 # 캐시 미스인 경우 AI 키워드 확장 수행
                 if not expansion_result:
                     try:
-                        expansion_result = asyncio.run(
-                            self.ai_keyword_generator.expand_domain_keywords(
-                                domain=domain,
-                                base_keywords=keywords,
-                                target_count=30
+                        # 현재 실행 중인 이벤트 루프 확인
+                        try:
+                            loop = asyncio.get_running_loop()
+                            # 이미 실행 중인 루프가 있는 경우, 새 스레드에서 실행
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(
+                                    lambda: asyncio.run(
+                                        asyncio.wait_for(
+                                            self.ai_keyword_generator.expand_domain_keywords(
+                                                domain=domain,
+                                                base_keywords=keywords,
+                                                target_count=30
+                                            ),
+                                            timeout=10.0
+                                        )
+                                    )
+                                )
+                                expansion_result = future.result(timeout=15.0)
+                        except RuntimeError:
+                            # 실행 중인 루프가 없는 경우, 직접 실행
+                            expansion_result = asyncio.run(
+                                asyncio.wait_for(
+                                    self.ai_keyword_generator.expand_domain_keywords(
+                                        domain=domain,
+                                        base_keywords=keywords,
+                                        target_count=30
+                                    ),
+                                    timeout=10.0
+                                )
                             )
-                        )
                         
                         # 캐시 저장 (개발 환경이 아닐 때만)
                         if expansion_result and expansion_result.api_call_success and not is_development:
@@ -768,6 +792,12 @@ class EnhancedLegalQuestionWorkflow(
                             except Exception as e:
                                 self.logger.debug(f"키워드 확장 캐시 저장 중 오류 (무시): {e}")
                         
+                    except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as e:
+                        self.logger.warning(f"AI keyword expansion timeout (10s): {e}")
+                        expansion_result = None
+                    except asyncio.CancelledError as e:
+                        self.logger.warning(f"AI keyword expansion cancelled: {e}")
+                        expansion_result = None
                     except Exception as e:
                         self.logger.warning(f"AI keyword expansion failed: {e}")
                         expansion_result = None
@@ -932,9 +962,24 @@ class EnhancedLegalQuestionWorkflow(
             
             # Agent 실행
             try:
+                # 대화 맥락 가져오기
+                session_id = self._get_state_value(state, "session_id", "")
+                chat_history = []
+                
+                if session_id:
+                    conversation_context = self._get_or_create_conversation_context(session_id)
+                    if conversation_context:
+                        chat_history = self._convert_conversation_context_to_messages(
+                            conversation_context, 
+                            max_turns=5,
+                            current_query=query,
+                            use_relevance=True
+                        )
+                        self.logger.info(f"Loaded {len(chat_history)} messages from conversation context (relevance-based)")
+                
                 result = self.agentic_agent.invoke({
                     "input": query,
-                    "chat_history": []  # 대화 이력은 향후 확장 가능
+                    "chat_history": chat_history
                 })
                 
                 # Agent 실행 결과에서 Tool 호출 정보 추출
@@ -1796,6 +1841,155 @@ class EnhancedLegalQuestionWorkflow(
         if result is None and context is not None:
             self.logger.error(f"Error building conversation context dict")
         return result
+
+    def _convert_conversation_context_to_messages(
+        self, 
+        context, 
+        max_turns: int = 5,
+        current_query: str = "",
+        use_relevance: bool = True,
+        max_tokens: Optional[int] = None
+    ) -> List:
+        """
+        ConversationContext를 LangChain Message 형식으로 변환
+        관련성 기반 또는 토큰 기반으로 턴을 선택할 수 있음
+        
+        Args:
+            context: ConversationContext 객체
+            max_turns: 최대 변환할 턴 수
+            current_query: 현재 질문 (관련성 계산용)
+            use_relevance: 관련성 기반 선택 사용 여부
+            max_tokens: 최대 토큰 수 (지정 시 토큰 기반 선택 사용)
+            
+        Returns:
+            List[BaseMessage]: LangChain Message 리스트
+        """
+        try:
+            from langchain_core.messages import HumanMessage, AIMessage
+            
+            messages = []
+            if not context or not hasattr(context, 'turns') or not context.turns:
+                return messages
+            
+            selected_turns = []
+            
+            # 토큰 기반 선택 (우선순위 1)
+            if max_tokens and max_tokens > 0:
+                try:
+                    selected_turns = self._prune_conversation_history_by_tokens(
+                        context,
+                        max_tokens=max_tokens
+                    )
+                    if selected_turns:
+                        self.logger.debug(f"Selected {len(selected_turns)} turns based on token limit ({max_tokens})")
+                except Exception as e:
+                    self.logger.warning(f"Failed to use token-based selection: {e}, falling back to relevance/recent")
+            
+            # 관련성 기반 선택 (우선순위 2, 토큰 기반이 실패하거나 사용하지 않는 경우)
+            if not selected_turns and use_relevance and current_query and self.conversation_manager:
+                try:
+                    relevant_context = self.conversation_manager.get_relevant_context(
+                        context.session_id,
+                        current_query,
+                        max_turns=max_turns
+                    )
+                    
+                    if relevant_context and relevant_context.get("relevant_turns"):
+                        # 관련 턴에서 실제 ConversationTurn 객체 찾기
+                        relevant_turn_data = relevant_context["relevant_turns"]
+                        for turn_data in relevant_turn_data:
+                            user_query = turn_data.get("user_query", "")
+                            bot_response = turn_data.get("bot_response", "")
+                            
+                            if user_query:
+                                messages.append(HumanMessage(content=user_query))
+                            if bot_response:
+                                # "..." 제거 (get_relevant_context에서 추가된 것)
+                                clean_response = bot_response.replace("...", "").strip()
+                                messages.append(AIMessage(content=clean_response))
+                        
+                        self.logger.debug(f"Selected {len(relevant_turn_data)} relevant turns based on relevance")
+                        return messages
+                except Exception as e:
+                    self.logger.warning(f"Failed to use relevance-based selection: {e}, falling back to recent turns")
+            
+            # 폴백: 최근 턴만 선택 (토큰 기반 선택 결과 사용 또는 최근 턴)
+            if not selected_turns:
+                selected_turns = context.turns[-max_turns:] if len(context.turns) > max_turns else context.turns
+            
+            # 선택된 턴을 메시지로 변환
+            for turn in selected_turns:
+                if hasattr(turn, 'user_query') and turn.user_query:
+                    messages.append(HumanMessage(content=turn.user_query))
+                if hasattr(turn, 'bot_response') and turn.bot_response:
+                    messages.append(AIMessage(content=turn.bot_response))
+            
+            self.logger.debug(f"Converted {len(selected_turns)} turns to {len(messages)} messages")
+            return messages
+            
+        except ImportError:
+            self.logger.warning("langchain_core.messages not available, returning empty list")
+            return []
+        except Exception as e:
+            self.logger.error(f"Error converting conversation context to messages: {e}")
+            return []
+
+    def _prune_conversation_history_by_tokens(
+        self,
+        context,
+        max_tokens: int = 2000
+    ) -> List:
+        """
+        토큰 수 기반으로 대화 이력 정리
+        
+        Args:
+            context: ConversationContext 객체
+            max_tokens: 최대 토큰 수
+            
+        Returns:
+            List[ConversationTurn]: 선택된 턴 리스트
+        """
+        try:
+            if not context or not hasattr(context, 'turns') or not context.turns:
+                return []
+            
+            selected_turns = []
+            total_tokens = 0
+            
+            def _estimate_tokens(text: str) -> int:
+                """간단한 토큰 수 추정 (한글 기준 약 1.5배)"""
+                if not text:
+                    return 0
+                # 한글은 평균적으로 영어보다 토큰 수가 많음
+                # 대략적인 추정: 문자 수 / 3 (한글 기준)
+                return len(text) // 3
+            
+            # 최근 턴부터 역순으로 검사 (최신 우선)
+            for turn in reversed(context.turns):
+                turn_text = ""
+                if hasattr(turn, 'user_query') and turn.user_query:
+                    turn_text += turn.user_query + " "
+                if hasattr(turn, 'bot_response') and turn.bot_response:
+                    turn_text += turn.bot_response
+                
+                turn_tokens = _estimate_tokens(turn_text)
+                
+                if total_tokens + turn_tokens <= max_tokens:
+                    selected_turns.insert(0, turn)  # 시간순 유지
+                    total_tokens += turn_tokens
+                else:
+                    # 토큰 제한 초과 시 중단
+                    break
+            
+            self.logger.debug(f"Pruned conversation history: {len(context.turns)} → {len(selected_turns)} turns ({total_tokens} tokens)")
+            return selected_turns
+            
+        except Exception as e:
+            self.logger.error(f"Error pruning conversation history by tokens: {e}")
+            # 폴백: 최근 5개 턴 반환
+            if context and hasattr(context, 'turns') and context.turns:
+                return context.turns[-5:]
+            return []
 
     # 직접 답변 생성 래퍼 메서드 (DirectAnswerHandler)
     def _generate_direct_answer_with_chain(self, query: str, llm) -> Optional[str]:

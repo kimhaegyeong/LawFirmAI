@@ -16,11 +16,6 @@ def disable_external_logging():
     외부 라이브러리의 로깅을 비활성화합니다.
     HuggingFace 관련 모든 로거를 포함하여 완전히 비활성화합니다.
     """
-    # 환경 변수로 HuggingFace 로깅 비활성화
-    os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-    os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
-    
     # FAISS 로깅 비활성화
     faiss_loggers = ['faiss', 'faiss.loader']
     for logger_name in faiss_loggers:

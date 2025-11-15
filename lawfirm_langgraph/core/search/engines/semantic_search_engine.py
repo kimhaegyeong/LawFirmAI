@@ -146,8 +146,6 @@ class SemanticSearchEngine:
                 # meta device 사용 방지
                 original_env = {}
                 try:
-                    original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
-                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                     if 'HF_DEVICE_MAP' in os.environ:
                         original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
                         del os.environ['HF_DEVICE_MAP']

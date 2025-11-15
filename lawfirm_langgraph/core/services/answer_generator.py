@@ -67,10 +67,9 @@ class AnswerResult:
 class AnswerGenerator:
     """답변 생성 엔진"""
     
-    def __init__(self, config, langfuse_client=None):
+    def __init__(self, config):
         """답변 생성기 초기화"""
         self.config = config
-        self.langfuse_client = langfuse_client
         self.logger = logging.getLogger(__name__)
         
         # LLM 초기화
@@ -239,16 +238,6 @@ class AnswerGenerator:
             # 통계 업데이트
             self._update_stats(result)
             
-            # Langfuse 추적
-            if self.langfuse_client and self.langfuse_client.is_enabled():
-                self.langfuse_client.track_llm_call(
-                    model=self.config.llm_model,
-                    prompt=f"Query: {query}\nContext: {context[:200]}...",
-                    response=answer,
-                    tokens_used=tokens_used,
-                    response_time=response_time
-                )
-            
             self.logger.info(f"Generated answer in {response_time:.2f}s with confidence {confidence:.2f}")
             return result
             
@@ -256,13 +245,6 @@ class AnswerGenerator:
             end_time = time.time()
             response_time = end_time - start_time
             
-            # 오류 추적
-            if self.langfuse_client and self.langfuse_client.is_enabled():
-                self.langfuse_client.track_error(
-                    error_type=type(e).__name__,
-                    error_message=str(e),
-                    context={"query": query, "template_type": template_type}
-                )
             
             logger.error(f"Failed to generate answer: {e}")
             

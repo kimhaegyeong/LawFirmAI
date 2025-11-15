@@ -56,13 +56,10 @@ except ImportError:
                 # meta device 사용을 완전히 방지하기 위한 환경 변수 설정
                 original_env = {}
                 try:
-                    # HuggingFace Hub 관련 환경 변수 저장 및 설정
-                    original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
                     original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = os.environ.get('TRANSFORMERS_NO_ADVISORY_WARNINGS', None)
                     original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
                     
                     # meta device 방지를 위한 환경 변수 설정
-                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
                     
                     # device_map 사용 방지
@@ -97,11 +94,6 @@ except ImportError:
                     
                     # 환경 변수 복원
                     try:
-                        if original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
-                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                        elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
-                            del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                        
                         if original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
                             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
                         elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
@@ -125,11 +117,6 @@ except ImportError:
                 except Exception as cpu_error:
                     # 환경 변수 복원
                     try:
-                        if original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
-                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                        elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
-                            del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                        
                         if original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
                             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
                         elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
@@ -147,7 +134,6 @@ except ImportError:
                         try:
                             # 환경 변수를 더 적극적으로 설정
                             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
-                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                             if 'HF_DEVICE_MAP' in os.environ:
                                 del os.environ['HF_DEVICE_MAP']
                             
@@ -168,7 +154,6 @@ except ImportError:
                             # 핵심: AutoModel.from_pretrained가 메타 디바이스에 로드되지 않도록 방지
                             
                             # 추가 환경 변수 설정 (메타 디바이스 완전 방지)
-                            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
                             os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
                             if 'HF_DEVICE_MAP' in os.environ:
@@ -318,7 +303,6 @@ except ImportError:
                                 try:
                                     # 모델을 완전히 재로드 (더 안전한 옵션 사용)
                                     # 추가 환경 변수 설정
-                                    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                                     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
                                     if 'HF_DEVICE_MAP' in os.environ:
                                         del os.environ['HF_DEVICE_MAP']
@@ -566,13 +550,10 @@ except ImportError:
                     # ===== 근본적인 해결: fallback 모델 로딩 전 환경 변수 설정 =====
                     fallback_original_env = {}
                     try:
-                        # HuggingFace Hub 관련 환경 변수 저장 및 설정
-                        fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = os.environ.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', None)
                         fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = os.environ.get('TRANSFORMERS_NO_ADVISORY_WARNINGS', None)
                         fallback_original_env['HF_DEVICE_MAP'] = os.environ.get('HF_DEVICE_MAP', None)
                         
                         # meta device 방지를 위한 환경 변수 설정
-                        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                         os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
                         
                         # device_map 사용 방지
@@ -599,11 +580,6 @@ except ImportError:
                         
                         # 환경 변수 복원
                         try:
-                            if fallback_original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
-                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                            elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
-                                del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                            
                             if fallback_original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
                                 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
                             elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
@@ -620,11 +596,6 @@ except ImportError:
                     except Exception as fallback_error:
                         # 환경 변수 복원
                         try:
-                            if fallback_original_env.get('HF_HUB_DISABLE_EXPERIMENTAL_WARNING') is not None:
-                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = fallback_original_env['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                            elif 'HF_HUB_DISABLE_EXPERIMENTAL_WARNING' in os.environ:
-                                del os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING']
-                            
                             if fallback_original_env.get('TRANSFORMERS_NO_ADVISORY_WARNINGS') is not None:
                                 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = fallback_original_env['TRANSFORMERS_NO_ADVISORY_WARNINGS']
                             elif 'TRANSFORMERS_NO_ADVISORY_WARNINGS' in os.environ:
@@ -642,7 +613,6 @@ except ImportError:
                             try:
                                 # 환경 변수를 더 적극적으로 설정
                                 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
-                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                                 if 'HF_DEVICE_MAP' in os.environ:
                                     del os.environ['HF_DEVICE_MAP']
                                 
@@ -661,7 +631,6 @@ except ImportError:
                                 # meta tensor 오류를 완전히 방지하기 위한 추가 옵션
                                 # 개선: 더 강력한 메타 디바이스 방지 로직
                                 # 추가 환경 변수 설정
-                                os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
                                 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
                                 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
                                 if 'HF_DEVICE_MAP' in os.environ:

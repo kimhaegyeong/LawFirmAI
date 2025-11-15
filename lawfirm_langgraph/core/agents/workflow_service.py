@@ -38,21 +38,7 @@ except ImportError:
     except ImportError:
         from core.utils.langgraph_config import LangGraphConfig
 
-# Langfuse 클라이언트 통합
-try:
-    from langfuse import Langfuse, trace
-
-    from core.services.langfuse_client import LangfuseClient
-    LANGFUSE_CLIENT_AVAILABLE = True
-    LANGFUSE_TRACE_AVAILABLE = True
-except ImportError:
-    LANGFUSE_CLIENT_AVAILABLE = False
-    LANGFUSE_TRACE_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
-
-if not LANGFUSE_CLIENT_AVAILABLE:
-    logger.warning("LangfuseClient not available for LangGraph workflow tracking")
 
 # from core.agents.checkpoint_manager import CheckpointManager
 from core.agents.state_definitions import create_initial_legal_state
@@ -128,18 +114,6 @@ class LangGraphWorkflowService:
         if self.app is None:
             self.logger.error("Failed to compile workflow")
             raise RuntimeError("워크플로우 컴파일에 실패했습니다")
-
-        # LangfuseClient 초기화 (답변 품질 추적)
-        self.langfuse_client_service = None
-        if LANGFUSE_CLIENT_AVAILABLE and self.config.langfuse_enabled:
-            try:
-                from core.services.langfuse_client import LangfuseClient
-                self.langfuse_client_service = LangfuseClient(self.config)
-                if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
-                    self.logger.info("LangfuseClient initialized for answer quality tracking")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize LangfuseClient: {e}")
-                self.langfuse_client_service = None
 
         self.logger.info("LangGraphWorkflowService initialized successfully")
 
@@ -957,10 +931,6 @@ class LangGraphWorkflowService:
                 "retrieved_docs": self._extract_retrieved_docs_from_result(flat_result)
             }
 
-            # Langfuse에 답변 품질 추적
-            if self.langfuse_client_service and self.langfuse_client_service.is_enabled():
-                self._track_answer_quality(query, response, processing_time)
-
             self.logger.info(f"Query processed successfully in {processing_time:.2f}s")
             return response
 
@@ -1256,87 +1226,6 @@ class LangGraphWorkflowService:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }
-
-    def _track_answer_quality(self, query: str, response: Dict[str, Any], processing_time: float):
-        """
-        Langfuse에 답변 품질 추적
-
-        Args:
-            query: 사용자 질문
-            response: 응답 결과
-            processing_time: 처리 시간
-        """
-        if not self.langfuse_client_service or not self.langfuse_client_service.is_enabled():
-            return
-
-        try:
-            # 답변 품질 점수 계산 (종합 점수)
-            quality_score = self._calculate_quality_score(response)
-
-            # 답변 품질 메트릭 추적
-            trace_id = self.langfuse_client_service.track_answer_quality_metrics(
-                query=query,
-                answer=response.get("answer", ""),
-                confidence=response.get("confidence", 0.0),
-                sources_count=len(response.get("sources", [])),
-                legal_refs_count=len(response.get("legal_references", [])),
-                processing_time=processing_time,
-                has_errors=len(response.get("errors", [])) > 0,
-                overall_quality=quality_score
-            )
-
-            self.logger.info(f"Answer quality tracked in Langfuse: quality_score={quality_score:.2f}, trace_id={trace_id}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to track answer quality in Langfuse: {e}")
-
-    def _calculate_quality_score(self, response: Dict[str, Any]) -> float:
-        """
-        답변 품질 점수 계산
-
-        Args:
-            response: 응답 결과
-
-        Returns:
-            float: 품질 점수 (0.0 ~ 1.0)
-        """
-        score = 0.0
-        max_score = 0.0
-
-        # 답변 길이 (20점)
-        answer = response.get("answer", "")
-        if len(answer) >= 50:
-            score += 10
-        if len(answer) >= 100:
-            score += 10
-        max_score += 20
-
-        # 신뢰도 (30점)
-        confidence = response.get("confidence", 0.0)
-        score += confidence * 30
-        max_score += 30
-
-        # 소스 제공 (20점)
-        sources_count = len(response.get("sources", []))
-        if sources_count > 0:
-            score += min(20, sources_count * 5)
-        max_score += 20
-
-        # 법률 참조 (20점)
-        legal_refs_count = len(response.get("legal_references", []))
-        if legal_refs_count > 0:
-            score += min(20, legal_refs_count * 10)
-        max_score += 20
-
-        # 에러 없음 (10점)
-        errors_count = len(response.get("errors", []))
-        if errors_count == 0:
-            score += 10
-        max_score += 10
-
-        # 정규화된 점수
-        quality_score = score / max_score if max_score > 0 else 0.0
-        return round(quality_score, 2)
 
     def _get_node_display_name(self, node_name: str) -> str:
         """

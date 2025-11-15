@@ -824,6 +824,14 @@ class UnifiedPromptManager:
 
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
         """최종 프롬프트 구성 - 자연스럽고 친근한 답변 스타일"""
+        # 동적 프롬프트 빌더 초기화
+        try:
+            from core.agents.prompt_builders.dynamic_prompt_builder import DynamicPromptBuilder
+            dynamic_builder = DynamicPromptBuilder()
+        except ImportError:
+            dynamic_builder = None
+            logger.warning("DynamicPromptBuilder를 사용할 수 없습니다. 기본 프롬프트를 사용합니다.")
+        
         # context 타입 검증 및 변환
         if context is None:
             context = {}
@@ -842,13 +850,29 @@ class UnifiedPromptManager:
         if isinstance(structured_docs, dict):
             raw_documents = structured_docs.get("documents", [])
             doc_count = len(raw_documents) if raw_documents else 0
+            
+            # raw_documents에 interpretation_paragraph 확인
+            interpretation_in_raw = [d for d in raw_documents if (d.get("type") or d.get("source_type") or d.get("metadata", {}).get("source_type") or d.get("metadata", {}).get("type")) == "interpretation_paragraph"]
+            print(f"[PROMPT DEBUG] raw_documents 총 개수: {len(raw_documents)}")
+            print(f"[PROMPT DEBUG] raw_documents에 interpretation_paragraph: {len(interpretation_in_raw)}개")
+            if interpretation_in_raw:
+                for idx, doc in enumerate(interpretation_in_raw, 1):
+                    print(f"[PROMPT DEBUG] raw interpretation #{idx}: id={doc.get('id')}, type={doc.get('type')}, source_type={doc.get('source_type')}, content_len={len(doc.get('content', '') or doc.get('text', ''))}")
 
             # 문서 필드 정규화 및 유효성 검증 (개선: content 없어도 다른 필드 허용)
             normalized_documents = []
             skipped_docs = []
+            interpretation_skipped = []
             for doc in raw_documents:
+                # interpretation_paragraph 디버깅
+                doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type") or doc.get("metadata", {}).get("type")
+                if doc_type == "interpretation_paragraph":
+                    print(f"[NORMALIZE DEBUG] interpretation_paragraph 문서 정규화 시작: id={doc.get('id')}, content_len={len(doc.get('content', '') or doc.get('text', ''))}")
+                
                 normalized = self._normalize_document_fields(doc)
                 if not normalized:
+                    if doc_type == "interpretation_paragraph":
+                        interpretation_skipped.append({"doc": doc, "reason": "normalized is empty"})
                     skipped_docs.append({"doc": doc, "reason": "normalized is empty"})
                     continue
 
@@ -862,7 +886,15 @@ class UnifiedPromptManager:
 
                 if has_valid_content or has_other_fields:
                     normalized_documents.append(normalized)
+                    if doc_type == "interpretation_paragraph":
+                        print(f"[NORMALIZE DEBUG] interpretation_paragraph 문서 정규화 성공: id={normalized.get('id')}, type={normalized.get('type')}, source_type={normalized.get('source_type')}")
                 else:
+                    if doc_type == "interpretation_paragraph":
+                        interpretation_skipped.append({
+                            "doc": doc,
+                            "reason": f"content too short ({len(content)} chars), source={source}"
+                        })
+                        print(f"[NORMALIZE DEBUG] interpretation_paragraph 문서 정규화 실패: content_len={len(content)}, source={source}")
                     skipped_docs.append({
                         "doc": doc,
                         "reason": f"content too short ({len(content)} chars), source={source}"
@@ -871,6 +903,9 @@ class UnifiedPromptManager:
                         f"⚠️ [DOCUMENT NORMALIZATION] Skipped document: "
                         f"content_len={len(content)}, source={source}"
                     )
+            
+            if interpretation_skipped:
+                logger.warning(f"⚠️ [DOCUMENT NORMALIZATION] interpretation_paragraph {len(interpretation_skipped)}개 문서 정규화 실패: {[d.get('reason') for d in interpretation_skipped]}")
 
             # 로깅 강화: 정규화 전후 문서 수 상세 로깅
             logger.info(
@@ -919,118 +954,233 @@ class UnifiedPromptManager:
         # 🔴 개선 2: base_prompt에 문서가 없을 때만 문서 섹션 생성
         # 검색 결과가 있는 경우에만 문서 섹션 추가
         # 검색 결과가 0개일 때는 문서 섹션을 생성하지 않음 (중요!)
-        # 관련도가 일정 수준 이하인 문서 필터링
+        # 관련도가 일정 수준 이하인 문서 필터링 및 타입별 균형 조정
         if not has_docs_in_base and documents and len(documents) > 0:
-            # 관련도가 일정 수준 이하인 문서는 제외 (동적 계산)
+            # 관련도가 너무 낮은 문서 제외 (0.2 미만)
+            MIN_RELEVANCE_THRESHOLD = 0.2
+            
+            # reranking 점수 우선 사용, 없으면 relevance_score 사용
             sorted_all_docs = sorted(
                 documents,
-                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                key=lambda x: (
+                    x.get("rerank_score") or 
+                    x.get("final_relevance_score") or 
+                    x.get("relevance_score", 0.0)
+                ) if isinstance(x, dict) else 0.0,
                 reverse=True
             )
 
-            # 최고 관련도 점수를 기준으로 동적 임계값 계산 (최고 점수의 70% 이상)
+            # 최고 관련도 점수를 기준으로 동적 임계값 계산 (최고 점수의 50% 이상 또는 절대 임계값 0.2 이상)
             if sorted_all_docs and len(sorted_all_docs) > 0:
                 max_score = sorted_all_docs[0].get("relevance_score", 0.0) if isinstance(sorted_all_docs[0], dict) else 0.0
-                low_relevance_threshold = max(0.5, max_score * 0.7) if max_score > 0 else 0.5
+                # 최고 점수의 50% 이상 또는 절대 임계값 0.2 이상
+                low_relevance_threshold = max(MIN_RELEVANCE_THRESHOLD, max_score * 0.5) if max_score > 0 else MIN_RELEVANCE_THRESHOLD
 
-                filtered_documents = [
-                    d for d in sorted_all_docs
-                    if isinstance(d, dict) and d.get("relevance_score", 0.0) >= low_relevance_threshold
-                ]
+                # 관련도 임계값 이상만 필터링 (단, 샘플링된 문서는 항상 포함)
+                filtered_documents = []
+                sample_docs = []
+                for d in sorted_all_docs:
+                    if not isinstance(d, dict):
+                        continue
+                    # 샘플링된 문서는 필터링에서 제외 (타입 다양성 보장)
+                    is_sample = d.get("metadata", {}).get("is_sample", False) or d.get("search_type") == "type_sample"
+                    if is_sample:
+                        sample_docs.append(d)
+                        logger.debug(f"🔍 [DOCUMENT FILTERING] 샘플링된 문서 포함: {d.get('source_type', 'unknown')}")
+                    elif d.get("relevance_score", 0.0) >= low_relevance_threshold:
+                        filtered_documents.append(d)
+                
+                # 샘플링된 문서를 필터링된 문서에 추가
+                filtered_documents.extend(sample_docs)
 
                 if len(filtered_documents) < len(sorted_all_docs):
                     logger.info(
                         f"🔍 [DOCUMENT FILTERING] Filtered {len(sorted_all_docs) - len(filtered_documents)} documents "
                         f"with relevance < {low_relevance_threshold:.3f} "
-                        f"(max_score: {max_score:.3f}, kept: {len(filtered_documents)})"
+                        f"(max_score: {max_score:.3f}, kept: {len(filtered_documents)}, samples: {len(sample_docs)})"
                     )
 
-                documents = filtered_documents if filtered_documents else sorted_all_docs[:5]  # 최소 5개는 보장
+                # 타입별 균형 조정
+                try:
+                    from core.workflow.utils.search_result_balancer import SearchResultBalancer
+                    balancer = SearchResultBalancer(min_per_type=1, max_per_type=5)  # min_per_type을 1로 낮춤
+                    grouped_docs = balancer.group_results_by_type(filtered_documents)
+                    
+                    # 샘플링된 문서가 있는 타입은 강제로 포함
+                    sample_types = set()
+                    for doc_type, docs in grouped_docs.items():
+                        for doc in docs:
+                            if doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample":
+                                sample_types.add(doc_type)
+                                logger.info(f"🔍 [BALANCER] {doc_type}: 샘플링된 문서 발견, 강제 포함")
+                    
+                    balanced_docs = balancer.balance_search_results(
+                        grouped_docs,
+                        total_limit=20  # 최대 20개
+                    )
+                    
+                    # 샘플링된 문서가 있는 타입이 결과에 없으면 강제로 추가
+                    for doc_type in sample_types:
+                        if doc_type not in [d.get("type") or d.get("source_type") for d in balanced_docs]:
+                            sample_docs = [d for d in grouped_docs.get(doc_type, []) 
+                                         if d.get("metadata", {}).get("is_sample", False) or d.get("search_type") == "type_sample"]
+                            if sample_docs:
+                                balanced_docs.extend(sample_docs[:1])  # 최소 1개 추가
+                                logger.info(f"✅ [BALANCER] {doc_type}: 샘플링된 문서 1개 강제 추가")
+                    
+                    documents = balanced_docs
+                    logger.info(
+                        f"✅ [DOCUMENT BALANCING] Balanced {len(balanced_docs)} documents "
+                        f"across types: {list(grouped_docs.keys())}, sample_types: {list(sample_types)}"
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ [DOCUMENT BALANCING] Failed to balance documents: {e}, using filtered documents")
+                    documents = filtered_documents[:20]  # 최대 20개
             else:
-                documents = sorted_all_docs[:5] if sorted_all_docs else []
+                documents = sorted_all_docs[:20] if sorted_all_docs else []
 
             if documents and len(documents) > 0:
-                # 관련도 점수 기준으로 문서 분류
-                # 옵션: 상위 N개를 최우선 문서로 지정 (관련도 0.7 이상 문서가 없을 경우 대비)
+                # 관련도 순으로 정렬 (참고용)
                 sorted_docs = sorted(
                     documents,
                     key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
                     reverse=True
                 )
 
-                # 관련도 0.65 이상 문서를 최우선 문서로 분류 (기준 완화)
-                high_relevance_docs = [d for d in sorted_docs if isinstance(d, dict) and d.get("relevance_score", 0.0) >= 0.65]
-
-                # 관련도 0.65 미만 0.35 이상 문서를 중요 문서로 분류
-                medium_relevance_docs = [d for d in sorted_docs if isinstance(d, dict) and 0.35 <= d.get("relevance_score", 0.0) < 0.65]
-
-                # 관련도 0.65 이상 문서가 없으면 상위 3개를 최우선 문서로 지정
-                if not high_relevance_docs and len(sorted_docs) > 0:
-                    top_count = min(3, len(sorted_docs))
-                    high_relevance_docs = sorted_docs[:top_count]
-                    medium_relevance_docs = sorted_docs[top_count:] if len(sorted_docs) > top_count else []
-
-                # 🔴 개선: 관련도 기반 유연한 검색 결과 활용 지침
+                # 🔴 개선: 관련도 기반 유연한 검색 결과 활용 지침 (간소화)
                 mandatory_section = "\n\n## ⚠️ 검색 결과 활용 지침\n\n"
+                mandatory_section += "**검색 결과 활용 우선순위**: 관련도 0.8 이상 문서를 우선 활용하세요.\n\n"
+                mandatory_section += "**절대 금지**: 검색 결과를 무시하거나 추측으로 답변하지 마세요.\n\n"
 
-                # 관련도 점수 활용 전략 명시
-                mandatory_section += "**검색 결과 활용 우선순위**:\n"
-                mandatory_section += "- 관련도 0.8 이상: 핵심 법적 근거로 직접 인용\n"
-                mandatory_section += "- 관련도 0.6-0.8: 관련성이 높으면 보충 설명에 활용 권장\n"
-                mandatory_section += "- 관련도 0.6 미만: 질문과 직접 관련 없으면 언급하지 않아도 됨\n\n"
-
-                # 관련도별 문서 목록 제공 (참고용)
-                if high_relevance_docs:
-                    doc_refs = []
-                    for idx, doc in enumerate(high_relevance_docs[:3], 1):
-                        law_name = doc.get("law_name", "")
-                        article_no = doc.get("article_no", "")
-                        score = doc.get("relevance_score", 0.0)
-                        if law_name and article_no:
-                            doc_refs.append(f"문서 {idx}({law_name} 제{article_no}조, 관련도: {score:.2f})")
-                        else:
-                            source = doc.get("source", "")
-                            if source:
-                                doc_refs.append(f"문서 {idx}({source}, 관련도: {score:.2f})")
-
-                    if doc_refs:
-                        mandatory_section += f"**고관련도 문서 (참고용)**: {', '.join(doc_refs)}\n"
-                        mandatory_section += "→ 질문과 직접 관련이 높으면 우선 활용하세요\n\n"
-
-                mandatory_section += "**검색 결과가 질문과 부합하지 않을 때**:\n"
-                mandatory_section += "- 검색된 자료에 [구체적 내용]이 없어서, [법령명]의 기본 원칙을 바탕으로 설명드릴게요...\n\n"
-
-                mandatory_section += "**절대 금지**:\n"
-                mandatory_section += "- ❌ 검색 결과를 무시하고 일반 지식만으로 답변\n"
-                mandatory_section += "- ❌ 검색 결과 없이 추측으로 답변\n"
-                mandatory_section += "- ❌ '정보가 부족합니다'만 답변\n"
-                mandatory_section += "- ❌ 관련도가 낮은 문서를 무리하게 인용\n\n"
-
-                # 🔴 개선 4: 문서 섹션 단일화 (중복 형식 제거, 헬퍼 메서드 사용)
+                # 🔴 개선 4: 타입별 문서 섹션 생성 (균형 분포)
                 documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-
-                # 🔴 추가 개선: 관련도 활용 전략 간단히 명시 (mandatory_section과 중복 제거)
-                # mandatory_section에 이미 상세한 전략이 있으므로 간단한 참고만 추가
                 documents_section += "**참고**: 위 문서들의 관련도 점수를 참고하여 우선순위를 정하세요. 관련도가 높은 문서를 우선적으로 활용하세요.\n\n"
 
-                # 최우선 문서
-                if high_relevance_docs:
-                    # 관련도 기준에 따라 섹션 제목 조정
-                    max_high_score = max([d.get("relevance_score", 0.0) for d in high_relevance_docs if isinstance(d, dict)]) if high_relevance_docs else 0.0
-                    if max_high_score >= 0.65:
-                        documents_section += "### 🔴 최우선 문서 (관련도 0.65 이상)\n\n"
-                    else:
-                        documents_section += "### 🔴 최우선 문서 (상위 문서)\n\n"
-                    for idx, doc in enumerate(high_relevance_docs[:5], 1):
+                # 타입별로 문서 분류
+                type_categories = {
+                    "statute_article": [],
+                    "case_paragraph": [],
+                    "decision_paragraph": [],
+                    "interpretation_paragraph": []
+                }
+                
+                print(f"[PROMPT DEBUG] documents 총 개수: {len(documents)}")
+                interpretation_count = 0
+                for doc in documents:
+                    if not isinstance(doc, dict):
+                        continue
+                    doc_type = (
+                        doc.get("type") or
+                        doc.get("source_type") or
+                        doc.get("metadata", {}).get("type") if isinstance(doc.get("metadata"), dict) else None or
+                        doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else None or
+                        "unknown"
+                    )
+                    
+                    # interpretation_paragraph 디버깅
+                    if doc_type == "interpretation_paragraph" or doc.get("source_type") == "interpretation_paragraph":
+                        interpretation_count += 1
+                        print(f"[PROMPT DEBUG] interpretation_paragraph 문서 발견 #{interpretation_count}: "
+                              f"id={doc.get('id')}, type={doc.get('type')}, source_type={doc.get('source_type')}, "
+                              f"relevance_score={doc.get('relevance_score')}, is_sample={doc.get('metadata', {}).get('is_sample', False)}")
+                        logger.info(
+                            f"🔍 [PROMPT DEBUG] interpretation_paragraph 문서 발견: "
+                            f"id={doc.get('id')}, type={doc.get('type')}, source_type={doc.get('source_type')}, "
+                            f"relevance_score={doc.get('relevance_score')}, is_sample={doc.get('metadata', {}).get('is_sample', False)}"
+                        )
+                    
+                    if doc_type in type_categories:
+                        type_categories[doc_type].append(doc)
+                    elif doc_type == "unknown":
+                        # 타입을 알 수 없는 경우 관련도가 높으면 판례로 분류
+                        if doc.get("relevance_score", 0.0) >= 0.5:
+                            type_categories["case_paragraph"].append(doc)
+                
+                print(f"[PROMPT DEBUG] interpretation_paragraph 총 개수: {interpretation_count}")
+                print(f"[PROMPT DEBUG] type_categories['interpretation_paragraph']: {len(type_categories['interpretation_paragraph'])}개")
+                
+                # 각 타입별로 관련도 순 정렬
+                for doc_type in type_categories:
+                    type_categories[doc_type].sort(
+                        key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                        reverse=True
+                    )
+                
+                total_included = 0
+                type_counts = {}
+                
+                # 법령 조문 (최대 5개)
+                if type_categories["statute_article"]:
+                    documents_section += "### 📜 법령 조문\n\n"
+                    statute_docs = type_categories["statute_article"][:5]
+                    for idx, doc in enumerate(statute_docs, 1):
                         documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=True)
-
-                # 중요 문서
-                if medium_relevance_docs:
-                    documents_section += "### 🟡 중요 문서 (관련도 0.35~0.65)\n\n"
-                    for idx, doc in enumerate(medium_relevance_docs[:3], 1):
+                    total_included += len(statute_docs)
+                    type_counts["statute_article"] = len(statute_docs)
+                
+                # 판례 (최대 7개)
+                if type_categories["case_paragraph"]:
+                    documents_section += "### ⚖️ 판례\n\n"
+                    case_docs = type_categories["case_paragraph"][:7]
+                    for idx, doc in enumerate(case_docs, 1):
+                        documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=True)
+                    total_included += len(case_docs)
+                    type_counts["case_paragraph"] = len(case_docs)
+                
+                # 결정례 (최대 4개)
+                if type_categories["decision_paragraph"]:
+                    documents_section += "### 📋 결정례\n\n"
+                    decision_docs = type_categories["decision_paragraph"][:4]
+                    for idx, doc in enumerate(decision_docs, 1):
                         documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=False)
-
-                logger.info(f"✅ [FINAL PROMPT] Added {len(documents)} documents (High: {len(high_relevance_docs)}, Medium: {len(medium_relevance_docs)})")
+                    total_included += len(decision_docs)
+                    type_counts["decision_paragraph"] = len(decision_docs)
+                
+                # 해석례 (최대 4개)
+                if type_categories["interpretation_paragraph"]:
+                    documents_section += "### 📖 해석례\n\n"
+                    interpretation_docs = type_categories["interpretation_paragraph"][:4]
+                    logger.info(
+                        f"✅ [PROMPT DEBUG] 해석례 섹션 생성: {len(interpretation_docs)}개 문서 "
+                        f"(총 {len(type_categories['interpretation_paragraph'])}개 중)"
+                    )
+                    for idx, doc in enumerate(interpretation_docs, 1):
+                        documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=False)
+                    total_included += len(interpretation_docs)
+                    type_counts["interpretation_paragraph"] = len(interpretation_docs)
+                else:
+                    logger.warning(
+                        f"⚠️ [PROMPT DEBUG] 해석례 섹션이 생성되지 않음: "
+                        f"type_categories['interpretation_paragraph'] = {len(type_categories['interpretation_paragraph'])}개"
+                    )
+                
+                logger.info(
+                    f"✅ [FINAL PROMPT] Added {total_included} documents "
+                    f"(Statute: {type_counts.get('statute_article', 0)}, "
+                    f"Case: {type_counts.get('case_paragraph', 0)}, "
+                    f"Decision: {type_counts.get('decision_paragraph', 0)}, "
+                    f"Interpretation: {type_counts.get('interpretation_paragraph', 0)})"
+                )
+                
+                # Phase 4: 프롬프트에 타입 정보 추가
+                retrieved_types = set(t for t, c in type_counts.items() if c > 0)
+                all_types = {"statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"}
+                missing_types = all_types - retrieved_types
+                
+                if missing_types:
+                    type_names = {
+                        "statute_article": "법령 조문",
+                        "case_paragraph": "판례",
+                        "decision_paragraph": "결정례",
+                        "interpretation_paragraph": "해석례"
+                    }
+                    missing_type_names = [type_names.get(t, t) for t in missing_types]
+                    documents_section += f"\n**⚠️ 참고**: 검색된 문서는 {', '.join([type_names.get(t, t) for t in retrieved_types])}만 포함되어 있습니다. "
+                    documents_section += f"{', '.join(missing_type_names)}는 검색되지 않았습니다.\n\n"
+                    logger.info(
+                        f"⚠️ [TYPE DIVERSITY] 프롬프트에 타입 정보 추가: "
+                        f"검색됨={list(retrieved_types)}, 누락={list(missing_types)}"
+                    )
 
         # 🔴 개선 3: 필수 준수 사항 섹션이 비어있을 때 처리
         if has_docs_in_base and not mandatory_section:
@@ -1223,97 +1373,48 @@ class UnifiedPromptManager:
 
             if doc_list:
                 doc_list_str = ', '.join(doc_list[:5])
-                # 🔴 개선: 실제 제공된 문서 조문을 예시로 사용
-                example_doc = doc_list[0] if doc_list else "법령명 제XX조"
-                # 판례명 예시 찾기
-                example_precedent = None
-                for doc in doc_list:
-                    if '법원' in doc or '판례' in doc or '-' in doc:
-                        example_precedent = doc
-                        break
-                
-                # 법령 조문 예시 찾기
-                example_law = None
-                for doc in doc_list:
-                    if '제' in doc and '조' in doc:
-                        example_law = doc
-                        break
-                
-                examples_text = f"""  * 예시 1: "{example_doc}에 따르면..."
-  * 예시 2: "[법령: {example_doc}]"
-  * 예시 3: "위 검색 결과 문서 중 {example_doc}에 명시된 바와 같이..."
-  * 예시 4: "민법 제750조에 따르면..." (법령 조문 인용 형식)"""
-                
-                if example_precedent:
-                    examples_text += f"\n  * 예시 5: \"{example_precedent} 판결에 의하면...\" (판례 인용 형식)"
-                else:
-                    examples_text += f"\n  * 예시 5: \"대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...\" (판례 인용 형식)"
                 
                 # 재생성 이유 확인 및 프롬프트 강화
                 regeneration_reason = context.get("regeneration_reason") if (isinstance(context, dict) and context) else None
                 retry_count = context.get("retry_count", 0) if (isinstance(context, dict) and context) else 0
                 regeneration_note = ""
                 if regeneration_reason:
-                    # 재시도 횟수에 따라 강도 조정
                     urgency_level = "CRITICAL" if retry_count >= 2 else "HIGH" if retry_count >= 1 else "NORMAL"
                     emphasis = "**절대적으로**" if retry_count >= 2 else "**반드시**" if retry_count >= 1 else ""
                     
                     if regeneration_reason == "specific_case_copy" or regeneration_reason == "specific_case_in_start":
                         regeneration_note = f"""
-### ⚠️ 재생성 사유: 특정 사건 내용 복사 감지 ({urgency_level} - {emphasis} 준수)
-이전 답변에서 특정 사건의 내용이 그대로 복사되었습니다. 다음 사항을 {emphasis} 준수하세요:
-
-**절대 금지 사항:**
-- ❌ 특정 사건번호(예: "2014가단3882", "2006다9408")를 답변에 포함하지 마세요
-- ❌ 특정 당사자명(예: "피고 엘지", "원고 본인", "피고", "원고")을 답변에 포함하지 마세요
-- ❌ "[문서: 대전지방법원-2014가단3882]" 같은 형식으로 시작하지 마세요
-- ❌ "이 사건", "이 사건 각 계약서", "이 사건 계약" 같은 특정 사건 지시어를 사용하지 마세요
-- ❌ "나아가", "위와 같은 법리에 비추어 보건대" 같은 판례 문구를 그대로 복사하지 마세요
+### ⚠️ 재생성 사유: 특정 사건 내용 복사 감지 ({urgency_level})
+**절대 금지**: 특정 사건번호, 당사자명, 사실관계 서술을 포함하지 마세요.
+**필수 준수**: 판례의 법적 원칙만 추출하여 일반적으로 설명하세요.
 {f'- ⚠️ **이미 {retry_count}번 재시도했습니다. 이번에는 반드시 일반적인 법적 원칙만 설명하세요.**' if retry_count >= 1 else ''}
-
-**필수 준수 사항:**
-- ✅ 판례의 법적 원칙만 추출하여 일반적으로 설명하세요
-- ✅ 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요 (예: "계약 위약금에 대해 궁금하시군요...")
-- ✅ 특정 사건의 사실관계를 서술하지 말고, 법적 원칙과 일반적인 조언만 제공하세요
-- ✅ 판례를 인용할 때는 법적 원칙만 설명하고, 특정 사건의 세부사항은 언급하지 마세요
 """
                     elif regeneration_reason == "general_principle_not_first" or regeneration_reason == "general_principle_not_in_start":
                         regeneration_note = """
 ### ⚠️ 재생성 사유: 일반 법적 원칙이 먼저 설명되지 않음
-이전 답변에서 일반 법적 원칙이 먼저 설명되지 않았습니다. 다음 사항을 반드시 준수하세요:
-- ✅ 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요
-- ✅ 예: "계약서 작성 시 주의해야 할 일반적인 법적 원칙은 다음과 같습니다."
-- ❌ 특정 사건번호나 사실관계 서술로 시작하지 마세요
+**필수**: 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요.
 """
                 
+                # 동적 프롬프트 빌더 사용
+                if dynamic_builder and documents:
+                    dynamic_guidance = dynamic_builder.build_simplified_prompt_section(documents, len(documents))
+                else:
+                    dynamic_guidance = ""
+                
                 final_instruction_section = f"""
-## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
+## 검색 결과 활용 지침
 {regeneration_note}
-### ⚠️ 답변 시작 시 필수 사항 (절대 준수)
-- **답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작해야 합니다.**
+### 답변 시작 시 필수 사항
+- 답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작하세요.
 - 예: "계약서 작성 시 주의해야 할 일반적인 법적 원칙은 다음과 같습니다."
-- ❌ 금지: "[문서: 대전지방법원-2014가단3882]" 같은 특정 사건번호로 시작
-- ❌ 금지: "나아가 계약서의 성립에 관하여 피고의..." 같은 특정 사건의 사실관계 서술로 시작
-- ❌ 금지: "주어진 문서를 바탕으로 답변드리면:" 같은 문구 사용
+- ❌ 금지: 특정 사건번호나 사실관계 서술로 시작
 
 ### 답변 작성 원칙
-- **일반적이고 포괄적인 답변 우선**: 특정 사건이나 판례에만 집중하지 말고, 질문의 일반적인 법적 원칙과 주의사항을 포괄적으로 다루세요.
-- **균형잡힌 접근**: 검색된 문서 중 특정 사건에만 집중하지 말고, 다양한 법령, 판례, 해석례를 종합하여 일반적인 조언을 제공하세요.
-- **특정 사건 내용 복사 금지**: 특정 사건번호(예: "2014가단3882"), 특정 당사자명(예: "피고 엘지", "원고 본인"), 특정 사건의 사실관계 서술(예: "이 사건 각 계약서 작성 당시")을 답변에 포함하지 마세요.
+- 일반적이고 포괄적인 답변 우선
+- 특정 사건 내용 복사 금지
+- 문서 활용: {doc_list_str}
 
-### 문서 활용 지침
-- 다음 문서 중 질문과 관련성이 높은 것을 우선 활용하세요: {doc_list_str}
-- 관련도가 낮은 문서는 무리하게 인용하지 마세요
-- 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
-- **⚠️ 각 인용에 반드시 명확한 출처 표기 (필수)**:
-{examples_text}
-- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
-- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
-- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요 (예: "민법 제750조에 따르면...")
-- 판례 인용 시 구체적인 판례명과 사건번호를 포함하되, 특정 사건에만 집중하지 말고 일반적인 법적 원칙을 중심으로 설명하세요 (예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...")
-- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
-- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
-- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
+{dynamic_guidance}
 """
             else:
                 # doc_list가 비어있을 때만 기본 예시 사용
@@ -1339,17 +1440,11 @@ class UnifiedPromptManager:
                     examples_text += f"\n  * 예시 5: \"{example_law}에 명시된 바와 같이...\" (법령 조문 인용 형식)"
                 
                 final_instruction_section = f"""
-## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
-- 위 검색 결과 문서에서 질문과 관련성이 높은 문서를 우선 활용하세요
-- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
-- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요
-- **각 인용에 반드시 명확한 출처 표기 (필수)**:
+### 인용 필수 사항
+- 법령 조문이 있으면 법령 조문을 우선 인용하세요
+- 최소 2개 이상의 문서 출처를 명시적으로 인용하세요
+- 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조")
 {examples_text}
-- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
-- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
-- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
-- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
-- 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
 """
         else:
             # 검색 결과가 없을 때 명확한 제한사항 명시
@@ -1450,95 +1545,17 @@ class UnifiedPromptManager:
 - 특정 사건에만 집중하지 마세요.
 - 특정 판례 사건의 내용을 그대로 복사하지 마세요. 판례의 법적 원칙을 추출하여 일반적으로 설명하세요.
 
-## 필수 포함 요소 (⚠️ 답변 품질 평가 기준)
-각 답변에 반드시 포함:
-1. **법적 근거**: 관련 법령 조문 정확히 인용 (⚠️ 필수 - 품질 평가의 핵심)
-   - 검색된 법령 조문이 있으면 **반드시 인용하세요** (인용하지 않으면 답변 품질이 매우 낮게 평가됩니다)
-   - 형식: "민법 제750조에 따르면..." 또는 "[법령: 민법 제750조]"
-   - **최소 2개 이상의 법령 조문 인용 필수** (1개 -> 2개로 증가)
-   - 단순히 "법령에 따르면"이 아닌 **구체적인 법령명과 조문번호를 포함하세요**
-   - 문서에서 법령 조문을 찾을 수 없어도, 질문과 관련된 일반적인 법령 조문을 인용하세요
-   - 예: "계약 해지" 질문 → "민법 제550조", "민법 제551조" 등 관련 조문 인용 필수
-   - **법령 조문 인용 시 조문의 핵심 내용을 간략히 설명하세요** (단순 인용만 하지 말고 내용 설명 포함)
-   - **법령 조문 인용은 답변의 핵심 부분에 배치하세요** (답변 시작 부분이나 주요 설명 부분)
+## 필수 포함 요소
+1. **법적 근거**: 법령 조문 정확히 인용 (형식: "민법 제750조에 따르면...")
+2. **판례 인용**: 판례가 있으면 인용 (형식: "대법원 2020다12345 판결에 의하면...")
+3. **문서 출처**: 사용한 문서 출처 명시 (형식: "문서 1에 따르면...")
+4. **실무적 의미**: 실제 의미 설명
+5. **실행 가능한 조언**: 구체적 행동 방안
 
-2. **판례 인용**: 관련 판례가 있으면 인용 (가능한 경우)
-   - 형식: "대법원 2020다12345 판결에 의하면..." 또는 "[판례: 대법원 2020다12345]"
-   - 판례 인용 시 구체적인 판례명과 사건번호를 포함하세요
-
-3. **문서 출처 명시**: 사용한 문서의 출처를 명시하세요 (⚠️ 필수)
-   - 형식: "문서 1에 따르면..." 또는 "[문서: 출처명]"
-   - 최소 2개 이상의 문서 출처 명시 필수
-
-4. **실무적 의미**: 실제로 무엇을 의미하는지 설명
-
-5. **실행 가능한 조언**: 구체적으로 어떻게 해야 하는지
-
-6. **주의사항**: 놓치기 쉬운 함정 (필요시에만)
-
-⚠️ **Citation 필수 체크리스트** (답변 품질 평가 기준 - 반드시 확인):
-- [ ] **법령 조문을 최소 2개 이상 인용했는가?** (없으면 답변 품질이 매우 낮게 평가됩니다)
-- [ ] 검색된 법령 조문이 있으면 반드시 인용했는가?
-- [ ] 구체적인 법령명과 조문번호를 포함했는가? (예: "민법 제750조", "형법 제250조")
-- [ ] 최소 2개 이상의 문서 출처를 명시했는가?
-- [ ] 각 인용에 명확한 출처 표기가 있는가?
-- [ ] 검색된 키워드를 답변에 포함했는가? (최소 5개 이상 권장)
-- [ ] **법령 조문 인용이 없으면 답변 품질이 매우 낮게 평가되며 재생성될 수 있습니다**
-- [ ] 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
-
-**예시 형식**:
-❌ "민법 제550조는 해지의 효과를 규정합니다"
-✅ "민법 제550조에 따르면, 계약을 해지하면 앞으로만 효력이 없어져요. 즉, 이미 받은 돈이나 물건은 돌려주지 않아도 됩니다. 다만 해지 이후 발생한 손해에 대해서는 배상을 청구할 수 있어요. (문서 1, 문서 2 참조)"
-
-## 📋 Citation 형식 예시 (필수 준수)
-
-### 법령 조문 인용 형식:
-✅ **올바른 예시**:
-- "민법 제750조에 따르면, 불법행위로 인한 손해배상 책임이 발생합니다."
-- "[법령: 민법 제750조]에 명시된 바와 같이..."
-- "민법 제750조 제1항에 따르면..."
-- "형법 제250조에 의하면..."
-
-❌ **잘못된 예시**:
-- "법령에 따르면..." (구체적인 법령명과 조문번호 없음)
-- "관련 법령에 의하면..." (구체적인 법령명과 조문번호 없음)
-- "법률에 명시된 바와 같이..." (구체적인 법령명과 조문번호 없음)
-
-### 판례 인용 형식:
-✅ **올바른 예시**:
-- "대법원 2020다12345 판결에 의하면..."
-- "[판례: 대법원 2020다12345]에 따르면..."
-- "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면..."
-- "서울중앙지방법원 2019가단123456 판결에 따르면..."
-
-❌ **잘못된 예시**:
-- "판례에 의하면..." (구체적인 판례명과 사건번호 없음)
-- "관련 판례에 따르면..." (구체적인 판례명과 사건번호 없음)
-- "법원 판결에 의하면..." (구체적인 판례명과 사건번호 없음)
-
-### 문서 출처 명시 형식:
-✅ **올바른 예시**:
-- "문서 1에 따르면..."
-- "[문서: 민법 제750조 해설]에 명시된 바와 같이..."
-- "검색 결과 문서 중 민법 제750조 관련 문서에 의하면..."
-- "위 검색 결과 문서 중 문서 2에 명시된 바와 같이..."
-
-❌ **잘못된 예시**:
-- "관련 문서에 따르면..." (구체적인 문서 출처 없음)
-- "검색 결과에 의하면..." (구체적인 문서 출처 없음)
-- "참고 자료에 따르면..." (구체적인 문서 출처 없음)
-
-⚠️ **Citation 필수 체크리스트** (답변 품질 평가 기준 - 반드시 확인):
-- [ ] 검색된 법령 조문이 있으면 반드시 인용했는가? (예: "민법 제750조")
-- [ ] 최소 2개 이상의 문서 출처를 명시했는가? (예: "문서 1", "문서 2")
-- [ ] 각 인용에 명확한 출처 표기가 있는가? (예: "[법령: 민법 제750조]")
-- [ ] 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
-- [ ] 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
-- [ ] 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함했는가?
-- [ ] 판례 인용 시 구체적인 판례명과 사건번호를 포함했는가?
-
-**⚠️ 중요**: 위 체크리스트를 모두 충족하지 않으면 답변 품질이 낮게 평가되며, 
-답변이 재생성될 수 있습니다.
+**⚠️ Citation 요구사항**:
+- 검색된 법령 조문이 있으면 반드시 인용 (구체적 법령명과 조문번호 포함)
+- 최소 2개 이상의 문서 출처 명시
+- 각 인용에 명확한 출처 표기
 
 ## 📏 답변 길이 요구사항
 - **최소 길이**: 500자 이상 (한국어 기준)
@@ -1555,56 +1572,18 @@ class UnifiedPromptManager:
 - ✅ 문서 내용이 직접적으로 관련이 없어도, 일반적인 법률 지식을 바탕으로 답변해야 합니다
 - ✅ 문서를 참고하여 답변하되, 문서 내용이 부족하면 일반적인 법률 지식으로 보완하세요
 
-## 📚 문서 활용 필수 지침
-1. **문서가 제공된 경우**:
-   - 반드시 문서 내용을 인용하고 활용해야 합니다
-   - **⚠️ 중요**: 문서 내용을 바탕으로 답변을 구성하되, 특정 사건의 내용을 그대로 복사하지 마세요
-   - 문서에서 일반적인 법적 원칙을 추출하여 설명하세요
-   - 문서에서 직접적인 답을 찾을 수 없어도, 관련 내용을 참고하여 답변하세요
-
-2. **문서 내용 활용 방법**:
-   - **⚠️ 금지**: 특정 판례 사건의 내용을 그대로 복사하지 마세요
-   - **⚠️ 필수**: 판례에서 법적 원칙을 추출하여 일반적으로 설명하세요
-   - 문서의 핵심 내용을 요약하여 답변에 포함하되, 특정 사건의 세부사항은 생략하세요
-   - 문서에서 인용할 법령 조문이나 판례를 찾아 활용하되, 판례는 법적 원칙 중심으로 설명하세요
-   - 문서의 맥락을 이해하고 질문에 맞게 해석하여 답변하세요
-
-3. **문서가 부족한 경우**:
-   - 제공된 문서 내용을 최대한 활용
-   - 일반적인 법률 지식으로 보완
-   - "문서에서 확인할 수 있는 내용은..."과 같이 명시적으로 구분
-
-**⚠️ 절대 금지 사항 (문서 활용 시)**:
-- ❌ 특정 판례 사건의 내용을 그대로 복사하는 것
-- ❌ 특정 사건의 세부사항(당사자명, 사건번호 등)을 상세히 나열하는 것
-- ❌ 판례 사건의 사실관계를 그대로 설명하는 것
-- ✅ 판례에서 법적 원칙을 추출하여 일반적으로 설명하는 것
-- ✅ 여러 판례를 종합하여 일반적인 법적 원칙을 설명하는 것
+## 📚 문서 활용 지침
+- 문서 내용을 바탕으로 답변 구성 (특정 사건 내용 복사 금지)
+- 판례에서 법적 원칙을 추출하여 일반적으로 설명
+- 문서가 부족하면 일반적인 법률 지식으로 보완
 
 {final_instruction_section}
 
-**⚠️ 최종 확인 사항**:
-1. 일반적인 법적 원칙을 먼저 설명했는가?
-2. 특정 사건의 내용을 그대로 복사하지 않았는가?
-3. 판례는 법적 원칙 중심으로 설명했는가?
-4. 법령 조문을 구체적으로 인용했는가?
-5. 문서 출처를 명시했는가?
-
-**⚠️ 답변 시작 시 필수 사항 (절대 준수)**:
-- **답변의 첫 문장은 반드시 일반적인 법적 원칙으로 시작해야 합니다.**
-- ❌ 금지: "[문서: 대전지방법원-2014가단3882]" 같은 특정 사건번호로 시작
-- ❌ 금지: "나아가 계약서의 성립에 관하여 피고의..." 같은 특정 사건의 사실관계 서술로 시작
-- ❌ 금지: "주어진 문서를 바탕으로 답변드리면:" 같은 문구 사용
-- ✅ 올바른 예: "계약서 작성 시 주의해야 할 일반적인 법적 원칙은 다음과 같습니다."
-- ✅ 올바른 예: "계약서 작성과 관련하여 일반적으로 적용되는 법적 원칙은..."
-
-**⚠️ 특정 사건 내용 복사 금지 (절대 금지)**:
-- ❌ 특정 사건번호(예: "2014가단3882", "대전지방법원-2014가단3882")를 답변에 포함하지 마세요
-- ❌ 특정 당사자명(예: "피고 엘지", "피고 에스케이", "원고 본인")을 답변에 포함하지 마세요
-- ❌ 특정 사건의 사실관계 서술(예: "이 사건 각 계약서 작성 당시", "나아가 이 사건 각 계약서 작성 당시")을 그대로 복사하지 마세요
-- ❌ "[문서: ...]" 형식으로 특정 사건번호를 포함한 인용을 하지 마세요
-- ✅ 판례의 법적 원칙만 추출하여 일반적으로 설명하세요
-- ✅ 판례 인용 시 "[판례: 대전지방법원 2014가단3882]" 형식으로 인용하되, 특정 사건의 사실관계는 설명하지 마세요
+**⚠️ 최종 확인**:
+- 일반 법적 원칙 먼저 설명
+- 특정 사건 내용 복사 금지
+- 법령 조문 구체적 인용
+- 문서 출처 명시
 
 답변을 시작하세요:
 """

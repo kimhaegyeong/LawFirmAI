@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 import time
@@ -782,13 +783,36 @@ class EnhancedLegalQuestionWorkflow:
                 domain = self._get_domain_from_query_type(query_type_str)
 
                 try:
-                    expansion_result = asyncio.run(
-                        self.ai_keyword_generator.expand_domain_keywords(
-                            domain=domain,
-                            base_keywords=keywords,
-                            target_count=30
+                    # 현재 실행 중인 이벤트 루프 확인
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # 이미 실행 중인 루프가 있는 경우, 새 스레드에서 실행
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(
+                                lambda: asyncio.run(
+                                    asyncio.wait_for(
+                                        self.ai_keyword_generator.expand_domain_keywords(
+                                            domain=domain,
+                                            base_keywords=keywords,
+                                            target_count=30
+                                        ),
+                                        timeout=10.0
+                                    )
+                                )
+                            )
+                            expansion_result = future.result(timeout=15.0)
+                    except RuntimeError:
+                        # 실행 중인 루프가 없는 경우, 직접 실행
+                        expansion_result = asyncio.run(
+                            asyncio.wait_for(
+                                self.ai_keyword_generator.expand_domain_keywords(
+                                    domain=domain,
+                                    base_keywords=keywords,
+                                    target_count=30
+                                ),
+                                timeout=10.0
+                            )
                         )
-                    )
 
                     if expansion_result.api_call_success:
                         all_keywords = keywords + expansion_result.expanded_keywords
@@ -822,6 +846,10 @@ class EnhancedLegalQuestionWorkflow:
                         self.logger.info(
                             f"⚠️ [KEYWORD EXPANSION] Used fallback: {len(keywords)} → {len(all_keywords)} keywords"
                         )
+                except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as e:
+                    self.logger.warning(f"AI keyword expansion timeout (10s): {e}")
+                except asyncio.CancelledError as e:
+                    self.logger.warning(f"AI keyword expansion cancelled: {e}")
                 except Exception as e:
                     self.logger.warning(f"AI keyword expansion failed: {e}")
 

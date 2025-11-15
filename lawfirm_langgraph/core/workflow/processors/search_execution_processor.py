@@ -465,6 +465,8 @@ class SearchExecutionProcessor:
         extracted_keywords: Optional[List[str]] = None
     ) -> Tuple[List[Dict[str, Any]], int]:
         """의미적 검색 실행"""
+        self.logger.info("🔍 [EXECUTE_SEMANTIC_SEARCH] 메서드 호출됨")
+        self.logger.info(f"🔍 [EXECUTE_SEMANTIC_SEARCH] original_query: {original_query[:50] if original_query else 'N/A'}...")
         semantic_results = []
         semantic_count = 0
 
@@ -560,19 +562,32 @@ class SearchExecutionProcessor:
         
         # semantic_search_engine 확인 (여러 방법 시도)
         semantic_engine = None
+        print(f"[TYPE DIVERSITY] semantic_search_engine 확인 시작")
+        print(f"[TYPE DIVERSITY] self.semantic_search_engine: {self.semantic_search_engine is not None}")
+        self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine 확인 시작")
+        self.logger.info(f"🔍 [TYPE DIVERSITY] self.semantic_search_engine: {self.semantic_search_engine is not None}")
+        
         if self.semantic_search_engine:
             semantic_engine = self.semantic_search_engine
-            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from self: {type(semantic_engine).__name__}")
+            self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from self: {type(semantic_engine).__name__}")
         elif hasattr(self.search_handler, 'semantic_search_engine') and self.search_handler.semantic_search_engine:
             semantic_engine = self.search_handler.semantic_search_engine
-            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from search_handler: {type(semantic_engine).__name__}")
+            self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler: {type(semantic_engine).__name__}")
         elif hasattr(self.search_handler, 'semantic_search') and self.search_handler.semantic_search:
             semantic_engine = self.search_handler.semantic_search
-            self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
+            self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
         else:
-            self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine not found: self.semantic_search_engine={self.semantic_search_engine}, search_handler.semantic_search_engine={getattr(self.search_handler, 'semantic_search_engine', 'N/A')}, search_handler.semantic_search={getattr(self.search_handler, 'semantic_search', 'N/A')}")
+            self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine not found")
+            self.logger.warning(f"   - self.semantic_search_engine: {self.semantic_search_engine}")
+            self.logger.warning(f"   - search_handler.semantic_search_engine: {getattr(self.search_handler, 'semantic_search_engine', 'N/A')}")
+            self.logger.warning(f"   - search_handler.semantic_search: {getattr(self.search_handler, 'semantic_search', 'N/A')}")
+        
+        print(f"[TYPE DIVERSITY] semantic_engine 확인 결과: {semantic_engine is not None}")
+        self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_engine 확인 결과: {semantic_engine is not None}")
         
         if semantic_engine:
+            print(f"[TYPE DIVERSITY] semantic_engine 발견, 타입별 검색 진행")
+            self.logger.info("✅ [TYPE DIVERSITY] semantic_engine 발견, 타입별 검색 진행")
             # Phase 2: QueryDiversifier로 타입별 쿼리 생성
             try:
                 diversified_queries = self.query_diversifier.diversify_search_queries(original_query or enhanced_semantic_query)
@@ -587,8 +602,13 @@ class SearchExecutionProcessor:
                 self.logger.warning(f"⚠️ [TYPE DIVERSITY] 쿼리 다변화 실패: {e}")
                 diversified_queries = {}
             
+            print(f"[TYPE DIVERSITY] 타입별 검색 시작")
+            print(f"[TYPE DIVERSITY] 검색할 타입: {list(document_types.keys())}")
             self.logger.info("🔍 [TYPE DIVERSITY] 타입별 검색 시작")
+            self.logger.info(f"🔍 [TYPE DIVERSITY] 검색할 타입: {list(document_types.keys())}")
             for doc_type, query_type in document_types.items():
+                print(f"[TYPE DIVERSITY] {doc_type} 검색 시작 (query_type={query_type})")
+                self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type} 검색 시작 (query_type={query_type})")
                 try:
                     # Phase 2: 타입별 최적화된 쿼리 사용
                     type_queries = diversified_queries.get(query_type, [])
@@ -665,18 +685,34 @@ class SearchExecutionProcessor:
                         try:
                             type_results = self._get_type_sample(semantic_engine, doc_type, k=2)
                             if type_results:
+                                print(f"[TYPE DIVERSITY] {doc_type}: 샘플링으로 {len(type_results)}개 가져옴")
                                 self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: 샘플링으로 {len(type_results)}개 가져옴")
+                                # 샘플링된 문서 상세 로그
+                                for idx, sample_doc in enumerate(type_results, 1):
+                                    self.logger.debug(
+                                        f"   샘플 {idx}: id={sample_doc.get('id')}, "
+                                        f"source_type={sample_doc.get('source_type')}, "
+                                        f"type={sample_doc.get('type')}, "
+                                        f"relevance_score={sample_doc.get('relevance_score')}"
+                                    )
+                            else:
+                                self.logger.warning(f"⚠️ [TYPE DIVERSITY] {doc_type}: 샘플링 결과도 없음")
                         except Exception as e:
-                            self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 샘플링 실패: {e}")
+                            self.logger.error(f"❌ [TYPE DIVERSITY] {doc_type} 샘플링 실패: {e}")
+                            import traceback
+                            self.logger.debug(f"샘플링 예외 상세: {traceback.format_exc()}")
                     
                     if type_results:
                         type_specific_results[doc_type] = type_results
                         semantic_results.extend(type_results)
                         type_specific_count += len(type_results)
+                        print(f"[TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 (검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)")
                         self.logger.info(
-                            f"✅ [TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 (쿼리: '{search_query[:30]}...')"
+                            f"✅ [TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 "
+                            f"(검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)"
                         )
                     else:
+                        print(f"[TYPE DIVERSITY] {doc_type}: 검색 결과 없음")
                         self.logger.warning(
                             f"⚠️ [TYPE DIVERSITY] {doc_type}: 검색 결과 없음 (데이터 없음 또는 쿼리 관련성 낮음, 쿼리: '{search_query[:30]}...')"
                         )
@@ -686,14 +722,33 @@ class SearchExecutionProcessor:
                     self.logger.debug(f"타입별 검색 예외 상세: {traceback.format_exc()}")
         else:
             self.logger.warning("⚠️ [TYPE DIVERSITY] semantic_search_engine을 찾을 수 없어 타입별 검색을 수행할 수 없습니다")
+            self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine 확인: self.semantic_search_engine={self.semantic_search_engine is not None}")
+            if hasattr(self, 'search_handler'):
+                self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler 확인: {self.search_handler is not None}")
+                if self.search_handler:
+                    self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search 확인: {hasattr(self.search_handler, 'semantic_search')}")
+                    if hasattr(self.search_handler, 'semantic_search_engine'):
+                        self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search_engine 확인: {self.search_handler.semantic_search_engine is not None}")
         
         semantic_count += type_specific_count
         
         if type_specific_count > 0:
+            type_distribution = dict((k, len(v)) for k, v in type_specific_results.items())
             self.logger.info(
                 f"✅ [TYPE DIVERSITY] 타입별 검색 완료: 총 {type_specific_count}개 추가 "
-                f"(타입별 분포: {dict((k, len(v)) for k, v in type_specific_results.items())})"
+                f"(타입별 분포: {type_distribution})"
             )
+            # interpretation_paragraph 확인
+            if "interpretation_paragraph" in type_specific_results:
+                self.logger.info(
+                    f"✅ [TYPE DIVERSITY] interpretation_paragraph: {len(type_specific_results['interpretation_paragraph'])}개 "
+                    f"검색 결과에 포함됨"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ [TYPE DIVERSITY] interpretation_paragraph: 검색 결과에 없음 "
+                    f"(type_specific_results keys: {list(type_specific_results.keys())})"
+                )
         else:
             self.logger.info("⚠️ [TYPE DIVERSITY] 타입별 검색 결과 없음 (데이터 불균형 또는 검색 실패)")
 
@@ -987,8 +1042,11 @@ class SearchExecutionProcessor:
                     source_name = doc_type
                     source_url = ""
                 
+                # 고유한 ID 생성 (중복 방지)
+                unique_id = f"sample_{doc_type}_{chunk_id}_{source_id}"
                 samples.append({
-                    "id": f"chunk_{chunk_id}",
+                    "id": unique_id,  # 고유 ID로 변경
+                    "content_id": unique_id,  # 중복 제거를 위한 대체 ID
                     "text": text,
                     "content": text,
                     "score": 0.3,  # 낮은 점수 (강제 샘플링)
@@ -1004,11 +1062,13 @@ class SearchExecutionProcessor:
                         "source_id": source_id,
                         "text": text,
                         "is_sample": True,  # 샘플링된 문서 표시
+                        "search_type": "type_sample",  # 메타데이터에도 추가
                         **source_meta
                     },
                     "relevance_score": 0.3,
                     "search_type": "type_sample"
                 })
+                self.logger.debug(f"🔍 [TYPE DIVERSITY] 샘플 문서 생성: id={unique_id}, doc_type={doc_type}, chunk_id={chunk_id}")
             
             return samples
         except Exception as e:
