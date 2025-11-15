@@ -108,6 +108,13 @@ class SearchHandler:
                     if not text_content:
                         continue  # content가 없으면 건너뛰기
                 
+                # 개선 #2: Semantic search 결과에 대한 기본 relevance score 보정 (0.0 → 최소 0.3)
+                relevance_score = result.get('relevance_score') or result.get('similarity') or result.get('score', 0.0)
+                if relevance_score <= 0.0:
+                    relevance_score = 0.3  # 최소 점수 보정
+                elif relevance_score < 0.3:
+                    relevance_score = max(0.3, relevance_score * 1.2)  # 낮은 점수 보정
+                
                 # metadata에 content 필드 명시적으로 저장
                 metadata = result.get('metadata', {})
                 if not isinstance(metadata, dict):
@@ -120,7 +127,7 @@ class SearchHandler:
                     'content': text_content,  # content 필드 보장
                     'text': text_content,  # text 필드도 추가 (호환성)
                     'source': result.get('source', 'Vector Search'),
-                    'relevance_score': result.get('score', 0.8),
+                    'relevance_score': relevance_score,  # 개선 #2: 보정된 relevance_score 사용
                     'type': result.get('type', 'unknown'),
                     'metadata': metadata,  # content 필드가 포함된 metadata 저장
                     'search_type': 'semantic'
@@ -469,6 +476,36 @@ class SearchHandler:
 
             # Step 3: 순위 결정
             ranked = self.result_ranker.rank_results(merged, top_k=20)
+
+            # Step 3.5: Citation 포함 문서 우선순위 부여
+            import re
+            law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
+            precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+            
+            citation_boosted = []
+            non_citation = []
+            
+            for result in ranked:
+                content = result.text if hasattr(result, 'text') else str(result)
+                has_law = bool(re.search(law_pattern, content))
+                has_precedent = bool(re.search(precedent_pattern, content))
+                
+                if has_law or has_precedent:
+                    # Citation이 있는 문서는 점수 부스트
+                    if hasattr(result, 'score'):
+                        result.score *= 1.2  # 20% 부스트
+                    citation_boosted.append(result)
+                else:
+                    non_citation.append(result)
+            
+            # Citation이 있는 문서를 먼저 배치
+            ranked = citation_boosted + non_citation
+            
+            if citation_boosted:
+                self.logger.info(
+                    f"🔍 [SEARCH FILTERING] Citation boost applied: "
+                    f"{len(citation_boosted)} documents with citations prioritized"
+                )
 
             # Step 4: 다양성 필터 적용
             filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)

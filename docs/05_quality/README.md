@@ -13,5 +13,5 @@
 ## 🔗 관련 섹션
 
 - [04_Models_Performance](../04_models/performance/README.md): 모델 성능 최적화
-- [05_RAG_System](../05_rag_system/README.md): RAG 시스템 아키텍처
+- [03_RAG_System](../03_rag_system/README.md): RAG 시스템 아키텍처
 - [10_Technical_Reference](../10_technical_reference/README.md): 기술 참고 문서

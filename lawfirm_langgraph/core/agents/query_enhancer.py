@@ -60,6 +60,11 @@ class QueryEnhancer:
     ) -> Dict[str, Any]:
         """
         검색 쿼리 최적화 (LLM 강화 포함, 폴백 지원)
+        
+        성능 최적화:
+        - 간단한 쿼리는 LLM 호출 스킵
+        - 캐시 우선 확인
+        - llm_fast 우선 사용
 
         Returns:
             {
@@ -69,17 +74,28 @@ class QueryEnhancer:
                 "llm_enhanced": bool  # LLM 강화 사용 여부
             }
         """
-        # LLM 쿼리 강화 시도 (실패해도 계속 진행)
+        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (기준 완화)
+        # 쿼리가 짧고 키워드가 충분하면 LLM 강화 생략
+        should_skip_llm = (
+            (len(query) < 50 and len(extracted_keywords) >= 2) or  # 짧은 쿼리 + 키워드 2개 이상
+            (len(query) < 30 and len(extracted_keywords) >= 1) or  # 매우 짧은 쿼리 + 키워드 1개 이상
+            (query_type in ["general_question", "definition_question"] and len(extracted_keywords) >= 2)  # 간단한 질문 유형 + 키워드 2개 이상
+        )
+        
+        # LLM 쿼리 강화 시도 (간단한 쿼리는 스킵)
         llm_enhanced = None
-        try:
-            llm_enhanced = self.enhance_query_with_llm(
-                query=query,
-                query_type=query_type,
-                extracted_keywords=extracted_keywords,
-                legal_field=legal_field
-            )
-        except Exception as e:
-            self.logger.debug(f"LLM query enhancement skipped: {e}")
+        if not should_skip_llm:
+            try:
+                llm_enhanced = self.enhance_query_with_llm(
+                    query=query,
+                    query_type=query_type,
+                    extracted_keywords=extracted_keywords,
+                    legal_field=legal_field
+                )
+            except Exception as e:
+                self.logger.debug(f"LLM query enhancement skipped: {e}")
+        else:
+            self.logger.debug(f"Skipping LLM enhancement for simple query: '{query[:50]}...'")
 
         # LLM 강화 결과 사용 또는 원본 사용
         if llm_enhanced and isinstance(llm_enhanced, dict):
@@ -100,6 +116,15 @@ class QueryEnhancer:
 
         # 2. 동의어 및 관련 용어 확장 (LLM 실패 시에도 강화)
         expanded_terms = self.expand_legal_terms(normalized_terms, legal_field)
+        
+        # 법률 용어 가중치 계산 및 우선순위 적용
+        term_weights = self.calculate_legal_term_weights(expanded_terms, query_type)
+        # 가중치가 높은 용어를 앞에 배치
+        expanded_terms = sorted(
+            expanded_terms,
+            key=lambda x: term_weights.get(x, 0.5),
+            reverse=True
+        )[:15]  # 최대 15개로 제한
 
         # LLM 실패 시 추가 키워드 확장 시도
         if not llm_used and extracted_keywords:
@@ -119,6 +144,9 @@ class QueryEnhancer:
         if not semantic_query or not str(semantic_query).strip():
             self.logger.warning(f"optimize_search_query: semantic_query is empty, using base_query: '{base_query[:50]}...'")
             semantic_query = base_query
+        
+        # 쿼리 길이 최적화 적용
+        semantic_query = self.optimize_query_length(semantic_query, max_length=100)
 
         # 4. 키워드 쿼리 생성 (법률 조항, 판례 검색용)
         keyword_queries = self.build_keyword_queries(base_query, expanded_terms, query_type)
@@ -132,11 +160,60 @@ class QueryEnhancer:
         if llm_variants:
             keyword_queries.extend(llm_variants[:3])  # 최대 3개만
 
+        # 개선 #5: Citation 포함 쿼리 추가 생성 (1개 → 3-5개로 확대)
+        citation_queries = []
+        if query_type in ["law_inquiry", "precedent_inquiry"]:
+            import re
+            # 법령 조문 검색을 위한 쿼리 생성
+            law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
+            law_matches = re.findall(law_pattern, base_query)
+            if law_matches:
+                # 개선 #5: 법령 조문이 있으면 해당 조문으로 검색 쿼리 생성 (최대 2개 → 3개)
+                for law in law_matches[:3]:
+                    if law not in citation_queries:
+                        citation_queries.append(law)
+            
+            # 판례 검색을 위한 쿼리 생성
+            precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+            precedent_matches = re.findall(precedent_pattern, base_query)
+            if precedent_matches:
+                # 개선 #5: 판례 쿼리 확대 (최대 1개 → 2개)
+                for precedent in precedent_matches[:2]:
+                    if precedent not in citation_queries:
+                        citation_queries.append(precedent)
+            
+            # extracted_keywords에서 법령 조문 추출
+            if extracted_keywords:
+                # 개선 #5: extracted_keywords에서 더 많은 법령 조문 추출 (최대 1개 → 2개)
+                for kw in extracted_keywords:
+                    if isinstance(kw, str):
+                        kw_law_matches = re.findall(law_pattern, kw)
+                        for law in kw_law_matches[:2]:
+                            if law not in citation_queries and len(citation_queries) < 5:
+                                citation_queries.append(law)
+            
+            # 개선 #5: 질문에서 관련 법률 용어 추출하여 추가 쿼리 생성
+            if query_type == "law_inquiry" and len(citation_queries) < 5:
+                legal_terms = ["손해배상", "불법행위", "계약", "해지", "해제", "소멸시효", "채권", "채무"]
+                for term in legal_terms:
+                    if term in base_query and term not in citation_queries:
+                        citation_queries.append(term)
+                        if len(citation_queries) >= 5:
+                            break
+        
+        # Citation 쿼리를 keyword_queries에 추가
+        if citation_queries:
+            keyword_queries.extend(citation_queries)
+            self.logger.info(
+                f"🔍 [QUERY ENHANCEMENT] Added {len(citation_queries)} citation queries: {citation_queries}"
+            )
+
         result = {
             "semantic_query": semantic_query,
             "keyword_queries": keyword_queries[:5],  # 최대 5개로 제한
             "expanded_keywords": expanded_terms,
-            "llm_enhanced": llm_used
+            "llm_enhanced": llm_used,
+            "citation_queries": citation_queries  # Citation 쿼리 추가
         }
 
         # 최종 검증 로그
@@ -229,9 +306,25 @@ class QueryEnhancer:
                     legal_field=legal_field
                 )
 
-                # LLM 호출 (짧은 응답만 필요하므로 토큰 수 제한)
+                # 성능 최적화: llm_fast 우선 사용 (더 빠른 응답)
+                llm_to_use = self.llm_fast if self.llm_fast else self.llm
+                if not llm_to_use:
+                    self.logger.warning("No LLM available for query enhancement")
+                    return None
+                
+                # LLM 호출 (짧은 응답만 필요하므로 토큰 수 제한, 타임아웃 설정)
                 try:
-                    response = self.llm.invoke(prompt)
+                    # 동기 LLM 호출에 타임아웃 적용 (최대 5초)
+                    if hasattr(llm_to_use, 'invoke'):
+                        # 타임아웃이 있는 경우 사용
+                        if hasattr(llm_to_use, 'timeout'):
+                            response = llm_to_use.invoke(prompt, timeout=5.0)
+                        else:
+                            # 타임아웃이 없는 경우 일반 호출
+                            response = llm_to_use.invoke(prompt)
+                    else:
+                        response = llm_to_use(prompt)
+                    
                     if isinstance(response, str):
                         llm_output = response
                     elif hasattr(response, 'content'):
@@ -287,31 +380,44 @@ class QueryEnhancer:
             Optional[Dict[str, Any]]: 강화된 쿼리 결과 또는 None
         """
         try:
-            # PromptChainExecutor 인스턴스 생성
+            # 성능 최적화: llm_fast 우선 사용 (더 빠른 응답)
+            # llm_fast가 없으면 메인 LLM 사용
             llm = self.llm_fast if self.llm_fast else self.llm
+            if not llm:
+                self.logger.warning("No LLM available for chain enhancement")
+                return None
+            
             chain_executor = PromptChainExecutor(llm, self.logger)
 
             # 체인 스텝 정의
             chain_steps = []
 
-            # Step 1: 쿼리 분석 및 핵심 키워드 추출
+            # Step 1: 쿼리 분석 및 핵심 키워드 추출 (프롬프트 최적화)
             def build_query_analysis_prompt(prev_output, initial_input):
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
                 query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
                 legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 법률 검색 쿼리를 분석하고 핵심 키워드를 추출해주세요.
+                return f"""법률 검색 쿼리 분석:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
+쿼리: {query_value}
+유형: {query_type_value}
+분야: {legal_field_value if legal_field_value else "미지정"}
 
-다음 형식으로 응답해주세요:
+**중요**: 질문의 핵심 의도를 정확히 파악하여 검색에 필요한 키워드를 추출하세요.
+
+**분석 기준**:
+1. 질문의 핵심 의도 파악: 예) "임대차 계약서 작성 시 임대인과 임차인의 권리와 의무" → 핵심 의도: "임대차 계약에서 당사자의 권리와 의무"
+2. 검색 범위를 질문과 직접 관련된 법령/판례로 제한: 예) "민사소송등인지법"은 임대차 계약서 작성과 직접 관련이 없으므로 제외
+3. 법령 조문 검색을 위한 키워드 포함: 예) "민법 임대차", "임대차보호법", "주택임대차보호법" 등
+
+응답 형식 (JSON만):
 {{
-    "core_keywords": ["핵심 키워드1", "핵심 키워드2", "핵심 키워드3"],
-    "query_intent": "쿼리의 의도 설명",
-    "key_concepts": ["핵심 법률 개념1", "핵심 법률 개념2"],
-    "analysis": "쿼리 분석 결과 (한국어)"
+    "core_keywords": ["키워드1", "키워드2", "키워드3"],
+    "query_intent": "질문의 핵심 의도 (한국어)",
+    "key_concepts": ["개념1", "개념2"],
+    "related_laws": ["관련 법령명1", "관련 법령명2"],
+    "excluded_keywords": ["제외할 키워드1", "제외할 키워드2"]
 }}
 """
 
@@ -324,34 +430,24 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 2: 키워드 확장 및 변형 생성
+            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화)
             def build_keyword_expansion_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 core_keywords = prev_output.get("core_keywords", [])
-                query_intent = prev_output.get("query_intent", "")
-                key_concepts = prev_output.get("key_concepts", [])
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-                query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
-                legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 핵심 키워드를 바탕으로 검색 범위를 확장하기 위한 키워드 변형과 동의어를 생성해주세요.
+                return f"""키워드 확장:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
-쿼리 의도: {query_intent}
-핵심 키워드: {', '.join(core_keywords) if core_keywords else "없음"}
-핵심 개념: {', '.join(key_concepts) if key_concepts else "없음"}
+쿼리: {query_value}
+핵심 키워드: {', '.join(core_keywords[:5]) if core_keywords else "없음"}
 
-다음 형식으로 응답해주세요:
+응답 형식 (JSON만):
 {{
-    "expanded_keywords": ["확장 키워드1", "확장 키워드2", "확장 키워드3", "확장 키워드4", "확장 키워드5"],
-    "synonyms": ["동의어1", "동의어2", "동의어3"],
-    "related_terms": ["관련 용어1", "관련 용어2"],
-    "keyword_variants": ["키워드 변형1", "키워드 변형2"],
-    "reasoning": "확장 근거 (한국어)"
+    "expanded_keywords": ["확장1", "확장2", "확장3"],
+    "synonyms": ["동의어1", "동의어2"],
+    "keyword_variants": ["변형1", "변형2"]
 }}
 """
 
@@ -364,16 +460,13 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 3: 최적화된 쿼리 생성
+            # Step 3: 최적화된 쿼리 생성 (프롬프트 최적화)
             def build_query_optimization_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 expanded_keywords = prev_output.get("expanded_keywords", [])
-                synonyms = prev_output.get("synonyms", [])
-                related_terms = prev_output.get("related_terms", [])
-                keyword_variants = prev_output.get("keyword_variants", [])
-
+                
                 # Step 1 결과에서 core_keywords 가져오기
                 core_keywords = []
                 if hasattr(chain_executor, 'chain_history'):
@@ -385,24 +478,25 @@ class QueryEnhancer:
                                 break
 
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-                query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
-                legal_field_value = initial_input.get("legal_field") if isinstance(initial_input, dict) else legal_field
 
-                return f"""다음 정보를 바탕으로 법률 데이터베이스 검색에 최적화된 쿼리를 생성해주세요.
+                return f"""쿼리 최적화:
 
-원본 쿼리: {query_value}
-질문 유형: {query_type_value}
-법률 분야: {legal_field_value if legal_field_value else "미지정"}
-핵심 키워드: {', '.join(core_keywords) if core_keywords else "없음"}
-확장 키워드: {', '.join(expanded_keywords[:10]) if expanded_keywords else "없음"}
+원본: {query_value}
+핵심: {', '.join(core_keywords[:3]) if core_keywords else "없음"}
+확장: {', '.join(expanded_keywords[:5]) if expanded_keywords else "없음"}
 
-다음 형식으로 응답해주세요:
+**중요**: 질문의 의도를 반영한 검색 쿼리를 생성하세요.
+
+**최적화 기준**:
+1. 질문의 핵심 키워드를 명시적으로 포함: 예) "임대차 계약서 작성 시 임대인과 임차인의 권리와 의무" → "임대차 임대인 임차인 권리 의무 민법"
+2. 검색 범위를 질문과 직접 관련된 법령/판례로 제한: 관련 없는 키워드 제거
+3. 벡터 검색과 키워드 검색 모두에 효과적인 쿼리 생성
+
+응답 형식 (JSON만):
 {{
-    "optimized_query": "최적화된 메인 쿼리 (최대 50자)",
-    "semantic_query": "벡터 검색용 쿼리 (의미 중심)",
-    "keyword_query": "키워드 검색용 쿼리 (정확 매칭 중심)",
-    "legal_terms": ["법률 전문 용어1", "법률 전문 용어2"],
-    "reasoning": "최적화 근거 (한국어)"
+    "optimized_query": "최적화 쿼리 (50자 이내)",
+    "semantic_query": "벡터 검색용 (질문의 핵심 의도와 키워드 포함)",
+    "keyword_query": "키워드 검색용 (법령명, 조문번호, 핵심 용어 포함)"
 }}
 """
 
@@ -460,11 +554,22 @@ class QueryEnhancer:
                 "legal_field": legal_field
             }
 
+            # 성능 최적화: 간단한 쿼리는 체인 단계 축소
+            # 쿼리가 짧고 키워드가 충분하면 검증 단계 스킵
+            should_skip_validation = (
+                len(query) < 60 and len(extracted_keywords) >= 2
+            )
+            
+            # 검증 단계 제거 (간단한 쿼리)
+            if should_skip_validation:
+                chain_steps = [step for step in chain_steps if step.get("name") != "query_validation"]
+                self.logger.debug(f"Skipping validation step for simple query: '{query[:50]}...'")
+            
             chain_result = chain_executor.execute_chain(
                 chain_steps=chain_steps,
                 initial_input=initial_input_dict,
-                max_iterations=2,
-                stop_on_failure=False
+                max_iterations=1,  # 각 단계 최대 1회 재시도 (2 → 1로 감소)
+                stop_on_failure=False  # 일부 단계 실패해도 계속 진행
             )
 
             # 결과 추출 및 통합
@@ -915,16 +1020,38 @@ class QueryEnhancer:
 
         # 지원되는 법률 분야별 관련 용어 매핑 (민사법, 지식재산권법, 행정법, 형사법만)
         field_expansions = {
-            "civil": ["민사", "계약", "손해배상", "채권", "채무"],
-            "criminal": ["형사", "범죄", "처벌", "형량"],
-            "intellectual_property": ["특허", "상표", "저작권", "지적재산"],
-            "administrative": ["행정", "행정처분", "행정소송", "행정심판"]
+            "civil": ["민사", "계약", "손해배상", "채권", "채무", "불법행위", "소유권", "점유"],
+            "criminal": ["형사", "범죄", "처벌", "형량", "구성요건", "기소", "공소"],
+            "intellectual_property": ["특허", "상표", "저작권", "지적재산", "침해", "등록"],
+            "administrative": ["행정", "행정처분", "행정소송", "행정심판", "행정처분", "행정쟁송"],
+            "family": ["가족", "혼인", "이혼", "상속", "양육권", "친권", "위자료"],
+            "labor": ["근로", "임금", "해고", "노동", "근로자", "사용자", "퇴직금", "산재"],
+            "corporate": ["회사", "주주", "이사", "법인", "기업", "자본", "이사회"],
+            "tax": ["세금", "과세", "소득세", "법인세", "부가가치세", "공제", "세율"]
+        }
+        
+        # 법률 용어 동의어 매핑
+        synonym_mapping = {
+            "계약": ["계약서", "계약관계", "계약체결"],
+            "손해배상": ["손해", "배상", "불법행위 손해배상"],
+            "불법행위": ["불법", "위법행위", "불법행위 책임"],
+            "채권": ["채권자", "채권관계"],
+            "채무": ["채무자", "채무관계"],
+            "소유권": ["소유", "소유자"],
+            "판례": ["판결", "선고", "판시사항", "판결요지"],
+            "법령": ["법률", "법규", "법규정"],
+            "조문": ["조항", "조", "법조문"]
         }
 
         # 관련 용어 추가
         if legal_field:
             related_terms = field_expansions.get(legal_field, [])
             expanded.extend(related_terms)
+        
+        # 동의어 추가
+        for term in terms:
+            if isinstance(term, str) and term in synonym_mapping:
+                expanded.extend(synonym_mapping[term])
 
         return list(set(expanded))[:15]  # 최대 15개로 제한
 
@@ -955,6 +1082,157 @@ class QueryEnhancer:
         """키워드 검색용 쿼리 리스트 생성"""
         return QueryBuilder.build_keyword_queries(query, expanded_terms, query_type)
 
+    def optimize_query_length(self, query: str, max_length: int = 100) -> str:
+        """쿼리 길이 최적화"""
+        if not query or not isinstance(query, str):
+            return query
+        
+        if len(query) <= max_length:
+            return query
+        
+        # 핵심 키워드 추출 (불용어 제거)
+        stopwords = ["은", "는", "이", "가", "을", "를", "에", "의", "로", "으로", "와", "과", "도", "만", "주세요", "요청", "설명"]
+        words = query.split()
+        keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+        
+        # 최대 5개 키워드 선택
+        optimized = " ".join(keywords[:5])
+        
+        # 길이 제한 적용
+        if len(optimized) > max_length:
+            optimized = optimized[:max_length].rsplit(' ', 1)[0]
+        
+        return optimized if optimized else query[:max_length]
+
+    def calculate_legal_term_weights(
+        self,
+        keywords: List[str],
+        query_type: str
+    ) -> Dict[str, float]:
+        """법률 용어 가중치 계산"""
+        import re
+        weights = {}
+        
+        for keyword in keywords:
+            if not isinstance(keyword, str):
+                continue
+                
+            weight = 0.5  # 기본 가중치
+            
+            # 법령명/조문번호 가중치 증가
+            if re.search(r'[가-힣]+법\s*제?\s*\d+\s*조', keyword):
+                weight = 1.0
+            # 판례 키워드 가중치 증가
+            elif re.search(r'대법원|법원.*\d{4}[다나마]\d+', keyword):
+                weight = 0.9
+            # 질문 유형별 가중치 조정
+            elif query_type == "law_inquiry" and ("법" in keyword or "조" in keyword):
+                weight = 0.8
+            elif query_type == "precedent_search" and ("판례" in keyword or "대법원" in keyword or "법원" in keyword):
+                weight = 0.8
+            # 법률 전문 용어 가중치 증가
+            elif any(term in keyword for term in ["손해배상", "불법행위", "계약", "채권", "채무", "소유권"]):
+                weight = 0.7
+            
+            weights[keyword] = weight
+        
+        return weights
+
+    def improve_query_based_on_results(
+        self,
+        query: str,
+        search_results: List[Dict],
+        quality_score: float,
+        query_type: str = ""
+    ) -> Optional[str]:
+        """검색 결과 품질에 따른 쿼리 개선"""
+        if quality_score >= 0.7:
+            return None  # 품질이 좋으면 개선 불필요
+        
+        if not search_results or len(search_results) == 0:
+            return None
+        
+        # 검색 결과에서 누락된 키워드 추출
+        missing_keywords = self._extract_missing_keywords(query, search_results)
+        
+        if not missing_keywords:
+            return None
+        
+        # 개선된 쿼리 생성
+        improved_query = self._add_keywords_to_query(query, missing_keywords, query_type)
+        
+        self.logger.info(
+            f"🔍 [QUERY IMPROVEMENT] Quality score: {quality_score:.2f}, "
+            f"Added keywords: {missing_keywords[:3]}, "
+            f"Improved query: '{improved_query[:50]}...'"
+        )
+        
+        return improved_query
+
+    def _extract_missing_keywords(
+        self,
+        query: str,
+        search_results: List[Dict]
+    ) -> List[str]:
+        """검색 결과에서 누락된 키워드 추출"""
+        import re
+        from collections import Counter
+        
+        # 검색 결과에서 자주 나타나는 법률 용어 추출
+        result_keywords = []
+        for result in search_results[:10]:  # 상위 10개 결과만 분석
+            content = result.get("content", "") or result.get("text", "") or ""
+            if not isinstance(content, str):
+                content = str(content)
+            
+            # 법률 용어 패턴 추출
+            law_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조'
+            precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+'
+            
+            law_matches = re.findall(law_pattern, content)
+            precedent_matches = re.findall(precedent_pattern, content)
+            
+            result_keywords.extend(law_matches)
+            result_keywords.extend(precedent_matches)
+            
+            # 법률 전문 용어 추출 (2-4자 한글 단어)
+            legal_terms = re.findall(r'[가-힣]{2,4}', content)
+            result_keywords.extend([term for term in legal_terms if len(term) >= 2])
+        
+        # 빈도 계산
+        keyword_freq = Counter(result_keywords)
+        
+        # 원본 쿼리에 없는 키워드 중 빈도가 높은 것 선택
+        query_words = set(re.findall(r'[가-힣]+', query))
+        missing_keywords = [
+            kw for kw, freq in keyword_freq.most_common(10)
+            if kw not in query_words and freq >= 2
+        ]
+        
+        return missing_keywords[:5]  # 최대 5개
+
+    def _add_keywords_to_query(
+        self,
+        query: str,
+        keywords: List[str],
+        query_type: str = ""
+    ) -> str:
+        """쿼리에 키워드 추가"""
+        if not keywords:
+            return query
+        
+        # 쿼리 길이 최적화
+        optimized_query = self.optimize_query_length(query, max_length=80)
+        
+        # 키워드 추가 (최대 3개)
+        added_keywords = keywords[:3]
+        improved_query = f"{optimized_query} {' '.join(added_keywords)}"
+        
+        # 최종 길이 제한
+        improved_query = self.optimize_query_length(improved_query, max_length=100)
+        
+        return improved_query
+
     def determine_search_parameters(
         self,
         query_type: str,
@@ -978,8 +1256,12 @@ class QueryEnhancer:
         # 복잡도에 따른 조정
         if query_complexity > 100:
             multiplier += 0.3
+        elif query_complexity > 50:
+            multiplier += 0.15
         if keyword_count > 10:
             multiplier += 0.2
+        elif keyword_count > 5:
+            multiplier += 0.1
 
         # 재시도 시 더 많은 결과
         if is_retry:
@@ -991,9 +1273,17 @@ class QueryEnhancer:
         # 유사도 임계값 동적 조정
         min_relevance = self.config.similarity_threshold
         if query_type == "precedent_search":
-            min_relevance = max(0.6, min_relevance - 0.1)  # 판례 검색: 완화
+            min_relevance = max(0.55, min_relevance - 0.15)  # 판례 검색: 더 완화
         elif query_type == "law_inquiry":
-            min_relevance = max(0.65, min_relevance - 0.05)  # 법령 조회: 약간 완화
+            min_relevance = max(0.6, min_relevance - 0.1)  # 법령 조회: 완화
+        elif query_type == "legal_advice":
+            min_relevance = max(0.65, min_relevance - 0.05)  # 법률 상담: 약간 완화
+        
+        # 복잡도에 따른 임계값 조정
+        if query_complexity > 100:
+            min_relevance = max(0.5, min_relevance - 0.1)
+        elif query_complexity > 50:
+            min_relevance = max(0.55, min_relevance - 0.05)
 
         return {
             "semantic_k": min(25, semantic_k),  # 최대 25개

@@ -2,6 +2,8 @@
 # .env 파일은 보안상 편집하지 않도록 설정
 .env
 # .env.example은 접근 가능하도록 허용 (환경 변수 템플릿 파일)
+!.env.example
+!**/.env.example
 
 # 기타 민감한 파일들
 *.key

@@ -1,26 +1,26 @@
 # start_monitoring.ps1
-# Windows PowerShell 스크립트
+# Windows PowerShell script
 
 Write-Host "🚀 Starting Grafana + Prometheus monitoring stack..." -ForegroundColor Green
 
-# 현재 디렉토리 확인
+# Check current directory
 if (-not (Test-Path "docker-compose.yml")) {
     Write-Host "❌ Error: docker-compose.yml not found. Please run this script from the monitoring directory." -ForegroundColor Red
     exit 1
 }
 
-# Docker Compose로 모니터링 스택 시작
+# Start monitoring stack with Docker Compose
 Write-Host "📦 Starting Docker containers..." -ForegroundColor Yellow
 docker-compose up -d
 
-# 서비스가 시작될 때까지 대기
+# Wait for services to start
 Write-Host "⏳ Waiting for services to start..." -ForegroundColor Yellow
 Start-Sleep -Seconds 10
 
-# 서비스 상태 확인
+# Check service status
 Write-Host "🔍 Checking service status..." -ForegroundColor Yellow
 
-# Prometheus 상태 확인
+# Check Prometheus status
 try {
     $response = Invoke-WebRequest -Uri "http://localhost:9090/-/healthy" -TimeoutSec 5 -ErrorAction Stop
     Write-Host "✅ Prometheus is running on http://localhost:9090" -ForegroundColor Green
@@ -28,7 +28,7 @@ try {
     Write-Host "❌ Prometheus failed to start" -ForegroundColor Red
 }
 
-# Grafana 상태 확인
+# Check Grafana status
 try {
     $response = Invoke-WebRequest -Uri "http://localhost:3000/api/health" -TimeoutSec 5 -ErrorAction Stop
     Write-Host "✅ Grafana is running on http://localhost:3000" -ForegroundColor Green
@@ -36,7 +36,7 @@ try {
     Write-Host "❌ Grafana failed to start" -ForegroundColor Red
 }
 
-# Node Exporter 상태 확인
+# Check Node Exporter status
 try {
     $response = Invoke-WebRequest -Uri "http://localhost:9100/metrics" -TimeoutSec 5 -ErrorAction Stop
     Write-Host "✅ Node Exporter is running on http://localhost:9100" -ForegroundColor Green

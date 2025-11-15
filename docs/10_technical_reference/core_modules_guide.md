@@ -8,14 +8,18 @@
 
 ```
 lawfirm_langgraph/core/
-├── agents/          # LangGraph 워크플로우 에이전트
-├── services/        # 비즈니스 서비스
-├── data/            # 데이터 레이어
-├── models/          # AI 모델
-└── utils/           # 유틸리티
+├── workflow/        # LangGraph 워크플로우 (메인)
+│   ├── callbacks/   # 스트리밍 콜백 핸들러
+│   └── ...
+├── agents/          # 에이전트 및 프롬프트 빌더
+├── search/          # 검색 엔진 및 핸들러
+├── generation/      # 답변 생성 및 포맷팅
+├── processing/      # 데이터 처리 및 검증
+├── classification/  # 분류 및 분석
+└── shared/          # 공유 유틸리티
 ```
 
-## 1. Agents 모듈 (`lawfirm_langgraph/core/agents/`)
+## 1. Workflow 모듈 (`lawfirm_langgraph/core/workflow/`)
 
 ### 1.1 LangGraph 워크플로우
 
@@ -25,10 +29,16 @@ lawfirm_langgraph/core/
 **주요 클래스**:
 - `LangGraphWorkflowService`: 워크플로우 실행 서비스
 
+**주요 메서드**:
+- `process_query()`: 질문 처리 (동기)
+- `process_query_async()`: 질문 처리 (비동기)
+- `create_streaming_callback_handler()`: 스트리밍 콜백 핸들러 생성
+- `get_config_with_callbacks()`: 콜백이 포함된 config 생성
+
 **사용 예시**:
 ```python
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 # 설정 초기화
 config = LangGraphConfig.from_env()
@@ -38,6 +48,46 @@ workflow = LangGraphWorkflowService(config)
 
 # 질문 처리
 result = await workflow.process_query_async("계약 해지 조건은?", "session_id")
+```
+
+### 1.2 스트리밍 콜백 시스템
+
+#### callbacks/streaming_callback_handler.py
+**역할**: LangGraph 스트리밍 콜백 핸들러
+
+**주요 클래스**:
+- `StreamingCallbackHandler`: LLM 스트리밍 이벤트를 캡처하여 큐에 저장
+
+**주요 메서드**:
+- `on_llm_start()`: LLM 시작 시 호출
+- `on_llm_stream()`: LLM 스트리밍 청크 수신 시 호출
+- `on_llm_end()`: LLM 종료 시 호출
+- `get_stats()`: 스트리밍 통계 반환
+
+**사용 예시**:
+```python
+import asyncio
+from lawfirm_langgraph.core.workflow.callbacks.streaming_callback_handler import StreamingCallbackHandler
+
+# 큐 생성
+callback_queue = asyncio.Queue()
+
+# 콜백 핸들러 생성
+callback_handler = StreamingCallbackHandler(queue=callback_queue)
+
+# LangGraph config에 추가
+config = {
+    "configurable": {"thread_id": "session_123"},
+    "callbacks": [callback_handler]
+}
+
+# 워크플로우 실행 중 큐에서 청크 수신
+while True:
+    try:
+        chunk = callback_queue.get_nowait()
+        print(f"Received chunk: {chunk['content']}")
+    except asyncio.QueueEmpty:
+        break
 ```
 
 #### legal_workflow_enhanced.py
@@ -52,9 +102,69 @@ result = await workflow.process_query_async("계약 해지 조건은?", "session
 - `assess_urgency`: 긴급도 평가
 - `resolve_multi_turn`: 멀티턴 처리
 - `retrieve_documents`: 문서 검색
-- `generate_answer_enhanced`: 답변 생성
+- `generate_answer_enhanced`: 답변 생성 (기본)
+- `generate_answer_stream`: 스트리밍 답변 생성 (API용)
+- `generate_answer_final`: 최종 검증 및 포맷팅 (테스트용)
 
-### 1.2 State 관리
+**환경 변수 기반 노드 선택**:
+- `USE_STREAMING_MODE=true`: `generate_answer_stream` 사용 → 실시간 스트리밍
+- `USE_STREAMING_MODE=false`: `generate_answer_final` 사용 → 검증 및 포맷팅 포함
+
+### 1.2 노드 모듈 (`nodes/`)
+
+#### classification_nodes.py
+**역할**: 질문 분류 노드
+
+**주요 함수**:
+- `classify_query_node()`: 질문 분류 노드
+
+#### search_nodes.py
+**역할**: 문서 검색 노드
+
+**주요 함수**:
+- `search_documents_node()`: 문서 검색 노드
+
+#### answer_nodes.py
+**역할**: 답변 생성 노드
+
+**주요 함수**:
+- `generate_answer_node()`: 답변 생성 노드
+
+#### routing_nodes.py
+**역할**: 라우팅 노드
+
+**주요 함수**:
+- `route_query_node()`: 쿼리 라우팅 노드
+
+#### node_wrappers.py
+**역할**: 노드 래퍼 및 최적화 데코레이터
+
+**주요 데코레이터**:
+- `with_state_optimization()`: State 최적화 적용
+
+**사용 예시**:
+```python
+from lawfirm_langgraph.core.workflow.nodes.node_wrappers import with_state_optimization
+
+@with_state_optimization("classify_query")
+def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
+    # 노드 로직
+    return state
+```
+
+#### node_input_output_spec.py
+**역할**: 노드별 입출력 사양 정의
+
+**주요 클래스**:
+- `NodeIOSpec`: 노드 입출력 사양
+- `NodeCategory`: 노드 카테고리
+
+**주요 함수**:
+- `get_node_spec()`: 노드 사양 조회
+- `validate_node_input()`: 입력 검증
+- `get_required_state_groups()`: 필요한 State 그룹 반환
+
+### 1.3 State 관리 (`state/`)
 
 #### state_definitions.py
 **역할**: LangGraph State 정의
@@ -116,35 +226,121 @@ result = await workflow.process_query_async("계약 해지 조건은?", "session
 - `to_nested_state()`: flat → nested 변환
 - `to_flat_state()`: nested → flat 변환
 
-### 1.3 노드 관리
+### 1.4 Tools 모듈 (`tools/`)
 
-#### node_wrappers.py
-**역할**: 노드 래퍼 및 최적화 데코레이터
-
-**주요 데코레이터**:
-- `with_state_optimization()`: State 최적화 적용
-
-**사용 예시**:
-```python
-from lawfirm_langgraph.core.agents.node_wrappers import with_state_optimization
-
-@with_state_optimization("classify_query")
-def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
-    # 노드 로직
-    return state
-```
-
-#### node_input_output_spec.py
-**역할**: 노드별 입출력 사양 정의
-
-**주요 클래스**:
-- `NodeIOSpec`: 노드 입출력 사양
-- `NodeCategory`: 노드 카테고리
+#### legal_search_tools.py
+**역할**: Agentic AI를 위한 법률 검색 도구
 
 **주요 함수**:
-- `get_node_spec()`: 노드 사양 조회
-- `validate_node_input()`: 입력 검증
-- `get_required_state_groups()`: 필요한 State 그룹 반환
+- `search_laws()`: 법령 검색 도구
+- `search_precedents()`: 판례 검색 도구
+
+### 1.5 Builders 모듈 (`builders/`)
+
+#### chain_builders.py
+**역할**: LangChain 체인 빌더
+
+**주요 함수**:
+- `build_classification_chain()`: 분류 체인 빌드
+- `build_answer_chain()`: 답변 체인 빌드
+
+#### prompt_builders.py
+**역할**: 프롬프트 빌더
+
+**주요 함수**:
+- `build_classification_prompt()`: 분류 프롬프트 빌드
+- `build_answer_prompt()`: 답변 프롬프트 빌드
+
+### 1.6 Mixins 모듈 (`mixins/`)
+
+#### answer_generation_mixin.py
+**역할**: 답변 생성 믹스인
+
+#### classification_mixin.py
+**역할**: 분류 믹스인
+
+#### search_mixin.py
+**역할**: 검색 믹스인
+
+## 2. Agents 모듈 (`lawfirm_langgraph/core/agents/`) - 레거시
+
+**참고**: 새로운 코드는 `core/workflow/`를 사용하세요. 이 디렉토리는 하위 호환성을 위해 유지됩니다.
+
+### 2.1 레거시 핸들러
+
+#### handlers/
+**역할**: 레거시 핸들러 모듈
+
+**주요 파일**:
+- `answer_formatter.py`: 답변 포맷터
+- `answer_generator.py`: 답변 생성기
+- `classification_handler.py`: 분류 핸들러
+- `context_builder.py`: 컨텍스트 빌더
+- `direct_answer_handler.py`: 직접 답변 핸들러
+- `search_handler.py`: 검색 핸들러
+
+### 2.2 유틸리티
+
+#### keyword_mapper.py
+**역할**: 법률 키워드 매핑
+
+**주요 클래스**:
+- `LegalKeywordMapper`: 법률 키워드 매퍼
+
+#### legal_data_connector_v2.py
+**역할**: 법률 데이터 커넥터 (벡터 스토어 + 데이터베이스)
+
+**주요 클래스**:
+- `LegalDataConnectorV2`: 통합 데이터 커넥터
+
+**주요 메서드**:
+- `retrieve_documents()`: 문서 검색
+- `search_by_similarity()`: 유사도 검색
+- `search_by_keywords()`: 키워드 검색
+
+### 2.3 최적화 및 모니터링
+
+#### optimizers/performance_optimizer.py
+**역할**: 성능 최적화
+
+**주요 기능**:
+- State 최적화
+- 메모리 관리
+- 캐시 관리
+
+#### optimizers/query_optimizer.py
+**역할**: 쿼리 최적화
+
+**주요 기능**:
+- 검색 쿼리 개선
+- 키워드 확장
+- 동의어 처리
+
+#### search_performance_monitor.py
+**역할**: 검색 성능 모니터링
+
+**주요 기능**:
+- 검색 시간 측정
+- 결과 품질 평가
+- 성능 메트릭 수집
+
+### 2.4 기타 유틸리티
+
+#### workflow_logger.py
+**역할**: 워크플로우 로깅
+
+**주요 기능**:
+- 노드 실행 로깅
+- State 변화 추적
+- 오류 로깅
+
+#### checkpoint_manager.py
+**역할**: 체크포인트 관리
+
+**주요 기능**:
+- State 저장
+- 워크플로우 재개
+- 이력 관리
 
 ### 1.4 데이터 커넥터
 
@@ -427,7 +623,7 @@ embedding = model.encode("계약 해지 조건")
 
 ```python
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 # 1. 설정 초기화
 config = LangGraphConfig.from_env()
@@ -488,10 +684,12 @@ for law in laws:
 ## 모듈 간 의존성
 
 ```
-workflow_service
+workflow/workflow_service
     ↓
-legal_workflow_enhanced
+workflow/legal_workflow_enhanced
     ↓
+    ├── workflow/nodes/ (워크플로우 노드)
+    ├── workflow/state/ (상태 관리)
     ├── services/search (검색)
     ├── services/generation (답변 생성)
     ├── services/enhancement (품질 개선)
@@ -516,7 +714,7 @@ State 최적화, 캐싱 등을 통해 성능을 향상시킵니다.
 
 ## 참고 자료
 
-- [LangGraph 통합 가이드](../05_rag_system/langgraph_integration_guide.md)
-- [RAG 아키텍처](../05_rag_system/rag_architecture.md)
+- [LangGraph 통합 가이드](../03_rag_system/langgraph_integration_guide.md)
+- [RAG 아키텍처](../03_rag_system/rag_architecture.md)
 - [LangGraph Node I/O](langgraph_node_io.md)
 - [데이터베이스 스키마](database_schema.md)

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 
 # 한글 출력을 위한 인코딩 설정
@@ -36,6 +36,8 @@ if sys.platform == "win32":
 
 class Config(BaseSettings):
     """설정 관리 클래스"""
+    
+    model_config = ConfigDict(protected_namespaces=('settings_',))
 
     # LAW OPEN API Configuration
     law_open_api_oc: str = Field(default="{OC}", env="LAW_OPEN_API_OC")
@@ -75,7 +77,6 @@ class Config(BaseSettings):
 
     # HuggingFace Spaces Configuration
     hf_space_id: Optional[str] = Field(default=None, env="HF_SPACE_ID")
-    hf_token: Optional[str] = Field(default=None, env="HF_TOKEN")
 
     # Performance Configuration
     max_workers: int = Field(default=4, env="MAX_WORKERS")

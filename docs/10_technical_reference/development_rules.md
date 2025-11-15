@@ -6,13 +6,13 @@
 
 ## 🚀 프로세스 관리 규칙
 
-### Streamlit 서버 관리
+### API 서버 관리
 
 #### 서버 시작
 ```bash
-# Streamlit 서버 시작
-cd apps/streamlit
-streamlit run app.py
+# API 서버 시작
+cd api
+python main.py
 ```
 
 #### 서버 종료
@@ -25,8 +25,8 @@ streamlit run app.py
 
 2. **포트 기반 종료**:
 ```bash
-# 8501 포트 사용 프로세스 확인
-netstat -ano | findstr :8501
+# 8000 포트 사용 프로세스 확인
+netstat -ano | findstr :8000
 
 # 특정 PID 종료
 taskkill /PID [PID번호] /F
@@ -46,6 +46,24 @@ taskkill /f /im python.exe
 taskkill /PID 12345 /F
 ```
 
+### React 프론트엔드 관리
+
+#### 개발 서버 시작
+```bash
+# React 개발 서버 시작
+cd frontend
+npm install
+npm run dev
+```
+
+#### 프로덕션 빌드
+```bash
+# 프로덕션 빌드
+cd frontend
+npm run build
+npm run preview
+```
+
 ## 🔧 개발 환경 규칙
 
 ### 디렉토리 구조 준수
@@ -59,14 +77,16 @@ LawFirmAI/
 │   │   └── enhancement/             # 품질 개선
 │   ├── data/                        # 데이터 레이어
 │   └── models/                      # AI 모델
-├── apps/                            # 애플리케이션 레이어
-│   ├── streamlit/                   # Streamlit 웹 인터페이스
-│   │   ├── app.py                   # 메인 앱
-│   │   └── requirements.txt         # 의존성
-│   └── api/                         # FastAPI 서버
+├── frontend/                        # React 프론트엔드
+│   ├── src/                         # 소스 코드
+│   ├── package.json                 # 의존성
+│   └── vite.config.ts               # Vite 설정
+├── api/                              # FastAPI 서버
+│   ├── main.py                      # 메인 앱
+│   └── requirements.txt             # 의존성
 ├── infrastructure/                  # 인프라 및 유틸리티
 │   └── utils/                       # 유틸리티 함수
-├── source/                          # 레거시 모듈 (호환성 유지)
+├── lawfirm_langgraph/               # 핵심 LangGraph 워크플로우 시스템
 ├── data/                            # 데이터 파일
 │   ├── lawfirm.db                   # SQLite 데이터베이스
 │   └── embeddings/                  # 벡터 임베딩
@@ -313,7 +333,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 복사
 COPY apps/streamlit/ ./apps/streamlit/
-COPY core/ ./source/
+COPY lawfirm_langgraph/ ./lawfirm_langgraph/
 COPY infrastructure/ ./infrastructure/
 
 # 비root 사용자로 실행

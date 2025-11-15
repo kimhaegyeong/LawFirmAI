@@ -1,0 +1,102 @@
+﻿# -*- coding: utf-8 -*-
+"""
+워크플로우 상수 정의
+리팩토링: legal_workflow_enhanced.py에서 상수 분리
+"""
+
+
+class WorkflowConstants:
+    """워크플로우 상수 정의"""
+
+    # LLM 설정
+    # Gemini 2.5 Flash Lite 최대 출력 토큰: 65,536
+    # 실제 사용 시 성능을 고려하여 적절한 값으로 설정 가능
+    MAX_OUTPUT_TOKENS = 8192  # 실용적인 값 (약 32,000자, 법률 답변에 충분)
+    # MAX_OUTPUT_TOKENS = 65536  # 최대값 (매우 긴 답변을 위한 경우)
+    TEMPERATURE = 0.3
+    TIMEOUT = 15
+
+    # 검색 설정 (개선: 검색 결과 수 증가)
+    SEMANTIC_SEARCH_K = 15  # 10 -> 15 (더 많은 결과 검색)
+    KEYWORD_SEARCH_K = 10  # 키워드 검색 결과 수
+    MAX_DOCUMENTS = 10  # 5 -> 10 (최종 문서 수 증가)
+    CATEGORY_SEARCH_LIMIT = 5  # 3 -> 5 (카테고리별 검색 결과 증가)
+
+    # 재시도 설정
+    MAX_RETRIES = 3
+    RETRY_DELAY = 1
+
+    # 신뢰도 설정
+    LLM_CLASSIFICATION_CONFIDENCE = 0.85
+    FALLBACK_CONFIDENCE = 0.7
+    DEFAULT_CONFIDENCE = 0.6
+
+    # 답변 길이 임계값
+    MIN_ANSWER_LENGTH_GENERATION = 100  # 생성 단계 최소 길이 (50 -> 100)
+    MIN_ANSWER_LENGTH_VALIDATION = 100  # 검증 단계 최소 길이 (50 -> 100)
+
+
+class RetryConfig:
+    """재시도 설정 상수"""
+    MAX_GENERATION_RETRIES = 4
+    MAX_VALIDATION_RETRIES = 1
+    MAX_TOTAL_RETRIES = 6
+
+
+class QualityThresholds:
+    """품질 임계값 상수"""
+    QUALITY_PASS_THRESHOLD = 0.75
+    HIGH_QUALITY_THRESHOLD = 0.80
+    MEDIUM_QUALITY_THRESHOLD = 0.60
+    HIGH_QUALITY_MIN_LENGTH = 50  # 고품질 답변 최소 길이
+    MEDIUM_QUALITY_MIN_LENGTH = 80  # 중품질 답변 최소 길이
+    LOW_QUALITY_MIN_LENGTH = 100  # 낮은 품질 답변 최소 길이
+
+
+class AnswerExtractionPatterns:
+    """답변 추출을 위한 정규식 패턴 상수"""
+
+    # 추론 과정 섹션 패턴 (개선: 더 많은 패턴 추가)
+    REASONING_SECTION_PATTERNS = [
+        r'##\s*🧠\s*추론\s*과정\s*작성',
+        r'##\s*🧠\s*추론\s*과정',
+        r'##\s*추론\s*과정\s*작성',
+        r'##\s*추론\s*과정',
+        r'##\s*Chain-of-Thought',
+        r'##\s*CoT',
+        r'###\s*🧠\s*추론',
+        r'##\s*추론',  # 추가: 간단한 추론 패턴
+        r'###\s*추론',  # 추가: 3단계 추론 패턴
+        r'##\s*사고\s*과정',  # 추가: 사고 과정 패턴
+        r'##\s*분석\s*과정',  # 추가: 분석 과정 패턴
+    ]
+
+    # 출력 섹션 패턴 (실제 답변)
+    OUTPUT_SECTION_PATTERNS = [
+        r'##\s*📤\s*출력',
+        r'##\s*📤\s*출력\s*형식',
+        r'##\s*출력',
+        r'##\s*최종\s*답변',
+        r'##\s*답변\s*내용',
+        r'##\s*답변\s*결과',
+    ]
+
+    # Step 패턴 (추론 과정 내부)
+    STEP_PATTERNS = [
+        r'###\s*Step\s*1[:：]',
+        r'###\s*Step\s*2[:：]',
+        r'###\s*Step\s*3[:：]',
+        r'###\s*단계\s*1[:：]',
+        r'###\s*단계\s*2[:：]',
+        r'###\s*단계\s*3[:：]',
+        r'###\s*Step\s*1\s*[:：]',
+        r'###\s*Step\s*2\s*[:：]',
+        r'###\s*Step\s*3\s*[:：]',
+    ]
+
+    # 답변 섹션 패턴 (일반적인 답변 헤더)
+    ANSWER_SECTION_PATTERNS = [
+        r'##\s*답변',
+        r'##\s*💬\s*답변',
+        r'###\s*답변',
+    ]

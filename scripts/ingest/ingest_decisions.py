@@ -14,6 +14,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from scripts.utils.text_chunker import chunk_paragraphs
 from scripts.utils.embeddings import SentenceEmbedder
+from scripts.utils.reference_statute_extractor import ReferenceStatuteExtractor
 
 
 def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
@@ -26,10 +27,20 @@ def ensure_domain(conn: sqlite3.Connection, name: str) -> int:
 
 
 def insert_decision(conn: sqlite3.Connection, domain_id: int, meta: Dict[str, Any]) -> int:
+    """Decision ?? ? ID ?? (???? ?? ??)"""
+    # ???? ??
+    extractor = ReferenceStatuteExtractor()
+    full_text = meta.get("full_text", "") or meta.get("content", "")
+    if not full_text and meta.get("sentences"):
+        full_text = "\n".join(meta.get("sentences", []))
+    
+    reference_statutes = extractor.extract_from_content(full_text)
+    reference_statutes_json = extractor.to_json(reference_statutes) if reference_statutes else None
+    
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO decisions(domain_id, org, doc_id, decision_date, result)
-        VALUES(?,?,?,?,?)
+        INSERT OR IGNORE INTO decisions(domain_id, org, doc_id, decision_date, result, reference_statutes)
+        VALUES(?,?,?,?,?,?)
         """,
         (
             domain_id,
@@ -37,12 +48,19 @@ def insert_decision(conn: sqlite3.Connection, domain_id: int, meta: Dict[str, An
             meta.get("doc_id"),
             meta.get("decision_date"),
             meta.get("result"),
+            reference_statutes_json,
         ),
     )
     if cur.lastrowid:
         decision_id = cur.lastrowid
     else:
         decision_id = conn.execute("SELECT id FROM decisions WHERE doc_id=?", (meta.get("doc_id"),)).fetchone()[0]
+        # ?? ???? ??? ???? ????
+        if reference_statutes_json:
+            conn.execute(
+                "UPDATE decisions SET reference_statutes = ? WHERE id = ?",
+                (reference_statutes_json, decision_id)
+            )
     return decision_id
 
 

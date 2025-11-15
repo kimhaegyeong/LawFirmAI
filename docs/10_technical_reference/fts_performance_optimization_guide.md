@@ -292,8 +292,3 @@ INSERT INTO fts_precedent_cases(fts_precedent_cases) VALUES('rebuild');
 - [SQLite 성능 튜닝 가이드](https://www.sqlite.org/optoverview.html)
 - [Python 캐싱 패턴](https://docs.python.org/3/library/functools.html#functools.lru_cache)
 
----
-
-**문서 버전**: v2.0  
-**최종 업데이트**: 2024년 12월  
-**작성자**: LawFirmAI 개발팀

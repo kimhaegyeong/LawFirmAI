@@ -11,14 +11,14 @@ LawFirmAI/
 ├── lawfirm_langgraph/       # 핵심 LangGraph 워크플로우 시스템
 │   ├── config/              # 설정 파일
 │   ├── core/                # 핵심 비즈니스 로직
-│   │   ├── agents/          # LangGraph 워크플로우 에이전트
+│   │   ├── workflow/        # LangGraph 워크플로우 (메인)
+│   │   ├── agents/          # 레거시 에이전트 코드 (유틸리티)
 │   │   ├── services/        # 비즈니스 서비스
 │   │   ├── data/            # 데이터 레이어
 │   │   ├── models/          # AI 모델
 │   │   └── utils/           # 유틸리티
-│   ├── langgraph_core/      # LangGraph 핵심 모듈
 │   ├── tests/               # 테스트 코드
-│   └── docs/                # 문서
+│   └── data/                # 데이터 파일
 ├── scripts/                 # 유틸리티 스크립트
 │   ├── data_collection/     # 데이터 수집
 │   ├── data_processing/     # 데이터 전처리
@@ -39,42 +39,75 @@ LawFirmAI/
 
 ## 📦 lawfirm_langgraph 모듈
 
-### lawfirm_langgraph/core/agents/ - LangGraph 에이전트
-**역할**: AI 워크플로우 관리
+### lawfirm_langgraph/core/workflow/ - LangGraph 워크플로우 (메인)
+**역할**: AI 워크플로우 관리 및 실행
+
+```
+lawfirm_langgraph/core/workflow/
+├── workflow_service.py              # 워크플로우 서비스 (메인)
+├── legal_workflow_enhanced.py       # 법률 워크플로우 구현
+├── nodes/                           # 워크플로우 노드
+│   ├── answer_nodes.py              # 답변 생성 노드
+│   ├── classification_nodes.py      # 분류 노드
+│   ├── search_nodes.py              # 검색 노드
+│   ├── routing_nodes.py             # 라우팅 노드
+│   ├── node_wrappers.py            # 노드 래퍼
+│   └── ...
+├── state/                           # 상태 정의 및 관리
+│   ├── state_definitions.py         # 상태 정의
+│   ├── modular_states.py            # 모듈화된 상태 구조
+│   ├── state_helpers.py             # 상태 헬퍼 함수
+│   ├── state_utils.py               # 상태 유틸리티
+│   ├── state_reduction.py           # 상태 최적화
+│   └── ...
+├── tools/                           # Agentic AI Tools
+│   └── legal_search_tools.py        # 법률 검색 도구
+├── builders/                        # 체인 빌더
+│   ├── chain_builders.py            # 체인 빌더
+│   ├── prompt_builders.py           # 프롬프트 빌더
+│   └── ...
+├── mixins/                          # 워크플로우 믹스인
+│   ├── answer_generation_mixin.py   # 답변 생성 믹스인
+│   ├── classification_mixin.py      # 분류 믹스인
+│   ├── search_mixin.py              # 검색 믹스인
+│   └── ...
+└── utils/                           # 워크플로우 유틸리티
+    ├── workflow_constants.py        # 워크플로우 상수
+    ├── workflow_logger.py           # 워크플로우 로거
+    └── ...
+```
+
+**사용 예시**:
+```python
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+
+config = LangGraphConfig.from_env()
+workflow = LangGraphWorkflowService(config)
+result = await workflow.process_query_async("질문", "session_id")
+```
+
+### lawfirm_langgraph/core/agents/ - 레거시 에이전트 코드
+**역할**: 레거시 코드 및 유틸리티 (하위 호환성 유지)
+
+**참고**: 새로운 코드는 `core/workflow/`를 사용하세요. 이 디렉토리는 하위 호환성을 위해 유지됩니다.
 
 ```
 lawfirm_langgraph/core/agents/
-├── workflow_service.py              # 워크플로우 서비스 (메인)
-├── legal_workflow_enhanced.py       # 법률 워크플로우
-├── state_definitions.py             # 상태 정의
-├── state_utils.py                   # 상태 유틸리티
-├── state_helpers.py                 # 상태 헬퍼 함수
-├── state_reduction.py                # 상태 최적화
-├── keyword_mapper.py                # 키워드 매퍼
-├── legal_data_connector_v2.py       # 데이터 커넥터 (v2)
-├── performance_optimizer.py          # 성능 최적화
-├── node_wrappers.py                 # 노드 래퍼
-├── query_optimizer.py               # 쿼리 최적화
-├── handlers/                        # 핸들러 모듈
+├── handlers/                        # 핸들러 모듈 (레거시)
 │   ├── answer_formatter.py
 │   ├── answer_generator.py
 │   ├── classification_handler.py
 │   ├── context_builder.py
 │   ├── direct_answer_handler.py
 │   └── search_handler.py
-├── tools/                           # Agentic AI Tools
+├── keyword_mapper.py                # 키워드 매퍼
+├── legal_data_connector_v2.py       # 데이터 커넥터 (v2)
+├── optimizers/                      # 최적화 모듈
+│   ├── performance_optimizer.py     # 성능 최적화
+│   └── query_optimizer.py           # 쿼리 최적화
 └── validators/                      # 검증 모듈
     └── quality_validators.py
-```
-
-**사용 예시**:
-```python
-from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
-
-config = LangGraphConfig.from_env()
-workflow = LangGraphWorkflowService(config)
-result = await workflow.process_query_async("질문", "session_id")
 ```
 
 ### lawfirm_langgraph/core/services/ - 비즈니스 서비스
@@ -134,7 +167,6 @@ lawfirm_langgraph/core/utils/
 ├── langchain_config.py              # LangChain 설정
 ├── logger.py                         # 로깅
 ├── config.py                        # 일반 설정
-├── ollama_client.py                  # Ollama 클라이언트
 └── ... (기타 유틸리티)
 ```
 
@@ -153,9 +185,12 @@ lawfirm_langgraph/config/
 ```
 User Input
     ↓
-lawfirm_langgraph/core/agents/workflow_service.py
+lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
-lawfirm_langgraph/core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
+    ├── nodes/classification_nodes.py (질문 분류)
+    ├── nodes/search_nodes.py (문서 검색)
+    └── nodes/answer_nodes.py (답변 생성)
     ↓
 lawfirm_langgraph/core/services/ (검색, 생성, 품질 개선)
     ├── hybrid_search_engine.py
@@ -192,7 +227,8 @@ sys.path.insert(0, str(project_root))
 ### Core 모듈 Import
 ```python
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
 from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
 from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 ```
@@ -224,7 +260,8 @@ from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `lawfirm_langgraph/core/agents/` | 워크플로우 관리 | services, models, data |
+| `lawfirm_langgraph/core/workflow/` | 워크플로우 관리 및 실행 | services, models, data |
+| `lawfirm_langgraph/core/agents/` | 레거시 코드 및 유틸리티 | services, models, data |
 | `lawfirm_langgraph/core/services/` | 비즈니스 로직 | data, models |
 | `lawfirm_langgraph/core/data/` | 데이터 관리 | - |
 | `lawfirm_langgraph/core/models/` | AI 모델 | - |
@@ -295,7 +332,7 @@ import torch
 from fastapi import FastAPI
 
 # 프로젝트 모듈
-from lawfirm_langgraph.core.agents import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow import LangGraphWorkflowService
 ```
 
 ### 3. Docstring
@@ -317,4 +354,4 @@ def process_data(data: Dict[str, Any]) -> str:
 
 - [프로젝트 개요](project_overview.md)
 - [아키텍처](architecture.md)
-- [LangGraph 워크플로우 가이드](../05_rag_system/langgraph_integration_guide.md)
+- [LangGraph 워크플로우 가이드](../03_rag_system/langgraph_integration_guide.md)

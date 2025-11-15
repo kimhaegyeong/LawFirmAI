@@ -8,6 +8,130 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+# 안전한 로깅 유틸리티 import (멀티스레딩 안전)
+# 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
+def _safe_log_fallback_debug(logger, message):
+    """폴백 디버그 로깅 함수"""
+    try:
+        logger.debug(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_info(logger, message):
+    """폴백 정보 로깅 함수"""
+    try:
+        logger.info(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_warning(logger, message):
+    """폴백 경고 로깅 함수"""
+    try:
+        logger.warning(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_error(logger, message):
+    """폴백 오류 로깅 함수"""
+    try:
+        logger.error(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+# 여러 경로 시도하여 safe_log_* 함수 import
+SAFE_LOGGING_AVAILABLE = False
+try:
+    from core.utils.safe_logging_utils import (
+        safe_log_debug,
+        safe_log_info,
+        safe_log_warning,
+        safe_log_error
+    )
+    SAFE_LOGGING_AVAILABLE = True
+except ImportError:
+    try:
+        # lawfirm_langgraph 경로에서 시도
+        from lawfirm_langgraph.core.utils.safe_logging_utils import (
+            safe_log_debug,
+            safe_log_info,
+            safe_log_warning,
+            safe_log_error
+        )
+        SAFE_LOGGING_AVAILABLE = True
+    except ImportError:
+        # Import 실패 시 폴백 함수 사용
+        safe_log_debug = _safe_log_fallback_debug
+        safe_log_info = _safe_log_fallback_info
+        safe_log_warning = _safe_log_fallback_warning
+        safe_log_error = _safe_log_fallback_error
+
+# 최종 확인: safe_log_debug가 정의되지 않았다면 폴백 함수 사용
+try:
+    _ = safe_log_debug
+except NameError:
+    safe_log_debug = _safe_log_fallback_debug
+try:
+    _ = safe_log_info
+except NameError:
+    safe_log_info = _safe_log_fallback_info
+try:
+    _ = safe_log_warning
+except NameError:
+    safe_log_warning = _safe_log_fallback_warning
+try:
+    _ = safe_log_error
+except NameError:
+    safe_log_error = _safe_log_fallback_error
+
+# Import 성공 시에도 _is_handler_valid와 _has_valid_handlers는 여전히 필요할 수 있음
+# 하지만 safe_log_* 함수들은 이미 import된 것을 사용
+if SAFE_LOGGING_AVAILABLE:
+    # Import 성공 시 _is_handler_valid와 _has_valid_handlers는 여전히 필요할 수 있음
+    # 하지만 safe_log_* 함수들은 이미 import된 것을 사용
+    def _is_handler_valid(handler: logging.Handler) -> bool:
+        """핸들러가 유효한지 확인"""
+        try:
+            if not handler:
+                return False
+            if isinstance(handler, logging.StreamHandler):
+                stream = handler.stream
+                if stream is None:
+                    return False
+                if hasattr(stream, 'closed') and stream.closed:
+                    return False
+                try:
+                    if hasattr(stream, 'writable'):
+                        if not stream.writable():
+                            return False
+                except (ValueError, AttributeError, OSError):
+                    return False
+            if isinstance(handler, logging.FileHandler):
+                if hasattr(handler, 'stream') and handler.stream:
+                    if hasattr(handler.stream, 'closed') and handler.stream.closed:
+                        return False
+            return True
+        except (ValueError, AttributeError, RuntimeError, OSError):
+            return False
+    
+    def _has_valid_handlers(logger: logging.Logger) -> bool:
+        """로거에 유효한 핸들러가 있는지 확인"""
+        try:
+            if logger.handlers:
+                for handler in logger.handlers:
+                    if _is_handler_valid(handler):
+                        return True
+            if logger.parent and logger.parent.handlers:
+                for handler in logger.parent.handlers:
+                    if _is_handler_valid(handler):
+                        return True
+            if logging.root.handlers:
+                for handler in logging.root.handlers:
+                    if _is_handler_valid(handler):
+                        return True
+            return False
+        except (ValueError, AttributeError, RuntimeError):
+            return False
+
 
 class PromptChainExecutor:
     """
@@ -67,7 +191,7 @@ class PromptChainExecutor:
         previous_output = initial_input
         validation_results = {}
 
-        self.logger.info(f"🔄 [CHAIN START] Executing {len(chain_steps)} steps")
+        safe_log_info(self.logger, f"🔄 [CHAIN START] Executing {len(chain_steps)} steps")
 
         try:
             for step_idx, step_config in enumerate(chain_steps):
@@ -79,11 +203,11 @@ class PromptChainExecutor:
                 if skip_if and callable(skip_if) and previous_output:
                     try:
                         if skip_if(previous_output):
-                            self.logger.info(f"⏭️ [CHAIN] Skipping step '{step_name}' (skip_if condition met)")
+                            safe_log_info(self.logger, f"⏭️ [CHAIN] Skipping step '{step_name}' (skip_if condition met)")
                             steps_executed.append(f"{step_name} (skipped)")
                             continue
                     except Exception as e:
-                        self.logger.warning(f"Error in skip_if for step '{step_name}': {e}")
+                        safe_log_warning(self.logger, f"Error in skip_if for step '{step_name}': {e}")
 
                 # 단계 실행
                 step_result = self._execute_step(
@@ -96,18 +220,18 @@ class PromptChainExecutor:
                 if not step_result["success"]:
                     error_msg = f"Step '{step_name}' failed: {step_result.get('error', 'Unknown error')}"
                     errors.append(error_msg)
-                    self.logger.error(f"❌ [CHAIN] {error_msg}")
+                    safe_log_error(self.logger, f"❌ [CHAIN] {error_msg}")
 
                     if required:
                         if stop_on_failure:
-                            self.logger.error(f"🛑 [CHAIN] Stopping chain due to required step failure")
+                            safe_log_error(self.logger, f"🛑 [CHAIN] Stopping chain due to required step failure")
                             break
                         else:
                             # 필수 단계 실패 시 이전 출력 사용
-                            self.logger.warning(f"⚠️ [CHAIN] Using previous output for failed required step")
+                            safe_log_warning(self.logger, f"⚠️ [CHAIN] Using previous output for failed required step")
                     else:
                         # 선택 단계 실패 시 건너뛰기
-                        self.logger.warning(f"⚠️ [CHAIN] Skipping optional step '{step_name}' after failure")
+                        safe_log_warning(self.logger, f"⚠️ [CHAIN] Skipping optional step '{step_name}' after failure")
                         continue
 
                 # 단계 성공 시 출력 업데이트
@@ -133,7 +257,8 @@ class PromptChainExecutor:
                 )
 
                 if not validation_results.get("is_valid", True):
-                    self.logger.warning(
+                    safe_log_warning(
+                        self.logger,
                         f"⚠️ [CHAIN VALIDATION] Final output validation failed: "
                         f"{validation_results.get('issues', [])}"
                     )
@@ -154,7 +279,8 @@ class PromptChainExecutor:
                 "validation_results": validation_results if validate_final_output else {}
             }
 
-            self.logger.info(
+            safe_log_info(
+                self.logger,
                 f"{'✅' if success else '⚠️'} [CHAIN END] "
                 f"Executed {len(steps_executed)} steps in {total_time:.2f}s, "
                 f"Errors: {len(errors)}, "
@@ -165,7 +291,7 @@ class PromptChainExecutor:
 
         except Exception as e:
             error_msg = f"Chain execution failed: {e}"
-            self.logger.error(f"❌ [CHAIN ERROR] {error_msg}")
+            safe_log_error(self.logger, f"❌ [CHAIN ERROR] {error_msg}")
             errors.append(error_msg)
 
             return {
@@ -272,7 +398,7 @@ class PromptChainExecutor:
             }
 
         except Exception as e:
-            self.logger.warning(f"Error during final output validation: {e}")
+            safe_log_warning(self.logger, f"Error during final output validation: {e}")
             return {
                 "is_valid": True,  # 검증 실패 시 기본적으로 유효하다고 가정
                 "issues": [f"Validation error: {e}"],
@@ -330,11 +456,42 @@ class PromptChainExecutor:
 
             for attempt in range(max_iterations):
                 try:
-                    self.logger.debug(
+                    safe_log_debug(
+                        self.logger,
                         f"🔄 [CHAIN STEP] '{step_name}' - Attempt {attempt + 1}/{max_iterations}"
                     )
 
-                    llm_response = self.llm.invoke(prompt)
+                    # LLM 호출 (스트리밍 지원)
+                    # stream() 우선 사용 - LangGraph가 on_llm_stream 이벤트 발생
+                    if hasattr(self.llm, 'stream'):
+                        try:
+                            full_response = ""
+                            for chunk in self.llm.stream(prompt):
+                                if hasattr(chunk, 'content'):
+                                    full_response += chunk.content
+                                elif isinstance(chunk, str):
+                                    full_response += chunk
+                                else:
+                                    full_response += str(chunk)
+                            llm_response = full_response
+                            safe_log_debug(
+                                self.logger,
+                                f"✅ [CHAIN STEP] '{step_name}' - stream() 사용 성공"
+                            )
+                        except Exception as stream_error:
+                            # stream() 실패 시 invoke()로 폴백
+                            safe_log_warning(
+                                self.logger,
+                                f"⚠️ [CHAIN STEP] '{step_name}' - stream() 호출 실패, invoke()로 폴백: {stream_error}"
+                            )
+                            llm_response = self.llm.invoke(prompt)
+                    else:
+                        # stream()이 없으면 invoke() 사용
+                        safe_log_debug(
+                            self.logger,
+                            f"ℹ️ [CHAIN STEP] '{step_name}' - stream() 미지원, invoke() 사용"
+                        )
+                        llm_response = self.llm.invoke(prompt)
 
                     # 응답 추출
                     response_content = self._extract_response_content(llm_response)
@@ -347,7 +504,8 @@ class PromptChainExecutor:
                     if validator and callable(validator):
                         if not validator(parsed_output):
                             if attempt < max_iterations - 1:
-                                self.logger.warning(
+                                safe_log_warning(
+                                    self.logger,
                                     f"⚠️ [CHAIN STEP] '{step_name}' validation failed, retrying..."
                                 )
                                 continue
@@ -361,7 +519,8 @@ class PromptChainExecutor:
 
                     # 성공
                     execution_time = time.time() - step_start_time
-                    self.logger.info(
+                    safe_log_info(
+                        self.logger,
                         f"✅ [CHAIN STEP] '{step_name}' completed in {execution_time:.2f}s"
                     )
 
@@ -374,7 +533,8 @@ class PromptChainExecutor:
 
                 except Exception as e:
                     last_error = str(e)
-                    self.logger.warning(
+                    safe_log_warning(
+                        self.logger,
                         f"⚠️ [CHAIN STEP] '{step_name}' attempt {attempt + 1} failed: {e}"
                     )
                     if attempt < max_iterations - 1:
@@ -418,7 +578,7 @@ class PromptChainExecutor:
             try:
                 return input_extractor(previous_output)
             except Exception as e:
-                self.logger.warning(f"Input extractor failed: {e}, using previous_output directly")
+                safe_log_warning(self.logger, f"Input extractor failed: {e}, using previous_output directly")
                 return previous_output
 
         # 기본값: 이전 출력을 그대로 사용
@@ -464,7 +624,7 @@ class PromptChainExecutor:
                     # 기존 방식 (step_input, previous_output, step_config)
                     return prompt_builder(step_input, previous_output, step_config)
             except Exception as e:
-                self.logger.error(f"Prompt builder failed: {e}")
+                safe_log_error(self.logger, f"Prompt builder failed: {e}")
                 return None
 
         # prompt_template 문자열이 있으면 사용
@@ -476,11 +636,11 @@ class PromptChainExecutor:
                 else:
                     return prompt_template.format(input=step_input, previous_output=previous_output)
             except Exception as e:
-                self.logger.error(f"Prompt template formatting failed: {e}")
+                safe_log_error(self.logger, f"Prompt template formatting failed: {e}")
                 return None
 
         # 둘 다 없으면 에러
-        self.logger.error("Neither prompt_template nor prompt_builder provided")
+        safe_log_error(self.logger, "Neither prompt_template nor prompt_builder provided")
         return None
 
     def _extract_response_content(self, response: Any) -> str:
@@ -531,7 +691,7 @@ class PromptChainExecutor:
             try:
                 return output_parser(response_content, previous_output)
             except Exception as e:
-                self.logger.warning(f"Output parser failed: {e}, using raw response")
+                safe_log_warning(self.logger, f"Output parser failed: {e}, using raw response")
                 return response_content
 
         # 기본값: 원본 응답 반환

@@ -11,6 +11,93 @@ import os
 from typing import Optional
 
 
+def disable_external_logging():
+    """
+    외부 라이브러리의 로깅을 비활성화합니다.
+    HuggingFace 관련 모든 로거를 포함하여 완전히 비활성화합니다.
+    """
+    # FAISS 로깅 비활성화
+    faiss_loggers = ['faiss', 'faiss.loader']
+    for logger_name in faiss_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+    
+    # Transformers 로깅 비활성화 (더 완전하게)
+    transformers_loggers = [
+        'transformers',
+        'transformers.tokenization_utils',
+        'transformers.tokenization_utils_base',
+        'transformers.configuration_utils',
+        'transformers.modeling_utils',
+        'transformers.file_utils',
+        'transformers.trainer',
+        'transformers.trainer_utils',
+        'transformers.modeling_tf_utils',
+        'transformers.modeling_flax_utils',
+    ]
+    for logger_name in transformers_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+    
+    # Sentence-Transformers 로깅 비활성화
+    sentence_transformers_loggers = [
+        'sentence_transformers',
+        'sentence_transformers.SentenceTransformer',
+        'sentence_transformers.models',
+        'sentence_transformers.util',
+    ]
+    for logger_name in sentence_transformers_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+    
+    # HuggingFace Hub 로깅 비활성화
+    hf_hub_loggers = [
+        'huggingface_hub',
+        'huggingface_hub.file_download',
+        'huggingface_hub.utils',
+        'huggingface_hub.hf_api',
+    ]
+    for logger_name in hf_hub_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+    
+    # PyTorch 로깅 비활성화
+    torch_loggers = [
+        'torch',
+        'torch.distributed',
+        'torch.nn',
+        'torch.optim',
+    ]
+    for logger_name in torch_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+    
+    # 기타 외부 라이브러리 로깅 비활성화
+    other_loggers = [
+        'urllib3',
+        'requests',
+        'tokenizers',
+        'datasets',
+        'accelerate',
+        'bitsandbytes',
+    ]
+    for logger_name in other_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.disabled = True
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+
+
 def setup_safe_logging(
     level: str = "INFO",
     format_string: Optional[str] = None,
@@ -18,6 +105,7 @@ def setup_safe_logging(
 ) -> logging.Logger:
     """
     안전한 로깅 설정을 구성합니다.
+    HuggingFace 관련 로깅을 자동으로 비활성화합니다.
     
     Args:
         level: 로깅 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -27,6 +115,8 @@ def setup_safe_logging(
     Returns:
         설정된 로거
     """
+    # HuggingFace 로깅 비활성화 (가장 먼저 실행)
+    disable_external_logging()
     # 기본 포맷 설정
     if format_string is None:
         format_string = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -73,6 +163,8 @@ def setup_safe_logging(
     # 특정 라이브러리의 로깅 레벨 조정
     logging.getLogger('faiss').setLevel(logging.WARNING)
     logging.getLogger('transformers').setLevel(logging.WARNING)
+    logging.getLogger('sentence_transformers').setLevel(logging.WARNING)
+    logging.getLogger('huggingface_hub').setLevel(logging.WARNING)
     logging.getLogger('torch').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     
@@ -90,26 +182,6 @@ def get_safe_logger(name: str) -> logging.Logger:
         로거 인스턴스
     """
     return logging.getLogger(name)
-
-
-def disable_external_logging():
-    """
-    외부 라이브러리의 로깅을 비활성화합니다.
-    """
-    # FAISS 로깅 비활성화
-    logging.getLogger('faiss').disabled = True
-    logging.getLogger('faiss.loader').disabled = True
-    
-    # Transformers 로깅 비활성화
-    logging.getLogger('transformers').disabled = True
-    logging.getLogger('transformers.tokenization_utils').disabled = True
-    
-    # PyTorch 로깅 비활성화
-    logging.getLogger('torch').disabled = True
-    
-    # 기타 외부 라이브러리 로깅 비활성화
-    logging.getLogger('urllib3').disabled = True
-    logging.getLogger('requests').disabled = True
 
 
 def setup_script_logging(script_name: str) -> logging.Logger:

@@ -19,12 +19,38 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 ### 기본 정보
 - **Base URL**: `http://localhost:8000/api/v1`
 - **Content-Type**: `application/json`
-- **API Version**: v2.0.0
+- **API Version**: v1.0.0
+
+### 실제 엔드포인트 목록
+
+#### 채팅 엔드포인트
+- `POST /chat` - 기본 채팅 메시지 처리
+- `POST /chat/stream` - 스트리밍 채팅 응답
+- `GET /chat/{session_id}/sources` - 세션별 소스 조회
+
+#### 세션 관리 엔드포인트
+- `GET /sessions` - 세션 목록 조회
+- `GET /sessions/by-date` - 날짜별 세션 목록 조회
+- `POST /sessions` - 새 세션 생성
+- `GET /sessions/{session_id}` - 세션 상세 조회
+- `PUT /sessions/{session_id}` - 세션 업데이트
+- `DELETE /sessions/{session_id}` - 세션 삭제
+- `POST /sessions/{session_id}/generate-title` - 세션 제목 생성
+
+#### 히스토리 엔드포인트
+- `GET /history` - 대화 히스토리 조회
+- `POST /history/export` - 히스토리 내보내기
+
+#### 피드백 엔드포인트
+- `POST /feedback` - 피드백 제출
+
+#### 헬스체크 엔드포인트
+- `GET /health` - 서비스 상태 확인
 
 ### 1. 기본 채팅 엔드포인트
 
 #### `POST /chat`
-기본 채팅 기능 (레거시 호환성)
+기본 채팅 기능
 
 **Request Body:**
 ```json
@@ -44,27 +70,56 @@ LawFirmAI는 지능형 법률 AI 어시스턴트를 위한 RESTful API를 제공
 }
 ```
 
-### 2. ML 강화 채팅 엔드포인트
+### 2. 스트리밍 채팅 엔드포인트
 
-#### `POST /chat/ml-enhanced`
-ML 강화된 채팅 기능
+#### `POST /chat/stream`
+스트리밍 채팅 응답 (Server-Sent Events)
 
 **Request Body:**
 ```json
 {
   "message": "계약 해제 조건",
-  "context": "상법 관련",
-  "session_id": "session_123",
-  "max_results": 10,
-  "ml_enhanced": true
+  "session_id": "session_123"
 }
 ```
+
+**Response:** Server-Sent Events (SSE) 형식으로 스트리밍
+
+**스트리밍 이벤트 타입:**
+- `progress`: 진행 상황 알림
+- `stream`: 실시간 답변 청크 (토큰 단위)
+- `final`: 최종 답변 및 메타데이터
+- `error`: 오류 발생 시
+
+**예시 응답:**
+```
+data: {"type":"progress","content":"답변 생성 중...","timestamp":"2025-11-12T09:30:00"}
+
+data: {"type":"stream","content":"계약","timestamp":"2025-11-12T09:30:01"}
+
+data: {"type":"stream","content":" 해제","timestamp":"2025-11-12T09:30:01"}
+
+data: {"type":"stream","content":" 조건은","timestamp":"2025-11-12T09:30:01"}
+
+...
+
+data: {"type":"final","content":"전체 답변...","sources":[...],"legal_references":[...]}
+```
+
+**구현 특징:**
+- LangGraph의 `astream_events()`를 사용하여 실시간 이벤트 스트리밍
+- `StreamingCallbackHandler`를 통한 LLM 토큰 단위 스트리밍
+- `generate_answer_stream` 노드 사용 (환경 변수 `USE_STREAMING_MODE=true`일 때)
+- 비동기 큐를 통한 콜백 이벤트 처리
+
+### 3. 소스 조회 엔드포인트
+
+#### `GET /chat/{session_id}/sources`
+세션별 소스 조회
 
 **Response:**
 ```json
 {
-  "response": "계약 해제 조건에 대해 설명드리겠습니다...",
-  "confidence": 0.92,
   "sources": [
     {
       "type": "law",
@@ -73,16 +128,87 @@ ML 강화된 채팅 기능
       "content": "계약 해제에 관한 규정",
       "similarity": 0.95
     }
-  ],
-  "ml_enhanced": true,
-  "processing_time": 1.2
+  ]
 }
 ```
 
-### 3. 지능형 채팅 엔드포인트 (Phase 2 신규)
+### 4. 세션 관리 엔드포인트
 
-#### `POST /chat/intelligent`
-질문 유형별 최적화된 답변 제공
+#### `GET /sessions`
+세션 목록 조회
+
+#### `POST /sessions`
+새 세션 생성
+
+#### `GET /sessions/{session_id}`
+세션 상세 조회
+
+#### `PUT /sessions/{session_id}`
+세션 업데이트
+
+#### `DELETE /sessions/{session_id}`
+세션 삭제
+
+#### `POST /sessions/{session_id}/generate-title`
+세션 제목 생성
+
+### 5. 히스토리 엔드포인트
+
+#### `GET /history`
+대화 히스토리 조회
+
+#### `POST /history/export`
+히스토리 내보내기
+
+### 6. 피드백 엔드포인트
+
+#### `POST /feedback`
+피드백 제출
+
+### 7. 헬스체크 엔드포인트
+
+#### `GET /health`
+서비스 상태 확인
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+```
+
+### 스트리밍 구현 상세
+
+#### 아키텍처
+```
+Client Request
+    ↓
+ChatService.stream_final_answer()
+    ↓
+StreamingCallbackHandler 생성 (asyncio.Queue)
+    ↓
+LangGraphWorkflowService.app.astream_events()
+    ↓
+generate_answer_stream 노드 실행
+    ↓
+LLM.stream() → on_llm_stream 이벤트
+    ↓
+StreamingCallbackHandler.on_llm_stream()
+    ↓
+asyncio.Queue에 청크 저장
+    ↓
+ChatService에서 큐 모니터링 및 SSE 전송
+    ↓
+Client (실시간 스트리밍 수신)
+```
+
+#### 환경 변수 설정
+```bash
+# 스트리밍 모드 활성화 (기본값: true)
+USE_STREAMING_MODE=true   # API용: 스트리밍 노드 사용
+USE_STREAMING_MODE=false  # 테스트용: 최종 검증 노드 사용
+```
 
 **Request Body:**
 ```json
@@ -319,7 +445,6 @@ ML 강화된 채팅 기능
     },
     "answer_generator": {
       "status": "healthy",
-      "ollama_client": "active",
       "answer_formatter": "active",
       "context_builder": "active",
       "test_answer_length": 245
@@ -488,7 +613,7 @@ intelligentChat("계약 해제 조건")
 
 - [프로젝트 개요](../01_getting_started/project_overview.md)
 - [데이터베이스 스키마](../10_technical_reference/database_schema.md)
-- [RAG 시스템 아키텍처](../05_rag_system/rag_architecture.md)
+- [RAG 시스템 아키텍처](../03_rag_system/rag_architecture.md)
 - [데이터 처리 가이드](../02_data/processing/preprocessing_guide.md)
 
 ---

@@ -11,7 +11,7 @@
 
 - [02_Data_Processing](../processing/README.md): 데이터 전처리
 - [02_Data_Embedding](../embedding/README.md): 벡터 임베딩
-- [05_RAG_System](../../05_rag_system/README.md): RAG 시스템
+- [03_RAG_System](../../03_rag_system/README.md): RAG 시스템
 
 ## 📝 참고
 

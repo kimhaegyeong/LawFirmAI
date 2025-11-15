@@ -14,7 +14,7 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .modular_states import (
     AnalysisState,
@@ -69,7 +69,8 @@ def set_classification(state: LegalWorkflowState, data: Dict[str, Any]):
 
 def update_classification(state: LegalWorkflowState, **kwargs):
     """분류 결과 업데이트 (keyword arguments)"""
-    if state["classification"] is None:
+    # classification 키가 없거나 None인 경우 기본값 생성
+    if "classification" not in state or state["classification"] is None:
         from .modular_states import create_default_classification
         state["classification"] = create_default_classification()
 
@@ -506,7 +507,23 @@ def get_field(state: Dict[str, Any], field_path: str) -> Any:
     if field_path in path_mapping:
         return path_mapping[field_path](state)
 
-    logger.warning(f"Unknown field path: {field_path}")
+    # 개선 사항 5: Optional 필드 안전 접근 로직 추가
+    # category와 uploaded_document는 optional 필드이므로 경고 레벨을 낮춤
+    optional_fields = ["category", "uploaded_document"]
+    if field_path in optional_fields:
+        logger.debug(f"Optional field path accessed: {field_path} (not in path_mapping)")
+        # Optional 필드에 대한 기본값 반환
+        if field_path == "category":
+            return None
+        elif field_path == "uploaded_document":
+            return None
+    else:
+        # expanded_queries는 SearchState에 정의되어 있지만 LangGraph reducer가 인식하지 못할 수 있음
+        # 이는 경고가 아닌 정상적인 동작일 수 있으므로 DEBUG 레벨로 변경
+        if field_path == "expanded_queries":
+            logger.debug(f"Unknown field path (expected for expanded_queries): {field_path}")
+        else:
+            logger.debug(f"Unknown field path: {field_path}")
     return None
 
 
@@ -534,7 +551,7 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
                         "requires_expert", "expert_subgraph"]:
         update_classification(state, **{field_path: value})  # type: ignore
     elif field_path in ["search_query", "extracted_keywords", "ai_keyword_expansion",
-                        "optimized_queries", "search_params", "semantic_results", "keyword_results",
+                        "optimized_queries", "search_params", "expanded_queries", "semantic_results", "keyword_results",
                         "semantic_count", "keyword_count", "merged_documents", "keyword_weights",
                         "prompt_optimized_context", "structured_documents", "search_metadata",
                         "search_quality_evaluation", "search_quality", "is_retry_search", "search_start_time", "search_cache_hit"]:
@@ -572,4 +589,9 @@ def set_field(state: Dict[str, Any], field_path: str, value: Any):
             state["common"]["metadata"] = {}
         state["common"]["metadata"]["quality_metrics"] = value
     else:
-        logger.warning(f"Unknown field path for setting: {field_path}")
+        # expanded_queries는 SearchState에 정의되어 있지만 LangGraph reducer가 인식하지 못할 수 있음
+        # 이는 경고가 아닌 정상적인 동작일 수 있으므로 DEBUG 레벨로 변경
+        if field_path == "expanded_queries":
+            logger.debug(f"Unknown field path for setting (expected for expanded_queries): {field_path}")
+        else:
+            logger.debug(f"Unknown field path for setting: {field_path}")

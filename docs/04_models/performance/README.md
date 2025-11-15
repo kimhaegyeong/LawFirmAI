@@ -12,6 +12,6 @@
 
 ## 🔗 관련 섹션
 
-- [05_RAG_System](../05_rag_system/README.md): RAG 시스템 아키텍처
+- [03_RAG_System](../03_rag_system/README.md): RAG 시스템 아키텍처
 - [05_Quality](../05_quality/quality_improvement_system.md): 품질 개선 시스템
 - [10_Technical_Reference](../10_technical_reference/README.md): 기술 참고 문서

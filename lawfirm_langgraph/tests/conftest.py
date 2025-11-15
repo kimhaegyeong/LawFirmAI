@@ -148,6 +148,60 @@ def mock_answer_generator():
 
 
 @pytest.fixture
+def mock_chat_service():
+    """Mock ChatService 픽스처"""
+    from lawfirm_langgraph.core.utils.config import Config
+    
+    with patch('lawfirm_langgraph.core.services.chat_service.HybridSearchEngineV2'):
+        with patch('lawfirm_langgraph.core.services.chat_service.QuestionClassifier'):
+            with patch('lawfirm_langgraph.core.services.chat_service.ImprovedAnswerGenerator'):
+                with patch('lawfirm_langgraph.core.services.chat_service.IntegratedSessionManager'):
+                    with patch('lawfirm_langgraph.core.services.chat_service.MultiTurnQuestionHandler'):
+                        with patch('lawfirm_langgraph.core.services.chat_service.ContextCompressor'):
+                            with patch('lawfirm_langgraph.core.services.chat_service.UserProfileManager'):
+                                with patch('lawfirm_langgraph.core.services.chat_service.EmotionIntentAnalyzer'):
+                                    with patch('lawfirm_langgraph.core.services.chat_service.ConversationFlowTracker'):
+                                        with patch('lawfirm_langgraph.core.services.chat_service.ContextualMemoryManager'):
+                                            with patch('lawfirm_langgraph.core.services.chat_service.ConversationQualityMonitor'):
+                                                with patch('lawfirm_langgraph.core.services.chat_service.PerformanceMonitor'):
+                                                    with patch('lawfirm_langgraph.core.services.chat_service.MemoryOptimizer'):
+                                                        with patch('lawfirm_langgraph.core.services.chat_service.CacheManager'):
+                                                            from lawfirm_langgraph.core.services.chat_service import ChatService
+                                                            config = Config()
+                                                            config.database_path = ":memory:"
+                                                            service = ChatService(config)
+                                                            return service
+
+
+@pytest.fixture
+def mock_database():
+    """Mock DatabaseManager 픽스처"""
+    db = MagicMock()
+    db.execute_query = Mock(return_value=[])
+    db.execute_update = Mock(return_value=1)
+    db.get_connection = MagicMock()
+    return db
+
+
+@pytest.fixture
+def temp_database():
+    """임시 데이터베이스 픽스처"""
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        db_path = f.name
+    
+    yield db_path
+    
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
+
+
+@pytest.fixture
 def cleanup_test_files():
     """테스트 파일 정리 픽스처"""
     test_files = []
@@ -176,7 +230,36 @@ def setup_test_environment(monkeypatch):
     monkeypatch.setenv("USE_AGENTIC_MODE", "false")
     monkeypatch.setenv("GOOGLE_API_KEY", "test_key")
     
-    # 로깅 레벨 설정
+    # 로깅 레벨 설정 (환경 변수로 제어 가능)
     import logging
-    logging.getLogger().setLevel(logging.WARNING)
+    import os
+    
+    # 환경 변수에서 로깅 레벨 읽기 (기본값: WARNING)
+    log_level_str = os.getenv("LOG_LEVEL", "WARNING").upper()
+    log_level_map = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+        "critical": logging.CRITICAL,
+    }
+    log_level = log_level_map.get(log_level_str, logging.WARNING)
+    
+    # 루트 로거 설정
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # 핸들러가 없으면 추가
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(log_level)
+        handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        )
+        root_logger.addHandler(handler)
+    
+    # lawfirm_langgraph 로거 설정
+    langgraph_logger = logging.getLogger("lawfirm_langgraph")
+    langgraph_logger.setLevel(log_level)
+    langgraph_logger.propagate = True
 

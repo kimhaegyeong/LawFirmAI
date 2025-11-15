@@ -6,6 +6,9 @@
 
 LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 처리, 문서 분석, 판례 검색 등의 기능을 제공합니다.
 
+**현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
+
+
 ## 📁 문서 디렉토리
 
 ### 01. 시작하기 (`01_getting_started/`)
@@ -13,6 +16,8 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 - [프로젝트 개요](01_getting_started/project_overview.md)
 - [프로젝트 구조](01_getting_started/project_structure.md)
 - [아키텍처](01_getting_started/architecture.md)
+- [프론트엔드 개발 가이드](01_getting_started/frontend_guide.md)
+- [UI 설계](01_getting_started/ui_design.md)
 
 ### 02. 데이터 (`02_data/`)
 데이터 수집, 처리, 임베딩 관련 문서
@@ -20,11 +25,11 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 - **processing/**: 데이터 전처리 가이드
 - **embedding/**: 벡터 임베딩 가이드
 
-### 03. RAG 시스템 (`05_rag_system/`)
+### 03. RAG 시스템 (`03_rag_system/`)
 LangGraph 기반 RAG 시스템 문서
-- [RAG 아키텍처](05_rag_system/rag_architecture.md)
-- [LangGraph 통합 가이드](05_rag_system/langgraph_integration_guide.md)
-- [개발 규칙](05_rag_system/langchain_langgraph_development_rules.md)
+- [RAG 아키텍처](03_rag_system/rag_architecture.md)
+- [LangGraph 통합 가이드](03_rag_system/langgraph_integration_guide.md)
+- [개발 규칙](03_rag_system/langchain_langgraph_development_rules.md)
 
 ### 04. 모델 (`04_models/`)
 AI 모델 성능 최적화 및 벤치마크
@@ -41,7 +46,6 @@ AI 모델 성능 최적화 및 벤치마크
 배포 가이드 및 운영 문서
 - [배포 가이드](06_deployment/Deployment_Guide.md)
 - [AWS 배포 가이드](06_deployment/aws_deployment_quickstart.md)
-- [AWS 프로덕션 아키텍처](06_deployment/aws_production_architecture_streamlit.md)
 - [HuggingFace Spaces 최적화](06_deployment/huggingface_spaces_optimization_plan.md)
 
 ### 07. API (`07_api/`)
@@ -68,16 +72,19 @@ API 문서 및 통합 가이드
 - [개발 규칙](10_technical_reference/development_rules.md)
 - [인코딩 개발 규칙](10_technical_reference/encoding_development_rules.md)
 - [문제 해결 가이드](10_technical_reference/Troubleshooting_Guide.md)
+- [환경 변수 관리](10_technical_reference/environment_variables.md)
 
 ### 참고 자료 (`reference/`)
 참고 문서 및 개선 계획
 - **improvement_plans/**: 개선 계획서
   - [LangGraph 워크플로우 개선 계획](reference/improvement_plans/langgraph_improvement.md)
+- [개선 사항 요약](reference/improvements_summary.md)
 
 ## 🔍 빠른 찾기
 
 ### 개발자용
 - 프로젝트 구조: [01_getting_started/project_structure.md](01_getting_started/project_structure.md)
+- 프론트엔드 가이드: [01_getting_started/frontend_guide.md](01_getting_started/frontend_guide.md)
 - 개발 규칙: [10_technical_reference/development_rules.md](10_technical_reference/development_rules.md)
 - Core 모듈 가이드: [10_technical_reference/core_modules_guide.md](10_technical_reference/core_modules_guide.md)
 
@@ -97,7 +104,3 @@ API 문서 및 통합 가이드
 2. **README.md 업데이트**: 해당 폴더의 README.md에 새 문서를 추가하세요
 3. **링크 일관성**: 상대 경로를 사용하여 다른 문서로의 링크를 작성하세요
 4. **네이밍 규칙**: 파일명은 소문자+언더스코어로 작성하세요 (`snake_case.md`)
-
-## 🔄 문서 업데이트 이력
-
-- **2024-12**: 폴더 구조 재구성 (제안 1: 주제 기반 계층 구조 적용)

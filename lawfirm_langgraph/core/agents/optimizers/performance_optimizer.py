@@ -138,6 +138,31 @@ class PerformanceCache:
         try:
             query_hash = self._generate_query_hash(query, query_type)
             
+            # answer가 dict인 경우 JSON 문자열로 변환
+            if isinstance(answer, dict):
+                answer_str = json.dumps(answer, ensure_ascii=False)
+            elif isinstance(answer, str):
+                answer_str = answer
+            else:
+                answer_str = str(answer)
+            
+            # sources가 dict 리스트인 경우 처리
+            if sources and isinstance(sources, list):
+                # 각 source가 dict인지 확인하고 문자열로 변환
+                sources_list = []
+                for source in sources:
+                    if isinstance(source, dict):
+                        sources_list.append(json.dumps(source, ensure_ascii=False))
+                    elif isinstance(source, str):
+                        sources_list.append(source)
+                    else:
+                        sources_list.append(str(source))
+                sources_json = json.dumps(sources_list, ensure_ascii=False)
+            elif isinstance(sources, (dict, list)):
+                sources_json = json.dumps(sources, ensure_ascii=False)
+            else:
+                sources_json = json.dumps([], ensure_ascii=False)
+            
             conn = sqlite3.connect(self.cache_db_path)
             cursor = conn.cursor()
             
@@ -145,7 +170,7 @@ class PerformanceCache:
                 INSERT OR REPLACE INTO answer_cache 
                 (query_hash, query_text, query_type, answer, confidence, sources)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (query_hash, query, query_type, answer, confidence, json.dumps(sources)))
+            ''', (query_hash, query, query_type, answer_str, confidence, sources_json))
             
             conn.commit()
             conn.close()

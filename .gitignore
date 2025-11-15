@@ -40,6 +40,10 @@ venv.bak/
 lawfirm_langgraph/.env
 .env.profiles/
 
+# Allow .env.example files (template files should be version controlled)
+!.env.example
+!**/.env.example
+
 
 # IDE
 .vscode/
@@ -67,6 +71,7 @@ model_cache/
 # Logs
 logs/
 *.log
+api/logs/
 
 # Vector Store
 chroma_db/
@@ -112,6 +117,14 @@ dmypy.json
 docs/_build/
 site/
 
+# Security Audit Reports
+docs/07_api/security_audit/*.json
+docs/07_api/security_audit/*.txt
+docs/**/security_audit/*.json
+docs/**/security_audit/*.txt
+**/security_audit/*.json
+**/security_audit/*.txt
+
 # HuggingFace Cache
 .cache/
 huggingface/
@@ -131,7 +144,11 @@ chroma_db/
 # personal data
 data/
 !lawfirm_langgraph/langgraph_core/data/  # Allow langgraph_core/data module (source code)
+!lawfirm_langgraph/core/data/  # Allow core/data directory
 reports/
 results/
 debug/
 test_outputs/
+
+# Portfolio documents (not for version control)
+portfolio/

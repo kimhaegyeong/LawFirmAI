@@ -1,0 +1,53 @@
+fastapi>=0.109.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# LangChain and LangGraph dependencies (for lawfirm_langgraph)
+# Use compatible versions to avoid conflicts
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-core>=1.0.0,<2.0.0
+langchain-google-genai>=0.0.6
+langgraph>=0.0.20
+langchain-text-splitters>=1.0.0,<2.0.0
+
+# Optional dependencies (for advanced features)
+langsmith>=0.1.0
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+numpy>=1.24.0
+
+# Fix compatibility issues with Python 3.11+
+# colorama 0.4.6 may have regex issues with Python 3.11, ensure latest patch
+colorama>=0.4.6,<0.5.0
+# tqdm 4.66.0+ has better Python 3.11+ compatibility
+tqdm>=4.66.0
+
+# OCR dependencies
+easyocr>=1.7.0
+Pillow>=10.0.0
+
+# File processing dependencies
+pdfplumber>=0.10.0
+python-docx>=1.1.0
+filetype>=1.2.0
+
+# Security dependencies
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+slowapi>=0.1.9
+authlib>=1.2.0
+
+# Database dependencies
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.12.0
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+httpx>=0.24.0
+

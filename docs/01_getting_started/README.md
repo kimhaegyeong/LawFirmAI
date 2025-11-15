@@ -18,7 +18,7 @@
 ## 🔗 관련 섹션
 
 - [02_Data](../02_data/collection/README.md): 데이터 수집 및 처리
-- [05_RAG_System](../05_rag_system/README.md): RAG 시스템
+- [03_RAG_System](../03_rag_system/README.md): RAG 시스템
 - [06_Deployment](../06_deployment/README.md): 배포 가이드
 - [09_User_Guide](../09_user_guide/README.md): 사용자 가이드
 - [10_Technical_Reference](../10_technical_reference/README.md): 기술 참고 문서

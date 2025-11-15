@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DEBUG=true
+      - CORS_ORIGINS=*
+      - DATABASE_URL=sqlite:///./data/api_sessions.db
+      - LANGGRAPH_ENABLED=true
+    volumes:
+      - ../data:/app/data
+      - ../lawfirm_langgraph:/app/lawfirm_langgraph
+    networks:
+      - lawfirm-network
+
+networks:
+  lawfirm-network:
+    driver: bridge
+

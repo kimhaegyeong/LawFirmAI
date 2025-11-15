@@ -10,12 +10,89 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pathlib import Path
 
+# 안전한 로깅 유틸리티 import (멀티스레딩 안전)
+# 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
+def _safe_log_fallback_debug(logger, message):
+    """폴백 디버그 로깅 함수"""
+    try:
+        logger.debug(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_info(logger, message):
+    """폴백 정보 로깅 함수"""
+    try:
+        logger.info(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_warning(logger, message):
+    """폴백 경고 로깅 함수"""
+    try:
+        logger.warning(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+def _safe_log_fallback_error(logger, message):
+    """폴백 오류 로깅 함수"""
+    try:
+        logger.error(message)
+    except (ValueError, AttributeError, RuntimeError, OSError):
+        pass
+
+# 여러 경로 시도하여 safe_log_* 함수 import
+SAFE_LOGGING_AVAILABLE = False
+try:
+    from core.utils.safe_logging_utils import (
+        safe_log_debug,
+        safe_log_info,
+        safe_log_warning,
+        safe_log_error
+    )
+    SAFE_LOGGING_AVAILABLE = True
+except ImportError:
+    try:
+        # lawfirm_langgraph 경로에서 시도
+        from lawfirm_langgraph.core.utils.safe_logging_utils import (
+            safe_log_debug,
+            safe_log_info,
+            safe_log_warning,
+            safe_log_error
+        )
+        SAFE_LOGGING_AVAILABLE = True
+    except ImportError:
+        # Import 실패 시 폴백 함수 사용
+        safe_log_debug = _safe_log_fallback_debug
+        safe_log_info = _safe_log_fallback_info
+        safe_log_warning = _safe_log_fallback_warning
+        safe_log_error = _safe_log_fallback_error
+
+# 최종 확인: safe_log_debug가 정의되지 않았다면 폴백 함수 사용
+try:
+    _ = safe_log_debug
+except NameError:
+    safe_log_debug = _safe_log_fallback_debug
+try:
+    _ = safe_log_info
+except NameError:
+    safe_log_info = _safe_log_fallback_info
+try:
+    _ = safe_log_warning
+except NameError:
+    safe_log_warning = _safe_log_fallback_warning
+try:
+    _ = safe_log_error
+except NameError:
+    safe_log_error = _safe_log_fallback_error
+
 try:
     from langgraph.checkpoint.sqlite import SqliteSaver
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
-    logging.warning("LangGraph checkpoint not available. Please install langgraph-checkpoint-sqlite")
+    # 안전한 로깅 사용 (멀티스레딩 안전)
+    _temp_logger = logging.getLogger(__name__)
+    safe_log_warning(_temp_logger, "LangGraph checkpoint not available. Please install langgraph-checkpoint-sqlite")
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +120,15 @@ class CheckpointManager:
         
         # LangGraph 사용 가능 여부 확인
         if not LANGGRAPH_AVAILABLE:
-            self.logger.warning("LangGraph checkpoint functionality not available")
+            safe_log_warning(self.logger, "LangGraph checkpoint functionality not available")
             # 폴백으로 MemorySaver 시도
             try:
                 from langgraph.checkpoint.memory import MemorySaver
                 self.saver = MemorySaver()
                 self.storage_type = "memory"
-                self.logger.info("Using MemorySaver as fallback (LangGraph not available)")
+                safe_log_info(self.logger, "Using MemorySaver as fallback (LangGraph not available)")
             except ImportError:
-                self.logger.error("No checkpoint functionality available")
+                safe_log_error(self.logger, "No checkpoint functionality available")
             return
         
         # 저장소 타입에 따라 초기화
@@ -60,10 +137,10 @@ class CheckpointManager:
         elif storage_type == "sqlite":
             self._init_sqlite_saver()
         elif storage_type in ["postgres", "redis"]:
-            self.logger.warning(f"{storage_type} checkpoint storage not yet implemented, using MemorySaver")
+            safe_log_warning(self.logger, f"{storage_type} checkpoint storage not yet implemented, using MemorySaver")
             self._init_memory_saver()
         else:
-            self.logger.warning(f"Unknown storage type: {storage_type}, using MemorySaver")
+            safe_log_warning(self.logger, f"Unknown storage type: {storage_type}, using MemorySaver")
             self._init_memory_saver()
     
     def _init_memory_saver(self):
@@ -71,15 +148,15 @@ class CheckpointManager:
         try:
             from langgraph.checkpoint.memory import MemorySaver
             self.saver = MemorySaver()
-            self.logger.info("Checkpoint manager initialized with MemorySaver")
+            safe_log_info(self.logger, "Checkpoint manager initialized with MemorySaver")
         except ImportError as e:
-            self.logger.error(f"Failed to initialize MemorySaver: {e}")
+            safe_log_error(self.logger, f"Failed to initialize MemorySaver: {e}")
             self.saver = None
     
     def _init_sqlite_saver(self):
         """SqliteSaver 초기화"""
         if not self.db_path:
-            self.logger.warning("SQLite requires db_path, falling back to MemorySaver")
+            safe_log_warning(self.logger, "SQLite requires db_path, falling back to MemorySaver")
             self._init_memory_saver()
             return
         
@@ -93,11 +170,11 @@ class CheckpointManager:
                 db_path_str = f"sqlite:///{db_path_str}"
             
             self.saver = SqliteSaver.from_conn_string(db_path_str)
-            self.logger.info(f"Checkpoint manager initialized with SqliteSaver: {db_path_str}")
+            safe_log_info(self.logger, f"Checkpoint manager initialized with SqliteSaver: {db_path_str}")
         except Exception as e:
-            self.logger.error(f"Failed to initialize SqliteSaver: {e}")
+            safe_log_error(self.logger, f"Failed to initialize SqliteSaver: {e}")
             # 폴백: 메모리 기반 체크포인터 사용
-            self.logger.warning("Falling back to MemorySaver")
+            safe_log_warning(self.logger, "Falling back to MemorySaver")
             self._init_memory_saver()
     
     def get_checkpointer(self):
@@ -145,10 +222,10 @@ class CheckpointManager:
         try:
             # LangGraph의 SqliteSaver가 자동으로 처리
             # 실제 저장은 워크플로우 실행 시 자동으로 수행됨
-            self.logger.debug(f"Checkpoint saved for thread: {thread_id}")
+            safe_log_debug(self.logger, f"Checkpoint saved for thread: {thread_id}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to save checkpoint: {e}")
+            safe_log_error(self.logger, f"Failed to save checkpoint: {e}")
             return False
     
     def load_checkpoint(self, thread_id: str) -> Optional[Dict[str, Any]]:
@@ -168,10 +245,10 @@ class CheckpointManager:
         try:
             # LangGraph의 SqliteSaver가 자동으로 처리
             # 실제 로드는 워크플로우 실행 시 자동으로 수행됨
-            self.logger.debug(f"Checkpoint loaded for thread: {thread_id}")
+            safe_log_debug(self.logger, f"Checkpoint loaded for thread: {thread_id}")
             return None  # LangGraph가 자동으로 처리하므로 None 반환
         except Exception as e:
-            self.logger.error(f"Failed to load checkpoint: {e}")
+            safe_log_error(self.logger, f"Failed to load checkpoint: {e}")
             return None
     
     def list_checkpoints(self, thread_id: str) -> List[Dict[str, Any]]:
@@ -191,10 +268,10 @@ class CheckpointManager:
         try:
             config = {"configurable": {"thread_id": thread_id}}
             checkpoints = self.saver.list(config)
-            self.logger.debug(f"Found {len(checkpoints)} checkpoints for thread: {thread_id}")
+            safe_log_debug(self.logger, f"Found {len(checkpoints)} checkpoints for thread: {thread_id}")
             return checkpoints
         except Exception as e:
-            self.logger.error(f"Failed to list checkpoints: {e}")
+            safe_log_error(self.logger, f"Failed to list checkpoints: {e}")
             return []
     
     def delete_checkpoint(self, thread_id: str, checkpoint_id: str) -> bool:
@@ -216,10 +293,10 @@ class CheckpointManager:
             config = {"configurable": {"thread_id": thread_id}}
             # LangGraph의 SqliteSaver는 직접적인 삭제 메서드를 제공하지 않음
             # 필요시 SQLite 직접 조작 필요
-            self.logger.debug(f"Checkpoint deletion requested for thread: {thread_id}, checkpoint: {checkpoint_id}")
+            safe_log_debug(self.logger, f"Checkpoint deletion requested for thread: {thread_id}, checkpoint: {checkpoint_id}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to delete checkpoint: {e}")
+            safe_log_error(self.logger, f"Failed to delete checkpoint: {e}")
             return False
     
     def cleanup_old_checkpoints(self, ttl_hours: int = 24) -> int:
