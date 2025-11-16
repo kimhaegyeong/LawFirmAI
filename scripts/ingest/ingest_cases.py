@@ -295,6 +295,33 @@ def insert_chunks_and_embeddings(
     chunk_ids = []
     texts_to_embed = []
     
+    # case 메타데이터 조회 (모든 청크에 공통으로 사용)
+    case_metadata = None
+    try:
+        import json
+        cursor_meta = conn.execute("""
+            SELECT doc_id, casenames, court
+            FROM cases
+            WHERE id = ?
+        """, (case_id,))
+        row = cursor_meta.fetchone()
+        if row:
+            case_metadata = {
+                'doc_id': row['doc_id'],
+                'casenames': row['casenames'],
+                'court': row['court']
+            }
+    except Exception as e:
+        logger.debug(f"Failed to get case metadata for case_id={case_id}: {e}")
+    
+    # 메타데이터 JSON 생성
+    meta_json = None
+    if case_metadata:
+        try:
+            meta_json = json.dumps(case_metadata, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Failed to serialize case metadata for case_id={case_id}: {e}")
+    
     for i, chunk_result in enumerate(chunk_results):
         chunk_idx = next_chunk_index + i
         metadata = chunk_result.metadata
@@ -305,7 +332,7 @@ def insert_chunks_and_embeddings(
                 start_char, end_char, overlap_chars, text, token_count, meta,
                 chunking_strategy, chunk_size_category, chunk_group_id, 
                 query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 "case_paragraph",
                 case_id,
@@ -314,6 +341,7 @@ def insert_chunks_and_embeddings(
                 None, None, None,
                 chunk_result.text,
                 None,
+                meta_json,  # 메타데이터 JSON 저장
                 metadata.get("chunking_strategy"),
                 metadata.get("chunk_size_category"),
                 metadata.get("chunk_group_id"),

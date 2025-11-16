@@ -133,6 +133,33 @@ def insert_chunks_and_embeddings(
         source_id=interp_id
     )
     
+    # interpretation ????? ?? (?? ??? ???? ??)
+    interpretation_metadata = None
+    try:
+        import json
+        cursor_meta = conn.execute("""
+            SELECT org, doc_id, title
+            FROM interpretations
+            WHERE id = ?
+        """, (interp_id,))
+        row = cursor_meta.fetchone()
+        if row:
+            interpretation_metadata = {
+                'org': row['org'],
+                'doc_id': row['doc_id'],
+                'title': row['title']
+            }
+    except Exception as e:
+        logger.debug(f"Failed to get interpretation metadata for interp_id={interp_id}: {e}")
+    
+    # ????? JSON ??
+    meta_json = None
+    if interpretation_metadata:
+        try:
+            meta_json = json.dumps(interpretation_metadata, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Failed to serialize interpretation metadata for interp_id={interp_id}: {e}")
+    
     rows_to_embed: List[Dict] = []
     for chunk_result in chunk_results:
         metadata = chunk_result.metadata
@@ -142,7 +169,7 @@ def insert_chunks_and_embeddings(
                 source_type, source_id, level, chunk_index, 
                 start_char, end_char, overlap_chars, text, token_count, meta,
                 chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 "interpretation_paragraph",
@@ -154,6 +181,7 @@ def insert_chunks_and_embeddings(
                 None,
                 chunk_result.text,
                 None,
+                meta_json,  # ????? JSON ??
                 metadata.get("chunking_strategy"),
                 metadata.get("chunk_size_category"),
                 metadata.get("chunk_group_id"),

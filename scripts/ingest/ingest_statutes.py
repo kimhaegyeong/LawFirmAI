@@ -172,6 +172,9 @@ def insert_chunks_and_embeddings(
         ):
             next_index_by_source[int(sid)] = int(max_idx) + 1
 
+    # statute_article ????? ?? (source_id?? ??)
+    statute_metadata_cache = {}
+    
     rows_to_embed: List[Dict] = []
     for ch in chunks:
         key = f"{ch.get('article_no')}|{ch.get('clause_no')}|{ch.get('item_no')}"
@@ -179,6 +182,37 @@ def insert_chunks_and_embeddings(
         source_id = candidates[0] if candidates else statute_article_ids[0]
         # Assign sequential chunk_index per source_id
         current_idx = next_index_by_source.get(source_id, 0)
+        
+        # ?? source_id? ????? ?? (?? ??)
+        meta_json = None
+        if source_id not in statute_metadata_cache:
+            try:
+                import json
+                cursor_meta = conn.execute("""
+                    SELECT s.name as statute_name, sa.article_no
+                    FROM statute_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE sa.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    statute_metadata = {
+                        'statute_name': row['statute_name'],
+                        'law_name': row['statute_name'],
+                        'article_no': row['article_no'],
+                        'article_number': row['article_no']
+                    }
+                    statute_metadata_cache[source_id] = statute_metadata
+                    meta_json = json.dumps(statute_metadata, ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"Failed to get statute metadata for source_id={source_id}: {e}")
+        else:
+            try:
+                import json
+                meta_json = json.dumps(statute_metadata_cache[source_id], ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"Failed to serialize statute metadata for source_id={source_id}: {e}")
+        
         # ??????? ?? ?? ??
         metadata = ch.get("metadata", {})
         cur2 = conn.execute(
@@ -187,7 +221,7 @@ def insert_chunks_and_embeddings(
                 source_type, source_id, level, chunk_index, 
                 start_char, end_char, overlap_chars, text, token_count, meta,
                 chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 "statute_article",
@@ -199,6 +233,7 @@ def insert_chunks_and_embeddings(
                 None,
                 ch.get("text"),
                 None,
+                meta_json,  # ????? JSON ??
                 metadata.get("chunking_strategy"),
                 metadata.get("chunk_size_category"),
                 metadata.get("chunk_group_id"),

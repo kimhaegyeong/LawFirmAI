@@ -133,6 +133,32 @@ def insert_chunks_and_embeddings(
         source_id=decision_id
     )
     
+    # decision ????? ?? (?? ??? ???? ??)
+    decision_metadata = None
+    try:
+        import json
+        cursor_meta = conn.execute("""
+            SELECT org, doc_id
+            FROM decisions
+            WHERE id = ?
+        """, (decision_id,))
+        row = cursor_meta.fetchone()
+        if row:
+            decision_metadata = {
+                'org': row['org'],
+                'doc_id': row['doc_id']
+            }
+    except Exception as e:
+        logger.debug(f"Failed to get decision metadata for decision_id={decision_id}: {e}")
+    
+    # ????? JSON ??
+    meta_json = None
+    if decision_metadata:
+        try:
+            meta_json = json.dumps(decision_metadata, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Failed to serialize decision metadata for decision_id={decision_id}: {e}")
+    
     rows_to_embed: List[Dict] = []
     for chunk_result in chunk_results:
         metadata = chunk_result.metadata
@@ -142,7 +168,7 @@ def insert_chunks_and_embeddings(
                 source_type, source_id, level, chunk_index, 
                 start_char, end_char, overlap_chars, text, token_count, meta,
                 chunking_strategy, chunk_size_category, chunk_group_id, query_type, original_document_id, embedding_version_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 "decision_paragraph",
@@ -154,6 +180,7 @@ def insert_chunks_and_embeddings(
                 None,
                 chunk_result.text,
                 None,
+                meta_json,  # ????? JSON ??
                 metadata.get("chunking_strategy"),
                 metadata.get("chunk_size_category"),
                 metadata.get("chunk_group_id"),
