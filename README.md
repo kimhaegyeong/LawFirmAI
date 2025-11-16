@@ -21,6 +21,7 @@ LawFirmAI는 LangGraph 기반의 State 기반 워크플로우를 통해 법률 �
 - ✅ **증분 전처리**: 자동화된 데이터 파이프라인
 - ✅ **Q&A 데이터셋**: 법률 Q&A 쌍 생성 및 관리
 - ✅ **메모리 최적화**: Float16 양자화, 지연 로딩, 자동 메모리 정리
+- ✅ **ML 훈련 및 평가**: Ground Truth 생성, RAG 검색 평가, 파라미터 튜닝
 
 ## 🛠️ 기술 스택
 
@@ -185,6 +186,7 @@ npm run dev
 - [임베딩 가이드](docs/02_data/embedding/embedding_guide.md)
 - [FAISS 버전 관리 가이드](docs/02_data/embedding/faiss_version_management_guide.md)
 - [FAISS 빠른 시작](docs/02_data/embedding/faiss_version_quick_start.md)
+- [ML 훈련 및 평가 시스템](docs/02_data/ml_training/README.md)
 
 ### 개발
 - [개발 규칙](docs/10_technical_reference/development_rules.md)

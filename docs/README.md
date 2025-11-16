@@ -29,6 +29,8 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
   - [임베딩 가이드](02_data/embedding/embedding_guide.md)
   - [버전 관리 가이드](02_data/embedding/version_management_guide.md)
   - [외부 인덱스 설정 가이드](02_data/embedding/external_index_config_guide.md)
+- **ml_training/**: ML 훈련 및 평가 시스템
+  - [ML 훈련 및 평가 시스템](02_data/ml_training/README.md)
 
 ### 03. RAG 시스템 (`03_rag_system/`)
 LangGraph 기반 RAG 시스템 문서
@@ -124,6 +126,7 @@ API 문서 및 통합 가이드
 - 임베딩 가이드: [02_data/embedding/embedding_guide.md](02_data/embedding/embedding_guide.md)
 - FAISS 버전 관리: [02_data/embedding/faiss_version_management_guide.md](02_data/embedding/faiss_version_management_guide.md)
 - FAISS 빠른 시작: [02_data/embedding/faiss_version_quick_start.md](02_data/embedding/faiss_version_quick_start.md)
+- ML 훈련 및 평가: [02_data/ml_training/README.md](02_data/ml_training/README.md)
 
 ## 📝 문서 작성 가이드
 
