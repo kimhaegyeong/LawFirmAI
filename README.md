@@ -49,12 +49,31 @@ LawFirmAI는 LangGraph 기반의 State 기반 워크플로우를 통해 법률 �
 LawFirmAI/
 ├── api/                    # FastAPI 서버
 ├── frontend/              # React 프론트엔드
-├── lawfirm_langgraph/      # LangGraph 워크플로우 코어
-├── scripts/                # 유틸리티 스크립트
-├── data/                   # 데이터 파일
-├── monitoring/             # 모니터링 시스템
-├── docs/                   # 문서
-└── tests/                  # 테스트 코드
+├── lawfirm_langgraph/     # LangGraph 워크플로우 코어
+│   ├── config/            # 설정 파일
+│   ├── core/              # 핵심 비즈니스 로직
+│   │   ├── workflow/      # LangGraph 워크플로우
+│   │   ├── agents/        # 레거시 에이전트 (하위 호환성)
+│   │   ├── services/      # 비즈니스 서비스
+│   │   ├── data/          # 데이터 레이어
+│   │   ├── models/        # AI 모델
+│   │   └── utils/         # 유틸리티
+│   └── tests/             # 테스트 코드
+├── scripts/               # 유틸리티 스크립트
+│   ├── data_collection/   # 데이터 수집
+│   ├── data_processing/   # 데이터 전처리
+│   ├── database/          # 데이터베이스 관리
+│   └── monitoring/       # 모니터링
+├── data/                  # 데이터 파일
+│   ├── raw/               # 원본 데이터
+│   ├── processed/         # 전처리된 데이터
+│   ├── embeddings/        # 벡터 임베딩
+│   └── database/          # 데이터베이스 파일
+├── monitoring/            # 모니터링 시스템
+│   ├── grafana/           # Grafana 설정
+│   └── prometheus/        # Prometheus 설정
+├── docs/                  # 프로젝트 문서
+└── tests/                 # 테스트 코드
 ```
 
 자세한 프로젝트 구조는 [프로젝트 구조 문서](docs/01_getting_started/project_structure.md)를 참조하세요.
@@ -97,7 +116,7 @@ python scripts/assembly/collect_laws_optimized.py --sample 50 --enable-metrics
 - `law_collection_memory_usage_bytes`: 메모리 사용량
 - `law_collection_cpu_usage_percent`: CPU 사용률
 
-자세한 내용은 [Windows 모니터링 가이드](docs/development/windows_monitoring_guide.md)를 참조하세요.
+자세한 내용은 [모니터링 가이드](docs/monitoring/monitoring_guide.md)를 참조하세요.
 
 ## 🚀 빠른 시작
 
@@ -121,7 +140,7 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 3. 환경 변수 설정 (선택사항)
+### 3. 환경 변수 설정
 
 프로젝트 루트에 `.env` 파일을 생성하고 필요한 환경 변수를 설정하세요:
 
@@ -144,7 +163,7 @@ npm install
 npm run dev
 ```
 
-### 6. 접속
+### 5. 접속
 
 - **React 프론트엔드**: http://localhost:3000
 - **FastAPI 서버**: http://localhost:8000
@@ -162,31 +181,32 @@ npm run dev
 ### 데이터
 - [데이터 수집 가이드](docs/02_data/collection/data_collection_guide.md)
 - [데이터 전처리 가이드](docs/02_data/processing/preprocessing_guide.md)
+- [자동 완료 스크립트 가이드](docs/02_data/processing/auto_complete_script_guide.md)
 - [임베딩 가이드](docs/02_data/embedding/embedding_guide.md)
+- [FAISS 버전 관리 가이드](docs/02_data/embedding/faiss_version_management_guide.md)
+- [FAISS 빠른 시작](docs/02_data/embedding/faiss_version_quick_start.md)
 
 ### 개발
 - [개발 규칙](docs/10_technical_reference/development_rules.md)
 - [인코딩 개발 규칙](docs/10_technical_reference/encoding_development_rules.md)
 - [성능 최적화 가이드](docs/04_models/performance/performance_optimization_guide.md)
+- [LangGraph 통합 가이드](docs/03_rag_system/langgraph_integration_guide.md)
 
 ### API
 - [API 문서](docs/07_api/API_Documentation.md)
 - [API 사용 예제](docs/07_api/usage_examples.md)
-- [스트리밍 기능 가이드](docs/STREAMING_GUIDE.md)
+- [스트리밍 기능 가이드](docs/07_api/streaming_guide.md)
 
 ### 배포
 - [배포 가이드](docs/06_deployment/Deployment_Guide.md)
 - [빠른 시작 가이드](docs/06_deployment/quick_start.md)
-- [AWS 배포 가이드](docs/06_deployment/AWS_Deployment_Guide.md)
-- [AWS 빠른 시작](docs/06_deployment/QUICK_START_AWS.md)
+- [AWS 배포 가이드](docs/06_deployment/aws_deployment_quickstart.md)
 - [배포 체크리스트](docs/06_deployment/DEPLOYMENT_CHECKLIST.md)
-- [프리 티어 최적화 가이드](docs/06_deployment/FREE_TIER_OPTIMIZATION.md)
-- [PostgreSQL 마이그레이션 계획](docs/06_deployment/POSTGRESQL_MIGRATION_PLAN.md)
-- [PostgreSQL 설정 가이드](docs/06_deployment/POSTGRESQL_SETUP_GUIDE.md)
-- [데이터베이스 마이그레이션 가이드](docs/06_deployment/DATABASE_MIGRATION_GUIDE.md)
 
 ### 모니터링
 - [모니터링 가이드](docs/monitoring/monitoring_guide.md)
+
+전체 문서 목록은 [문서 인덱스](docs/README.md)를 참조하세요.
 
 ## 🔍 주요 기능
 
@@ -198,7 +218,17 @@ LawFirmAI는 관계형 데이터베이스(SQLite)와 벡터 데이터베이스(F
 - **의미적 검색**: 자연어 쿼리를 통한 맥락적 검색
 - **하이브리드 검색**: 두 검색 방식의 결과를 통합하여 최적의 결과 제공
 
-자세한 내용은 [하이브리드 검색 아키텍처](docs/05_rag_system/rag_architecture.md)를 참조하세요.
+자세한 내용은 [하이브리드 검색 아키텍처](docs/03_rag_system/rag_architecture.md)를 참조하세요.
+
+### LangGraph 워크플로우
+
+LawFirmAI는 LangGraph를 활용한 State 기반 워크플로우 시스템을 사용합니다.
+
+- **상태 기반 처리**: 질문 분류 → 검색 → 답변 생성의 단계별 처리
+- **Agentic AI**: Tool Use/Function Calling을 통한 동적 도구 선택
+- **실시간 스트리밍**: LLM 응답을 토큰 단위로 실시간 전달
+
+자세한 내용은 [LangGraph 통합 가이드](docs/03_rag_system/langgraph_integration_guide.md)를 참조하세요.
 
 ## 📊 데이터 현황
 

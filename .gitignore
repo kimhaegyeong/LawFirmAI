@@ -72,6 +72,8 @@ model_cache/
 logs/
 *.log
 api/logs/
+data/performance_logs/
+*.metrics.json
 
 # Vector Store
 chroma_db/
