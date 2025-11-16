@@ -16,6 +16,7 @@ export interface SourceInfo {
   name: string;
   type: 'statute_article' | 'case_paragraph' | 'decision_paragraph' | 'interpretation_paragraph' | string;
   url?: string;
+  original_url?: string;
   
   // 법령 정보 (최상위 레벨)
   statute_name?: string;

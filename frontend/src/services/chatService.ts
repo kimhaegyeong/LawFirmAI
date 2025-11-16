@@ -113,9 +113,10 @@ export async function* sendStreamingChatMessage(
             errorMessage.includes('chunked')) {
           // 불완전한 스트림 오류는 경고로 처리
           // 실제로는 데이터가 정상적으로 처리되었을 수 있음
-          logger.warn('[SSE] Fetch error (incomplete chunked encoding):', fetchError);
-          // 이 경우는 fetch 단계에서 발생했으므로 response가 없음
-          // 하지만 브라우저 콘솔에만 경고가 표시되고 실제 동작에는 문제가 없을 수 있음
+          // 브라우저 콘솔에만 경고가 표시되고 실제 동작에는 문제가 없을 수 있음
+          if (import.meta.env.DEV) {
+            logger.debug('[SSE] Fetch error (incomplete chunked encoding, but data may be processed):', fetchError);
+          }
           // 조용히 처리하고 사용자에게는 성공으로 표시
           return; // 빈 제너레이터 반환 (이미 처리된 데이터가 있을 수 있음)
         }
