@@ -8,8 +8,9 @@ import logging
 import sqlite3
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -857,7 +858,16 @@ class SemanticSearchEngineV2:
 
         # 쿼리 벡터 캐싱 (LRU 캐시)
         self._query_vector_cache = {}  # query -> vector
-        self._cache_max_size = 128  # 최대 캐시 크기
+        self._cache_max_size = 512  # 최대 캐시 크기 (128 → 512로 증가)
+        
+        # 메타데이터 캐싱 (성능 개선, TTL 지원)
+        self._metadata_cache = {}  # key -> {'data': metadata, 'timestamp': time.time()}
+        self._metadata_cache_max_size = 1000  # 최대 캐시 크기
+        self._metadata_cache_ttl = 3600  # TTL: 1시간 (초 단위)
+        self._metadata_cache_hits = 0  # 캐시 히트 수
+        self._metadata_cache_misses = 0  # 캐시 미스 수
+        self._metadata_cache_last_cleanup = time.time()  # 마지막 정리 시간
+        self._metadata_cache_cleanup_interval = 300  # 정리 간격: 5분
         
         # FAISS 버전 관리자 초기화
         self.faiss_version_manager = None
@@ -1379,19 +1389,133 @@ class SemanticSearchEngineV2:
                 self.logger.error(f"Error loading chunk vectors: {e}")
             return {}
 
+    def _normalize_query(self, query: str) -> str:
+        """쿼리 정규화 (공백, 대소문자)"""
+        if not query:
+            return ""
+        # 공백 정규화 및 소문자 변환
+        normalized = ' '.join(query.lower().split())
+        return normalized
+    
+    def _encode_query(self, query: str) -> Optional[np.ndarray]:
+        """쿼리 인코딩 (캐시 사용, 재정규화 포함)"""
+        query_vec = self._get_cached_query_vector(query)
+        if query_vec is not None:
+            return query_vec
+        
+        if not self._ensure_embedder_initialized():
+            self.logger.error("Cannot generate query embedding: embedder not initialized")
+            return None
+        
+        try:
+            query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
+            
+            query_norm = np.linalg.norm(query_vec)
+            if abs(query_norm - 1.0) > 0.01:
+                self.logger.debug(f"Query vector not normalized (norm={query_norm:.4f}), re-normalizing")
+                query_vec = query_vec / (query_norm + 1e-9)
+            
+            self._cache_query_vector(query, query_vec)
+            return query_vec
+        except Exception as e:
+            self.logger.error(f"Failed to encode query: {e}")
+            if self.model_name and self._initialize_embedder(self.model_name):
+                try:
+                    query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
+                    query_norm = np.linalg.norm(query_vec)
+                    if abs(query_norm - 1.0) > 0.01:
+                        self.logger.debug(f"Query vector not normalized (norm={query_norm:.4f}), re-normalizing")
+                        query_vec = query_vec / (query_norm + 1e-9)
+                    self._cache_query_vector(query, query_vec)
+                    return query_vec
+                except Exception as e2:
+                    self.logger.error(f"Failed to encode query after re-initialization: {e2}")
+            return None
+    
+    def _cleanup_expired_cache(self):
+        """만료된 캐시 항목 제거"""
+        current_time = time.time()
+        
+        # 정리 간격 체크 (너무 자주 정리하지 않도록)
+        if current_time - self._metadata_cache_last_cleanup < self._metadata_cache_cleanup_interval:
+            return
+        
+        expired_keys = []
+        for key, cache_item in self._metadata_cache.items():
+            if isinstance(cache_item, dict) and 'timestamp' in cache_item:
+                if current_time - cache_item['timestamp'] > self._metadata_cache_ttl:
+                    expired_keys.append(key)
+            else:
+                # 구 형식 (타임스탬프 없음) - 오래된 것으로 간주하고 제거
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            del self._metadata_cache[key]
+        
+        if expired_keys:
+            self.logger.debug(f"Cleaned up {len(expired_keys)} expired cache items")
+        
+        self._metadata_cache_last_cleanup = current_time
+    
+    def _get_from_cache(self, key: Any) -> Optional[Any]:
+        """캐시에서 항목 가져오기 (TTL 체크 포함)"""
+        self._cleanup_expired_cache()
+        
+        if key not in self._metadata_cache:
+            return None
+        
+        cache_item = self._metadata_cache[key]
+        
+        # 새 형식 (타임스탬프 포함)
+        if isinstance(cache_item, dict) and 'timestamp' in cache_item:
+            current_time = time.time()
+            if current_time - cache_item['timestamp'] > self._metadata_cache_ttl:
+                # 만료됨
+                del self._metadata_cache[key]
+                return None
+            return cache_item.get('data')
+        else:
+            # 구 형식 (타임스탬프 없음) - 호환성을 위해 반환하되 새 형식으로 변환
+            data = cache_item
+            self._metadata_cache[key] = {
+                'data': data,
+                'timestamp': time.time()
+            }
+            return data
+    
+    def _set_to_cache(self, key: Any, value: Any):
+        """캐시에 항목 저장 (TTL 포함)"""
+        # 캐시 크기 제한 체크
+        if len(self._metadata_cache) >= self._metadata_cache_max_size:
+            # 만료된 항목 먼저 정리 시도
+            self._cleanup_expired_cache()
+            
+            # 여전히 크기 제한 초과 시 LRU 방식으로 제거
+            if len(self._metadata_cache) >= self._metadata_cache_max_size:
+                oldest_key = next(iter(self._metadata_cache))
+                del self._metadata_cache[oldest_key]
+        
+        # 새 형식으로 저장 (타임스탬프 포함)
+        self._metadata_cache[key] = {
+            'data': value,
+            'timestamp': time.time()
+        }
+
     def _get_cached_query_vector(self, query: str) -> Optional[np.ndarray]:
-        """캐시에서 쿼리 벡터 가져오기"""
-        return self._query_vector_cache.get(query)
+        """캐시에서 쿼리 벡터 가져오기 (정규화된 쿼리 사용)"""
+        normalized_query = self._normalize_query(query)
+        return self._query_vector_cache.get(normalized_query)
 
     def _cache_query_vector(self, query: str, vector: np.ndarray):
-        """쿼리 벡터를 캐시에 저장 (LRU 방식)"""
+        """쿼리 벡터를 캐시에 저장 (LRU 방식, 정규화된 쿼리 사용)"""
+        normalized_query = self._normalize_query(query)
         # 캐시 크기 제한 (LRU: 오래된 항목 제거)
         if len(self._query_vector_cache) >= self._cache_max_size:
             # 가장 오래된 항목 제거 (단순 구현: 첫 번째 항목)
             oldest_key = next(iter(self._query_vector_cache))
             del self._query_vector_cache[oldest_key]
 
-        self._query_vector_cache[query] = vector
+        self._query_vector_cache[normalized_query] = vector
 
     def _load_chunk_vectors_batch(self,
                                   chunk_ids: List[int],
@@ -1910,50 +2034,15 @@ class SemanticSearchEngineV2:
             step_start = time.time()
             
             # 1. 쿼리 임베딩 생성 (캐시 사용)
-            query_vec = self._get_cached_query_vector(query)
+            encode_start = time.time()
+            query_vec = self._encode_query(query)
             if query_vec is None:
-                # Embedder 초기화 상태 재확인
-                if not self._ensure_embedder_initialized():
-                    self.logger.error("Cannot generate query embedding: embedder not initialized")
-                    return []
-                
-                # 캐시에 없으면 생성
-                encode_start = time.time()
-                try:
-                    query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
-                    
-                    # 쿼리 벡터 재정규화 확인 및 강화
-                    query_norm = np.linalg.norm(query_vec)
-                    if abs(query_norm - 1.0) > 0.01:  # 정규화 오차 허용 범위
-                        self.logger.debug(f"Query vector not normalized (norm={query_norm:.4f}), re-normalizing")
-                        query_vec = query_vec / (query_norm + 1e-9)  # 재정규화
-                    
-                    self._cache_query_vector(query, query_vec)
-                    step_times['query_encoding'] = time.time() - encode_start
-                    self.logger.debug(f"⏱️  Query encoding: {step_times['query_encoding']:.3f}s")
-                except Exception as e:
-                    self.logger.error(f"Failed to encode query: {e}")
-                    # 재초기화 후 재시도
-                    if self.model_name and self._initialize_embedder(self.model_name):
-                        try:
-                            query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
-                            
-                            # 쿼리 벡터 재정규화 확인 및 강화
-                            query_norm = np.linalg.norm(query_vec)
-                            if abs(query_norm - 1.0) > 0.01:  # 정규화 오차 허용 범위
-                                self.logger.debug(f"Query vector not normalized (norm={query_norm:.4f}), re-normalizing")
-                                query_vec = query_vec / (query_norm + 1e-9)  # 재정규화
-                            
-                            self._cache_query_vector(query, query_vec)
-                            step_times['query_encoding'] = time.time() - encode_start
-                        except Exception as e2:
-                            self.logger.error(f"Failed to encode query after re-initialization: {e2}")
-                            return []
-                    else:
-                        return []
-            else:
-                step_times['query_encoding'] = 0.0  # 캐시에서 가져옴
+                return []
+            step_times['query_encoding'] = time.time() - encode_start
+            if step_times['query_encoding'] < 0.001:
                 self.logger.debug("⏱️  Query encoding: 0.000s (cached)")
+            else:
+                self.logger.debug(f"⏱️  Query encoding: {step_times['query_encoding']:.3f}s")
 
             # 2. FAISS 인덱스 사용 또는 전체 벡터 로드
             search_start = time.time()
@@ -2184,6 +2273,63 @@ class SemanticSearchEngineV2:
             # 외부 인덱스 메타데이터 확인
             if self.use_external_index:
                 self.logger.debug(f"_external_metadata length: {len(self._external_metadata) if hasattr(self, '_external_metadata') and self._external_metadata else 0}")
+            
+            # 배치 메타데이터 조회를 위한 준비 (최적화: 중복 제거 및 필터링)
+            chunk_ids_for_batch = []
+            seen_chunk_ids = set()
+            
+            # 먼저 모든 chunk_id 수집 (중복 제거)
+            for similarity_item in similarities[:k]:
+                if self.use_external_index and len(similarity_item) == 3:
+                    idx, chunk_id, score = similarity_item
+                else:
+                    chunk_id, score = similarity_item
+                
+                if chunk_id not in seen_chunk_ids:
+                    chunk_ids_for_batch.append(chunk_id)
+                    seen_chunk_ids.add(chunk_id)
+            
+            # 배치로 chunk_metadata 조회 (캐싱 적용)
+            batch_chunk_metadata = {}
+            if conn and chunk_ids_for_batch:
+                batch_start = time.time()
+                batch_chunk_metadata = self._batch_load_chunk_metadata(conn, chunk_ids_for_batch)
+                batch_time = time.time() - batch_start
+                self.logger.debug(f"Batch loaded metadata for {len(batch_chunk_metadata)} chunks in {batch_time:.3f}s")
+            
+            # source_items 수집 (source_type, source_id 쌍, 중복 제거)
+            source_items_for_batch = []
+            seen_source_items = set()
+            for chunk_id in chunk_ids_for_batch:
+                if chunk_id in batch_chunk_metadata:
+                    chunk_meta = batch_chunk_metadata[chunk_id]
+                    source_type = chunk_meta.get('source_type')
+                    source_id = chunk_meta.get('source_id')
+                    if source_type and source_id:
+                        # source_id가 문자열인 경우 정수로 변환 시도
+                        if isinstance(source_id, str):
+                            try:
+                                import re
+                                numbers = re.findall(r'\d+', str(source_id))
+                                if numbers:
+                                    source_id = int(numbers[-1])
+                                else:
+                                    continue
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        source_key = (source_type, source_id)
+                        if source_key not in seen_source_items:
+                            source_items_for_batch.append(source_key)
+                            seen_source_items.add(source_key)
+            
+            # 배치로 source_metadata 조회 (캐싱 적용)
+            batch_source_metadata = {}
+            if conn and source_items_for_batch:
+                batch_start = time.time()
+                batch_source_metadata = self._batch_load_source_metadata(conn, source_items_for_batch)
+                batch_time = time.time() - batch_start
+                self.logger.debug(f"Batch loaded source metadata for {len(batch_source_metadata)} source items in {batch_time:.3f}s")
             
             for similarity_item in similarities[:k]:
                 # 외부 인덱스 사용 시 (idx, chunk_id, similarity) 튜플, 일반 인덱스는 (chunk_id, similarity) 튜플
@@ -2421,6 +2567,19 @@ class SemanticSearchEngineV2:
                 
                 source_type = chunk_metadata.get('source_type')
                 source_id = chunk_metadata.get('source_id')
+                # source_id가 문자열인 경우 정수로 변환 시도
+                if source_id and isinstance(source_id, str):
+                    try:
+                        # 문자열에서 숫자 추출 시도 (예: "case_2021도1750" -> 1750)
+                        import re
+                        numbers = re.findall(r'\d+', str(source_id))
+                        if numbers:
+                            source_id = int(numbers[-1])  # 마지막 숫자 사용
+                        else:
+                            # 숫자가 없으면 None으로 설정하여 조회 실패 처리
+                            source_id = None
+                    except (ValueError, TypeError):
+                        source_id = None
                 text = chunk_metadata.get('text', '')
                 chunk_size_cat = chunk_metadata.get('chunk_size_category')
                 chunk_group_id = chunk_metadata.get('chunk_group_id')
@@ -2443,33 +2602,97 @@ class SemanticSearchEngineV2:
                     conn, chunk_id, text, source_type, source_id, full_metadata
                 )
 
-                # 소스별 상세 메타데이터 조회 (외부 인덱스 사용 시 건너뛰기)
-                if not self.use_external_index and conn:
-                    # text_chunks.meta에서 메타데이터 우선 로드
+                # 소스별 상세 메타데이터 조회 (배치 조회 결과 사용)
+                if conn and source_type and source_id:
+                    # 배치로 조회한 chunk_metadata 사용
                     chunk_meta_from_db = None
-                    try:
-                        cursor_meta = conn.execute(
-                            "SELECT meta FROM text_chunks WHERE id = ?",
-                            (chunk_id,)
-                        )
-                        meta_row = cursor_meta.fetchone()
-                        if meta_row and meta_row['meta']:
-                            try:
-                                import json
-                                chunk_meta_from_db = json.loads(meta_row['meta'])
-                            except Exception as e:
-                                self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
-                    except Exception as e:
-                        self.logger.debug(f"Failed to get meta for chunk_id={chunk_id}: {e}")
+                    if chunk_id in batch_chunk_metadata:
+                        chunk_meta_from_db = batch_chunk_metadata[chunk_id].get('meta', {})
                     
-                    # 소스 테이블에서 메타데이터 조회
-                    source_meta = self._get_source_metadata(conn, source_type, source_id)
+                    # source_id가 정수인지 확인하고 변환
+                    source_id_for_query = source_id
+                    if source_id and not isinstance(source_id, int):
+                        try:
+                            if isinstance(source_id, str):
+                                import re
+                                numbers = re.findall(r'\d+', str(source_id))
+                                if numbers:
+                                    source_id_for_query = int(numbers[-1])
+                                else:
+                                    source_id_for_query = None
+                            else:
+                                source_id_for_query = int(source_id)
+                        except (ValueError, TypeError):
+                            source_id_for_query = None
+                    
+                    # 배치로 조회한 source_metadata 사용
+                    source_meta = {}
+                    if source_id_for_query:
+                        source_meta_key = (source_type, source_id_for_query)
+                        if source_meta_key in batch_source_metadata:
+                            source_meta = batch_source_metadata[source_meta_key].copy()
+                        else:
+                            # 배치 조회에 없으면 개별 조회 (폴백)
+                            source_meta = self._get_source_metadata(conn, source_type, source_id_for_query)
                     
                     # text_chunks.meta의 메타데이터를 우선적으로 사용 (소스 테이블 메타데이터와 병합)
                     if chunk_meta_from_db:
                         # chunk_meta_from_db를 우선, source_meta는 보완용으로 사용
                         merged_meta = {**source_meta, **chunk_meta_from_db}
                         source_meta = merged_meta
+                    
+                    # 소스 테이블에서 메타데이터 추가 조회 (누락된 필드 보완)
+                    # 배치 조회 결과가 비어있거나 필수 필드가 누락된 경우에만 재조회
+                    # 배치 조회에서 이미 가져온 경우 재조회 생략 (최적화)
+                    if not source_meta or len(source_meta) == 0:
+                        # 배치 조회에 없었던 경우에만 개별 조회
+                        if source_id_for_query and source_meta_key not in batch_source_metadata:
+                            source_meta_from_table = self._get_source_metadata(conn, source_type, source_id_for_query)
+                            if source_meta_from_table:
+                                source_meta = source_meta_from_table
+                                # 캐시에 저장 (TTL 포함)
+                                self._set_to_cache(source_meta_key, source_meta)
+                    else:
+                        # 필수 필드 확인 및 보완 (배치 조회 결과가 있지만 필수 필드가 누락된 경우)
+                        needs_reload = False
+                        if source_type == "statute_article":
+                            if not source_meta.get("statute_name") or not source_meta.get("article_no"):
+                                needs_reload = True
+                        elif source_type == "case_paragraph":
+                            if not source_meta.get("doc_id") or not source_meta.get("casenames") or not source_meta.get("court"):
+                                needs_reload = True
+                        elif source_type == "decision_paragraph":
+                            if not source_meta.get("org") or not source_meta.get("doc_id"):
+                                needs_reload = True
+                        elif source_type == "interpretation_paragraph":
+                            if not source_meta.get("org") or not source_meta.get("doc_id"):
+                                needs_reload = True
+                        
+                        # 필수 필드가 누락된 경우에만 재조회 (배치 조회 결과가 불완전한 경우)
+                        if needs_reload and source_id_for_query:
+                            source_meta_from_table = self._get_source_metadata(conn, source_type, source_id_for_query)
+                            if source_meta_from_table:
+                                # 누락된 필드만 보완
+                                for key, value in source_meta_from_table.items():
+                                    if key not in source_meta or not source_meta[key]:
+                                        source_meta[key] = value
+                                # 캐시 업데이트 (TTL 포함)
+                                cached_data = self._get_from_cache(source_meta_key)
+                                if cached_data is not None:
+                                    # 기존 캐시 항목 업데이트
+                                    cached_data.update(source_meta)
+                                    self._set_to_cache(source_meta_key, cached_data)
+                                else:
+                                    # 새로 저장
+                                    self._set_to_cache(source_meta_key, source_meta)
+                    
+                    # statute_article의 경우 별칭 필드도 설정
+                    if source_type == "statute_article":
+                        if "statute_name" in source_meta and not source_meta.get("law_name"):
+                            source_meta["law_name"] = source_meta["statute_name"]
+                        if "article_no" in source_meta and not source_meta.get("article_number"):
+                            source_meta["article_number"] = source_meta["article_no"]
+                    
                     # content 필드가 비어있으면 경고 및 복원 시도
                     if not text or len(text.strip()) == 0:
                         self.logger.warning(f"⚠️ [SEMANTIC SEARCH] Empty text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
@@ -2491,47 +2714,11 @@ class SemanticSearchEngineV2:
                             text = restored_text
                             self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
                 else:
-                    # 외부 인덱스 사용 시 메타데이터는 이미 로드됨
-                    source_meta = metadata if self.use_external_index else {}
-                    
-                    # 외부 인덱스 사용 시에도 text_chunks.meta에서 메타데이터 우선 로드
-                    if self.use_external_index and conn:
-                        chunk_meta_from_db = None
-                        try:
-                            cursor_meta = conn.execute(
-                                "SELECT meta FROM text_chunks WHERE id = ?",
-                                (chunk_id,)
-                            )
-                            meta_row = cursor_meta.fetchone()
-                            if meta_row and meta_row['meta']:
-                                try:
-                                    import json
-                                    chunk_meta_from_db = json.loads(meta_row['meta'])
-                                except Exception as e:
-                                    self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
-                        except Exception as e:
-                            self.logger.debug(f"Failed to get meta for chunk_id={chunk_id}: {e}")
-                        
-                        # text_chunks.meta의 메타데이터를 우선적으로 사용
-                        if chunk_meta_from_db:
-                            # chunk_meta_from_db를 우선, 기존 source_meta는 보완용으로 사용
-                            merged_meta = {**source_meta, **chunk_meta_from_db}
-                            source_meta = merged_meta
-                        
-                        # 소스 테이블에서 메타데이터 추가 조회 (누락된 필드 보완)
-                        if source_type and source_id:
-                            source_meta_from_table = self._get_source_metadata(conn, source_type, source_id)
-                            if source_meta_from_table:
-                                # source_meta_from_table로 누락된 필드 보완
-                                for key, value in source_meta_from_table.items():
-                                    if key not in source_meta or not source_meta[key]:
-                                        source_meta[key] = value
-                                # statute_article의 경우 별칭 필드도 설정
-                                if source_type == "statute_article":
-                                    if "statute_name" in source_meta_from_table and not source_meta.get("law_name"):
-                                        source_meta["law_name"] = source_meta_from_table["statute_name"]
-                                    if "article_no" in source_meta_from_table and not source_meta.get("article_number"):
-                                        source_meta["article_number"] = source_meta_from_table["article_no"]
+                    # conn, source_type, source_id가 없는 경우 기본값 설정
+                    if self.use_external_index and metadata:
+                        source_meta = metadata.copy()
+                    else:
+                        source_meta = {}
                 
                 # text가 비어있으면 건너뛰기
                 if not text or len(text.strip()) == 0:
@@ -3040,17 +3227,34 @@ class SemanticSearchEngineV2:
                 required_fields = self._get_required_metadata_fields(source_type)
                 missing_fields = []
                 for field in required_fields:
-                    # 최상위 레벨, metadata, source_meta 모두 확인
-                    field_value = (result.get(field) or 
-                                 result.get('metadata', {}).get(field) or
-                                 result.get('source_meta', {}).get(field) if 'source_meta' in result else None)
+                    # 최상위 레벨, metadata, source_meta 모두 확인 (명시적으로 각각 확인)
+                    field_value = result.get(field)
+                    if not field_value:
+                        metadata_dict = result.get('metadata', {})
+                        if isinstance(metadata_dict, dict):
+                            field_value = metadata_dict.get(field)
+                    if not field_value and 'source_meta' in result:
+                        source_meta_dict = result.get('source_meta', {})
+                        if isinstance(source_meta_dict, dict):
+                            field_value = source_meta_dict.get(field)
+                    
                     # statute_article의 경우 별칭 필드도 확인
                     if not field_value and source_type == 'statute_article':
                         if field == 'law_name':
-                            field_value = result.get('statute_name') or result.get('metadata', {}).get('statute_name')
+                            field_value = result.get('statute_name')
+                            if not field_value:
+                                metadata_dict = result.get('metadata', {})
+                                if isinstance(metadata_dict, dict):
+                                    field_value = metadata_dict.get('statute_name')
                         elif field == 'article_number':
-                            field_value = result.get('article_no') or result.get('metadata', {}).get('article_no')
-                    if not field_value:
+                            field_value = result.get('article_no')
+                            if not field_value:
+                                metadata_dict = result.get('metadata', {})
+                                if isinstance(metadata_dict, dict):
+                                    field_value = metadata_dict.get('article_no')
+                    
+                    # 필드 값이 있는지 확인 (None, 빈 문자열, 빈 리스트 등 제외)
+                    if field_value is None or (isinstance(field_value, str) and len(field_value.strip()) == 0):
                         missing_fields.append(field)
                 
                 if missing_fields:
@@ -4163,6 +4367,180 @@ class SemanticSearchEngineV2:
             return column_name in columns
         except Exception:
             return False
+
+    def _batch_load_chunk_metadata(self, conn: sqlite3.Connection, chunk_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """
+        여러 chunk_id의 text_chunks.meta를 배치로 조회 (캐싱 적용)
+        
+        Args:
+            conn: 데이터베이스 연결
+            chunk_ids: 조회할 chunk_id 리스트
+            
+        Returns:
+            chunk_id -> 메타데이터 딕셔너리
+        """
+        if not chunk_ids:
+            return {}
+        
+        metadata_map = {}
+        uncached_ids = []
+        
+        # 캐시에서 먼저 확인 (TTL 체크 포함)
+        for chunk_id in chunk_ids:
+            cache_key = f"chunk_{chunk_id}"
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                metadata_map[chunk_id] = cached_data.copy()
+                self._metadata_cache_hits += 1
+            else:
+                uncached_ids.append(chunk_id)
+                self._metadata_cache_misses += 1
+        
+        # 캐시에 없는 것만 DB에서 조회
+        if uncached_ids:
+            # 배치 크기 최적화: SQLite의 최대 변수 수 제한 고려 (999개)
+            batch_size = min(500, len(uncached_ids))
+            for i in range(0, len(uncached_ids), batch_size):
+                batch = uncached_ids[i:i + batch_size]
+                try:
+                    placeholders = ','.join(['?'] * len(batch))
+                    cursor = conn.execute(f"""
+                        SELECT id, meta, source_type, source_id
+                        FROM text_chunks
+                        WHERE id IN ({placeholders})
+                    """, batch)
+                    
+                    for row in cursor.fetchall():
+                        chunk_id = row['id']
+                        meta_json = {}
+                        if row['meta']:
+                            try:
+                                import json
+                                meta_json = json.loads(row['meta'])
+                            except Exception as e:
+                                self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
+                        
+                        chunk_meta = {
+                            'meta': meta_json,
+                            'source_type': row['source_type'],
+                            'source_id': row['source_id']
+                        }
+                        metadata_map[chunk_id] = chunk_meta
+                        
+                        # 캐시에 저장 (TTL 포함)
+                        cache_key = f"chunk_{chunk_id}"
+                        self._set_to_cache(cache_key, chunk_meta)
+                except Exception as e:
+                    self.logger.warning(f"Error in batch_load_chunk_metadata: {e}")
+        
+        if self._metadata_cache_hits + self._metadata_cache_misses > 0:
+            hit_rate = self._metadata_cache_hits / (self._metadata_cache_hits + self._metadata_cache_misses) * 100
+            if hit_rate > 0:
+                self.logger.info(f"📊 Metadata cache hit rate: {hit_rate:.1f}% ({self._metadata_cache_hits} hits, {self._metadata_cache_misses} misses)")
+        
+        return metadata_map
+    
+    def _batch_load_source_metadata(self, conn: sqlite3.Connection, source_items: List[Tuple[str, int]]) -> Dict[Tuple[str, int], Dict[str, Any]]:
+        """
+        여러 (source_type, source_id) 쌍의 소스 메타데이터를 배치로 조회 (캐싱 적용)
+        
+        Args:
+            conn: 데이터베이스 연결
+            source_items: (source_type, source_id) 튜플 리스트
+            
+        Returns:
+            (source_type, source_id) -> 메타데이터 딕셔너리
+        """
+        if not source_items:
+            return {}
+        
+        metadata_map = {}
+        uncached_items = []
+        
+        # 캐시에서 먼저 확인 (TTL 체크 포함)
+        for source_type, source_id in source_items:
+            cache_key = (source_type, source_id)
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                metadata_map[cache_key] = cached_data.copy()
+                self._metadata_cache_hits += 1
+            else:
+                uncached_items.append((source_type, source_id))
+                self._metadata_cache_misses += 1
+        
+        # 캐시에 없는 것만 DB에서 조회
+        if not uncached_items:
+            return metadata_map
+        
+        # 타입별로 그룹화
+        by_type = {}
+        for source_type, source_id in uncached_items:
+            if source_type not in by_type:
+                by_type[source_type] = []
+            by_type[source_type].append(source_id)
+        
+        # 타입별로 배치 조회 (배치 크기 최적화)
+        for source_type, source_ids in by_type.items():
+            if not source_ids:
+                continue
+            
+            # 배치 크기 최적화: SQLite의 최대 변수 수 제한 고려 (999개)
+            batch_size = min(500, len(source_ids))
+            for i in range(0, len(source_ids), batch_size):
+                batch = source_ids[i:i + batch_size]
+                try:
+                    placeholders = ','.join(['?'] * len(batch))
+                    
+                    if source_type == "statute_article":
+                        cursor = conn.execute(f"""
+                            SELECT sa.id, sa.article_no, s.name as statute_name, s.abbrv, s.category, s.statute_type
+                            FROM statute_articles sa
+                            JOIN statutes s ON sa.statute_id = s.id
+                            WHERE sa.id IN ({placeholders})
+                        """, batch)
+                    elif source_type == "case_paragraph":
+                        # cases 테이블에서 직접 조회
+                        cursor = conn.execute(f"""
+                            SELECT c.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
+                            FROM cases c
+                            WHERE c.id IN ({placeholders})
+                        """, batch)
+                    elif source_type == "decision_paragraph":
+                        # decisions 테이블에서 직접 조회
+                        cursor = conn.execute(f"""
+                            SELECT d.id, d.org, d.doc_id, d.decision_date, d.result
+                            FROM decisions d
+                            WHERE d.id IN ({placeholders})
+                        """, batch)
+                    elif source_type == "interpretation_paragraph":
+                        cursor = conn.execute(f"""
+                            SELECT ip.id, i.org, i.doc_id, i.title, i.response_date
+                            FROM interpretation_paragraphs ip
+                            JOIN interpretations i ON ip.interpretation_id = i.id
+                            WHERE ip.id IN ({placeholders})
+                        """, batch)
+                    else:
+                        continue
+                    
+                    for row in cursor.fetchall():
+                        source_id = row['id']
+                        metadata = dict(row)
+                        # statute_article의 경우 별칭 추가
+                        if source_type == "statute_article":
+                            if "statute_name" in metadata:
+                                metadata["law_name"] = metadata["statute_name"]
+                            if "article_no" in metadata:
+                                metadata["article_number"] = metadata["article_no"]
+                        
+                        cache_key = (source_type, source_id)
+                        metadata_map[cache_key] = metadata
+                        
+                        # 캐시에 저장 (TTL 포함)
+                        self._set_to_cache(cache_key, metadata)
+                except Exception as e:
+                    self.logger.warning(f"Error in batch_load_source_metadata for {source_type}: {e}")
+        
+        return metadata_map
 
     def _get_source_metadata(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> Dict[str, Any]:
         """

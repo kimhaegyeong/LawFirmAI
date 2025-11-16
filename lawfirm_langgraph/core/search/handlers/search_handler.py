@@ -20,6 +20,42 @@ class SearchHandler:
 
     의미적 검색, 키워드 검색, 결과 병합 및 재정렬을 처리합니다.
     """
+    
+    def _expand_synonyms_simple(self, query: str, keywords: List[str]) -> List[str]:
+        """
+        간단한 법률 용어 동의어 확장
+        
+        Args:
+            query: 원본 쿼리
+            keywords: 추출된 키워드
+        
+        Returns:
+            동의어 리스트
+        """
+        synonyms = []
+        
+        # 법률 용어 동의어 사전 (간단한 버전)
+        legal_synonyms = {
+            "보증금": ["임대보증금", "전세금", "보증금액"],
+            "반환": ["반납", "지급", "환불", "반환금"],
+            "임대차": ["임대", "임차", "전세", "월세"],
+            "계약": ["약정", "계약서", "계약관계"],
+            "해지": ["해제", "종료", "만료", "해약"],
+            "손해": ["손실", "피해", "손해액"],
+            "배상": ["보상", "배상금", "손해배상"],
+            "이혼": ["이혼소송", "이혼절차"],
+            "재산": ["재산분할", "재산권", "재산분할청구"],
+            "상속": ["상속분", "상속재산", "상속인"],
+        }
+        
+        # 키워드와 쿼리에서 동의어 찾기
+        all_terms = keywords + query.split()
+        for term in all_terms:
+            if term in legal_synonyms:
+                synonyms.extend(legal_synonyms[term])
+        
+        # 중복 제거 및 최대 5개로 제한
+        return list(set(synonyms))[:5]
 
     def __init__(
         self,
@@ -92,11 +128,24 @@ class SearchHandler:
             # 원래 k의 2배로 검색하여 판례/결정례 포함 확률 증가
             expanded_k = search_k * 2
             
-            # 검색 품질 강화: similarity_threshold를 0.4로 낮춰 더 많은 결과 확보
-            # (판례/결정례의 유사도가 낮을 수 있으므로)
+            # 검색 품질 강화: similarity_threshold 조정
+            # IndexIVFPQ 인덱스 사용 시 더 낮은 threshold 사용 (압축 인덱스이므로)
             config_threshold = getattr(self.config, 'similarity_threshold', 0.3)
-            similarity_threshold = max(0.4, config_threshold)  # 0.5 -> 0.4로 조정
-
+            
+            # IndexIVFPQ 인덱스 사용 여부 확인
+            is_indexivfpq = False
+            if self.semantic_search_engine and hasattr(self.semantic_search_engine, 'index') and self.semantic_search_engine.index:
+                index_type = type(self.semantic_search_engine.index).__name__
+                if 'IndexIVFPQ' in index_type:
+                    is_indexivfpq = True
+                    self.logger.info(f"🔍 [SEMANTIC SEARCH] IndexIVFPQ detected, using lower similarity_threshold")
+            
+            # IndexIVFPQ 인덱스 사용 시 더 낮은 threshold (0.15로 낮춤, 0.85 목표 달성)
+            if is_indexivfpq:
+                similarity_threshold = max(0.15, config_threshold)  # IndexIVFPQ는 0.15부터 시작 (더 많은 결과 확보)
+            else:
+                similarity_threshold = max(0.4, config_threshold)  # 일반 인덱스는 0.4
+            
             # 검색 쿼리에 질문의 핵심 키워드를 명시적으로 포함
             enhanced_query = query
             if extracted_keywords and len(extracted_keywords) > 0:
@@ -115,7 +164,14 @@ class SearchHandler:
                     query_keywords = set(query.split())
                     new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
                     if new_keywords:
-                        enhanced_query = f"{query} {' '.join(new_keywords[:3])}"
+                        # 개선: 키워드 3개 → 5개로 증가
+                        enhanced_query = f"{query} {' '.join(new_keywords[:5])}"
+                        
+                        # 동의어 확장 추가 (간단한 법률 용어 동의어)
+                        synonyms = self._expand_synonyms_simple(query, new_keywords)
+                        if synonyms:
+                            enhanced_query = f"{enhanced_query} {' '.join(synonyms[:3])}"
+                        
                         self.logger.info(f"🔍 [SEMANTIC SEARCH] Enhanced query with keywords: '{enhanced_query[:100]}...'")
             
             # 기본 검색 수행 (향상된 쿼리 사용)

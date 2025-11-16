@@ -510,12 +510,24 @@ class SearchHandler:
             # Step 4: 다양성 필터 적용
             filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
 
-            # Step 5: MergedResult를 Dict 형태로 변환
+            # Step 5: MergedResult를 Dict 형태로 변환 및 관련도 필터링
+            min_relevance_score = 0.80
             documents = []
             for result in filtered:
+                relevance_score = result.score if hasattr(result, 'score') else 0.0
+                
+                # 관련도 0.80 이상인 문서만 포함
+                if relevance_score < min_relevance_score:
+                    self.logger.debug(
+                        f"[SEARCH HANDLER] Document filtered out due to low relevance: "
+                        f"score={relevance_score:.3f} < {min_relevance_score}, "
+                        f"source={result.source if hasattr(result, 'source') else 'unknown'}"
+                    )
+                    continue
+                
                 doc = {
                     "content": result.text,
-                    "relevance_score": result.score,
+                    "relevance_score": relevance_score,
                     "source": result.source,
                     "id": f"{result.source}_{hash(result.text)}",
                     "type": "merged"
@@ -526,6 +538,18 @@ class SearchHandler:
 
                 documents.append(doc)
 
+            if len(documents) < len(filtered):
+                self.logger.info(
+                    f"🔍 [SEARCH HANDLER] Relevance filtering (>= {min_relevance_score}): "
+                    f"{len(filtered)} → {len(documents)} documents"
+                )
+            
+            if not documents and filtered:
+                self.logger.warning(
+                    f"⚠️ [SEARCH HANDLER] All {len(filtered)} documents were filtered out "
+                    f"(relevance < {min_relevance_score}). Consider lowering the threshold."
+                )
+
             self.logger.info(
                 f"Rerank applied: {len(semantic_results)} semantic + {len(keyword_results)} keyword → {len(documents)} final"
             )
@@ -533,11 +557,17 @@ class SearchHandler:
 
         except Exception as e:
             self.logger.warning(f"Rerank failed, using simple merge: {e}")
-            # 폴백: 간단한 병합 및 정렬
+            # 폴백: 간단한 병합 및 정렬 (관련도 필터링 포함)
+            min_relevance_score = 0.80
             seen_ids = set()
             documents = []
 
             for doc in semantic_results:
+                # 관련도 필터링
+                relevance_score = doc.get('relevance_score', doc.get('similarity', 0.0))
+                if relevance_score < min_relevance_score:
+                    continue
+                
                 doc_id = doc.get('id')
                 if doc_id is not None:
                     try:
@@ -551,6 +581,11 @@ class SearchHandler:
                             seen_ids.add(doc_id_str)
 
             for doc in keyword_results:
+                # 관련도 필터링
+                relevance_score = doc.get('relevance_score', doc.get('similarity', 0.0))
+                if relevance_score < min_relevance_score:
+                    continue
+                
                 doc_id = doc.get('id')
                 if doc_id is not None:
                     try:
