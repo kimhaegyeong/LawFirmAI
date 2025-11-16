@@ -47,6 +47,8 @@ class UnifiedSourceFormatter:
             return self._format_decision_paragraph(metadata)
         elif source_type == "interpretation_paragraph":
             return self._format_interpretation_paragraph(metadata)
+        elif source_type == "regulation_paragraph":
+            return self._format_regulation_paragraph(metadata)
         else:
             return SourceInfo(name="Unknown", type=source_type)
     
@@ -154,6 +156,35 @@ class UnifiedSourceFormatter:
                 "title": title,
                 "doc_id": doc_id,
                 "response_date": response_date
+            }
+        )
+    
+    def _format_regulation_paragraph(self, metadata: Dict[str, Any]) -> SourceInfo:
+        """기타 참고자료 포맷팅"""
+        title = metadata.get("title", "") or metadata.get("name", "")
+        doc_id = metadata.get("doc_id", "") or metadata.get("id", "")
+        content = metadata.get("content", "") or metadata.get("text", "")
+        
+        if title and title.strip():
+            name = title.strip()
+        elif doc_id and doc_id.strip():
+            name = doc_id.strip()
+        elif content and len(content) > 0:
+            name = content[:50] + "..." if len(content) > 50 else content
+        else:
+            name = "기타 참고자료"
+        
+        url = metadata.get("url", "") or metadata.get("detail_url", "")
+        
+        return SourceInfo(
+            name=name,
+            type="regulation_paragraph",
+            url=url,
+            metadata={
+                "title": title,
+                "doc_id": doc_id,
+                "content": content,
+                **{k: v for k, v in metadata.items() if k not in ["title", "doc_id", "id", "content", "text", "url", "detail_url"]}
             }
         )
     

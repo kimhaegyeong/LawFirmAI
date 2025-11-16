@@ -864,24 +864,56 @@ class UnifiedPromptManager:
                 reverse=True
             )
 
-            # 최고 관련도 점수를 기준으로 동적 임계값 계산 (최고 점수의 70% 이상)
+            # 개선 3: 동적 관련성 임계값 적용 강화
             if sorted_all_docs and len(sorted_all_docs) > 0:
                 max_score = sorted_all_docs[0].get("relevance_score", 0.0) if isinstance(sorted_all_docs[0], dict) else 0.0
-                low_relevance_threshold = max(0.5, max_score * 0.7) if max_score > 0 else 0.5
-
-                filtered_documents = [
-                    d for d in sorted_all_docs
-                    if isinstance(d, dict) and d.get("relevance_score", 0.0) >= low_relevance_threshold
-                ]
+                
+                # 동적 임계값 계산: 최고 점수의 70% 이상이면서 절대 임계값 0.60 이상
+                dynamic_threshold = max_score * 0.7 if max_score > 0 else 0.5
+                absolute_threshold = 0.60
+                low_relevance_threshold = max(dynamic_threshold, absolute_threshold)
+                
+                # 개선 2: 프롬프트 생성 단계에서 문서 재필터링 (질문과의 관련성 재검증)
+                query_lower = query.lower() if query else ""
+                filtered_documents = []
+                
+                for d in sorted_all_docs:
+                    if not isinstance(d, dict):
+                        continue
+                    
+                    relevance_score = d.get("relevance_score", 0.0)
+                    
+                    # 동적 임계값 필터링
+                    if relevance_score < low_relevance_threshold:
+                        continue
+                    
+                    # 개선 2: 질문과의 관련성 재검증
+                    content = (d.get("content") or d.get("text") or "").lower()
+                    source = (d.get("source") or "").lower()
+                    
+                    # 질문의 핵심 키워드가 문서에 포함되어 있는지 확인
+                    has_relevant_content = False
+                    if query_lower:
+                        query_words = [w for w in query_lower.split() if len(w) > 2]
+                        for word in query_words[:5]:  # 상위 5개 단어만 확인
+                            if word in content or word in source:
+                                has_relevant_content = True
+                                break
+                    
+                    # 관련도가 높으면(0.70 이상) 키워드 체크 생략
+                    if relevance_score >= 0.70 or has_relevant_content:
+                        filtered_documents.append(d)
 
                 if len(filtered_documents) < len(sorted_all_docs):
                     logger.info(
                         f"🔍 [DOCUMENT FILTERING] Filtered {len(sorted_all_docs) - len(filtered_documents)} documents "
-                        f"with relevance < {low_relevance_threshold:.3f} "
+                        f"with relevance < {low_relevance_threshold:.3f} or no query relevance "
                         f"(max_score: {max_score:.3f}, kept: {len(filtered_documents)})"
                     )
 
-                documents = filtered_documents if filtered_documents else sorted_all_docs[:5]  # 최소 5개는 보장
+                # 개선 8: 프롬프트에 포함할 문서 수 제한 (5-7개)
+                max_docs_for_prompt = 7
+                documents = filtered_documents[:max_docs_for_prompt] if filtered_documents else sorted_all_docs[:max_docs_for_prompt]
             else:
                 documents = sorted_all_docs[:5] if sorted_all_docs else []
 
@@ -1187,13 +1219,14 @@ class UnifiedPromptManager:
 - 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
 - **⚠️ 각 인용에 반드시 명확한 출처 표기 (필수)**:
 {examples_text}
-- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
+- **🚨 CRITICAL: 답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 3-5개 이상 명시적으로 인용하세요** (2개는 최소 기준이며, 3-5개 이상 권장)
 - **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
-- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요 (예: "민법 제750조에 따르면...")
+- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 2개 이상의 법령 조문을 반드시 인용하세요 (예: "민법 제750조에 따르면...", "형법 제250조에 따르면...")
+- **판례 인용 필수**: 검색 결과에 판례가 있으면 최소 1-2개 이상의 판례를 반드시 인용하세요
 - 판례 인용 시 구체적인 판례명과 사건번호를 포함하세요 (예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...")
 - 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
-- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
-- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
+- **⚠️ 인용 부족 시 답변 품질이 매우 낮게 평가되며 재생성됩니다**: 법령 조문 인용이 없거나 전체 인용이 2개 미만이면 답변이 거부됩니다
+- **⚠️ 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다**: 각 주요 주장마다 최소 1개 이상의 인용을 포함하세요
 """
             else:
                 # doc_list가 비어있을 때만 기본 예시 사용
