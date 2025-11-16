@@ -1131,9 +1131,26 @@ class EnhancedLegalQuestionWorkflow(
                     f"(retry count: {retry_counts['generation']}/{RetryConfig.MAX_GENERATION_RETRIES})"
                 )
                 self.retry_manager.increment_retry_count(state, "generation")
-                state = self.generate_answer_enhanced(state)
-                quality_check_passed = self._validate_answer_quality_internal(state)
-                self._set_state_value(state, "needs_regeneration", False)
+                try:
+                    state = self.generate_answer_enhanced(state)
+                    quality_check_passed = self._validate_answer_quality_internal(state)
+                    self._set_state_value(state, "needs_regeneration", False)
+                except asyncio.CancelledError:
+                    self.logger.warning("⚠️ [REGENERATION] Answer generation was cancelled. Using existing answer.")
+                    existing_answer = self._get_state_value(state, "answer", "")
+                    if existing_answer and len(str(existing_answer).strip()) > 10:
+                        quality_check_passed = True
+                        self._set_state_value(state, "needs_regeneration", False)
+                    else:
+                        quality_check_passed = False
+                except Exception as regen_error:
+                    self.logger.error(f"⚠️ [REGENERATION] Error during regeneration: {regen_error}", exc_info=True)
+                    existing_answer = self._get_state_value(state, "answer", "")
+                    if existing_answer and len(str(existing_answer).strip()) > 10:
+                        quality_check_passed = True
+                        self._set_state_value(state, "needs_regeneration", False)
+                    else:
+                        quality_check_passed = False
         
         return quality_check_passed
     
@@ -1166,8 +1183,17 @@ class EnhancedLegalQuestionWorkflow(
             if self._detect_format_errors(normalized_answer):
                 self.logger.warning("🔄 [AUTO RETRY] Format errors persist after normalization. Retrying generation.")
                 self.retry_manager.increment_retry_count(state, "generation")
-                state = self.generate_answer_enhanced(state)
-                quality_check_passed = self._validate_answer_quality_internal(state)
+                try:
+                    state = self.generate_answer_enhanced(state)
+                    quality_check_passed = self._validate_answer_quality_internal(state)
+                except asyncio.CancelledError:
+                    self.logger.warning("⚠️ [FORMAT ERRORS] Answer generation was cancelled. Using normalized answer.")
+                    self._set_answer_safely(state, normalized_answer)
+                    quality_check_passed = True
+                except Exception as format_regen_error:
+                    self.logger.error(f"⚠️ [FORMAT ERRORS] Error during regeneration: {format_regen_error}", exc_info=True)
+                    self._set_answer_safely(state, normalized_answer)
+                    quality_check_passed = True
         
         return quality_check_passed
     
@@ -1184,6 +1210,16 @@ class EnhancedLegalQuestionWorkflow(
                 f"✅ [FINAL NODE] 최종 검증 및 포맷팅 완료 ({elapsed:.2f}s), "
                 f"confidence: {confidence:.3f}"
             )
+        except asyncio.CancelledError:
+            self.logger.warning("⚠️ [FORMAT AND FINALIZE] Formatting was cancelled. Using basic format.")
+            existing_answer = self._get_state_value(state, "answer", "")
+            if existing_answer and len(str(existing_answer).strip()) > 10:
+                state["answer"] = self._normalize_answer(str(existing_answer))
+                self._prepare_final_response_minimal(state)
+            else:
+                state["answer"] = self._normalize_answer(state.get("answer", ""))
+                self._prepare_final_response_minimal(state)
+            self._update_processing_time(state, formatting_start_time)
         except Exception as format_error:
             self.logger.warning(f"Formatting failed: {format_error}, using basic format")
             state["answer"] = self._normalize_answer(state.get("answer", ""))
@@ -1193,13 +1229,17 @@ class EnhancedLegalQuestionWorkflow(
     def _handle_final_node_error(self, state: LegalWorkflowState, error: Exception) -> None:
         """최종 노드 오류 처리"""
         error_msg = str(error)
-        self.logger.error(f"⚠️ [FORMAT_ANSWER] Exception occurred: {error_msg}", exc_info=True)
-        self._handle_error(state, error_msg, "최종 검증 및 포맷팅 중 오류 발생")
+        
+        if isinstance(error, asyncio.CancelledError):
+            self.logger.warning("⚠️ [FORMAT_ANSWER] Operation was cancelled. Preserving existing answer.")
+        else:
+            self.logger.error(f"⚠️ [FORMAT_ANSWER] Exception occurred: {error_msg}", exc_info=True)
+            self._handle_error(state, error_msg, "최종 검증 및 포맷팅 중 오류 발생")
         
         if error_msg == 'control' or 'control' in error_msg.lower():
             self.logger.warning(f"⚠️ [FORMAT_ANSWER] 'control' error detected. Preserving existing answer if available.")
         
-        existing_answer = state.get("answer", "")
+        existing_answer = self._get_state_value(state, "answer", "")
         if isinstance(existing_answer, dict):
             existing_answer = existing_answer.get("text", "") or existing_answer.get("content", "") or str(existing_answer)
         elif not isinstance(existing_answer, str):
@@ -1207,10 +1247,10 @@ class EnhancedLegalQuestionWorkflow(
         
         if existing_answer and len(existing_answer.strip()) > 10:
             self._set_answer_safely(state, existing_answer)
-            self.logger.info(f"⚠️ [FORMAT_ANSWER] Preserved existing answer: length={len(existing_answer)}")
+            self.logger.info(f"✅ [FORMAT_ANSWER] Preserved existing answer: length={len(existing_answer)}")
         else:
-            query = state.get("query", "")
-            retrieved_docs = state.get("retrieved_docs", [])
+            query = self._get_state_value(state, "query", "")
+            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
             if retrieved_docs and len(retrieved_docs) > 0:
                 minimal_answer = f"질문 '{query}'에 대한 답변을 준비했습니다. 검색된 문서 {len(retrieved_docs)}개를 참고하여 답변을 생성했습니다."
             else:
@@ -1293,6 +1333,14 @@ class EnhancedLegalQuestionWorkflow(
 
             self._update_processing_time(state, overall_start_time)
 
+        except asyncio.CancelledError:
+            self.logger.warning("⚠️ [FINAL NODE] Operation was cancelled. Preserving existing answer.")
+            existing_answer = self._get_state_value(state, "answer", "")
+            if existing_answer and len(str(existing_answer).strip()) > 10:
+                self._set_answer_safely(state, existing_answer)
+                self.logger.info(f"✅ [FINAL NODE] Preserved existing answer after cancellation: length={len(str(existing_answer))}")
+            else:
+                self._handle_final_node_error(state, asyncio.CancelledError("Operation was cancelled"))
         except Exception as e:
             self._handle_final_node_error(state, e)
 
@@ -3124,9 +3172,11 @@ class EnhancedLegalQuestionWorkflow(
                         elif "법" in cit_text and "조" in cit_text and cit_text not in extracted_laws:
                             extracted_laws.append(cit_text)
         
-        # 필요한 Citation 수 확인 (개선: 더 많은 Citation 추가)
-        required_laws = min(4, len(extracted_laws))  # 3 -> 4로 증가
-        required_precedents = min(3, len(extracted_precedents))  # 2 -> 3으로 증가
+        # 개선: 더 많은 Citation 추가 (최소 3-5개 목표)
+        # retrieved_docs 개수를 고려하여 동적으로 조정
+        target_citation_count = max(3, min(5, len(retrieved_docs) if retrieved_docs else 3))
+        required_laws = min(max(2, target_citation_count - 1), len(extracted_laws))  # 최소 2개, 최대 4개
+        required_precedents = min(max(1, target_citation_count - 2), len(extracted_precedents))  # 최소 1개, 최대 3개
         
         enhanced_answer = answer
         
@@ -3240,8 +3290,143 @@ class EnhancedLegalQuestionWorkflow(
         return {}
 
     def _call_llm_with_retry(self, prompt: str, max_retries: int = WorkflowConstants.MAX_RETRIES) -> str:
-        """AnswerGenerator.call_llm_with_retry 래퍼"""
-        return self.answer_generator.call_llm_with_retry(prompt, max_retries)
+        """LLM 호출 (재시도 로직 포함)"""
+        if hasattr(self, 'answer_generator') and self.answer_generator and hasattr(self.answer_generator, 'call_llm_with_retry'):
+            return self.answer_generator.call_llm_with_retry(prompt, max_retries)
+        
+        # Fallback: 직접 LLM 호출
+        if not hasattr(self, 'llm') or not self.llm:
+            self.logger.error("LLM not available for multi-query generation")
+            raise RuntimeError("LLM not available")
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.invoke(prompt)
+                from core.agents.workflow_utils import WorkflowUtils
+                result = WorkflowUtils.extract_response_content(response)
+                return result
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    self.logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}, retrying...")
+                    time.sleep(1)
+                else:
+                    self.logger.error(f"LLM call failed after {max_retries} attempts: {e}")
+                    raise
+    
+    def _generate_multi_queries_with_llm(
+        self,
+        query: str,
+        query_type: str,
+        max_queries: int = 3,
+        use_cache: bool = True
+    ) -> List[str]:
+        """
+        LLM을 사용하여 사용자 질문을 여러 개의 검색용 질문으로 재작성 (Multi-Query Retrieval)
+        
+        Args:
+            query: 원본 사용자 질문
+            query_type: 질문 유형 (statute, case, decision, interpretation 등)
+            max_queries: 생성할 최대 질문 수 (원본 포함)
+            use_cache: 캐싱 사용 여부
+        
+        Returns:
+            재작성된 검색용 질문 리스트 (원본 포함)
+        """
+        if not query or not query.strip():
+            return [query] if query else []
+        
+        # 간단한 메모리 캐시 사용 (클래스 변수로 관리)
+        if not hasattr(self.__class__, '_multi_query_cache'):
+            self.__class__._multi_query_cache = {}
+        
+        # 캐시 키 생성
+        cache_key = f"multi_query:{query}:{query_type}:{max_queries}"
+        
+        # 캐시 확인
+        if use_cache:
+            cached = self.__class__._multi_query_cache.get(cache_key)
+            if cached:
+                self.logger.info(f"✅ [MULTI-QUERY] Cache hit for query: '{query[:50]}...'")
+                print(f"[MULTI-QUERY] Cache hit for query: '{query[:50]}...'", flush=True, file=sys.stdout)
+                return cached
+        
+        try:
+            print(f"[MULTI-QUERY] Calling LLM to generate query variations...", flush=True, file=sys.stdout)
+            self.logger.info(f"🔍 [MULTI-QUERY] Calling LLM to generate query variations for: '{query[:50]}...'")
+            
+            # 질문 유형에 따른 프롬프트 조정
+            query_type_description = {
+                "statute": "법령 조문",
+                "case": "판례",
+                "decision": "판결",
+                "interpretation": "법률 해석",
+                "general": "일반 법률"
+            }.get(query_type, "법률")
+            
+            prompt = f"""다음 법률 질문을 검색에 최적화된 {max_queries - 1}개의 서로 다른 질문으로 재작성해주세요.
+각 질문은 원본 질문의 핵심 의도를 유지하면서, 서로 다른 관점이나 표현으로 작성되어야 합니다.
+
+원본 질문: {query}
+질문 유형: {query_type_description}
+
+요구사항:
+1. 각 질문은 독립적으로 검색 가능해야 함
+2. 법률 용어와 전문 표현을 포함
+3. 구체적이고 명확한 질문으로 작성
+4. 중복을 최소화
+5. 각 질문은 한 줄로 작성
+
+재작성된 질문들 (각 줄에 하나씩, 번호 없이):"""
+
+            response = self._call_llm_with_retry(prompt, max_retries=2)
+            print(f"[MULTI-QUERY] LLM response received: {len(response)} chars", flush=True, file=sys.stdout)
+            self.logger.debug(f"🔍 [MULTI-QUERY] LLM response: {response[:200]}...")
+            
+            # 응답에서 질문 추출
+            queries = []
+            for line in response.split('\n'):
+                line = line.strip()
+                # 번호나 불필요한 문자 제거
+                if line:
+                    # 번호 패턴 제거 (1., 2., - 등)
+                    line = line.lstrip('0123456789.-) ')
+                    if line and not line.startswith('#') and len(line) > 5:
+                        queries.append(line)
+            
+            # 원본 질문을 첫 번째로 포함
+            result_queries = [query] + queries[:max_queries - 1]
+            result_queries = result_queries[:max_queries]
+            
+            # 최소 1개는 보장 (원본)
+            if not result_queries:
+                result_queries = [query]
+            
+            # 캐시 저장 (최대 100개까지만 저장)
+            if use_cache:
+                if len(self.__class__._multi_query_cache) >= 100:
+                    # 가장 오래된 항목 제거 (FIFO)
+                    oldest_key = next(iter(self.__class__._multi_query_cache))
+                    del self.__class__._multi_query_cache[oldest_key]
+                self.__class__._multi_query_cache[cache_key] = result_queries
+            
+            self.logger.info(
+                f"✅ [MULTI-QUERY] Generated {len(result_queries)} queries for: '{query[:50]}...' "
+                f"(original + {len(result_queries) - 1} variations)"
+            )
+            print(
+                f"[MULTI-QUERY] Generated {len(result_queries)} queries: "
+                f"{[q[:30] + '...' if len(q) > 30 else q for q in result_queries]}",
+                flush=True, file=sys.stdout
+            )
+            
+            return result_queries
+            
+        except Exception as e:
+            self.logger.warning(
+                f"⚠️ [MULTI-QUERY] LLM 기반 질문 재작성 실패: {e}, 원본 질문 사용"
+            )
+            print(f"[MULTI-QUERY] Error: {e}, using original query", flush=True, file=sys.stdout)
+            return [query]
 
     def _generate_answer_with_chain(
         self,
@@ -3871,6 +4056,9 @@ class EnhancedLegalQuestionWorkflow(
         query: str
     ) -> Dict[str, Any]:
         """최적화된 쿼리 검증 및 수정 (중복 코드 제거)"""
+        # Multi-Query 보존
+        multi_queries_backup = optimized_queries.get("multi_queries", None)
+        
         semantic_query_created = optimized_queries.get("semantic_query", "")
         if not semantic_query_created or not str(semantic_query_created).strip():
             self.logger.warning(f"semantic_query is empty, using base query: '{query[:50]}...'")
@@ -3884,6 +4072,10 @@ class EnhancedLegalQuestionWorkflow(
             optimized_queries["keyword_queries"] = [query]
             keyword_queries_created = [query]
             self._set_state_value(state, "optimized_queries", optimized_queries)
+        
+        # Multi-Query 복원
+        if multi_queries_backup:
+            optimized_queries["multi_queries"] = multi_queries_backup
         
         return {
             "optimized_queries": optimized_queries,
@@ -3975,6 +4167,42 @@ class EnhancedLegalQuestionWorkflow(
                 legal_field=legal_field,
                 is_retry=is_retry
             )
+            
+            # Multi-Query Retrieval 적용 (LLM 기반 질문 재작성)
+            # 캐시에서 가져온 경우에도 multi_queries는 매번 새로 생성 (캐시 무시)
+            multi_queries = None
+            print(f"[MULTI-QUERY] Starting multi-query generation for: '{search_query[:50]}...'", flush=True, file=sys.stdout)
+            self.logger.info(f"🔍 [MULTI-QUERY] Starting multi-query generation for: '{search_query[:50]}...'")
+            try:
+                multi_queries = self._generate_multi_queries_with_llm(
+                    query=search_query,
+                    query_type=query_type_str,
+                    max_queries=3,
+                    use_cache=True
+                )
+                print(f"[MULTI-QUERY] Generated {len(multi_queries) if multi_queries else 0} queries", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Generated {len(multi_queries) if multi_queries else 0} queries")
+                
+                if multi_queries and len(multi_queries) > 1:
+                    optimized_queries["multi_queries"] = multi_queries
+                    # 첫 번째 재작성된 질문을 semantic_query로 사용 (원본이 첫 번째)
+                    if len(multi_queries) > 1:
+                        optimized_queries["semantic_query"] = multi_queries[0]
+                    print(
+                        f"[MULTI-QUERY] Using {len(multi_queries)} queries: "
+                        f"{[q[:30] + '...' if len(q) > 30 else q for q in multi_queries]}",
+                        flush=True, file=sys.stdout
+                    )
+                    self.logger.info(
+                        f"🔍 [MULTI-QUERY] Generated {len(multi_queries)} queries: "
+                        f"{[q[:30] + '...' if len(q) > 30 else q for q in multi_queries]}"
+                    )
+                else:
+                    print(f"[MULTI-QUERY] Only {len(multi_queries) if multi_queries else 0} query(s), using original", flush=True, file=sys.stdout)
+                    self.logger.warning(f"⚠️ [MULTI-QUERY] Only {len(multi_queries) if multi_queries else 0} query(s), using original")
+            except Exception as e:
+                print(f"[MULTI-QUERY] Error: {e}", flush=True, file=sys.stdout)
+                self.logger.warning(f"⚠️ [MULTI-QUERY] Error generating multi-queries: {e}, using original query", exc_info=True)
 
             if is_retry:
                 quality_feedback = self.answer_generator.get_quality_feedback_for_retry(state)
@@ -4006,7 +4234,25 @@ class EnhancedLegalQuestionWorkflow(
             optimized_queries = validated_queries["optimized_queries"]
             semantic_query_created = validated_queries["semantic_query_created"]
             keyword_queries_created = validated_queries["keyword_queries_created"]
-
+            
+            # Multi-Query가 검증 과정에서 손실되지 않도록 보장 (항상 추가)
+            if multi_queries and len(multi_queries) > 1:
+                optimized_queries["multi_queries"] = multi_queries
+                print(f"[MULTI-QUERY] Added multi_queries to optimized_queries after validation: {len(multi_queries)} queries", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Added multi_queries to optimized_queries after validation: {len(multi_queries)} queries")
+            
+            # 검증 후 최종 optimized_queries를 state에 저장
+            print(f"[MULTI-QUERY] Saving optimized_queries to state (keys: {list(optimized_queries.keys())}, has_multi_queries: {'multi_queries' in optimized_queries})", flush=True, file=sys.stdout)
+            self._set_state_value(state, "optimized_queries", optimized_queries)
+            
+            # 직접 state에 저장 (이중 보장)
+            if multi_queries and len(multi_queries) > 1:
+                if "optimized_queries" not in state:
+                    state["optimized_queries"] = {}
+                if not isinstance(state["optimized_queries"], dict):
+                    state["optimized_queries"] = {}
+                state["optimized_queries"]["multi_queries"] = multi_queries
+                print(f"[MULTI-QUERY] Directly saved multi_queries to state['optimized_queries']", flush=True, file=sys.stdout)
             self._set_state_value(state, "search_query", semantic_query_created)
 
             # 캐시 확인 (재시도 시에는 캐시 우회)
@@ -7265,17 +7511,40 @@ class EnhancedLegalQuestionWorkflow(
         retrieved_docs: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Citation 검증 및 보강"""
-        citation_coverage = 0.0
-        citation_count = 0
+        # 먼저 validation_result를 가져와서 실제 citation_coverage 확인
+        validation_result = self.answer_generator.validate_answer_uses_context(
+            answer=normalized_response,
+            context=context_dict,
+            query=query,
+            retrieved_docs=retrieved_docs
+        )
         
-        if retrieved_docs and normalized_response:
-            citation_count = len(LAW_PATTERN.findall(normalized_response)) + len(PRECEDENT_PATTERN.findall(normalized_response))
-            citation_coverage = min(1.0, citation_count / max(1, len(retrieved_docs) * 0.3))
+        citation_coverage = validation_result.get("citation_coverage", 0.0)
+        citation_count = validation_result.get("citation_count", 0)
         
-        if citation_coverage < 0.3 and retrieved_docs:
+        # 로그 출력 강화
+        print(
+            f"🔍 [CITATION VALIDATION] citation_coverage={citation_coverage:.2f}, "
+            f"citation_count={citation_count}, retrieved_docs={len(retrieved_docs) if retrieved_docs else 0}",
+            flush=True, file=sys.stdout
+        )
+        self.logger.info(
+            f"🔍 [CITATION VALIDATION] citation_coverage={citation_coverage:.2f}, "
+            f"citation_count={citation_count}, retrieved_docs={len(retrieved_docs) if retrieved_docs else 0}"
+        )
+        
+        # 개선: citation_coverage 임계값을 0.5로 낮춰서 더 적극적으로 보강
+        if citation_coverage < 0.5 and retrieved_docs:
+            print(
+                f"🔧 [CITATION ENHANCEMENT] Triggering enhancement: "
+                f"citation_coverage={citation_coverage:.2f} < 0.5 (target: >= 0.5), "
+                f"citation_count={citation_count}, retrieved_docs={len(retrieved_docs)}",
+                flush=True, file=sys.stdout
+            )
             self.logger.info(
                 f"🔧 [CITATION ENHANCEMENT] Triggering enhancement: "
-                f"citation_coverage={citation_coverage:.2f} < 0.3"
+                f"citation_coverage={citation_coverage:.2f} < 0.5 (target: >= 0.5), "
+                f"citation_count={citation_count}, retrieved_docs={len(retrieved_docs)}"
             )
             legal_references = context_dict.get("legal_references", []) if isinstance(context_dict, dict) else []
             citations = context_dict.get("citations", []) if isinstance(context_dict, dict) else []
@@ -7290,24 +7559,16 @@ class EnhancedLegalQuestionWorkflow(
             if enhanced_answer != normalized_response:
                 normalized_response = enhanced_answer
                 self._set_answer_safely(state, normalized_response)
-            
-            validation_result = self.answer_generator.validate_answer_uses_context(
-                answer=normalized_response,
-                context=context_dict,
-                query=query,
-                retrieved_docs=retrieved_docs
-            )
-            citation_coverage = validation_result.get("citation_coverage", citation_coverage)
-            citation_count = validation_result.get("citation_count", citation_count)
-        else:
-            validation_result = self.answer_generator.validate_answer_uses_context(
-                answer=normalized_response,
-                context=context_dict,
-                query=query,
-                retrieved_docs=retrieved_docs
-            )
-            citation_coverage = validation_result.get("citation_coverage", citation_coverage)
-            citation_count = validation_result.get("citation_count", citation_count)
+                
+                # 보강 후 다시 검증
+                validation_result = self.answer_generator.validate_answer_uses_context(
+                    answer=normalized_response,
+                    context=context_dict,
+                    query=query,
+                    retrieved_docs=retrieved_docs
+                )
+                citation_coverage = validation_result.get("citation_coverage", citation_coverage)
+                citation_count = validation_result.get("citation_count", citation_count)
         
         self.logger.info(
             f"🔍 [CITATION CHECK] citation_coverage={citation_coverage:.2f}, "

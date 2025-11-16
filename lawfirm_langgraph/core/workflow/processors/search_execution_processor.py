@@ -6,6 +6,7 @@ Search Execution Processor
 
 import logging
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
@@ -89,6 +90,15 @@ class SearchExecutionProcessor:
                 optimized_queries = optimized_queries_raw
                 if not extracted_keywords and "expanded_keywords" in optimized_queries:
                     extracted_keywords = optimized_queries.get("expanded_keywords", [])
+        
+        # Multi-Query 확인 로그 (항상 출력)
+        has_multi = optimized_queries and "multi_queries" in optimized_queries
+        keys_str = list(optimized_queries.keys()) if optimized_queries else "None"
+        print(f"[MULTI-QUERY] get_search_params: optimized_queries keys={keys_str}, has_multi_queries={has_multi}", flush=True, file=sys.stdout)
+        if has_multi:
+            self.logger.info(f"🔍 [MULTI-QUERY] get_search_params: Found multi_queries with {len(optimized_queries.get('multi_queries', []))} queries")
+        elif optimized_queries:
+            self.logger.warning(f"⚠️ [MULTI-QUERY] get_search_params: optimized_queries exists but no multi_queries (keys: {keys_str})")
 
         if not search_params or len(search_params) == 0:
             search_params_raw = get_field(state, "search_params")
@@ -193,8 +203,17 @@ class SearchExecutionProcessor:
             keyword_results = []
             keyword_count = 0
 
+            # Multi-Query 확인 로그
+            multi_queries = optimized_queries.get("multi_queries", [])
+            if multi_queries:
+                print(f"[MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries in optimized_queries", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries: {[q[:30] + '...' if len(q) > 30 else q for q in multi_queries]}")
+            else:
+                print(f"[MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries (keys: {list(optimized_queries.keys()) if optimized_queries else 'None'})", flush=True, file=sys.stdout)
+                self.logger.warning(f"⚠️ [MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries (keys: {list(optimized_queries.keys()) if optimized_queries else 'None'})")
+            
             if debug_mode:
-                self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, original_query={original_query[:50] if original_query else 'N/A'}...")
+                self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, multi_queries={len(multi_queries) if multi_queries else 0}, original_query={original_query[:50] if original_query else 'N/A'}...")
 
             self.logger.info(f"🔍 [SEARCH] Before check: extracted_keywords={len(extracted_keywords) if extracted_keywords else 0} (type: {type(extracted_keywords).__name__})")
             if not extracted_keywords or len(extracted_keywords) == 0:
@@ -535,20 +554,42 @@ class SearchExecutionProcessor:
             )
             print(f"[DEBUG] _execute_semantic_search_internal: Added {original_count} results from original query search")
 
-        keyword_queries = optimized_queries.get("keyword_queries", [])[:2]
-        for i, kw_query in enumerate(keyword_queries, 1):
-            if kw_query and kw_query.strip() and kw_query != semantic_query:
-                kw_semantic, kw_count = self.search_handler.semantic_search(
-                    kw_query,
-                    k=semantic_k // 2,
-                    extracted_keywords=extracted_keywords
-                )
-                semantic_results.extend(kw_semantic)
-                semantic_count += kw_count
-                self.logger.info(
-                    f"🔍 [DEBUG] Keyword-based semantic search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
-                )
-                print(f"[DEBUG] _execute_semantic_search_internal: Added {kw_count} results from keyword query #{i}")
+        # Multi-Query Retrieval 적용 (LLM 기반 질문 재작성)
+        multi_queries = optimized_queries.get("multi_queries", [])
+        if multi_queries and len(multi_queries) > 1:
+            print(f"[MULTI-QUERY] Found {len(multi_queries)} queries, executing searches...", flush=True, file=sys.stdout)
+            self.logger.info(f"🔍 [MULTI-QUERY] Found {len(multi_queries)} queries, executing searches...")
+            # 첫 번째는 이미 semantic_query로 검색됨 (원본)
+            for i, mq in enumerate(multi_queries[1:], 1):
+                if mq and mq.strip() and mq != semantic_query:
+                    mq_semantic, mq_count = self.search_handler.semantic_search(
+                        mq,
+                        k=semantic_k // 2,
+                        extracted_keywords=extracted_keywords
+                    )
+                    semantic_results.extend(mq_semantic)
+                    semantic_count += mq_count
+                    self.logger.info(
+                        f"🔍 [MULTI-QUERY] Query #{i}: {mq_count} results (query: '{mq[:50]}...')"
+                    )
+                    print(f"[MULTI-QUERY] Query #{i}: {mq_count} results (query: '{mq[:50]}...')", flush=True, file=sys.stdout)
+        
+        # 키워드 쿼리로 추가 의미적 검색 (Multi-Query가 없거나 부족한 경우)
+        if not multi_queries or len(multi_queries) <= 1:
+            keyword_queries = optimized_queries.get("keyword_queries", [])[:2]
+            for i, kw_query in enumerate(keyword_queries, 1):
+                if kw_query and kw_query.strip() and kw_query != semantic_query:
+                    kw_semantic, kw_count = self.search_handler.semantic_search(
+                        kw_query,
+                        k=semantic_k // 2,
+                        extracted_keywords=extracted_keywords
+                    )
+                    semantic_results.extend(kw_semantic)
+                    semantic_count += kw_count
+                    self.logger.info(
+                        f"🔍 [DEBUG] Keyword-based semantic search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
+                    )
+                    print(f"[DEBUG] _execute_semantic_search_internal: Added {kw_count} results from keyword query #{i}")
 
         # Phase 1 + Phase 2: 타입별 별도 검색 수행 및 쿼리 다변화 적용 (타입 다양성 개선)
         document_types = {
@@ -602,11 +643,14 @@ class SearchExecutionProcessor:
                 self.logger.warning(f"⚠️ [TYPE DIVERSITY] 쿼리 다변화 실패: {e}")
                 diversified_queries = {}
             
-            print(f"[TYPE DIVERSITY] 타입별 검색 시작")
+            print(f"[TYPE DIVERSITY] 타입별 검색 시작 (병렬 실행)")
             print(f"[TYPE DIVERSITY] 검색할 타입: {list(document_types.keys())}")
-            self.logger.info("🔍 [TYPE DIVERSITY] 타입별 검색 시작")
+            self.logger.info("🔍 [TYPE DIVERSITY] 타입별 검색 시작 (병렬 실행)")
             self.logger.info(f"🔍 [TYPE DIVERSITY] 검색할 타입: {list(document_types.keys())}")
-            for doc_type, query_type in document_types.items():
+            
+            # 타입별 검색 병렬화
+            def search_by_type(doc_type, query_type):
+                """타입별 검색 함수 (병렬 실행용)"""
                 print(f"[TYPE DIVERSITY] {doc_type} 검색 시작 (query_type={query_type})")
                 self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type} 검색 시작 (query_type={query_type})")
                 try:
@@ -702,24 +746,40 @@ class SearchExecutionProcessor:
                             import traceback
                             self.logger.debug(f"샘플링 예외 상세: {traceback.format_exc()}")
                     
-                    if type_results:
-                        type_specific_results[doc_type] = type_results
-                        semantic_results.extend(type_results)
-                        type_specific_count += len(type_results)
-                        print(f"[TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 (검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)")
-                        self.logger.info(
-                            f"✅ [TYPE DIVERSITY] {doc_type}: {len(type_results)}개 검색 성공 "
-                            f"(검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)"
-                        )
-                    else:
-                        print(f"[TYPE DIVERSITY] {doc_type}: 검색 결과 없음")
-                        self.logger.warning(
-                            f"⚠️ [TYPE DIVERSITY] {doc_type}: 검색 결과 없음 (데이터 없음 또는 쿼리 관련성 낮음, 쿼리: '{search_query[:30]}...')"
-                        )
+                    return doc_type, type_results
                 except Exception as e:
                     self.logger.error(f"❌ [TYPE DIVERSITY] 타입별 검색 실패 ({doc_type}): {e}")
                     import traceback
                     self.logger.debug(f"타입별 검색 예외 상세: {traceback.format_exc()}")
+                    return doc_type, []
+            
+            # 병렬 실행
+            with ThreadPoolExecutor(max_workers=len(document_types)) as executor:
+                futures = {
+                    executor.submit(search_by_type, doc_type, query_type): doc_type
+                    for doc_type, query_type in document_types.items()
+                }
+                
+                for future in futures:
+                    doc_type = futures[future]
+                    try:
+                        result_doc_type, type_results = future.result(timeout=30)
+                        if type_results:
+                            type_specific_results[result_doc_type] = type_results
+                            semantic_results.extend(type_results)
+                            type_specific_count += len(type_results)
+                            print(f"[TYPE DIVERSITY] {result_doc_type}: {len(type_results)}개 검색 성공 (검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)")
+                            self.logger.info(
+                                f"✅ [TYPE DIVERSITY] {result_doc_type}: {len(type_results)}개 검색 성공 "
+                                f"(검색 결과에 추가됨, 총 semantic_results: {len(semantic_results)}개)"
+                            )
+                        else:
+                            print(f"[TYPE DIVERSITY] {result_doc_type}: 검색 결과 없음")
+                            self.logger.warning(
+                                f"⚠️ [TYPE DIVERSITY] {result_doc_type}: 검색 결과 없음 (데이터 없음 또는 쿼리 관련성 낮음)"
+                            )
+                    except Exception as e:
+                        self.logger.error(f"❌ [TYPE DIVERSITY] {doc_type} 병렬 검색 실패: {e}")
         else:
             self.logger.warning("⚠️ [TYPE DIVERSITY] semantic_search_engine을 찾을 수 없어 타입별 검색을 수행할 수 없습니다")
             self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine 확인: self.semantic_search_engine={self.semantic_search_engine is not None}")

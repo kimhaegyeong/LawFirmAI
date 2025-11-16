@@ -475,11 +475,46 @@ class WorkflowDocumentProcessor:
         selected_docs = []
         seen_sources = set()
         
-        # 1단계: 관련도가 높은 문서 우선 선택 (관련도 0.65 이상)
+        # 개선: Citation 가능성이 높은 문서 식별 (법령 조문, 판례 등)
+        import re
+        citation_pattern = re.compile(r'[가-힣]+법\s*제?\s*\d+\s*조')
+        precedent_pattern = re.compile(r'[가-힣]+(?:지방)?법원|대법원|판결|사건')
+        
+        # 문서에 citation 점수 부여
+        for doc in sorted_docs:
+            content = (doc.get("content") or doc.get("text") or "").lower()
+            doc_type = doc.get("type") or doc.get("source_type") or ""
+            
+            citation_score = 0.0
+            # 법령 조문 타입이면 높은 점수
+            if doc_type in ["statute_article", "statute"]:
+                citation_score += 0.5
+            # 판례 타입이면 높은 점수
+            elif doc_type in ["case_paragraph", "precedent", "decision_paragraph"]:
+                citation_score += 0.4
+            # 내용에서 법령 조문 발견
+            if citation_pattern.search(content):
+                citation_score += 0.3
+            # 내용에서 판례 발견
+            if precedent_pattern.search(content):
+                citation_score += 0.2
+            
+            doc["citation_potential_score"] = min(1.0, citation_score)
+        
+        # 1단계: 관련도가 높고 citation 가능성이 높은 문서 우선 선택
         high_relevance_docs = [
             doc for doc in sorted_docs 
             if (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) >= 0.65
         ]
+        
+        # citation 가능성 순으로 정렬
+        high_relevance_docs.sort(
+            key=lambda x: (
+                x.get("citation_potential_score", 0.0),
+                x.get("relevance_score", 0.0) or x.get("final_weighted_score", 0.0)
+            ),
+            reverse=True
+        )
         
         for doc in high_relevance_docs:
             if len(selected_docs) >= max_docs:
@@ -490,7 +525,7 @@ class WorkflowDocumentProcessor:
                 selected_docs.append(doc)
                 seen_sources.add(source)
         
-        # 2단계: 관련도가 중간인 문서 선택 (관련도 0.55-0.65)
+        # 2단계: 관련도가 중간이지만 citation 가능성이 높은 문서 우선 선택
         if len(selected_docs) < max_docs:
             medium_relevance_docs = [
                 doc for doc in sorted_docs 
@@ -498,11 +533,20 @@ class WorkflowDocumentProcessor:
                 and doc not in selected_docs
             ]
             
+            # citation 가능성 순으로 정렬
+            medium_relevance_docs.sort(
+                key=lambda x: (
+                    x.get("citation_potential_score", 0.0),
+                    x.get("relevance_score", 0.0) or x.get("final_weighted_score", 0.0)
+                ),
+                reverse=True
+            )
+            
             for doc in medium_relevance_docs:
                 if len(selected_docs) >= max_docs:
                     break
                 
-                # 개선 9: 질문 유형별 필터링
+                # 개선: citation 가능성이 높거나 키워드 매칭이 있는 문서 우선
                 content = (doc.get("content") or doc.get("text") or "").lower()
                 has_relevant_keyword = False
                 
@@ -511,7 +555,11 @@ class WorkflowDocumentProcessor:
                         has_relevant_keyword = True
                         break
                 
-                if has_relevant_keyword or doc.get("keyword_match_score", 0.0) > 0.0:
+                citation_potential = doc.get("citation_potential_score", 0.0)
+                keyword_match = doc.get("keyword_match_score", 0.0)
+                
+                # citation 가능성이 높거나 키워드 매칭이 있으면 선택
+                if citation_potential >= 0.3 or has_relevant_keyword or keyword_match > 0.0:
                     source = doc.get("source", "")
                     if not source or source not in seen_sources:
                         selected_docs.append(doc)
