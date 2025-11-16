@@ -340,7 +340,8 @@ async def run_query_test(query: str):
         result = await service.process_query(
             query=query,
             session_id="query_test",
-            enable_checkpoint=False
+            enable_checkpoint=False,
+            use_astream_events=True
         )
         
         # 결과 출력

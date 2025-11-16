@@ -69,16 +69,6 @@
 - `final_test_analysis.md` - 최종 테스트 분석
 - `answer_quality_issues_analysis.md` - 답변 품질 이슈 분석
 
-## 🗑️ 정리된 파일들
-
-다음 파일들은 일시적/디버깅용으로 삭제되었습니다:
-- `investigate_*.py` - 디버깅/조사용 스크립트
-- `test_version_5_*.py` - 특정 버전 테스트 (일시적)
-- `test_new_faiss_index.py` - 특정 인덱스 테스트 (일시적)
-- `check_version_details.py` - 중복 체크 스크립트
-- `check_external_index_metadata.py` - 중복 체크 스크립트
-- `test_indexivfpq_search.py`, `test_indexivfpq_support.py` - `test_langgraph_with_indexivfpq.py`로 통합
-- `debug_*.py` - 디버깅용 스크립트
 
 ## 📌 사용 가이드
 
