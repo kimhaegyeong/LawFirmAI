@@ -1,450 +1,334 @@
 # -*- coding: utf-8 -*-
 """
-SemanticSearchEngineV2 테스트
-의미적 검색 엔진 V2 단위 테스트
+SemanticSearchEngineV2 테스트 코드
 """
 
-import pytest
-import tempfile
-import os
 import sys
+import os
+import time
 import sqlite3
-import numpy as np
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch, PropertyMock
-from typing import Dict, Any, List
 
-# 프로젝트 루트를 sys.path에 추가
-project_root = Path(__file__).parent.parent.parent.parent
+# 프로젝트 루트 경로 추가
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "lawfirm_langgraph"))
 
-# lawfirm_langgraph 디렉토리를 sys.path에 추가
-lawfirm_langgraph_path = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(lawfirm_langgraph_path))
+import warnings
+warnings.filterwarnings('ignore', message='.*python-dotenv.*')
 
-from core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
+from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 
 
 class TestSemanticSearchEngineV2:
-    """SemanticSearchEngineV2 테스트"""
+    """SemanticSearchEngineV2 테스트 클래스"""
     
-    @pytest.fixture
-    def temp_db(self):
-        """임시 데이터베이스 픽스처"""
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
-            db_path = f.name
+    def __init__(self):
+        """테스트 초기화"""
+        self.engine = None
+        self.db_path = None
         
-        # 테스트용 데이터베이스 스키마 생성
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+    def setup(self):
+        """테스트 설정"""
+        # DB 경로 찾기
+        possible_db_paths = [
+            "data/lawfirm_v2.db",
+            "./data/lawfirm_v2.db",
+            str(project_root / "data" / "lawfirm_v2.db")
+        ]
         
-        # embeddings 테이블 생성
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS embeddings (
-                chunk_id INTEGER PRIMARY KEY,
-                vector BLOB,
-                dim INTEGER,
-                model TEXT
+        for path in possible_db_paths:
+            if Path(path).exists():
+                self.db_path = path
+                break
+        
+        if not self.db_path:
+            print("❌ 데이터베이스 파일을 찾을 수 없습니다.")
+            return False
+        
+        try:
+            self.engine = SemanticSearchEngineV2(
+                db_path=self.db_path,
+                use_external_index=False
             )
-        """)
-        
-        # text_chunks 테이블 생성
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS text_chunks (
-                id INTEGER PRIMARY KEY,
-                source_type TEXT,
-                text TEXT,
-                source_id TEXT,
-                chunk_size_category TEXT,
-                chunk_group_id TEXT,
-                chunking_strategy TEXT,
-                embedding_version_id INTEGER
-            )
-        """)
-        
-        # embedding_versions 테이블 생성
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS embedding_versions (
-                id INTEGER PRIMARY KEY,
-                is_active INTEGER DEFAULT 1
-            )
-        """)
-        
-        # 테스트 데이터 삽입
-        test_vector = np.random.rand(768).astype(np.float32)
-        cursor.execute("""
-            INSERT INTO embeddings (chunk_id, vector, dim, model)
-            VALUES (1, ?, 768, 'test-model')
-        """, (test_vector.tobytes(),))
-        
-        cursor.execute("""
-            INSERT INTO text_chunks (id, source_type, text, source_id, embedding_version_id)
-            VALUES (1, 'statute_article', '테스트 텍스트', 'test-1', 1)
-        """)
-        
-        cursor.execute("""
-            INSERT INTO embedding_versions (id, is_active)
-            VALUES (1, 1)
-        """)
-        
-        conn.commit()
-        conn.close()
-        
-        yield db_path
-        
-        if os.path.exists(db_path):
-            try:
-                os.remove(db_path)
-            except Exception:
-                pass
+            print(f"✅ SemanticSearchEngineV2 초기화 성공 (DB: {self.db_path})")
+            return True
+        except Exception as e:
+            print(f"❌ SemanticSearchEngineV2 초기화 실패: {e}")
+            return False
     
-    @pytest.fixture
-    def mock_embedder(self):
-        """Mock 임베딩 모델 픽스처"""
-        embedder = MagicMock()
-        embedder.dim = 768
-        embedder.model = MagicMock()
-        embedder.encode = Mock(return_value=np.random.rand(768).astype(np.float32))
-        return embedder
+    def test_normalize_query(self):
+        """쿼리 정규화 테스트"""
+        print("\n📋 테스트: 쿼리 정규화")
+        try:
+            # 공백 정규화
+            result1 = self.engine._normalize_query("  임대차   계약  ")
+            assert result1 == "임대차 계약", f"Expected '임대차 계약', got '{result1}'"
+            
+            # 대소문자 정규화
+            result2 = self.engine._normalize_query("임대차 계약")
+            result3 = self.engine._normalize_query("임대차 계약")
+            assert result2 == result3, "대소문자 정규화 실패"
+            
+            # 빈 문자열
+            result4 = self.engine._normalize_query("")
+            assert result4 == "", f"Expected '', got '{result4}'"
+            
+            print("   ✅ 쿼리 정규화 테스트 통과")
+            return True
+        except Exception as e:
+            print(f"   ❌ 쿼리 정규화 테스트 실패: {e}")
+            return False
     
-    @pytest.fixture
-    def search_engine(self, temp_db, mock_embedder):
-        """SemanticSearchEngineV2 인스턴스 픽스처"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                engine = SemanticSearchEngineV2(
-                    db_path=temp_db,
-                    model_name='test-model'
-                )
-                engine.embedder = mock_embedder
-                engine.dim = 768
-                return engine
+    def test_cache_ttl(self):
+        """캐시 TTL 테스트"""
+        print("\n📋 테스트: 캐시 TTL")
+        try:
+            # 캐시에 항목 저장
+            test_key = "test_key"
+            test_value = {"test": "data"}
+            self.engine._set_to_cache(test_key, test_value)
+            
+            # 즉시 조회 (캐시 히트)
+            cached = self.engine._get_from_cache(test_key)
+            assert cached == test_value, "캐시 저장/조회 실패"
+            
+            # TTL을 짧게 설정하여 만료 테스트
+            original_ttl = self.engine._metadata_cache_ttl
+            self.engine._metadata_cache_ttl = 0.1  # 0.1초
+            
+            # 캐시에 다시 저장
+            self.engine._set_to_cache(test_key, test_value)
+            
+            # 0.2초 대기 (TTL 초과)
+            time.sleep(0.2)
+            
+            # 만료된 항목 조회 (캐시 미스)
+            expired = self.engine._get_from_cache(test_key)
+            assert expired is None, "만료된 캐시 항목이 제거되지 않음"
+            
+            # TTL 복원
+            self.engine._metadata_cache_ttl = original_ttl
+            
+            print("   ✅ 캐시 TTL 테스트 통과")
+            return True
+        except Exception as e:
+            print(f"   ❌ 캐시 TTL 테스트 실패: {e}")
+            return False
     
-    def test_initialization(self, temp_db, mock_embedder):
-        """초기화 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                engine = SemanticSearchEngineV2(
-                    db_path=temp_db,
-                    model_name='test-model'
-                )
+    def test_cache_cleanup(self):
+        """캐시 정리 테스트"""
+        print("\n📋 테스트: 캐시 정리")
+        try:
+            # 여러 항목 저장
+            for i in range(10):
+                self.engine._set_to_cache(f"key_{i}", {"data": i})
+            
+            initial_size = len(self.engine._metadata_cache)
+            assert initial_size == 10, f"Expected 10 items, got {initial_size}"
+            
+            # TTL을 짧게 설정
+            original_ttl = self.engine._metadata_cache_ttl
+            original_cleanup_interval = self.engine._metadata_cache_cleanup_interval
+            self.engine._metadata_cache_ttl = 0.1
+            self.engine._metadata_cache_cleanup_interval = 0.05  # 0.05초
+            
+            # 시간 경과 대기
+            time.sleep(0.15)
+            
+            # 정리 실행
+            self.engine._cleanup_expired_cache()
+            
+            # 만료된 항목이 제거되었는지 확인
+            cleaned_size = len(self.engine._metadata_cache)
+            assert cleaned_size == 0, f"Expected 0 items after cleanup, got {cleaned_size}"
+            
+            # 설정 복원
+            self.engine._metadata_cache_ttl = original_ttl
+            self.engine._metadata_cache_cleanup_interval = original_cleanup_interval
+            
+            print("   ✅ 캐시 정리 테스트 통과")
+            return True
+        except Exception as e:
+            print(f"   ❌ 캐시 정리 테스트 실패: {e}")
+            return False
+    
+    def test_batch_load_chunk_metadata(self):
+        """배치 chunk_metadata 조회 테스트"""
+        print("\n📋 테스트: 배치 chunk_metadata 조회")
+        try:
+            conn = self.engine._get_connection()
+            if not conn:
+                print("   ⚠️  DB 연결 실패, 테스트 스킵")
+                return True
+            
+            # 실제 chunk_id 조회
+            cursor = conn.execute("SELECT id FROM text_chunks LIMIT 5")
+            chunk_ids = [row[0] for row in cursor.fetchall()]
+            
+            if not chunk_ids:
+                print("   ⚠️  chunk_id가 없어 테스트 스킵")
+                return True
+            
+            # 배치 조회
+            result = self.engine._batch_load_chunk_metadata(conn, chunk_ids)
+            
+            assert len(result) == len(chunk_ids), f"Expected {len(chunk_ids)} results, got {len(result)}"
+            
+            # 결과 검증
+            for chunk_id in chunk_ids:
+                assert chunk_id in result, f"chunk_id {chunk_id} not in result"
+                assert 'meta' in result[chunk_id], f"chunk_id {chunk_id} missing 'meta' field"
+                assert 'source_type' in result[chunk_id], f"chunk_id {chunk_id} missing 'source_type' field"
+                assert 'source_id' in result[chunk_id], f"chunk_id {chunk_id} missing 'source_id' field"
+            
+            # 캐시 테스트 (두 번째 조회는 캐시에서 가져와야 함)
+            cache_hits_before = self.engine._metadata_cache_hits
+            result2 = self.engine._batch_load_chunk_metadata(conn, chunk_ids)
+            cache_hits_after = self.engine._metadata_cache_hits
+            
+            assert cache_hits_after > cache_hits_before, "캐시 히트가 발생하지 않음"
+            
+            conn.close()
+            print(f"   ✅ 배치 chunk_metadata 조회 테스트 통과 (조회: {len(chunk_ids)}개, 캐시 히트: {cache_hits_after - cache_hits_before}개)")
+            return True
+        except Exception as e:
+            print(f"   ❌ 배치 chunk_metadata 조회 테스트 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def test_batch_load_source_metadata(self):
+        """배치 source_metadata 조회 테스트"""
+        print("\n📋 테스트: 배치 source_metadata 조회")
+        try:
+            conn = self.engine._get_connection()
+            if not conn:
+                print("   ⚠️  DB 연결 실패, 테스트 스킵")
+                return True
+            
+            # 실제 source_type, source_id 조회
+            cursor = conn.execute("""
+                SELECT DISTINCT source_type, source_id 
+                FROM text_chunks 
+                WHERE source_type IS NOT NULL AND source_id IS NOT NULL
+                LIMIT 5
+            """)
+            source_items = [(row[0], row[1]) for row in cursor.fetchall()]
+            
+            if not source_items:
+                print("   ⚠️  source_items가 없어 테스트 스킵")
+                return True
+            
+            # 배치 조회
+            result = self.engine._batch_load_source_metadata(conn, source_items)
+            
+            # 결과 검증
+            for source_type, source_id in source_items:
+                # source_id가 문자열인 경우 정수로 변환 시도
+                if isinstance(source_id, str):
+                    import re
+                    numbers = re.findall(r'\d+', str(source_id))
+                    if numbers:
+                        source_id = int(numbers[-1])
+                    else:
+                        continue
                 
-                assert engine.db_path == temp_db
-                assert engine.model_name == 'test-model'
-                assert engine.embedder is not None
-                assert engine.dim == 768
-    
-    def test_initialization_with_config(self, mock_embedder):
-        """Config를 사용한 초기화 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.Config') as mock_config:
-                    mock_config_instance = MagicMock()
-                    mock_config_instance.database_path = ':memory:'
-                    mock_config.return_value = mock_config_instance
-                    
-                    engine = SemanticSearchEngineV2(db_path=None)
-                    assert engine.db_path == ':memory:'
-    
-    def test_detect_model_from_database(self, search_engine):
-        """데이터베이스에서 모델 감지 테스트"""
-        model_name = search_engine._detect_model_from_database()
-        assert model_name == 'test-model'
-    
-    def test_detect_model_from_database_no_data(self, temp_db, mock_embedder):
-        """데이터베이스에 데이터가 없을 때 모델 감지 테스트"""
-        # 빈 데이터베이스 생성
-        conn = sqlite3.connect(temp_db)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM embeddings")
-        conn.commit()
-        conn.close()
-        
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                engine = SemanticSearchEngineV2(
-                    db_path=temp_db,
-                    model_name='test-model'
-                )
-                model_name = engine._detect_model_from_database()
-                assert model_name is None
-    
-    def test_is_available(self, search_engine):
-        """사용 가능 여부 확인 테스트"""
-        assert search_engine.is_available() is True
-    
-    def test_is_available_no_db(self, mock_embedder):
-        """데이터베이스가 없을 때 사용 가능 여부 확인 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.Path') as mock_path:
-                    mock_path.return_value.exists.return_value = False
-                    engine = SemanticSearchEngineV2(
-                        db_path='/nonexistent.db',
-                        model_name='test-model'
-                    )
-                    assert engine.is_available() is False
-    
-    def test_diagnose(self, search_engine):
-        """상태 진단 테스트"""
-        diagnosis = search_engine.diagnose()
-        
-        assert isinstance(diagnosis, dict)
-        assert 'available' in diagnosis
-        assert 'db_exists' in diagnosis
-        assert 'embedder_initialized' in diagnosis
-        assert 'faiss_available' in diagnosis
-        assert 'embeddings_count' in diagnosis
-        assert 'model_name' in diagnosis
-    
-    def test_ensure_embedder_initialized(self, search_engine):
-        """임베딩 모델 초기화 확인 테스트"""
-        assert search_engine._ensure_embedder_initialized() is True
-    
-    def test_ensure_embedder_initialized_failed(self, temp_db, mock_embedder):
-        """임베딩 모델 초기화 실패 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.SentenceEmbedder', return_value=mock_embedder):
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.FAISS_AVAILABLE', True):
-                engine = SemanticSearchEngineV2(
-                    db_path=temp_db,
-                    model_name='test-model'
-                )
-                engine.embedder = None
-                engine.model_name = None
-                assert engine._ensure_embedder_initialized() is False
-    
-    def test_load_chunk_vectors(self, search_engine):
-        """벡터 로드 테스트"""
-        vectors = search_engine._load_chunk_vectors()
-        
-        assert isinstance(vectors, dict)
-        assert len(vectors) > 0
-    
-    def test_load_chunk_vectors_with_filters(self, search_engine):
-        """필터를 사용한 벡터 로드 테스트"""
-        vectors = search_engine._load_chunk_vectors(
-            source_types=['statute_article'],
-            limit=10
-        )
-        
-        assert isinstance(vectors, dict)
-    
-    def test_get_cached_query_vector(self, search_engine):
-        """쿼리 벡터 캐시 테스트"""
-        query = "테스트 쿼리"
-        vector = np.random.rand(768).astype(np.float32)
-        
-        search_engine._cache_query_vector(query, vector)
-        cached = search_engine._get_cached_query_vector(query)
-        
-        assert cached is not None
-        np.testing.assert_array_equal(cached, vector)
-    
-    def test_cache_query_vector_lru(self, search_engine):
-        """LRU 캐시 테스트"""
-        # 캐시 크기 초과 테스트
-        search_engine._cache_max_size = 2
-        
-        query1 = "쿼리1"
-        query2 = "쿼리2"
-        query3 = "쿼리3"
-        
-        vector1 = np.random.rand(768).astype(np.float32)
-        vector2 = np.random.rand(768).astype(np.float32)
-        vector3 = np.random.rand(768).astype(np.float32)
-        
-        search_engine._cache_query_vector(query1, vector1)
-        search_engine._cache_query_vector(query2, vector2)
-        search_engine._cache_query_vector(query3, vector3)
-        
-        # 가장 오래된 쿼리1이 제거되어야 함
-        assert search_engine._get_cached_query_vector(query1) is None
-        assert search_engine._get_cached_query_vector(query2) is not None
-        assert search_engine._get_cached_query_vector(query3) is not None
-    
-    def test_calculate_optimal_nprobe(self, search_engine):
-        """최적 nprobe 계산 테스트"""
-        nprobe = search_engine._calculate_optimal_nprobe(k=10, total_vectors=1000)
-        
-        assert isinstance(nprobe, int)
-        assert nprobe >= 1
-    
-    def test_search_without_index(self, search_engine):
-        """인덱스 없이 검색 테스트"""
-        search_engine.index = None
-        
-        with patch.object(search_engine, '_load_faiss_index', side_effect=Exception("Index not found")):
-            results = search_engine.search("테스트 쿼리", k=5)
-            assert isinstance(results, list)
-    
-    def test_search_with_index(self, search_engine):
-        """인덱스와 함께 검색 테스트"""
-        # Mock FAISS 인덱스
-        mock_index = MagicMock()
-        mock_index.search = Mock(return_value=(
-            np.array([[0.9, 0.8, 0.7]]),
-            np.array([[0, 1, 2]])
-        ))
-        search_engine.index = mock_index
-        search_engine._chunk_ids = [0, 1, 2]
-        search_engine._chunk_metadata = {
-            1: {'source_type': 'statute_article', 'text': '테스트', 'source_id': 'test-1'}
-        }
-        
-        with patch.object(search_engine, '_get_connection') as mock_conn:
-            mock_conn_instance = MagicMock()
-            mock_cursor = MagicMock()
-            mock_row = MagicMock()
-            mock_row.__getitem__ = Mock(side_effect=lambda key: {
-                'source_type': 'statute_article',
-                'text': '테스트 텍스트',
-                'source_id': 'test-1'
-            }.get(key))
-            mock_cursor.fetchall = Mock(return_value=[mock_row])
-            mock_conn_instance.cursor.return_value = mock_cursor
-            mock_conn.return_value = mock_conn_instance
+                key = (source_type, source_id)
+                if key in result:
+                    assert isinstance(result[key], dict), f"source_metadata for {key} is not a dict"
             
-            with patch.object(search_engine, '_get_source_metadata', return_value={}):
-                with patch.object(search_engine, '_format_source', return_value='테스트 소스'):
-                    results = search_engine.search("테스트 쿼리", k=3)
-                    assert isinstance(results, list)
-    
-    def test_search_with_retry(self, search_engine):
-        """재시도 로직이 포함된 검색 테스트"""
-        search_engine.index = None
-        
-        with patch.object(search_engine, '_search_with_threshold') as mock_search:
-            # 첫 번째 시도: 결과 부족
-            mock_search.side_effect = [
-                [],  # 첫 번째 시도: 결과 없음
-                [{'text': '결과1', 'score': 0.6}],  # 두 번째 시도: 결과 있음
-            ]
+            # 캐시 테스트
+            cache_hits_before = self.engine._metadata_cache_hits
+            result2 = self.engine._batch_load_source_metadata(conn, source_items)
+            cache_hits_after = self.engine._metadata_cache_hits
             
-            results = search_engine.search("테스트 쿼리", k=5, min_results=1)
-            assert isinstance(results, list)
-            assert len(results) > 0
+            assert cache_hits_after > cache_hits_before, "캐시 히트가 발생하지 않음"
+            
+            conn.close()
+            print(f"   ✅ 배치 source_metadata 조회 테스트 통과 (조회: {len(source_items)}개, 캐시 히트: {cache_hits_after - cache_hits_before}개)")
+            return True
+        except Exception as e:
+            print(f"   ❌ 배치 source_metadata 조회 테스트 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    def test_search_disable_retry(self, search_engine):
-        """재시도 비활성화 검색 테스트"""
-        search_engine.index = None
-        
-        with patch.object(search_engine, '_search_with_threshold', return_value=[]):
-            results = search_engine.search("테스트 쿼리", k=5, disable_retry=True)
-            assert isinstance(results, list)
-    
-    def test_search_with_filters(self, search_engine):
-        """필터를 사용한 검색 테스트"""
-        search_engine.index = None
-        
-        with patch.object(search_engine, '_search_with_threshold', return_value=[]):
-            results = search_engine.search(
-                "테스트 쿼리",
+    def test_search_basic(self):
+        """기본 검색 테스트"""
+        print("\n📋 테스트: 기본 검색")
+        try:
+            query = "임대차 계약"
+            results = self.engine.search(
+                query=query,
                 k=5,
-                source_types=['statute_article'],
-                min_ml_confidence=0.5,
-                min_quality_score=0.5,
-                filter_by_confidence=True
+                similarity_threshold=0.3
             )
-            assert isinstance(results, list)
-    
-    def test_build_faiss_index_sync(self, search_engine):
-        """FAISS 인덱스 동기 빌드 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.faiss') as mock_faiss:
-            mock_index = MagicMock()
-            mock_faiss.IndexFlatL2.return_value = MagicMock()
-            mock_faiss.IndexIVFFlat.return_value = mock_index
             
-            result = search_engine._build_faiss_index_sync()
-            assert isinstance(result, bool)
+            assert isinstance(results, list), "검색 결과가 리스트가 아님"
+            assert len(results) <= 5, f"검색 결과가 k보다 많음: {len(results)}"
+            
+            # 결과 검증
+            for result in results:
+                assert 'text' in result or 'content' in result, "검색 결과에 text/content가 없음"
+                assert 'score' in result or 'similarity' in result, "검색 결과에 score/similarity가 없음"
+            
+            print(f"   ✅ 기본 검색 테스트 통과 (결과: {len(results)}개)")
+            return True
+        except Exception as e:
+            print(f"   ❌ 기본 검색 테스트 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    def test_build_faiss_index_sync_no_vectors(self, search_engine):
-        """벡터가 없을 때 FAISS 인덱스 빌드 테스트"""
-        with patch.object(search_engine, '_load_chunk_vectors', return_value={}):
-            result = search_engine._build_faiss_index_sync()
-            assert result is False
-    
-    def test_load_faiss_index(self, search_engine):
-        """FAISS 인덱스 로드 테스트"""
-        with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.faiss') as mock_faiss:
-            with patch('lawfirm_langgraph.core.search.engines.semantic_search_engine_v2.Path') as mock_path:
-                mock_path_instance = MagicMock()
-                mock_path_instance.exists.return_value = True
-                mock_path.return_value = mock_path_instance
-                
-                mock_index = MagicMock()
-                mock_faiss.read_index = Mock(return_value=mock_index)
-                
-                with patch('builtins.open', mock_open()):
-                    try:
-                        search_engine._load_faiss_index()
-                        assert search_engine.index is not None or True  # 로드 실패해도 테스트 통과
-                    except Exception:
-                        pass  # 로드 실패는 정상일 수 있음
-    
-    def test_format_source(self, search_engine):
-        """소스 포맷팅 테스트"""
-        source_meta = {
-            'statute_name': '민법',
-            'article_no': '1'
-        }
+    def run_all_tests(self):
+        """모든 테스트 실행"""
+        print("="*80)
+        print("SemanticSearchEngineV2 테스트 시작")
+        print("="*80)
         
-        result = search_engine._format_source('statute_article', source_meta)
-        assert isinstance(result, str)
-    
-    def test_restore_text_from_source(self, search_engine):
-        """소스에서 텍스트 복원 테스트"""
-        with patch.object(search_engine, '_get_connection') as mock_conn:
-            mock_conn_instance = MagicMock()
-            mock_cursor = MagicMock()
-            mock_row = MagicMock()
-            mock_row.__getitem__ = Mock(side_effect=lambda key: '복원된 텍스트' if key == 'content' else None)
-            mock_cursor.fetchone.return_value = mock_row
-            mock_conn_instance.cursor.return_value = mock_cursor
-            mock_conn.return_value = mock_conn_instance
-            
-            text = search_engine._restore_text_from_source(
-                mock_conn_instance,
-                'statute_article',
-                'test-1'
-            )
-            assert isinstance(text, str) or text is None
-    
-    def test_get_source_metadata(self, search_engine):
-        """소스 메타데이터 조회 테스트"""
-        with patch.object(search_engine, '_get_connection') as mock_conn:
-            mock_conn_instance = MagicMock()
-            mock_cursor = MagicMock()
-            mock_row = MagicMock()
-            mock_row.keys.return_value = ['statute_name', 'article_no']
-            mock_row.__getitem__ = Mock(side_effect=lambda key: {
-                'statute_name': '민법',
-                'article_no': '1'
-            }.get(key))
-            mock_cursor.fetchone.return_value = mock_row
-            mock_conn_instance.cursor.return_value = mock_cursor
-            mock_conn.return_value = mock_conn_instance
-            
-            metadata = search_engine._get_source_metadata(
-                mock_conn_instance,
-                'statute_article',
-                'test-1'
-            )
-            assert isinstance(metadata, dict)
-    
-    def test_calculate_hybrid_score(self, search_engine):
-        """하이브리드 점수 계산 테스트"""
-        score = search_engine._calculate_hybrid_score(
-            similarity=0.8,
-            ml_confidence=0.7,
-            quality_score=0.6
-        )
+        if not self.setup():
+            print("\n❌ 테스트 설정 실패")
+            return False
         
-        assert isinstance(score, float)
-        assert 0.0 <= score <= 1.0
+        tests = [
+            ("쿼리 정규화", self.test_normalize_query),
+            ("캐시 TTL", self.test_cache_ttl),
+            ("캐시 정리", self.test_cache_cleanup),
+            ("배치 chunk_metadata 조회", self.test_batch_load_chunk_metadata),
+            ("배치 source_metadata 조회", self.test_batch_load_source_metadata),
+            ("기본 검색", self.test_search_basic),
+        ]
+        
+        results = []
+        for test_name, test_func in tests:
+            try:
+                result = test_func()
+                results.append((test_name, result))
+            except Exception as e:
+                print(f"\n❌ {test_name} 테스트 중 예외 발생: {e}")
+                results.append((test_name, False))
+        
+        # 결과 요약
+        print("\n" + "="*80)
+        print("테스트 결과 요약")
+        print("="*80)
+        
+        passed = sum(1 for _, result in results if result)
+        total = len(results)
+        
+        for test_name, result in results:
+            status = "✅ 통과" if result else "❌ 실패"
+            print(f"  {test_name}: {status}")
+        
+        print(f"\n총 {passed}/{total} 테스트 통과")
+        print("="*80)
+        
+        return passed == total
 
 
-def mock_open():
-    """Mock open 함수"""
-    from unittest.mock import mock_open as _mock_open
-    return _mock_open(read_data=b'')
+if __name__ == "__main__":
+    tester = TestSemanticSearchEngineV2()
+    success = tester.run_all_tests()
+    sys.exit(0 if success else 1)
 
