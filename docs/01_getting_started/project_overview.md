@@ -11,14 +11,15 @@
 ### 1. LangGraph 워크플로우 시스템
 - **상태 기반 워크플로우**: State 기반 법률 질문 처리 시스템
 - **Agentic AI**: Tool Use/Function Calling을 통한 동적 도구 선택
-- **워크플로우 서비스**: `lawfirm_langgraph/core/agents/workflow_service.py`
-- **법률 워크플로우**: `lawfirm_langgraph/core/agents/legal_workflow_enhanced.py`
+- **워크플로우 서비스**: `lawfirm_langgraph/core/workflow/workflow_service.py`
+- **법률 워크플로우**: `lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py`
 
 ### 2. 하이브리드 검색 시스템
-- **벡터 검색**: FAISS 기반 의미적 유사도 검색
-- **정확 매칭**: 키워드 기반 정확한 매칭
-- **결과 통합**: 가중 평균으로 검색 결과 결합
-- **검색 엔진**: `lawfirm_langgraph/core/services/hybrid_search_engine.py`
+- **벡터 검색**: FAISS 기반 의미적 유사도 검색 (SemanticSearchEngineV2)
+- **키워드 검색**: FTS5 기반 키워드 검색 (KeywordSearchEngine)
+- **하이브리드 통합**: 가중 평균으로 검색 결과 결합
+- **검색 엔진**: `lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py`
+- **하이브리드 엔진**: `lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py`
 
 ### 3. 데이터베이스 시스템
 - **SQLite 데이터베이스**: 법률 및 판례 문서 저장
@@ -29,17 +30,19 @@
 
 ### 4. 벡터 임베딩 시스템
 - **FAISS 벡터 인덱스**: 법률 및 판례 문서 벡터 임베딩
-- **임베딩 모델**: ko-sroberta-multitask (768차원)
+- **임베딩 모델**: snunlp/KR-SBERT-V40K-klueNLI-augSTS (768차원)
+- **IndexIVFPQ 지원**: 메모리 효율적인 근사 검색
+- **버전 관리**: EmbeddingVersionManager, FAISSVersionManager
 - **검색 성능**: 평균 응답 시간 < 1초
 - **증분 업데이트**: 새로운 데이터 자동 처리
 - **벡터 스토어**: `lawfirm_langgraph/core/data/vector_store.py`
 
 ### 5. 지능형 답변 생성
-- **질문 분류**: 6가지 질문 유형 자동 분류
+- **질문 분류**: 의미적 도메인 분류 시스템
 - **동적 검색**: 질문 유형별 검색 가중치 조정
 - **구조화된 답변**: 질문 유형별 맞춤형 답변
 - **신뢰도 시스템**: 답변 신뢰성 수치화
-- **답변 생성기**: `lawfirm_langgraph/core/services/answer_generator.py`
+- **답변 생성기**: `lawfirm_langgraph/core/agents/handlers/answer_generator.py`
 
 ### 6. AI 모델 시스템
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
@@ -49,6 +52,7 @@
 - **Gemini 클라이언트**: `lawfirm_langgraph/core/services/gemini_client.py`
 - **State 최적화**: State reduction으로 메모리 효율성 향상
 - **성능 최적화**: 컨텍스트 확장 스킵, 검증 간소화로 응답 시간 단축
+- **메타데이터 캐싱**: TTL 기반 캐싱으로 검색 성능 향상
 
 ## 🔧 기술 스택
 
@@ -130,7 +134,7 @@ export LANGRAPH_ENABLED=true
 ```python
 import asyncio
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
-from lawfirm_langgraph.core.agents.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 
 async def main():
     config = LangGraphConfig.from_env()

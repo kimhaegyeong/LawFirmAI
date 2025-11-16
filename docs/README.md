@@ -52,13 +52,9 @@ AI 모델 성능 최적화 및 벤치마크
 배포 가이드 및 운영 문서
 - [배포 가이드](06_deployment/Deployment_Guide.md)
 - [AWS 배포 가이드](06_deployment/aws_deployment_quickstart.md)
-- [빠른 시작 가이드](06_deployment/quick_start.md)
 - [AWS 빠른 시작](06_deployment/QUICK_START_AWS.md)
 - [배포 체크리스트](06_deployment/DEPLOYMENT_CHECKLIST.md)
 - [프리 티어 최적화 가이드](06_deployment/FREE_TIER_OPTIMIZATION.md)
-- [PostgreSQL 마이그레이션 계획](06_deployment/POSTGRESQL_MIGRATION_PLAN.md)
-- [PostgreSQL 설정 가이드](06_deployment/POSTGRESQL_SETUP_GUIDE.md)
-- [데이터베이스 마이그레이션 가이드](06_deployment/DATABASE_MIGRATION_GUIDE.md)
 - [HuggingFace Spaces 최적화](06_deployment/huggingface_spaces_optimization_plan.md)
 
 ### 07. API (`07_api/`)

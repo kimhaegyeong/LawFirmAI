@@ -77,7 +77,7 @@ INSERT INTO fts_precedent_cases(fts_precedent_cases) VALUES('optimize');
 
 #### 최적화된 검색 엔진
 ```python
-from source.services.optimized_precedent_search_engine import OptimizedPrecedentSearchEngine
+from lawfirm_langgraph.core.services.optimized_precedent_search_engine import OptimizedPrecedentSearchEngine
 
 # 검색 엔진 초기화
 engine = OptimizedPrecedentSearchEngine()

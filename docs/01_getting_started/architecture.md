@@ -36,9 +36,21 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 │  ├── lawfirm_langgraph/core/data/vector_store.py          │
 │  └── lawfirm_langgraph/core/data/conversation_store.py    │
 ├─────────────────────────────────────────────────────────────┤
+│                    검색 레이어                              │
+│  ├── lawfirm_langgraph/core/search/engines/                │
+│  │   ├── semantic_search_engine_v2.py                     │
+│  │   ├── keyword_search_engine.py                         │
+│  │   └── hybrid_search_engine_v2.py                       │
+│  └── lawfirm_langgraph/core/search/handlers/               │
+│      └── search_handler.py                                 │
+├─────────────────────────────────────────────────────────────┤
 │                    AI 모델 레이어                            │
 │  ├── lawfirm_langgraph/core/services/gemini_client.py     │
 │  └── lawfirm_langgraph/core/models/sentence_bert.py        │
+├─────────────────────────────────────────────────────────────┤
+│                    분류 레이어                              │
+│  └── lawfirm_langgraph/core/classification/                │
+│      └── domain_classifier.py                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -78,50 +90,50 @@ result = await workflow.process_query_async("질문", "session_id")
 
 ### 2. 하이브리드 검색 엔진
 
-**파일**: `lawfirm_langgraph/core/services/hybrid_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py`
 
-**역할**: 의미적 검색 + 정확 매칭 통합
+**역할**: 의미적 검색 + 키워드 검색 통합
 
 **검색 방식**:
-- 의미적 검색 (FAISS 벡터)
-- 정확 매칭 (데이터베이스)
+- 의미적 검색 (FAISS 벡터, SemanticSearchEngineV2)
+- 키워드 검색 (FTS5, KeywordSearchEngine)
 - 하이브리드 병합
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 
-engine = HybridSearchEngine()
-results = engine.search("계약 해지", question_type="law_inquiry")
+engine = HybridSearchEngineV2()
+results = engine.search("계약 해지", k=10)
 ```
 
 ### 3. 의미적 검색 엔진
 
-**파일**: `lawfirm_langgraph/core/services/semantic_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py`
 
-**역할**: FAISS 벡터 기반 의미적 유사도 검색
+**역할**: FAISS 벡터 기반 의미적 유사도 검색 (IndexIVFPQ 지원)
 
 **기능**:
 - 벡터 임베딩 생성
 - 유사도 검색
 - 결과 랭킹
 
-### 4. 정확한 매칭 검색 엔진
+### 4. 키워드 검색 엔진
 
-**파일**: `lawfirm_langgraph/core/services/exact_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/keyword_search_engine.py`
 
-**역할**: 키워드 기반 정확한 매칭 검색
+**역할**: FTS5 기반 키워드 검색
 
 **기능**:
-- 키워드 검색
-- FTS (Full-Text Search) 활용
-- 정확한 매칭 결과 반환
+- FTS5 풀텍스트 검색
+- 키워드 매칭
+- 검색 결과 랭킹
 
 ### 5. 질문 분류기
 
-**파일**: `lawfirm_langgraph/core/services/question_classifier.py`
+**파일**: `lawfirm_langgraph/core/classification/domain_classifier.py`
 
-**역할**: 질문 유형 분류 및 처리 전략 결정
+**역할**: 의미적 도메인 분류 및 처리 전략 결정
 
 **분류 유형**:
 - 법령 조문 문의
@@ -131,7 +143,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 ### 6. 답변 생성기
 
-**파일**: `lawfirm_langgraph/core/services/answer_generator.py`
+**파일**: `lawfirm_langgraph/core/agents/handlers/answer_generator.py`
 
 **역할**: 검색 결과를 바탕으로 답변 생성
 
@@ -142,7 +154,7 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
+from lawfirm_langgraph.core.agents.handlers.answer_generator import AnswerGenerator
 
 generator = AnswerGenerator()
 answer = generator.generate(query, context)

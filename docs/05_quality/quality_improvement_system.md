@@ -400,7 +400,7 @@ python scripts/data_processing/quality/quality_reporting_dashboard.py \
 
 ### 5.1 LegalKeywordMapper (가중치 기반)
 
-**위치**: `source/services/langgraph/keyword_mapper.py`
+**위치**: `lawfirm_langgraph/core/services/keyword_mapper.py`
 
 **기능**:
 - 가중치 기반 키워드 분류 (핵심/중요/보조)
@@ -422,7 +422,7 @@ def get_keyword_analysis_report(self, answer: str, query_type: str, question: st
 
 **사용 예시**:
 ```python
-from source.services.langgraph.keyword_mapper import LegalKeywordMapper
+from lawfirm_langgraph.core.services.keyword_mapper import LegalKeywordMapper
 
 mapper = LegalKeywordMapper()
 keywords = mapper.get_keywords_for_question("계약서 검토 시 주의사항", "contract_review")
@@ -431,7 +431,7 @@ coverage = mapper.calculate_weighted_keyword_coverage(answer, "contract_review",
 
 ### 5.2 ContextAwareKeywordMapper (컨텍스트 인식)
 
-**위치**: `source/services/langgraph/keyword_mapper.py`
+**위치**: `lawfirm_langgraph/core/services/keyword_mapper.py`
 
 **기능**:
 - 질문의 컨텍스트 자동 식별
@@ -456,7 +456,7 @@ def get_enhanced_keyword_mapping(self, question: str, query_type: str) -> Dict[s
 
 ### 5.3 AdaptiveKeywordMapper (동적 학습)
 
-**위치**: `source/services/langgraph/keyword_mapper.py`
+**위치**: `lawfirm_langgraph/core/services/keyword_mapper.py`
 
 **기능**:
 - 사용자 피드백 기반 키워드 효과성 학습
@@ -480,7 +480,7 @@ def get_learning_insights(self) -> Dict[str, any]
 
 ### 5.4 SemanticKeywordMapper (의미적 유사도)
 
-**위치**: `source/services/langgraph/keyword_mapper.py`
+**위치**: `lawfirm_langgraph/core/services/keyword_mapper.py`
 
 **기능**:
 - 법률 용어 간 의미적 관계 정의
@@ -503,7 +503,7 @@ def get_semantic_keyword_clusters(self, keywords: List[str]) -> Dict[str, List[s
 
 ### 5.5 EnhancedKeywordMapper (통합 시스템)
 
-**위치**: `source/services/langgraph/keyword_mapper.py`
+**위치**: `lawfirm_langgraph/core/services/keyword_mapper.py`
 
 **기능**:
 - 모든 키워드 매핑 시스템 통합
@@ -528,7 +528,7 @@ def get_keyword_effectiveness_report(self) -> Dict[str, any]
 
 **기본 사용법**:
 ```python
-from source.services.langgraph.keyword_mapper import EnhancedKeywordMapper
+from lawfirm_langgraph.core.services.keyword_mapper import EnhancedKeywordMapper
 
 # 통합 키워드 매퍼 초기화
 mapper = EnhancedKeywordMapper()
@@ -733,7 +733,7 @@ python scripts/data_processing/quality/automated_data_cleaner.py \
 
 ```python
 # 키워드 매핑 시스템 테스트
-from source.services.langgraph.keyword_mapper import EnhancedKeywordMapper
+from lawfirm_langgraph.core.services.keyword_mapper import EnhancedKeywordMapper
 
 # 통합 키워드 매퍼 초기화
 mapper = EnhancedKeywordMapper()

@@ -134,8 +134,8 @@ class LegalDomain(Enum):
 ### 1. 기본 사용법
 
 ```python
-from source.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
-from source.services.question_classifier import QuestionType
+from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from lawfirm_langgraph.core.classification.domain_classifier import QuestionType
 
 # 통합 프롬프트 관리자 초기화
 unified_manager = UnifiedPromptManager()
@@ -153,7 +153,7 @@ prompt = unified_manager.get_optimized_prompt(
 ### 2. 성능 최적화
 
 ```python
-from source.services.prompt_optimizer import create_prompt_optimizer
+from lawfirm_langgraph.core.services.prompt_optimizer import create_prompt_optimizer
 
 # 프롬프트 최적화기 생성
 optimizer = create_prompt_optimizer(unified_manager)
@@ -168,7 +168,7 @@ recommendations = optimizer.get_optimization_recommendations()
 ### 3. 동적 업데이트
 
 ```python
-from source.services.dynamic_prompt_updater import create_dynamic_prompt_updater
+from lawfirm_langgraph.core.services.dynamic_prompt_updater import create_dynamic_prompt_updater
 
 # 동적 업데이터 생성
 updater = create_dynamic_prompt_updater(unified_manager)
