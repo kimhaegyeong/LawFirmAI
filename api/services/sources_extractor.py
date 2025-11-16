@@ -464,7 +464,8 @@ class SourcesExtractor:
             "statute_article": [],
             "case_paragraph": [],
             "decision_paragraph": [],
-            "interpretation_paragraph": []
+            "interpretation_paragraph": [],
+            "regulation_paragraph": []
         }
         
         # sources_by_type만 반환 (sources_detail은 sources_by_type에서 재구성 가능)
@@ -1312,14 +1313,20 @@ class SourcesExtractor:
                     metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                     if metadata.get("case_id") or metadata.get("court") or metadata.get("casenames"):
                         source_type = "case_paragraph"
-                    elif metadata.get("decision_id") or metadata.get("org"):
+                    elif metadata.get("decision_id"):
                         source_type = "decision_paragraph"
-                    elif metadata.get("interpretation_number") or (metadata.get("org") and metadata.get("title")):
+                    elif (metadata.get("interpretation_number") or 
+                          metadata.get("interpretation_serial_number") or
+                          metadata.get("expcId") or
+                          (metadata.get("org") and metadata.get("title") and metadata.get("response_date")) or
+                          (metadata.get("org") and metadata.get("title") and not metadata.get("decision_id"))):
                         source_type = "interpretation_paragraph"
+                    elif metadata.get("org") and not metadata.get("title"):
+                        source_type = "decision_paragraph"
                     elif metadata.get("statute_name") or metadata.get("law_name") or metadata.get("article_no"):
                         source_type = "statute_article"
                     else:
-                        continue
+                        source_type = "regulation_paragraph"
                 
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                 merged_metadata = {**metadata}
@@ -1331,10 +1338,17 @@ class SourcesExtractor:
                 
                 source_info_detail = formatter.format_source(source_type, merged_metadata)
                 
+                # 원본 문서 URL 생성
+                source_id = merged_metadata.get("source_id") or doc.get("source_id") or merged_metadata.get("id")
+                original_url = None
+                if source_id and source_type:
+                    original_url = f"/api/documents/original/{source_type}/{source_id}"
+                
                 detail_dict = {
                     "name": source_info_detail.name,
                     "type": source_info_detail.type,
                     "url": source_info_detail.url or "",
+                    "original_url": original_url,
                     "metadata": source_info_detail.metadata or {}
                 }
                 
@@ -1381,6 +1395,13 @@ class SourcesExtractor:
                             detail_dict["title"] = meta["title"]
                         if meta.get("response_date"):
                             detail_dict["response_date"] = meta["response_date"]
+                    elif source_type == "regulation_paragraph":
+                        if meta.get("title"):
+                            detail_dict["title"] = meta["title"]
+                        if meta.get("doc_id"):
+                            detail_dict["doc_id"] = meta["doc_id"]
+                        if meta.get("url") or meta.get("detail_url"):
+                            detail_dict["url"] = meta.get("url") or meta.get("detail_url")
                 
                 content = doc.get("content") or doc.get("text") or ""
                 if content:
@@ -1424,6 +1445,12 @@ class SourcesExtractor:
             metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             merged_metadata = {**metadata}
             
+            # 원본 문서 URL 생성
+            source_id = merged_metadata.get("source_id") or doc.get("source_id") or merged_metadata.get("id")
+            original_url = None
+            if source_id and source_type:
+                original_url = f"/api/documents/original/{source_type}/{source_id}"
+            
             # doc의 최상위 레벨 필드도 확인 (metadata에 없으면 doc에서 가져오기, 강화)
             for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
                        "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date",
@@ -1431,10 +1458,17 @@ class SourcesExtractor:
                 if key in doc and not merged_metadata.get(key):
                     merged_metadata[key] = doc[key]
             
+            # 원본 문서 URL 생성
+            source_id = merged_metadata.get("source_id") or doc.get("source_id") or merged_metadata.get("id")
+            original_url = None
+            if source_id and source_type:
+                original_url = f"/api/documents/original/{source_type}/{source_id}"
+            
             detail_dict = {
                 "name": "",
                 "type": source_type,
                 "url": "",
+                "original_url": original_url,
                 "metadata": merged_metadata
             }
             
@@ -1828,7 +1862,8 @@ class SourcesExtractor:
             "statute_article": [],
             "case_paragraph": [],
             "decision_paragraph": [],
-            "interpretation_paragraph": []
+            "interpretation_paragraph": [],
+            "regulation_paragraph": []
         }
         
         for detail in sources_detail:
@@ -1853,7 +1888,8 @@ class SourcesExtractor:
                 "statute_article": [],
                 "case_paragraph": [],
                 "decision_paragraph": [],
-                "interpretation_paragraph": []
+                "interpretation_paragraph": [],
+                "regulation_paragraph": []
             }
             
             if sources_detail:
@@ -1886,7 +1922,8 @@ class SourcesExtractor:
                 "statute_article": [],
                 "case_paragraph": [],
                 "decision_paragraph": [],
-                "interpretation_paragraph": []
+                "interpretation_paragraph": [],
+                "regulation_paragraph": []
             }
     
     def _extract_statutes_from_reference_clauses(

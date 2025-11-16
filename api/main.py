@@ -138,7 +138,7 @@ get_api_config()
 from api.middleware.logging import setup_logging
 
 # 라우터는 환경 변수 로드 후에 import
-from api.routers import chat, session, history, feedback, health, auth
+from api.routers import chat, session, history, feedback, health, auth, documents
 
 # FastAPI 앱 생성
 # 프로덕션 환경에서 API 문서 비활성화
@@ -452,6 +452,7 @@ app.include_router(history.router, prefix="/api/v1", tags=["history"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
+app.include_router(documents.router, tags=["documents"])
 
 
 @app.get("/")

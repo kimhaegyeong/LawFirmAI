@@ -456,6 +456,17 @@ async def _generate_stream_response(
                     # sources 이벤트 생성 실패해도 스트림은 계속 진행
             
             _maybe_generate_session_title(session_id)
+        
+        # 스트림 종료를 명확히 하기 위해 빈 줄 전송 (선택사항)
+        # FastAPI의 StreamingResponse는 제너레이터가 종료되면 자동으로 연결을 닫지만,
+        # 명시적으로 종료 신호를 보내면 더 안전함
+        try:
+            # 제너레이터가 정상적으로 종료되면 자동으로 연결이 닫힘
+            # 추가 종료 신호는 필요 없음 (FastAPI가 자동 처리)
+            pass
+        except GeneratorExit:
+            logger.debug("[_generate_stream_response] Generator exit during cleanup")
+            raise
     
     except GeneratorExit:
         logger.debug("[chat_stream] Client disconnected, closing stream")

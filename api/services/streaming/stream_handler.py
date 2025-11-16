@@ -368,6 +368,10 @@ class StreamHandler:
                     
                     done_event = self.event_builder.create_done_event(full_answer, final_metadata)
                     yield format_sse_event(done_event)
+                    
+                    # 스트림 종료를 명확히 하기 위해 제너레이터 종료
+                    # break 후 제너레이터가 정상적으로 종료되면 FastAPI가 자동으로 연결을 닫음
+                    logger.debug("[stream_final_answer] Stream completed, generator will exit")
                     break
         
         finally:
@@ -411,19 +415,126 @@ class StreamHandler:
                     f"full_answer_length={len(full_answer)}"
                 )
                 
-                sources = state_values.get("sources", [])
-                legal_references = state_values.get("legal_references", [])
-                sources_detail = state_values.get("sources_detail", [])
+                sources_from_top = state_values.get("sources", [])
+                sources_from_common = (state_values.get("common", {}).get("sources") if isinstance(state_values.get("common"), dict) else None) or []
+                sources_from_metadata = (state_values.get("metadata", {}).get("sources") if isinstance(state_values.get("metadata"), dict) else None) or []
+                sources = sources_from_top or sources_from_common or sources_from_metadata or []
+                
+                legal_refs_from_top = state_values.get("legal_references", [])
+                legal_refs_from_common = (state_values.get("common", {}).get("legal_references") if isinstance(state_values.get("common"), dict) else None) or []
+                legal_refs_from_metadata = (state_values.get("metadata", {}).get("legal_references") if isinstance(state_values.get("metadata"), dict) else None) or []
+                legal_references = legal_refs_from_top or legal_refs_from_common or legal_refs_from_metadata or []
+                
+                sources_detail_from_top = state_values.get("sources_detail", [])
+                sources_detail_from_common = (state_values.get("common", {}).get("sources_detail") if isinstance(state_values.get("common"), dict) else None) or []
+                sources_detail_from_metadata = (state_values.get("metadata", {}).get("sources_detail") if isinstance(state_values.get("metadata"), dict) else None) or []
+                sources_detail = sources_detail_from_top or sources_detail_from_common or sources_detail_from_metadata or []
+                
+                sources_source = "top" if sources_from_top else ("common" if sources_from_common else ("metadata" if sources_from_metadata else "none"))
+                sources_detail_source = "top" if sources_detail_from_top else ("common" if sources_detail_from_common else ("metadata" if sources_detail_from_metadata else "none"))
                 
                 logger.debug(
                     f"[stream_final_answer] Sources extraction check: "
-                    f"state_sources={len(sources)}, "
+                    f"state_sources={len(sources)} (from {sources_source}), "
                     f"state_legal_references={len(legal_references)}, "
-                    f"state_sources_detail={len(sources_detail)}"
+                    f"state_sources_detail={len(sources_detail)} (from {sources_detail_source})"
                 )
                 
-                if not sources and not sources_detail:
-                    retrieved_docs = state_values.get("retrieved_docs", [])
+                if not sources_detail:
+                    structured_docs_from_top = state_values.get("structured_documents")
+                    structured_docs_from_search = (state_values.get("search", {}).get("structured_documents") if isinstance(state_values.get("search"), dict) else None)
+                    structured_docs_from_common = (state_values.get("common", {}).get("search", {}).get("structured_documents") if isinstance(state_values.get("common"), dict) and isinstance(state_values["common"].get("search"), dict) else None)
+                    
+                    structured_docs = (
+                        structured_docs_from_top or
+                        structured_docs_from_search or
+                        structured_docs_from_common
+                    )
+                    
+                    prompt_used_docs = []
+                    if structured_docs and isinstance(structured_docs, dict):
+                        documents_in_prompt = structured_docs.get("documents", [])
+                        if documents_in_prompt and isinstance(documents_in_prompt, list):
+                            min_relevance_score = 0.80
+                            filtered_docs = []
+                            for doc in documents_in_prompt:
+                                if not isinstance(doc, dict):
+                                    continue
+                                
+                                relevance_score = (
+                                    doc.get("relevance_score") or
+                                    doc.get("score") or
+                                    doc.get("final_weighted_score") or
+                                    doc.get("similarity") or
+                                    0.0
+                                )
+                                
+                                if relevance_score >= min_relevance_score:
+                                    filtered_docs.append(doc)
+                                else:
+                                    logger.debug(
+                                        f"[stream_final_answer] Document filtered out due to low relevance: "
+                                        f"score={relevance_score:.3f} < {min_relevance_score}, "
+                                        f"doc_id={doc.get('doc_id') or doc.get('id') or 'unknown'}"
+                                    )
+                            
+                            prompt_used_docs = filtered_docs
+                            logger.info(
+                                f"[stream_final_answer] Filtered documents by relevance (>= {min_relevance_score}): "
+                                f"{len(prompt_used_docs)}/{len(documents_in_prompt)} documents passed"
+                            )
+                            
+                            if not prompt_used_docs and documents_in_prompt:
+                                logger.warning(
+                                    f"[stream_final_answer] No documents with relevance >= {min_relevance_score} found. "
+                                    f"All {len(documents_in_prompt)} documents were filtered out. "
+                                    f"Consider lowering the threshold or checking document quality."
+                                )
+                    
+                    retrieved_docs_from_top = state_values.get("retrieved_docs")
+                    retrieved_docs_from_search = (state_values.get("search", {}).get("retrieved_docs") if isinstance(state_values.get("search"), dict) else None)
+                    retrieved_docs_from_common = (state_values.get("common", {}).get("search", {}).get("retrieved_docs") if isinstance(state_values.get("common"), dict) and isinstance(state_values["common"].get("search"), dict) else None)
+                    retrieved_docs_from_metadata = (state_values.get("metadata", {}).get("retrieved_docs") if isinstance(state_values.get("metadata"), dict) else None)
+                    retrieved_docs_from_metadata_search = (state_values.get("metadata", {}).get("search", {}).get("retrieved_docs") if isinstance(state_values.get("metadata"), dict) and isinstance(state_values["metadata"].get("search"), dict) else None)
+                    
+                    all_retrieved_docs = (
+                        retrieved_docs_from_top or
+                        retrieved_docs_from_search or
+                        retrieved_docs_from_common or
+                        retrieved_docs_from_metadata or
+                        retrieved_docs_from_metadata_search
+                    )
+                    
+                    if prompt_used_docs:
+                        retrieved_docs = prompt_used_docs
+                        logger.info(
+                            f"[stream_final_answer] Using {len(retrieved_docs)} documents from structured_documents "
+                            f"(actual documents used in prompt) instead of all {len(all_retrieved_docs) if all_retrieved_docs else 0} retrieved_docs"
+                        )
+                    else:
+                        retrieved_docs = all_retrieved_docs
+                        if retrieved_docs:
+                            logger.debug(
+                                f"[stream_final_answer] structured_documents not found, "
+                                f"using all {len(retrieved_docs)} retrieved_docs"
+                            )
+                    
+                    if prompt_used_docs:
+                        retrieved_docs_source = "structured_documents"
+                    else:
+                        retrieved_docs_source = (
+                            "top" if retrieved_docs_from_top else
+                            ("search" if retrieved_docs_from_search else
+                            ("common.search" if retrieved_docs_from_common else
+                            ("metadata" if retrieved_docs_from_metadata else
+                            ("metadata.search" if retrieved_docs_from_metadata_search else "none"))))
+                        )
+                    
+                    logger.debug(
+                        f"[stream_final_answer] Retrieved docs check: "
+                        f"count={len(retrieved_docs) if retrieved_docs else 0}, "
+                        f"source={retrieved_docs_source}"
+                    )
                     
                     # state에 retrieved_docs가 없으면 global cache에서 가져오기 시도
                     if not retrieved_docs:
@@ -457,25 +568,66 @@ class StreamHandler:
                             if _global_search_results_cache is not None:
                                 logger.debug(f"[stream_final_answer] Global cache exists: {type(_global_search_results_cache).__name__}, keys: {list(_global_search_results_cache.keys()) if isinstance(_global_search_results_cache, dict) else 'N/A'}")
                                 
-                                # search 그룹에서 확인
+                                cached_structured_docs = None
                                 if isinstance(_global_search_results_cache, dict) and "search" in _global_search_results_cache:
                                     cached_search = _global_search_results_cache["search"]
                                     if isinstance(cached_search, dict):
-                                        cached_docs = cached_search.get("retrieved_docs", [])
-                                        if isinstance(cached_docs, list) and len(cached_docs) > 0:
-                                            retrieved_docs = cached_docs
-                                            logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} retrieved_docs from global cache search group")
-                                        else:
-                                            cached_merged = cached_search.get("merged_documents", [])
-                                            if isinstance(cached_merged, list) and len(cached_merged) > 0:
-                                                retrieved_docs = cached_merged
-                                                logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} merged_documents from global cache search group")
+                                        cached_structured_docs = cached_search.get("structured_documents")
                                 
-                                # 최상위 레벨에서 확인
+                                if cached_structured_docs and isinstance(cached_structured_docs, dict):
+                                    cached_prompt_docs = cached_structured_docs.get("documents", [])
+                                    if cached_prompt_docs and isinstance(cached_prompt_docs, list) and len(cached_prompt_docs) > 0:
+                                        min_relevance_score = 0.80
+                                        filtered_cached_docs = []
+                                        for doc in cached_prompt_docs:
+                                            if not isinstance(doc, dict):
+                                                continue
+                                            
+                                            relevance_score = (
+                                                doc.get("relevance_score") or
+                                                doc.get("score") or
+                                                doc.get("final_weighted_score") or
+                                                doc.get("similarity") or
+                                                0.0
+                                            )
+                                            
+                                            if relevance_score >= min_relevance_score:
+                                                filtered_cached_docs.append(doc)
+                                        
+                                        if filtered_cached_docs:
+                                            retrieved_docs = filtered_cached_docs
+                                            retrieved_docs_source = "global_cache.structured_documents"
+                                            logger.info(
+                                                f"[stream_final_answer] Restored {len(retrieved_docs)}/{len(cached_prompt_docs)} documents "
+                                                f"from global cache structured_documents (filtered by relevance >= {min_relevance_score})"
+                                            )
+                                        else:
+                                            logger.warning(
+                                                f"[stream_final_answer] All {len(cached_prompt_docs)} documents from global cache "
+                                                f"were filtered out (relevance < {min_relevance_score})"
+                                            )
+                                
+                                if not retrieved_docs:
+                                    if isinstance(_global_search_results_cache, dict) and "search" in _global_search_results_cache:
+                                        cached_search = _global_search_results_cache["search"]
+                                        if isinstance(cached_search, dict):
+                                            cached_docs = cached_search.get("retrieved_docs", [])
+                                            if isinstance(cached_docs, list) and len(cached_docs) > 0:
+                                                retrieved_docs = cached_docs
+                                                retrieved_docs_source = "global_cache.search.retrieved_docs"
+                                                logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} retrieved_docs from global cache search group")
+                                            else:
+                                                cached_merged = cached_search.get("merged_documents", [])
+                                                if isinstance(cached_merged, list) and len(cached_merged) > 0:
+                                                    retrieved_docs = cached_merged
+                                                    retrieved_docs_source = "global_cache.search.merged_documents"
+                                                    logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} merged_documents from global cache search group")
+                                
                                 if not retrieved_docs and isinstance(_global_search_results_cache, dict):
                                     cached_docs = _global_search_results_cache.get("retrieved_docs", [])
                                     if isinstance(cached_docs, list) and len(cached_docs) > 0:
                                         retrieved_docs = cached_docs
+                                        retrieved_docs_source = "global_cache.top"
                                         logger.debug(f"[stream_final_answer] Restored {len(retrieved_docs)} retrieved_docs from global cache top level")
                                 
                                 if not retrieved_docs:
@@ -489,6 +641,7 @@ class StreamHandler:
                     logger.debug(
                         f"[stream_final_answer] Attempting to extract sources: "
                         f"retrieved_docs_count={len(retrieved_docs) if retrieved_docs else 0}, "
+                        f"retrieved_docs_source={retrieved_docs_source}, "
                         f"sources_extractor={self.sources_extractor is not None}"
                     )
                     

@@ -141,6 +141,7 @@ class SourceInfo(BaseModel):
     name: str = Field(..., description="출처명")
     type: str = Field(..., description="출처 타입 (statute_article, case_paragraph 등)")
     url: Optional[str] = Field(None, description="출처 URL")
+    original_url: Optional[str] = Field(None, description="원본 문서 조회 URL")
     metadata: Optional[Dict[str, Any]] = Field(None, description="추가 메타데이터")
 
 
