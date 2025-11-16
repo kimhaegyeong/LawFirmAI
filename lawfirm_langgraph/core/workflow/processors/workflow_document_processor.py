@@ -42,11 +42,23 @@ class WorkflowDocumentProcessor:
             
             valid_docs = []
             invalid_docs_count = 0
-            min_relevance_score_semantic = 0.2
-            min_relevance_score_keyword = 0.15
             
-            # 개선 #4: 법령 조문 타입 문서의 필터링 임계값 완화
-            min_relevance_score_statute_article = 0.1
+            # 개선 1, 4: 문서 타입별 필터링 기준 차등화
+            min_relevance_score_semantic = 0.60
+            min_relevance_score_keyword = 0.55
+            min_relevance_score_statute_article = 0.50
+            min_relevance_score_precedent = 0.60
+            min_relevance_score_general = 0.65
+            
+            # 개선 6: 키워드 매칭 점수 최소 기준
+            min_keyword_match_score = 0.01
+            
+            # 개선 7: 질문 핵심 키워드 추출 (간단한 버전)
+            query_lower = query.lower()
+            query_keywords = []
+            for keyword in extracted_keywords:
+                if keyword and len(keyword) > 1:
+                    query_keywords.append(keyword.lower())
             
             for doc in retrieved_docs:
                 if not isinstance(doc, dict):
@@ -54,15 +66,35 @@ class WorkflowDocumentProcessor:
                     continue
                 
                 content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
-                if not content or len(content.strip()) < 10:
+                
+                # 개선 7: 문서 내용 길이 및 품질 검증 강화
+                if not content or len(content.strip()) < 20:
                     invalid_docs_count += 1
-                    self.logger.debug(f"Document filtered: content too short or empty (source: {doc.get('source', 'Unknown')})")
+                    self.logger.debug(f"Document filtered: content too short or empty (length: {len(content) if content else 0}, source: {doc.get('source', 'Unknown')})")
                     continue
                 
                 search_type = doc.get("search_type", "semantic")
                 relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
                 keyword_match_score = doc.get("keyword_match_score", 0.0)
-                has_keyword_match = keyword_match_score > 0.0 or len(doc.get("matched_keywords", [])) > 0
+                matched_keywords = doc.get("matched_keywords", [])
+                has_keyword_match = keyword_match_score > 0.0 or len(matched_keywords) > 0
+                
+                # 개선 6: 키워드 매칭 점수 기반 필터링
+                if keyword_match_score == 0.0 and not matched_keywords:
+                    content_lower = content.lower()
+                    has_query_keyword = False
+                    for qkw in query_keywords:
+                        if qkw in content_lower:
+                            has_query_keyword = True
+                            break
+                    
+                    if not has_query_keyword and relevance_score < 0.70:
+                        invalid_docs_count += 1
+                        self.logger.debug(
+                            f"Document filtered: no keyword match and low relevance "
+                            f"(relevance: {relevance_score:.3f}, source: {doc.get('source', 'Unknown')})"
+                        )
+                        continue
                 
                 # 문서 타입 확인
                 doc_type = doc.get("type", "").lower() if doc.get("type") else ""
@@ -75,16 +107,26 @@ class WorkflowDocumentProcessor:
                     doc.get("direct_match", False) or
                     search_type == "direct_statute"
                 )
+                is_precedent = (
+                    doc_type == "precedent" or
+                    source_type == "precedent" or
+                    "precedent" in doc_type or
+                    "precedent" in source_type or
+                    "판례" in content[:200] or
+                    "대법원" in content[:200]
+                )
                 
-                # 개선 #4: 법령 조문은 낮은 임계값 적용
+                # 개선 4: 문서 타입별 필터링 기준 차등화
                 if is_statute_article:
                     min_score = min_relevance_score_statute_article
+                elif is_precedent:
+                    min_score = min_relevance_score_precedent
                 elif search_type == "keyword" and has_keyword_match:
                     min_score = min_relevance_score_keyword
                 elif search_type == "semantic":
                     min_score = min_relevance_score_semantic
                 else:
-                    min_score = min_relevance_score_keyword if search_type == "keyword" else min_relevance_score_semantic
+                    min_score = min_relevance_score_general
                 
                 if relevance_score < min_score:
                     invalid_docs_count += 1
@@ -120,13 +162,23 @@ class WorkflowDocumentProcessor:
                 reverse=True
             )
             
+            # 개선 8: 프롬프트에 포함할 문서 수 제한 (5-7개)
+            max_docs_for_prompt = 7
+            
+            # 개선 12: 문서 선택 로직 개선 (관련성 우선)
             if select_balanced_documents_func:
-                balanced_docs = select_balanced_documents_func(sorted_docs, max_docs=10)
+                balanced_docs = select_balanced_documents_func(sorted_docs, max_docs=max_docs_for_prompt)
             else:
-                balanced_docs = self.select_balanced_documents(sorted_docs, max_docs=10)
+                balanced_docs = self.select_balanced_documents_relevance_first(
+                    sorted_docs, 
+                    query=query,
+                    extracted_keywords=extracted_keywords,
+                    query_type=query_type,
+                    max_docs=max_docs_for_prompt
+                )
             
             if not balanced_docs and sorted_docs:
-                balanced_docs = sorted_docs[:min(8, len(sorted_docs))]
+                balanced_docs = sorted_docs[:min(max_docs_for_prompt, len(sorted_docs))]
             
             sorted_docs = balanced_docs
             
@@ -291,6 +343,20 @@ class WorkflowDocumentProcessor:
                     f"(may contain instructions only without actual document content)"
                 )
             
+            # 개선 10: 프롬프트 생성 후 최종 검증
+            final_validation = self._validate_final_documents(
+                sorted_docs=sorted_docs,
+                query=query,
+                extracted_keywords=extracted_keywords,
+                query_type=query_type
+            )
+            
+            if final_validation.get("low_relevance_warning"):
+                self.logger.warning(
+                    f"build_prompt_optimized_context: {final_validation['low_relevance_warning']} "
+                    f"(low_relevance_count: {final_validation.get('low_relevance_count', 0)})"
+                )
+            
             return {
                 "prompt_optimized_text": prompt_section,
                 "structured_documents": {
@@ -304,7 +370,8 @@ class WorkflowDocumentProcessor:
                 },
                 "document_count": len(sorted_docs),
                 "total_context_length": len(prompt_section),
-                "content_validation": content_validation
+                "content_validation": content_validation,
+                "final_validation": final_validation
             }
         
         except Exception as e:
@@ -376,6 +443,184 @@ class WorkflowDocumentProcessor:
         )
         
         return selected_docs[:max_docs]
+    
+    def select_balanced_documents_relevance_first(
+        self,
+        sorted_docs: List[Dict[str, Any]],
+        query: str,
+        extracted_keywords: List[str],
+        query_type: str,
+        max_docs: int = 7
+    ) -> List[Dict[str, Any]]:
+        """
+        개선 12: 관련성 우선 문서 선택 (다양성보다 관련성 우선)
+        
+        Args:
+            sorted_docs: 점수로 정렬된 문서 리스트
+            query: 사용자 질문
+            extracted_keywords: 추출된 키워드 리스트
+            query_type: 질문 유형
+            max_docs: 선택할 최대 문서 수
+        
+        Returns:
+            관련성이 높은 문서 리스트
+        """
+        if not sorted_docs:
+            return []
+        
+        # 개선 9: 질문 유형별 문서 필터링 기준 적용
+        query_lower = query.lower()
+        query_keywords_lower = [kw.lower() for kw in extracted_keywords if kw and len(kw) > 1]
+        
+        selected_docs = []
+        seen_sources = set()
+        
+        # 1단계: 관련도가 높은 문서 우선 선택 (관련도 0.65 이상)
+        high_relevance_docs = [
+            doc for doc in sorted_docs 
+            if (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) >= 0.65
+        ]
+        
+        for doc in high_relevance_docs:
+            if len(selected_docs) >= max_docs:
+                break
+            
+            source = doc.get("source", "")
+            if source and source not in seen_sources:
+                selected_docs.append(doc)
+                seen_sources.add(source)
+        
+        # 2단계: 관련도가 중간인 문서 선택 (관련도 0.55-0.65)
+        if len(selected_docs) < max_docs:
+            medium_relevance_docs = [
+                doc for doc in sorted_docs 
+                if 0.55 <= (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) < 0.65
+                and doc not in selected_docs
+            ]
+            
+            for doc in medium_relevance_docs:
+                if len(selected_docs) >= max_docs:
+                    break
+                
+                # 개선 9: 질문 유형별 필터링
+                content = (doc.get("content") or doc.get("text") or "").lower()
+                has_relevant_keyword = False
+                
+                for qkw in query_keywords_lower:
+                    if qkw in content or qkw in query_lower:
+                        has_relevant_keyword = True
+                        break
+                
+                if has_relevant_keyword or doc.get("keyword_match_score", 0.0) > 0.0:
+                    source = doc.get("source", "")
+                    if not source or source not in seen_sources:
+                        selected_docs.append(doc)
+                        if source:
+                            seen_sources.add(source)
+        
+        # 3단계: 부족하면 상위 문서로 채우기
+        if len(selected_docs) < max_docs:
+            for doc in sorted_docs:
+                if len(selected_docs) >= max_docs:
+                    break
+                if doc not in selected_docs:
+                    selected_docs.append(doc)
+        
+        self.logger.info(
+            f"select_balanced_documents_relevance_first: Selected {len(selected_docs)}/{len(sorted_docs)} documents "
+            f"(high_relevance: {len([d for d in selected_docs if (d.get('relevance_score', 0.0) or d.get('final_weighted_score', 0.0)) >= 0.65])})"
+        )
+        
+        return selected_docs[:max_docs]
+    
+    def _validate_final_documents(
+        self,
+        sorted_docs: List[Dict[str, Any]],
+        query: str,
+        extracted_keywords: List[str],
+        query_type: str
+    ) -> Dict[str, Any]:
+        """
+        개선 10: 프롬프트 생성 후 최종 검증
+        
+        Args:
+            sorted_docs: 최종 선택된 문서 리스트
+            query: 사용자 질문
+            extracted_keywords: 추출된 키워드 리스트
+            query_type: 질문 유형
+        
+        Returns:
+            검증 결과 딕셔너리
+        """
+        validation_result = {
+            "total_docs": len(sorted_docs),
+            "high_relevance_count": 0,
+            "medium_relevance_count": 0,
+            "low_relevance_count": 0,
+            "low_relevance_warning": None,
+            "avg_relevance_score": 0.0,
+            "min_relevance_score": 0.0,
+            "max_relevance_score": 0.0
+        }
+        
+        if not sorted_docs:
+            return validation_result
+        
+        relevance_scores = []
+        query_lower = query.lower()
+        query_keywords_lower = [kw.lower() for kw in extracted_keywords if kw and len(kw) > 1]
+        
+        for doc in sorted_docs:
+            relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+            relevance_scores.append(relevance_score)
+            
+            if relevance_score >= 0.65:
+                validation_result["high_relevance_count"] += 1
+            elif relevance_score >= 0.55:
+                validation_result["medium_relevance_count"] += 1
+            else:
+                validation_result["low_relevance_count"] += 1
+                
+                # 관련도가 낮은 문서의 경우 키워드 매칭 확인
+                content = (doc.get("content") or doc.get("text") or "").lower()
+                has_keyword = False
+                for qkw in query_keywords_lower:
+                    if qkw in content:
+                        has_keyword = True
+                        break
+                
+                if not has_keyword and doc.get("keyword_match_score", 0.0) == 0.0:
+                    source = doc.get("source", "Unknown")
+                    if not validation_result["low_relevance_warning"]:
+                        validation_result["low_relevance_warning"] = f"Low relevance documents detected: {source}"
+                    else:
+                        validation_result["low_relevance_warning"] += f", {source}"
+        
+        if relevance_scores:
+            validation_result["avg_relevance_score"] = sum(relevance_scores) / len(relevance_scores)
+            validation_result["min_relevance_score"] = min(relevance_scores)
+            validation_result["max_relevance_score"] = max(relevance_scores)
+        
+        # 경고 조건: 관련도가 낮은 문서가 전체의 30% 이상이거나 평균 관련도가 0.60 미만
+        if validation_result["low_relevance_count"] > 0:
+            low_relevance_ratio = validation_result["low_relevance_count"] / validation_result["total_docs"]
+            if low_relevance_ratio >= 0.3 or validation_result["avg_relevance_score"] < 0.60:
+                if not validation_result["low_relevance_warning"]:
+                    validation_result["low_relevance_warning"] = (
+                        f"Low relevance ratio: {low_relevance_ratio:.1%}, "
+                        f"avg_score: {validation_result['avg_relevance_score']:.3f}"
+                    )
+        
+        self.logger.info(
+            f"_validate_final_documents: Validation complete - "
+            f"total: {validation_result['total_docs']}, "
+            f"high: {validation_result['high_relevance_count']}, "
+            f"medium: {validation_result['medium_relevance_count']}, "
+            f"low: {validation_result['low_relevance_count']}, "
+            f"avg_score: {validation_result['avg_relevance_score']:.3f}"
+        )
+        
+        return validation_result
     
     def select_high_value_documents(
         self,
