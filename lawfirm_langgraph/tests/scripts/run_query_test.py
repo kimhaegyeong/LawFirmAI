@@ -13,17 +13,18 @@ import io
 import os
 
 # python-dotenv 경고 억제 (가장 먼저 실행)
-# stderr를 완전히 리다이렉트하여 python-dotenv 경고 억제
+# stderr를 완전히 리다이렉트하지 않고, warnings만 필터링
 _original_stderr = sys.stderr
-try:
-    # Windows와 Unix 모두 지원
-    if sys.platform == 'win32':
-        sys.stderr = open('nul', 'w', encoding='utf-8', errors='replace')
-    else:
-        sys.stderr = open('/dev/null', 'w', encoding='utf-8', errors='replace')
-except Exception:
-    # 실패 시 원본 stderr 유지
-    pass
+# stderr 리다이렉트 제거 - 로깅 오류 방지
+# try:
+#     # Windows와 Unix 모두 지원
+#     if sys.platform == 'win32':
+#         sys.stderr = open('nul', 'w', encoding='utf-8', errors='replace')
+#     else:
+#         sys.stderr = open('/dev/null', 'w', encoding='utf-8', errors='replace')
+# except Exception:
+#     # 실패 시 원본 stderr 유지
+#     pass
 
 # warnings 모듈도 필터링
 import warnings
@@ -295,10 +296,37 @@ async def run_query_test(query: str):
         
         # 설정 로드
         logger.info("1️⃣  설정 로드 중...")
+        
+        # IndexIVFPQ 인덱스 사용 설정 (환경 변수 우선, 없으면 기본값)
+        if not os.getenv('USE_EXTERNAL_VECTOR_STORE'):
+            os.environ['USE_EXTERNAL_VECTOR_STORE'] = 'true'
+            logger.info("   📌 USE_EXTERNAL_VECTOR_STORE=true 설정됨")
+        
+        if not os.getenv('EXTERNAL_VECTOR_STORE_BASE_PATH'):
+            # IndexIVFPQ 인덱스 경로 자동 감지
+            possible_paths = [
+                "data/vector_store/v2.0.0-dynamic-dynamic-ivfpq",
+                "./data/vector_store/v2.0.0-dynamic-dynamic-ivfpq",
+                str(project_root / "data" / "vector_store" / "v2.0.0-dynamic-dynamic-ivfpq")
+            ]
+            for path in possible_paths:
+                if Path(path).exists():
+                    os.environ['EXTERNAL_VECTOR_STORE_BASE_PATH'] = path
+                    logger.info(f"   📌 EXTERNAL_VECTOR_STORE_BASE_PATH={path} 설정됨")
+                    break
+        
         config = LangGraphConfig.from_env()
         config.enable_checkpoint = False  # 테스트 모드
         logger.info(f"   ✅ LangGraph 활성화: {config.langgraph_enabled}")
         logger.info(f"   ✅ 체크포인트: {config.enable_checkpoint}")
+        
+        # 외부 인덱스 설정 확인
+        from lawfirm_langgraph.core.utils.config import Config
+        config_obj = Config()
+        if config_obj.use_external_vector_store:
+            logger.info(f"   ✅ 외부 인덱스 사용: {config_obj.external_vector_store_base_path}")
+        else:
+            logger.info(f"   ℹ️  외부 인덱스 미사용 (DB 기반 인덱스 사용)")
         
         # 서비스 초기화
         logger.info("\n2️⃣  LangGraphWorkflowService 초기화 중...")
@@ -605,14 +633,14 @@ async def run_query_test(query: str):
 def main():
     """메인 실행 함수"""
     try:
-        # stderr 복원 (모듈 import 후)
-        global _original_stderr
-        try:
-            if hasattr(sys.stderr, 'close'):
-                sys.stderr.close()
-        except:
-            pass
-        sys.stderr = _original_stderr
+        # stderr 복원 (모듈 import 후) - 이미 리다이렉트하지 않으므로 불필요
+        # global _original_stderr
+        # try:
+        #     if hasattr(sys.stderr, 'close'):
+        #         sys.stderr.close()
+        # except:
+        #     pass
+        # sys.stderr = _original_stderr
         
         query = get_query_from_args()
         

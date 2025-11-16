@@ -142,7 +142,7 @@ def fix_embedding_version_ids(db_path: str, dry_run: bool = True) -> Dict[str, A
 
 def fix_metadata_fields(db_path: str, dry_run: bool = True) -> Dict[str, Any]:
     """
-    메타데이터 필드 보완 (case_paragraph의 doc_id, casenames, court 등)
+    메타데이터 필드 보완 (모든 source_type의 메타데이터)
     
     Args:
         db_path: 데이터베이스 경로
@@ -156,9 +156,13 @@ def fix_metadata_fields(db_path: str, dry_run: bool = True) -> Dict[str, Any]:
     
     try:
         cursor = conn.cursor()
+        total_updated = 0
         
-        # case_paragraph 타입 청크 중 메타데이터 누락 확인
-        # text_chunks 테이블에는 meta 컬럼이 있음 (metadata가 아님)
+        logger.info("\n" + "="*80)
+        logger.info("메타데이터 필드 보완")
+        logger.info("="*80)
+        
+        # 1. case_paragraph 타입 처리
         cursor.execute("""
             SELECT 
                 COUNT(*) as total_case_chunks,
@@ -166,78 +170,269 @@ def fix_metadata_fields(db_path: str, dry_run: bool = True) -> Dict[str, Any]:
             FROM text_chunks tc
             WHERE tc.source_type = 'case_paragraph'
         """)
-        stats = dict(cursor.fetchone())
+        case_stats = dict(cursor.fetchone())
         
-        logger.info("\n" + "="*80)
-        logger.info("메타데이터 필드 보완")
-        logger.info("="*80)
-        logger.info(f"case_paragraph 타입 청크 수: {stats['total_case_chunks']}")
-        logger.info(f"메타데이터 누락 청크: {stats['missing_metadata']}")
+        logger.info(f"\n[case_paragraph]")
+        logger.info(f"  전체 청크 수: {case_stats['total_case_chunks']}")
+        logger.info(f"  메타데이터 누락 청크: {case_stats['missing_metadata']}")
         
-        if stats['missing_metadata'] == 0:
-            logger.info("✅ 모든 case_paragraph 청크에 메타데이터가 있습니다.")
-            return stats
+        if case_stats['missing_metadata'] > 0:
+            cursor.execute("""
+                SELECT 
+                    tc.id as chunk_id,
+                    tc.source_id,
+                    c.doc_id,
+                    c.casenames,
+                    c.court
+                FROM text_chunks tc
+                LEFT JOIN case_paragraphs cp ON tc.source_id = cp.id
+                LEFT JOIN cases c ON cp.case_id = c.id
+                WHERE tc.source_type = 'case_paragraph'
+                AND (tc.meta IS NULL OR tc.meta = '')
+                AND cp.id IS NOT NULL
+                AND c.id IS NOT NULL
+            """)
+            
+            case_rows = cursor.fetchall()
+            logger.info(f"  메타데이터 보완 가능한 청크: {len(case_rows)}개")
+            
+            if not dry_run:
+                case_updated = 0
+                for row in case_rows:
+                    try:
+                        import json
+                        metadata = {
+                            'doc_id': row['doc_id'],
+                            'casenames': row['casenames'],
+                            'court': row['court']
+                        }
+                        metadata_json = json.dumps(metadata, ensure_ascii=False)
+                        
+                        cursor.execute("""
+                            UPDATE text_chunks
+                            SET meta = ?
+                            WHERE id = ?
+                        """, (metadata_json, row['chunk_id']))
+                        
+                        case_updated += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to update metadata for chunk_id={row['chunk_id']}: {e}")
+                
+                total_updated += case_updated
+                logger.info(f"  ✅ {case_updated}개 청크의 메타데이터 보완 완료")
+            else:
+                if case_rows:
+                    logger.info("  샘플:")
+                    for row in case_rows[:3]:
+                        logger.info(f"    청크 ID: {row['chunk_id']}, doc_id: {row['doc_id']}, casenames: {row['casenames']}")
         
-        # case_paragraphs와 cases 테이블을 JOIN하여 메타데이터 조회
+        # 2. decision_paragraph 타입 처리
         cursor.execute("""
             SELECT 
-                tc.id as chunk_id,
-                tc.source_id,
-                c.doc_id,
-                c.casenames,
-                c.court
+                COUNT(*) as total_decision_chunks,
+                COUNT(CASE WHEN tc.meta IS NULL OR tc.meta = '' THEN 1 END) as missing_metadata
             FROM text_chunks tc
-            LEFT JOIN case_paragraphs cp ON tc.source_id = cp.id
-            LEFT JOIN cases c ON cp.case_id = c.id
-            WHERE tc.source_type = 'case_paragraph'
-            AND (tc.meta IS NULL OR tc.meta = '')
-            AND cp.id IS NOT NULL
-            AND c.id IS NOT NULL
-            LIMIT 100
+            WHERE tc.source_type = 'decision_paragraph'
         """)
+        decision_stats = dict(cursor.fetchone())
         
-        rows = cursor.fetchall()
-        logger.info(f"메타데이터 보완 가능한 청크: {len(rows)}개")
+        logger.info(f"\n[decision_paragraph]")
+        logger.info(f"  전체 청크 수: {decision_stats['total_decision_chunks']}")
+        logger.info(f"  메타데이터 누락 청크: {decision_stats['missing_metadata']}")
         
-        if dry_run:
-            logger.info(f"\n[DRY RUN] {len(rows)}개 청크의 메타데이터를 보완할 예정입니다.")
-            if rows:
-                logger.info("샘플:")
-                for row in rows[:3]:
-                    logger.info(f"  청크 ID: {row['chunk_id']}, doc_id: {row['doc_id']}, casenames: {row['casenames']}")
-            return stats
-        
-        # 메타데이터 업데이트
-        updated_count = 0
-        for row in rows:
-            try:
-                import json
-                metadata = {
-                    'doc_id': row['doc_id'],
-                    'casenames': row['casenames'],
-                    'court': row['court']
-                }
-                metadata_json = json.dumps(metadata, ensure_ascii=False)
+        if decision_stats['missing_metadata'] > 0:
+            cursor.execute("""
+                SELECT 
+                    tc.id as chunk_id,
+                    tc.source_id,
+                    d.org,
+                    d.doc_id
+                FROM text_chunks tc
+                LEFT JOIN decision_paragraphs dp ON tc.source_id = dp.id
+                LEFT JOIN decisions d ON dp.decision_id = d.id
+                WHERE tc.source_type = 'decision_paragraph'
+                AND (tc.meta IS NULL OR tc.meta = '')
+                AND dp.id IS NOT NULL
+                AND d.id IS NOT NULL
+            """)
+            
+            decision_rows = cursor.fetchall()
+            logger.info(f"  메타데이터 보완 가능한 청크: {len(decision_rows)}개")
+            
+            if not dry_run:
+                decision_updated = 0
+                for row in decision_rows:
+                    try:
+                        import json
+                        metadata = {
+                            'org': row['org'],
+                            'doc_id': row['doc_id']
+                        }
+                        metadata_json = json.dumps(metadata, ensure_ascii=False)
+                        
+                        cursor.execute("""
+                            UPDATE text_chunks
+                            SET meta = ?
+                            WHERE id = ?
+                        """, (metadata_json, row['chunk_id']))
+                        
+                        decision_updated += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to update metadata for chunk_id={row['chunk_id']}: {e}")
                 
-                cursor.execute("""
-                    UPDATE text_chunks
-                    SET meta = ?
-                    WHERE id = ?
-                """, (metadata_json, row['chunk_id']))
+                total_updated += decision_updated
+                logger.info(f"  ✅ {decision_updated}개 청크의 메타데이터 보완 완료")
+            else:
+                if decision_rows:
+                    logger.info("  샘플:")
+                    for row in decision_rows[:3]:
+                        logger.info(f"    청크 ID: {row['chunk_id']}, doc_id: {row['doc_id']}, org: {row['org']}")
+        
+        # 3. statute_article 타입 처리
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_statute_chunks,
+                COUNT(CASE WHEN tc.meta IS NULL OR tc.meta = '' THEN 1 END) as missing_metadata
+            FROM text_chunks tc
+            WHERE tc.source_type = 'statute_article'
+        """)
+        statute_stats = dict(cursor.fetchone())
+        
+        logger.info(f"\n[statute_article]")
+        logger.info(f"  전체 청크 수: {statute_stats['total_statute_chunks']}")
+        logger.info(f"  메타데이터 누락 청크: {statute_stats['missing_metadata']}")
+        
+        if statute_stats['missing_metadata'] > 0:
+            cursor.execute("""
+                SELECT 
+                    tc.id as chunk_id,
+                    tc.source_id,
+                    s.name as statute_name,
+                    sa.article_no
+                FROM text_chunks tc
+                LEFT JOIN statute_articles sa ON tc.source_id = sa.id
+                LEFT JOIN statutes s ON sa.statute_id = s.id
+                WHERE tc.source_type = 'statute_article'
+                AND (tc.meta IS NULL OR tc.meta = '')
+                AND sa.id IS NOT NULL
+                AND s.id IS NOT NULL
+            """)
+            
+            statute_rows = cursor.fetchall()
+            logger.info(f"  메타데이터 보완 가능한 청크: {len(statute_rows)}개")
+            
+            if not dry_run:
+                statute_updated = 0
+                for row in statute_rows:
+                    try:
+                        import json
+                        metadata = {
+                            'statute_name': row['statute_name'],
+                            'law_name': row['statute_name'],
+                            'article_no': row['article_no'],
+                            'article_number': row['article_no']
+                        }
+                        metadata_json = json.dumps(metadata, ensure_ascii=False)
+                        
+                        cursor.execute("""
+                            UPDATE text_chunks
+                            SET meta = ?
+                            WHERE id = ?
+                        """, (metadata_json, row['chunk_id']))
+                        
+                        statute_updated += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to update metadata for chunk_id={row['chunk_id']}: {e}")
                 
-                updated_count += 1
-            except Exception as e:
-                logger.debug(f"Failed to update metadata for chunk_id={row['chunk_id']}: {e}")
+                total_updated += statute_updated
+                logger.info(f"  ✅ {statute_updated}개 청크의 메타데이터 보완 완료")
+            else:
+                if statute_rows:
+                    logger.info("  샘플:")
+                    for row in statute_rows[:3]:
+                        logger.info(f"    청크 ID: {row['chunk_id']}, statute_name: {row['statute_name']}, article_no: {row['article_no']}")
+        
+        # 4. interpretation_paragraph 타입 처리
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_interpretation_chunks,
+                COUNT(CASE WHEN tc.meta IS NULL OR tc.meta = '' THEN 1 END) as missing_metadata
+            FROM text_chunks tc
+            WHERE tc.source_type = 'interpretation_paragraph'
+        """)
+        interpretation_stats = dict(cursor.fetchone())
+        
+        logger.info(f"\n[interpretation_paragraph]")
+        logger.info(f"  전체 청크 수: {interpretation_stats['total_interpretation_chunks']}")
+        logger.info(f"  메타데이터 누락 청크: {interpretation_stats['missing_metadata']}")
+        
+        if interpretation_stats['missing_metadata'] > 0:
+            cursor.execute("""
+                SELECT 
+                    tc.id as chunk_id,
+                    tc.source_id,
+                    i.org,
+                    i.doc_id,
+                    i.title
+                FROM text_chunks tc
+                LEFT JOIN interpretation_paragraphs ip ON tc.source_id = ip.id
+                LEFT JOIN interpretations i ON ip.interpretation_id = i.id
+                WHERE tc.source_type = 'interpretation_paragraph'
+                AND (tc.meta IS NULL OR tc.meta = '')
+                AND ip.id IS NOT NULL
+                AND i.id IS NOT NULL
+            """)
+            
+            interpretation_rows = cursor.fetchall()
+            logger.info(f"  메타데이터 보완 가능한 청크: {len(interpretation_rows)}개")
+            
+            if not dry_run:
+                interpretation_updated = 0
+                for row in interpretation_rows:
+                    try:
+                        import json
+                        metadata = {
+                            'org': row['org'],
+                            'doc_id': row['doc_id'],
+                            'title': row['title']
+                        }
+                        metadata_json = json.dumps(metadata, ensure_ascii=False)
+                        
+                        cursor.execute("""
+                            UPDATE text_chunks
+                            SET meta = ?
+                            WHERE id = ?
+                        """, (metadata_json, row['chunk_id']))
+                        
+                        interpretation_updated += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to update metadata for chunk_id={row['chunk_id']}: {e}")
+                
+                total_updated += interpretation_updated
+                logger.info(f"  ✅ {interpretation_updated}개 청크의 메타데이터 보완 완료")
+            else:
+                if interpretation_rows:
+                    logger.info("  샘플:")
+                    for row in interpretation_rows[:3]:
+                        logger.info(f"    청크 ID: {row['chunk_id']}, doc_id: {row['doc_id']}, org: {row['org']}, title: {row['title']}")
         
         conn.commit()
-        logger.info(f"✅ {updated_count}개 청크의 메타데이터 보완 완료")
         
-        return {'updated_count': updated_count, 'total_case_chunks': stats['total_case_chunks']}
+        if total_updated > 0:
+            logger.info(f"\n✅ 총 {total_updated}개 청크의 메타데이터 보완 완료")
+        
+        return {
+            'case_updated': case_stats.get('missing_metadata', 0) if dry_run else 0,
+            'decision_updated': decision_stats.get('missing_metadata', 0) if dry_run else 0,
+            'statute_updated': statute_stats.get('missing_metadata', 0) if dry_run else 0,
+            'interpretation_updated': interpretation_stats.get('missing_metadata', 0) if dry_run else 0,
+            'total_updated': total_updated
+        }
         
     except Exception as e:
         conn.rollback()
         logger.error(f"❌ 메타데이터 보완 실패: {e}", exc_info=True)
-        return stats
+        return {'total_updated': 0, 'error': str(e)}
     finally:
         conn.close()
 
