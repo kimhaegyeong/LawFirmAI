@@ -19,6 +19,7 @@ export interface SourcesByType {
   case_paragraph: SourceInfo[];
   decision_paragraph: SourceInfo[];
   interpretation_paragraph: SourceInfo[];
+  regulation_paragraph: SourceInfo[];
 }
 
 export interface ParseSourcesOptions {
@@ -265,6 +266,7 @@ export function getSourcesByType(
     case_paragraph: [],
     decision_paragraph: [],
     interpretation_paragraph: [],
+    regulation_paragraph: [],
   };
   
   for (const detail of sourcesDetail) {
@@ -286,6 +288,7 @@ export function getSourcesDetailFromSourcesByType(sourcesByType: SourcesByType):
     ...sourcesByType.case_paragraph,
     ...sourcesByType.decision_paragraph,
     ...sourcesByType.interpretation_paragraph,
+    ...sourcesByType.regulation_paragraph,
   ];
 }
 
@@ -391,6 +394,9 @@ export function parseSourcesMetadata(
       interpretation_paragraph: Array.isArray(byType.interpretation_paragraph)
         ? byType.interpretation_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
         : [],
+      regulation_paragraph: Array.isArray(byType.regulation_paragraph)
+        ? byType.regulation_paragraph.map(normalizeSourceInfo).filter((s): s is SourceInfo => s !== null)
+        : [],
     };
     
     // sources_by_type이 유효한지 확인 (최소한 하나의 타입이라도 데이터가 있어야 함)
@@ -398,7 +404,8 @@ export function parseSourcesMetadata(
       parsedByType.statute_article.length > 0 ||
       parsedByType.case_paragraph.length > 0 ||
       parsedByType.decision_paragraph.length > 0 ||
-      parsedByType.interpretation_paragraph.length > 0;
+      parsedByType.interpretation_paragraph.length > 0 ||
+      parsedByType.regulation_paragraph.length > 0;
     
     if (hasValidData) {
       sourcesByType = parsedByType;

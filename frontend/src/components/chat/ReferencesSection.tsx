@@ -1,12 +1,13 @@
 /**
  * 참고자료 섹션 컴포넌트
  */
-import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronUp, ExternalLink, FileText } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { Modal } from '../common/Modal';
 import type { SourceInfo } from '../../types/chat';
 import { extractLegalReferencesFromSourcesDetail, getSourcesDetailFromSourcesByType } from '../../utils/sourcesParser';
 import type { SourcesByType } from '../../utils/sourcesParser';
+import { OriginalDocumentViewer } from './OriginalDocumentViewer';
 
 interface Reference {
   id: string;
@@ -14,6 +15,8 @@ interface Reference {
   title: string;
   content: string;
   link?: string;
+  originalUrl?: string;
+  source?: SourceInfo;
 }
 
 interface ReferencesSectionProps {
@@ -33,6 +36,7 @@ export function ReferencesSection({
 }: ReferencesSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [selectedReference, setSelectedReference] = useState<Reference | null>(null);
+  const [selectedSourceForOriginal, setSelectedSourceForOriginal] = useState<SourceInfo | null>(null);
 
   // sourcesByType 우선 사용, 없으면 sourcesDetail에서 재구성
   const effectiveSourcesDetail = useMemo(() => {
@@ -89,6 +93,8 @@ export function ReferencesSection({
         title,
         content,
         link: detail.url,
+        originalUrl: detail.original_url,
+        source: detail,
       };
     });
   }, [effectiveSourcesDetail]);
@@ -205,12 +211,22 @@ export function ReferencesSection({
                         <ExternalLink className="w-4 h-4" />
                       </a>
                     )}
-                    <button
-                      onClick={() => setSelectedReference(ref)}
-                      className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
-                    >
-                      원문 보기
-                    </button>
+                    {ref.originalUrl && ref.source ? (
+                      <button
+                        onClick={() => setSelectedSourceForOriginal(ref.source!)}
+                        className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 flex items-center gap-1"
+                      >
+                        <FileText className="w-3 h-3" />
+                        원문 보기
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setSelectedReference(ref)}
+                        className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
+                      >
+                        상세 보기
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -231,6 +247,13 @@ export function ReferencesSection({
           </div>
         )}
       </Modal>
+
+      {selectedSourceForOriginal && (
+        <OriginalDocumentViewer
+          source={selectedSourceForOriginal}
+          onClose={() => setSelectedSourceForOriginal(null)}
+        />
+      )}
     </>
   );
 }

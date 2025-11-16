@@ -128,22 +128,46 @@ export function CompactReferencesBadge({
         
         title = titleText || '해석례';
         subtitle = [org, responseDate].filter(Boolean).join(' · ');
+      } else if (detail.type === 'regulation_paragraph') {
+        type = 'regulation';
+        title = detail.name || detail.title || detail.content || '기타 참고자료';
+        subtitle = detail.metadata?.doc_id || '';
       } else {
         title = detail.name || detail.content || '참고자료';
       }
       
       // 중복 체크용 키 생성 (ReferencesModalContent와 동일한 로직)
-      // doc_id > case_number > article_number > law_name > content 순서
-      const docId = detail.metadata?.doc_id || detail.case_number;
-      const key = docId || 
-                 detail.case_number || 
-                 (detail.article_no && detail.statute_name ? `${detail.statute_name}-${detail.article_no}` : undefined) ||
-                 detail.article_no ||
-                 detail.decision_number ||
-                 detail.interpretation_number ||
-                 detail.statute_name ||
-                 title || 
-                 `detail-${idx}`;
+      // 판례: case_number 우선 사용 (같은 사건번호는 하나로 통합)
+      // 법령: law_name + article_number 조합
+      // 결정례: decision_number 우선
+      // 해석례: interpretation_number 우선
+      let key: string;
+      
+      if (type === 'precedent' && detail.case_number) {
+        // 판례는 case_number로 중복 제거 (같은 사건번호는 하나로 통합)
+        key = `precedent-${detail.case_number}`;
+      } else if (type === 'law' && detail.statute_name && detail.article_no) {
+        // 법령은 statute_name + article_no 조합
+        key = `law-${detail.statute_name}-${detail.article_no}`;
+      } else if (type === 'decision' && detail.decision_number) {
+        // 결정례는 decision_number로 중복 제거
+        key = `decision-${detail.decision_number}`;
+      } else if (type === 'interpretation' && detail.interpretation_number) {
+        // 해석례는 interpretation_number로 중복 제거
+        key = `interpretation-${detail.interpretation_number}`;
+      } else {
+        // 기타: doc_id > case_number > article_number > law_name > content 순서
+        const docId = detail.metadata?.doc_id || detail.case_number;
+        key = docId || 
+             detail.case_number || 
+             (detail.article_no && detail.statute_name ? `${detail.statute_name}-${detail.article_no}` : undefined) ||
+             detail.article_no ||
+             detail.decision_number ||
+             detail.interpretation_number ||
+             detail.statute_name ||
+             title || 
+             `detail-${idx}`;
+      }
       
       if (!seen.has(key)) {
         seen.add(key);
@@ -158,52 +182,57 @@ export function CompactReferencesBadge({
       }
     });
 
-    // legal_references 처리 (sources_detail과 중복 제외, deprecated)
-    allLegalRefs.forEach((ref, idx) => {
-      const matched = effectiveSourcesDetail.find(detail => {
-        const detailName = detail.name || detail.content || '';
-        return detailName.includes(ref) || ref.includes(detailName);
+    // sources_by_type이 있으면 sources와 references 배열은 무시 (중복 방지)
+    const shouldUseStringRefs = !propSourcesByType || effectiveSourcesDetail.length === 0;
+    
+    if (shouldUseStringRefs) {
+      // legal_references 처리 (sources_detail과 중복 제외, deprecated)
+      allLegalRefs.forEach((ref, idx) => {
+        const matched = effectiveSourcesDetail.find(detail => {
+          const detailName = detail.name || detail.content || '';
+          return detailName.includes(ref) || ref.includes(detailName);
+        });
+        
+        if (!matched && !seen.has(ref)) {
+          seen.add(ref);
+          all.push({
+            id: `legal-${idx}`,
+            type: 'law',
+            title: ref,
+          });
+        }
       });
-      
-      if (!matched && !seen.has(ref)) {
-        seen.add(ref);
-        all.push({
-          id: `legal-${idx}`,
-          type: 'law',
-          title: ref,
-        });
-      }
-    });
 
-    // sources 처리 (sources_detail과 중복 제외)
-    sources.forEach((src, idx) => {
-      const matched = effectiveSourcesDetail.find(detail => {
-        const detailName = detail.name || detail.content || '';
-        return detailName.includes(src) || src.includes(detailName);
+      // sources 처리 (sources_detail과 중복 제외)
+      sources.forEach((src, idx) => {
+        const matched = effectiveSourcesDetail.find(detail => {
+          const detailName = detail.name || detail.content || '';
+          return detailName.includes(src) || src.includes(detailName);
+        });
+        
+        if (!matched && !seen.has(src)) {
+          seen.add(src);
+          const isPrecedent = /대법원|고등법원|지방법원|판결|선고|\d{4}[가-힣]\d+/.test(src);
+          all.push({
+            id: `source-${idx}`,
+            type: isPrecedent ? 'precedent' : 'law',
+            title: src,
+          });
+        }
       });
-      
-      if (!matched && !seen.has(src)) {
-        seen.add(src);
-        const isPrecedent = /대법원|고등법원|지방법원|판결|선고|\d{4}[가-힣]\d+/.test(src);
-        all.push({
-          id: `source-${idx}`,
-          type: isPrecedent ? 'precedent' : 'law',
-          title: src,
-        });
-      }
-    });
 
-    // references 처리
-    references.forEach((ref, idx) => {
-      if (!seen.has(ref)) {
-        seen.add(ref);
-        all.push({
-          id: `ref-${idx}`,
-          type: 'regulation',
-          title: ref,
-        });
-      }
-    });
+      // references 처리
+      references.forEach((ref, idx) => {
+        if (!seen.has(ref)) {
+          seen.add(ref);
+          all.push({
+            id: `ref-${idx}`,
+            type: 'regulation',
+            title: ref,
+          });
+        }
+      });
+    }
 
     // 타입별 정렬: 법령, 판례, 결정례, 해석례, 기타 순서
     const typeOrder: Record<string, number> = {
@@ -219,7 +248,7 @@ export function CompactReferencesBadge({
       const orderB = typeOrder[b.type] || 999;
       return orderA - orderB;
     });
-  }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
+  }, [references, allLegalRefs, sources, effectiveSourcesDetail, propSourcesByType]);
 
   // 전체 참고자료 개수 계산 (중복 제거된 parsedReferences 사용)
   const totalCount = parsedReferences.length;

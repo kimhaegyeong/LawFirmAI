@@ -50,7 +50,7 @@ export function MessageReferencesSection({
   }, [legalReferences, extractedLegalRefs]);
 
   // totalCount 계산은 CompactReferencesBadge의 parsedReferences를 기반으로 계산
-  // 실제 표시되는 항목 수와 일치하도록 하기 위해 CompactReferencesBadge와 동일한 로직 사용
+  // sources_by_type이 있으면 sources와 references 배열은 무시 (중복 방지)
   const totalCount = useMemo(() => {
     const seen = new Set<string>();
     const all: string[] = [];
@@ -58,11 +58,14 @@ export function MessageReferencesSection({
     // effectiveSourcesDetail 우선 처리 (CompactReferencesBadge와 동일한 키 생성 로직)
     effectiveSourcesDetail.forEach((detail, idx) => {
       let title = '';
+      let type: 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation' = 'regulation';
       
       if (detail.type === 'statute_article') {
+        type = 'law';
         const lawName = detail.statute_name || detail.metadata?.statute_name || detail.name || '';
         title = lawName || '법령';
       } else if (detail.type === 'case_paragraph') {
+        type = 'precedent';
         const caseName = detail.case_name || 
                         detail.metadata?.case_name ||
                         detail.metadata?.casenames || 
@@ -72,26 +75,43 @@ export function MessageReferencesSection({
                           detail.metadata?.doc_id || '';
         title = (caseName || caseNumber || '판례') as string;
       } else if (detail.type === 'decision_paragraph') {
+        type = 'decision';
         const org = detail.org || detail.metadata?.org || '';
         const decisionNumber = detail.decision_number || 
                               detail.metadata?.decision_number ||
                               detail.metadata?.doc_id || '';
         title = (org || decisionNumber || '결정례') as string;
       } else if (detail.type === 'interpretation_paragraph') {
+        type = 'interpretation';
         const titleText = detail.title || detail.metadata?.title || detail.name || '';
         title = titleText || '해석례';
+      } else if (detail.type === 'regulation_paragraph') {
+        type = 'regulation';
+        title = detail.name || detail.title || detail.content || '기타 참고자료';
       } else {
         title = detail.name || detail.content || '참고자료';
       }
       
-      // CompactReferencesBadge와 동일한 키 생성 로직
-      const key = detail.case_number || 
-                 detail.article_no ||
-                 detail.decision_number ||
-                 detail.interpretation_number ||
-                 detail.metadata?.doc_id || 
-                 title || 
-                 `detail-${idx}`;
+      // CompactReferencesBadge와 동일한 키 생성 로직 (타입별 중복 제거)
+      let key: string;
+      
+      if (type === 'precedent' && detail.case_number) {
+        key = `precedent-${detail.case_number}`;
+      } else if (type === 'law' && detail.statute_name && detail.article_no) {
+        key = `law-${detail.statute_name}-${detail.article_no}`;
+      } else if (type === 'decision' && detail.decision_number) {
+        key = `decision-${detail.decision_number}`;
+      } else if (type === 'interpretation' && detail.interpretation_number) {
+        key = `interpretation-${detail.interpretation_number}`;
+      } else {
+        key = detail.case_number || 
+             detail.article_no ||
+             detail.decision_number ||
+             detail.interpretation_number ||
+             detail.metadata?.doc_id || 
+             title || 
+             `detail-${idx}`;
+      }
       
       if (!seen.has(key)) {
         seen.add(key);
@@ -99,42 +119,47 @@ export function MessageReferencesSection({
       }
     });
     
-    // legalReferences 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
-    allLegalRefs.forEach(ref => {
-      const matched = effectiveSourcesDetail.find(detail => {
-        const detailName = detail.name || detail.content || '';
-        return detailName.includes(ref) || ref.includes(detailName);
+    // sources_by_type이 있으면 sources와 references 배열은 무시 (중복 방지)
+    const shouldUseStringRefs = !propSourcesByType || effectiveSourcesDetail.length === 0;
+    
+    if (shouldUseStringRefs) {
+      // legalReferences 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
+      allLegalRefs.forEach(ref => {
+        const matched = effectiveSourcesDetail.find(detail => {
+          const detailName = detail.name || detail.content || '';
+          return detailName.includes(ref) || ref.includes(detailName);
+        });
+        
+        if (!matched && !seen.has(ref)) {
+          seen.add(ref);
+          all.push(ref);
+        }
       });
       
-      if (!matched && !seen.has(ref)) {
-        seen.add(ref);
-        all.push(ref);
-      }
-    });
-    
-    // sources 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
-    sources.forEach(src => {
-      const matched = effectiveSourcesDetail.find(detail => {
-        const detailName = detail.name || detail.content || '';
-        return detailName.includes(src) || src.includes(detailName);
+      // sources 처리 (sources_detail과 중복 제외, CompactReferencesBadge와 동일한 로직)
+      sources.forEach(src => {
+        const matched = effectiveSourcesDetail.find(detail => {
+          const detailName = detail.name || detail.content || '';
+          return detailName.includes(src) || src.includes(detailName);
+        });
+        
+        if (!matched && !seen.has(src)) {
+          seen.add(src);
+          all.push(src);
+        }
       });
       
-      if (!matched && !seen.has(src)) {
-        seen.add(src);
-        all.push(src);
-      }
-    });
-    
-    // references 처리
-    references.forEach(ref => {
-      if (!seen.has(ref)) {
-        seen.add(ref);
-        all.push(ref);
-      }
-    });
+      // references 처리
+      references.forEach(ref => {
+        if (!seen.has(ref)) {
+          seen.add(ref);
+          all.push(ref);
+        }
+      });
+    }
     
     return all.length;
-  }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
+  }, [references, allLegalRefs, sources, effectiveSourcesDetail, propSourcesByType]);
 
   if (totalCount === 0) {
     return null;
