@@ -246,6 +246,74 @@ def re_embed_document(
         chunk_ids = []
         texts_to_embed = []
         
+        # 소스 타입별 메타데이터 조회 (모든 청크에 공통으로 사용)
+        source_metadata = None
+        try:
+            import json
+            if source_type == "case_paragraph":
+                cursor_meta = conn.execute("""
+                    SELECT c.doc_id, c.casenames, c.court
+                    FROM cases c
+                    WHERE c.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    source_metadata = {
+                        'doc_id': row['doc_id'],
+                        'casenames': row['casenames'],
+                        'court': row['court']
+                    }
+            elif source_type == "decision_paragraph":
+                cursor_meta = conn.execute("""
+                    SELECT d.org, d.doc_id
+                    FROM decisions d
+                    WHERE d.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    source_metadata = {
+                        'org': row['org'],
+                        'doc_id': row['doc_id']
+                    }
+            elif source_type == "statute_article":
+                cursor_meta = conn.execute("""
+                    SELECT s.name as statute_name, sa.article_no
+                    FROM statute_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE sa.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    source_metadata = {
+                        'statute_name': row['statute_name'],
+                        'law_name': row['statute_name'],
+                        'article_no': row['article_no'],
+                        'article_number': row['article_no']
+                    }
+            elif source_type == "interpretation_paragraph":
+                cursor_meta = conn.execute("""
+                    SELECT i.org, i.doc_id, i.title
+                    FROM interpretations i
+                    WHERE i.id = ?
+                """, (source_id,))
+                row = cursor_meta.fetchone()
+                if row:
+                    source_metadata = {
+                        'org': row['org'],
+                        'doc_id': row['doc_id'],
+                        'title': row['title']
+                    }
+        except Exception as e:
+            logger.debug(f"Failed to get source metadata for {source_type} {source_id}: {e}")
+        
+        # 메타데이터 JSON 생성
+        meta_json = None
+        if source_metadata:
+            try:
+                meta_json = json.dumps(source_metadata, ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"Failed to serialize metadata for {source_type} {source_id}: {e}")
+        
         for i, chunk_result in enumerate(chunk_results):
             chunk_idx = next_chunk_index + i
             metadata = chunk_result.metadata
@@ -256,7 +324,7 @@ def re_embed_document(
                     start_char, end_char, overlap_chars, text, token_count, meta,
                     chunking_strategy, chunk_size_category, chunk_group_id,
                     query_type, original_document_id, embedding_version_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     source_type,
                     source_id,
@@ -265,6 +333,7 @@ def re_embed_document(
                     None, None, None,
                     chunk_result.text,
                     None,
+                    meta_json,  # 메타데이터 JSON 저장
                     metadata.get("chunking_strategy"),
                     metadata.get("chunk_size_category"),
                     metadata.get("chunk_group_id"),
