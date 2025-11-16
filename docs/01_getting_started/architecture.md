@@ -59,9 +59,12 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 | 모듈 | 책임 | 주요 컴포넌트 |
 |------|------|-------------|
 | **lawfirm_langgraph/core/workflow/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced, nodes, state |
-| **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | hybrid_search, semantic_search, answer_generator |
+| **lawfirm_langgraph/core/search/** | 검색 엔진 | semantic_search_engine_v2, keyword_search_engine, hybrid_search_engine_v2 |
+| **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | gemini_client, unified_prompt_manager, keyword_mapper |
+| **lawfirm_langgraph/core/agents/handlers/** | 핸들러 | answer_generator, search_handler, classification_handler |
 | **lawfirm_langgraph/core/data/** | 데이터 관리 | database, vector_store, conversation_store |
 | **lawfirm_langgraph/core/models/** | AI 모델 관리 | sentence_bert |
+| **lawfirm_langgraph/core/classification/** | 분류 시스템 | domain_classifier |
 | **lawfirm_langgraph/config/** | 설정 관리 | langgraph_config, app_config |
 
 ## 핵심 서비스
