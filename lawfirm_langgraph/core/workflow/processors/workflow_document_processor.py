@@ -43,12 +43,13 @@ class WorkflowDocumentProcessor:
             valid_docs = []
             invalid_docs_count = 0
             
-            # 개선 1, 4: 문서 타입별 필터링 기준 차등화
-            min_relevance_score_semantic = 0.60
-            min_relevance_score_keyword = 0.55
-            min_relevance_score_statute_article = 0.50
-            min_relevance_score_precedent = 0.60
-            min_relevance_score_general = 0.65
+            # 개선 1, 4: 문서 타입별 필터링 기준 차등화 (실제 점수 범위에 맞게 완화)
+            # 검색 결과 평균 점수: 0.458, 범위: 0.373~0.732
+            min_relevance_score_semantic = 0.35
+            min_relevance_score_keyword = 0.35
+            min_relevance_score_statute_article = 0.30
+            min_relevance_score_precedent = 0.35
+            min_relevance_score_general = 0.40
             
             # 개선 6: 키워드 매칭 점수 최소 기준
             min_keyword_match_score = 0.01
@@ -67,10 +68,40 @@ class WorkflowDocumentProcessor:
                 
                 content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
                 
-                # 개선 7: 문서 내용 길이 및 품질 검증 강화
-                if not content or len(content.strip()) < 20:
+                # content가 없거나 너무 짧은 경우 복원 시도 (최소 길이 완화: 10자 → 5자)
+                if not content or len(content.strip()) < 5:
+                    # metadata에서 복원 시도
+                    metadata = doc.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        content = metadata.get("content") or metadata.get("text") or content
+                    
+                    # 여전히 없으면 최소한의 정보라도 유지 (필터링하지 않음, 최소 길이 완화: 10자 → 5자)
+                    if not content or len(content.strip()) < 5:
+                        # doc의 다른 필드에서 정보 추출
+                        title = doc.get("title") or doc.get("name") or ""
+                        if title:
+                            content = title
+                        else:
+                            # 최후의 수단: doc_id나 다른 식별자 사용
+                            doc_id = doc.get("doc_id") or doc.get("id") or ""
+                            if doc_id:
+                                content = f"Document {doc_id}"
+                    
+                    # content를 doc에 다시 설정
+                    if content:
+                        doc["content"] = content
+                        doc["text"] = content
+                
+                # 최소 길이 검증 (더욱 완화된 기준)
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                source_type = doc.get("source_type", "").lower() if doc.get("source_type") else ""
+                is_legal_doc = "statute" in doc_type or "statute" in source_type or "case" in doc_type or "case" in source_type
+                # 법령/판례 문서는 3자, 기타는 5자로 더 완화
+                min_content_length = 3 if is_legal_doc else 5
+                
+                if not content or len(content.strip()) < min_content_length:
                     invalid_docs_count += 1
-                    self.logger.debug(f"Document filtered: content too short or empty (length: {len(content) if content else 0}, source: {doc.get('source', 'Unknown')})")
+                    self.logger.debug(f"Document filtered: content too short or empty (length: {len(content) if content else 0}, min_required: {min_content_length}, source: {doc.get('source', 'Unknown')})")
                     continue
                 
                 search_type = doc.get("search_type", "semantic")
@@ -79,7 +110,7 @@ class WorkflowDocumentProcessor:
                 matched_keywords = doc.get("matched_keywords", [])
                 has_keyword_match = keyword_match_score > 0.0 or len(matched_keywords) > 0
                 
-                # 개선 6: 키워드 매칭 점수 기반 필터링
+                # 개선 6: 키워드 매칭 점수 기반 필터링 (더욱 완화)
                 if keyword_match_score == 0.0 and not matched_keywords:
                     content_lower = content.lower()
                     has_query_keyword = False
@@ -88,17 +119,17 @@ class WorkflowDocumentProcessor:
                             has_query_keyword = True
                             break
                     
-                    if not has_query_keyword and relevance_score < 0.70:
+                    # 관련성 임계값 더욱 완화 (법령/판례 문서는 0.30, 기타는 0.40)
+                    relevance_threshold = 0.30 if is_legal_doc else 0.40
+                    if not has_query_keyword and relevance_score < relevance_threshold:
                         invalid_docs_count += 1
                         self.logger.debug(
                             f"Document filtered: no keyword match and low relevance "
-                            f"(relevance: {relevance_score:.3f}, source: {doc.get('source', 'Unknown')})"
+                            f"(relevance: {relevance_score:.3f}, threshold: {relevance_threshold}, source: {doc.get('source', 'Unknown')})"
                         )
                         continue
                 
-                # 문서 타입 확인
-                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
-                source_type = doc.get("source_type", "").lower() if doc.get("source_type") else ""
+                # 문서 타입 확인 (이미 위에서 정의됨, 추가 확인만 수행)
                 is_statute_article = (
                     doc_type == "statute_article" or 
                     source_type == "statute_article" or
@@ -112,11 +143,14 @@ class WorkflowDocumentProcessor:
                     source_type == "precedent" or
                     "precedent" in doc_type or
                     "precedent" in source_type or
+                    "case_paragraph" in doc_type or
+                    "case_paragraph" in source_type or
                     "판례" in content[:200] or
                     "대법원" in content[:200]
                 )
+                # is_legal_doc는 이미 위에서 정의됨
                 
-                # 개선 4: 문서 타입별 필터링 기준 차등화
+                # 개선 4: 문서 타입별 필터링 기준 차등화 (키워드 매칭이 있으면 완화)
                 if is_statute_article:
                     min_score = min_relevance_score_statute_article
                 elif is_precedent:
@@ -128,11 +162,21 @@ class WorkflowDocumentProcessor:
                 else:
                     min_score = min_relevance_score_general
                 
+                # 키워드 매칭이 있으면 기준을 더 완화 (0.10 감소)
+                if has_keyword_match or has_query_keyword:
+                    min_score = max(0.20, min_score - 0.10)
+                
+                # 첫 번째 필터링(키워드 매칭 없을 때)을 통과한 경우, 두 번째 필터링은 더 완화
+                if not has_keyword_match and not has_query_keyword and relevance_score >= 0.30:
+                    # 이미 첫 번째 필터링을 통과했으므로 두 번째 필터링은 더 완화
+                    min_score = max(0.25, min_score - 0.15)
+                
                 if relevance_score < min_score:
                     invalid_docs_count += 1
                     self.logger.debug(
                         f"Document filtered: relevance score too low ({relevance_score:.3f} < {min_score:.3f}) "
-                        f"(source: {doc.get('source', 'Unknown')}, type: {search_type}, doc_type: {doc_type})"
+                        f"(source: {doc.get('source', 'Unknown')}, type: {search_type}, doc_type: {doc_type}, "
+                        f"has_keyword: {has_keyword_match or has_query_keyword})"
                     )
                     continue
                 

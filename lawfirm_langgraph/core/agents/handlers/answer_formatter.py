@@ -5,6 +5,7 @@ LangGraph 워크플로우의 답변 포맷팅 및 최종 응답 준비 로직을
 """
 
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -95,6 +96,17 @@ class AnswerFormatterHandler:
         self.source_extractor = SourceExtractor(self.logger)
         self.answer_cleaner = AnswerCleaner(self.logger)
         self.length_adjuster = AnswerLengthAdjuster(self.length_config, self.logger)
+        
+        # Config 및 LegalDataConnectorV2 인스턴스 초기화 (os 변수 오류 방지)
+        try:
+            from core.utils.config import Config
+            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+            self._config = Config()
+            self._connector = LegalDataConnectorV2(self._config.database_path)
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Config/Connector: {e}")
+            self._config = None
+            self._connector = None
 
     def format_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅: 구조화 + 시각적 포맷팅"""
@@ -1999,7 +2011,6 @@ class AnswerFormatterHandler:
         self.logger.info(f"[SOURCES] ✅ Final sources saved to state: {len(normalized_sources_clean)} sources, {len(final_sources_detail_clean)} details, {len(legal_refs[:MAX_LEGAL_REFERENCES_LIMIT])} legal refs")
         
         # sources 데이터 상세 로깅 (개발 모드에서만)
-        import os
         if os.getenv("DEBUG_SOURCES", "false").lower() == "true" or self.logger.level <= logging.DEBUG:
             self.logger.info(f"[SOURCES_TEST] ===== Sources Data Analysis =====")
             self.logger.info(f"[SOURCES_TEST] Sources count: {len(normalized_sources_clean)}")
@@ -2206,12 +2217,12 @@ class AnswerFormatterHandler:
             전체 본문 텍스트 또는 None
         """
         try:
-            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
-            from core.utils.config import Config
+            # Config 및 connector 인스턴스 사용 (이미 초기화됨)
+            if self._config is None or self._connector is None:
+                self.logger.warning("Config or Connector not initialized, cannot get full text")
+                return None
             
-            config = Config()
-            connector = LegalDataConnectorV2(config.database_path)
-            conn = connector._get_connection()
+            conn = self._connector._get_connection()
             cursor = conn.cursor()
             
             full_text = None
@@ -2292,12 +2303,12 @@ class AnswerFormatterHandler:
             {doc_id: full_text} 딕셔너리
         """
         try:
-            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
-            from core.utils.config import Config
+            # Config 및 connector 인스턴스 사용 (이미 초기화됨)
+            if self._config is None or self._connector is None:
+                self.logger.warning("Config or Connector not initialized, cannot get full texts")
+                return {}
             
-            config = Config()
-            connector = LegalDataConnectorV2(config.database_path)
-            conn = connector._get_connection()
+            conn = self._connector._get_connection()
             cursor = conn.cursor()
             
             full_texts = {}
