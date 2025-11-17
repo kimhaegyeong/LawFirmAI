@@ -79,6 +79,9 @@ data/performance_logs/
 chroma_db/
 faiss_index/
 
+# MLflow
+mlflow/mlruns/
+
 # Benchmark Results
 benchmark_results/
 
@@ -155,5 +158,5 @@ test_outputs/
 # Portfolio documents (not for version control)
 portfolio/
 
-**/*.pkl
-**/*.pyc
+*.pkl
+*.pyc
