@@ -43,16 +43,41 @@ class WorkflowDocumentProcessor:
             valid_docs = []
             invalid_docs_count = 0
             
-            # 개선 1, 4: 문서 타입별 필터링 기준 차등화 (실제 점수 범위에 맞게 완화)
-            # 검색 결과 평균 점수: 0.458, 범위: 0.373~0.732
-            min_relevance_score_semantic = 0.35
-            min_relevance_score_keyword = 0.35
-            min_relevance_score_statute_article = 0.30
-            min_relevance_score_precedent = 0.35
-            min_relevance_score_general = 0.40
+            # 개선: 동적 임계값 조정 (검색 결과 점수 분포 분석)
+            scores = [doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0) 
+                     for doc in retrieved_docs if isinstance(doc, dict)]
             
-            # 개선 6: 키워드 매칭 점수 최소 기준
-            min_keyword_match_score = 0.01
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                max_score = max(scores)
+                min_score = min(scores)
+                score_range = max_score - min_score
+                
+                # 점수 분포에 따라 동적 임계값 계산
+                if score_range < 0.2:
+                    # 점수가 비슷하면 임계값을 낮춤
+                    dynamic_threshold = max(0.25, avg_score - 0.1)
+                elif score_range < 0.4:
+                    # 점수 차이가 중간이면 평균 기준
+                    dynamic_threshold = max(0.30, avg_score - 0.05)
+                else:
+                    # 점수 차이가 크면 평균 이상만 선택
+                    dynamic_threshold = avg_score
+                
+                self.logger.info(
+                    f"Dynamic threshold calculation: avg={avg_score:.3f}, "
+                    f"range={score_range:.3f}, threshold={dynamic_threshold:.3f}"
+                )
+            else:
+                dynamic_threshold = 0.35
+            
+            # 개선 1, 4: 문서 타입별 필터링 기준 차등화 (동적 임계값 적용)
+            # 검색 결과 평균 점수: 0.458, 범위: 0.373~0.732
+            min_relevance_score_semantic = max(0.25, dynamic_threshold - 0.05)
+            min_relevance_score_keyword = max(0.25, dynamic_threshold - 0.05)
+            min_relevance_score_statute_article = max(0.20, dynamic_threshold - 0.10)
+            min_relevance_score_precedent = max(0.25, dynamic_threshold - 0.05)
+            min_relevance_score_general = max(0.30, dynamic_threshold)
             
             # 개선 7: 질문 핵심 키워드 추출 (간단한 버전)
             query_lower = query.lower()
@@ -624,6 +649,83 @@ class WorkflowDocumentProcessor:
         )
         
         return selected_docs[:max_docs]
+    
+    def select_diverse_documents(
+        self,
+        documents: List[Dict[str, Any]],
+        query: str,
+        max_docs: int = 7,
+        diversity_weight: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """
+        MMR (Maximal Marginal Relevance) 알고리즘을 사용한 다양성과 관련성의 균형을 맞춘 문서 선택
+        
+        Args:
+            documents: 선택할 문서 리스트 (이미 점수로 정렬된 상태)
+            query: 검색 쿼리
+            max_docs: 선택할 최대 문서 수
+            diversity_weight: 다양성 가중치 (0.0 ~ 1.0, 높을수록 다양성 중시)
+        
+        Returns:
+            다양성과 관련성이 균형잡힌 문서 리스트
+        """
+        if not documents:
+            return []
+        
+        selected = []
+        remaining = documents.copy()
+        
+        # 첫 번째 문서: 가장 관련성 높은 문서
+        if remaining:
+            selected.append(remaining.pop(0))
+        
+        # 나머지 문서: MMR 점수로 선택
+        while len(selected) < max_docs and remaining:
+            best_doc = None
+            best_score = -1
+            
+            for doc in remaining:
+                # 관련성 점수
+                relevance = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                
+                # 다양성 점수 (이미 선택된 문서와의 유사도 최소화)
+                min_similarity = 1.0
+                doc_content = (doc.get("content") or doc.get("text") or "").lower()
+                doc_words = set(doc_content.split())
+                
+                for selected_doc in selected:
+                    selected_content = (selected_doc.get("content") or selected_doc.get("text") or "").lower()
+                    selected_words = set(selected_content.split())
+                    
+                    # Jaccard 유사도 계산
+                    if doc_words or selected_words:
+                        intersection = len(doc_words & selected_words)
+                        union = len(doc_words | selected_words)
+                        similarity = intersection / union if union > 0 else 0.0
+                        min_similarity = min(min_similarity, similarity)
+                
+                # MMR 점수: (1 - diversity_weight) * relevance + diversity_weight * (1 - similarity)
+                mmr_score = (
+                    (1 - diversity_weight) * relevance +
+                    diversity_weight * (1 - min_similarity)
+                )
+                
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_doc = doc
+            
+            if best_doc:
+                selected.append(best_doc)
+                remaining.remove(best_doc)
+            else:
+                break
+        
+        self.logger.info(
+            f"MMR diversity selection: {len(selected)}/{len(documents)} documents selected "
+            f"(diversity_weight={diversity_weight:.2f})"
+        )
+        
+        return selected
     
     def _validate_final_documents(
         self,

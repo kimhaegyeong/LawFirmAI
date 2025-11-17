@@ -240,15 +240,13 @@ class EnhancedLegalQuestionWorkflow(
             db_path = config.database_path
             
             # 외부 인덱스 사용 설정 확인
-            use_external_index = getattr(config, 'use_external_vector_store', False)
-            vector_store_version = getattr(config, 'vector_store_version', None)
-            external_vector_store_base_path = getattr(config, 'external_vector_store_base_path', None)
+            use_mlflow_index = getattr(config, 'use_mlflow_index', False)
+            mlflow_run_id = getattr(config, 'mlflow_run_id', None)
             
             self.semantic_search = SemanticSearchEngineV2(
                 db_path=db_path,
-                use_external_index=use_external_index,
-                vector_store_version=vector_store_version,
-                external_index_path=external_vector_store_base_path
+                use_mlflow_index=use_mlflow_index,
+                mlflow_run_id=mlflow_run_id
             )
             
             if hasattr(self.semantic_search, 'diagnose'):
@@ -700,44 +698,42 @@ class EnhancedLegalQuestionWorkflow(
                 query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
                 domain = WorkflowUtils.get_domain_from_query_type(query_type_str)
 
-                # 로컬 개발 환경에서는 캐시 비활성화
-                is_development = os.getenv("DEBUG", "false").lower() == "true" or os.getenv("ENVIRONMENT", "").lower() == "development"
-
-                # 키워드 확장 결과 캐싱 확인 (개발 환경이 아닐 때만)
+                # 캐싱 활성화 (개발 환경에서도 성능 향상을 위해 캐싱 사용)
+                # 키워드 확장 결과 캐싱 확인
                 expansion_result = None
                 cache_hit_keywords = False
-                if not is_development:
-                    try:
-                        # 캐시 키 생성 (domain, keywords 기반)
-                        keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
-                        cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
-                        
-                        # PerformanceOptimizer 캐시에서 확인
-                        cached_result = self.performance_optimizer.cache.get_cached_answer(
-                            f"keyword_exp:{cache_key}", query_type_str
-                        )
-                        if cached_result and isinstance(cached_result, dict) and "expansion_result" in cached_result:
-                            expansion_data = cached_result.get("expansion_result")
-                            if expansion_data:
-                                # 캐시된 결과를 expansion_result 형태로 재구성
-                                from types import SimpleNamespace
-                                expansion_result = SimpleNamespace(
-                                    api_call_success=expansion_data.get("api_call_success", True),
-                                    expanded_keywords=expansion_data.get("expanded_keywords", []),
-                                    domain=expansion_data.get("domain", domain),
-                                    base_keywords=expansion_data.get("base_keywords", keywords),
-                                    confidence=expansion_data.get("confidence", 0.9),
-                                    expansion_method=expansion_data.get("expansion_method", "cache")
-                                )
-                                cache_hit_keywords = True
-                                self.logger.info(f"✅ [CACHE HIT] 키워드 확장 결과 캐시 히트: {cache_key[:16]}...")
-                    except Exception as e:
-                        self.logger.debug(f"키워드 확장 캐시 확인 중 오류 (무시): {e}")
+                try:
+                    # 캐시 키 생성 (domain, keywords 기반)
+                    keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
+                    cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
+                    
+                    # PerformanceOptimizer 캐시에서 확인
+                    cached_result = self.performance_optimizer.cache.get_cached_answer(
+                        f"keyword_exp:{cache_key}", query_type_str
+                    )
+                    if cached_result and isinstance(cached_result, dict) and "expansion_result" in cached_result:
+                        expansion_data = cached_result.get("expansion_result")
+                        if expansion_data:
+                            # 캐시된 결과를 expansion_result 형태로 재구성
+                            from types import SimpleNamespace
+                            expansion_result = SimpleNamespace(
+                                api_call_success=expansion_data.get("api_call_success", True),
+                                expanded_keywords=expansion_data.get("expanded_keywords", []),
+                                domain=expansion_data.get("domain", domain),
+                                base_keywords=expansion_data.get("base_keywords", keywords),
+                                confidence=expansion_data.get("confidence", 0.9),
+                                expansion_method=expansion_data.get("expansion_method", "cache")
+                            )
+                            cache_hit_keywords = True
+                            self.logger.info(f"✅ [CACHE HIT] 키워드 확장 결과 캐시 히트: {cache_key[:16]}...")
+                except Exception as e:
+                    self.logger.debug(f"키워드 확장 캐시 확인 중 오류 (무시): {e}")
 
                 # 캐시 미스인 경우 AI 키워드 확장 수행
                 if not expansion_result:
                     try:
                         # 현재 실행 중인 이벤트 루프 확인
+                        # 타임아웃 단축: 10초 → 5초 (성능 개선)
                         try:
                             loop = asyncio.get_running_loop()
                             # 이미 실행 중인 루프가 있는 경우, 새 스레드에서 실행
@@ -750,11 +746,11 @@ class EnhancedLegalQuestionWorkflow(
                                                 base_keywords=keywords,
                                                 target_count=30
                                             ),
-                                            timeout=10.0
+                                            timeout=5.0  # 10초 → 5초로 단축
                                         )
                                     )
                                 )
-                                expansion_result = future.result(timeout=15.0)
+                                expansion_result = future.result(timeout=7.0)  # 15초 → 7초로 단축
                         except RuntimeError:
                             # 실행 중인 루프가 없는 경우, 직접 실행
                             expansion_result = asyncio.run(
@@ -764,12 +760,12 @@ class EnhancedLegalQuestionWorkflow(
                                         base_keywords=keywords,
                                         target_count=30
                                     ),
-                                    timeout=10.0
+                                    timeout=5.0  # 10초 → 5초로 단축
                                 )
                             )
                         
-                        # 캐시 저장 (개발 환경이 아닐 때만)
-                        if expansion_result and expansion_result.api_call_success and not is_development:
+                        # 캐시 저장 (항상 활성화)
+                        if expansion_result and expansion_result.api_call_success:
                             try:
                                 keywords_str = ",".join(sorted([str(kw) for kw in keywords]))
                                 cache_key = hashlib.md5(f"keyword_exp:{domain}:{keywords_str}".encode('utf-8')).hexdigest()
@@ -793,7 +789,7 @@ class EnhancedLegalQuestionWorkflow(
                                 self.logger.debug(f"키워드 확장 캐시 저장 중 오류 (무시): {e}")
                         
                     except (asyncio.TimeoutError, concurrent.futures.TimeoutError) as e:
-                        self.logger.warning(f"AI keyword expansion timeout (10s): {e}")
+                        self.logger.warning(f"AI keyword expansion timeout (5s): {e}")
                         expansion_result = None
                     except asyncio.CancelledError as e:
                         self.logger.warning(f"AI keyword expansion cancelled: {e}")
@@ -2016,9 +2012,19 @@ class EnhancedLegalQuestionWorkflow(
             for turn in reversed(context.turns):
                 turn_text = ""
                 if hasattr(turn, 'user_query') and turn.user_query:
-                    turn_text += turn.user_query + " "
+                    user_query = turn.user_query
+                    if isinstance(user_query, dict):
+                        user_query = user_query.get('content', user_query.get('text', str(user_query)))
+                    elif not isinstance(user_query, str):
+                        user_query = str(user_query)
+                    turn_text += user_query + " "
                 if hasattr(turn, 'bot_response') and turn.bot_response:
-                    turn_text += turn.bot_response
+                    bot_response = turn.bot_response
+                    if isinstance(bot_response, dict):
+                        bot_response = bot_response.get('content', bot_response.get('text', str(bot_response)))
+                    elif not isinstance(bot_response, str):
+                        bot_response = str(bot_response)
+                    turn_text += bot_response
                 
                 turn_tokens = _estimate_tokens(turn_text)
                 
@@ -4244,6 +4250,22 @@ class EnhancedLegalQuestionWorkflow(
             # 검증 후 최종 optimized_queries를 state에 저장
             print(f"[MULTI-QUERY] Saving optimized_queries to state (keys: {list(optimized_queries.keys())}, has_multi_queries: {'multi_queries' in optimized_queries})", flush=True, file=sys.stdout)
             self._set_state_value(state, "optimized_queries", optimized_queries)
+            
+            # Global cache에도 저장 (state reduction 대응)
+            try:
+                from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache is None or not isinstance(_global_search_results_cache, dict):
+                    import core.shared.wrappers.node_wrappers as node_wrappers_module
+                    node_wrappers_module._global_search_results_cache = {}
+                    _global_search_results_cache = node_wrappers_module._global_search_results_cache
+                
+                if "search" not in _global_search_results_cache:
+                    _global_search_results_cache["search"] = {}
+                _global_search_results_cache["search"]["optimized_queries"] = optimized_queries.copy()
+                print(f"[MULTI-QUERY] Saved optimized_queries to global cache (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Saved optimized_queries to global cache")
+            except Exception as e:
+                self.logger.debug(f"Failed to save optimized_queries to global cache: {e}")
             
             # 직접 state에 저장 (이중 보장)
             if multi_queries and len(multi_queries) > 1:

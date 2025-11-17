@@ -59,7 +59,89 @@ class SearchExecutionProcessor:
         """검색에 필요한 모든 파라미터를 한 번에 가져오기 (State 접근 최적화)"""
         from core.workflow.state.state_helpers import get_field
 
-        optimized_queries = self._get_state_value(state, "optimized_queries", {})
+        # Multi-Query 강화: state의 여러 위치에서 optimized_queries 찾기 (순서 중요)
+        # _get_state_value가 None을 반환할 수 있으므로, 먼저 직접 확인
+        optimized_queries = None
+        
+        # 디버깅: state 구조 확인
+        state_keys = list(state.keys()) if isinstance(state, dict) else []
+        print(f"[MULTI-QUERY] get_search_params: state keys={state_keys}", flush=True, file=sys.stdout)
+        self.logger.debug(f"🔍 [MULTI-QUERY] get_search_params: state keys={state_keys}")
+        
+        # search와 common 그룹의 구조도 확인
+        if "search" in state and isinstance(state["search"], dict):
+            search_keys = list(state["search"].keys())
+            print(f"[MULTI-QUERY] search group keys={search_keys}", flush=True, file=sys.stdout)
+        if "common" in state and isinstance(state.get("common"), dict):
+            common_keys = list(state["common"].keys())
+            print(f"[MULTI-QUERY] common group keys={common_keys}", flush=True, file=sys.stdout)
+            if "search" in state["common"] and isinstance(state["common"]["search"], dict):
+                common_search_keys = list(state["common"]["search"].keys())
+                print(f"[MULTI-QUERY] common.search keys={common_search_keys}", flush=True, file=sys.stdout)
+        
+        # 1. top-level state에서 직접 확인 (가장 우선)
+        if "optimized_queries" in state and isinstance(state["optimized_queries"], dict) and len(state["optimized_queries"]) > 0:
+            optimized_queries = state["optimized_queries"]
+            print(f"[MULTI-QUERY] Found optimized_queries in top-level state (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+            self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in top-level state (keys: {list(optimized_queries.keys())})")
+        
+        # 2. search group에서 확인 (top-level에 없으면)
+        if (not optimized_queries or (isinstance(optimized_queries, dict) and len(optimized_queries) == 0)) and "search" in state and isinstance(state["search"], dict):
+            search_group = state["search"]
+            search_optimized = search_group.get("optimized_queries")
+            print(f"[MULTI-QUERY] Checking search group: optimized_queries type={type(search_optimized)}, value={search_optimized}", flush=True, file=sys.stdout)
+            if search_optimized and isinstance(search_optimized, dict):
+                if len(search_optimized) > 0:
+                    optimized_queries = search_optimized
+                    print(f"[MULTI-QUERY] Found optimized_queries in search group (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                    self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in search group (keys: {list(optimized_queries.keys())})")
+                else:
+                    print(f"[MULTI-QUERY] search group optimized_queries is empty dict", flush=True, file=sys.stdout)
+            else:
+                print(f"[MULTI-QUERY] search group optimized_queries is not a dict or None: {search_optimized}", flush=True, file=sys.stdout)
+        
+        # 3. common.search에서 확인 (위에서 찾지 못했으면)
+        if (not optimized_queries or len(optimized_queries) == 0) and "common" in state and isinstance(state.get("common"), dict):
+            common_search = state["common"].get("search", {})
+            if isinstance(common_search, dict) and common_search.get("optimized_queries"):
+                optimized_queries = common_search["optimized_queries"]
+                print(f"[MULTI-QUERY] Found optimized_queries in common.search (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in common.search (keys: {list(optimized_queries.keys())})")
+        # 4. _get_state_value로 확인 (fallback)
+        if not optimized_queries or len(optimized_queries) == 0:
+            optimized_queries = self._get_state_value(state, "optimized_queries", {})
+            if optimized_queries and len(optimized_queries) > 0:
+                print(f"[MULTI-QUERY] Found optimized_queries via _get_state_value (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries via _get_state_value (keys: {list(optimized_queries.keys())})")
+            else:
+                print(f"[MULTI-QUERY] _get_state_value returned: {optimized_queries}", flush=True, file=sys.stdout)
+        
+        # optimized_queries가 None이면 빈 딕셔너리로 초기화
+        if optimized_queries is None:
+            optimized_queries = {}
+            print(f"[MULTI-QUERY] optimized_queries was None, initialized to empty dict", flush=True, file=sys.stdout)
+        
+        # 5. Global cache에서 확인 (state reduction 대응)
+        if (not optimized_queries or len(optimized_queries) == 0):
+            try:
+                from core.shared.wrappers.node_wrappers import _global_search_results_cache
+                if _global_search_results_cache and isinstance(_global_search_results_cache, dict):
+                    if "search" in _global_search_results_cache and isinstance(_global_search_results_cache["search"], dict):
+                        cached_optimized = _global_search_results_cache["search"].get("optimized_queries")
+                        if cached_optimized and isinstance(cached_optimized, dict) and len(cached_optimized) > 0:
+                            optimized_queries = cached_optimized.copy()
+                            print(f"[MULTI-QUERY] Found optimized_queries in global cache (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                            self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in global cache (keys: {list(optimized_queries.keys())})")
+            except Exception as e:
+                self.logger.debug(f"Failed to get optimized_queries from global cache: {e}")
+        
+        # 6. get_field로 확인 (최후의 수단)
+        if not optimized_queries or len(optimized_queries) == 0:
+            optimized_queries_raw = get_field(state, "optimized_queries")
+            if optimized_queries_raw and isinstance(optimized_queries_raw, dict) and len(optimized_queries_raw) > 0:
+                optimized_queries = optimized_queries_raw
+                self.logger.info("🔍 [MULTI-QUERY] Found optimized_queries via get_field")
+        
         search_params = self._get_state_value(state, "search_params", {})
         query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
         legal_field = self._get_state_value(state, "legal_field", "")
@@ -72,7 +154,10 @@ class SearchExecutionProcessor:
                 extracted_keywords = search_group["extracted_keywords"]
 
             if search_group.get("optimized_queries") and isinstance(search_group["optimized_queries"], dict) and len(search_group["optimized_queries"]) > 0:
-                optimized_queries = search_group["optimized_queries"]
+                # search group의 optimized_queries가 더 완전하면 사용
+                if "multi_queries" in search_group["optimized_queries"] or len(search_group["optimized_queries"]) > len(optimized_queries):
+                    optimized_queries = search_group["optimized_queries"]
+                    self.logger.debug("🔍 [MULTI-QUERY] Using optimized_queries from search group (more complete)")
                 if not extracted_keywords and "expanded_keywords" in optimized_queries:
                     extracted_keywords = optimized_queries.get("expanded_keywords", [])
 
@@ -83,13 +168,50 @@ class SearchExecutionProcessor:
             extracted_keywords_raw = get_field(state, "extracted_keywords")
             if extracted_keywords_raw and len(extracted_keywords_raw) > 0:
                 extracted_keywords = extracted_keywords_raw
-
-        if not optimized_queries or len(optimized_queries) == 0:
-            optimized_queries_raw = get_field(state, "optimized_queries")
-            if optimized_queries_raw and len(optimized_queries_raw) > 0:
-                optimized_queries = optimized_queries_raw
-                if not extracted_keywords and "expanded_keywords" in optimized_queries:
-                    extracted_keywords = optimized_queries.get("expanded_keywords", [])
+        
+        # Multi-Query 복원: optimized_queries가 있지만 multi_queries가 없는 경우 state에서 직접 확인
+        if optimized_queries and "multi_queries" not in optimized_queries:
+            # state의 여러 위치에서 multi_queries 확인 (순서 중요)
+            state_multi_queries = None
+            # 1. top-level state에서 직접 확인 (가장 우선)
+            if "optimized_queries" in state and isinstance(state["optimized_queries"], dict):
+                state_multi_queries = state["optimized_queries"].get("multi_queries")
+                if state_multi_queries:
+                    self.logger.info(f"🔍 [MULTI-QUERY] Found multi_queries in top-level state (count: {len(state_multi_queries)})")
+            # 2. search group에서 확인
+            if not state_multi_queries and "search" in state and isinstance(state.get("search"), dict):
+                search_optimized = state["search"].get("optimized_queries", {})
+                if isinstance(search_optimized, dict):
+                    state_multi_queries = search_optimized.get("multi_queries")
+                    if state_multi_queries:
+                        self.logger.info(f"🔍 [MULTI-QUERY] Found multi_queries in search group (count: {len(state_multi_queries)})")
+            # 3. common.search에서 확인
+            if not state_multi_queries and "common" in state and isinstance(state.get("common"), dict):
+                common_search = state["common"].get("search", {})
+                if isinstance(common_search, dict) and common_search.get("optimized_queries"):
+                    common_optimized = common_search["optimized_queries"]
+                    if isinstance(common_optimized, dict):
+                        state_multi_queries = common_optimized.get("multi_queries")
+                        if state_multi_queries:
+                            self.logger.info(f"🔍 [MULTI-QUERY] Found multi_queries in common.search (count: {len(state_multi_queries)})")
+            # 4. common group에서 직접 확인
+            if not state_multi_queries and "common" in state and isinstance(state.get("common"), dict):
+                common_optimized = state["common"].get("optimized_queries", {})
+                if isinstance(common_optimized, dict):
+                    state_multi_queries = common_optimized.get("multi_queries")
+                    if state_multi_queries:
+                        self.logger.info(f"🔍 [MULTI-QUERY] Found multi_queries in common group (count: {len(state_multi_queries)})")
+            
+            if state_multi_queries:
+                if not optimized_queries:
+                    optimized_queries = {}
+                optimized_queries["multi_queries"] = state_multi_queries
+                self.logger.info(f"✅ [MULTI-QUERY] Restored multi_queries from state (count: {len(state_multi_queries)})")
+            else:
+                # 디버깅: state 구조 확인
+                self.logger.warning(f"⚠️ [MULTI-QUERY] Could not find multi_queries in state. State keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+                if isinstance(state, dict) and "search" in state:
+                    self.logger.warning(f"⚠️ [MULTI-QUERY] search group keys: {list(state['search'].keys()) if isinstance(state['search'], dict) else 'N/A'}")
         
         # Multi-Query 확인 로그 (항상 출력)
         has_multi = optimized_queries and "multi_queries" in optimized_queries
