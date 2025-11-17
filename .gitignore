@@ -160,3 +160,5 @@ portfolio/
 
 *.pkl
 *.pyc
+
+mlruns/
