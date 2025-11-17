@@ -98,15 +98,10 @@ class AnswerFormatterHandler:
         self.length_adjuster = AnswerLengthAdjuster(self.length_config, self.logger)
         
         # Config 및 LegalDataConnectorV2 인스턴스 초기화 (os 변수 오류 방지)
-        try:
-            from core.utils.config import Config
-            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
-            self._config = Config()
-            self._connector = LegalDataConnectorV2(self._config.database_path)
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize Config/Connector: {e}")
-            self._config = None
-            self._connector = None
+        # 지연 초기화로 변경하여 os 변수 오류 방지
+        self._config = None
+        self._connector = None
+        self._config_initialized = False
 
     def format_answer(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 답변 포맷팅: 구조화 + 시각적 포맷팅"""
@@ -2217,7 +2212,19 @@ class AnswerFormatterHandler:
             전체 본문 텍스트 또는 None
         """
         try:
-            # Config 및 connector 인스턴스 사용 (이미 초기화됨)
+            # Config 및 connector 인스턴스 지연 초기화 (os 변수 오류 방지)
+            if not self._config_initialized:
+                try:
+                    import os
+                    from core.utils.config import Config
+                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                    self._config = Config()
+                    self._connector = LegalDataConnectorV2(self._config.database_path)
+                    self._config_initialized = True
+                except Exception as e:
+                    self.logger.warning(f"Failed to initialize Config/Connector: {e}")
+                    return None
+            
             if self._config is None or self._connector is None:
                 self.logger.warning("Config or Connector not initialized, cannot get full text")
                 return None
@@ -2303,7 +2310,19 @@ class AnswerFormatterHandler:
             {doc_id: full_text} 딕셔너리
         """
         try:
-            # Config 및 connector 인스턴스 사용 (이미 초기화됨)
+            # Config 및 connector 인스턴스 지연 초기화 (os 변수 오류 방지)
+            if not self._config_initialized:
+                try:
+                    import os
+                    from core.utils.config import Config
+                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                    self._config = Config()
+                    self._connector = LegalDataConnectorV2(self._config.database_path)
+                    self._config_initialized = True
+                except Exception as e:
+                    self.logger.warning(f"Failed to initialize Config/Connector: {e}")
+                    return {}
+            
             if self._config is None or self._connector is None:
                 self.logger.warning("Config or Connector not initialized, cannot get full texts")
                 return {}
