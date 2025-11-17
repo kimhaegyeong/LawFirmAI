@@ -297,36 +297,35 @@ async def run_query_test(query: str):
         # 설정 로드
         logger.info("1️⃣  설정 로드 중...")
         
-        # IndexIVFPQ 인덱스 사용 설정 (환경 변수 우선, 없으면 기본값)
-        if not os.getenv('USE_EXTERNAL_VECTOR_STORE'):
-            os.environ['USE_EXTERNAL_VECTOR_STORE'] = 'true'
-            logger.info("   📌 USE_EXTERNAL_VECTOR_STORE=true 설정됨")
+        # MLflow 인덱스 사용 설정 (환경 변수 우선, 없으면 기본값)
+        if not os.getenv('USE_MLFLOW_INDEX'):
+            os.environ['USE_MLFLOW_INDEX'] = 'true'
+            logger.info("   📌 USE_MLFLOW_INDEX=true 설정됨")
         
-        if not os.getenv('EXTERNAL_VECTOR_STORE_BASE_PATH'):
-            # IndexIVFPQ 인덱스 경로 자동 감지
-            possible_paths = [
-                "data/vector_store/v2.0.0-dynamic-dynamic-ivfpq",
-                "./data/vector_store/v2.0.0-dynamic-dynamic-ivfpq",
-                str(project_root / "data" / "vector_store" / "v2.0.0-dynamic-dynamic-ivfpq")
-            ]
-            for path in possible_paths:
-                if Path(path).exists():
-                    os.environ['EXTERNAL_VECTOR_STORE_BASE_PATH'] = path
-                    logger.info(f"   📌 EXTERNAL_VECTOR_STORE_BASE_PATH={path} 설정됨")
-                    break
+        if not os.getenv('MLFLOW_TRACKING_URI'):
+            # MLflow tracking URI 설정
+            mlflow_uri = str(project_root / "mlflow" / "mlruns")
+            os.environ['MLFLOW_TRACKING_URI'] = f"file:///{mlflow_uri.replace(chr(92), '/')}"
+            logger.info(f"   📌 MLFLOW_TRACKING_URI 설정됨")
+        
+        # MLFLOW_RUN_ID가 없으면 프로덕션 run 자동 조회 (비워두면 자동)
+        if not os.getenv('MLFLOW_RUN_ID'):
+            logger.info("   📌 MLFLOW_RUN_ID 비어있음 - 프로덕션 run 자동 조회 예정")
+        else:
+            logger.info(f"   📌 MLFLOW_RUN_ID={os.getenv('MLFLOW_RUN_ID')} 설정됨")
         
         config = LangGraphConfig.from_env()
         config.enable_checkpoint = False  # 테스트 모드
         logger.info(f"   ✅ LangGraph 활성화: {config.langgraph_enabled}")
         logger.info(f"   ✅ 체크포인트: {config.enable_checkpoint}")
         
-        # 외부 인덱스 설정 확인
+        # MLflow 인덱스 설정 확인
         from lawfirm_langgraph.core.utils.config import Config
         config_obj = Config()
-        if config_obj.use_external_vector_store:
-            logger.info(f"   ✅ 외부 인덱스 사용: {config_obj.external_vector_store_base_path}")
+        if config_obj.use_mlflow_index:
+            logger.info(f"   ✅ MLflow 인덱스 사용: run_id={config_obj.mlflow_run_id or '자동 조회'}")
         else:
-            logger.info(f"   ℹ️  외부 인덱스 미사용 (DB 기반 인덱스 사용)")
+            logger.info(f"   ℹ️  MLflow 인덱스 미사용 (DB 기반 인덱스 사용)")
         
         # 서비스 초기화
         logger.info("\n2️⃣  LangGraphWorkflowService 초기화 중...")
