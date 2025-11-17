@@ -5004,7 +5004,10 @@ class EnhancedLegalQuestionWorkflow(
         semantic_count: int,
         keyword_count: int,
         needs_retry: bool,
-        start_time: float
+        start_time: float,
+        query: str = "",
+        query_type_str: str = "",
+        extracted_keywords: List[str] = None
     ) -> None:
         """최종 결과를 State에 저장"""
         debug_mode = os.getenv("DEBUG_SEARCH_RESULTS", "false").lower() == "true"
@@ -5046,6 +5049,89 @@ class EnhancedLegalQuestionWorkflow(
                 final_score_msg = f"📊 [SEARCH RESULTS] Final documents score range - Min: {min(final_scores):.3f}, Max: {max(final_scores):.3f}, Avg: {sum(final_scores)/len(final_scores):.3f}"
                 print(final_score_msg, flush=True, file=sys.stdout)
                 self.logger.info(final_score_msg)
+            
+            # 검색 품질 메트릭 로깅 추가
+            if final_docs:
+                try:
+                    # 검색 품질 메트릭 직접 계산
+                    metrics = {
+                        "avg_relevance": 0.0,
+                        "min_relevance": 0.0,
+                        "max_relevance": 0.0,
+                        "diversity_score": 0.0,
+                        "keyword_coverage": 0.0
+                    }
+                    
+                    scores = [doc.get("relevance_score", doc.get("final_weighted_score", 0.0)) for doc in final_docs]
+                    if scores:
+                        metrics["avg_relevance"] = sum(scores) / len(scores)
+                        metrics["min_relevance"] = min(scores)
+                        metrics["max_relevance"] = max(scores)
+                    
+                    contents = [doc.get("content", doc.get("text", "")) for doc in final_docs]
+                    unique_terms = set()
+                    total_terms = 0
+                    for content in contents:
+                        if isinstance(content, str):
+                            terms = content.lower().split()
+                            unique_terms.update(terms)
+                            total_terms += len(terms)
+                    
+                    if total_terms > 0:
+                        metrics["diversity_score"] = len(unique_terms) / total_terms
+                    
+                    if extracted_keywords:
+                        covered_keywords = set()
+                        for doc in final_docs:
+                            content = doc.get("content", doc.get("text", "")).lower()
+                            if isinstance(content, str):
+                                for keyword in extracted_keywords:
+                                    if keyword.lower() in content:
+                                        covered_keywords.add(keyword.lower())
+                        
+                        if extracted_keywords:
+                            metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
+                    
+                    metrics_msg = (
+                        f"📊 [SEARCH QUALITY METRICS] "
+                        f"Avg Relevance: {metrics.get('avg_relevance', 0.0):.3f}, "
+                        f"Min: {metrics.get('min_relevance', 0.0):.3f}, "
+                        f"Max: {metrics.get('max_relevance', 0.0):.3f}, "
+                        f"Diversity: {metrics.get('diversity_score', 0.0):.3f}, "
+                        f"Keyword Coverage: {metrics.get('keyword_coverage', 0.0):.3f}"
+                    )
+                    print(metrics_msg, flush=True, file=sys.stdout)
+                    self.logger.info(metrics_msg)
+                    
+                    # MLflow 로깅 추가
+                    try:
+                        import mlflow
+                        if mlflow.active_run() is not None:
+                            mlflow.log_metrics({
+                                "search_quality_avg_relevance": metrics.get('avg_relevance', 0.0),
+                                "search_quality_min_relevance": metrics.get('min_relevance', 0.0),
+                                "search_quality_max_relevance": metrics.get('max_relevance', 0.0),
+                                "search_quality_diversity": metrics.get('diversity_score', 0.0),
+                                "search_quality_keyword_coverage": metrics.get('keyword_coverage', 0.0),
+                                "search_results_count": len(final_docs),
+                                "search_overall_quality": overall_quality,
+                                "search_semantic_count": semantic_count,
+                                "search_keyword_count": keyword_count,
+                                "search_retry_performed": 1.0 if needs_retry else 0.0
+                            })
+                            mlflow.log_params({
+                                "search_query_type": query_type_str or "",
+                                "search_processing_time": processing_time
+                            })
+                            self.logger.debug(f"✅ [MLFLOW] Search quality metrics logged to MLflow run: {mlflow.active_run().info.run_id}")
+                        else:
+                            self.logger.debug("MLflow run not active, skipping metric logging")
+                    except ImportError:
+                        self.logger.debug("MLflow not available, skipping metric logging")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to log to MLflow: {e}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to log search quality metrics: {e}", exc_info=True)
         else:
             no_docs_msg = f"⚠️ [SEARCH RESULTS] No documents available after processing (quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
             print(no_docs_msg, flush=True, file=sys.stdout)
@@ -5185,7 +5271,8 @@ class EnhancedLegalQuestionWorkflow(
 
             self._save_final_results_to_state(
                 state, final_docs, merged_docs, filtered_docs, overall_quality,
-                semantic_count, keyword_count, needs_retry, start_time
+                semantic_count, keyword_count, needs_retry, start_time,
+                query=query, query_type_str=query_type_str, extracted_keywords=extracted_keywords
             )
 
         except Exception as e:

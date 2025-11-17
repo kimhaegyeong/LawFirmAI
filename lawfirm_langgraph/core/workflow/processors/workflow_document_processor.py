@@ -6,6 +6,7 @@
 
 import logging
 import re
+import sys
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -43,31 +44,74 @@ class WorkflowDocumentProcessor:
             valid_docs = []
             invalid_docs_count = 0
             
-            # 개선: 동적 임계값 조정 (검색 결과 점수 분포 분석)
+            # 개선: 동적 임계값 조정 (검색 결과 점수 분포 분석) - 개선 버전
             scores = [doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0) 
                      for doc in retrieved_docs if isinstance(doc, dict)]
             
             if scores:
+                import statistics
                 avg_score = sum(scores) / len(scores)
                 max_score = max(scores)
                 min_score = min(scores)
                 score_range = max_score - min_score
                 
-                # 점수 분포에 따라 동적 임계값 계산
-                if score_range < 0.2:
-                    # 점수가 비슷하면 임계값을 낮춤
-                    dynamic_threshold = max(0.25, avg_score - 0.1)
-                elif score_range < 0.4:
-                    # 점수 차이가 중간이면 평균 기준
-                    dynamic_threshold = max(0.30, avg_score - 0.05)
-                else:
-                    # 점수 차이가 크면 평균 이상만 선택
-                    dynamic_threshold = avg_score
+                # 표준편차 계산 (더 정교한 분포 분석)
+                try:
+                    std_dev = statistics.stdev(scores) if len(scores) > 1 else 0.0
+                except:
+                    std_dev = 0.0
                 
-                self.logger.info(
-                    f"Dynamic threshold calculation: avg={avg_score:.3f}, "
-                    f"range={score_range:.3f}, threshold={dynamic_threshold:.3f}"
+                # 분위수 계산 (25%, 50%, 75%)
+                sorted_scores = sorted(scores)
+                q25_idx = int(len(sorted_scores) * 0.25)
+                q50_idx = int(len(sorted_scores) * 0.50)
+                q75_idx = int(len(sorted_scores) * 0.75)
+                q25 = sorted_scores[q25_idx] if q25_idx < len(sorted_scores) else min_score
+                q50 = sorted_scores[q50_idx] if q50_idx < len(sorted_scores) else avg_score
+                q75 = sorted_scores[q75_idx] if q75_idx < len(sorted_scores) else max_score
+                
+                # 검색 결과 수에 따른 임계값 조정
+                num_results = len(retrieved_docs)
+                if num_results < 5:
+                    # 검색 결과가 매우 적으면 임계값을 크게 완화
+                    threshold_adjustment = -0.15
+                elif num_results < 10:
+                    # 검색 결과가 적으면 임계값을 완화
+                    threshold_adjustment = -0.10
+                elif num_results < 20:
+                    # 검색 결과가 보통이면 약간 완화
+                    threshold_adjustment = -0.05
+                else:
+                    # 검색 결과가 충분하면 조정 없음
+                    threshold_adjustment = 0.0
+                
+                # 점수 분포에 따라 동적 임계값 계산 (개선된 로직)
+                if score_range < 0.15:
+                    # 점수가 매우 비슷하면 중위수 기준으로 낮춤
+                    dynamic_threshold = max(0.20, q50 - 0.15 + threshold_adjustment)
+                elif score_range < 0.25:
+                    # 점수가 비슷하면 25% 분위수 기준
+                    dynamic_threshold = max(0.25, q25 - 0.10 + threshold_adjustment)
+                elif score_range < 0.4:
+                    # 점수 차이가 중간이면 평균 기준 (표준편차 고려)
+                    if std_dev > 0.1:
+                        # 분산이 크면 평균 - 표준편차
+                        dynamic_threshold = max(0.30, avg_score - std_dev * 0.5 + threshold_adjustment)
+                    else:
+                        # 분산이 작으면 평균 기준
+                        dynamic_threshold = max(0.30, avg_score - 0.05 + threshold_adjustment)
+                else:
+                    # 점수 차이가 크면 중위수 기준 (이상치 영향 최소화)
+                    dynamic_threshold = max(0.35, q50 + threshold_adjustment)
+                
+                threshold_msg = (
+                    f"📊 [DYNAMIC THRESHOLD] avg={avg_score:.3f}, "
+                    f"std={std_dev:.3f}, range={score_range:.3f}, "
+                    f"q25={q25:.3f}, q50={q50:.3f}, q75={q75:.3f}, "
+                    f"num_results={num_results}, threshold={dynamic_threshold:.3f}"
                 )
+                print(threshold_msg, flush=True, file=sys.stdout)
+                self.logger.info(threshold_msg)
             else:
                 dynamic_threshold = 0.35
             
