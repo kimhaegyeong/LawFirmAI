@@ -16,8 +16,10 @@
 
 ### 2. 하이브리드 검색 시스템
 - **벡터 검색**: FAISS 기반 의미적 유사도 검색 (SemanticSearchEngineV2)
-- **키워드 검색**: FTS5 기반 키워드 검색 (KeywordSearchEngine)
+- **키워드 검색**: FTS5 기반 키워드 검색 (ExactSearchEngineV2)
 - **하이브리드 통합**: 가중 평균으로 검색 결과 결합
+- **Keyword Coverage 기반 동적 가중치**: 검색 결과의 키워드 커버리지에 따라 가중치 조정
+- **의미 기반 키워드 매칭**: SentenceTransformer를 활용한 의미적 유사도 기반 키워드 매칭
 - **검색 엔진**: `lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py`
 - **하이브리드 엔진**: `lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py`
 
@@ -42,7 +44,8 @@
 - **동적 검색**: 질문 유형별 검색 가중치 조정
 - **구조화된 답변**: 질문 유형별 맞춤형 답변
 - **신뢰도 시스템**: 답변 신뢰성 수치화
-- **답변 생성기**: `lawfirm_langgraph/core/agents/handlers/answer_generator.py`
+- **Keyword Coverage 최적화**: 평균 0.806 (목표 0.70 이상 초과 달성)
+- **성능 최적화**: 선택적 의미 기반 매칭, 배치 임베딩 생성, 모델 캐싱
 
 ### 6. AI 모델 시스템
 - **Google Gemini 2.5 Flash Lite**: 클라우드 LLM 모델
@@ -51,8 +54,13 @@
 - **UnifiedPromptManager**: 법률 도메인별 프롬프트 통합 관리
 - **Gemini 클라이언트**: `lawfirm_langgraph/core/services/gemini_client.py`
 - **State 최적화**: State reduction으로 메모리 효율성 향상
-- **성능 최적화**: 컨텍스트 확장 스킵, 검증 간소화로 응답 시간 단축
+- **성능 최적화**: 
+  - 선택적 의미 기반 매칭 (Keyword Coverage 70% 이상 시 생략)
+  - 배치 임베딩 생성 (batch_size=8)
+  - SentenceTransformer 모델 캐싱 (약 7.5초 절약)
+  - LLM 호출 타임아웃 최적화 (3초)
 - **메타데이터 캐싱**: TTL 기반 캐싱으로 검색 성능 향상
+- **메타데이터 정규화**: 오타 필드명 자동 수정 및 복원
 
 ### 7. ML 훈련 및 평가 시스템
 - **Ground Truth 생성**: 의사 쿼리 및 클러스터링 기반 Ground Truth 생성

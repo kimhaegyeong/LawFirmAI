@@ -61,7 +61,8 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 | **lawfirm_langgraph/core/workflow/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced, nodes, state |
 | **lawfirm_langgraph/core/search/** | 검색 엔진 | semantic_search_engine_v2, keyword_search_engine, hybrid_search_engine_v2 |
 | **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | gemini_client, unified_prompt_manager, keyword_mapper |
-| **lawfirm_langgraph/core/agents/handlers/** | 핸들러 | answer_generator, search_handler, classification_handler |
+| **lawfirm_langgraph/core/search/processors/** | 검색 결과 처리 | result_merger, result_ranker, search_result_processor |
+| **lawfirm_langgraph/core/workflow/processors/** | 워크플로우 문서 처리 | workflow_document_processor |
 | **lawfirm_langgraph/core/data/** | 데이터 관리 | database, vector_store, conversation_store |
 | **lawfirm_langgraph/core/models/** | AI 모델 관리 | sentence_bert |
 | **lawfirm_langgraph/core/classification/** | 분류 시스템 | domain_classifier |
@@ -99,8 +100,9 @@ result = await workflow.process_query_async("질문", "session_id")
 
 **검색 방식**:
 - 의미적 검색 (FAISS 벡터, SemanticSearchEngineV2)
-- 키워드 검색 (FTS5, KeywordSearchEngine)
+- 키워드 검색 (FTS5, ExactSearchEngineV2)
 - 하이브리드 병합
+- Keyword Coverage 기반 동적 가중치 조정
 
 **사용 예시**:
 ```python
@@ -134,33 +136,43 @@ results = engine.search("계약 해지", k=10)
 
 ### 5. 질문 분류기
 
-**파일**: `lawfirm_langgraph/core/classification/domain_classifier.py`
+**파일**: `lawfirm_langgraph/core/classification/classifiers/question_classifier.py`
 
 **역할**: 의미적 도메인 분류 및 처리 전략 결정
 
 **분류 유형**:
-- 법령 조문 문의
-- 판례 검색
-- 절차 문의
-- 일반 질문
+- 법령 조문 문의 (law_inquiry)
+- 판례 검색 (precedent_search)
+- 절차 문의 (procedure_inquiry)
+- 일반 질문 (general_question)
+- 법률 자문 (legal_advice)
 
-### 6. 답변 생성기
+### 6. 검색 결과 처리 및 순위 결정
 
-**파일**: `lawfirm_langgraph/core/agents/handlers/answer_generator.py`
+**파일**: `lawfirm_langgraph/core/search/processors/result_merger.py`
 
-**역할**: 검색 결과를 바탕으로 답변 생성
+**역할**: 검색 결과 병합 및 순위 결정
 
 **기능**:
-- 컨텍스트 구성
-- LLM 기반 답변 생성
-- 답변 포맷팅
+- 검색 결과 병합 (ResultMerger)
+- 다단계 재순위화 (ResultRanker)
+- Keyword Coverage 평가
+- 의미 기반 키워드 매칭 (선택적 실행, 모델 캐싱)
+- 배치 임베딩 생성 (성능 최적화)
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.agents.handlers.answer_generator import AnswerGenerator
+from lawfirm_langgraph.core.search.processors.result_merger import ResultMerger, ResultRanker
 
-generator = AnswerGenerator()
-answer = generator.generate(query, context)
+merger = ResultMerger()
+ranker = ResultRanker()
+
+# 검색 결과 병합
+merged = merger.merge_results(exact_results, semantic_results, weights, query)
+
+# 순위 결정 및 Keyword Coverage 평가
+ranked = ranker.rank_results(merged, top_k=20, query=query)
+quality = ranker.evaluate_search_quality(query, ranked, query_type, extracted_keywords)
 ```
 
 ### 7. 컨텍스트 빌더
@@ -360,14 +372,10 @@ workflow = LangGraphWorkflowService(config)
 
 ### 1. 메모리 최적화
 
-```python
-from lawfirm_langgraph.core.agents.optimizers.performance_optimizer import PerformanceOptimizer
-
-optimizer = PerformanceOptimizer()
-optimizer.optimize_memory()
-```
-
-**참고**: `core/agents/optimizers/`는 레거시 코드입니다. 새로운 코드는 `core/workflow/` 구조를 사용하세요.
+- **State 최적화**: State reduction으로 메모리 효율성 향상
+- **모델 캐싱**: SentenceTransformer 모델 클래스 변수로 캐싱 (약 7.5초 절약)
+- **선택적 의미 기반 매칭**: Keyword Coverage 70% 이상 시 의미 기반 매칭 생략
+- **배치 임베딩 생성**: 개별 생성 대신 배치로 처리 (batch_size=8)
 
 ### 2. 캐싱 전략
 
