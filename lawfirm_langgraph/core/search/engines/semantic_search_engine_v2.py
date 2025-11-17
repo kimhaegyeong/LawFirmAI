@@ -831,9 +831,16 @@ class SemanticSearchEngineV2:
         self.current_faiss_version = None  # 현재 FAISS 버전 (MLflow 전환 시에도 호환성 유지)
         self.faiss_version_manager = None  # FAISS 버전 관리자 (MLflow 전환 시에도 호환성 유지)
 
-        # 쿼리 벡터 캐싱 (LRU 캐시)
-        self._query_vector_cache = {}  # query -> vector
-        self._cache_max_size = 512  # 최대 캐시 크기 (128 → 512로 증가)
+        # 쿼리 벡터 캐싱 (해시 기반 LRU 캐시)
+        try:
+            import hashlib
+            self._use_hash_cache = True
+            self._query_vector_cache = {}  # query_hash -> vector
+            self._cache_max_size = 1000  # 최대 캐시 크기 (512 → 1000로 증가)
+        except ImportError:
+            self._use_hash_cache = False
+            self._query_vector_cache = {}  # query -> vector
+            self._cache_max_size = 512
         
         # 메타데이터 캐싱 (성능 개선, TTL 지원)
         self._metadata_cache = {}  # key -> {'data': metadata, 'timestamp': time.time()}
@@ -1502,20 +1509,36 @@ class SemanticSearchEngineV2:
         }
 
     def _get_cached_query_vector(self, query: str) -> Optional[np.ndarray]:
-        """캐시에서 쿼리 벡터 가져오기 (정규화된 쿼리 사용)"""
-        normalized_query = self._normalize_query(query)
-        return self._query_vector_cache.get(normalized_query)
+        """캐시에서 쿼리 벡터 가져오기 (해시 기반 LRU 캐시)"""
+        if self._use_hash_cache:
+            import hashlib
+            normalized_query = self._normalize_query(query)
+            query_hash = hashlib.md5(normalized_query.encode()).hexdigest()
+            return self._query_vector_cache.get(query_hash)
+        else:
+            normalized_query = self._normalize_query(query)
+            return self._query_vector_cache.get(normalized_query)
 
     def _cache_query_vector(self, query: str, vector: np.ndarray):
-        """쿼리 벡터를 캐시에 저장 (LRU 방식, 정규화된 쿼리 사용)"""
-        normalized_query = self._normalize_query(query)
-        # 캐시 크기 제한 (LRU: 오래된 항목 제거)
-        if len(self._query_vector_cache) >= self._cache_max_size:
-            # 가장 오래된 항목 제거 (단순 구현: 첫 번째 항목)
-            oldest_key = next(iter(self._query_vector_cache))
-            del self._query_vector_cache[oldest_key]
-
-        self._query_vector_cache[normalized_query] = vector
+        """쿼리 벡터를 캐시에 저장 (해시 기반 LRU 캐시)"""
+        if self._use_hash_cache:
+            import hashlib
+            normalized_query = self._normalize_query(query)
+            query_hash = hashlib.md5(normalized_query.encode()).hexdigest()
+            # 캐시 크기 제한 (LRU: 오래된 항목 제거)
+            if len(self._query_vector_cache) >= self._cache_max_size:
+                # 가장 오래된 항목 제거 (단순 구현: 첫 번째 항목)
+                oldest_key = next(iter(self._query_vector_cache))
+                del self._query_vector_cache[oldest_key]
+            self._query_vector_cache[query_hash] = vector
+        else:
+            normalized_query = self._normalize_query(query)
+            # 캐시 크기 제한 (LRU: 오래된 항목 제거)
+            if len(self._query_vector_cache) >= self._cache_max_size:
+                # 가장 오래된 항목 제거 (단순 구현: 첫 번째 항목)
+                oldest_key = next(iter(self._query_vector_cache))
+                del self._query_vector_cache[oldest_key]
+            self._query_vector_cache[normalized_query] = vector
 
     def _load_chunk_vectors_batch(self,
                                   chunk_ids: List[int],
@@ -3312,6 +3335,23 @@ class SemanticSearchEngineV2:
                         restored_count = len(missing_fields) - len(still_missing)
                         if restored_count > 0:
                             restoration_stats['metadata_restored'] += restored_count
+                        # 개선: 메타데이터가 일부 누락되어도 결과는 포함 (경고만 출력)
+                        # 핵심 필드가 모두 누락된 경우에만 제외
+                        critical_fields = self._get_critical_metadata_fields(source_type)
+                        if critical_fields:
+                            critical_missing = [f for f in still_missing if f in critical_fields]
+                            if len(critical_missing) == len(critical_fields):
+                                # 모든 핵심 필드가 누락된 경우에만 제외
+                                self.logger.warning(
+                                    f"⚠️  Result {i+1} ({source_type}): All critical fields missing: {critical_missing}, excluding result"
+                                )
+                                continue
+                            elif critical_missing:
+                                # 일부 핵심 필드가 누락되었지만 일부는 있으면 포함 (경고만)
+                                self.logger.warning(
+                                    f"⚠️  Result {i+1} ({source_type}): Some critical fields missing: {critical_missing}, but including result"
+                                )
+                        # 핵심 필드가 없거나 일부만 누락된 경우 결과 포함
                     else:
                         self.logger.debug(
                             f"✅ Result {i+1} ({source_type}): All required fields restored successfully"
@@ -3475,6 +3515,24 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Failed to batch load embedding_version_ids: {e}", exc_info=True)
             return {}
+    
+    def _get_critical_metadata_fields(self, source_type: str) -> List[str]:
+        """
+        필수 필드 중에서도 반드시 있어야 하는 핵심 필드 반환
+        
+        Args:
+            source_type: 소스 타입
+            
+        Returns:
+            핵심 필드 리스트
+        """
+        critical_fields_map = {
+            'case_paragraph': ['doc_id'],  # doc_id는 필수, casenames와 court는 선택적
+            'decision_paragraph': ['doc_id'],  # doc_id는 필수, org는 선택적
+            'interpretation_paragraph': ['interpretation_id'],  # interpretation_id는 필수
+            'statute_article': ['statute_name', 'article_no'],  # 법령명과 조문번호는 필수
+        }
+        return critical_fields_map.get(source_type, [])
     
     def _get_required_metadata_fields(self, source_type: str) -> List[str]:
         """
@@ -4181,19 +4239,21 @@ class SemanticSearchEngineV2:
         """
         # nlist 추정 (일반적으로 total/10 ~ total/100)
         estimated_nlist = max(10, min(100, total_vectors // 10))
+        
+        # 더 공격적인 nprobe 계산 (개선: base_nprobe 계산 방식 변경)
+        base_nprobe = max(32, int(np.sqrt(total_vectors) / 10))
 
-        # k 값에 따라 nprobe 조정
-        if k <= 5:
-            nprobe = max(1, estimated_nlist // 10)  # 적은 결과: 낮은 nprobe (빠른 검색)
+        # k 값에 따라 nprobe 조정 (개선: 더 많은 후보 검색)
+        if k <= 10:
+            nprobe = min(base_nprobe * 2, 256)
         elif k <= 20:
-            nprobe = max(5, estimated_nlist // 5)  # 중간 결과: 중간 nprobe
+            nprobe = min(base_nprobe * 3, 512)
         else:
-            nprobe = max(10, estimated_nlist // 2)  # 많은 결과: 높은 nprobe (정확한 검색)
+            nprobe = min(base_nprobe * 4, 1024)
 
         # IndexIVFPQ는 압축 인덱스이므로 더 높은 nprobe 필요 (정확도 향상)
         if self.index and 'IndexIVFPQ' in type(self.index).__name__:
-            # IndexIVFPQ: 정확도 향상을 위해 nprobe 증가 (50% → 100% 증가로 변경)
-            nprobe = int(nprobe * 2.0)  # 100% 증가 (정확도 향상)
+            nprobe = int(nprobe * 2.0)
 
         # 최소/최대 값 제한
         nprobe = min(max(1, nprobe), estimated_nlist)
@@ -5659,11 +5719,22 @@ class SemanticSearchEngineV2:
             "priority": 1
         })
         
-        # 2. 키워드 확장 쿼리
+        # 2. 구조화된 정보 추출 (법령 조문 번호, 판례 사건번호 등)
+        structured_info = self._extract_structured_info(query)
+        
+        # 3. 키워드 확장 쿼리
         if expanded_keywords and len(expanded_keywords) >= 2:
-            # 상위 5개 키워드 추가 (개선: 3개 → 5개로 확대)
-            top_keywords = expanded_keywords[:5]
-            expanded_query = f"{query} {' '.join(top_keywords)}"
+            # 상위 7-10개 키워드 추가 (개선: 5개 → 7-10개로 확대)
+            # 키워드가 많으면 10개, 적으면 7개 사용
+            num_keywords = min(10, max(7, len(expanded_keywords)))
+            top_keywords = expanded_keywords[:num_keywords]
+            
+            # 구조화된 정보와 키워드 결합
+            if structured_info:
+                expanded_query = f"{query} {' '.join(top_keywords)} {' '.join(structured_info)}"
+            else:
+                expanded_query = f"{query} {' '.join(top_keywords)}"
+            
             variations.append({
                 "query": expanded_query,
                 "type": "keyword_expanded",
@@ -5674,6 +5745,8 @@ class SemanticSearchEngineV2:
             # 키워드만으로 검색 (원본 쿼리가 너무 길 때)
             if len(query) > 50:
                 keyword_only_query = " ".join(top_keywords)
+                if structured_info:
+                    keyword_only_query = f"{keyword_only_query} {' '.join(structured_info)}"
                 variations.append({
                     "query": keyword_only_query,
                     "type": "keyword_only",
@@ -5681,10 +5754,22 @@ class SemanticSearchEngineV2:
                     "priority": 3
                 })
         
-        # 3. 핵심 키워드 추출 쿼리
+        # 4. 구조화된 정보만으로 검색 (법령 조문 번호, 판례 사건번호 등)
+        if structured_info:
+            structured_query = " ".join(structured_info)
+            variations.append({
+                "query": structured_query,
+                "type": "structured_info",
+                "weight": 0.95,
+                "priority": 2
+            })
+        
+        # 5. 핵심 키워드 추출 쿼리
         core_keywords = self._extract_core_keywords_simple(query)
         if core_keywords and len(core_keywords) >= 2:
             core_query = " ".join(core_keywords)
+            if structured_info:
+                core_query = f"{core_query} {' '.join(structured_info)}"
             if core_query != query:
                 variations.append({
                     "query": core_query,
@@ -5697,6 +5782,34 @@ class SemanticSearchEngineV2:
         variations.sort(key=lambda x: (x["priority"], -x["weight"]))
         
         return variations
+    
+    def _extract_structured_info(self, query: str) -> List[str]:
+        """구조화된 정보 추출 (법령 조문 번호, 판례 사건번호 등)"""
+        import re
+        structured_info = []
+        
+        # 법령 조문 번호 추출 (예: "민법 제543조", "형법 제250조")
+        law_pattern = r'([가-힣]+법)\s*제?\s*(\d+)\s*조'
+        law_matches = re.findall(law_pattern, query)
+        for law_name, article_num in law_matches:
+            structured_info.append(f"{law_name} 제{article_num}조")
+        
+        # 판례 사건번호 추출 (예: "대법원 2020다12345", "2020나12345")
+        precedent_pattern = r'(대법원\s*)?(\d{4}[다나마]\d+)'
+        precedent_matches = re.findall(precedent_pattern, query)
+        for court, case_num in precedent_matches:
+            if court:
+                structured_info.append(f"{court}{case_num}")
+            else:
+                structured_info.append(case_num)
+        
+        # 헌법 조문 추출 (예: "헌법 제10조")
+        constitution_pattern = r'헌법\s*제?\s*(\d+)\s*조'
+        constitution_matches = re.findall(constitution_pattern, query)
+        for article_num in constitution_matches:
+            structured_info.append(f"헌법 제{article_num}조")
+        
+        return structured_info
 
     def _extract_core_keywords_simple(self, query: str) -> List[str]:
         """핵심 키워드 추출 (간단한 구현)"""

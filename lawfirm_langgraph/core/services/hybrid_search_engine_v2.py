@@ -82,6 +82,12 @@ class HybridSearchEngineV2:
             if search_types is None:
                 search_types = ["law", "precedent", "decision", "interpretation"]
 
+            # 질문 유형 분석 (개선: 질문 유형별 가중치 동적 조정)
+            query_type = self.question_classifier.classify(query)
+            
+            # 질문 유형별 가중치 설정
+            type_weights = self._get_query_type_weights(query_type)
+            
             # 검색 결과 수집
             exact_results = {}
             semantic_results = []
@@ -90,17 +96,18 @@ class HybridSearchEngineV2:
             if include_exact:
                 exact_results = self._execute_exact_search(query, search_types)
 
-            # 의미적 검색 (벡터)
+            # 의미적 검색 (벡터) - 가중치에 따라 검색 결과 수 조정
             if include_semantic:
-                semantic_results = self._execute_semantic_search(query, search_types)
+                semantic_k = int(max_results * type_weights["semantic"] * 2)
+                semantic_results = self._execute_semantic_search(query, search_types, k=semantic_k)
 
-            # 결과 통합
+            # 결과 통합 (가중치 적용)
             merged_results = self.result_merger.merge_results(
-                exact_results, semantic_results
+                exact_results, semantic_results, weights=type_weights, query=query
             )
 
             # 결과 랭킹
-            ranked_results = self.result_ranker.rank_results(merged_results)
+            ranked_results = self.result_ranker.rank_results(merged_results, top_k=max_results, query=query)
 
             # 다양성 필터 적용
             filtered_results = self.result_ranker.apply_diversity_filter(
@@ -154,7 +161,7 @@ class HybridSearchEngineV2:
             self.logger.error(f"Error in exact search: {e}")
             return {}
 
-    def _execute_semantic_search(self, query: str, search_types: List[str]) -> List[Dict[str, Any]]:
+    def _execute_semantic_search(self, query: str, search_types: List[str], k: Optional[int] = None) -> List[Dict[str, Any]]:
         """벡터 기반 의미 검색 실행"""
         try:
             # search_types를 source_types로 매핑
@@ -170,9 +177,12 @@ class HybridSearchEngineV2:
                 if st in source_type_mapping:
                     source_types.extend(source_type_mapping[st])
 
+            if k is None:
+                k = self.search_config["max_results"]
+
             results = self.semantic_search.search(
                 query,
-                k=self.search_config["max_results"],
+                k=k,
                 source_types=source_types if source_types else None,
                 similarity_threshold=self.search_config["semantic_threshold"]
             )
@@ -180,3 +190,26 @@ class HybridSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Error in semantic search: {e}")
             return []
+    
+    def _get_query_type_weights(self, query_type: QuestionType) -> Dict[str, float]:
+        """질문 유형별 가중치 반환"""
+        weights = {
+            QuestionType.LAW_INQUIRY: {
+                "exact": 0.6,  # 법령 조문은 키워드 검색이 중요
+                "semantic": 0.4
+            },
+            QuestionType.PRECEDENT_SEARCH: {
+                "exact": 0.4,  # 판례는 의미적 검색이 중요
+                "semantic": 0.6
+            },
+            QuestionType.COMPLEX_QUESTION: {
+                "exact": 0.5,  # 균형
+                "semantic": 0.5
+            },
+            QuestionType.GENERAL: {
+                "exact": 0.5,  # 기본값
+                "semantic": 0.5
+            }
+        }
+        
+        return weights.get(query_type, {"exact": 0.5, "semantic": 0.5})

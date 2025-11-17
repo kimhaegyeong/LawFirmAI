@@ -134,11 +134,11 @@ class HybridSearchEngineV2:
             
             # 결과 통합 (동적 가중치 적용)
             merged_results = self.result_merger.merge_results(
-                exact_results, semantic_results, weights=weights
+                exact_results, semantic_results, weights=weights, query=query
             )
 
             # 결과 랭킹
-            ranked_results = self.result_ranker.rank_results(merged_results)
+            ranked_results = self.result_ranker.rank_results(merged_results, top_k=max_results, query=query)
 
             # 다양성 필터 적용
             filtered_results = self.result_ranker.apply_diversity_filter(
