@@ -6,6 +6,8 @@
 
 import logging
 import re
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.agents.extractors import DocumentExtractor
@@ -54,6 +56,42 @@ class QueryEnhancer:
         
         # 검색 쿼리 다변화 유틸리티
         self.query_diversifier = QueryDiversifier()
+        
+        # 최적 파라미터 로드 (선택사항)
+        self.optimized_params = self._load_optimized_params()
+
+    def _load_optimized_params(self) -> Optional[Dict[str, Any]]:
+        """최적 파라미터 로드 (선택사항)"""
+        try:
+            params_path = os.getenv(
+                "OPTIMIZED_SEARCH_PARAMS_PATH",
+                "data/ml_config/optimized_search_params.json"
+            )
+            
+            config_file = Path(params_path)
+            if not config_file.is_absolute():
+                current_file = Path(__file__).resolve()
+                langgraph_dir = current_file.parent.parent.parent.parent
+                project_root = langgraph_dir.parent
+                config_file = (project_root / params_path).resolve()
+            
+            if not config_file.exists():
+                self.logger.debug(f"최적 파라미터 파일을 찾을 수 없습니다: {config_file}")
+                return None
+            
+            import json
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            optimized_params = config.get("search_parameters", {})
+            if optimized_params:
+                self.logger.info(f"최적 파라미터 로드 완료: {config_file}")
+                return optimized_params
+            
+            return None
+        except Exception as e:
+            self.logger.debug(f"최적 파라미터 로드 실패 (무시됨): {e}")
+            return None
 
     def optimize_search_query(
         self,
@@ -1283,7 +1321,17 @@ class QueryEnhancer:
         is_retry: bool
     ) -> Dict[str, Any]:
         """검색 파라미터 동적 결정"""
-        base_k = WorkflowConstants.SEMANTIC_SEARCH_K
+        if self.optimized_params:
+            base_k = self.optimized_params.get("top_k", WorkflowConstants.SEMANTIC_SEARCH_K)
+            base_similarity = self.optimized_params.get("similarity_threshold", self.config.similarity_threshold)
+            use_reranking = self.optimized_params.get("use_reranking", True)
+            rerank_top_n = self.optimized_params.get("rerank_top_n", 30) if use_reranking else None
+        else:
+            base_k = WorkflowConstants.SEMANTIC_SEARCH_K
+            base_similarity = self.config.similarity_threshold
+            use_reranking = False
+            rerank_top_n = None
+        
         base_limit = WorkflowConstants.CATEGORY_SEARCH_LIMIT
 
         # 질문 유형에 따른 조정
@@ -1309,23 +1357,38 @@ class QueryEnhancer:
         keyword_limit = int(base_limit * multiplier)
 
         # 유사도 임계값 동적 조정
-        min_relevance = self.config.similarity_threshold
-        if query_type == "precedent_search":
-            min_relevance = max(0.6, min_relevance - 0.1)  # 판례 검색: 완화
-        elif query_type == "law_inquiry":
-            min_relevance = max(0.65, min_relevance - 0.05)  # 법령 조회: 약간 완화
+        if self.optimized_params:
+            min_relevance = base_similarity
+            if query_type == "precedent_search":
+                min_relevance = max(0.6, min_relevance - 0.1)
+            elif query_type == "law_inquiry":
+                min_relevance = max(0.65, min_relevance - 0.05)
+        else:
+            min_relevance = self.config.similarity_threshold
+            if query_type == "precedent_search":
+                min_relevance = max(0.6, min_relevance - 0.1)
+            elif query_type == "law_inquiry":
+                min_relevance = max(0.65, min_relevance - 0.05)
 
-        return {
-            "semantic_k": min(25, semantic_k),  # 최대 25개
-            "keyword_limit": min(7, keyword_limit),  # 최대 7개
+        result = {
+            "semantic_k": min(25, semantic_k),
+            "keyword_limit": min(7, keyword_limit),
             "min_relevance": min_relevance,
-            "max_results": int(base_k * multiplier * 1.2),  # 최종 결과 수
+            "max_results": int(base_k * multiplier * 1.2),
             "rerank": {
-                "top_k": min(20, int(base_k * multiplier)),
+                "top_k": rerank_top_n if rerank_top_n else min(20, int(base_k * multiplier)),
                 "diversity_weight": 0.3,
                 "relevance_weight": 0.7
             }
         }
+        
+        if self.optimized_params:
+            result["use_reranking"] = use_reranking
+            result["query_enhancement"] = self.optimized_params.get("query_enhancement", True)
+            result["use_keyword_search"] = self.optimized_params.get("use_keyword_search", True)
+            result["hybrid_search_ratio"] = self.optimized_params.get("hybrid_search_ratio", 1.0)
+        
+        return result
 
     def extract_query_relevant_sentences(
         self,

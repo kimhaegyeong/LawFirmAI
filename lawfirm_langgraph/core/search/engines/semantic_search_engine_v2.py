@@ -2051,7 +2051,7 @@ class SemanticSearchEngineV2:
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
-                search_k = k * 2  # 여유 있게 검색
+                search_k = k * 5  # 여유 있게 검색 (개선: 2배 → 5배로 확대)
                 
                 # nprobe 설정 (IndexIVF 계열만 지원)
                 if hasattr(self.index, 'nprobe'):
@@ -3556,15 +3556,17 @@ class SemanticSearchEngineV2:
                                 source_id = row['source_id']
                             if not source_type and row['source_type']:
                                 source_type = row['source_type']
-                            # text도 복원 시도
+                            # text도 복원 시도 (Empty text content 해결)
                             if row['text']:
-                                result['text'] = row['text']
-                                result['content'] = row['text']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['text'] = row['text']
-                                result['metadata']['content'] = row['text']
-                                self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks")
+                                restored_text = row['text']
+                                if len(restored_text.strip()) > 0:
+                                    result['text'] = restored_text
+                                    result['content'] = restored_text
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['text'] = restored_text
+                                    result['metadata']['content'] = restored_text
+                                    self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks (length: {len(restored_text)} chars)")
                         conn.close()
                     except Exception as e:
                         self.logger.debug(f"Failed to get metadata from text_chunks for chunk_id={chunk_id}: {e}")
@@ -3623,8 +3625,91 @@ class SemanticSearchEngineV2:
                 except Exception as e:
                     self.logger.debug(f"Failed to restore source_id and metadata for chunk_id={chunk_id}: {e}")
             
-            # 누락된 필드 복원
+            # source_id가 None인 경우에도 chunk_id로 직접 복원 시도 (우선 처리)
+            if not source_id and chunk_id:
+                try:
+                    # case_paragraph의 경우: doc_id, casenames, court 복원
+                    if source_type == 'case_paragraph':
+                        cursor_case = conn.execute("""
+                            SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                            FROM text_chunks tc
+                            JOIN case_paragraphs cp ON tc.source_id = cp.id
+                            JOIN cases c ON cp.case_id = c.id
+                            WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
+                        """, (chunk_id,))
+                        case_row = cursor_case.fetchone()
+                        if case_row:
+                            if 'doc_id' in missing_fields and case_row['doc_id']:
+                                result['doc_id'] = case_row['doc_id']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['doc_id'] = case_row['doc_id']
+                            if 'casenames' in missing_fields and case_row['casenames']:
+                                result['casenames'] = case_row['casenames']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['casenames'] = case_row['casenames']
+                            if 'court' in missing_fields and case_row['court']:
+                                result['court'] = case_row['court']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['court'] = case_row['court']
+                            self.logger.debug(f"✅ Restored case metadata for chunk_id={chunk_id} (doc_id, casenames, court)")
+                    
+                    # decision_paragraph의 경우: org, doc_id 복원
+                    elif source_type == 'decision_paragraph':
+                        cursor_decision = conn.execute("""
+                            SELECT dp.decision_id, d.org, d.doc_id
+                            FROM text_chunks tc
+                            JOIN decision_paragraphs dp ON tc.source_id = dp.id
+                            JOIN decisions d ON dp.decision_id = d.id
+                            WHERE tc.id = ? AND tc.source_type = 'decision_paragraph'
+                        """, (chunk_id,))
+                        decision_row = cursor_decision.fetchone()
+                        if decision_row:
+                            if 'org' in missing_fields and decision_row['org']:
+                                result['org'] = decision_row['org']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['org'] = decision_row['org']
+                            if 'doc_id' in missing_fields and decision_row['doc_id']:
+                                result['doc_id'] = decision_row['doc_id']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['doc_id'] = decision_row['doc_id']
+                            self.logger.debug(f"✅ Restored decision metadata for chunk_id={chunk_id} (org, doc_id)")
+                    
+                    # interpretation_paragraph의 경우: interpretation_id, doc_id 복원
+                    elif source_type == 'interpretation_paragraph':
+                        cursor_interp = conn.execute("""
+                            SELECT ip.interpretation_id, i.doc_id
+                            FROM text_chunks tc
+                            JOIN interpretation_paragraphs ip ON tc.source_id = ip.id
+                            JOIN interpretations i ON ip.interpretation_id = i.id
+                            WHERE tc.id = ? AND tc.source_type = 'interpretation_paragraph'
+                        """, (chunk_id,))
+                        interp_row = cursor_interp.fetchone()
+                        if interp_row:
+                            if 'interpretation_id' in missing_fields and interp_row['interpretation_id']:
+                                result['interpretation_id'] = interp_row['interpretation_id']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['interpretation_id'] = interp_row['interpretation_id']
+                            if 'doc_id' in missing_fields and interp_row['doc_id']:
+                                result['doc_id'] = interp_row['doc_id']
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['doc_id'] = interp_row['doc_id']
+                            self.logger.debug(f"✅ Restored interpretation metadata for chunk_id={chunk_id} (interpretation_id, doc_id)")
+                except Exception as e:
+                    self.logger.debug(f"Failed to restore metadata via chunk_id for chunk_id={chunk_id}: {e}")
+            
+            # 누락된 필드 복원 (일반적인 방법)
             for field in missing_fields:
+                # 이미 복원된 필드는 건너뛰기
+                if result.get(field) or result.get('metadata', {}).get(field):
+                    continue
+                
                 field_value = None
                 restoration_source = None
                 
@@ -5576,8 +5661,8 @@ class SemanticSearchEngineV2:
         
         # 2. 키워드 확장 쿼리
         if expanded_keywords and len(expanded_keywords) >= 2:
-            # 상위 3개 키워드만 추가
-            top_keywords = expanded_keywords[:3]
+            # 상위 5개 키워드 추가 (개선: 3개 → 5개로 확대)
+            top_keywords = expanded_keywords[:5]
             expanded_query = f"{query} {' '.join(top_keywords)}"
             variations.append({
                 "query": expanded_query,

@@ -36,20 +36,18 @@ class HybridSearchEngineV2:
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)
 
-        # 외부 인덱스 사용 설정 확인
+        # MLflow 인덱스 사용 설정 확인
         config = Config()
-        use_external_index = getattr(config, 'use_external_vector_store', False)
-        vector_store_version = getattr(config, 'vector_store_version', None)
-        external_vector_store_base_path = getattr(config, 'external_vector_store_base_path', None)
+        use_mlflow_index = getattr(config, 'use_mlflow_index', False)
+        mlflow_run_id = getattr(config, 'mlflow_run_id', None)
 
         # 검색 엔진 초기화
         self.exact_search = ExactSearchEngineV2(db_path)
         self.semantic_search = SemanticSearchEngineV2(
             db_path=db_path,
             model_name=model_name,
-            use_external_index=use_external_index,
-            vector_store_version=vector_store_version,
-            external_index_path=external_vector_store_base_path
+            use_mlflow_index=use_mlflow_index,
+            mlflow_run_id=mlflow_run_id
         )
         self.question_classifier = QuestionClassifier()
         self.result_merger = ResultMerger()
@@ -106,9 +104,37 @@ class HybridSearchEngineV2:
             if include_semantic:
                 semantic_results = self._execute_semantic_search(query, search_types)
 
-            # 결과 통합
+            # 질문 유형 분석 및 가중치 동적 조정
+            query_type = self.question_classifier.classify(query)
+            
+            # 질문 유형별 가중치 설정
+            type_weights = {
+                "law_inquiry": {
+                    "exact": 0.6,  # 법령 조회는 키워드 검색이 중요
+                    "semantic": 0.4
+                },
+                "precedent_search": {
+                    "exact": 0.4,  # 판례 검색은 의미적 검색이 중요
+                    "semantic": 0.6
+                },
+                "complex_question": {
+                    "exact": 0.5,  # 균형
+                    "semantic": 0.5
+                }
+            }
+            
+            # 기본 가중치
+            default_weights = {"exact": 0.6, "semantic": 0.4}
+            weights = type_weights.get(query_type, default_weights)
+            
+            self.logger.info(
+                f"Query type: {query_type}, weights: exact={weights['exact']:.2f}, "
+                f"semantic={weights['semantic']:.2f}"
+            )
+            
+            # 결과 통합 (동적 가중치 적용)
             merged_results = self.result_merger.merge_results(
-                exact_results, semantic_results
+                exact_results, semantic_results, weights=weights
             )
 
             # 결과 랭킹

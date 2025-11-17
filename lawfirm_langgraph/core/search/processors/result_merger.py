@@ -119,10 +119,25 @@ class ResultMerger:
 class ResultRanker:
     """검색 결과 순위 결정기"""
     
-    def __init__(self):
+    def __init__(self, use_cross_encoder: bool = True):
         """순위 결정기 초기화"""
         self.logger = logging.getLogger(__name__)
-        self.logger.info("ResultRanker initialized")
+        self.use_cross_encoder = use_cross_encoder
+        self.cross_encoder = None
+        
+        if use_cross_encoder:
+            try:
+                from sentence_transformers import CrossEncoder
+                self.cross_encoder = CrossEncoder('Dongjin-kr/ko-reranker', max_length=512)
+                self.logger.info("Cross-Encoder reranker initialized (Dongjin-kr/ko-reranker)")
+            except ImportError:
+                self.logger.warning("sentence-transformers not available, Cross-Encoder disabled")
+                self.use_cross_encoder = False
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Cross-Encoder: {e}, falling back to standard ranking")
+                self.use_cross_encoder = False
+        
+        self.logger.info(f"ResultRanker initialized (cross_encoder={self.use_cross_encoder})")
     
     def rank_results(self, results: List[Any], top_k: int = 10) -> List[Any]:
         """
@@ -177,8 +192,98 @@ class ResultRanker:
         ranked_results = list(unique_results.values())
         ranked_results.sort(key=lambda x: x.score, reverse=True)
         
+        # Cross-Encoder reranking 적용 (상위 후보만)
+        if self.use_cross_encoder and self.cross_encoder and len(ranked_results) > 0:
+            try:
+                reranked_results = self.cross_encoder_rerank(
+                    ranked_results[:top_k * 2],  # 상위 후보만 rerank
+                    top_k=top_k
+                )
+                ranked_results = reranked_results + ranked_results[top_k * 2:]
+            except Exception as e:
+                self.logger.warning(f"Cross-Encoder reranking failed: {e}, using standard ranking")
+        
         # Dict로 변환하여 반환 (호환성 유지)
         return [self._merged_result_to_dict(r) for r in ranked_results[:top_k]]
+    
+    def cross_encoder_rerank(
+        self,
+        results: List[MergedResult],
+        query: str = "",
+        top_k: int = 10
+    ) -> List[MergedResult]:
+        """
+        Cross-Encoder를 사용한 정확한 재정렬
+        
+        Args:
+            results: 재정렬할 MergedResult 리스트
+            query: 검색 쿼리 (metadata에서 추출 가능)
+            top_k: 반환할 최대 결과 수
+            
+        Returns:
+            List[MergedResult]: 재정렬된 결과
+        """
+        if not results or not self.cross_encoder:
+            return results[:top_k]
+        
+        # query가 없으면 metadata에서 추출 시도
+        if not query:
+            for result in results:
+                if isinstance(result.metadata, dict):
+                    query = result.metadata.get("query", "")
+                    if query:
+                        break
+        
+        if not query:
+            self.logger.warning("No query provided for Cross-Encoder reranking, using standard ranking")
+            return results[:top_k]
+        
+        try:
+            # query-document 쌍 생성
+            pairs = []
+            for result in results:
+                text = result.text[:500]  # 길이 제한
+                pairs.append([query, text])
+            
+            # 점수 계산
+            scores = self.cross_encoder.predict(pairs)
+            
+            # 점수 반영 및 정렬
+            reranked_results = []
+            for result, score in zip(results, scores):
+                # 기존 점수와 Cross-Encoder 점수 결합
+                original_score = result.score
+                cross_encoder_score = float(score)
+                
+                # 가중 평균 (기존 점수 70%, Cross-Encoder 점수 30%)
+                combined_score = 0.7 * original_score + 0.3 * cross_encoder_score
+                
+                # MergedResult 업데이트 (새 객체 생성)
+                updated_result = MergedResult(
+                    text=result.text,
+                    score=combined_score,
+                    source=result.source,
+                    metadata={
+                        **result.metadata,
+                        "cross_encoder_score": cross_encoder_score,
+                        "original_score": original_score
+                    }
+                )
+                reranked_results.append(updated_result)
+            
+            # 점수순 정렬
+            reranked_results.sort(key=lambda x: x.score, reverse=True)
+            
+            self.logger.info(
+                f"Cross-Encoder reranking: {len(results)} documents reranked, "
+                f"top score: {reranked_results[0].score:.3f}" if reranked_results else "no results"
+            )
+            
+            return reranked_results[:top_k]
+            
+        except Exception as e:
+            self.logger.error(f"Cross-Encoder reranking error: {e}")
+            return results[:top_k]
     
     def _merged_result_to_dict(self, result: MergedResult) -> Dict[str, Any]:
         """MergedResult를 Dict로 변환"""
