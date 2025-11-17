@@ -511,7 +511,8 @@ class SearchHandler:
                     if validated_results:
                         rerank_results = self.result_ranker.rank_results(
                             validated_results,
-                            top_k=rerank_params["top_k"]
+                            top_k=rerank_params["top_k"],
+                            query=query
                         )
                     else:
                         raise ValueError("No valid documents for reranking")
@@ -888,11 +889,12 @@ class SearchHandler:
             merged = self.result_merger.merge_results(
                 exact_results=exact_results,
                 semantic_results=filtered_keyword,
-                weights={"exact": 0.6, "semantic": 0.4}
+                weights={"exact": 0.6, "semantic": 0.4},
+                query=query
             )
 
             # Step 3: 순위 결정
-            ranked = self.result_ranker.rank_results(merged, top_k=20)
+            ranked = self.result_ranker.rank_results(merged, top_k=20, query=query)
 
             # Step 3.5: Citation 포함 문서 우선순위 부여
             import re

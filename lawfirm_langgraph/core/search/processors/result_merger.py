@@ -31,7 +31,8 @@ class ResultMerger:
     def merge_results(self, 
                      exact_results: Dict[str, List[Dict[str, Any]]], 
                      semantic_results: List[Dict[str, Any]],
-                     weights: Dict[str, float] = None) -> List[MergedResult]:
+                     weights: Dict[str, float] = None,
+                     query: str = "") -> List[MergedResult]:
         """
         검색 결과 병합
         
@@ -39,6 +40,7 @@ class ResultMerger:
             exact_results: 정확한 검색 결과 (딕셔너리)
             semantic_results: 의미적 검색 결과 (리스트)
             weights: 가중치 딕셔너리
+            query: 검색 쿼리 (metadata 저장용)
             
         Returns:
             List[MergedResult]: 병합된 결과
@@ -73,6 +75,10 @@ class ResultMerger:
                     metadata['content'] = text_content
                     metadata['text'] = text_content
                     
+                    # metadata에 query 저장
+                    if query:
+                        metadata['query'] = query
+                    
                     merged_result = MergedResult(
                         text=text_content,
                         score=result.get('similarity', result.get('relevance_score', result.get('score', 0.0))) * weights["exact"],
@@ -104,6 +110,10 @@ class ResultMerger:
                     metadata = result if isinstance(result, dict) else {}
                 metadata['content'] = text_content
                 metadata['text'] = text_content
+                
+                # metadata에 query 저장
+                if query:
+                    metadata['query'] = query
                 
                 merged_result = MergedResult(
                     text=text_content,
@@ -139,13 +149,14 @@ class ResultRanker:
         
         self.logger.info(f"ResultRanker initialized (cross_encoder={self.use_cross_encoder})")
     
-    def rank_results(self, results: List[Any], top_k: int = 10) -> List[Any]:
+    def rank_results(self, results: List[Any], top_k: int = 10, query: str = "") -> List[Any]:
         """
         검색 결과 순위 결정
         
         Args:
             results: 병합된 검색 결과 (MergedResult 또는 Dict)
             top_k: 반환할 결과 수
+            query: 검색 쿼리 (Cross-Encoder reranking용)
             
         Returns:
             List[MergedResult] 또는 List[Dict]: 순위가 매겨진 결과
@@ -197,6 +208,7 @@ class ResultRanker:
             try:
                 reranked_results = self.cross_encoder_rerank(
                     ranked_results[:top_k * 2],  # 상위 후보만 rerank
+                    query=query,  # query 전달
                     top_k=top_k
                 )
                 ranked_results = reranked_results + ranked_results[top_k * 2:]
@@ -217,7 +229,7 @@ class ResultRanker:
         
         Args:
             results: 재정렬할 MergedResult 리스트
-            query: 검색 쿼리 (metadata에서 추출 가능)
+            query: 검색 쿼리 (우선순위: 파라미터 > metadata)
             top_k: 반환할 최대 결과 수
             
         Returns:
@@ -226,15 +238,25 @@ class ResultRanker:
         if not results or not self.cross_encoder:
             return results[:top_k]
         
-        # query가 없으면 metadata에서 추출 시도
-        if not query:
+        # query 추출 우선순위: 파라미터 > metadata > 원본 쿼리
+        extracted_query = query
+        
+        if not extracted_query:
             for result in results:
                 if isinstance(result.metadata, dict):
-                    query = result.metadata.get("query", "")
-                    if query:
+                    extracted_query = result.metadata.get("query", "")
+                    if extracted_query:
                         break
         
-        if not query:
+        # 추가: 원본 쿼리 필드 확인
+        if not extracted_query:
+            for result in results:
+                if isinstance(result.metadata, dict):
+                    extracted_query = result.metadata.get("original_query", "") or result.metadata.get("search_query", "")
+                    if extracted_query:
+                        break
+        
+        if not extracted_query:
             self.logger.warning("No query provided for Cross-Encoder reranking, using standard ranking")
             return results[:top_k]
         
@@ -243,7 +265,7 @@ class ResultRanker:
             pairs = []
             for result in results:
                 text = result.text[:500]  # 길이 제한
-                pairs.append([query, text])
+                pairs.append([extracted_query, text])
             
             # 점수 계산
             scores = self.cross_encoder.predict(pairs)
@@ -255,8 +277,8 @@ class ResultRanker:
                 original_score = result.score
                 cross_encoder_score = float(score)
                 
-                # 가중 평균 (기존 점수 70%, Cross-Encoder 점수 30%)
-                combined_score = 0.7 * original_score + 0.3 * cross_encoder_score
+                # 가중 평균 (기존 점수 60%, Cross-Encoder 점수 40%) - 개선: Cross-Encoder 비중 증가
+                combined_score = 0.6 * original_score + 0.4 * cross_encoder_score
                 
                 # MergedResult 업데이트 (새 객체 생성)
                 updated_result = MergedResult(
@@ -468,6 +490,71 @@ class ResultRanker:
         )
         
         return diverse_docs
+    
+    def evaluate_search_quality(
+        self,
+        query: str,
+        results: List[Dict[str, Any]],
+        query_type: str = "",
+        extracted_keywords: List[str] = None
+    ) -> Dict[str, float]:
+        """
+        검색 품질 평가 메트릭 수집
+        
+        Args:
+            query: 검색 쿼리
+            results: 검색 결과 리스트
+            query_type: 질문 유형
+            extracted_keywords: 추출된 키워드
+            
+        Returns:
+            Dict[str, float]: 검색 품질 메트릭
+        """
+        metrics = {
+            "avg_relevance": 0.0,
+            "min_relevance": 0.0,
+            "max_relevance": 0.0,
+            "diversity_score": 0.0,
+            "keyword_coverage": 0.0
+        }
+        
+        if not results:
+            return metrics
+        
+        # 관련성 점수 계산
+        scores = [doc.get("relevance_score", doc.get("final_weighted_score", 0.0)) for doc in results]
+        if scores:
+            metrics["avg_relevance"] = sum(scores) / len(scores)
+            metrics["min_relevance"] = min(scores)
+            metrics["max_relevance"] = max(scores)
+        
+        # 다양성 점수 계산
+        contents = [doc.get("content", doc.get("text", "")) for doc in results]
+        unique_terms = set()
+        total_terms = 0
+        for content in contents:
+            if isinstance(content, str):
+                terms = content.lower().split()
+                unique_terms.update(terms)
+                total_terms += len(terms)
+        
+        if total_terms > 0:
+            metrics["diversity_score"] = len(unique_terms) / total_terms
+        
+        # 키워드 커버리지 점수 계산
+        if extracted_keywords:
+            covered_keywords = set()
+            for doc in results:
+                content = doc.get("content", doc.get("text", "")).lower()
+                if isinstance(content, str):
+                    for keyword in extracted_keywords:
+                        if keyword.lower() in content:
+                            covered_keywords.add(keyword.lower())
+            
+            if extracted_keywords:
+                metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
+        
+        return metrics
     
     def _has_citation(self, document: Dict[str, Any]) -> bool:
         """문서에 Citation이 있는지 확인"""
