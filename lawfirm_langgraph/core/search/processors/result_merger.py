@@ -5,8 +5,15 @@ Result Merger and Ranker
 """
 
 import logging
+import math
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -463,30 +470,17 @@ class ResultRanker:
                 doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
                 doc["recency_score"] = recency_score
         
-        # Stage 4: MMR 기반 다양성 적용 (개선: 검색 결과 품질 및 질문 타입 기반 동적 조정)
-        # 검색 품질에 따른 lambda_score 조정
-        if search_quality < 0.5:
-            # 품질 낮음: 키워드 매칭 강화 (다양성 감소)
-            lambda_score = 0.8
-        elif search_quality > 0.8:
-            # 품질 높음: 관련성 우선 (다양성 증가)
-            lambda_score = 0.6
-        else:
-            # 품질 중간: 균형잡힌 재정렬
-            lambda_score = 0.7
-        
-        # 질문 타입별 다양성 조정
-        if query_type == "law_inquiry":
-            # 법령 조회: 관련성 우선 (다양성 약간 감소)
-            lambda_score = min(0.85, lambda_score + 0.1)
-        elif query_type == "precedent_search":
-            # 판례 검색: 다양성 강화 (다양한 판례 포함)
-            lambda_score = max(0.5, lambda_score - 0.1)
+        # Stage 4: MMR 기반 다양성 적용 (개선: 동적 가중치 사용)
+        dynamic_lambda = self._get_dynamic_mmr_lambda(
+            query_type=query_type,
+            search_quality=search_quality,
+            num_results=len(citation_docs + non_citation_docs)
+        )
         
         diverse_docs = self._apply_mmr_diversity(
             citation_docs + non_citation_docs,
             query,
-            lambda_score=lambda_score
+            lambda_score=dynamic_lambda
         )
         
         return diverse_docs
@@ -528,18 +522,8 @@ class ResultRanker:
             metrics["min_relevance"] = min(scores)
             metrics["max_relevance"] = max(scores)
         
-        # 다양성 점수 계산
-        contents = [doc.get("content", doc.get("text", "")) for doc in results]
-        unique_terms = set()
-        total_terms = 0
-        for content in contents:
-            if isinstance(content, str):
-                terms = content.lower().split()
-                unique_terms.update(terms)
-                total_terms += len(terms)
-        
-        if total_terms > 0:
-            metrics["diversity_score"] = len(unique_terms) / total_terms
+        # 다양성 점수 계산 (다차원 다양성 통합)
+        metrics["diversity_score"] = self._calculate_comprehensive_diversity_score(results)
         
         # 키워드 커버리지 점수 계산
         if extracted_keywords:
@@ -555,6 +539,201 @@ class ResultRanker:
                 metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
         
         return metrics
+    
+    def _calculate_comprehensive_diversity_score(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        다차원 다양성 점수 계산
+        
+        Args:
+            results: 검색 결과 리스트
+            
+        Returns:
+            float: 통합 다양성 점수 (0.0 ~ 1.0)
+        """
+        if not results or len(results) < 2:
+            return 0.0
+        
+        # 1. 단어 기반 다양성 (30%)
+        word_diversity = self._calculate_word_diversity(results)
+        
+        # 2. 의미적 다양성 (40%) - 문서 임베딩 간 코사인 유사도 기반
+        semantic_diversity = self._calculate_semantic_diversity(results)
+        
+        # 3. 타입 다양성 (20%) - 엔트로피 기반
+        type_diversity = self._calculate_type_diversity(results)
+        
+        # 4. 문서 간 유사도 다양성 (10%) - 평균 최소 거리
+        inter_doc_diversity = self._calculate_inter_document_diversity(results)
+        
+        # 가중 평균
+        comprehensive_score = (
+            0.3 * word_diversity +
+            0.4 * semantic_diversity +
+            0.2 * type_diversity +
+            0.1 * inter_doc_diversity
+        )
+        
+        return max(0.0, min(1.0, comprehensive_score))
+    
+    def _calculate_word_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        단어 기반 다양성 계산 (기존 로직)
+        
+        Returns:
+            float: 단어 다양성 점수 (0.0 ~ 1.0)
+        """
+        contents = [doc.get("content", doc.get("text", "")) for doc in results]
+        unique_terms = set()
+        total_terms = 0
+        for content in contents:
+            if isinstance(content, str):
+                terms = content.lower().split()
+                unique_terms.update(terms)
+                total_terms += len(terms)
+        
+        if total_terms > 0:
+            return len(unique_terms) / total_terms
+        return 0.0
+    
+    def _calculate_semantic_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        의미적 다양성 계산 (임베딩 벡터 간 유사도 기반)
+        
+        Returns:
+            float: 의미적 다양성 점수 (0.0 ~ 1.0, 높을수록 다양함)
+        """
+        if len(results) < 2:
+            return 0.0
+        
+        # 문서 임베딩 벡터 추출
+        embeddings = []
+        for doc in results:
+            embedding = doc.get("embedding") or doc.get("vector") or doc.get("metadata", {}).get("embedding")
+            if embedding is not None:
+                if isinstance(embedding, list):
+                    if SKLEARN_AVAILABLE:
+                        embedding = np.array(embedding)
+                    else:
+                        continue
+                embeddings.append(embedding)
+        
+        if len(embeddings) < 2 or not SKLEARN_AVAILABLE:
+            # 임베딩이 없거나 sklearn이 없으면 폴백: 문서 간 유사도 사용
+            return self._calculate_inter_document_diversity(results)
+        
+        try:
+            # 모든 문서 쌍 간 코사인 유사도 계산
+            similarities = []
+            for i in range(len(embeddings)):
+                for j in range(i + 1, len(embeddings)):
+                    try:
+                        similarity = cosine_similarity(
+                            embeddings[i].reshape(1, -1),
+                            embeddings[j].reshape(1, -1)
+                        )[0][0]
+                        similarities.append(float(similarity))
+                    except Exception:
+                        continue
+            
+            if not similarities:
+                return self._calculate_inter_document_diversity(results)
+            
+            # 평균 유사도가 낮을수록 다양성 높음
+            avg_similarity = sum(similarities) / len(similarities)
+            semantic_diversity = 1.0 - avg_similarity
+            
+            return max(0.0, min(1.0, semantic_diversity))
+        except Exception:
+            # 오류 발생 시 폴백
+            return self._calculate_inter_document_diversity(results)
+    
+    def _calculate_inter_document_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        문서 간 유사도 기반 다양성 계산
+        
+        Returns:
+            float: 문서 간 다양성 점수 (0.0 ~ 1.0)
+        """
+        if len(results) < 2:
+            return 0.0
+        
+        # 문서 쌍 간 유사도 계산
+        similarities = []
+        for i in range(len(results)):
+            doc1_content = (results[i].get("content") or results[i].get("text") or "").lower()
+            doc1_words = set(doc1_content.split())
+            
+            for j in range(i + 1, len(results)):
+                doc2_content = (results[j].get("content") or results[j].get("text") or "").lower()
+                doc2_words = set(doc2_content.split())
+                
+                # Jaccard 유사도
+                if doc1_words or doc2_words:
+                    intersection = len(doc1_words & doc2_words)
+                    union = len(doc1_words | doc2_words)
+                    similarity = intersection / union if union > 0 else 0.0
+                    similarities.append(similarity)
+        
+        if not similarities:
+            return 0.0
+        
+        # 평균 유사도가 낮을수록 다양성 높음
+        avg_similarity = sum(similarities) / len(similarities)
+        diversity = 1.0 - avg_similarity
+        
+        return max(0.0, min(1.0, diversity))
+    
+    def _calculate_type_diversity(
+        self,
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """
+        타입 다양성 계산 (엔트로피 기반)
+        
+        Returns:
+            float: 타입 다양성 점수 (0.0 ~ 1.0)
+        """
+        if not results:
+            return 0.0
+        
+        # 타입별 카운트
+        type_counts = {}
+        for doc in results:
+            doc_type = (
+                doc.get("type") or
+                doc.get("source_type") or
+                doc.get("metadata", {}).get("source_type", "unknown")
+            )
+            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+        
+        # 엔트로피 계산
+        total = sum(type_counts.values())
+        if total == 0:
+            return 0.0
+        
+        entropy = 0.0
+        for count in type_counts.values():
+            if count > 0:
+                p = count / total
+                entropy -= p * math.log2(p)
+        
+        # 정규화 (최대 엔트로피)
+        max_entropy = math.log2(len(type_counts)) if len(type_counts) > 1 else 1.0
+        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+        
+        return normalized_entropy
     
     def _has_citation(self, document: Dict[str, Any]) -> bool:
         """문서에 Citation이 있는지 확인"""
@@ -708,6 +887,51 @@ class ResultRanker:
                 break
         
         return selected
+    
+    def _get_dynamic_mmr_lambda(
+        self,
+        query_type: str = "",
+        search_quality: float = 0.7,
+        num_results: int = 10
+    ) -> float:
+        """
+        동적 MMR lambda 가중치 계산
+        
+        Args:
+            query_type: 질문 유형
+            search_quality: 검색 품질 점수 (0.0 ~ 1.0)
+            num_results: 검색 결과 수
+        
+        Returns:
+            float: lambda 가중치 (0.0 ~ 1.0, 높을수록 관련성 중시)
+        """
+        base_lambda = 0.7
+        
+        # 질문 유형별 조정
+        if query_type == "law_inquiry":
+            base_lambda = 0.8  # 법령 조회: 관련성 우선
+        elif query_type == "precedent_search":
+            base_lambda = 0.6  # 판례 검색: 다양성 중시
+        elif query_type == "complex_question":
+            base_lambda = 0.65  # 복합 질문: 균형
+        
+        # 검색 품질에 따른 조정
+        if search_quality >= 0.8:
+            # 품질이 높으면 다양성 강화 가능
+            base_lambda -= 0.1
+        elif search_quality < 0.6:
+            # 품질이 낮으면 관련성 우선
+            base_lambda += 0.1
+        
+        # 결과 수에 따른 조정
+        if num_results > 20:
+            # 결과가 많으면 다양성 강화
+            base_lambda -= 0.05
+        elif num_results < 10:
+            # 결과가 적으면 관련성 우선
+            base_lambda += 0.05
+        
+        return max(0.5, min(0.9, base_lambda))
     
     def _calculate_doc_similarity(
         self,

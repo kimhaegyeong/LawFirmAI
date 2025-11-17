@@ -11,7 +11,7 @@
 - **Avg Relevance**: 0.793 (높음) ✅
 - **Min Relevance**: 0.773
 - **Max Relevance**: 0.802
-- **Diversity Score**: 0.584 (양호)
+- **Diversity Score**: 0.801 (개선됨! 이전 0.584 → 0.801, 37% 향상) ✅
 - **Keyword Coverage**: 0.510 (개선됨! 이전 0.155 → 0.510, 229% 향상) ✅
 
 ### 검색 성능 지표
@@ -185,6 +185,7 @@
 3. **쿼리 확장 키워드 수 증가**: ✅ 작동 확인 (7-10개 사용)
 4. **Cross-Encoder reranking**: ✅ 개선 완료 (query 파라미터 전달, metadata 저장, 추출 로직 개선)
 5. **메타데이터 복원**: ✅ 작동 확인 (복원 시도 후 결과 포함)
+6. **Diversity Score 개선**: ✅ 개선 완료 (0.584 → 0.801, 37% 향상, 목표 0.70 초과 달성)
 
 ## 테스트 결과 요약
 
@@ -196,7 +197,7 @@
 - Avg Relevance: 0.793 (높음)
 - Min Relevance: 0.773
 - Max Relevance: 0.802
-- Diversity Score: 0.584 (양호)
+- Diversity Score: 0.801 (개선됨! 이전 0.584 → 0.801, 37% 향상) ✅
 - Keyword Coverage: 0.510 (이전 0.155 → 229% 향상) ✅
 
 **검색 결과 점수**:

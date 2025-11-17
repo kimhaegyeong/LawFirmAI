@@ -5062,35 +5062,45 @@ class EnhancedLegalQuestionWorkflow(
                         "keyword_coverage": 0.0
                     }
                     
-                    scores = [doc.get("relevance_score", doc.get("final_weighted_score", 0.0)) for doc in final_docs]
-                    if scores:
-                        metrics["avg_relevance"] = sum(scores) / len(scores)
-                        metrics["min_relevance"] = min(scores)
-                        metrics["max_relevance"] = max(scores)
-                    
-                    contents = [doc.get("content", doc.get("text", "")) for doc in final_docs]
-                    unique_terms = set()
-                    total_terms = 0
-                    for content in contents:
-                        if isinstance(content, str):
-                            terms = content.lower().split()
-                            unique_terms.update(terms)
-                            total_terms += len(terms)
-                    
-                    if total_terms > 0:
-                        metrics["diversity_score"] = len(unique_terms) / total_terms
-                    
-                    if extracted_keywords:
-                        covered_keywords = set()
-                        for doc in final_docs:
-                            content = doc.get("content", doc.get("text", "")).lower()
+                    # result_ranker의 evaluate_search_quality 사용 (다차원 다양성 통합)
+                    if self.result_ranker and hasattr(self.result_ranker, 'evaluate_search_quality'):
+                        metrics = self.result_ranker.evaluate_search_quality(
+                            query=query,
+                            results=final_docs,
+                            query_type=query_type_str,
+                            extracted_keywords=extracted_keywords
+                        )
+                    else:
+                        # 폴백: 기본 계산
+                        scores = [doc.get("relevance_score", doc.get("final_weighted_score", 0.0)) for doc in final_docs]
+                        if scores:
+                            metrics["avg_relevance"] = sum(scores) / len(scores)
+                            metrics["min_relevance"] = min(scores)
+                            metrics["max_relevance"] = max(scores)
+                        
+                        contents = [doc.get("content", doc.get("text", "")) for doc in final_docs]
+                        unique_terms = set()
+                        total_terms = 0
+                        for content in contents:
                             if isinstance(content, str):
-                                for keyword in extracted_keywords:
-                                    if keyword.lower() in content:
-                                        covered_keywords.add(keyword.lower())
+                                terms = content.lower().split()
+                                unique_terms.update(terms)
+                                total_terms += len(terms)
+                        
+                        if total_terms > 0:
+                            metrics["diversity_score"] = len(unique_terms) / total_terms
                         
                         if extracted_keywords:
-                            metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
+                            covered_keywords = set()
+                            for doc in final_docs:
+                                content = doc.get("content", doc.get("text", "")).lower()
+                                if isinstance(content, str):
+                                    for keyword in extracted_keywords:
+                                        if keyword.lower() in content:
+                                            covered_keywords.add(keyword.lower())
+                            
+                            if extracted_keywords:
+                                metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
                     
                     metrics_msg = (
                         f"📊 [SEARCH QUALITY METRICS] "
