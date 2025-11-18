@@ -89,6 +89,13 @@ class LangGraphConfig:
     similarity_threshold: float = 0.3  # 문서 유사도 임계값
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
     max_tokens: int = 2000  # 최대 토큰 수
+    
+    # Embedding Model 설정 (한국 법률 특화 SBERT 모델)
+    embedding_model: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"  # 기본값
+    # 사용 가능한 법률 특화 모델:
+    # - "Ko-Legal-SBERT" (HuggingFace 모델명 확인 필요)
+    # - "LegalInsight/PretrainedModel" (HuggingFace 모델명 확인 필요)
+    # - "snunlp/KR-SBERT-V40K-klueNLI-augSTS" (기본 한국어 SBERT)
 
     # 통계 관리 설정
     enable_statistics: bool = True
@@ -179,6 +186,9 @@ class LangGraphConfig:
         config.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", config.similarity_threshold))
         config.max_context_length = int(os.getenv("MAX_CONTEXT_LENGTH", config.max_context_length))
         config.max_tokens = int(os.getenv("MAX_TOKENS", config.max_tokens))
+        
+        # Embedding Model 설정
+        config.embedding_model = os.getenv("EMBEDDING_MODEL", config.embedding_model)
 
         # 통계 관리 설정
         config.enable_statistics = os.getenv("ENABLE_STATISTICS", "true").lower() == "true"

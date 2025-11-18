@@ -154,6 +154,37 @@ class EmbeddingVersionManager:
         finally:
             conn.close()
     
+    def get_version_by_name(self, version_name: str) -> Optional[Dict]:
+        """
+        버전명으로 버전 조회
+        
+        Args:
+            version_name: 버전 이름
+        
+        Returns:
+            Optional[Dict]: 버전 정보, 없으면 None
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("""
+                SELECT * FROM embedding_versions
+                WHERE version_name = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (version_name,))
+            
+            row = cursor.fetchone()
+            if row:
+                import json
+                result = dict(row)
+                if result.get('metadata'):
+                    result['metadata'] = json.loads(result['metadata'])
+                return result
+            return None
+            
+        finally:
+            conn.close()
+    
     def list_versions(self, chunking_strategy: Optional[str] = None) -> List[Dict]:
         """
         버전 목록 조회

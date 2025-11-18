@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Modular States 테스트
-langgraph_core/state/modular_states.py 단위 테스트
+State Definitions 및 Modular States 테스트
+langgraph_core/state/state_definitions.py 및 modular_states.py 단위 테스트
 """
 
 import pytest
@@ -20,6 +20,13 @@ from lawfirm_langgraph.langgraph_core.state.modular_states import (
     CommonState,
     LegalWorkflowState,
     create_initial_legal_state
+)
+from lawfirm_langgraph.langgraph_core.state.state_definitions import (
+    create_flat_legal_state,
+    MAX_RETRIEVED_DOCS,
+    MAX_DOCUMENT_CONTENT_LENGTH,
+    MAX_CONVERSATION_HISTORY,
+    MAX_PROCESSING_STEPS
 )
 
 
@@ -100,4 +107,41 @@ class TestModularStates:
         assert state["input"]["session_id"] == "test_session"
         assert "classification" in state
         assert "search" in state
+    
+    def test_state_constants(self):
+        """State 상수 테스트"""
+        assert isinstance(MAX_RETRIEVED_DOCS, int)
+        assert MAX_RETRIEVED_DOCS > 0
+        assert isinstance(MAX_DOCUMENT_CONTENT_LENGTH, int)
+        assert MAX_DOCUMENT_CONTENT_LENGTH > 0
+        assert isinstance(MAX_CONVERSATION_HISTORY, int)
+        assert MAX_CONVERSATION_HISTORY > 0
+        assert isinstance(MAX_PROCESSING_STEPS, int)
+        assert MAX_PROCESSING_STEPS > 0
+
+
+class TestCreateFlatLegalState:
+    """create_flat_legal_state 테스트"""
+    
+    def test_create_flat_legal_state_basic(self):
+        """기본 평면 상태 생성 테스트"""
+        state = create_flat_legal_state(
+            query="테스트 질문",
+            session_id="test_session"
+        )
+        
+        assert isinstance(state, dict)
+        assert state.get("query") == "테스트 질문"
+        assert state.get("session_id") == "test_session"
+    
+    def test_create_flat_legal_state_structure(self):
+        """평면 상태 구조 테스트"""
+        state = create_flat_legal_state(
+            query="테스트 질문",
+            session_id="test_session"
+        )
+        
+        assert isinstance(state, dict)
+        assert "query" in state
+        assert "session_id" in state
 

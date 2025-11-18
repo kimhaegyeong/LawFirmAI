@@ -81,6 +81,15 @@ class Config(BaseSettings):
         default="data/ml_config/optimized_search_params.json",
         env="OPTIMIZED_SEARCH_PARAMS_PATH"
     )
+    
+    # Search Quality Improvement Features
+    enable_search_improvements: bool = Field(default=True, env="ENABLE_SEARCH_IMPROVEMENTS")
+    use_adaptive_weights: bool = Field(default=True, env="USE_ADAPTIVE_WEIGHTS")
+    use_adaptive_threshold: bool = Field(default=True, env="USE_ADAPTIVE_THRESHOLD")
+    use_diversity_ranking: bool = Field(default=True, env="USE_DIVERSITY_RANKING")
+    use_metadata_enhancement: bool = Field(default=True, env="USE_METADATA_ENHANCEMENT")
+    use_quality_scoring: bool = Field(default=True, env="USE_QUALITY_SCORING")
+    use_advanced_reranker: bool = Field(default=False, env="USE_ADVANCED_RERANKER")
 
     # Logging Configuration
     log_level: str = Field(default="INFO", env="LOG_LEVEL")

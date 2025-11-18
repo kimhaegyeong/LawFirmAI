@@ -21,17 +21,25 @@ class HybridSearchEngineV2:
 
     def __init__(self,
                  db_path: Optional[str] = None,
-                 model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
+                 model_name: Optional[str] = None):
         """
         검색 엔진 초기화
 
         Args:
             db_path: lawfirm_v2.db 경로 (None이면 환경변수 DATABASE_PATH 사용)
-            model_name: 임베딩 모델명
+            model_name: 임베딩 모델명 (None이면 환경변수 EMBEDDING_MODEL 또는 Config 사용)
         """
         if db_path is None:
             config = Config()
             db_path = config.database_path
+        
+        if model_name is None:
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name is None:
+                config = Config()
+                model_name = config.embedding_model
+        
         self.db_path = db_path
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)

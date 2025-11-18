@@ -182,6 +182,8 @@ class EnhancedLegalQuestionWorkflow(
 
         # 컴포넌트 초기화
         self.keyword_mapper = LegalKeywordMapper()
+        from core.agents.keyword_extractor import KeywordExtractor
+        self.keyword_extractor = KeywordExtractor(use_morphology=True, logger_instance=self.logger)
         self.data_connector = LegalDataConnectorV2()
         self.performance_optimizer = PerformanceOptimizer()
         self.term_integrator = TermIntegrator()
@@ -243,8 +245,12 @@ class EnhancedLegalQuestionWorkflow(
             use_mlflow_index = getattr(config, 'use_mlflow_index', False)
             mlflow_run_id = getattr(config, 'mlflow_run_id', None)
             
+            # LangGraphConfig에서 embedding_model 가져오기 (법률 특화 SBERT 모델 지원)
+            model_name = getattr(self.config, 'embedding_model', None)
+            
             self.semantic_search = SemanticSearchEngineV2(
                 db_path=db_path,
+                model_name=model_name,
                 use_mlflow_index=use_mlflow_index,
                 mlflow_run_id=mlflow_run_id
             )
@@ -486,6 +492,31 @@ class EnhancedLegalQuestionWorkflow(
             langfuse_client=None,  # langfuse_client는 선택사항
             llm=self.llm  # 이미 초기화된 LLM 전달
         )
+        
+        # DirectAnswerHandler 초기화 (Phase 10 리팩토링) - LLM 초기화 이후
+        try:
+            from core.agents.handlers.direct_answer_handler import DirectAnswerHandler
+            self.direct_answer_handler = DirectAnswerHandler(
+                llm=self.llm,
+                llm_fast=self.llm_fast,
+                logger=self.logger
+            )
+            self.logger.info("DirectAnswerHandler initialized")
+        except ImportError:
+            try:
+                from core.generation.generators.direct_answer_handler import DirectAnswerHandler
+                self.direct_answer_handler = DirectAnswerHandler(
+                    llm=self.llm,
+                    llm_fast=self.llm_fast,
+                    logger=self.logger
+                )
+                self.logger.info("DirectAnswerHandler initialized (from generators)")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize DirectAnswerHandler: {e}")
+                self.direct_answer_handler = None
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize DirectAnswerHandler: {e}")
+            self.direct_answer_handler = None
 
         # 워크플로우 라우팅 핸들러 초기화 (Phase 9 리팩토링) - answer_generator 초기화 이후
         self.workflow_routes = WorkflowRoutes(
@@ -667,31 +698,56 @@ class EnhancedLegalQuestionWorkflow(
                 state["common"]["metadata"] = {}
             state["common"]["metadata"]["_last_executed_node"] = "expand_keywords"
 
-            # 1. 기본 키워드 추출
+            # 1. 기본 키워드 추출 (Phase 2: KeywordExtractor 활용)
             keywords = self._get_state_value(state, "extracted_keywords", [])
             if len(keywords) == 0:
                 query = self._get_state_value(state, "query", "")
                 query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", "general_question"))
-                keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
-                keywords = [kw for kw in keywords if isinstance(kw, (str, int, float, tuple)) and kw is not None]
-                keywords = list(set(keywords))
+                
+                # Phase 2: KeywordExtractor를 사용한 형태소 분석 기반 키워드 추출
+                extracted_keywords = []
+                if self.keyword_extractor and query:
+                    try:
+                        extracted_keywords = self.keyword_extractor.extract_keywords(
+                            query, 
+                            max_keywords=15,  # Phase 2: 키워드 수 증가 (10-15개)
+                            prefer_morphology=True
+                        )
+                        self.logger.debug(f"🔍 [KEYWORD EXTRACTION] Extracted {len(extracted_keywords)} keywords using morphology")
+                    except Exception as e:
+                        self.logger.warning(f"KeywordExtractor failed: {e}, using keyword_mapper")
+                        extracted_keywords = []
+                
+                # keyword_mapper를 사용한 키워드 추출 (보완)
+                mapper_keywords = self.keyword_mapper.get_keywords_for_question(query, query_type_str)
+                mapper_keywords = [kw for kw in mapper_keywords if isinstance(kw, (str, int, float, tuple)) and kw is not None]
+                
+                # 두 방법의 키워드 통합
+                keywords = list(set(extracted_keywords + mapper_keywords))
+                keywords = [kw for kw in keywords if isinstance(kw, str) and len(kw.strip()) >= 2]
+                
                 self._set_state_value(state, "extracted_keywords", keywords)
-                self.logger.info(f"✅ [KEYWORD EXTRACTION] Extracted {len(keywords)} base keywords")
+                self.logger.info(f"✅ [KEYWORD EXTRACTION] Extracted {len(keywords)} base keywords (morphology: {len(extracted_keywords)}, mapper: {len(mapper_keywords)})")
 
-            # 2. 조건부 AI 키워드 확장 (should_expand_keywords_ai 조건 확인)
+            # 2. 조건부 AI 키워드 확장 (should_expand_keywords_ai 조건 확인) - 성능 최적화: 조건 완화
             should_expand_ai = False
             if self.ai_keyword_generator:
-                # should_expand_keywords_ai 조건 확인
-                if len(keywords) >= 3:
+                # should_expand_keywords_ai 조건 확인 (성능 최적화: 더 엄격한 조건)
+                if len(keywords) >= 5:  # 3 → 5로 증가 (더 많은 키워드가 있을 때만 확장)
                     query_type = self._get_state_value(state, "query_type", "")
                     complex_types = ["precedent_search", "law_inquiry", "legal_advice"]
                     if query_type in complex_types:
-                        should_expand_ai = True
-                        self.logger.info(f"🔍 [AI KEYWORD EXPANSION] Conditions met: query_type={query_type}, keywords={len(keywords)}")
+                        # 추가 조건: 쿼리 길이 확인 (짧은 쿼리는 AI 확장 생략)
+                        query = self._get_state_value(state, "query", "")
+                        if len(query) >= 10:  # 최소 10자 이상인 쿼리만 확장
+                            should_expand_ai = True
+                            self.logger.info(f"🔍 [AI KEYWORD EXPANSION] Conditions met: query_type={query_type}, keywords={len(keywords)}, query_len={len(query)}")
+                        else:
+                            self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: query too short ({len(query)} < 10)")
                     else:
                         self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: query_type={query_type} not in complex_types")
                 else:
-                    self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: Not enough keywords ({len(keywords)} < 3)")
+                    self.logger.debug(f"🔍 [AI KEYWORD EXPANSION] Skipping: Not enough keywords ({len(keywords)} < 5)")
 
             # 3. AI 키워드 확장 (조건부, 캐싱 적용)
             if should_expand_ai:
@@ -733,10 +789,13 @@ class EnhancedLegalQuestionWorkflow(
                 if not expansion_result:
                     try:
                         # 현재 실행 중인 이벤트 루프 확인
-                        # 타임아웃 단축: 10초 → 5초 (성능 개선)
+                        # 타임아웃 추가 단축: 5초 → 3초 (성능 개선)
                         try:
                             loop = asyncio.get_running_loop()
                             # 이미 실행 중인 루프가 있는 경우, 새 스레드에서 실행
+                            query = self._get_state_value(state, "query", "")
+                            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
+                            
                             with concurrent.futures.ThreadPoolExecutor() as executor:
                                 future = executor.submit(
                                     lambda: asyncio.run(
@@ -744,23 +803,30 @@ class EnhancedLegalQuestionWorkflow(
                                             self.ai_keyword_generator.expand_domain_keywords(
                                                 domain=domain,
                                                 base_keywords=keywords,
-                                                target_count=30
+                                                target_count=50,
+                                                query=query,
+                                                query_type=query_type_str
                                             ),
-                                            timeout=5.0  # 10초 → 5초로 단축
+                                            timeout=3.0  # 5초 → 3초로 추가 단축
                                         )
                                     )
                                 )
-                                expansion_result = future.result(timeout=7.0)  # 15초 → 7초로 단축
+                                expansion_result = future.result(timeout=4.0)  # 7초 → 4초로 단축
                         except RuntimeError:
                             # 실행 중인 루프가 없는 경우, 직접 실행
+                            query = self._get_state_value(state, "query", "")
+                            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
+                            
                             expansion_result = asyncio.run(
                                 asyncio.wait_for(
                                     self.ai_keyword_generator.expand_domain_keywords(
                                         domain=domain,
                                         base_keywords=keywords,
-                                        target_count=30
+                                        target_count=50,
+                                        query=query,
+                                        query_type=query_type_str
                                     ),
-                                    timeout=5.0  # 10초 → 5초로 단축
+                                    timeout=3.0  # 5초 → 3초로 추가 단축
                                 )
                             )
                         
@@ -1791,6 +1857,11 @@ class EnhancedLegalQuestionWorkflow(
             llm = self.llm_fast if hasattr(self, 'llm_fast') and self.llm_fast else self.llm
 
             # Phase 10 리팩토링: DirectAnswerHandler 사용
+            if not hasattr(self, 'direct_answer_handler') or self.direct_answer_handler is None:
+                self.logger.warning("direct_answer_handler not initialized, falling back to search")
+                self._set_state_value(state, "needs_search", True)
+                return state
+            
             # Prompt Chaining을 사용한 직접 답변 생성
             answer = self.direct_answer_handler.generate_direct_answer_with_chain(query)
 
@@ -3397,7 +3468,45 @@ class EnhancedLegalQuestionWorkflow(
                     # 번호 패턴 제거 (1., 2., - 등)
                     line = line.lstrip('0123456789.-) ')
                     if line and not line.startswith('#') and len(line) > 5:
-                        queries.append(line)
+                        # 개선: 불필요한 텍스트 제거 (예: "계약 해지 통보 계약" 같은 중복/불필요한 텍스트)
+                        # 1. 중복된 단어 제거 (연속된 동일 단어)
+                        words = line.split()
+                        cleaned_words = []
+                        prev_word = None
+                        for word in words:
+                            if word != prev_word:
+                                cleaned_words.append(word)
+                            prev_word = word
+                        line = ' '.join(cleaned_words)
+                        
+                        # 2. 불필요한 접미사 제거 (예: "계약 해석", "계약 해지 통보 계약" 등)
+                        # 원본 쿼리의 핵심 키워드만 추출하여 불필요한 접미사 제거
+                        query_keywords = set(query.split())
+                        line_words = line.split()
+                        # 원본 쿼리에 없는 불필요한 접미사 제거 (마지막 부분)
+                        while line_words and line_words[-1] not in query_keywords and len(line_words) > len(query.split()):
+                            # 원본 쿼리와 겹치는 단어가 있는지 확인
+                            if any(word in query_keywords for word in line_words[:-1]):
+                                line_words.pop()
+                            else:
+                                break
+                        line = ' '.join(line_words)
+                        
+                        # 3. 쿼리 길이 제한 (너무 긴 쿼리는 검색 실패 가능성 높음)
+                        if len(line) > 100:
+                            # 핵심 키워드만 추출 (원본 쿼리의 키워드 우선)
+                            query_words = query.split()
+                            line_words = line.split()
+                            # 원본 쿼리 단어를 우선 포함
+                            essential_words = [w for w in line_words if w in query_words]
+                            # 나머지 단어 추가 (최대 100자)
+                            for word in line_words:
+                                if word not in essential_words and len(' '.join(essential_words + [word])) <= 100:
+                                    essential_words.append(word)
+                            line = ' '.join(essential_words[:15])  # 최대 15개 단어
+                        
+                        if line and len(line) > 5:
+                            queries.append(line)
             
             # 원본 질문을 첫 번째로 포함
             result_queries = [query] + queries[:max_queries - 1]
@@ -4369,14 +4478,27 @@ class EnhancedLegalQuestionWorkflow(
     def _merge_search_results_internal(
         self,
         semantic_results: List[Dict[str, Any]],
-        keyword_results: List[Dict[str, Any]]
+        keyword_results: List[Dict[str, Any]],
+        query: str = "",
+        query_type: str = "general_question",
+        extracted_keywords: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """검색 결과 병합 (SearchResultProcessor 사용)"""
-        return self.search_result_processor.merge_search_results(
-            semantic_results=semantic_results,
-            keyword_results=keyword_results,
-            result_merger=self.result_merger
-        )
+        """검색 결과 병합 (SearchHandler 사용, 개선 기능 포함)"""
+        if self.search_handler:
+            return self.search_handler.merge_search_results(
+                semantic_results=semantic_results,
+                keyword_results=keyword_results,
+                query=query,
+                query_type=query_type,
+                extracted_keywords=extracted_keywords
+            )
+        else:
+            # 폴백: SearchResultProcessor 사용
+            return self.search_result_processor.merge_search_results(
+                semantic_results=semantic_results,
+                keyword_results=keyword_results,
+                result_merger=self.result_merger
+            )
     
     def _apply_keyword_weights_to_docs(
         self,
@@ -4490,25 +4612,33 @@ class EnhancedLegalQuestionWorkflow(
         keyword_results: List[Dict[str, Any]],
         query: str
     ) -> List[Dict[str, Any]]:
-        """병합 및 재순위"""
+        """병합 및 재순위 (개선 기능 포함)"""
         debug_mode = os.getenv("DEBUG_SEARCH_RESULTS", "false").lower() == "true"
         
+        # query_type과 extracted_keywords 추출
+        query_type = self._get_state_value(state, "query_type", "general_question")
+        if isinstance(query_type, dict):
+            query_type = query_type.get("type", "general_question")
+        extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
+        
         if self.search_handler and semantic_results and keyword_results:
-            optimized_queries = self._get_state_value(state, "optimized_queries", {})
-            rerank_params = {
-                "top_k": self.config.max_retrieved_docs or 20,
-                "diversity_weight": 0.3
-            }
-            merged_docs = self.search_handler.merge_and_rerank_search_results(
+            # 개선된 merge_search_results 사용
+            merged_docs = self.search_handler.merge_search_results(
                 semantic_results=semantic_results,
                 keyword_results=keyword_results,
                 query=query,
-                optimized_queries=optimized_queries,
-                rerank_params=rerank_params
+                query_type=query_type,
+                extracted_keywords=extracted_keywords
             )
-            self.logger.info(f"🔀 [MERGE] Using merge_and_rerank_search_results: {len(merged_docs)} docs")
+            self.logger.info(f"🔀 [MERGE] Using improved merge_search_results: {len(merged_docs)} docs")
         else:
-            merged_docs = self._merge_search_results_internal(semantic_results, keyword_results)
+            merged_docs = self._merge_search_results_internal(
+                semantic_results, 
+                keyword_results,
+                query=query,
+                query_type=query_type,
+                extracted_keywords=extracted_keywords
+            )
             self.logger.info(f"🔀 [MERGE] Using _merge_search_results_internal: {len(merged_docs)} docs")
         
         if debug_mode:
@@ -5064,6 +5194,16 @@ class EnhancedLegalQuestionWorkflow(
                     
                     # result_ranker의 evaluate_search_quality 사용 (다차원 다양성 통합)
                     if self.result_ranker and hasattr(self.result_ranker, 'evaluate_search_quality'):
+                        # 개선: extracted_keywords 로깅 강화
+                        if not extracted_keywords:
+                            self.logger.warning(f"⚠️ [KEYWORD COVERAGE] extracted_keywords is empty or None")
+                            extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
+                            if not extracted_keywords and "search" in state and isinstance(state.get("search"), dict):
+                                extracted_keywords = state["search"].get("extracted_keywords", [])
+                            self.logger.info(f"🔍 [KEYWORD COVERAGE] Re-fetched extracted_keywords: {len(extracted_keywords)} keywords")
+                        else:
+                            self.logger.debug(f"🔍 [KEYWORD COVERAGE] Using extracted_keywords: {len(extracted_keywords)} keywords")
+                        
                         metrics = self.result_ranker.evaluate_search_quality(
                             query=query,
                             results=final_docs,
@@ -5116,7 +5256,30 @@ class EnhancedLegalQuestionWorkflow(
                     # MLflow 로깅 추가
                     try:
                         import mlflow
-                        if mlflow.active_run() is not None:
+                        from datetime import datetime
+                        from core.utils.config import Config
+                        
+                        # MLflow run이 없으면 자동으로 시작
+                        active_run = mlflow.active_run()
+                        if active_run is None:
+                            # MLflow 설정 확인
+                            config = Config()
+                            tracking_uri = config.mlflow_tracking_uri
+                            if tracking_uri:
+                                mlflow.set_tracking_uri(tracking_uri)
+                            
+                            # Experiment 설정
+                            experiment_name = getattr(config, 'mlflow_experiment_name', 'rag_search_quality')
+                            mlflow.set_experiment(experiment_name)
+                            
+                            # Run 시작
+                            run_name = f"search_quality_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            mlflow.start_run(run_name=run_name)
+                            active_run = mlflow.active_run()
+                            print(f"✅ [MLFLOW] Started new MLflow run: {run_name} (run_id: {active_run.info.run_id})", flush=True, file=sys.stdout)
+                            self.logger.info(f"✅ [MLFLOW] Started new MLflow run: {run_name} (run_id: {active_run.info.run_id})")
+                        
+                        if active_run is not None:
                             mlflow.log_metrics({
                                 "search_quality_avg_relevance": metrics.get('avg_relevance', 0.0),
                                 "search_quality_min_relevance": metrics.get('min_relevance', 0.0),
@@ -5129,17 +5292,24 @@ class EnhancedLegalQuestionWorkflow(
                                 "search_keyword_count": keyword_count,
                                 "search_retry_performed": 1.0 if needs_retry else 0.0
                             })
-                            mlflow.log_params({
-                                "search_query_type": query_type_str or "",
-                                "search_processing_time": processing_time
-                            })
-                            self.logger.debug(f"✅ [MLFLOW] Search quality metrics logged to MLflow run: {mlflow.active_run().info.run_id}")
-                        else:
-                            self.logger.debug("MLflow run not active, skipping metric logging")
+                            
+                            # 파라미터 대신 태그로만 저장 (태그는 변경 가능하므로 중복 로깅 오류 방지)
+                            # MLflow 파라미터는 한 번 설정되면 변경할 수 없으므로, 변경 가능한 태그만 사용
+                            try:
+                                mlflow.set_tags({
+                                    "search_query_type": query_type_str or "",
+                                    "search_processing_time": str(processing_time),
+                                    "search_query": query[:100] if query else "",
+                                    "search_query_length": str(len(query)) if query else "0"
+                                })
+                            except Exception as tag_error:
+                                self.logger.warning(f"Failed to log MLflow tags: {tag_error}")
+                            print(f"✅ [MLFLOW] Search quality metrics logged to MLflow run: {active_run.info.run_id}", flush=True, file=sys.stdout)
+                            self.logger.info(f"✅ [MLFLOW] Search quality metrics logged to MLflow run: {active_run.info.run_id}")
                     except ImportError:
                         self.logger.debug("MLflow not available, skipping metric logging")
                     except Exception as e:
-                        self.logger.debug(f"Failed to log to MLflow: {e}")
+                        self.logger.warning(f"Failed to log to MLflow: {e}", exc_info=True)
                 except Exception as e:
                     self.logger.warning(f"Failed to log search quality metrics: {e}", exc_info=True)
         else:
@@ -7876,6 +8046,20 @@ class EnhancedLegalQuestionWorkflow(
                     state["common"] = {}
                 if "search" not in state["common"]:
                     state["common"]["search"] = {}
+                state["common"]["search"]["retrieved_docs"] = retrieved_docs
+                
+                metadata = self._get_metadata_safely(state)
+                if "search" not in metadata:
+                    metadata["search"] = {}
+                metadata["search"]["retrieved_docs"] = retrieved_docs
+                metadata["retrieved_docs"] = retrieved_docs
+                self._set_state_value(state, "metadata", metadata)
+                
+                self.logger.info(f"✅ [GENERATE_ANSWER] Saved recovered retrieved_docs to multiple state locations")
+            
+            if not retrieved_docs or len(retrieved_docs) == 0:
+                self.logger.warning(f"⚠️ [GENERATE_ANSWER] Failed to recover retrieved_docs. Answer generation may fail.")
+
                 state["common"]["search"]["retrieved_docs"] = retrieved_docs
                 
                 metadata = self._get_metadata_safely(state)

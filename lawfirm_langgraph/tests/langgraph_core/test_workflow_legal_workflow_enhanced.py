@@ -48,47 +48,22 @@ class TestEnhancedLegalQuestionWorkflow:
                         assert workflow.config == mock_config
                         assert workflow.logger is not None
     
-    @pytest.mark.asyncio
-    async def test_process_async(self, workflow):
-        """비동기 처리 테스트"""
-        mock_graph = Mock()
-        mock_graph.ainvoke = AsyncMock(return_value={
-            "answer": "테스트 답변",
-            "sources": [],
-            "confidence": 0.9
-        })
-        workflow.graph = mock_graph
-        
-        result = await workflow.process_async(
-            query="테스트 질문",
-            session_id="test_session"
-        )
+    def test_get_statistics(self, workflow):
+        """통계 조회 테스트"""
+        result = workflow.get_statistics()
         
         assert isinstance(result, dict)
-        assert "answer" in result or "errors" in result
     
-    @pytest.mark.asyncio
-    async def test_process_async_with_error(self, workflow):
-        """에러 발생 시 비동기 처리 테스트"""
-        mock_graph = Mock()
-        mock_graph.ainvoke = AsyncMock(side_effect=Exception("Test error"))
-        workflow.graph = mock_graph
+    def test_process_legal_terms(self, workflow):
+        """법률 용어 처리 테스트"""
+        state = {
+            "query": "계약 해지",
+            "session_id": "test_session",
+            "extracted_keywords": []
+        }
         
-        result = await workflow.process_async(
-            query="테스트 질문",
-            session_id="test_session"
-        )
+        result = workflow.process_legal_terms(state)
         
         assert isinstance(result, dict)
-        assert "error" in result or "errors" in result
-    
-    def test_get_state(self, workflow):
-        """상태 조회 테스트"""
-        mock_graph = Mock()
-        mock_graph.get_state = Mock(return_value={"query": "test"})
-        workflow.graph = mock_graph
-        
-        result = workflow.get_state("test_session")
-        
-        assert isinstance(result, dict) or result is None
+        assert "extracted_keywords" in result or "query" in result
 

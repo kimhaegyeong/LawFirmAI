@@ -12,7 +12,7 @@ class SentenceEmbedder:
     _threads_configured = False
     _threads_lock = threading.Lock()
     
-    def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
+    def __init__(self, model_name: str = None):
         # PyTorch 스레드 수 최대화 (시스템 사양에 맞게)
         # 이미 설정된 경우 재설정 시도하지 않음 (스레드 설정 오류 방지)
         cpu_count = os.cpu_count()
@@ -37,6 +37,27 @@ class SentenceEmbedder:
                 os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
         
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        if model_name is None:
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name is None:
+                try:
+                    import sys
+                    from pathlib import Path
+                    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "lawfirm_langgraph"))
+                    from core.utils.config import Config
+                    config = Config()
+                    model_name = config.embedding_model
+                except Exception:
+                    model_name = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+        
+        # 모델 이름 정리 (따옴표 및 공백 제거)
+        if model_name:
+            model_name = model_name.strip().strip('"').strip("'").strip()
+        
+        if not model_name:
+            raise ValueError("Model name cannot be empty")
+        
         self.model_name = model_name
         
         try:

@@ -35,7 +35,15 @@ except ImportError:
 
     class SentenceEmbedder:
         """Fallback embedder using sentence-transformers"""
-        def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
+        def __init__(self, model_name: Optional[str] = None):
+            if model_name is None:
+                import os
+                model_name = os.getenv("EMBEDDING_MODEL")
+                if model_name is None:
+                    from ..utils.config import Config
+                    config = Config()
+                    model_name = config.embedding_model
+            
             self.model_name = model_name
             self.model = SentenceTransformer(model_name)
             self.dim = self.model.get_sentence_embedding_dimension()
@@ -70,11 +78,19 @@ class SemanticSearchEngineV2:
 
         # 모델명이 제공되지 않으면 데이터베이스에서 자동 감지
         if model_name is None:
-            model_name = self._detect_model_from_database()
+            # 환경 변수에서 먼저 확인 (법률 특화 SBERT 모델 지원)
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            
             if model_name is None:
-                # 감지 실패 시 문서 임베딩 기준 모델 사용
-                model_name = "jhgan/ko-sroberta-multitask"
-                self.logger.warning(f"Could not detect model from database, using default: {model_name}")
+                model_name = self._detect_model_from_database()
+                if model_name is None:
+                    from ..utils.config import Config
+                    config = Config()
+                    model_name = config.embedding_model
+                    self.logger.warning(f"Could not detect model from database or env, using config default: {model_name}")
+            else:
+                self.logger.info(f"Using embedding model from environment variable: {model_name}")
 
         self.model_name = model_name
 

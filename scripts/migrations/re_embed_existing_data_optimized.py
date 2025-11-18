@@ -15,6 +15,8 @@ import sys
 import logging
 import gc
 import torch
+import signal
+import atexit
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from tqdm import tqdm
@@ -35,6 +37,38 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Graceful shutdown을 위한 전역 변수
+_shutdown_requested = False
+_db_connection = None
+
+
+def signal_handler(signum, frame):
+    """시그널 핸들러: 종료 요청 플래그 설정"""
+    global _shutdown_requested
+    signal_name = signal.Signals(signum).name
+    logger.warning(f"종료 신호 수신: {signal_name}. 현재 배치 완료 후 안전하게 종료합니다...")
+    _shutdown_requested = True
+
+
+def register_signal_handlers():
+    """시그널 핸들러 등록"""
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # 종료 신호
+    if hasattr(signal, 'SIGBREAK'):  # Windows
+        signal.signal(signal.SIGBREAK, signal_handler)
+
+
+def cleanup_on_exit():
+    """프로그램 종료 시 리소스 정리"""
+    global _db_connection
+    if _db_connection:
+        try:
+            _db_connection.commit()
+            _db_connection.close()
+            logger.info("데이터베이스 연결 종료")
+        except Exception as e:
+            logger.error(f"데이터베이스 정리 중 오류: {e}")
 
 
 @dataclass
@@ -214,7 +248,12 @@ def filter_existing_documents_batch(
     chunking_strategy: str,
     version_id: int
 ) -> List[Tuple[str, int]]:
-    """배치 단위로 이미 처리된 문서 필터링 (최적화: 배치 조회)"""
+    """배치 단위로 이미 처리된 문서 필터링 (최적화: 배치 조회)
+    
+    재개 기능: 중간에 종료된 경우를 감지하여 부분 처리된 문서도 재처리
+    - 모든 청크가 해당 버전으로 임베딩되었는지 확인
+    - 청크와 임베딩의 개수가 일치하는지 확인
+    """
     if not documents:
         return []
     
@@ -236,14 +275,20 @@ def filter_existing_documents_batch(
         for i in range(0, len(source_ids), batch_size):
             batch_ids = source_ids[i:i + batch_size]
             placeholders = ','.join(['?'] * len(batch_ids))
+            # 완전히 처리된 문서만 필터링 (청크와 임베딩이 모두 존재하고 개수가 일치)
             cursor = conn.execute(
-                f"""SELECT DISTINCT source_type, source_id 
-                    FROM text_chunks 
-                    WHERE source_type = ?
-                    AND source_id IN ({placeholders})
-                    AND chunking_strategy = ? 
-                    AND embedding_version_id = ?""",
-                [source_type] + batch_ids + [chunking_strategy, version_id]
+                f"""SELECT tc.source_type, tc.source_id, 
+                           COUNT(DISTINCT tc.id) as chunk_count,
+                           COUNT(DISTINCT e.id) as embedding_count
+                    FROM text_chunks tc
+                    LEFT JOIN embeddings e ON e.chunk_id = tc.id AND e.version_id = ?
+                    WHERE tc.source_type = ?
+                    AND tc.source_id IN ({placeholders})
+                    AND tc.chunking_strategy = ? 
+                    AND tc.embedding_version_id = ?
+                    GROUP BY tc.source_type, tc.source_id
+                    HAVING chunk_count > 0 AND chunk_count = embedding_count""",
+                [version_id, source_type] + batch_ids + [chunking_strategy, version_id]
             )
             for row in cursor.fetchall():
                 existing_docs.add((row['source_type'], row['source_id']))
@@ -427,9 +472,13 @@ def collect_chunks_for_batch(
     
     # 배치 단위로 이미 처리된 문서 필터링
     if skip_if_exists:
+        original_count = len(documents)
         documents = filter_existing_documents_batch(
             conn, documents, chunking_strategy, version_id
         )
+        skipped_count = original_count - len(documents)
+        if skipped_count > 0:
+            logger.info(f"이미 처리된 문서 {skipped_count}개 건너뜀 (재개 기능)")
         if not documents:
             return [], [], {}
     
@@ -439,34 +488,60 @@ def collect_chunks_for_batch(
     # 메모리 정리: 문서 복원 후 불필요한 데이터 정리
     gc.collect()
     
-    # 배치 단위로 청크 삭제 (각 문서별로 정확하게 삭제)
+    # 배치 단위로 청크 삭제 (최적화: 배치 삭제 함수 사용)
     # UNIQUE 제약이 (source_type, source_id, chunk_index)에 걸려 있으므로
     # 모든 버전의 청크를 삭제해야 함 (재임베딩은 완전 교체 방식)
+    deleted_counts = {}
     if restored_docs:
-        deleted_counts = {}
-        for source_type, source_id in restored_docs.keys():
-            # 해당 문서의 모든 버전 청크 개수 조회
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM text_chunks WHERE source_type = ? AND source_id = ?",
-                (source_type, source_id)
-            )
-            count = cursor.fetchone()[0]
-            if count > 0:
-                deleted_counts[(source_type, source_id)] = count
+        # 배치 삭제 함수 사용 (더 효율적)
+        docs_to_delete = list(restored_docs.keys())
+        # 모든 버전의 청크를 삭제해야 하므로 version_id는 무시
+        # delete_chunks_batch는 특정 version_id만 삭제하므로 직접 구현
+        # source_type별로 그룹화하여 배치 삭제
+        by_type = {}
+        for source_type, source_id in docs_to_delete:
+            if source_type not in by_type:
+                by_type[source_type] = []
+            by_type[source_type].append(source_id)
+        
+        for source_type, source_ids in by_type.items():
+            if not source_ids:
+                continue
+            
+            # SQLite 제한 고려하여 배치 처리
+            batch_size = 500
+            for i in range(0, len(source_ids), batch_size):
+                batch_ids = source_ids[i:i + batch_size]
+                placeholders = ','.join(['?'] * len(batch_ids))
+                
+                # 삭제할 청크 개수 조회
+                cursor = conn.execute(
+                    f"""SELECT source_id, COUNT(*) as count
+                        FROM text_chunks 
+                        WHERE source_type = ? AND source_id IN ({placeholders})
+                        GROUP BY source_id""",
+                    [source_type] + batch_ids
+                )
+                for row in cursor.fetchall():
+                    deleted_counts[(source_type, row['source_id'])] = row['count']
+                
                 # embeddings 먼저 삭제 (모든 버전)
                 conn.execute(
-                    """DELETE FROM embeddings 
+                    f"""DELETE FROM embeddings 
                         WHERE chunk_id IN (
                             SELECT id FROM text_chunks 
-                            WHERE source_type = ? AND source_id = ?
+                            WHERE source_type = ? AND source_id IN ({placeholders})
                         )""",
-                    (source_type, source_id)
+                    [source_type] + batch_ids
                 )
+                
                 # text_chunks 삭제 (모든 버전 - UNIQUE 제약 충돌 방지)
                 conn.execute(
-                    "DELETE FROM text_chunks WHERE source_type = ? AND source_id = ?",
-                    (source_type, source_id)
+                    f"""DELETE FROM text_chunks 
+                        WHERE source_type = ? AND source_id IN ({placeholders})""",
+                    [source_type] + batch_ids
                 )
+        
         # 삭제 후 즉시 커밋하여 UNIQUE 제약 오류 방지
         if deleted_counts:
             conn.commit()
@@ -558,22 +633,44 @@ def insert_chunks_and_embeddings_batch(
         chunk_inserts
     )
     
-    # 삽입된 청크 ID를 배치로 조회
+    # 삽입된 청크 ID를 배치로 조회 (최적화: 배치 쿼리로 조회)
     chunk_ids = []
-    for chunk_data in chunks_data:
-        cursor = conn.execute(
-            """SELECT id FROM text_chunks 
-               WHERE source_type = ? AND source_id = ? AND chunk_index = ? 
-               AND embedding_version_id = ?
-               ORDER BY id DESC LIMIT 1""",
-            (chunk_data.source_type, chunk_data.source_id, 
-             chunk_data.chunk_index_offset, version_id)
-        )
-        row = cursor.fetchone()
-        if row:
-            chunk_ids.append(row[0])
-        else:
-            logger.warning(f"청크 ID를 찾을 수 없음: {chunk_data.source_type}/{chunk_data.source_id}/{chunk_data.chunk_index_offset}")
+    if chunks_data:
+        # SQLite의 SQLITE_MAX_VARIABLE_NUMBER 제한 고려 (기본값 999)
+        # 각 조건당 3개 파라미터이므로 안전하게 300개씩 배치 처리
+        batch_size = 300
+        id_map = {}
+        
+        for i in range(0, len(chunks_data), batch_size):
+            batch_chunks = chunks_data[i:i + batch_size]
+            conditions = []
+            params = []
+            for chunk_data in batch_chunks:
+                conditions.append("(source_type = ? AND source_id = ? AND chunk_index = ?)")
+                params.extend([chunk_data.source_type, chunk_data.source_id, chunk_data.chunk_index_offset])
+            
+            placeholders = " OR ".join(conditions)
+            cursor = conn.execute(
+                f"""SELECT source_type, source_id, chunk_index, id 
+                    FROM text_chunks 
+                    WHERE ({placeholders}) AND embedding_version_id = ?
+                    ORDER BY id DESC""",
+                params + [version_id]
+            )
+            
+            for row in cursor.fetchall():
+                key = (row['source_type'], row['source_id'], row['chunk_index'])
+                if key not in id_map:
+                    id_map[key] = row['id']
+        
+        # 순서대로 ID 추출
+        for chunk_data in chunks_data:
+            key = (chunk_data.source_type, chunk_data.source_id, chunk_data.chunk_index_offset)
+            if key in id_map:
+                chunk_ids.append(id_map[key])
+            else:
+                logger.warning(f"청크 ID를 찾을 수 없음: {chunk_data.source_type}/{chunk_data.source_id}/{chunk_data.chunk_index_offset}")
+                chunk_ids.append(None)
     
     # 임베딩 삽입
     embedding_data = [
@@ -650,11 +747,17 @@ def re_embed_documents_batch_optimized(
         all_texts = [chunk_data.chunk_result.text for chunk_data in chunks_data]
         logger.info(f"배치 임베딩 생성: {len(all_texts)}개 청크")
         
+        # 임베딩 생성 (시간이 오래 걸릴 수 있음 - 완료 후 종료 플래그 확인)
         all_embeddings = embedder.encode(all_texts, batch_size=embedding_batch_size)
         dim = all_embeddings.shape[1] if len(all_embeddings.shape) > 1 else all_embeddings.shape[0]
         model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
         
-        # 3단계: 배치로 DB 삽입
+        # 임베딩 생성 완료 후 종료 플래그 확인
+        # 종료 요청이 있어도 현재 배치는 완료 (임베딩 생성 비용이 크므로)
+        if _shutdown_requested:
+            logger.warning(f"임베딩 생성 완료. 종료 요청 감지. 배치 {batch_num}의 DB 삽입 완료 후 종료합니다...")
+        
+        # 3단계: 배치로 DB 삽입 (종료 요청이 있어도 현재 배치는 완료)
         insert_chunks_and_embeddings_batch(
             conn=conn,
             chunks_data=chunks_data,
@@ -674,12 +777,16 @@ def re_embed_documents_batch_optimized(
         processed_count = len(processed_docs)
         chunks_count = len(chunks_data)
         
-        # 커밋 최적화: 여러 배치마다 커밋
-        if batch_num % commit_interval == 0:
+        # 커밋 최적화: 여러 배치마다 커밋 또는 종료 요청 시 즉시 커밋
+        if _shutdown_requested or batch_num % commit_interval == 0:
             conn.commit()
-            logger.info(f"커밋 완료 (배치 {batch_num}): {processed_count}개 문서 처리, {chunks_count}개 청크 생성")
+            if _shutdown_requested:
+                logger.info(f"커밋 완료 (종료 전): 배치 {batch_num} - {processed_count}개 문서 처리, {chunks_count}개 청크 생성")
+            else:
+                logger.info(f"커밋 완료 (배치 {batch_num}): {processed_count}개 문서 처리, {chunks_count}개 청크 생성")
             # 주기적인 가비지 컬렉션 (커밋 시마다)
             gc.collect()
+        
         for doc in processed_docs:
             total_deleted += deleted_counts.get(doc, 0)
         total_inserted += chunks_count
@@ -691,9 +798,18 @@ def re_embed_documents_batch_optimized(
         del deleted_counts
         
         logger.info(f"배치 {batch_num} 처리 완료: {processed_count}개 문서, {chunks_count}개 청크 (전체 진행률: {batch_num * doc_batch_size}/{len(documents)})")
+        
+        # 배치 완료 후 종료 플래그 확인
+        if _shutdown_requested:
+            logger.warning(f"배치 {batch_num} 완료 후 종료합니다. 중단 시점: {total_inserted}개 청크 삽입, {skipped_count}개 문서 건너뜀")
+            logger.info("재실행 시 자동으로 중단 지점부터 재개됩니다.")
+            break
     
-    # 마지막 커밋
+    # 마지막 커밋 (정상 종료 또는 graceful shutdown 모두)
     conn.commit()
+    
+    if _shutdown_requested:
+        logger.warning("Graceful shutdown 완료")
     
     return total_deleted, total_inserted, skipped_count
 
@@ -741,6 +857,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Graceful shutdown을 위한 시그널 핸들러 등록
+    register_signal_handlers()
+    atexit.register(cleanup_on_exit)
+    
     if args.dry_run:
         logger.info("DRY RUN 모드: 실제 변경 없이 테스트만 수행합니다.")
     
@@ -783,13 +903,18 @@ def main():
         logger.info(f"지정된 임베딩 배치 크기: {args.embedding_batch_size}")
     
     # 데이터베이스 연결
+    global _db_connection
     conn = sqlite3.connect(args.db, timeout=30.0)
+    _db_connection = conn  # 전역 변수에 저장 (cleanup_on_exit에서 사용)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")  # 성능 최적화
-    conn.execute("PRAGMA cache_size = -256000")  # 256MB 캐시 (128MB에서 증가)
+    conn.execute("PRAGMA cache_size = -256000")  # 256MB 캐시
     conn.execute("PRAGMA temp_store = MEMORY")  # 임시 테이블을 메모리에 저장
-    conn.execute("PRAGMA mmap_size = 536870912")  # 512MB 메모리 맵 (256MB에서 증가)
+    conn.execute("PRAGMA mmap_size = 536870912")  # 512MB 메모리 맵
+    conn.execute("PRAGMA page_size = 4096")  # 페이지 크기 최적화
+    conn.execute("PRAGMA optimize")  # 쿼리 플래너 최적화
+    conn.execute("PRAGMA threads = 4")  # 멀티스레드 사용 (가능한 경우)
     
     # 인덱스 최적화
     if not args.skip_index_optimization:
@@ -797,7 +922,14 @@ def main():
     
     # 임베더 초기화
     logger.info("임베더 초기화 중...")
-    embedder = SentenceEmbedder()
+    import os
+    model_name = os.getenv("EMBEDDING_MODEL")
+    if model_name:
+        logger.info(f"Using embedding model from environment: {model_name}")
+        embedder = SentenceEmbedder(model_name)
+    else:
+        logger.info("Using default embedding model")
+        embedder = SentenceEmbedder()
     logger.info(f"임베더 디바이스: {embedder.device}")
     
     # 고유한 문서 목록 조회
@@ -871,8 +1003,13 @@ def main():
             else:
                 logger.warning("원본 문서 복원 실패")
     
-    conn.close()
-    logger.info("작업 완료!")
+    # 데이터베이스 연결 종료
+    try:
+        conn.close()
+        _db_connection = None
+        logger.info("작업 완료!")
+    except Exception as e:
+        logger.error(f"데이터베이스 연결 종료 중 오류: {e}")
 
 
 if __name__ == '__main__':

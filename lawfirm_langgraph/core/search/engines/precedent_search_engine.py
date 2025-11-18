@@ -59,8 +59,15 @@ class PrecedentSearchEngine:
         self.vector_metadata = None
 
         try:
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name is None:
+                from core.utils.config import Config
+                config = Config()
+                model_name = config.embedding_model
+            
             self.vector_store = LegalVectorStore(
-                model_name="jhgan/ko-sroberta-multitask",
+                model_name=model_name,
                 dimension=768,
                 index_type="flat"
             )

@@ -7,7 +7,8 @@ import logging
 from pathlib import Path
 
 # 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent.parent.parent.parent
+# scripts/tests/build_faiss_for_version.py -> scripts/tests -> scripts -> 프로젝트 루트
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
@@ -35,7 +36,7 @@ def build_faiss_index_for_version(version_id: int, db_path: str = "data/lawfirm_
     try:
         engine = SemanticSearchEngineV2(
             db_path=db_path,
-            use_external_index=False  # 내부 인덱스 빌드
+            use_mlflow_index=False  # 내부 인덱스 빌드
         )
         logger.info("✅ 검색 엔진 초기화 완료")
     except Exception as e:

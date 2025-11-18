@@ -1,0 +1,25 @@
+{
+  "venvPath": "../api",
+  "venv": "venv",
+  "pythonVersion": "3.11",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/htmlcov",
+    "**/coverage",
+    "**/.pytest_cache",
+    "**/logs"
+  ],
+  "extraPaths": [
+    ".",
+    "../api",
+    "../scripts"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false
+}
+

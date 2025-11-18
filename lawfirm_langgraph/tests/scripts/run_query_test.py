@@ -77,11 +77,40 @@ if str(lawfirm_langgraph_dir) not in sys.path:
     sys.path.insert(0, str(lawfirm_langgraph_dir))
 
 # 로깅 설정 (SafeStreamHandler 사용)
-def setup_logging(log_level: str = "INFO"):
-    """로깅 설정 (Windows PowerShell 호환)"""
+def setup_logging(log_level: str = "INFO", log_file: str = None):
+    """로깅 설정 (Windows PowerShell 호환)
+    
+    Args:
+        log_level: 로그 레벨 (INFO, DEBUG, WARNING, ERROR)
+        log_file: 로그 파일 경로 (None이면 자동 생성)
+    """
     logger = logging.getLogger("lawfirm_langgraph.tests")
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     logger.handlers.clear()
+    
+    # 로그 파일 경로 설정
+    if log_file is None:
+        # 환경 변수에서 로그 디렉토리 확인
+        log_dir = os.getenv("TEST_LOG_DIR", str(project_root / "logs" / "test"))
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 타임스탬프 기반 로그 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(log_dir, f"run_query_test_{timestamp}.log")
+    
+    # 로그 파일 핸들러 추가
+    try:
+        file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
+        file_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        logger.info(f"📝 로그 파일: {log_file}")
+    except Exception as e:
+        logger.warning(f"⚠️  로그 파일 생성 실패: {e} (콘솔 로그만 사용)")
     
     # SafeStreamHandler 클래스 정의
     class SafeStreamHandler(logging.StreamHandler):
@@ -219,7 +248,12 @@ def setup_logging(log_level: str = "INFO"):
     
     return logger
 
-logger = setup_logging(os.getenv("TEST_LOG_LEVEL", "INFO"))
+# 로그 파일 경로 설정 (환경 변수 또는 자동 생성)
+log_file_path = os.getenv("TEST_LOG_FILE", None)
+logger = setup_logging(
+    log_level=os.getenv("TEST_LOG_LEVEL", "INFO"),
+    log_file=log_file_path
+)
 
 
 def get_query_from_args() -> str:
@@ -272,6 +306,17 @@ async def run_query_test(query: str):
     logger.info("LangGraph 질의 테스트")
     logger.info("="*80)
     logger.info(f"\n📋 질의: {query}\n")
+    
+    # 로그 파일 경로 출력 (환경 변수로 설정된 경우)
+    log_file_path = os.getenv("TEST_LOG_FILE", None)
+    if log_file_path:
+        logger.info(f"📝 로그 파일: {log_file_path}")
+    else:
+        # 자동 생성된 로그 파일 경로 찾기
+        for handler in logger.handlers:
+            if isinstance(handler, logging.FileHandler):
+                logger.info(f"📝 로그 파일: {handler.baseFilename}")
+                break
     
     try:
         # python-dotenv 경고 억제를 위한 환경 변수 설정

@@ -23,6 +23,14 @@ class SearchResultProcessor:
         self.logger = logger or logging.getLogger(__name__)
         self.result_merger = result_merger
         self.result_ranker = result_ranker
+        
+        # Phase 3: KeywordExtractor 초기화 (형태소 분석용)
+        self.keyword_extractor = None
+        try:
+            from core.agents.keyword_extractor import KeywordExtractor
+            self.keyword_extractor = KeywordExtractor(use_morphology=True, logger_instance=self.logger)
+        except Exception as e:
+            self.logger.debug(f"KeywordExtractor initialization failed: {e}, will use fallback matching")
     
     def merge_search_results(
         self,
@@ -205,16 +213,83 @@ class SearchResultProcessor:
             
             total_weight += weight
             keyword_lower = keyword.lower()
+            is_matched = False
+            match_type = "exact"  # exact, partial, compound
             
+            # Phase 3: 1. 직접 문자열 매칭
             if keyword_lower in doc_content_lower:
                 matched_keywords.append(keyword)
                 matched_weight += weight
+                is_matched = True
+                match_type = "exact"
                 
                 keyword_count = doc_content_lower.count(keyword_lower)
                 if keyword_count > 1:
                     matched_weight += weight * 0.1 * min(2, keyword_count - 1)
+            
+            # Phase 3: 2. 형태소 분석 기반 부분 매칭 (직접 매칭이 없는 경우)
+            if not is_matched and self.keyword_extractor:
+                try:
+                    # 키워드의 형태소 분석
+                    keyword_morphs = self.keyword_extractor._okt.morphs(keyword) if self.keyword_extractor._okt else []
+                    keyword_nouns = self.keyword_extractor._okt.nouns(keyword) if self.keyword_extractor._okt else []
+                    
+                    # 문서 내용의 형태소 분석 (일부만)
+                    doc_sample = doc_content[:1000]  # 성능 최적화를 위해 일부만 분석
+                    doc_morphs = self.keyword_extractor._okt.morphs(doc_sample) if self.keyword_extractor._okt else []
+                    doc_nouns = self.keyword_extractor._okt.nouns(doc_sample) if self.keyword_extractor._okt else []
+                    
+                    # 형태소 기반 부분 매칭 확인
+                    if keyword_morphs:
+                        matched_morphs = sum(1 for morph in keyword_morphs if morph in doc_morphs)
+                        morph_ratio = matched_morphs / len(keyword_morphs) if keyword_morphs else 0.0
+                        
+                        if morph_ratio >= 0.6:  # 60% 이상 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * morph_ratio * 0.7  # 부분 매칭은 70% 가중치
+                            is_matched = True
+                            match_type = "partial"
+                    
+                    # 명사 기반 매칭 확인
+                    if not is_matched and keyword_nouns:
+                        matched_nouns = sum(1 for noun in keyword_nouns if noun in doc_nouns)
+                        noun_ratio = matched_nouns / len(keyword_nouns) if keyword_nouns else 0.0
+                        
+                        if noun_ratio >= 0.5:  # 50% 이상 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * noun_ratio * 0.6  # 명사 매칭은 60% 가중치
+                            is_matched = True
+                            match_type = "partial"
+                    
+                except Exception as e:
+                    self.logger.debug(f"Morphological matching error for keyword '{keyword}': {e}")
+            
+            # Phase 3: 3. 복합어 분리 및 매칭 (직접 매칭이 없는 경우)
+            if not is_matched:
+                # 복합어 패턴 (예: "손해배상" → "손해", "배상")
+                compound_patterns = [
+                    (r'손해배상', ['손해', '배상']),
+                    (r'불법행위', ['불법', '행위']),
+                    (r'계약해지', ['계약', '해지']),
+                    (r'계약해제', ['계약', '해제']),
+                    (r'손해배상청구권', ['손해배상', '청구권', '손해', '배상']),
+                ]
                 
-                # 개선 #2: 법률 용어 보너스 점수 추가
+                for pattern, parts in compound_patterns:
+                    if re.search(pattern, keyword):
+                        # 복합어의 구성 요소가 모두 문서에 있는지 확인
+                        matched_parts = sum(1 for part in parts if part in doc_content_lower)
+                        part_ratio = matched_parts / len(parts) if parts else 0.0
+                        
+                        if part_ratio >= 0.7:  # 70% 이상 구성 요소 매칭
+                            matched_keywords.append(keyword)
+                            matched_weight += weight * part_ratio * 0.8  # 복합어 매칭은 80% 가중치
+                            is_matched = True
+                            match_type = "compound"
+                            break
+            
+            # 개선 #2: 법률 용어 보너스 점수 추가 (매칭된 경우에만)
+            if is_matched:
                 for pattern, bonus_multiplier in legal_term_patterns:
                     if re.search(pattern, keyword):
                         matched_weight += weight * (bonus_multiplier - 1.0) * 0.3

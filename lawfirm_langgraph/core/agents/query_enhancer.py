@@ -430,24 +430,65 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화)
+            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화 - Phase 5: 고급 키워드 매칭 기법 반영)
             def build_keyword_expansion_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 core_keywords = prev_output.get("core_keywords", [])
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
+                query_type_value = initial_input.get("query_type") if isinstance(initial_input, dict) else query_type
 
-                return f"""키워드 확장:
+                return f"""키워드 확장 (고급 매칭 기법 적용):
 
 쿼리: {query_value}
+유형: {query_type_value}
 핵심 키워드: {', '.join(core_keywords[:5]) if core_keywords else "없음"}
+
+**다층 키워드 매칭 시스템**:
+1. **계층적 키워드 매칭** (가중치 우선순위):
+   - Level 1: 직접 문자열 매칭 (100% 가중치) - 정확한 키워드
+   - Level 2: 형태소 분석 기반 매칭 (80% 가중치) - 어간/어미 분리
+   - Level 3: 의미 기반 매칭 (70% 가중치) - 동의어/유의어
+   - Level 4: 확장 키워드 매칭 (60% 가중치) - 관련 용어
+
+2. **키워드 그룹 매칭**:
+   - 관련 키워드를 그룹으로 묶어 매칭
+   - 그룹 내 일부 키워드 매칭 시 부분 점수 부여
+   - 예: "계약" 그룹 → ["계약서", "계약관계", "계약당사자", "계약조건"]
+
+3. **동적 키워드 가중치** (문서 유형별):
+   - 법령 조문: 법령명/조문번호 가중치 증가
+   - 판례: 사건명/법원 가중치 증가
+   - 계약서: 계약 관련 용어 가중치 증가
+
+**컨텍스트 기반 키워드 매칭**:
+- 문서의 주제와 키워드의 관련성 분석
+- 쿼리 전체와 문서의 의미적 유사도 고려
+- 문서 구조 기반 매칭 (법령: 조문번호 우선, 판례: 사건명 우선)
+
+**고급 키워드 확장 기법**:
+1. **도메인 특화 확장**: 법률 분야별 전문 사전 활용
+2. **계층적 확장**: 상위 개념 → 하위 개념 (예: "계약" → "매매계약", "임대차계약")
+3. **역방향 확장**: 검색 결과에서 자주 나타나는 키워드 역추적
 
 응답 형식 (JSON만):
 {{
     "expanded_keywords": ["확장1", "확장2", "확장3"],
     "synonyms": ["동의어1", "동의어2"],
-    "keyword_variants": ["변형1", "변형2"]
+    "keyword_variants": ["변형1", "변형2"],
+    "keyword_groups": {{
+        "그룹명1": ["키워드1", "키워드2", "키워드3"],
+        "그룹명2": ["키워드4", "키워드5"]
+    }},
+    "hierarchical_keywords": {{
+        "상위개념": ["하위개념1", "하위개념2"]
+    }},
+    "weighted_keywords": {{
+        "키워드1": 1.0,
+        "키워드2": 0.8,
+        "키워드3": 0.7
+    }}
 }}
 """
 

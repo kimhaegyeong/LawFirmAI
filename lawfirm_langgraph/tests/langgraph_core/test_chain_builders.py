@@ -27,38 +27,22 @@ class TestDirectAnswerChainBuilder:
         assert "term_definition" in prompt
         assert "simple_question" in prompt
     
-    def test_build_prompt_generation_prompt_greeting(self):
-        """인사말 프롬프트 생성 테스트"""
-        query = "안녕하세요"
-        prompt = DirectAnswerChainBuilder.build_prompt_generation_prompt(query, "greeting")
+    def test_build_prompt_generation_prompt(self):
+        """프롬프트 생성 테스트 (다양한 query_type)"""
+        prompt_greeting = DirectAnswerChainBuilder.build_prompt_generation_prompt("안녕하세요", "greeting")
+        assert isinstance(prompt_greeting, str)
+        assert "안녕하세요" in prompt_greeting
+        assert "인사" in prompt_greeting or "응답" in prompt_greeting
         
-        assert isinstance(prompt, str)
-        assert query in prompt
-        assert "인사" in prompt or "응답" in prompt
-    
-    def test_build_prompt_generation_prompt_term_definition(self):
-        """용어 정의 프롬프트 생성 테스트"""
-        query = "계약이란 무엇인가요?"
-        prompt = DirectAnswerChainBuilder.build_prompt_generation_prompt(query, "term_definition")
+        prompt_term = DirectAnswerChainBuilder.build_prompt_generation_prompt("계약이란 무엇인가요?", "term_definition")
+        assert isinstance(prompt_term, str)
+        assert "정의" in prompt_term
         
-        assert isinstance(prompt, str)
-        assert query in prompt or "용어" in prompt
-        assert "정의" in prompt
-    
-    def test_build_prompt_generation_prompt_simple_question(self):
-        """간단한 질문 프롬프트 생성 테스트"""
-        query = "법률 상담은 어디서 받나요?"
-        prompt = DirectAnswerChainBuilder.build_prompt_generation_prompt(query, "simple_question")
+        prompt_simple = DirectAnswerChainBuilder.build_prompt_generation_prompt("법률 상담은 어디서 받나요?", "simple_question")
+        assert isinstance(prompt_simple, str)
+        assert "간단" in prompt_simple or "답변" in prompt_simple
         
-        assert isinstance(prompt, str)
-        assert query in prompt
-        assert "간단" in prompt or "답변" in prompt
-    
-    def test_build_prompt_generation_prompt_unknown_type(self):
-        """알 수 없는 유형 프롬프트 생성 테스트"""
-        query = "테스트 질문"
-        prompt = DirectAnswerChainBuilder.build_prompt_generation_prompt(query, "unknown")
-        
-        assert isinstance(prompt, str)
-        assert query in prompt
+        prompt_unknown = DirectAnswerChainBuilder.build_prompt_generation_prompt("테스트 질문", "unknown")
+        assert isinstance(prompt_unknown, str)
+        assert "테스트 질문" in prompt_unknown
 

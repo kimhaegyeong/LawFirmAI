@@ -2313,7 +2313,6 @@ class AnswerFormatterHandler:
             # Config 및 connector 인스턴스 지연 초기화 (os 변수 오류 방지)
             if not self._config_initialized:
                 try:
-                    import os
                     from core.utils.config import Config
                     from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
                     self._config = Config()

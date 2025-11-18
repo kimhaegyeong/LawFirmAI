@@ -17,13 +17,20 @@ class KeywordExtractor:
     형태소 분석을 활용하여 조사/어미를 자동 제거하고 핵심 키워드를 추출합니다.
     """
     
-    # 기본 불용어 목록 (클래스 변수)
+    # 기본 불용어 목록 (클래스 변수) - 개선: 불용어 리스트 확장
     BASIC_STOPWORDS: Set[str] = {
+        # 기본 조사
         '에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은',
         '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고',
         '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등',
+        # 질문/요청 표현
         '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문',
-        '답변', '알려주세요', '알려주시기', '바랍니다'
+        '답변', '알려주세요', '알려주시기', '바랍니다',
+        # 추가 불용어 (개선)
+        '인한', '찾아주세요', '찾아', '주세요', '주시기', '부탁', '드립니다',
+        '합니다', '입니다', '인가요', '인지', '인가', '인지요', '에 대해',
+        '에 대해서', '에 관한', '에 대한', '에 관하여', '로 인한', '로 인해',
+        '으로 인한', '으로 인해', '때문', '때문에', '위해서', '위하여'
     }
     
     # 조사 패턴 (정규식)
@@ -40,6 +47,27 @@ class KeywordExtractor:
     ARTICLE_PATTERNS = [
         re.compile(r'제\s*\d+\s*조'),
         re.compile(r'\d+\s*조'),
+    ]
+    
+    # 법률 용어 복합어 패턴 (개선: 복합어 인식 강화)
+    LEGAL_COMPOUND_PATTERNS = [
+        re.compile(r'소멸시효'),
+        re.compile(r'손해배상'),
+        re.compile(r'불법행위'),
+        re.compile(r'계약해지'),
+        re.compile(r'계약해제'),
+        re.compile(r'손해배상청구권'),
+        re.compile(r'원상회복'),
+        re.compile(r'이행지체'),
+        re.compile(r'이행불능'),
+        re.compile(r'채무불이행'),
+        re.compile(r'동시이행항변권'),
+        re.compile(r'계약위반'),
+        re.compile(r'계약불이행'),
+        re.compile(r'해지권'),
+        re.compile(r'해제권'),
+        re.compile(r'약정해제권'),
+        re.compile(r'법정해제권'),
     ]
     
     # 허용할 품사 태그 (형태소 분석용)
@@ -144,8 +172,20 @@ class KeywordExtractor:
                     keywords.append(article_text)
                     break
         
+        # 법률 용어 복합어 추출 (개선: 복합어 인식 강화)
+        for pattern in self.LEGAL_COMPOUND_PATTERNS:
+            compound_match = pattern.search(query)
+            if compound_match:
+                compound_term = compound_match.group().replace(' ', '').strip()
+                if compound_term not in keywords:
+                    keywords.append(compound_term)
+        
         # 형태소 분석으로 핵심 키워드 추출
         for word, pos in pos_tags:
+            # 불용어 필터링 (개선)
+            if word in self.BASIC_STOPWORDS:
+                continue
+            
             # 허용된 품사만 선택
             if pos in self.ALLOWED_POS_TAGS:
                 # 2자 이상이고 중복이 아닌 경우
@@ -195,6 +235,14 @@ class KeywordExtractor:
                     keywords.append(article_text)
                     break
         
+        # 법률 용어 복합어 추출 (개선: 복합어 인식 강화)
+        for pattern in self.LEGAL_COMPOUND_PATTERNS:
+            compound_match = pattern.search(query)
+            if compound_match:
+                compound_term = compound_match.group().replace(' ', '').strip()
+                if compound_term not in keywords:
+                    keywords.append(compound_term)
+        
         # 나머지 키워드 추출
         for w in words[:10]:  # 상위 10개 단어 검토
             w_clean = self.JOSA_PATTERN.sub('', w.strip())
@@ -202,6 +250,7 @@ class KeywordExtractor:
             if not w_clean or len(w_clean) < 2:
                 continue
             
+            # 불용어 필터링 (개선: 확장된 불용어 리스트 사용)
             if w_clean in self.BASIC_STOPWORDS or w_clean in keywords:
                 continue
             

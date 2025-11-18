@@ -136,6 +136,10 @@ class ResultMerger:
 class ResultRanker:
     """검색 결과 순위 결정기"""
     
+    # 클래스 변수: SentenceTransformer 모델 캐싱 (성능 최적화)
+    _semantic_model = None
+    _semantic_model_name = None
+    
     def __init__(self, use_cross_encoder: bool = True):
         """순위 결정기 초기화"""
         self.logger = logging.getLogger(__name__)
@@ -155,6 +159,34 @@ class ResultRanker:
                 self.use_cross_encoder = False
         
         self.logger.info(f"ResultRanker initialized (cross_encoder={self.use_cross_encoder})")
+    
+    @classmethod
+    def _get_semantic_model(cls):
+        """SentenceTransformer 모델 가져오기 (캐싱)"""
+        if cls._semantic_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                import os
+                
+                if cls._semantic_model_name is None:
+                    model_name = os.getenv("EMBEDDING_MODEL")
+                    if model_name is None:
+                        try:
+                            from ...utils.config import Config
+                        except ImportError:
+                            from core.utils.config import Config
+                        config = Config()
+                        model_name = config.embedding_model
+                    cls._semantic_model_name = model_name
+                
+                cls._semantic_model = SentenceTransformer(cls._semantic_model_name)
+                logger = logging.getLogger(__name__)
+                logger.debug(f"Semantic model loaded and cached: {cls._semantic_model_name}")
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.debug(f"Failed to load semantic model: {e}")
+                return None
+        return cls._semantic_model
     
     def rank_results(self, results: List[Any], top_k: int = 10, query: str = "") -> List[Any]:
         """
@@ -213,10 +245,19 @@ class ResultRanker:
         # Cross-Encoder reranking 적용 (상위 후보만)
         if self.use_cross_encoder and self.cross_encoder and len(ranked_results) > 0:
             try:
+                # extracted_keywords 추출 (metadata에서)
+                extracted_keywords = None
+                for result in ranked_results:
+                    if isinstance(result.metadata, dict):
+                        extracted_keywords = result.metadata.get("extracted_keywords", [])
+                        if extracted_keywords:
+                            break
+                
                 reranked_results = self.cross_encoder_rerank(
                     ranked_results[:top_k * 2],  # 상위 후보만 rerank
                     query=query,  # query 전달
-                    top_k=top_k
+                    top_k=top_k,
+                    extracted_keywords=extracted_keywords
                 )
                 ranked_results = reranked_results + ranked_results[top_k * 2:]
             except Exception as e:
@@ -229,15 +270,17 @@ class ResultRanker:
         self,
         results: List[MergedResult],
         query: str = "",
-        top_k: int = 10
+        top_k: int = 10,
+        extracted_keywords: List[str] = None
     ) -> List[MergedResult]:
         """
-        Cross-Encoder를 사용한 정확한 재정렬
+        Cross-Encoder를 사용한 정확한 재정렬 (Phase 2: Keyword Coverage 고려)
         
         Args:
             results: 재정렬할 MergedResult 리스트
             query: 검색 쿼리 (우선순위: 파라미터 > metadata)
             top_k: 반환할 최대 결과 수
+            extracted_keywords: 추출된 키워드 리스트 (Keyword Coverage 계산용)
             
         Returns:
             List[MergedResult]: 재정렬된 결과
@@ -267,6 +310,14 @@ class ResultRanker:
             self.logger.warning("No query provided for Cross-Encoder reranking, using standard ranking")
             return results[:top_k]
         
+        # extracted_keywords 추출 (metadata에서)
+        if extracted_keywords is None:
+            for result in results:
+                if isinstance(result.metadata, dict):
+                    extracted_keywords = result.metadata.get("extracted_keywords", [])
+                    if extracted_keywords:
+                        break
+        
         try:
             # query-document 쌍 생성
             pairs = []
@@ -284,8 +335,35 @@ class ResultRanker:
                 original_score = result.score
                 cross_encoder_score = float(score)
                 
-                # 가중 평균 (기존 점수 60%, Cross-Encoder 점수 40%) - 개선: Cross-Encoder 비중 증가
-                combined_score = 0.6 * original_score + 0.4 * cross_encoder_score
+                # Phase 2: Keyword Coverage 기반 보너스 계산
+                keyword_bonus = 0.0
+                if extracted_keywords:
+                    # 문서에서 키워드 매칭 확인
+                    text_lower = result.text.lower()
+                    matched_keywords = [kw for kw in extracted_keywords if kw.lower() in text_lower]
+                    
+                    if matched_keywords:
+                        # Keyword Coverage 계산
+                        keyword_coverage = len(matched_keywords) / len(extracted_keywords)
+                        
+                        # 핵심 키워드(상위 3개) 매칭 확인
+                        core_keywords = extracted_keywords[:3] if len(extracted_keywords) >= 3 else extracted_keywords
+                        core_matched = sum(1 for kw in core_keywords if kw.lower() in text_lower)
+                        core_ratio = core_matched / len(core_keywords) if core_keywords else 0.0
+                        
+                        # Keyword Coverage 보너스 (최대 15%)
+                        coverage_bonus = keyword_coverage * 0.15
+                        
+                        # 핵심 키워드 매칭 보너스 (최대 10%)
+                        core_bonus = core_ratio * 0.10
+                        
+                        keyword_bonus = coverage_bonus + core_bonus
+                
+                # 가중 평균 (기존 점수 60%, Cross-Encoder 점수 40%)
+                base_combined_score = 0.6 * original_score + 0.4 * cross_encoder_score
+                
+                # Keyword Coverage 보너스 적용
+                combined_score = base_combined_score * (1.0 + keyword_bonus)
                 
                 # MergedResult 업데이트 (새 객체 생성)
                 updated_result = MergedResult(
@@ -295,7 +373,8 @@ class ResultRanker:
                     metadata={
                         **result.metadata,
                         "cross_encoder_score": cross_encoder_score,
-                        "original_score": original_score
+                        "original_score": original_score,
+                        "keyword_bonus": keyword_bonus
                     }
                 )
                 reranked_results.append(updated_result)
@@ -374,11 +453,11 @@ class ResultRanker:
                 core_keyword_ratio = core_keywords_matched / min(3, len(extracted_keywords)) if extracted_keywords else 0.0
                 core_keyword_bonus = core_keyword_ratio * 0.25  # 최대 25% 증가
             
-            # 키워드 커버리지 보너스
-            coverage_bonus = keyword_coverage * 0.15  # 최대 15% 증가
+            # 키워드 커버리지 보너스 (개선: Phase 1 - 가중치 증가)
+            coverage_bonus = keyword_coverage * 0.20  # 최대 20% 증가 (0.15 → 0.20)
             
-            # 키워드 매칭 점수 보너스
-            keyword_bonus = keyword_score * 0.2  # 최대 20% 증가
+            # 키워드 매칭 점수 보너스 (개선: Phase 1 - 가중치 증가)
+            keyword_bonus = keyword_score * 0.30  # 최대 30% 증가 (0.2 → 0.3)
             
             # 총 키워드 보너스 적용
             current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
@@ -525,18 +604,108 @@ class ResultRanker:
         # 다양성 점수 계산 (다차원 다양성 통합)
         metrics["diversity_score"] = self._calculate_comprehensive_diversity_score(results)
         
-        # 키워드 커버리지 점수 계산
+        # 키워드 커버리지 점수 계산 (Phase 3: 의미적 유사도 고려)
         if extracted_keywords:
             covered_keywords = set()
-            for doc in results:
-                content = doc.get("content", doc.get("text", "")).lower()
-                if isinstance(content, str):
-                    for keyword in extracted_keywords:
-                        if keyword.lower() in content:
-                            covered_keywords.add(keyword.lower())
+            semantic_matches = {}  # 의미적 매칭 점수
             
-            if extracted_keywords:
-                metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
+            # Phase 3: 임베딩 모델을 사용한 의미적 유사도 기반 매칭 (성능 최적화: 모델 캐싱)
+            use_semantic_matching = False
+            model = None
+            if SKLEARN_AVAILABLE:
+                model = self._get_semantic_model()
+                if model is not None:
+                    use_semantic_matching = True
+                    self.logger.debug("Using semantic similarity for keyword matching (cached model)")
+                else:
+                    self.logger.debug("Semantic model not available, using string matching only")
+            else:
+                self.logger.debug("sklearn not available, using string matching only")
+            
+            if use_semantic_matching:
+                try:
+                    # 성능 최적화: 배치 임베딩 생성 및 선택적 의미 기반 매칭
+                    # 1. 직접 문자열 매칭 먼저 수행 (빠른 필터링)
+                    for doc in results:
+                        content = doc.get("content", doc.get("text", ""))
+                        if not isinstance(content, str) or not content:
+                            continue
+                        
+                        content_lower = content.lower()
+                        
+                        # 직접 문자열 매칭
+                        for keyword in extracted_keywords:
+                            if keyword.lower() in content_lower:
+                                covered_keywords.add(keyword.lower())
+                    
+                    # 2. 의미 기반 매칭이 필요한 경우만 수행 (직접 매칭이 부족한 경우)
+                    # Keyword Coverage가 이미 높으면 의미 기반 매칭 생략
+                    current_coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+                    use_semantic_if_needed = current_coverage < 0.7  # 70% 미만일 때만 의미 기반 매칭
+                    
+                    if use_semantic_if_needed:
+                        # 키워드 임베딩 생성 (한 번만)
+                        keyword_embeddings = model.encode(extracted_keywords, show_progress_bar=False)
+                        
+                        # 문서 임베딩 배치 생성 (성능 최적화)
+                        doc_texts = []
+                        doc_indices = []
+                        for idx, doc in enumerate(results):
+                            content = doc.get("content", doc.get("text", ""))
+                            if isinstance(content, str) and content:
+                                doc_text = content[:512] if len(content) > 512 else content
+                                doc_texts.append(doc_text)
+                                doc_indices.append(idx)
+                        
+                        if doc_texts:
+                            # 배치 임베딩 생성 (개별 생성 대신 배치로 처리)
+                            doc_embeddings = model.encode(doc_texts, show_progress_bar=False, batch_size=8)
+                            
+                            # 배치 유사도 계산
+                            for doc_idx, doc_embedding in zip(doc_indices, doc_embeddings):
+                                doc = results[doc_idx]
+                                try:
+                                    # 코사인 유사도 계산
+                                    similarities = cosine_similarity(
+                                        [doc_embedding],
+                                        keyword_embeddings
+                                    )[0]
+                                    
+                                    for idx, similarity in enumerate(similarities):
+                                        if similarity >= 0.5:  # 의미적 유사도 임계값
+                                            keyword = extracted_keywords[idx]
+                                            # 직접 매칭이 없고 의미적 매칭만 있는 경우
+                                            if keyword.lower() not in covered_keywords:
+                                                if keyword not in semantic_matches:
+                                                    semantic_matches[keyword] = similarity
+                                                else:
+                                                    semantic_matches[keyword] = max(semantic_matches[keyword], similarity)
+                                except Exception as e:
+                                    self.logger.debug(f"Semantic matching error for document: {e}")
+                                    continue
+                    else:
+                        self.logger.debug(f"Skipping semantic matching (coverage already high: {current_coverage:.2f})")
+                    
+                    # 의미적 매칭도 포함하여 계산 (의미적 매칭은 80% 가중치로 증가)
+                    total_coverage = len(covered_keywords) + len(semantic_matches) * 0.8
+                    if extracted_keywords:
+                        metrics["keyword_coverage"] = min(1.0, total_coverage / len(extracted_keywords))
+                    
+                except Exception as e:
+                    self.logger.warning(f"Semantic keyword matching failed: {e}, falling back to string matching")
+                    use_semantic_matching = False
+            
+            # 폴백: 기존 문자열 매칭 방식
+            if not use_semantic_matching:
+                for doc in results:
+                    content = doc.get("content", doc.get("text", "")).lower()
+                    if isinstance(content, str):
+                        for keyword in extracted_keywords:
+                            if keyword.lower() in content:
+                                covered_keywords.add(keyword.lower())
+                
+                if extracted_keywords:
+                    metrics["keyword_coverage"] = len(covered_keywords) / len(extracted_keywords)
         
         return metrics
     

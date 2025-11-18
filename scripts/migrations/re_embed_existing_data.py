@@ -399,7 +399,14 @@ def main():
     
     # 임베더 초기화
     logger.info("임베더 초기화 중...")
-    embedder = SentenceEmbedder()
+    import os
+    model_name = os.getenv("EMBEDDING_MODEL")
+    if model_name:
+        logger.info(f"Using embedding model from environment: {model_name}")
+        embedder = SentenceEmbedder(model_name)
+    else:
+        logger.info("Using default embedding model")
+        embedder = SentenceEmbedder()
     
     # 고유한 문서 목록 조회
     logger.info("고유한 문서 목록 조회 중...")
@@ -418,19 +425,37 @@ def main():
         version_manager = EmbeddingVersionManager(db_path)
         
         # 활성 버전 조회 또는 생성 (한 번만 수행)
-        active_version = version_manager.get_active_version(args.chunking_strategy)
-        if not active_version:
-            model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
-            version_name = f"v1.0.0-{args.chunking_strategy}"
-            version_id = version_manager.register_version(
-                version_name=version_name,
-                chunking_strategy=args.chunking_strategy,
-                model_name=model_name,
-                description=f"{args.chunking_strategy} 청킹 전략 (재임베딩)",
-                set_active=True
-            )
+        model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+        
+        # 모델명을 포함한 고유한 버전명 생성
+        model_short = model_name.split('/')[-1].replace('-', '_')[:20]  # 모델명에서 짧은 식별자 추출
+        version_name = f"v2.0.0-{args.chunking_strategy}-{model_short}"
+        
+        # 기존 버전 확인
+        existing_version = version_manager.get_version_by_name(version_name)
+        if existing_version:
+            version_id = existing_version['id']
+            logger.info(f"기존 버전 사용: {version_name} (ID: {version_id})")
         else:
-            version_id = active_version['id']
+            # 새 버전 생성
+            try:
+                version_id = version_manager.register_version(
+                    version_name=version_name,
+                    chunking_strategy=args.chunking_strategy,
+                    model_name=model_name,
+                    description=f"{args.chunking_strategy} 청킹 전략, 모델: {model_name}",
+                    set_active=True
+                )
+                logger.info(f"새 버전 생성: {version_name} (ID: {version_id})")
+            except Exception as e:
+                # 버전 생성 실패 시 기존 활성 버전 사용
+                logger.warning(f"버전 생성 실패: {e}, 기존 활성 버전 사용 시도")
+                active_version = version_manager.get_active_version(args.chunking_strategy)
+                if active_version:
+                    version_id = active_version['id']
+                    logger.info(f"기존 활성 버전 사용: {active_version['version_name']} (ID: {version_id})")
+                else:
+                    raise
         
         logger.info(f"사용할 버전 ID: {version_id}")
         

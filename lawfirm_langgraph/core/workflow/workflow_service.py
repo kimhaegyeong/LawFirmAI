@@ -5,6 +5,7 @@ LangGraph Workflow Service
 """
 
 import asyncio
+import gc
 import logging
 import os
 import sys
@@ -1814,6 +1815,12 @@ class LangGraphWorkflowService:
             }
 
             self.logger.info(f"Query processed successfully in {processing_time:.2f}s")
+            
+            # 메모리 정리: 쿼리 처리 완료 후 가비지 컬렉션
+            collected = gc.collect()
+            if collected > 0:
+                self.logger.debug(f"Garbage collection after query processing: {collected} objects collected")
+            
             return response
 
         except ValueError as e:

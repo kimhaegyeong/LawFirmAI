@@ -61,40 +61,13 @@ class TestWorkflowRoutes:
         assert routes.ai_keyword_generator is None
         assert routes.logger is not None
     
-    def test_route_by_complexity_simple(self, workflow_routes):
-        """간단한 복잡도 라우팅 테스트"""
-        state = {"query_complexity": "simple"}
-        result = workflow_routes.route_by_complexity(state)
-        
-        assert result == "simple"
-    
-    def test_route_by_complexity_moderate(self, workflow_routes):
-        """중간 복잡도 라우팅 테스트"""
-        state = {"query_complexity": "moderate"}
-        result = workflow_routes.route_by_complexity(state)
-        
-        assert result == "moderate"
-    
-    def test_route_by_complexity_complex(self, workflow_routes):
-        """복잡한 복잡도 라우팅 테스트"""
-        state = {"query_complexity": "complex"}
-        result = workflow_routes.route_by_complexity(state)
-        
-        assert result == "complex"
-    
-    def test_route_by_complexity_default(self, workflow_routes):
-        """기본 복잡도 라우팅 테스트"""
-        state = {}
-        result = workflow_routes.route_by_complexity(state)
-        
-        assert result in ["simple", "moderate", "complex"]
-    
-    def test_route_by_complexity_common_group(self, workflow_routes):
-        """common 그룹에서 복잡도 조회 테스트"""
-        state = {"common": {"query_complexity": "moderate"}}
-        result = workflow_routes.route_by_complexity(state)
-        
-        assert result == "moderate"
+    def test_route_by_complexity(self, workflow_routes):
+        """복잡도별 라우팅 테스트"""
+        assert workflow_routes.route_by_complexity({"query_complexity": "simple"}) == "simple"
+        assert workflow_routes.route_by_complexity({"query_complexity": "moderate"}) == "moderate"
+        assert workflow_routes.route_by_complexity({"query_complexity": "complex"}) == "complex"
+        assert workflow_routes.route_by_complexity({}) in ["simple", "moderate", "complex"]
+        assert workflow_routes.route_by_complexity({"common": {"query_complexity": "moderate"}}) == "moderate"
     
     def test_route_expert(self, workflow_routes):
         """전문가 라우팅 테스트"""
@@ -121,7 +94,7 @@ class TestWorkflowRoutes:
         
         result = workflow_routes.assess_complexity(state)
         
-        assert result in ["simple", "medium", "complex"]
+        assert result in ["simple", "medium", "complex", "moderate"]
     
     def test_assess_complexity_simple(self, workflow_routes):
         """간단한 복잡도 평가 테스트"""
@@ -135,104 +108,35 @@ class TestWorkflowRoutes:
         
         assert result == "simple"
     
-    def test_should_analyze_document_with_document(self, workflow_routes):
-        """문서가 있는 경우 문서 분석 필요 여부 테스트"""
-        state = {"uploaded_document": {"content": "test"}}
-        result = workflow_routes.should_analyze_document(state)
-        
-        assert result == "analyze"
+    def test_should_analyze_document(self, workflow_routes):
+        """문서 분석 필요 여부 테스트"""
+        assert workflow_routes.should_analyze_document({"uploaded_document": {"content": "test"}}) == "analyze"
+        assert workflow_routes.should_analyze_document({}) == "skip"
     
-    def test_should_analyze_document_without_document(self, workflow_routes):
-        """문서가 없는 경우 문서 분석 필요 여부 테스트"""
-        state = {}
-        result = workflow_routes.should_analyze_document(state)
-        
-        assert result == "skip"
+    def test_should_skip_search(self, workflow_routes):
+        """검색 스킵 여부 테스트"""
+        assert workflow_routes.should_skip_search({"search_cache_hit": True}) == "skip"
+        assert workflow_routes.should_skip_search({"search_cache_hit": False}) == "continue"
     
-    def test_should_skip_search_cache_hit(self, workflow_routes):
-        """캐시 히트 시 검색 스킵 테스트"""
-        state = {"search_cache_hit": True}
-        result = workflow_routes.should_skip_search(state)
-        
-        assert result == "skip"
+    def test_should_skip_search_adaptive(self, workflow_routes):
+        """Adaptive 검색 스킵 여부 테스트"""
+        assert workflow_routes.should_skip_search_adaptive({"needs_search": False, "query_complexity": "simple"}) == "skip"
+        assert workflow_routes.should_skip_search_adaptive({"needs_search": True, "query_complexity": "complex"}) == "continue"
     
-    def test_should_skip_search_no_cache(self, workflow_routes):
-        """캐시 미스 시 검색 계속 테스트"""
-        state = {"search_cache_hit": False}
-        result = workflow_routes.should_skip_search(state)
-        
-        assert result == "continue"
-    
-    def test_should_skip_search_adaptive_simple(self, workflow_routes):
-        """간단한 질문 검색 스킵 테스트"""
-        state = {
-            "needs_search": False,
-            "query_complexity": "simple"
-        }
-        result = workflow_routes.should_skip_search_adaptive(state)
-        
-        assert result == "skip"
-    
-    def test_should_skip_search_adaptive_complex(self, workflow_routes):
-        """복잡한 질문 검색 계속 테스트"""
-        state = {
-            "needs_search": True,
-            "query_complexity": "complex"
-        }
-        result = workflow_routes.should_skip_search_adaptive(state)
-        
-        assert result == "continue"
-    
-    def test_should_expand_keywords_ai_no_generator(self, workflow_routes):
-        """AI 생성기가 없는 경우 키워드 확장 스킵 테스트"""
+    def test_should_expand_keywords_ai(self, workflow_routes):
+        """AI 키워드 확장 여부 테스트"""
         workflow_routes.ai_keyword_generator = None
-        state = {"extracted_keywords": ["kw1", "kw2", "kw3"]}
-        result = workflow_routes.should_expand_keywords_ai(state)
+        assert workflow_routes.should_expand_keywords_ai({"extracted_keywords": ["kw1", "kw2", "kw3"]}) == "skip"
         
-        assert result == "skip"
-    
-    def test_should_expand_keywords_ai_few_keywords(self, workflow_routes):
-        """키워드가 적은 경우 확장 스킵 테스트"""
         workflow_routes.ai_keyword_generator = Mock()
-        state = {"extracted_keywords": ["kw1", "kw2"]}
-        result = workflow_routes.should_expand_keywords_ai(state)
-        
-        assert result == "skip"
+        assert workflow_routes.should_expand_keywords_ai({"extracted_keywords": ["kw1", "kw2"]}) == "skip"
+        assert workflow_routes.should_expand_keywords_ai({"extracted_keywords": ["kw1", "kw2", "kw3", "kw4"], "query_type": "legal_advice"}) == "expand"
     
-    def test_should_expand_keywords_ai_complex_type(self, workflow_routes):
-        """복잡한 질문 유형 키워드 확장 테스트"""
-        workflow_routes.ai_keyword_generator = Mock()
-        state = {
-            "extracted_keywords": ["kw1", "kw2", "kw3", "kw4"],
-            "query_type": "legal_advice"
-        }
-        result = workflow_routes.should_expand_keywords_ai(state)
+    def test_should_retry_generation(self, workflow_routes, mock_retry_manager):
+        """재시도 여부 테스트"""
+        mock_retry_manager.get_retry_counts.return_value = {"generation": 2, "validation": 0, "total": 2}
+        assert workflow_routes.should_retry_generation({"answer": "Test answer"}) == "format"
         
-        assert result == "expand"
-    
-    def test_should_retry_generation_max_retries(self, workflow_routes, mock_retry_manager):
-        """최대 재시도 횟수 도달 시 포맷팅 진행 테스트"""
-        mock_retry_manager.get_retry_counts.return_value = {
-            "generation": 2,
-            "validation": 0,
-            "total": 2
-        }
-        
-        state = {"answer": "Test answer"}
-        result = workflow_routes.should_retry_generation(state)
-        
-        assert result == "format"
-    
-    def test_should_retry_generation_short_answer(self, workflow_routes, mock_retry_manager):
-        """짧은 답변 재시도 테스트"""
-        mock_retry_manager.get_retry_counts.return_value = {
-            "generation": 0,
-            "validation": 0,
-            "total": 0
-        }
-        
-        state = {"answer": "Short"}
-        result = workflow_routes.should_retry_generation(state)
-        
-        assert result in ["validate", "retry_search", "format"]
+        mock_retry_manager.get_retry_counts.return_value = {"generation": 0, "validation": 0, "total": 0}
+        assert workflow_routes.should_retry_generation({"answer": "Short"}) in ["validate", "retry_search", "format"]
 

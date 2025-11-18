@@ -17,27 +17,20 @@ from lawfirm_langgraph.langgraph_core.processing.response_parsers import (
 class TestResponseParser:
     """ResponseParser 테스트"""
     
-    def test_extract_json_valid(self):
-        """유효한 JSON 추출 테스트"""
-        response = 'Here is the result: {"key": "value", "number": 123}'
-        json_str = ResponseParser.extract_json(response)
+    def test_extract_json(self):
+        """JSON 추출 테스트 (유효한, 중첩된, 없는 경우)"""
+        valid_response = 'Here is the result: {"key": "value", "number": 123}'
+        json_str_valid = ResponseParser.extract_json(valid_response)
+        assert json_str_valid is not None
+        assert "key" in json_str_valid
         
-        assert json_str is not None
-        assert "key" in json_str
-    
-    def test_extract_json_no_json(self):
-        """JSON이 없는 응답 테스트"""
-        response = "This is a plain text response without JSON."
-        json_str = ResponseParser.extract_json(response)
+        nested_response = 'Result: {"outer": {"inner": "value"}}'
+        json_str_nested = ResponseParser.extract_json(nested_response)
+        assert json_str_nested is not None
         
-        assert json_str is None
-    
-    def test_extract_json_nested(self):
-        """중첩된 JSON 추출 테스트"""
-        response = 'Result: {"outer": {"inner": "value"}}'
-        json_str = ResponseParser.extract_json(response)
-        
-        assert json_str is not None
+        no_json_response = "This is a plain text response without JSON."
+        json_str_no_json = ResponseParser.extract_json(no_json_response)
+        assert json_str_no_json is None
     
     def test_parse_json_safe_valid(self):
         """유효한 JSON 파싱 테스트"""
@@ -90,24 +83,17 @@ class TestClassificationParser:
         assert result["question_type"] == "legal_advice"
         assert result["confidence"] == 0.9
     
-    def test_parse_question_type_response_invalid(self):
-        """유효하지 않은 질문 유형 응답 파싱 테스트"""
-        response = "This is not a valid JSON response."
+    def test_parse_question_type_response_invalid_or_missing(self):
+        """유효하지 않거나 필수 필드가 없는 질문 유형 응답 파싱 테스트"""
+        invalid_response = "This is not a valid JSON response."
+        result_invalid = ClassificationParser.parse_question_type_response(invalid_response)
+        assert isinstance(result_invalid, dict)
+        assert result_invalid["question_type"] == "general_question"
         
-        result = ClassificationParser.parse_question_type_response(response)
-        
-        assert isinstance(result, dict)
-        assert "question_type" in result
-        assert result["question_type"] == "general_question"
-    
-    def test_parse_question_type_response_missing_field(self):
-        """필수 필드가 없는 질문 유형 응답 파싱 테스트"""
-        response = '{"confidence": 0.9}'
-        
-        result = ClassificationParser.parse_question_type_response(response)
-        
-        assert isinstance(result, dict)
-        assert result["question_type"] == "general_question"
+        missing_field_response = '{"confidence": 0.9}'
+        result_missing = ClassificationParser.parse_question_type_response(missing_field_response)
+        assert isinstance(result_missing, dict)
+        assert result_missing["question_type"] == "general_question"
     
     def test_parse_legal_field_response_valid(self):
         """유효한 법률 분야 응답 파싱 테스트"""

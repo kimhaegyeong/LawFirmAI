@@ -95,8 +95,8 @@ class TestNodeIOSpec:
         assert is_valid is False
         assert "answer" in error
     
-    def test_check_field_in_state_nested(self):
-        """State에서 필드 확인 - 중첩 구조 테스트"""
+    def test_check_field_in_state_variations(self):
+        """State에서 필드 확인 테스트 (중첩, 평면, 그룹)"""
         spec = NodeIOSpec(
             node_name="test_node",
             category=NodeCategory.INPUT,
@@ -108,46 +108,14 @@ class TestNodeIOSpec:
             output_state_groups={}
         )
         
-        state = {"input": {"query": "Test query"}}
-        result = spec._check_field_in_state("query", state)
+        state_nested = {"input": {"query": "Test query"}}
+        assert spec._check_field_in_state("query", state_nested) is True
         
-        assert result is True
-    
-    def test_check_field_in_state_flat(self):
-        """State에서 필드 확인 - 평면 구조 테스트"""
-        spec = NodeIOSpec(
-            node_name="test_node",
-            category=NodeCategory.INPUT,
-            description="Test node",
-            required_input={"query": "질문"},
-            optional_input={},
-            output={},
-            required_state_groups={"input"},
-            output_state_groups={}
-        )
+        state_flat = {"query": "Test query"}
+        assert spec._check_field_in_state("query", state_flat) is True
         
-        state = {"query": "Test query"}
-        result = spec._check_field_in_state("query", state)
-        
-        assert result is True
-    
-    def test_check_field_in_state_group(self):
-        """State에서 필드 확인 - 그룹 내부 테스트"""
-        spec = NodeIOSpec(
-            node_name="test_node",
-            category=NodeCategory.INPUT,
-            description="Test node",
-            required_input={"query": "질문"},
-            optional_input={},
-            output={},
-            required_state_groups={"input"},
-            output_state_groups={}
-        )
-        
-        state = {"search": {"query": "Test query"}}
-        result = spec._check_field_in_state("query", state)
-        
-        assert result is True
+        state_group = {"search": {"query": "Test query"}}
+        assert spec._check_field_in_state("query", state_group) is True
 
 
 class TestNodeSpecs:

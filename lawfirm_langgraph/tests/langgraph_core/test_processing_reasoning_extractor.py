@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Processing Reasoning Extractor 테스트
-langgraph_core/processing/reasoning_extractor.py 단위 테스트
+Reasoning Extractor 테스트
+langgraph_core/processing/reasoning_extractor.py 및 data/reasoning_extractor.py 단위 테스트
 """
 
 import pytest
@@ -62,7 +62,7 @@ class TestReasoningExtractor:
         response = """## 📤 출력
 계약 해지는 다음과 같이 가능합니다."""
         
-        result = extractor.extract_answer(response)
+        result = extractor.extract_actual_answer(response)
         
         assert isinstance(result, str)
         assert len(result) > 0
@@ -73,7 +73,7 @@ class TestReasoningExtractor:
         
         response = "계약 해지는 다음과 같이 가능합니다."
         
-        result = extractor.extract_answer(response)
+        result = extractor.extract_actual_answer(response)
         
         assert isinstance(result, str)
     
@@ -81,12 +81,15 @@ class TestReasoningExtractor:
         """답변 품질 검증 테스트"""
         extractor = ReasoningExtractor()
         
-        answer = "계약 해지는 계약서에 명시된 조건에 따라 가능합니다. 민법 제543조에 따르면 계약 해제가 가능합니다."
+        original_answer = "## 🧠 추론 과정\n### Step 1: 분석\n계약 해지는 계약서에 명시된 조건에 따라 가능합니다. 민법 제543조에 따르면 계약 해제가 가능합니다."
+        actual_answer = "계약 해지는 계약서에 명시된 조건에 따라 가능합니다. 민법 제543조에 따르면 계약 해제가 가능합니다."
+        reasoning_info = extractor.extract_reasoning(original_answer)
         
-        result = extractor.validate_answer_quality(answer)
+        result = extractor.verify_extraction_quality(original_answer, actual_answer, reasoning_info)
         
         assert isinstance(result, dict)
-        assert "is_valid" in result or "quality_score" in result
+        assert "is_valid" in result
+        assert "score" in result
     
     def test_clean_reasoning_markers(self):
         """추론 마커 정리 테스트"""
@@ -94,7 +97,7 @@ class TestReasoningExtractor:
         
         text = "## 🧠 추론 과정\n### Step 1: 분석\n내용"
         
-        result = extractor.clean_reasoning_markers(text)
+        result = extractor.clean_reasoning_keywords(text)
         
         assert isinstance(result, str)
 

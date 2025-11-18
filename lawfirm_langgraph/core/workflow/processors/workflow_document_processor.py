@@ -266,6 +266,40 @@ class WorkflowDocumentProcessor:
                     "total_context_length": 0
                 }
             
+            # 개선: Keyword Coverage 기반 필터링 (Phase 1) - 문서 손실 방지 (더 완화)
+            docs_before_filter = len(valid_docs)
+            if extracted_keywords:
+                # 동적 임계값 계산 (검색 결과 수에 따라 조정) - 매우 완화된 기준
+                num_valid_docs = len(valid_docs)
+                if num_valid_docs >= 10:
+                    min_coverage = 0.1  # 개선: 0.2 → 0.1로 더 완화
+                elif num_valid_docs >= 5:
+                    min_coverage = 0.05  # 개선: 0.1 → 0.05로 더 완화
+                else:
+                    min_coverage = 0.0  # 개선: 0.05 → 0.0으로 완전 완화 (결과가 적으면 필터링 안 함)
+                
+                # 문서가 10개 이하인 경우 필터링 건너뛰기 (문서 손실 방지)
+                if num_valid_docs <= 10:
+                    self.logger.debug(
+                        f"🔍 [KEYWORD FILTERING] Skipping keyword coverage filter "
+                        f"(documents={num_valid_docs} <= 10, preventing document loss)"
+                    )
+                else:
+                    valid_docs = self.filter_by_keyword_coverage(
+                        valid_docs,
+                        extracted_keywords,
+                        min_coverage=min_coverage
+                    )
+                
+                # 문서 손실 로깅
+                docs_after_filter = len(valid_docs)
+                if docs_after_filter < docs_before_filter:
+                    lost_count = docs_before_filter - docs_after_filter
+                    self.logger.warning(
+                        f"⚠️ [DOCUMENT LOSS] filter_by_keyword_coverage: {lost_count} documents lost "
+                        f"({docs_before_filter} → {docs_after_filter}, min_coverage={min_coverage})"
+                    )
+            
             sorted_docs = sorted(
                 valid_docs,
                 key=lambda x: (
@@ -275,8 +309,8 @@ class WorkflowDocumentProcessor:
                 reverse=True
             )
             
-            # 개선 8: 프롬프트에 포함할 문서 수 제한 (5-7개)
-            max_docs_for_prompt = 7
+            # 개선 8: 프롬프트에 포함할 문서 수 제한 (문서 손실 방지: 7 → 10으로 증가)
+            max_docs_for_prompt = 10
             
             # 개선 12: 문서 선택 로직 개선 (관련성 우선)
             if select_balanced_documents_func:
@@ -294,6 +328,14 @@ class WorkflowDocumentProcessor:
                 balanced_docs = sorted_docs[:min(max_docs_for_prompt, len(sorted_docs))]
             
             sorted_docs = balanced_docs
+            
+            # 문서 손실 로깅 (개선)
+            if len(sorted_docs) < len(valid_docs):
+                lost_count = len(valid_docs) - len(sorted_docs)
+                self.logger.warning(
+                    f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
+                    f"({len(valid_docs)} → {len(sorted_docs)}, max_docs={max_docs_for_prompt})"
+                )
             
             if not sorted_docs:
                 self.logger.error("build_prompt_optimized_context: sorted_docs is empty after filtering")
@@ -939,6 +981,67 @@ class WorkflowDocumentProcessor:
         except Exception as e:
             self.logger.warning(f"High value document selection failed: {e}, using first {max_docs} documents")
             return documents[:max_docs]
+    
+    def filter_by_keyword_coverage(
+        self,
+        documents: List[Dict[str, Any]],
+        extracted_keywords: List[str],
+        min_coverage: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """Keyword Coverage 기반 필터링 (개선: Phase 1)"""
+        if not documents or not extracted_keywords:
+            return documents
+        
+        filtered = []
+        excluded_count = 0
+        
+        for doc in documents:
+            keyword_coverage = doc.get("keyword_coverage", 0.0)
+            
+            # Keyword Coverage가 임계값 이상인 문서만 포함
+            if keyword_coverage >= min_coverage:
+                filtered.append(doc)
+            else:
+                # 개선: 핵심 키워드 매칭 확인 강화 (문서 내용에서 직접 확인)
+                has_core_keyword = False
+                content = (doc.get("content", "") or doc.get("text", "")).lower()
+                core_keywords = extracted_keywords[:3] if len(extracted_keywords) >= 3 else extracted_keywords
+                
+                # matched_keywords에서 확인
+                matched_keywords = doc.get("matched_keywords", [])
+                if matched_keywords:
+                    has_core_keyword = any(
+                        str(kw).lower() in [str(mk).lower() for mk in matched_keywords] 
+                        for kw in core_keywords if isinstance(kw, str)
+                    )
+                
+                # 문서 내용에서 직접 확인 (matched_keywords가 없는 경우)
+                if not has_core_keyword and content:
+                    has_core_keyword = any(
+                        str(kw).lower() in content 
+                        for kw in core_keywords if isinstance(kw, str) and len(kw) >= 2
+                    )
+                
+                if has_core_keyword:
+                    filtered.append(doc)
+                    self.logger.debug(
+                        f"Document included due to core keyword match: "
+                        f"coverage={keyword_coverage:.3f}, core_keywords={core_keywords[:2]}"
+                    )
+                else:
+                    excluded_count += 1
+                    self.logger.debug(
+                        f"Document filtered: coverage={keyword_coverage:.3f} < {min_coverage}, "
+                        f"no core keyword match"
+                    )
+        
+        if excluded_count > 0:
+            self.logger.info(
+                f"🔍 [KEYWORD FILTERING] Filtered {excluded_count}/{len(documents)} documents "
+                f"by keyword coverage (min_coverage={min_coverage})"
+            )
+        
+        return filtered
     
     def generate_document_based_instructions(
         self,

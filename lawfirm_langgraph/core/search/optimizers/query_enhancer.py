@@ -517,31 +517,57 @@ class QueryEnhancer:
                 "required": True
             })
 
-            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화)
+            # Step 2: 키워드 확장 및 변형 생성 (프롬프트 최적화 - 개선: Phase 1)
             def build_keyword_expansion_prompt(prev_output, initial_input):
                 if not isinstance(prev_output, dict):
                     prev_output = {}
 
                 core_keywords = prev_output.get("core_keywords", [])
                 query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
+                extracted_keywords_value = initial_input.get("extracted_keywords", []) if isinstance(initial_input, dict) else extracted_keywords
 
-                return f"""키워드 확장:
+                return f"""법률 검색 쿼리 최적화 및 키워드 확장:
 
-쿼리: {query_value}
-핵심 키워드: {', '.join(core_keywords[:5]) if core_keywords else "없음"}
+**원본 질문**: {query_value}
+**질문 유형**: {query_type}
+**법률 분야**: {legal_field}
+**기본 키워드**: {', '.join(extracted_keywords_value[:10]) if extracted_keywords_value else "없음"}
+**핵심 키워드**: {', '.join(core_keywords[:5]) if core_keywords else "없음"}
 
-응답 형식 (JSON만):
+**주요 작업** (우선순위 순):
+1. **동의어 및 유사어 확장** (최우선)
+   - 각 키워드의 동의어, 유사어, 변형어를 최대한 많이 생성하세요
+   - 예: "손해배상" → ["손해배상", "손해 배상", "손해보상", "배상책임", "손해전보", "손해배상청구"]
+   - 예: "불법행위" → ["불법행위", "불법", "위법행위", "불법적 행위", "불법행위책임", "불법행위로 인한 손해"]
+   
+2. **관련 법률 용어 추가**
+   - 직접 관련된 법률 용어, 법령명, 조문 번호
+   - 예: "손해배상" → "민법 제750조", "민법 제751조", "불법행위"
+   
+3. **최적화된 검색 쿼리 생성**
+   - 벡터 검색용 의미적 쿼리
+   - 키워드 검색용 확장된 키워드 리스트
+
+**출력 형식** (JSON만):
 {{
-    "expanded_keywords": ["확장1", "확장2", "확장3"],
-    "synonyms": ["동의어1", "동의어2"],
-    "keyword_variants": ["변형1", "변형2"]
+    "optimized_query": "최적화된 쿼리",
+    "expanded_keywords": ["확장키워드1", "확장키워드2", ...],
+    "synonyms": ["동의어1", "동의어2", ...],
+    "keyword_variants": ["변형1", "변형2", ...],
+    "legal_references": ["법령1", "법령2", ...]
 }}
 """
 
             chain_steps.append({
                 "name": "keyword_expansion",
                 "prompt_builder": build_keyword_expansion_prompt,
-                "input_extractor": lambda prev: prev,
+                "input_extractor": lambda prev: {
+                    **prev,
+                    "query": query,
+                    "query_type": query_type,
+                    "legal_field": legal_field,
+                    "extracted_keywords": extracted_keywords
+                },
                 "output_parser": lambda response, prev: QueryParser.parse_keyword_expansion_response(response),
                 "validator": lambda output: output and isinstance(output, dict) and "expanded_keywords" in output,
                 "required": True

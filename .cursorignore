@@ -16,6 +16,7 @@ credentials/
 # 로그 파일들
 logs/
 *.log
+!lawfirm_langgraph/logs/
 
 # 캐시 및 임시 파일들
 __pycache__/

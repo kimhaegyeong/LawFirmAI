@@ -934,6 +934,74 @@ def measure_time(func):
 - [ ] 캐싱 전략이 적절한가?
 - [ ] 모니터링이 가능한가?
 
+## 테스트 로그 파일 저장 규칙
+
+### run_query_test.py 로그 파일 저장
+
+**run_query_test.py** 스크립트를 실행할 때 로그를 파일로 저장하여 분석할 수 있습니다.
+
+#### 자동 로그 파일 생성 (기본)
+
+기본적으로 로그 파일은 자동으로 생성됩니다:
+
+```bash
+python lawfirm_langgraph/tests/scripts/run_query_test.py "계약 해지 사유에 대해 알려주세요"
+```
+
+**로그 파일 위치**: `logs/test/run_query_test_YYYYMMDD_HHMMSS.log`
+
+#### 환경 변수 설정
+
+**로그 파일 경로 지정**:
+```powershell
+$env:TEST_LOG_FILE="logs/test/my_test.log"
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+**로그 디렉토리 변경**:
+```powershell
+$env:TEST_LOG_DIR="logs/custom_test"
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+**로그 레벨 설정**:
+```powershell
+$env:TEST_LOG_LEVEL="DEBUG"  # DEBUG, INFO, WARNING, ERROR
+python lawfirm_langgraph/tests/scripts/run_query_test.py "질의 내용"
+```
+
+#### 로그 분석 예시
+
+**성능 메트릭 추출**:
+```powershell
+Select-String -Pattern "PERFORMANCE|process_search_results_combined|expand_keywords" logs/test/run_query_test_*.log
+```
+
+**Keyword Coverage 추출**:
+```powershell
+Select-String -Pattern "Keyword Coverage" logs/test/run_query_test_*.log
+```
+
+**에러 로그 추출**:
+```powershell
+Select-String -Pattern "ERROR|❌|⚠️" logs/test/run_query_test_*.log
+```
+
+**메타데이터 오타 확인**:
+```powershell
+Select-String -Pattern "interpretation_id|interpretatiion_id|interpretattion_id|Normalized typo|Fixed typo" logs/test/run_query_test_*.log
+```
+
+#### 환경 변수 요약
+
+| 환경 변수 | 설명 | 기본값 |
+|---------|------|--------|
+| `TEST_LOG_FILE` | 로그 파일 경로 (전체 경로) | 자동 생성 |
+| `TEST_LOG_DIR` | 로그 디렉토리 | `logs/test` |
+| `TEST_LOG_LEVEL` | 로그 레벨 | `INFO` |
+
+**자세한 내용**: `docs/cursor_rules/run_query_test_logging.md` 참조
+
 ---
 
 이 규칙들은 LawFirmAI 프로젝트의 일관성과 품질을 보장하기 위해 작성되었습니다. 

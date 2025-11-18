@@ -2696,9 +2696,22 @@ class EnhancedLegalQuestionWorkflow:
         """SearchHandler.calculate_source_credibility 래퍼"""
         return self.search_handler.calculate_source_credibility(source)
 
-    def _merge_search_results(self, semantic_results: List[Dict], keyword_results: List[Dict]) -> List[Dict]:
+    def _merge_search_results(
+        self, 
+        semantic_results: List[Dict], 
+        keyword_results: List[Dict],
+        query: str = "",
+        query_type: str = "general_question",
+        extracted_keywords: Optional[List[str]] = None
+    ) -> List[Dict]:
         """SearchHandler.merge_search_results 래퍼"""
-        return self.search_handler.merge_search_results(semantic_results, keyword_results)
+        return self.search_handler.merge_search_results(
+            semantic_results, 
+            keyword_results,
+            query=query,
+            query_type=query_type,
+            extracted_keywords=extracted_keywords
+        )
 
     def _update_search_metadata(
         self,

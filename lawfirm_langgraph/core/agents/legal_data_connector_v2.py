@@ -47,7 +47,6 @@ class LegalDataConnectorV2:
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
             import sys
-            import os
             # source 모듈 경로 추가
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
             from core.utils.config import Config

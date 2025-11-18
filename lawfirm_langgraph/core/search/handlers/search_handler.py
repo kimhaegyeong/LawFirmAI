@@ -13,6 +13,18 @@ from core.workflow.state.state_definitions import LegalWorkflowState
 from core.workflow.utils.workflow_constants import WorkflowConstants
 from core.workflow.utils.workflow_utils import WorkflowUtils
 
+# 개선 기능 import (선택적)
+try:
+    from core.search.optimizers.enhanced_query_expander import EnhancedQueryExpander
+    from core.search.optimizers.adaptive_hybrid_weights import AdaptiveHybridWeights
+    from core.search.optimizers.adaptive_threshold import AdaptiveThreshold
+    from core.search.optimizers.diversity_ranker import DiversityRanker
+    from core.search.optimizers.metadata_enhancer import MetadataEnhancer
+    from core.search.optimizers.multi_dimensional_quality import MultiDimensionalQualityScorer
+    IMPROVEMENT_FEATURES_AVAILABLE = True
+except ImportError:
+    IMPROVEMENT_FEATURES_AVAILABLE = False
+
 
 class SearchHandler:
     """
@@ -89,6 +101,35 @@ class SearchHandler:
         self.performance_optimizer = performance_optimizer
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
+        
+        # 개선 기능 초기화 (선택적)
+        self._init_improvement_features()
+    
+    def _init_improvement_features(self):
+        """개선 기능 초기화"""
+        self.use_improvements = getattr(self.config, 'enable_search_improvements', True)
+        
+        if not IMPROVEMENT_FEATURES_AVAILABLE:
+            self.use_improvements = False
+            self.logger.debug("Search improvement features not available")
+            return
+        
+        if self.use_improvements:
+            try:
+                self.query_expander = EnhancedQueryExpander()
+                self.adaptive_weights = AdaptiveHybridWeights()
+                self.adaptive_threshold = AdaptiveThreshold(
+                    base_threshold=getattr(self.config, 'similarity_threshold', 0.5)
+                )
+                self.diversity_ranker = DiversityRanker()
+                self.metadata_enhancer = MetadataEnhancer()
+                self.quality_scorer = MultiDimensionalQualityScorer()
+                self.logger.info("Search improvement features initialized")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize improvement features: {e}")
+                self.use_improvements = False
+        else:
+            self.logger.debug("Search improvements disabled by config")
 
     def check_cache(
         self,
@@ -146,9 +187,25 @@ class SearchHandler:
             else:
                 similarity_threshold = max(0.4, config_threshold)  # 일반 인덱스는 0.4
             
-            # 검색 쿼리에 질문의 핵심 키워드를 명시적으로 포함
+            # Query Expansion (개선 기능)
             enhanced_query = query
-            if extracted_keywords and len(extracted_keywords) > 0:
+            if self.use_improvements and hasattr(self, 'query_expander') and extracted_keywords:
+                try:
+                    expanded_query = self.query_expander.expand_query(
+                        query=query,
+                        query_type="general_question",  # query_type은 별도로 전달받을 수 있음
+                        extracted_keywords=extracted_keywords
+                    )
+                    if expanded_query.expanded_keywords:
+                        # 확장된 키워드를 쿼리에 추가
+                        expanded_keywords_str = ' '.join(expanded_query.expanded_keywords[:5])
+                        enhanced_query = f"{query} {expanded_keywords_str}"
+                        self.logger.info(f"🔍 [QUERY EXPANSION] Expanded query: {len(expanded_query.expanded_keywords)} keywords")
+                except Exception as e:
+                    self.logger.debug(f"Query expansion failed: {e}, using original query")
+            
+            # 기존 방식 (폴백)
+            if enhanced_query == query and extracted_keywords and len(extracted_keywords) > 0:
                 # 핵심 키워드 추출 (법령명, 조문번호, 핵심 용어 우선)
                 core_keywords = []
                 for kw in extracted_keywords[:5]:
@@ -164,7 +221,6 @@ class SearchHandler:
                     query_keywords = set(query.split())
                     new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
                     if new_keywords:
-                        # 개선: 키워드 3개 → 5개로 증가
                         enhanced_query = f"{query} {' '.join(new_keywords[:5])}"
                         
                         # 동의어 확장 추가 (간단한 법률 용어 동의어)
@@ -861,12 +917,48 @@ class SearchHandler:
                 return 0.8
 
         return 0.6  # 기본 신뢰도
+    
+    def _calculate_keyword_coverage(
+        self,
+        results: List[Dict[str, Any]],
+        keywords: List[str]
+    ) -> float:
+        """Keyword Coverage 계산"""
+        if not keywords or not results:
+            return 0.5
+        
+        matched_count = 0
+        for result in results[:10]:  # 상위 10개만 확인
+            text = result.get("text", result.get("content", ""))
+            if text:
+                text_lower = text.lower()
+                for keyword in keywords:
+                    if keyword.lower() in text_lower:
+                        matched_count += 1
+                        break
+        
+        coverage = matched_count / min(len(keywords), 10)
+        return min(1.0, coverage)
 
-    def merge_search_results(self, semantic_results: List[Dict], keyword_results: List[Dict]) -> List[Dict]:
+    def merge_search_results(
+        self, 
+        semantic_results: List[Dict], 
+        keyword_results: List[Dict],
+        query: str = "",
+        query_type: str = "general_question",
+        extracted_keywords: Optional[List[str]] = None
+    ) -> List[Dict]:
         """검색 결과 통합 및 중복 제거 (Rerank 로직 적용 + 유사도 필터링)"""
         try:
-            # Step 0: 유사도 임계값 필터링
-            similarity_threshold = self.config.similarity_threshold
+            # Step 0: 적응형 유사도 임계값 (개선 기능)
+            if self.use_improvements and hasattr(self, 'adaptive_threshold'):
+                similarity_threshold = self.adaptive_threshold.calculate_threshold(
+                    query=query,
+                    query_type=query_type,
+                    result_count=len(semantic_results) + len(keyword_results)
+                )
+            else:
+                similarity_threshold = self.config.similarity_threshold
             filtered_semantic = [
                 doc for doc in semantic_results
                 if doc.get('relevance_score', doc.get('similarity', 0.0)) >= similarity_threshold
@@ -885,11 +977,31 @@ class SearchHandler:
             # Step 1: 결과를 ResultMerger가 처리할 수 있는 형태로 변환
             exact_results = {"semantic": filtered_semantic}
 
+            # Step 1.5: 동적 가중치 계산 (개선 기능)
+            if self.use_improvements and hasattr(self, 'adaptive_weights'):
+                # Keyword Coverage 계산
+                keyword_coverage = self._calculate_keyword_coverage(
+                    filtered_semantic + filtered_keyword,
+                    extracted_keywords or []
+                )
+                weights = self.adaptive_weights.calculate_weights(
+                    query=query,
+                    query_type=query_type,
+                    keyword_coverage=keyword_coverage
+                )
+                # 기존 가중치 형식으로 변환
+                merge_weights = {
+                    "exact": weights["semantic"],
+                    "semantic": weights["keyword"]
+                }
+            else:
+                merge_weights = {"exact": 0.6, "semantic": 0.4}
+
             # Step 2: 결과 병합 (가중치 적용)
             merged = self.result_merger.merge_results(
                 exact_results=exact_results,
                 semantic_results=filtered_keyword,
-                weights={"exact": 0.6, "semantic": 0.4},
+                weights=merge_weights,
                 query=query
             )
 
@@ -926,23 +1038,96 @@ class SearchHandler:
                     f"{len(citation_boosted)} documents with citations prioritized"
                 )
 
-            # Step 4: 다양성 필터 적용
-            filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
+            # Step 4: 다양성 필터 적용 (개선 기능: MMR 사용)
+            if self.use_improvements and hasattr(self, 'diversity_ranker'):
+                # MergedResult를 Dict로 변환
+                ranked_dicts = []
+                for result in ranked:
+                    doc = {
+                        "text": result.text if hasattr(result, 'text') else str(result),
+                        "content": result.text if hasattr(result, 'text') else str(result),
+                        "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                        "source": result.source if hasattr(result, 'source') else "",
+                        "metadata": result.metadata if hasattr(result, 'metadata') else {}
+                    }
+                    ranked_dicts.append(doc)
+                
+                # MMR 기반 다양성 보장
+                diverse_results = self.diversity_ranker.rank_with_diversity(
+                    results=ranked_dicts,
+                    query=query,
+                    lambda_param=0.5,
+                    top_k=20
+                )
+                filtered = diverse_results
+            else:
+                filtered = self.result_ranker.apply_diversity_filter(ranked, max_per_type=5)
+                # MergedResult를 Dict로 변환
+                ranked_dicts = []
+                for result in filtered:
+                    doc = {
+                        "text": result.text if hasattr(result, 'text') else str(result),
+                        "content": result.text if hasattr(result, 'text') else str(result),
+                        "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                        "source": result.source if hasattr(result, 'source') else "",
+                        "metadata": result.metadata if hasattr(result, 'metadata') else {}
+                    }
+                    ranked_dicts.append(doc)
+                filtered = ranked_dicts
 
-            # Step 5: MergedResult를 Dict 형태로 변환
+            # Step 5: 메타데이터 강화 및 품질 점수 계산 (개선 기능)
             documents = []
             for result in filtered:
-                doc = {
-                    "content": result.text,
-                    "relevance_score": result.score,
-                    "source": result.source,
-                    "id": f"{result.source}_{hash(result.text)}",
-                    "type": "merged"
-                }
-                # metadata를 기존 Dict 형태로 병합
-                if isinstance(result.metadata, dict):
-                    doc.update(result.metadata)
-
+                if isinstance(result, dict):
+                    doc = result.copy()
+                else:
+                    doc = {
+                        "content": result.text if hasattr(result, 'text') else str(result),
+                        "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                        "source": result.source if hasattr(result, 'source') else "",
+                        "id": f"{result.source}_{hash(result.text)}" if hasattr(result, 'source') else "",
+                        "type": "merged"
+                    }
+                    if hasattr(result, 'metadata') and isinstance(result.metadata, dict):
+                        doc.update(result.metadata)
+                
+                # 메타데이터 강화 및 부스팅
+                if self.use_improvements and hasattr(self, 'metadata_enhancer'):
+                    try:
+                        metadata_boost = self.metadata_enhancer.boost_by_metadata(
+                            doc, query, query_type
+                        )
+                        doc["metadata_boost"] = metadata_boost
+                        original_score = doc.get("relevance_score", 0.0)
+                        doc["relevance_score"] = original_score * (1.0 + metadata_boost * 0.2)
+                    except Exception as e:
+                        self.logger.debug(f"Metadata boost failed: {e}")
+                
+                # 다차원 품질 점수 계산
+                if self.use_improvements and hasattr(self, 'quality_scorer'):
+                    try:
+                        quality_scores = self.quality_scorer.calculate_quality(
+                            doc, query, query_type, extracted_keywords
+                        )
+                        doc["quality_scores"] = {
+                            "relevance": quality_scores.relevance,
+                            "accuracy": quality_scores.accuracy,
+                            "completeness": quality_scores.completeness,
+                            "recency": quality_scores.recency,
+                            "source_credibility": quality_scores.source_credibility,
+                            "overall": quality_scores.overall
+                        }
+                        # 품질 점수를 최종 점수에 반영
+                        final_score = doc.get("relevance_score", 0.0)
+                        doc["final_score"] = 0.7 * final_score + 0.3 * quality_scores.overall
+                        doc["relevance_score"] = doc["final_score"]
+                    except Exception as e:
+                        self.logger.debug(f"Quality scoring failed: {e}")
+                
+                # id가 없으면 생성
+                if "id" not in doc:
+                    doc["id"] = f"{doc.get('source', 'unknown')}_{hash(doc.get('content', ''))}"
+                
                 documents.append(doc)
 
             self.logger.info(
