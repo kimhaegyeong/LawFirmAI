@@ -796,34 +796,59 @@ class SemanticSearchEngineV2:
         self.logger = logging.getLogger(__name__)
         
         # 설정에서 MLflow 인덱스 사용 여부 확인
-        if not use_mlflow_index:
-            try:
-                from core.utils.config import Config
-                config = Config()
-                use_mlflow_index = config.use_mlflow_index if hasattr(config, 'use_mlflow_index') else False
-                if use_mlflow_index:
-                    mlflow_run_id = mlflow_run_id or (config.mlflow_run_id if hasattr(config, 'mlflow_run_id') else None)
-            except Exception as e:
-                self.logger.debug(f"Could not load config for MLflow index settings: {e}")
+        # use_mlflow_index가 명시적으로 False로 전달된 경우 환경 변수 무시
+        if use_mlflow_index is False:
+            # 명시적으로 False로 설정된 경우 환경 변수나 설정 파일 무시
+            pass
+        elif not use_mlflow_index:
+            # use_mlflow_index가 None이거나 제공되지 않은 경우에만 환경 변수/설정 확인
+            import os
+            env_use_mlflow = os.getenv("USE_MLFLOW_INDEX", "").lower()
+            if env_use_mlflow in ("true", "1", "yes"):
+                use_mlflow_index = True
+                self.logger.info("USE_MLFLOW_INDEX environment variable is set to true")
+            else:
+                try:
+                    from core.utils.config import Config
+                    config = Config()
+                    use_mlflow_index = config.use_mlflow_index if hasattr(config, 'use_mlflow_index') else False
+                    if use_mlflow_index:
+                        mlflow_run_id = mlflow_run_id or (config.mlflow_run_id if hasattr(config, 'mlflow_run_id') else None)
+                except Exception as e:
+                    self.logger.debug(f"Could not load config for MLflow index settings: {e}")
         
         self.use_mlflow_index = use_mlflow_index
         self.mlflow_run_id = mlflow_run_id
 
-        # 모델명이 제공되지 않으면 데이터베이스에서 자동 감지
+        # 모델명이 제공되지 않으면 MLflow에서 자동 감지
         if model_name is None:
             # 환경 변수에서 먼저 확인 (법률 특화 SBERT 모델 지원)
             import os
             model_name = os.getenv("EMBEDDING_MODEL")
             
+            if model_name is None and self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
+                try:
+                    run_id = self.mlflow_run_id
+                    if not run_id:
+                        run_id = self.mlflow_manager.get_production_run()
+                    
+                    if run_id:
+                        import mlflow
+                        version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
+                        embedding_config = version_info.get('embedding_config', {})
+                        model_name = embedding_config.get('model')
+                        if model_name:
+                            self.logger.info(f"Detected model from MLflow run {run_id}: {model_name}")
+                except Exception as e:
+                    self.logger.debug(f"Could not detect model from MLflow: {e}")
+            
             if model_name is None:
-                model_name = self._detect_model_from_database()
-                if model_name is None:
-                    from ..utils.config import Config
-                    config = Config()
-                    model_name = config.embedding_model
-                    self.logger.warning(f"Could not detect model from database or env, using config default: {model_name}")
-            else:
-                self.logger.info(f"Using embedding model from environment variable: {model_name}")
+                from ..utils.config import Config
+                config = Config()
+                model_name = config.embedding_model
+                self.logger.warning(f"Could not detect model from MLflow, using config default: {model_name}")
+            elif model_name and model_name != os.getenv("EMBEDDING_MODEL"):
+                self.logger.info(f"Using embedding model: {model_name}")
 
         # 모델 이름 정리 (따옴표 제거)
         if model_name:
@@ -956,30 +981,20 @@ class SemanticSearchEngineV2:
         if not Path(db_path).exists():
             self.logger.warning(f"Database {db_path} not found")
 
-        # FAISS 인덱스 로드 또는 빌드
-        # 예외 처리를 강화하여 초기화 실패 시에도 서비스가 계속되도록 함
+        # FAISS 인덱스 로드 (MLflow 전용)
         if FAISS_AVAILABLE and self.embedder:
-            try:
-                if self.use_mlflow_index and self.mlflow_manager:
-                    # MLflow 인덱스 사용 시 MLflow에서 로드
-                    # 예외 발생 시에도 초기화는 계속되며, 첫 검색 시 재시도
-                    try:
-                        self._load_mlflow_index()
-                    except Exception as e:
-                        self.logger.warning(f"Failed to load MLflow index during initialization: {e}. Will retry on first search.")
-                        self.index = None
-                elif Path(self.index_path).exists():
-                    # 내부 인덱스 사용 시 레거시 경로에서 로드
-                    try:
-                        self._load_faiss_index()
-                    except Exception as e:
-                        self.logger.warning(f"Failed to load FAISS index during initialization: {e}. Will retry on first search.")
-                        self.index = None
-                else:
-                    self.logger.info("FAISS index not found, will build on first search")
-            except Exception as e:
-                self.logger.error(f"Unexpected error during index initialization: {e}", exc_info=True)
-                self.index = None
+            if self.use_mlflow_index:
+                if not self.mlflow_manager:
+                    raise RuntimeError("MLflow manager is not initialized. Check MLflow configuration.")
+                try:
+                    self._load_mlflow_index()
+                except RuntimeError as e:
+                    self.logger.error(f"Failed to load MLflow index: {e}", exc_info=True)
+                    raise
+            else:
+                # use_mlflow_index가 False인 경우 인덱스 빌드 모드
+                # 인덱스는 나중에 빌드되므로 로드하지 않음
+                self.logger.debug("Skipping index load (build mode: use_mlflow_index=False)")
     
     def _initialize_embedder(self, model_name: str, retry_count: int = 0, max_retries: int = 2) -> bool:
         """
@@ -1836,45 +1851,16 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"⚠️  Specified version (ID={embedding_version_id}) has no chunks! Falling back to all versions.")
                 embedding_version_id = None
         
-        # FAISS 버전이 지정된 경우 해당 버전 로드
-        current_version = getattr(self, 'current_faiss_version', None)
-        if faiss_version and faiss_version != current_version:
-            if hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
-                try:
-                    self._load_faiss_index(faiss_version)
-                except Exception as e:
-                    self.logger.warning(f"Failed to load FAISS version {faiss_version}: {e}")
-        
         # 인덱스가 없으면 자동으로 로드 시도 (초기화 실패 시 재시도)
-        index_load_failed = False
         if self.index is None and FAISS_AVAILABLE and self.embedder:
-            try:
-                # 내부 인덱스를 우선적으로 사용 (MLflow 인덱스는 fallback)
-                if faiss_version and hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
-                    self._load_faiss_index(faiss_version)
-                elif Path(self.index_path).exists():
-                    # 내부 인덱스가 존재하면 우선 사용
-                    self._load_faiss_index()
-                    if self.index is None:
-                        # 내부 인덱스 로드 실패 시 MLflow 인덱스 시도
-                        if self.use_mlflow_index and self.mlflow_manager:
-                            self._load_mlflow_index()
-                elif hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
-                    # 버전 관리자가 있으면 활성 버전 시도
-                    self._load_faiss_index()  # 활성 버전 자동 로드
-                elif self.use_mlflow_index and self.mlflow_manager:
-                    # 내부 인덱스가 없으면 MLflow 인덱스 사용
+            if self.use_mlflow_index and self.mlflow_manager:
+                try:
                     self._load_mlflow_index()
-            except Exception as e:
-                self.logger.warning(f"Failed to load FAISS index during search: {e}")
-                self.logger.info("🔄 Falling back to direct database search (no FAISS index)")
-                index_load_failed = True
-                # 인덱스 로드 실패 시에도 계속 진행 (폴백 로직 사용)
-        
-        # 인덱스가 여전히 없으면 폴백 모드로 표시
-        use_fallback = (self.index is None) or index_load_failed
-        if use_fallback:
-            self.logger.info("📊 Using fallback search mode: Direct database vector search (slower but reliable)")
+                except RuntimeError as e:
+                    self.logger.error(f"Failed to load MLflow index during search: {e}")
+                    raise
+            else:
+                raise RuntimeError("MLflow index is required but not available. Set USE_MLFLOW_INDEX=true")
         
         # Embedder 초기화 상태 확인 및 필요시 재초기화
         if not self._ensure_embedder_initialized():
@@ -2403,10 +2389,7 @@ class SemanticSearchEngineV2:
 
             else:
                 # 기존 방식 (전체 벡터 로드 및 선형 검색)
-                # FAISS 인덱스가 없으면 백그라운드에서 빌드 시작
-                if FAISS_AVAILABLE and self.index is None and not self._index_building:
-                    self.logger.info("FAISS index not found, starting background build")
-                    self._build_faiss_index_async()
+                # MLflow 인덱스 전용이므로 자동 빌드 제거
 
                 # 활성 버전 필터링 로직 검증
                 if embedding_version_id:
@@ -4753,18 +4736,12 @@ class SemanticSearchEngineV2:
             self.logger.error(f"Error in incremental index update: {e}", exc_info=True)
 
     def _load_mlflow_index(self):
-        """MLflow에서 FAISS 인덱스 로드"""
+        """MLflow에서 FAISS 인덱스 로드 (필수)"""
         if not FAISS_AVAILABLE:
-            return
-        
-        # 내부 인덱스가 존재하면 MLflow 인덱스 로드 건너뛰기 (내부 인덱스 우선)
-        if Path(self.index_path).exists():
-            self.logger.debug(f"Skipping MLflow index load: internal index exists at {self.index_path}")
-            return
+            raise RuntimeError("FAISS is not available")
         
         if not self.use_mlflow_index or not self.mlflow_manager:
-            self.logger.debug("Skipping MLflow index load: use_mlflow_index=False or mlflow_manager not available")
-            return
+            raise RuntimeError("MLflow index is required but not configured. Set USE_MLFLOW_INDEX=true")
         
         try:
             # run_id가 없으면 프로덕션 run 자동 조회
@@ -4775,14 +4752,14 @@ class SemanticSearchEngineV2:
                     self.logger.info(f"Auto-detected production run: {run_id}")
                     self.mlflow_run_id = run_id
                 else:
-                    self.logger.warning("No production run found in MLflow. Please specify MLFLOW_RUN_ID.")
-                    return
+                    raise RuntimeError("No production run found in MLflow. Please specify MLFLOW_RUN_ID or tag a run as 'production_ready'")
             
             # MLflow에서 인덱스 로드
+            self.logger.info(f"Attempting to load index from MLflow run: {run_id}")
             index_data = self.mlflow_manager.load_index(run_id)
             if not index_data:
-                self.logger.warning(f"Failed to load index from MLflow run: {run_id}")
-                return
+                self.logger.error(f"MLflow manager returned None for run {run_id}. Check MLflow logs for details.")
+                raise RuntimeError(f"Failed to load index from MLflow run: {run_id}")
             
             self.index = index_data['index']
             id_mapping = index_data.get('id_mapping', {})
@@ -4846,9 +4823,10 @@ class SemanticSearchEngineV2:
                 version = run_info.get('tags', {}).get('version', 'unknown')
                 self.logger.info(f"MLflow version: {version}")
         
+        except RuntimeError:
+            raise
         except Exception as e:
-            self.logger.warning(f"Failed to load MLflow FAISS index: {e}, will use DB-based index", exc_info=True)
-            self.index = None
+            raise RuntimeError(f"Failed to load MLflow FAISS index: {e}") from e
     
     def _load_faiss_index(self, faiss_version_name: Optional[str] = None):
         """저장된 FAISS 인덱스 로드 (DB 기반 또는 버전 관리 시스템)"""

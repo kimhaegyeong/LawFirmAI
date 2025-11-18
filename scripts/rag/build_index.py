@@ -55,10 +55,23 @@ def build_and_save_index(
         logger.info(f"Embedding version ID: {embedding_version_id}")
         logger.info(f"Chunking strategy: {chunking_strategy}")
         
-        search_engine = SemanticSearchEngineV2(
-            db_path=db_path,
-            model_name=model_name
-        )
+        # 인덱스 빌드 시에는 MLflow 인덱스 로드를 건너뛰기 위해 use_mlflow_index=False 설정
+        # 환경 변수가 설정되어 있어도 명시적으로 False로 설정
+        import os
+        original_use_mlflow = os.environ.get("USE_MLFLOW_INDEX")
+        try:
+            os.environ["USE_MLFLOW_INDEX"] = "false"
+            search_engine = SemanticSearchEngineV2(
+                db_path=db_path,
+                model_name=model_name,
+                use_mlflow_index=False
+            )
+        finally:
+            # 환경 변수 복원
+            if original_use_mlflow is not None:
+                os.environ["USE_MLFLOW_INDEX"] = original_use_mlflow
+            elif "USE_MLFLOW_INDEX" in os.environ:
+                del os.environ["USE_MLFLOW_INDEX"]
         
         logger.info("Loading chunk vectors...")
         chunk_vectors = search_engine._load_chunk_vectors(embedding_version_id=embedding_version_id)

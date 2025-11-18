@@ -174,7 +174,15 @@ python scripts/migrations/re_embed_existing_data_optimized.py \
 
 #### 2-2. case_paragraph 재임베딩
 
+**현재 상태**: 43.0% 완료 (25,330/58,923 청크)
+
+**남은 작업**: 약 33,593개 청크 재임베딩 필요
+
 ```bash
+# 환경 변수 설정
+$env:EMBEDDING_MODEL="woong0322/ko-legal-sbert-finetuned"
+
+# case_paragraph 재임베딩 (이미 재임베딩된 청크는 자동으로 건너뜀)
 python scripts/migrations/re_embed_existing_data_optimized.py \
     --db data/lawfirm_v2.db \
     --source-type case_paragraph \
@@ -182,6 +190,11 @@ python scripts/migrations/re_embed_existing_data_optimized.py \
     --doc-batch-size 200 \
     --commit-interval 5
 ```
+
+**예상 소요 시간**: 
+- 남은 청크 수: 약 33,593개
+- CPU 사용 시: 약 2-4시간
+- GPU 사용 시: 약 1-2시간
 
 #### 2-3. decision_paragraph 재임베딩
 
@@ -251,14 +264,125 @@ model_name = os.getenv("EMBEDDING_MODEL", "woong0322/ko-legal-sbert-finetuned")
 embedder = SentenceEmbedder(model_name)
 ```
 
-## FAISS 인덱스 재구축
+## FAISS 인덱스 재구축 (MLflow 전용)
 
-재임베딩 완료 후 FAISS 인덱스도 재구축해야 합니다:
+재임베딩 완료 후 MLflow에 FAISS 인덱스를 빌드하고 저장해야 합니다.
+
+**중요**: 시스템이 MLflow 인덱스 전용으로 변경되었으므로, MLflow에 인덱스를 저장해야 합니다.
+
+### 1. 임베딩 버전 ID 확인
+
+재임베딩된 Ko-Legal-SBERT 버전의 ID를 확인합니다:
 
 ```bash
-# FAISS 인덱스 재구축 스크립트 확인 필요
-# 또는 SemanticSearchEngineV2가 자동으로 재구축할 수 있음
+python -c "
+import sqlite3
+conn = sqlite3.connect('data/lawfirm_v2.db')
+cursor = conn.execute('''
+    SELECT id, version_name, model_name, created_at
+    FROM embedding_versions
+    WHERE model_name LIKE '%ko-legal-sbert%' OR model_name LIKE '%Legal%'
+    ORDER BY created_at DESC
+    LIMIT 1
+''')
+row = cursor.fetchone()
+if row:
+    print(f'Version ID: {row[0]}')
+    print(f'Version Name: {row[1]}')
+    print(f'Model: {row[2]}')
+else:
+    print('Ko-Legal-SBERT 버전을 찾을 수 없습니다.')
+"
 ```
+
+### 2. MLflow 인덱스 빌드 및 저장
+
+#### 방법 1: 자동 스크립트 사용 (권장)
+
+Ko-Legal-SBERT 전용 스크립트를 사용하면 버전 ID를 자동으로 찾아서 빌드합니다:
+
+```bash
+# 환경 변수 설정
+$env:EMBEDDING_MODEL="woong0322/ko-legal-sbert-finetuned"
+$env:USE_MLFLOW_INDEX="true"
+
+# 자동 빌드 스크립트 실행
+python scripts/rag/build_ko_legal_sbert_index.py
+```
+
+#### 방법 2: 수동 빌드
+
+`scripts/rag/build_index.py`를 직접 사용하여 MLflow에 인덱스를 빌드하고 저장합니다:
+
+```bash
+# 환경 변수 설정
+$env:EMBEDDING_MODEL="woong0322/ko-legal-sbert-finetuned"
+$env:USE_MLFLOW_INDEX="true"
+
+# 타임스탬프 생성
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+# MLflow 인덱스 빌드 및 저장
+python scripts/rag/build_index.py \
+    --version-name "production-ko-legal-sbert-$timestamp" \
+    --embedding-version-id <VERSION_ID> \
+    --chunking-strategy standard \
+    --db-path data/lawfirm_v2.db \
+    --use-mlflow \
+    --model-name "woong0322/ko-legal-sbert-finetuned"
+```
+
+**매개변수 설명**:
+- `--version-name`: MLflow에 저장될 버전 이름 (예: `production-ko-legal-sbert-20250101-120000`)
+- `--embedding-version-id`: 위에서 확인한 임베딩 버전 ID
+- `--chunking-strategy`: 재임베딩 시 사용한 청킹 전략 (일반적으로 `standard`)
+- `--use-mlflow`: MLflow 사용 (기본값: true)
+- `--model-name`: 임베딩 모델명
+
+### 3. 프로덕션 태그 설정
+
+빌드된 인덱스를 프로덕션으로 사용하려면 `production_ready` 태그를 설정합니다:
+
+#### 방법 1: Python 스크립트 사용
+
+```bash
+python -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path('.').resolve()))
+from scripts.rag.mlflow_manager import MLflowFAISSManager
+import mlflow
+
+manager = MLflowFAISSManager()
+client = mlflow.tracking.MlflowClient()
+client.set_tag('<MLFLOW_RUN_ID>', 'status', 'production_ready')
+print('✅ 프로덕션 태그 설정 완료')
+"
+```
+
+#### 방법 2: MLflow UI 사용
+
+MLflow UI에서 직접 태그를 설정할 수 있습니다:
+- Run 상세 페이지 → Tags → `status` = `production_ready` 추가
+
+### 4. 인덱스 로드 확인
+
+인덱스가 정상적으로 로드되는지 확인합니다:
+
+```bash
+# 환경 변수 설정
+$env:USE_MLFLOW_INDEX="true"
+$env:MLFLOW_RUN_ID="<MLFLOW_RUN_ID>"  # 선택사항 (없으면 프로덕션 run 자동 감지)
+
+# 테스트 스크립트 실행
+python lawfirm_langgraph/tests/scripts/test_mlflow_only_index.py
+```
+
+### 주의사항
+
+1. **MLflow 필수**: 시스템이 MLflow 인덱스 전용이므로 반드시 MLflow에 인덱스를 저장해야 합니다.
+2. **자동 빌드 없음**: 재임베딩 후 자동으로 인덱스가 빌드되지 않으므로 수동으로 빌드해야 합니다.
+3. **버전 관리**: 각 재임베딩 버전마다 별도의 MLflow run으로 저장하는 것을 권장합니다.
 
 ## 검증 및 테스트
 
@@ -401,22 +525,22 @@ conn.commit()
 ## 체크리스트
 
 ### 사전 준비
-- [ ] HuggingFace에서 정확한 모델명 확인
-- [ ] 모델 차원 확인
-- [ ] 데이터베이스 백업
-- [ ] 현재 임베딩 상태 확인
+- [x] HuggingFace에서 정확한 모델명 확인
+- [x] 모델 차원 확인
+- [x] 데이터베이스 백업
+- [x] 현재 임베딩 상태 확인
 
 ### Phase 1: 소규모 테스트
-- [ ] 모델 로딩 테스트
-- [ ] 10개 문서 재임베딩 테스트
-- [ ] 결과 검증
+- [x] 모델 로딩 테스트
+- [x] 10개 문서 재임베딩 테스트
+- [x] 결과 검증
 - [ ] 검색 품질 테스트
 
 ### Phase 2: 단계별 재임베딩
-- [ ] statute_article 재임베딩
-- [ ] case_paragraph 재임베딩
-- [ ] decision_paragraph 재임베딩
-- [ ] interpretation_paragraph 재임베딩
+- [x] statute_article 재임베딩 (완료: 1,641/1,641 청크)
+- [ ] case_paragraph 재임베딩 (진행 중: 25,330/58,923 청크, 43.0%)
+- [x] decision_paragraph 재임베딩 (완료: 7,226/7,226 청크)
+- [x] interpretation_paragraph 재임베딩 (완료: 1,088/1,088 청크)
 - [ ] 각 단계별 검증
 
 ### Phase 3: 전체 재임베딩 (선택)
@@ -425,10 +549,14 @@ conn.commit()
 - [ ] 완료 후 검증
 
 ### 완료 후
-- [ ] FAISS 인덱스 재구축
+- [x] FAISS 인덱스 재구축 (MLflow) - 부분 완료
+  - [x] 임베딩 버전 ID 확인 (완료: ID 6)
+  - [x] MLflow 인덱스 빌드 및 저장 (완료: 35,285개 벡터, run_id=bef566aa4a914404a530807742d57774)
+  - [x] 프로덕션 태그 설정 (완료)
+  - [ ] 인덱스 로드 확인 (case_paragraph 재임베딩 완료 후 전체 인덱스 재빌드 필요)
 - [ ] 검색 품질 테스트
 - [ ] 성능 비교 리포트 생성
-- [ ] 문서 업데이트
+- [x] 문서 업데이트 (완료)
 
 ## 참고 자료
 

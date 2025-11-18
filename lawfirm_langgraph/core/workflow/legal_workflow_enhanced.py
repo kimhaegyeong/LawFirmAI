@@ -264,8 +264,9 @@ class EnhancedLegalQuestionWorkflow(
             else:
                 self.logger.info(f"SemanticSearchEngineV2 initialized successfully with {db_path}")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize SemanticSearchEngineV2: {e}")
+            self.logger.error(f"Failed to initialize SemanticSearchEngineV2: {e}", exc_info=True)
             self.semantic_search = None
+            self.logger.error(f"SemanticSearchEngineV2 is not available. Vector search will be disabled.")
 
         # 검색 핸들러 초기화 (Phase 2 리팩토링) - semantic_search 초기화 이후
         self.search_handler = SearchHandler(

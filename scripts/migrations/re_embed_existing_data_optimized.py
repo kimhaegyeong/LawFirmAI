@@ -246,13 +246,15 @@ def filter_existing_documents_batch(
     conn: sqlite3.Connection,
     documents: List[Tuple[str, int]],
     chunking_strategy: str,
-    version_id: int
+    version_id: int,
+    model_name: Optional[str] = None
 ) -> List[Tuple[str, int]]:
     """배치 단위로 이미 처리된 문서 필터링 (최적화: 배치 조회)
     
     재개 기능: 중간에 종료된 경우를 감지하여 부분 처리된 문서도 재처리
     - 모든 청크가 해당 버전으로 임베딩되었는지 확인
     - 청크와 임베딩의 개수가 일치하는지 확인
+    - 모델명도 확인하여 특정 모델로 재임베딩 시 다른 모델 임베딩은 무시
     """
     if not documents:
         return []
@@ -275,21 +277,65 @@ def filter_existing_documents_batch(
         for i in range(0, len(source_ids), batch_size):
             batch_ids = source_ids[i:i + batch_size]
             placeholders = ','.join(['?'] * len(batch_ids))
-            # 완전히 처리된 문서만 필터링 (청크와 임베딩이 모두 존재하고 개수가 일치)
-            cursor = conn.execute(
-                f"""SELECT tc.source_type, tc.source_id, 
-                           COUNT(DISTINCT tc.id) as chunk_count,
-                           COUNT(DISTINCT e.id) as embedding_count
-                    FROM text_chunks tc
-                    LEFT JOIN embeddings e ON e.chunk_id = tc.id AND e.version_id = ?
-                    WHERE tc.source_type = ?
-                    AND tc.source_id IN ({placeholders})
-                    AND tc.chunking_strategy = ? 
-                    AND tc.embedding_version_id = ?
-                    GROUP BY tc.source_type, tc.source_id
-                    HAVING chunk_count > 0 AND chunk_count = embedding_count""",
-                [version_id, source_type] + batch_ids + [chunking_strategy, version_id]
-            )
+            
+            # 모델명이 제공된 경우 모델명도 확인
+            if model_name:
+                # 완전히 처리된 문서만 필터링 (청크와 임베딩이 모두 존재하고 개수가 일치, 모델명도 일치)
+                # 중요: embedding_version_id 조건을 제거하고, 모델명과 version_id만으로 확인
+                # 이유: 다른 모델로 임베딩된 청크는 다른 embedding_version_id를 가질 수 있음
+                cursor = conn.execute(
+                    f"""SELECT tc.source_type, tc.source_id, 
+                               COUNT(DISTINCT tc.id) as chunk_count,
+                               COUNT(DISTINCT e.id) as embedding_count
+                        FROM text_chunks tc
+                        LEFT JOIN embeddings e ON e.chunk_id = tc.id 
+                            AND e.version_id = ? 
+                            AND e.model = ?
+                        WHERE tc.source_type = ?
+                        AND tc.source_id IN ({placeholders})
+                        AND tc.chunking_strategy = ?
+                        GROUP BY tc.source_type, tc.source_id
+                        HAVING chunk_count > 0 AND chunk_count = embedding_count""",
+                    [version_id, model_name, source_type] + batch_ids + [chunking_strategy]
+                )
+                # 디버깅: 첫 번째 배치만 샘플 출력
+                if i == 0 and len(batch_ids) > 0:
+                    sample_cursor = conn.execute(
+                        f"""SELECT tc.source_type, tc.source_id, 
+                                   COUNT(DISTINCT tc.id) as chunk_count,
+                                   COUNT(DISTINCT e.id) as embedding_count,
+                                   COUNT(DISTINCT CASE WHEN e.model = ? THEN e.id END) as model_match_count
+                            FROM text_chunks tc
+                            LEFT JOIN embeddings e ON e.chunk_id = tc.id AND e.version_id = ?
+                            WHERE tc.source_type = ?
+                            AND tc.source_id IN ({placeholders})
+                            AND tc.chunking_strategy = ? 
+                            AND tc.embedding_version_id = ?
+                            GROUP BY tc.source_type, tc.source_id
+                            LIMIT 3""",
+                        [model_name, version_id, source_type] + batch_ids + [chunking_strategy, version_id]
+                    )
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    for sample_row in sample_cursor.fetchall():
+                        logger.debug(f"샘플 문서 {sample_row['source_type']}/{sample_row['source_id']}: "
+                                   f"{sample_row['chunk_count']} 청크, {sample_row['embedding_count']} 임베딩, "
+                                   f"{sample_row['model_match_count']} 모델 일치")
+            else:
+                # 모델명이 없는 경우 기존 로직 사용 (하위 호환성)
+                cursor = conn.execute(
+                    f"""SELECT tc.source_type, tc.source_id, 
+                               COUNT(DISTINCT tc.id) as chunk_count,
+                               COUNT(DISTINCT e.id) as embedding_count
+                        FROM text_chunks tc
+                        LEFT JOIN embeddings e ON e.chunk_id = tc.id AND e.version_id = ?
+                        WHERE tc.source_type = ?
+                        AND tc.source_id IN ({placeholders})
+                        AND tc.chunking_strategy = ?
+                        GROUP BY tc.source_type, tc.source_id
+                        HAVING chunk_count > 0 AND chunk_count = embedding_count""",
+                    [version_id, source_type] + batch_ids + [chunking_strategy]
+                )
             for row in cursor.fetchall():
                 existing_docs.add((row['source_type'], row['source_id']))
     
@@ -326,24 +372,49 @@ def restore_documents_batch(
                 restored[(source_type, row['id'])] = row['text']
         
         elif source_type == "case_paragraph":
+            # text_chunks.source_id는 case_paragraphs.id를 참조
+            # 먼저 case_paragraphs.id로 조회하여 case_id를 찾고, 그 case_id의 모든 paragraph를 가져옴
             cursor = conn.execute(
-                f"""SELECT case_id, GROUP_CONCAT(text, '\n') as full_text
-                    FROM case_paragraphs 
-                    WHERE case_id IN ({placeholders})
-                    GROUP BY case_id""",
+                f"""SELECT cp.id, cp.case_id
+                    FROM case_paragraphs cp
+                    WHERE cp.id IN ({placeholders})""",
                 source_ids
             )
-            for row in cursor.fetchall():
-                if row['full_text']:
-                    restored[(source_type, row['case_id'])] = row['full_text']
-                else:
+            # source_id (case_paragraphs.id) -> case_id 매핑
+            source_to_case = {row['id']: row['case_id'] for row in cursor.fetchall()}
+            case_ids = list(set(source_to_case.values()))
+            
+            if case_ids:
+                # case_id별로 모든 paragraph를 가져옴
+                case_placeholders = ','.join(['?'] * len(case_ids))
+                cursor = conn.execute(
+                    f"""SELECT case_id, GROUP_CONCAT(text, '\n') as full_text
+                        FROM case_paragraphs 
+                        WHERE case_id IN ({case_placeholders})
+                        GROUP BY case_id""",
+                    case_ids
+                )
+                case_texts = {row['case_id']: row['full_text'] for row in cursor.fetchall() if row['full_text']}
+                
+                # 각 source_id (case_paragraphs.id)에 대해 해당 case_id의 전체 텍스트를 매핑
+                for source_id, case_id in source_to_case.items():
+                    if case_id in case_texts:
+                        restored[(source_type, source_id)] = case_texts[case_id]
+                
+                # case_paragraphs에 없는 경우 cases 테이블에서 조회
+                missing_case_ids = [cid for cid in case_ids if cid not in case_texts]
+                if missing_case_ids:
+                    missing_placeholders = ','.join(['?'] * len(missing_case_ids))
                     cursor2 = conn.execute(
-                        f"SELECT id, full_text FROM cases WHERE id IN ({placeholders})",
-                        [row['case_id']]
+                        f"""SELECT id, searchable_text 
+                            FROM cases 
+                            WHERE id IN ({missing_placeholders})""",
+                        missing_case_ids
                     )
-                    row2 = cursor2.fetchone()
-                    if row2 and row2['full_text']:
-                        restored[(source_type, row['case_id'])] = row2['full_text']
+                    case_texts_from_cases = {row['id']: row['searchable_text'] for row in cursor2.fetchall() if row['searchable_text']}
+                    for source_id, case_id in source_to_case.items():
+                        if case_id in case_texts_from_cases and (source_type, source_id) not in restored:
+                            restored[(source_type, source_id)] = case_texts_from_cases[case_id]
         
         elif source_type == "decision_paragraph":
             cursor = conn.execute(
@@ -451,7 +522,8 @@ def collect_chunks_for_batch(
     chunking_strategy: str,
     query_type: Optional[str],
     skip_if_exists: bool = True,
-    strategy=None
+    strategy=None,
+    already_filtered: bool = False
 ) -> Tuple[List[ChunkData], List[Tuple[str, int]], Dict[Tuple[str, int], int]]:
     """
     여러 문서의 청크를 수집하여 배치 임베딩 준비
@@ -471,15 +543,25 @@ def collect_chunks_for_batch(
         )
     
     # 배치 단위로 이미 처리된 문서 필터링
-    if skip_if_exists:
+    # 주의: 문서 조회 단계에서 이미 재임베딩이 필요한 문서만 가져왔다면,
+    # 필터링은 완전히 재임베딩된 문서만 제외 (부분 재임베딩된 문서는 포함)
+    if skip_if_exists and not already_filtered:
         original_count = len(documents)
+        # 모델명을 가져와서 필터링에 사용
+        import os
+        model_name = os.getenv("EMBEDDING_MODEL")
+        logger.info(f"필터링: 버전 ID={version_id}, 모델명={model_name}, 문서 수={original_count}")
+        
+        # 문서 조회 쿼리에서 이미 재임베딩이 필요한 문서만 가져왔다면,
+        # 필터링은 완전히 재임베딩된 문서만 제외 (부분 재임베딩된 문서는 포함)
         documents = filter_existing_documents_batch(
-            conn, documents, chunking_strategy, version_id
+            conn, documents, chunking_strategy, version_id, model_name=model_name
         )
         skipped_count = original_count - len(documents)
         if skipped_count > 0:
-            logger.info(f"이미 처리된 문서 {skipped_count}개 건너뜀 (재개 기능)")
+            logger.info(f"이미 완전히 처리된 문서 {skipped_count}개 건너뜀 (재개 기능), 남은 문서: {len(documents)}개")
         if not documents:
+            logger.warning(f"모든 문서가 이미 완전히 처리되어 있습니다. 버전 ID={version_id}, 모델명={model_name}")
             return [], [], {}
     
     # 배치 단위로 문서 복원
@@ -700,7 +782,8 @@ def re_embed_documents_batch_optimized(
     doc_batch_size: int = 200,
     embedding_batch_size: int = 512,
     skip_if_exists: bool = True,
-    commit_interval: int = 5
+    commit_interval: int = 5,
+    already_filtered: bool = False
 ) -> Tuple[int, int, int]:
     """
     여러 문서를 배치로 처리하여 성능 향상
@@ -735,8 +818,9 @@ def re_embed_documents_batch_optimized(
             version_id=version_id,
             chunking_strategy=chunking_strategy,
             query_type=query_type,
-            skip_if_exists=skip_if_exists,
-            strategy=strategy
+            skip_if_exists=skip_if_exists and not already_filtered,
+            strategy=strategy,
+            already_filtered=already_filtered
         )
         
         if not chunks_data:
@@ -934,7 +1018,43 @@ def main():
     
     # 고유한 문서 목록 조회
     logger.info("고유한 문서 목록 조회 중...")
-    documents = get_unique_documents(conn, args.source_type)
+    
+    # 모델명을 고려하여 재임베딩이 필요한 문서만 조회
+    import os
+    env_model_name = os.getenv("EMBEDDING_MODEL")
+    model_name = env_model_name if env_model_name else getattr(embedder.model, 'name_or_path', None)
+    
+    # 재임베딩이 필요한 문서만 조회할지 여부를 추적
+    filtered_at_query = False
+    
+    if model_name and args.source_type:
+        # 특정 모델로 재임베딩되지 않은 문서만 조회
+        logger.info(f"모델 '{model_name}'로 재임베딩되지 않은 문서만 조회합니다.")
+        if args.source_type == "case_paragraph":
+            cursor = conn.execute("""
+                SELECT DISTINCT tc.source_id
+                FROM text_chunks tc
+                LEFT JOIN embeddings e ON e.chunk_id = tc.id 
+                    AND e.model = ? 
+                    AND e.version_id = (
+                        SELECT id FROM embedding_versions 
+                        WHERE model_name = ? AND chunking_strategy = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    )
+                WHERE tc.source_type = ?
+                AND tc.chunking_strategy = ?
+                GROUP BY tc.source_id
+                HAVING COUNT(DISTINCT tc.id) > COUNT(DISTINCT e.id)
+                ORDER BY tc.source_id
+            """, [model_name, model_name, args.chunking_strategy, args.source_type, args.chunking_strategy])
+            documents = [("case_paragraph", row[0]) for row in cursor.fetchall()]
+            filtered_at_query = True  # 쿼리 단계에서 이미 필터링됨
+        else:
+            # 다른 source_type은 기존 방식 사용
+            documents = get_unique_documents(conn, args.source_type)
+    else:
+        # 모델명이 없으면 기존 방식 사용
+        documents = get_unique_documents(conn, args.source_type)
     
     if args.limit:
         documents = documents[:args.limit]
@@ -959,24 +1079,51 @@ def main():
                 raise ValueError(f"버전 ID {version_id}를 찾을 수 없습니다.")
             logger.info(f"지정된 버전 사용: {version_info.get('version_name', 'N/A')} (ID: {version_id})")
         else:
-            # 활성 버전 조회 또는 생성 (한 번만 수행)
+            # 모델명을 고려하여 버전 조회 또는 생성
+            import os
+            env_model_name = os.getenv("EMBEDDING_MODEL")
+            model_name = env_model_name if env_model_name else getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+            
+            # 모델명과 청킹 전략으로 버전 조회
             active_version = version_manager.get_active_version(args.chunking_strategy)
-            if not active_version:
-                model_name = getattr(embedder.model, 'name_or_path', 'snunlp/KR-SBERT-V40K-klueNLI-augSTS')
-                version_name = f"v1.0.0-{args.chunking_strategy}"
-                version_id = version_manager.register_version(
-                    version_name=version_name,
-                    chunking_strategy=args.chunking_strategy,
-                    model_name=model_name,
-                    description=f"{args.chunking_strategy} 청킹 전략 (재임베딩 최적화)",
-                    set_active=True
-                )
-            else:
+            
+            # 활성 버전이 있고 모델명이 일치하는 경우 사용
+            if active_version and active_version.get('model_name') == model_name:
                 version_id = active_version['id']
+                logger.info(f"기존 활성 버전 사용: {active_version.get('version_name', 'N/A')} (ID: {version_id}, 모델: {model_name})")
+            else:
+                # 모델명과 청킹 전략으로 버전 검색
+                conn_temp = sqlite3.connect(db_path)
+                conn_temp.row_factory = sqlite3.Row
+                cursor = conn_temp.execute(
+                    """SELECT id, version_name FROM embedding_versions 
+                       WHERE model_name = ? AND chunking_strategy = ?
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (model_name, args.chunking_strategy)
+                )
+                existing_version = cursor.fetchone()
+                conn_temp.close()
+                
+                if existing_version:
+                    version_id = existing_version['id']
+                    logger.info(f"기존 버전 사용: {existing_version['version_name']} (ID: {version_id}, 모델: {model_name})")
+                else:
+                    # 새 버전 생성
+                    version_name = f"v2.0.0-{args.chunking_strategy}-{model_name.split('/')[-1].replace('-', '_')[:20]}"
+                    version_id = version_manager.register_version(
+                        version_name=version_name,
+                        chunking_strategy=args.chunking_strategy,
+                        model_name=model_name,
+                        description=f"{args.chunking_strategy} 청킹 전략 ({model_name})",
+                        set_active=True
+                    )
+                    logger.info(f"새 버전 생성: {version_name} (ID: {version_id}, 모델: {model_name})")
         
         logger.info(f"사용할 버전 ID: {version_id}")
         
         # 최적화된 배치 재임베딩
+        # 쿼리 단계에서 이미 재임베딩이 필요한 문서만 가져왔다면,
+        # 필터링은 완전히 재임베딩된 문서만 제외 (부분 재임베딩된 문서는 포함)
         total_deleted, total_inserted, skipped_count = re_embed_documents_batch_optimized(
             conn=conn,
             documents=documents,
@@ -987,8 +1134,9 @@ def main():
             query_type=args.query_type,
             doc_batch_size=args.doc_batch_size,
             embedding_batch_size=args.embedding_batch_size,
-            skip_if_exists=True,
-            commit_interval=getattr(args, 'commit_interval', 5)
+            skip_if_exists=not filtered_at_query,  # 쿼리에서 이미 필터링했다면 필터링 건너뛰기
+            commit_interval=getattr(args, 'commit_interval', 5),
+            already_filtered=filtered_at_query  # 쿼리에서 이미 필터링했다면 플래그 전달
         )
         
         logger.info(f"재임베딩 완료: {total_deleted}개 청크 삭제, {total_inserted}개 청크 삽입, {skipped_count}개 문서 건너뜀")

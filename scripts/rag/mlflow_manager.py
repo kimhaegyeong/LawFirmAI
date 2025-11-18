@@ -211,13 +211,15 @@ class MLflowFAISSManager:
                 with open(temp_path / "index_stats.json", 'w', encoding='utf-8') as f:
                     json.dump(index_stats, f, indent=2)
                 
-                mlflow.log_artifacts(str(temp_path), "faiss_index")
-                mlflow.log_metrics({
-                    "num_vectors": index.ntotal,
-                    "dimension": index.d,
-                    "id_mapping_size": len(id_mapping),
-                    "metadata_size": len(metadata)
-                })
+                # 활성 run 컨텍스트 설정 후 아티팩트 저장
+                with mlflow.start_run(run_id=run_id):
+                    mlflow.log_artifacts(str(temp_path), "faiss_index")
+                    mlflow.log_metrics({
+                        "num_vectors": index.ntotal,
+                        "dimension": index.d,
+                        "id_mapping_size": len(id_mapping),
+                        "metadata_size": len(metadata)
+                    })
                 
                 logger.info(f"Saved FAISS index to MLflow run: {run_id}")
                 return True
@@ -334,7 +336,7 @@ class MLflowFAISSManager:
                     shutil.rmtree(download_path, ignore_errors=True)
                     
         except Exception as e:
-            logger.error(f"Failed to load index from MLflow: {e}")
+            logger.error(f"Failed to load index from MLflow run {run_id}: {e}", exc_info=True)
             return None
     
     def list_runs(
