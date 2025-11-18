@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.monitor_re_embedding_progress import monitor_progress
+from scripts.monitoring.monitor_re_embedding_progress import monitor_progress
 from scripts.build_faiss_index_for_dynamic_chunking import build_faiss_index
 from scripts.utils.embedding_version_manager import EmbeddingVersionManager
 
