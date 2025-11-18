@@ -87,53 +87,42 @@ workflow = LangGraphWorkflowService(config)
 result = await workflow.process_query_async("질문", "session_id")
 ```
 
-### lawfirm_langgraph/core/agents/ - 레거시 에이전트 코드
-**역할**: 레거시 코드 및 유틸리티 (하위 호환성 유지)
-
-**참고**: 새로운 코드는 `core/workflow/`를 사용하세요. 이 디렉토리는 하위 호환성을 위해 유지됩니다.
-
-```
-lawfirm_langgraph/core/agents/
-├── handlers/                        # 핸들러 모듈 (레거시)
-│   ├── answer_formatter.py
-│   ├── answer_generator.py
-│   ├── classification_handler.py
-│   ├── context_builder.py
-│   ├── direct_answer_handler.py
-│   └── search_handler.py
-├── keyword_mapper.py                # 키워드 매퍼
-├── legal_data_connector_v2.py       # 데이터 커넥터 (v2)
-├── optimizers/                      # 최적화 모듈
-│   ├── performance_optimizer.py     # 성능 최적화
-│   └── query_optimizer.py           # 쿼리 최적화
-└── validators/                      # 검증 모듈
-    └── quality_validators.py
-```
 
 ### lawfirm_langgraph/core/services/ - 비즈니스 서비스
-**역할**: 검색, 답변 생성, 품질 개선 등
+**역할**: 답변 생성, 컨텍스트 구축, 신뢰도 계산 등
 
 ```
 lawfirm_langgraph/core/services/
-├── hybrid_search_engine.py          # 하이브리드 검색
-├── semantic_search_engine.py         # 의미적 검색
-├── exact_search_engine.py            # 정확한 매칭
-├── precedent_search_engine.py         # 판례 검색
-├── question_classifier.py            # 질문 분류
 ├── answer_generator.py                # 답변 생성
 ├── context_builder.py                 # 컨텍스트 빌더
 ├── confidence_calculator.py          # 신뢰도 계산
 ├── gemini_client.py                   # Gemini 클라이언트
 ├── unified_prompt_manager.py          # 통합 프롬프트 관리
-└── ... (70+ 서비스 파일)
+└── ... (기타 서비스 파일)
+```
+
+**참고**: 검색 엔진은 `core/search/engines/`에 위치합니다.
+
+### lawfirm_langgraph/core/search/ - 검색 시스템
+**역할**: 하이브리드 검색 엔진 및 검색 결과 처리
+
+```
+lawfirm_langgraph/core/search/
+├── engines/                          # 검색 엔진
+│   ├── hybrid_search_engine_v2.py    # 하이브리드 검색
+│   ├── semantic_search_engine_v2.py  # 의미적 검색
+│   └── keyword_search_engine.py      # 키워드 검색
+└── processors/                        # 검색 결과 처리
+    ├── result_merger.py              # 결과 병합
+    └── result_ranker.py              # 결과 순위 결정
 ```
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 
-engine = HybridSearchEngine()
-results = engine.search("계약 해지", question_type="law_inquiry")
+engine = HybridSearchEngineV2()
+results = engine.search("계약 해지", k=10)
 ```
 
 ### lawfirm_langgraph/core/data/ - 데이터 레이어
@@ -204,11 +193,13 @@ User Output
 ```
 Query
     ↓
-lawfirm_langgraph/core/services/question_classifier.py (분류)
+lawfirm_langgraph/core/classification/classifiers/question_classifier.py (분류)
     ↓
-lawfirm_langgraph/core/services/hybrid_search_engine.py (검색)
-    ├── semantic_search_engine.py
-    └── exact_search_engine.py
+lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py (검색)
+    ├── semantic_search_engine_v2.py
+    └── keyword_search_engine.py
+    ↓
+lawfirm_langgraph/core/search/processors/result_merger.py (결과 병합)
     ↓
 Results
 ```
@@ -229,7 +220,7 @@ sys.path.insert(0, str(project_root))
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 ```
 
@@ -260,8 +251,8 @@ from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `lawfirm_langgraph/core/workflow/` | 워크플로우 관리 및 실행 | services, models, data |
-| `lawfirm_langgraph/core/agents/` | 레거시 코드 및 유틸리티 | services, models, data |
+| `lawfirm_langgraph/core/workflow/` | 워크플로우 관리 및 실행 | search, services, models, data |
+| `lawfirm_langgraph/core/search/` | 검색 엔진 및 결과 처리 | data, models |
 | `lawfirm_langgraph/core/services/` | 비즈니스 로직 | data, models |
 | `lawfirm_langgraph/core/data/` | 데이터 관리 | - |
 | `lawfirm_langgraph/core/models/` | AI 모델 | - |

@@ -16,7 +16,7 @@
 
 ### 2. 하이브리드 검색 시스템
 - **벡터 검색**: FAISS 기반 의미적 유사도 검색 (SemanticSearchEngineV2)
-- **키워드 검색**: FTS5 기반 키워드 검색 (ExactSearchEngineV2)
+- **키워드 검색**: FTS5 기반 키워드 검색 (KeywordSearchEngine)
 - **하이브리드 통합**: 가중 평균으로 검색 결과 결합
 - **Keyword Coverage 기반 동적 가중치**: 검색 결과의 키워드 커버리지에 따라 가중치 조정
 - **의미 기반 키워드 매칭**: SentenceTransformer를 활용한 의미적 유사도 기반 키워드 매칭
@@ -106,36 +106,13 @@
 
 ## 📁 프로젝트 구조
 
-```
-LawFirmAI/
-├── lawfirm_langgraph/      # 핵심 LangGraph 워크플로우 시스템
-│   ├── config/             # 설정 파일
-│   ├── core/               # 핵심 비즈니스 로직
-│   │   ├── agents/         # LangGraph 워크플로우 에이전트
-│   │   ├── services/       # 비즈니스 서비스
-│   │   ├── data/           # 데이터 레이어
-│   │   ├── models/         # AI 모델
-│   │   └── utils/          # 유틸리티
-│   ├── langgraph_core/     # LangGraph 핵심 모듈
-│   ├── tests/              # 테스트 코드
-│   └── docs/               # 문서
-├── scripts/                # 유틸리티 스크립트
-│   ├── data_collection/    # 데이터 수집
-│   ├── data_processing/    # 데이터 전처리
-│   ├── database/           # 데이터베이스 관리
-│   └── ml_training/        # ML 모델 훈련 및 평가
-│       ├── evaluation/     # 평가 스크립트
-│       ├── model_training/ # 모델 훈련
-│       └── vector_embedding/ # 벡터 임베딩
-├── data/                   # 데이터 파일
-│   ├── raw/                # 원본 데이터
-│   ├── processed/          # 전처리된 데이터
-│   ├── embeddings/         # 벡터 임베딩
-│   └── database/           # 데이터베이스 파일
-├── monitoring/             # 모니터링 시스템
-├── docs/                   # 문서
-└── README.md               # 프로젝트 문서
-```
+자세한 프로젝트 구조는 [프로젝트 구조 문서](project_structure.md)를 참조하세요.
+
+주요 디렉토리:
+- `lawfirm_langgraph/`: 핵심 LangGraph 워크플로우 시스템
+- `scripts/`: 데이터 수집, 전처리, ML 훈련 스크립트
+- `data/`: 원본 데이터, 전처리된 데이터, 벡터 임베딩
+- `docs/`: 프로젝트 문서
 
 ## 🚀 빠른 시작
 

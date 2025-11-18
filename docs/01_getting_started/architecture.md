@@ -263,9 +263,9 @@ lawfirm_langgraph/core/workflow/workflow_service.py
 lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── nodes/classification_nodes.py (질문 분류)
     ├── nodes/search_nodes.py (문서 검색)
-    │   ├── lawfirm_langgraph/core/services/hybrid_search_engine.py
-    │   ├── lawfirm_langgraph/core/services/semantic_search_engine.py
-    │   └── lawfirm_langgraph/core/services/exact_search_engine.py
+    │   ├── lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py
+    │   ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py
+    │   └── lawfirm_langgraph/core/search/engines/keyword_search_engine.py
     └── nodes/answer_nodes.py (답변 생성)
         ├── lawfirm_langgraph/core/services/answer_generator.py
         ├── lawfirm_langgraph/core/services/context_builder.py
@@ -279,13 +279,13 @@ User Output
 ```
 Query
     ↓
-lawfirm_langgraph/core/services/question_classifier.py (질문 분류)
+lawfirm_langgraph/core/classification/classifiers/question_classifier.py (질문 분류)
     ↓
-lawfirm_langgraph/core/services/hybrid_search_engine.py (하이브리드 검색)
-    ├── lawfirm_langgraph/core/services/semantic_search_engine.py (의미적 검색)
-    └── lawfirm_langgraph/core/services/exact_search_engine.py (정확 매칭)
+lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py (하이브리드 검색)
+    ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py (의미적 검색)
+    └── lawfirm_langgraph/core/search/engines/keyword_search_engine.py (키워드 검색)
     ↓
-lawfirm_langgraph/core/services/result_merger.py (결과 병합)
+lawfirm_langgraph/core/search/processors/result_merger.py (결과 병합)
     ↓
 Results
 ```
@@ -296,13 +296,13 @@ Results
 
 ```python
 # 직접 호출
-from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
 
-search_engine = HybridSearchEngine()
+search_engine = HybridSearchEngineV2()
 answer_generator = AnswerGenerator()
 
-results = search_engine.search("계약 해지")
+results = search_engine.search("계약 해지", k=10)
 answer = answer_generator.generate("계약 해지", results)
 ```
 
@@ -403,13 +403,15 @@ async def parallel_search(queries: List[str]):
 ### 1. 입력 검증
 
 ```python
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=10000)
     session_id: Optional[str] = None
     
-    @validator('message')
+    @field_validator('message')
+    @classmethod
     def validate_message(cls, v):
         if len(v) > 10000:
             raise ValueError('메시지가 너무 깁니다')
@@ -442,8 +444,9 @@ from unittest.mock import Mock
 class TestHybridSearchEngine:
     def test_search(self):
         """검색 기능 테스트"""
-        engine = HybridSearchEngine()
-        results = engine.search("계약 해지")
+        from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
+        engine = HybridSearchEngineV2()
+        results = engine.search("계약 해지", k=10)
         assert results is not None
         assert len(results) > 0
 ```

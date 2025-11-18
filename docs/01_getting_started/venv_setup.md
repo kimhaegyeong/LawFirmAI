@@ -75,3 +75,4 @@ python -m pytest test/ -v
 - `.vscode/settings.json`은 Cursor/VSCode의 Python 확장 기능을 위한 설정입니다.
 - 두 설정이 함께 작동하여 올바른 가상환경을 자동으로 사용합니다.
 
+
