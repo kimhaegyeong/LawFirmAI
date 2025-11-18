@@ -49,31 +49,35 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 ### 핵심 컴포넌트
 
 #### 1. LangGraph Workflow Service
-**파일**: `source/agents/workflow_service.py`
+**파일**: `lawfirm_langgraph/core/workflow/workflow_service.py`
 
 - **역할**: LangGraph 기반 법률 질문 처리 워크플로우 오케스트레이션
 - **주요 기능**:
   - 질문 처리 워크플로우 실행
   - 상태 관리 및 최적화
   - 세션 관리
+  - Keyword Coverage 최적화 (평균 0.806)
+  - 성능 최적화 (선택적 의미 기반 매칭, 배치 임베딩 생성)
 
 #### 2. 검색 엔진
-**파일**: `source/services/search/`
+**파일**: `lawfirm_langgraph/core/search/engines/`
 
-- **HybridSearchEngine**: 하이브리드 검색 (의미적 + 정확 매칭)
-- **SemanticSearchEngine**: FAISS 벡터 기반 의미적 검색
-- **ExactSearchEngine**: SQLite FTS 기반 정확한 매칭 검색
+- **HybridSearchEngineV2**: 하이브리드 검색 (의미적 + 정확 매칭)
+- **SemanticSearchEngineV2**: FAISS 벡터 기반 의미적 검색
+- **ExactSearchEngineV2**: SQLite FTS5 기반 정확한 매칭 검색
 - **QuestionClassifier**: 질문 유형 분류
+- **Keyword Coverage 기반 동적 가중치**: 검색 결과의 키워드 커버리지에 따라 가중치 조정
 
-#### 3. 답변 생성 서비스
-**파일**: `source/services/generation/`
+#### 3. 검색 결과 처리 및 순위 결정
+**파일**: `lawfirm_langgraph/core/search/processors/`
 
-- **AnswerGenerator**: LLM 기반 답변 생성
-- **ContextBuilder**: 검색 결과 기반 컨텍스트 구축
-- **AnswerFormatter**: 답변 포맷팅
+- **ResultMerger**: 검색 결과 병합
+- **ResultRanker**: 다단계 재순위화 및 Keyword Coverage 평가
+- **SearchResultProcessor**: 검색 결과 처리 및 키워드 매칭 점수 계산
+- **의미 기반 키워드 매칭**: SentenceTransformer를 활용한 의미적 유사도 기반 키워드 매칭 (선택적 실행)
 
 #### 4. 데이터 레이어
-**파일**: `source/data/`
+**파일**: `lawfirm_langgraph/core/data/`
 
 - **VectorStore**: FAISS 벡터 스토어 관리
 - **Database**: SQLite 데이터베이스 관리
@@ -180,20 +184,21 @@ python main.py
 ```
 사용자 쿼리 (frontend 또는 api)
     ↓
-core/agents/workflow_service.py
+lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
-core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
+lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── classify_query (질문 분류)
-    ├── resolve_multi_turn (멀티턴 처리)
+    ├── expand_keywords (키워드 확장 - LLM 기반)
     ├── retrieve_documents (문서 검색)
-    │   ├── core/services/search/hybrid_search_engine.py
-    │   ├── core/services/search/semantic_search_engine.py
-    │   └── core/services/search/exact_search_engine.py
-    ├── generate_answer (답변 생성)
-    │   ├── core/services/generation/answer_generator.py
-    │   └── core/services/generation/context_builder.py
-    └── calculate_confidence (신뢰도 계산)
-        └── core/services/enhancement/confidence_calculator.py
+    │   ├── lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py
+    │   ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py
+    │   └── lawfirm_langgraph/core/search/engines/exact_search_engine_v2.py
+    ├── process_search_results_combined (검색 결과 처리)
+    │   ├── lawfirm_langgraph/core/search/processors/result_merger.py
+    │   ├── lawfirm_langgraph/core/search/processors/result_ranker.py
+    │   └── lawfirm_langgraph/core/search/processors/search_result_processor.py
+    └── generate_answer (답변 생성)
+        └── lawfirm_langgraph/core/workflow/processors/workflow_document_processor.py
     ↓
 최종 응답 반환
 ```
@@ -203,13 +208,13 @@ core/agents/legal_workflow_enhanced.py (LangGraph 워크플로우)
 ```
 문서 입력
     ↓
-core/data/data_processor.py (문서 전처리)
+lawfirm_langgraph/core/data/data_processor.py (문서 전처리)
     ↓
-core/data/vector_store.py (벡터 임베딩 생성)
+lawfirm_langgraph/core/data/vector_store.py (벡터 임베딩 생성)
     ↓
 FAISS 인덱스 업데이트
     ↓
-core/data/database.py (메타데이터 저장)
+lawfirm_langgraph/core/data/database.py (메타데이터 저장)
     ↓
 성공/실패 응답
 ```
@@ -217,10 +222,10 @@ core/data/database.py (메타데이터 저장)
 ## 기술 스택
 
 ### 핵심 라이브러리
+- **LangGraph**: State 기반 워크플로우 관리
 - **LangChain**: RAG 파이프라인 구축 및 체인 관리
-- **Langfuse**: LLM 관찰성 및 디버깅 플랫폼
 - **FAISS**: 벡터 검색 및 유사도 계산
-- **Sentence-Transformers**: 한국어 임베딩 모델
+- **Sentence-Transformers**: 한국어 임베딩 모델 (snunlp/KR-SBERT-V40K-klueNLI-augSTS)
 - **SQLite**: 정확한 매칭 검색 및 메타데이터 저장 (Python 내장 모듈)
 
 ### LLM 지원
@@ -234,44 +239,35 @@ core/data/database.py (메타데이터 저장)
 ## 성능 최적화
 
 ### 1. 벡터 검색 최적화
-- **인덱스 최적화**: FAISS 인덱스 타입 선택
+- **인덱스 최적화**: FAISS 인덱스 타입 선택 (IndexIVFPQ 지원)
 - **배치 처리**: 여러 쿼리 동시 처리
-- **캐싱**: 자주 사용되는 검색 결과 캐싱
+- **모델 캐싱**: SentenceTransformer 모델 클래스 변수로 캐싱 (약 7.5초 절약)
+- **선택적 의미 기반 매칭**: Keyword Coverage 70% 이상 시 의미 기반 매칭 생략
+- **배치 임베딩 생성**: 개별 생성 대신 배치로 처리 (batch_size=8)
 
 ### 2. 컨텍스트 관리 최적화
 - **동적 길이 조절**: 쿼리 복잡도에 따른 컨텍스트 길이 조절
-- **관련성 필터링**: 임계값 기반 문서 필터링
+- **관련성 필터링**: Keyword Coverage 기반 문서 필터링
 - **세션 캐싱**: 사용자 세션별 컨텍스트 캐싱
+- **문서 손실 방지**: 10개 이하 문서 필터링 건너뛰기
 
 ### 3. LLM 호출 최적화
 - **프롬프트 최적화**: 효율적인 프롬프트 템플릿
 - **토큰 관리**: 최적의 토큰 사용량
 - **비동기 처리**: 여러 LLM 호출 병렬 처리
+- **타임아웃 최적화**: LLM 호출 타임아웃 3초로 단축
+- **조건부 AI 확장**: 키워드 5개 이상, 쿼리 10자 이상일 때만 AI 확장
 
 ## 모니터링 및 디버깅
 
-### Langfuse 대시보드
-- **실시간 추적**: 모든 LLM 호출의 실시간 모니터링
-- **성능 메트릭**: 응답 시간, 토큰 사용량, 비용 분석
-- **오류 추적**: 실패한 요청의 상세 분석
-- **A/B 테스트**: 다양한 프롬프트 및 모델 비교
-
 ### 로깅 시스템
-
-```python
-# 로깅 설정 예시
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/langchain_rag.log')
-    ]
-)
-```
+- **파일 로깅**: `logs/test/run_query_test_YYYYMMDD_HHMMSS.log`에 자동 저장
+- **성능 메트릭**: 노드별 실행 시간 추적
+- **Keyword Coverage 추적**: 검색 품질 메트릭 모니터링
+- **메타데이터 정규화 로그**: 오타 필드명 자동 수정 추적
 
 ### 메트릭 수집
-- **RAG 메트릭**: 검색 정확도, 응답 품질, 신뢰도
+- **RAG 메트릭**: 검색 정확도, 응답 품질, 신뢰도, Keyword Coverage
 - **성능 메트릭**: 응답 시간, 처리량, 리소스 사용량
 - **사용자 메트릭**: 쿼리 패턴, 세션 길이, 만족도
 
@@ -316,26 +312,27 @@ logging.basicConfig(
 ### 검색 엔진 구성
 
 #### 1. 의미적 검색 엔진
-**파일**: `source/services/search/semantic_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py`
 
 ```python
-from source.services.search import SemanticSearchEngine
+from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 
-engine = SemanticSearchEngine()
+engine = SemanticSearchEngineV2()
 results = engine.search("계약 해지", k=5)
 ```
 
 **주요 기능**:
 - FAISS 벡터 인덱스 기반 검색
-- Sentence-BERT 모델을 사용한 의미적 유사도 계산
+- Sentence-BERT 모델을 사용한 의미적 유사도 계산 (snunlp/KR-SBERT-V40K-klueNLI-augSTS)
+- 메타데이터 정규화 (오타 필드명 자동 수정)
 
 #### 2. 정확 매칭 검색 엔진
-**파일**: `source/services/search/exact_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/exact_search_engine_v2.py`
 
 ```python
-from source.services.search import ExactSearchEngine
+from lawfirm_langgraph.core.search.engines.exact_search_engine_v2 import ExactSearchEngineV2
 
-engine = ExactSearchEngine()
+engine = ExactSearchEngineV2()
 results = engine.search("민법 제543조", k=5)
 ```
 
@@ -344,12 +341,12 @@ results = engine.search("민법 제543조", k=5)
 - 법령명, 조문번호 등 정확한 매칭
 
 #### 3. 하이브리드 검색 엔진
-**파일**: `source/services/search/hybrid_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py`
 
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 
-engine = HybridSearchEngine()
+engine = HybridSearchEngineV2()
 results = engine.search("계약 해지", question_type="law_inquiry")
 ```
 
@@ -357,32 +354,36 @@ results = engine.search("계약 해지", question_type="law_inquiry")
 - 의미적 검색과 정확 매칭 검색 결과 통합
 - 가중 평균을 통한 결과 재순위화
 - 질문 유형별 동적 가중치 조정
+- Keyword Coverage 기반 동적 가중치 조정
 
 ## LangGraph 기반 RAG 시스템
 
 ### 워크플로우 서비스
 
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
 
 # 쿼리 처리
-result = await workflow.process_query("계약 해지 조건은?", "session_id")
+result = await workflow.process_query_async("계약 해지 조건은?", "session_id")
 
 # 결과 확인
 print(result["answer"])
 print(f"신뢰도: {result.get('confidence', 'N/A')}")
 print(f"소스: {result.get('sources', [])}")
+print(f"Keyword Coverage: {result.get('keyword_coverage', 'N/A')}")
 ```
 
 **주요 기능**:
 - LangGraph 기반 State 워크플로우
 - 질문 분류 및 긴급도 평가
+- LLM 기반 키워드 확장
 - 하이브리드 검색 자동 실행
+- Keyword Coverage 기반 검색 결과 평가
 - 답변 생성 및 품질 검증
 
 ## 사용 예시
@@ -390,28 +391,29 @@ print(f"소스: {result.get('sources', [])}")
 ### 1. 기본 RAG 쿼리
 
 ```python
-from source.agents.workflow_service import LangGraphWorkflowService
-from infrastructure.utils.langgraph_config import LangGraphConfig
+from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
+from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 # 워크플로우 서비스 초기화
 config = LangGraphConfig.from_env()
 workflow = LangGraphWorkflowService(config)
 
 # 쿼리 처리
-result = await workflow.process_query("계약서에서 주의해야 할 조항은 무엇인가요?", "session_id")
+result = await workflow.process_query_async("계약서에서 주의해야 할 조항은 무엇인가요?", "session_id")
 
 print(f"답변: {result['answer']}")
 print(f"신뢰도: {result.get('confidence', 'N/A')}")
 print(f"참조 문서: {len(result.get('sources', []))}개")
+print(f"Keyword Coverage: {result.get('keyword_coverage', 'N/A')}")
 ```
 
 ### 2. 하이브리드 검색
 
 ```python
-from source.services.search import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 
 # 검색 엔진 초기화
-search_engine = HybridSearchEngine()
+search_engine = HybridSearchEngineV2()
 
 # 하이브리드 검색
 results = search_engine.search("민법 제543조", question_type="law_inquiry")
@@ -425,10 +427,10 @@ for result in results:
 ### 3. 벡터 저장소 관리
 
 ```python
-from source.data.vector_store import VectorStore
+from lawfirm_langgraph.core.data.vector_store import VectorStore
 
 # 벡터 저장소 초기화
-vector_store = VectorStore("ko-sroberta-multitask")
+vector_store = VectorStore("snunlp/KR-SBERT-V40K-klueNLI-augSTS")
 
 # 문서 추가
 vector_store.add_documents(documents)
@@ -457,10 +459,13 @@ results = vector_store.similarity_search("계약 해지", k=5)
 
 ```bash
 # RAG 시스템 로그 확인
-tail -f logs/langchain_rag.log
+tail -f logs/test/run_query_test_*.log
 
-# Langfuse 대시보드 접속
-# https://cloud.langfuse.com
+# 성능 메트릭 추출
+Select-String -Path logs/test/run_query_test_*.log -Pattern "PERFORMANCE|process_search_results_combined|expand_keywords"
+
+# Keyword Coverage 확인
+Select-String -Path logs/test/run_query_test_*.log -Pattern "Keyword Coverage"
 ```
 
 ## 성능 지표
@@ -469,16 +474,22 @@ tail -f logs/langchain_rag.log
 
 | 지표 | 값 | 설명 |
 |------|-----|------|
-| **평균 검색 시간** | 0.015초 | 매우 빠른 검색 성능 |
-| **처리 속도** | 5.77 법률/초 | 안정적인 처리 속도 |
+| **평균 Keyword Coverage** | 0.806 | 목표 0.70 이상 초과 달성 |
+| **process_search_results_combined** | 4-5초 | 목표 5초 이하 달성 (68-75% 감소) |
+| **expand_keywords** | 3-4초 | 목표 5초 이하 달성 (51-63% 감소) |
+| **평균 검색 시간** | < 1초 | 매우 빠른 검색 성능 |
 | **성공률** | 99.9% | 높은 안정성 |
-| **메모리 사용량** | 190MB | 최적화된 메모리 사용 |
-| **벡터 인덱스 크기** | 456.5 MB | 효율적인 인덱스 크기 |
-| **메타데이터 크기** | 326.7 MB | 상세한 메타데이터 |
+| **메모리 사용량** | 최적화됨 | 모델 캐싱으로 메모리 효율성 향상 |
 
 ## 결론
 
-LangChain 기반 RAG 시스템은 법률 AI 어시스턴트의 핵심 기능을 제공하며, Langfuse를 통한 관찰성과 디버깅 기능으로 시스템의 안정성과 성능을 보장합니다. 모듈화된 아키텍처와 확장 가능한 설계를 통해 향후 요구사항 변화에 유연하게 대응할 수 있습니다.
+LangGraph 기반 RAG 시스템은 법률 AI 어시스턴트의 핵심 기능을 제공하며, Keyword Coverage 최적화와 성능 최적화를 통해 시스템의 안정성과 성능을 보장합니다. 모듈화된 아키텍처와 확장 가능한 설계를 통해 향후 요구사항 변화에 유연하게 대응할 수 있습니다.
+
+**주요 개선 사항**:
+- Keyword Coverage: 평균 0.806 (목표 0.70 이상 초과 달성)
+- 성능 최적화: 선택적 의미 기반 매칭, 배치 임베딩 생성, 모델 캐싱
+- 메타데이터 정규화: 오타 필드명 자동 수정 및 복원
+- LLM 기반 키워드 확장: 동의어/유사어 확장으로 검색 정확도 향상
 
 ---
 
