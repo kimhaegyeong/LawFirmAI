@@ -12,12 +12,11 @@ from typing import List, Dict, Any, Optional
 import re
 
 # 프로젝트 루트를 sys.path에 추가
-_CURRENT_FILE = Path(__file__).resolve()
-_PROJECT_ROOT = _CURRENT_FILE.parents[1]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+from scripts.utils.path_utils import setup_project_path
+setup_project_path()
 
 from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
+from scripts.utils.text_utils import extract_keywords
 
 
 def analyze_reference_quality(
@@ -120,23 +119,6 @@ def analyze_reference_quality(
     return analysis
 
 
-def extract_keywords(query: str) -> List[str]:
-    """쿼리에서 키워드 추출"""
-    # 간단한 키워드 추출 (조사 제거)
-    stopwords = ['에', '를', '을', '의', '와', '과', '로', '으로', '에서', '에게', '에게서', 
-                 '에 대해', '에 대해서', '에 관하여', '에 관해서', '에 대해 알려주세요', 
-                 '에 대해 설명해주세요', '에 대해 알려주세요', '에 대해 설명해주세요',
-                 '알려주세요', '설명해주세요', '알려줘', '설명해줘', '무엇인가요', '무엇인가',
-                 '어떤', '어떻게', '왜', '언제', '어디서', '누가']
-    
-    # 조사 제거
-    for stopword in stopwords:
-        query = query.replace(stopword, ' ')
-    
-    # 공백으로 분리
-    keywords = [kw.strip() for kw in query.split() if kw.strip() and len(kw.strip()) > 1]
-    
-    return keywords
 
 
 def print_analysis_report(query: str, analysis: Dict[str, Any], results: List[Dict[str, Any]]):

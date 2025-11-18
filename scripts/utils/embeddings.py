@@ -36,7 +36,14 @@ class SentenceEmbedder:
                 os.environ['OMP_NUM_THREADS'] = str(cpu_count)
                 os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
         
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # GPU 디바이스 확인 (CUDA 또는 ROCm)
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif hasattr(torch, 'hip') and torch.hip.is_available():
+            # AMD GPU (ROCm) - CUDA API 호환
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
         
         if model_name is None:
             model_name = os.getenv("EMBEDDING_MODEL")
@@ -168,8 +175,11 @@ class SentenceEmbedder:
             del sum_vec
             del lengths
             del sent_vec
-            if self.device != "cpu" and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if self.device != "cpu":
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif hasattr(torch, 'hip') and torch.hip.is_available():
+                    torch.hip.empty_cache()
         
         if not embeddings:
             return np.zeros((0, self.dim), dtype=np.float32)

@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 # 프로젝트 루트를 sys.path에 추가
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
+from scripts.utils.path_utils import setup_project_path, get_project_root
+project_root = setup_project_path()
 
 try:
     from dotenv import load_dotenv
