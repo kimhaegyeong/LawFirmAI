@@ -4,6 +4,7 @@ Semantic Search Engine V2
 lawfirm_v2.db의 embeddings 테이블을 사용한 벡터 검색 엔진
 """
 
+import gc
 import logging
 import sqlite3
 import sys
@@ -41,7 +42,22 @@ except ImportError:
         PARAMETER_CHECK_SAMPLE_SIZE = 10  # 검증 시 확인할 파라미터 샘플 개수
         MAX_META_DEVICE_FIX_ATTEMPTS = 3  # meta device 수정 최대 시도 횟수
         
-        def __init__(self, model_name: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"):
+        def __init__(self, model_name: Optional[str] = None):
+            if model_name is None:
+                import os
+                model_name = os.getenv("EMBEDDING_MODEL")
+                if model_name is None:
+                    from ...utils.config import Config
+                    config = Config()
+                    model_name = config.embedding_model
+            
+            # 모델 이름 정리 (따옴표 및 공백 제거)
+            if model_name:
+                model_name = model_name.strip().strip('"').strip("'").strip()
+            
+            if not model_name:
+                raise ValueError("Model name cannot be empty")
+            
             self.model_name = model_name
             import logging
             logger = logging.getLogger(__name__)
@@ -86,7 +102,7 @@ except ImportError:
                             "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                             "device_map": None,  # device_map 사용 안 함
                             "dtype": torch.float32,  # 명시적 dtype 설정 (torch_dtype deprecated)
-                            "use_safetensors": False,  # safetensors 사용 안 함 (meta tensor 문제 방지)
+                            "use_safetensors": True,  # safetensors 사용 (모델이 safetensors 형식)
                             "ignore_mismatched_sizes": True,  # 크기 불일치 무시
                             "trust_remote_code": True,  # 원격 코드 신뢰
                             "local_files_only": False,  # 로컬 파일만 사용 안 함
@@ -175,7 +191,7 @@ except ImportError:
                                 dtype=torch.float32,  # dtype 사용 (torch_dtype deprecated)
                                 low_cpu_mem_usage=False,  # 핵심: meta device 방지 (False로 설정)
                                 device_map=None,  # 핵심: device_map 사용 안 함
-                                use_safetensors=False,  # safetensors 사용 안 함 (일부 모델에서 메타 디바이스 문제 발생)
+                                use_safetensors=True,  # safetensors 사용 (모델이 safetensors 형식)
                                 trust_remote_code=True,
                                 local_files_only=False,
                                 _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
@@ -314,7 +330,7 @@ except ImportError:
                                         dtype=torch.float32,  # torch_dtype deprecated
                                         low_cpu_mem_usage=False,  # 핵심: meta device 방지
                                         device_map=None,  # 핵심: device_map 사용 안 함
-                                        use_safetensors=False,  # safetensors 사용 안 함
+                                        use_safetensors=True,  # safetensors 사용 (모델이 safetensors 형식)
                                         trust_remote_code=True,
                                         local_files_only=False,
                                         _fast_init=False,  # fast init 비활성화
@@ -542,7 +558,17 @@ except ImportError:
                 
                 # 대체 모델 시도
                 try:
-                    fallback_model = "jhgan/ko-sroberta-multitask"
+                    from ...utils.config import Config
+                    config = Config()
+                    fallback_model = config.embedding_model
+                    
+                    # 모델 이름 정리 (따옴표 및 공백 제거)
+                    if fallback_model:
+                        fallback_model = fallback_model.strip().strip('"').strip("'").strip()
+                    
+                    if not fallback_model:
+                        raise ValueError("Fallback model name cannot be empty")
+                    
                     logger.warning(f"Trying fallback model: {fallback_model}")
                     import torch
                     import os
@@ -573,7 +599,7 @@ except ImportError:
                                 "low_cpu_mem_usage": False,  # meta device 사용 방지 (가장 중요)
                                 "device_map": None,  # device_map 사용 안 함
                                 "dtype": torch.float32,  # 명시적 dtype 설정 (torch_dtype deprecated)
-                                "use_safetensors": False,  # safetensors 사용 안 함
+                                "use_safetensors": True,  # safetensors 사용 (모델이 safetensors 형식)
                                 "trust_remote_code": True,  # 원격 코드 신뢰
                                 "local_files_only": False,  # 로컬 파일만 사용 안 함
                             }
@@ -651,7 +677,7 @@ except ImportError:
                                     torch_dtype=torch.float32,
                                     low_cpu_mem_usage=False,  # 핵심: meta device 방지
                                     device_map=None,  # 핵심: device_map 사용 안 함
-                                    use_safetensors=False,  # safetensors 사용 안 함 (일부 모델에서 메타 디바이스 문제 발생)
+                                    use_safetensors=True,  # safetensors 사용 (모델이 safetensors 형식)
                                     trust_remote_code=True,
                                     local_files_only=False,
                                     _fast_init=False,  # fast init 비활성화 (meta tensor 방지)
@@ -785,12 +811,24 @@ class SemanticSearchEngineV2:
 
         # 모델명이 제공되지 않으면 데이터베이스에서 자동 감지
         if model_name is None:
-            model_name = self._detect_model_from_database()
+            # 환경 변수에서 먼저 확인 (법률 특화 SBERT 모델 지원)
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            
             if model_name is None:
-                # 감지 실패 시 문서 임베딩 기준 모델 사용
-                model_name = "jhgan/ko-sroberta-multitask"
-                self.logger.warning(f"Could not detect model from database, using default: {model_name}")
+                model_name = self._detect_model_from_database()
+                if model_name is None:
+                    from ..utils.config import Config
+                    config = Config()
+                    model_name = config.embedding_model
+                    self.logger.warning(f"Could not detect model from database or env, using config default: {model_name}")
+            else:
+                self.logger.info(f"Using embedding model from environment variable: {model_name}")
 
+        # 모델 이름 정리 (따옴표 제거)
+        if model_name:
+            model_name = model_name.strip().strip('"').strip("'")
+        
         self.model_name = model_name
 
         # FAISS 인덱스 관련 속성
@@ -956,9 +994,23 @@ class SemanticSearchEngineV2:
             초기화 성공 여부
         """
         try:
+            # 모델 이름 정리 (따옴표 및 공백 제거)
+            if model_name:
+                model_name = model_name.strip().strip('"').strip("'").strip()
+            
+            if not model_name:
+                self.logger.error("Model name is empty after cleaning")
+                return False
+            
             self.embedder = SentenceEmbedder(model_name)
             self.dim = self.embedder.dim
             self.logger.info(f"Embedding model loaded: {model_name}, dim={self.dim}")
+            
+            # 메모리 정리: 모델 로딩 후 가비지 컬렉션
+            collected = gc.collect()
+            if collected > 0:
+                self.logger.debug(f"Garbage collection after model loading: {collected} objects collected")
+            
             return True
         except RuntimeError as e:
             # PyTorch 스레드 설정 관련 오류는 재시도하지 않음 (이미 SentenceEmbedder에서 처리됨)
@@ -1220,6 +1272,26 @@ class SemanticSearchEngineV2:
             # 먼저 활성 버전의 모델 조회 시도
             active_version_id = self._get_active_embedding_version_id()
             if active_version_id:
+                # embedding_versions 테이블에서 직접 모델명 조회 (더 정확함)
+                cursor.execute("""
+                    SELECT model_name
+                    FROM embedding_versions
+                    WHERE id = ?
+                """, (active_version_id,))
+                row = cursor.fetchone()
+                if row and row['model_name']:
+                    detected_model = row['model_name']
+                    # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
+                    if detected_model:
+                        detected_model = detected_model.strip().strip('"').strip("'")
+                    self.logger.info(
+                        f"Detected embedding model from active version (ID={active_version_id}): "
+                        f"{detected_model}"
+                    )
+                    conn.close()
+                    return detected_model
+                
+                # embedding_versions에 모델명이 없는 경우, embeddings 테이블에서 조회
                 cursor.execute("""
                     SELECT DISTINCT e.model, COUNT(*) as count
                     FROM embeddings e
@@ -1232,8 +1304,11 @@ class SemanticSearchEngineV2:
                 row = cursor.fetchone()
                 if row:
                     detected_model = row['model']
+                    # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
+                    if detected_model:
+                        detected_model = detected_model.strip().strip('"').strip("'")
                     self.logger.info(
-                        f"Detected embedding model from active version (ID={active_version_id}): "
+                        f"Detected embedding model from active version embeddings (ID={active_version_id}): "
                         f"{detected_model} (count: {row['count']})"
                     )
                     conn.close()
@@ -1252,6 +1327,9 @@ class SemanticSearchEngineV2:
 
             if row:
                 detected_model = row['model']
+                # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
+                if detected_model:
+                    detected_model = detected_model.strip().strip('"').strip("'")
                 self.logger.info(f"Detected embedding model from database: {detected_model} (count: {row['count']})")
                 if active_version_id:
                     self.logger.warning(
@@ -1771,15 +1849,22 @@ class SemanticSearchEngineV2:
         index_load_failed = False
         if self.index is None and FAISS_AVAILABLE and self.embedder:
             try:
-                if self.use_mlflow_index and self.mlflow_manager:
-                    self._load_mlflow_index()
-                elif faiss_version and hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
+                # 내부 인덱스를 우선적으로 사용 (MLflow 인덱스는 fallback)
+                if faiss_version and hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
                     self._load_faiss_index(faiss_version)
+                elif Path(self.index_path).exists():
+                    # 내부 인덱스가 존재하면 우선 사용
+                    self._load_faiss_index()
+                    if self.index is None:
+                        # 내부 인덱스 로드 실패 시 MLflow 인덱스 시도
+                        if self.use_mlflow_index and self.mlflow_manager:
+                            self._load_mlflow_index()
                 elif hasattr(self, 'faiss_version_manager') and self.faiss_version_manager:
                     # 버전 관리자가 있으면 활성 버전 시도
                     self._load_faiss_index()  # 활성 버전 자동 로드
-                elif Path(self.index_path).exists():
-                    self._load_faiss_index()
+                elif self.use_mlflow_index and self.mlflow_manager:
+                    # 내부 인덱스가 없으면 MLflow 인덱스 사용
+                    self._load_mlflow_index()
             except Exception as e:
                 self.logger.warning(f"Failed to load FAISS index during search: {e}")
                 self.logger.info("🔄 Falling back to direct database search (no FAISS index)")
@@ -2074,6 +2159,20 @@ class SemanticSearchEngineV2:
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
+                
+                # 차원 검증: 쿼리 벡터 차원과 인덱스 차원이 일치하는지 확인
+                query_dim = query_vec_np.shape[1]
+                index_dim = self.index.d
+                if query_dim != index_dim:
+                    error_msg = (
+                        f"FAISS index dimension mismatch: query vector dimension ({query_dim}) "
+                        f"does not match index dimension ({index_dim}). "
+                        f"This usually happens after re-embedding with a different model. "
+                        f"Please rebuild the FAISS index."
+                    )
+                    self.logger.error(f"❌ {error_msg}")
+                    raise ValueError(error_msg)
+                
                 search_k = k * 5  # 여유 있게 검색 (개선: 2배 → 5배로 확대)
                 
                 # nprobe 설정 (IndexIVF 계열만 지원)
@@ -2089,10 +2188,33 @@ class SemanticSearchEngineV2:
                 is_indexivfpq = 'IndexIVFPQ' in type(self.index).__name__
                 
                 self.logger.info(f"🔍 FAISS search returned {len(indices[0])} results (index_type={type(self.index).__name__}, filtering with version_id={embedding_version_id})")
+                
+                # _chunk_ids 확인
+                if not hasattr(self, '_chunk_ids') or not self._chunk_ids:
+                    self.logger.error(f"❌ _chunk_ids is empty or not loaded! FAISS index has {self.index.ntotal} vectors but _chunk_ids has {len(self._chunk_ids) if hasattr(self, '_chunk_ids') else 0} entries")
+                    self.logger.error("Attempting to reload _chunk_ids from database...")
+                    try:
+                        conn = self._get_connection()
+                        cursor = conn.execute(
+                            "SELECT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                            (embedding_version_id or self._get_active_embedding_version_id(),)
+                        )
+                        self._chunk_ids = [row[0] for row in cursor.fetchall()]
+                        conn.close()
+                        self.logger.info(f"✅ Reloaded {len(self._chunk_ids)} chunk_ids from database")
+                    except Exception as e:
+                        self.logger.error(f"Failed to reload _chunk_ids: {e}")
+                        return []
 
                 similarities = []
+                skipped_count = 0
+                filtered_by_version = 0
+                filtered_by_source = 0
+                filtered_by_threshold = 0
+                filtered_by_not_found = 0
                 for distance, idx in zip(distances[0], indices[0]):
                     if idx < 0 or idx >= len(self._chunk_ids):
+                        skipped_count += 1
                         continue
                     
                     # chunk_id 추출
@@ -2104,6 +2226,28 @@ class SemanticSearchEngineV2:
                             chunk_id = idx
                     else:
                         chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
+                    
+                    # chunk_id가 데이터베이스에 존재하는지 확인 (재임베딩 후 버전 불일치 방지)
+                    if chunk_id not in self._chunk_metadata:
+                        # DB에서 직접 확인
+                        try:
+                            conn_temp = self._get_connection()
+                            cursor_temp = conn_temp.execute(
+                                "SELECT id FROM text_chunks WHERE id = ?",
+                                (chunk_id,)
+                            )
+                            row_temp = cursor_temp.fetchone()
+                            conn_temp.close()
+                            
+                            if not row_temp:
+                                # chunk_id가 데이터베이스에 존재하지 않음 (FAISS 인덱스가 다른 버전으로 빌드됨)
+                                filtered_by_not_found += 1
+                                if filtered_by_not_found <= 5:  # 처음 5개만 로깅
+                                    self.logger.warning(f"⚠️  chunk_id={chunk_id} not found in database (FAISS index may be built with different version)")
+                                continue
+                        except Exception as e:
+                            self.logger.debug(f"Failed to verify chunk_id={chunk_id} existence: {e}")
+                            # 검증 실패 시에도 계속 진행 (성능을 위해)
                     
                     # source_types 필터링 (FAISS 인덱스 사용 시 사전 필터링)
                     if source_types:
@@ -2151,6 +2295,7 @@ class SemanticSearchEngineV2:
                         
                         # source_type이 source_types에 없으면 건너뛰기
                         if chunk_source_type and chunk_source_type not in source_types:
+                            filtered_by_source += 1
                             continue
                     
                     # embedding_version_id 필터링 (IndexIVFPQ 인덱스 사용 시 선택적 적용)
@@ -2186,16 +2331,41 @@ class SemanticSearchEngineV2:
                                 if active_version_id:
                                     chunk_version_id = active_version_id
                         
-                        # IndexIVFPQ 인덱스 사용 시 필터링 완화 (활성 버전이 없거나 매칭되지 않아도 허용)
+                        # 버전 필터링 (완화된 로직: 활성 버전이 요청 버전과 일치하면 허용)
                         if chunk_version_id != embedding_version_id:
-                            if is_indexivfpq:
-                                # IndexIVFPQ 인덱스 사용 시: 활성 버전이 없거나 매칭되지 않아도 경고만 출력하고 계속 진행
+                            # 활성 버전 확인
+                            active_version_id = self._get_active_embedding_version_id()
+                            
+                            # 활성 버전이 요청 버전과 일치하면 허용 (버전이 다르거나 없어도)
+                            if active_version_id == embedding_version_id:
+                                # 활성 버전과 요청 버전이 일치하면 버전 필터링 완화
                                 if chunk_version_id is None:
+                                    self.logger.debug(f"chunk_id={chunk_id} has no version_id, allowing (active version {active_version_id} matches requested {embedding_version_id})")
+                                elif is_indexivfpq:
+                                    self.logger.debug(f"IndexIVFPQ: chunk_id={chunk_id} version_id={chunk_version_id} != {embedding_version_id}, allowing (active version matches)")
+                                else:
+                                    # 일반 인덱스도 활성 버전이 일치하면 허용
+                                    self.logger.debug(f"chunk_id={chunk_id} version_id={chunk_version_id} != {embedding_version_id}, allowing (active version {active_version_id} matches requested)")
+                            elif chunk_version_id is None:
+                                # chunk_version_id가 None이고 활성 버전도 일치하지 않으면
+                                if is_indexivfpq:
+                                    # IndexIVFPQ 인덱스 사용 시: 버전이 없어도 허용
                                     self.logger.debug(f"IndexIVFPQ: chunk_id={chunk_id} has no version_id, allowing (filtering relaxed)")
                                 else:
-                                    self.logger.debug(f"IndexIVFPQ: chunk_id={chunk_id} version_id={chunk_version_id} != {embedding_version_id}, allowing (filtering relaxed)")
+                                    # 일반 인덱스는 활성 버전 사용
+                                    if active_version_id:
+                                        chunk_version_id = active_version_id
+                                        self.logger.debug(f"chunk_id={chunk_id} has no version_id, using active version {active_version_id}")
+                                    else:
+                                        filtered_by_version += 1
+                                        self.logger.debug(f"Filtered out chunk_id={chunk_id}: no version_id and no active version")
+                                        continue
+                            elif is_indexivfpq:
+                                # IndexIVFPQ 인덱스 사용 시: 버전이 매칭되지 않아도 허용
+                                self.logger.debug(f"IndexIVFPQ: chunk_id={chunk_id} version_id={chunk_version_id} != {embedding_version_id}, allowing (filtering relaxed)")
                             else:
                                 # 일반 인덱스는 엄격한 필터링
+                                filtered_by_version += 1
                                 self.logger.debug(f"Filtered out chunk_id={chunk_id}: version_id={chunk_version_id} != {embedding_version_id}")
                                 continue
                     
@@ -2204,11 +2374,21 @@ class SemanticSearchEngineV2:
                     if similarity >= similarity_threshold:
                         similarities.append((chunk_id, similarity))
                         self.logger.debug(f"Added to similarities: chunk_id={chunk_id}, similarity={similarity:.4f}, version_id={chunk_version_id if embedding_version_id is not None else 'N/A'}")
+                    else:
+                        filtered_by_threshold += 1
 
                 # 유사도 기준 정렬
                 similarities.sort(key=lambda x: x[1], reverse=True)  # similarity는 인덱스 1
                 
                 step_times['faiss_search'] = time.time() - search_start
+                
+                # 필터링 통계 로깅
+                if len(similarities) == 0 and len(indices[0]) > 0:
+                    self.logger.warning(f"⚠️  No results after filtering! FAISS returned {len(indices[0])} results but all were filtered out.")
+                    self.logger.warning(f"   Filtering stats: skipped={skipped_count}, by_version={filtered_by_version}, by_source={filtered_by_source}, by_threshold={filtered_by_threshold}, not_found={filtered_by_not_found}")
+                    if filtered_by_not_found > 0:
+                        self.logger.warning(f"   ⚠️  {filtered_by_not_found} chunk_ids not found in database - FAISS index may be built with different version. Please rebuild the index.")
+                    self.logger.warning(f"   Possible causes: similarity_threshold too high ({similarity_threshold:.3f}) or embedding_version_id mismatch (requested={embedding_version_id})")
                 
                 # IndexIVFPQ 인덱스 사용 시 상세 로깅
                 if is_indexivfpq:
@@ -2218,9 +2398,6 @@ class SemanticSearchEngineV2:
                         max_sim = max(s[1] for s in similarities)
                         min_sim = min(s[1] for s in similarities)
                         self.logger.info(f"   Similarity scores: avg={avg_sim:.3f}, max={max_sim:.3f}, min={min_sim:.3f}")
-                    else:
-                        self.logger.warning(f"   ⚠️  No results after filtering! FAISS returned {len(indices[0])} results but all were filtered out.")
-                        self.logger.warning(f"   Possible causes: similarity_threshold too high ({similarity_threshold:.3f}) or embedding_version_id mismatch")
                 else:
                     self.logger.debug(f"⏱️  FAISS search: {step_times['faiss_search']:.3f}s, {len(similarities)} results")
 
@@ -2298,6 +2475,15 @@ class SemanticSearchEngineV2:
                 batch_chunk_metadata = self._batch_load_chunk_metadata(conn, chunk_ids_for_batch)
                 batch_time = time.time() - batch_start
                 self.logger.debug(f"Batch loaded metadata for {len(batch_chunk_metadata)} chunks in {batch_time:.3f}s")
+                
+                # 존재하지 않는 chunk_id 확인 및 로깅
+                missing_chunk_ids = [cid for cid in chunk_ids_for_batch if cid not in batch_chunk_metadata]
+                if missing_chunk_ids:
+                    self.logger.warning(f"⚠️  {len(missing_chunk_ids)} chunk_ids not found in database (out of {len(chunk_ids_for_batch)} requested)")
+                    if len(missing_chunk_ids) <= 10:
+                        self.logger.debug(f"Missing chunk_ids: {missing_chunk_ids}")
+                    else:
+                        self.logger.debug(f"Missing chunk_ids (first 10): {missing_chunk_ids[:10]}")
             
             # source_items 수집 (source_type, source_id 쌍, 중복 제거)
             source_items_for_batch = []
@@ -2336,6 +2522,11 @@ class SemanticSearchEngineV2:
             for similarity_item in similarities[:k]:
                 chunk_id, score = similarity_item
                 self.logger.debug(f"Processing result: chunk_id={chunk_id}, score={score:.4f}")
+                
+                # chunk_id가 배치 메타데이터에 없는 경우 건너뛰기 (데이터베이스에 존재하지 않음)
+                if chunk_id not in batch_chunk_metadata and chunk_id not in self._chunk_metadata:
+                    self.logger.debug(f"Skipping chunk_id={chunk_id}: not found in database")
+                    continue
                 
                 # metadata 변수 초기화
                 metadata = None
@@ -2866,6 +3057,17 @@ class SemanticSearchEngineV2:
                                 if key not in source_meta or not source_meta[key]:
                                     source_meta[key] = value
                 
+                # interpretation_paragraph 타입의 경우 오타 필드명 정규화 (검색 결과 생성 시)
+                if source_type == "interpretation_paragraph":
+                    # source_meta에서 오타 필드명 확인 및 정규화
+                    typo_fields = ['interpretatiion_id', 'interpretattion_id']
+                    for typo_field in typo_fields:
+                        if typo_field in source_meta:
+                            correct_value = source_meta[typo_field]
+                            source_meta['interpretation_id'] = correct_value
+                            del source_meta[typo_field]
+                            self.logger.debug(f"✅ Normalized typo field {typo_field} → interpretation_id={correct_value} in source_meta for chunk_id={chunk_id}")
+                
                 result = {
                     "id": f"chunk_{chunk_id}",
                     "text": text,
@@ -2889,6 +3091,7 @@ class SemanticSearchEngineV2:
                     "casenames": source_meta.get("casenames") if source_type == "case_paragraph" else None,
                     "org": source_meta.get("org") if source_type in ["decision_paragraph", "interpretation_paragraph"] else None,
                     "title": source_meta.get("title") if source_type == "interpretation_paragraph" else None,
+                    "interpretation_id": source_meta.get("interpretation_id") if source_type == "interpretation_paragraph" else None,  # 오타 필드명 정규화 후 올바른 필드명 사용
                     "metadata": {
                         "chunk_id": chunk_id,
                         "source_type": source_type,
@@ -3168,6 +3371,28 @@ class SemanticSearchEngineV2:
         
         for i, result in enumerate(results):
             try:
+                # 0. interpretation_paragraph 타입의 경우 오타 필드명 정규화 (검증 전)
+                source_type = result.get('type') or result.get('metadata', {}).get('source_type')
+                if source_type == 'interpretation_paragraph':
+                    typo_fields = ['interpretatiion_id', 'interpretattion_id']
+                    for typo_field in typo_fields:
+                        if typo_field in result:
+                            correct_value = result[typo_field]
+                            result['interpretation_id'] = correct_value
+                            if 'metadata' not in result:
+                                result['metadata'] = {}
+                            result['metadata']['interpretation_id'] = correct_value
+                            del result[typo_field]
+                            self.logger.debug(f"✅ Normalized typo field {typo_field} → interpretation_id={correct_value} in result")
+                        if 'metadata' in result and isinstance(result['metadata'], dict) and typo_field in result['metadata']:
+                            correct_value = result['metadata'][typo_field]
+                            result['interpretation_id'] = correct_value
+                            if 'metadata' not in result:
+                                result['metadata'] = {}
+                            result['metadata']['interpretation_id'] = correct_value
+                            del result['metadata'][typo_field]
+                            self.logger.debug(f"✅ Normalized typo field {typo_field} in metadata → interpretation_id={correct_value}")
+                
                 # 1. embedding_version_id 검증 및 복원 (개선 사항 #1)
                 original_version_id = result.get('embedding_version_id') or result.get('metadata', {}).get('embedding_version_id')
                 version_id = original_version_id
@@ -4110,6 +4335,48 @@ class SemanticSearchEngineV2:
                             self.logger.debug(f"Failed to restore org for chunk_id={chunk_id}: {e}")
                     
                     # interpretation_paragraph의 interpretation_id 복원 (source_id=None인 경우도 처리)
+                    # 개선: 오타 필드명도 확인 및 정규화 (interpretatiion_id, interpretattion_id)
+                    if source_type == 'interpretation_paragraph' and field == 'interpretation_id' and not field_value:
+                        # 오타 필드명도 확인
+                        typo_fields = ['interpretatiion_id', 'interpretattion_id']
+                        for typo_field in typo_fields:
+                            typo_value = result.get(typo_field) or result.get('metadata', {}).get(typo_field)
+                            if typo_value:
+                                field_value = typo_value
+                                result['interpretation_id'] = field_value
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['interpretation_id'] = field_value
+                                # 오타 필드명 제거
+                                if typo_field in result:
+                                    del result[typo_field]
+                                if typo_field in result.get('metadata', {}):
+                                    del result['metadata'][typo_field]
+                                self.logger.debug(f"✅ Fixed typo field {typo_field} → interpretation_id={field_value} for chunk_id={chunk_id}")
+                                break
+                    
+                    # 검색 결과 생성 시 오타 필드명 정규화 (추가 개선)
+                    # interpretation_paragraph 타입의 경우 모든 오타 필드명을 올바른 필드명으로 정규화
+                    if source_type == 'interpretation_paragraph':
+                        typo_fields = ['interpretatiion_id', 'interpretattion_id']
+                        for typo_field in typo_fields:
+                            if typo_field in result:
+                                correct_value = result[typo_field]
+                                result['interpretation_id'] = correct_value
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['interpretation_id'] = correct_value
+                                del result[typo_field]
+                                self.logger.debug(f"✅ Normalized typo field {typo_field} → interpretation_id={correct_value} for chunk_id={chunk_id}")
+                            if 'metadata' in result and isinstance(result['metadata'], dict) and typo_field in result['metadata']:
+                                correct_value = result['metadata'][typo_field]
+                                result['interpretation_id'] = correct_value
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['interpretation_id'] = correct_value
+                                del result['metadata'][typo_field]
+                                self.logger.debug(f"✅ Normalized typo field {typo_field} in metadata → interpretation_id={correct_value} for chunk_id={chunk_id}")
+                    
                     if source_type == 'interpretation_paragraph' and field == 'interpretation_id' and not field_value:
                         try:
                             actual_source_id = source_id
@@ -4490,6 +4757,11 @@ class SemanticSearchEngineV2:
         if not FAISS_AVAILABLE:
             return
         
+        # 내부 인덱스가 존재하면 MLflow 인덱스 로드 건너뛰기 (내부 인덱스 우선)
+        if Path(self.index_path).exists():
+            self.logger.debug(f"Skipping MLflow index load: internal index exists at {self.index_path}")
+            return
+        
         if not self.use_mlflow_index or not self.mlflow_manager:
             self.logger.debug("Skipping MLflow index load: use_mlflow_index=False or mlflow_manager not available")
             return
@@ -4684,21 +4956,35 @@ class SemanticSearchEngineV2:
                     self.logger.info(f"Loaded chunk_ids from {chunk_ids_path} ({len(self._chunk_ids)} chunks)")
                 except Exception as e:
                     self.logger.warning(f"Failed to load chunk_ids from {chunk_ids_path}: {e}, falling back to DB query")
-                    # DB에서 로드
+                    # DB에서 로드 (활성 버전 사용)
                     conn = self._get_connection()
-                    cursor = conn.execute(
-                        "SELECT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
-                        (self.model_name,)
-                    )
+                    active_version_id = self._get_active_embedding_version_id()
+                    if active_version_id:
+                        cursor = conn.execute(
+                            "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                            (active_version_id,)
+                        )
+                    else:
+                        cursor = conn.execute(
+                            "SELECT DISTINCT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
+                            (self.model_name,)
+                        )
                     self._chunk_ids = [row[0] for row in cursor.fetchall()]
                     conn.close()
             else:
-                # chunk_ids.json이 없으면 embeddings 테이블에서 로드
+                # chunk_ids.json이 없으면 embeddings 테이블에서 로드 (활성 버전 사용)
                 conn = self._get_connection()
-                cursor = conn.execute(
-                    "SELECT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
-                    (self.model_name,)
-                )
+                active_version_id = self._get_active_embedding_version_id()
+                if active_version_id:
+                    cursor = conn.execute(
+                        "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                        (active_version_id,)
+                    )
+                else:
+                    cursor = conn.execute(
+                        "SELECT DISTINCT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
+                        (self.model_name,)
+                    )
                 self._chunk_ids = [row[0] for row in cursor.fetchall()]
                 conn.close()
             
@@ -4708,11 +4994,60 @@ class SemanticSearchEngineV2:
                     diff = len(self._chunk_ids) - self.index.ntotal
                     self.logger.warning(
                         f"⚠️  _chunk_ids length ({len(self._chunk_ids)}) != FAISS index ntotal ({self.index.ntotal}). "
-                        f"Difference: {diff} chunks. Truncating _chunk_ids to match index size."
+                        f"Difference: {diff} chunks. This may indicate the index was built with a different version."
                     )
+                    
+                    # 활성 버전의 chunk_id 범위 확인
+                    active_version_id = self._get_active_embedding_version_id()
+                    if active_version_id:
+                        try:
+                            conn_check = self._get_connection()
+                            cursor_check = conn_check.execute(
+                                "SELECT MIN(id) as min_id, MAX(id) as max_id, COUNT(*) as count FROM text_chunks WHERE embedding_version_id = ?",
+                                (active_version_id,)
+                            )
+                            row_check = cursor_check.fetchone()
+                            conn_check.close()
+                            
+                            if row_check and row_check['count'] > 0:
+                                active_min_id = row_check['min_id']
+                                active_max_id = row_check['max_id']
+                                active_count = row_check['count']
+                                
+                                # _chunk_ids의 범위 확인
+                                if self._chunk_ids:
+                                    chunk_ids_min = min(self._chunk_ids)
+                                    chunk_ids_max = max(self._chunk_ids)
+                                    
+                                    # 범위가 다르면 다른 버전으로 빌드된 것으로 판단
+                                    if chunk_ids_min < active_min_id or chunk_ids_max > active_max_id:
+                                        self.logger.warning(
+                                            f"   ⚠️  FAISS index chunk_id range ({chunk_ids_min}-{chunk_ids_max}) "
+                                            f"does not match active version {active_version_id} range ({active_min_id}-{active_max_id}). "
+                                            f"Please rebuild the FAISS index for version {active_version_id}."
+                                        )
+                        except Exception as e:
+                            self.logger.debug(f"Failed to check version consistency: {e}")
+                    
                     if diff > 0:
-                        self.logger.warning(f"   ⚠️  {diff} chunks will be excluded from search results. Consider rebuilding the index.")
+                        self.logger.warning(f"   ⚠️  Truncating _chunk_ids to match index size. {diff} chunks will be excluded from search results.")
                     self._chunk_ids = self._chunk_ids[:self.index.ntotal]
+            
+            # _chunk_metadata 로드 (버전 정보 포함)
+            if self._chunk_ids and not self._chunk_metadata:
+                self.logger.info(f"Loading chunk metadata for {len(self._chunk_ids)} chunks...")
+                try:
+                    conn = self._get_connection()
+                    # 배치로 메타데이터 로드
+                    batch_size = 1000
+                    for i in range(0, len(self._chunk_ids), batch_size):
+                        batch_ids = self._chunk_ids[i:i + batch_size]
+                        batch_metadata = self._batch_load_chunk_metadata(conn, batch_ids)
+                        self._chunk_metadata.update(batch_metadata)
+                    conn.close()
+                    self.logger.info(f"Loaded metadata for {len(self._chunk_metadata)} chunks")
+                except Exception as e:
+                    self.logger.warning(f"Failed to load chunk metadata: {e}")
 
             self.logger.info(f"FAISS index loaded: {len(self._chunk_ids)} vectors from {self.index_path}")
 
@@ -4771,7 +5106,7 @@ class SemanticSearchEngineV2:
                 try:
                     placeholders = ','.join(['?'] * len(batch))
                     cursor = conn.execute(f"""
-                        SELECT id, meta, source_type, source_id
+                        SELECT id, meta, source_type, source_id, embedding_version_id
                         FROM text_chunks
                         WHERE id IN ({placeholders})
                     """, batch)
@@ -4789,7 +5124,8 @@ class SemanticSearchEngineV2:
                         chunk_meta = {
                             'meta': meta_json,
                             'source_type': row['source_type'],
-                            'source_id': row['source_id']
+                            'source_id': row['source_id'],
+                            'embedding_version_id': row['embedding_version_id'] if 'embedding_version_id' in row.keys() else None
                         }
                         metadata_map[chunk_id] = chunk_meta
                         
