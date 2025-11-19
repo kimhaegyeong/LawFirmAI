@@ -93,6 +93,14 @@ from core.services.unified_prompt_manager import (
     UnifiedPromptManager,
 )
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 # Logger 초기화
 logger = logging.getLogger(__name__)
 
@@ -291,6 +299,15 @@ class EnhancedLegalQuestionWorkflow:
 
         # 통합 프롬프트 관리자 초기화 (우선)
         self.unified_prompt_manager = UnifiedPromptManager()
+
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
         # 컴포넌트 초기화
         self.keyword_mapper = LegalKeywordMapper()
@@ -8510,21 +8527,6 @@ class EnhancedLegalQuestionWorkflow:
         if not query:
             return []
         
-        # 불용어 제거 (법률 도메인 특화)
-        stopwords = {
-            # 기본 조사
-            "에", "를", "을", "의", "와", "과", "은", "는", "이", "가", 
-            # 추가 조사
-            "도", "만", "조차", "까지", "부터", "에게", "한테", "께", "에서", "에게서",
-            # 복합 조사
-            "에 대해", "에 대해서", "대해", "대해서", "에 관한", "에 대한", "에 관하여",
-            # 질문/요청 표현
-            "알려주세요", "알려주시기", "알려", "주세요", "주시기", "부탁", "드립니다", 
-            "합니다", "입니다", "인가요", "인지", "인가", "인지요",
-            # 법률 도메인 일반 불용어
-            "법률", "규정", "조항", "법령", "법", "법률", "규칙"
-        }
-        
         # 복합 조사 패턴 (먼저 제거)
         query_clean = query
         complex_particles = [
@@ -8560,11 +8562,14 @@ class EnhancedLegalQuestionWorkflow:
                     seen_keywords.add(keyword)
                     extracted_positions.append((match.start(), match.end()))
         
-        # 2. 단일 키워드 추출 (복합 키워드와 겹치지 않는 부분만)
+        # 2. 단일 키워드 추출 (복합 키워드와 겹치지 않는 부분만 - KoreanStopwordProcessor 사용)
         words = re.findall(r'\b\w+\b', query_clean)
         for word in words:
             word_clean = word.strip()
-            if word_clean and len(word_clean) > 1 and word_clean not in stopwords and word_clean not in seen_keywords:
+            if word_clean and len(word_clean) > 1 and word_clean not in seen_keywords:
+                # 불용어 필터링 (KoreanStopwordProcessor 사용)
+                if self.stopword_processor and self.stopword_processor.is_stopword(word_clean):
+                    continue
                 # 추출된 복합 키워드와 겹치는지 확인
                 word_pos = query_clean.find(word_clean)
                 is_overlapping = False
@@ -8584,21 +8589,6 @@ class EnhancedLegalQuestionWorkflow:
         import re
         if not query:
             return []
-        
-        # 불용어 제거 (법률 도메인 특화)
-        stopwords = {
-            # 기본 조사
-            "에", "를", "을", "의", "와", "과", "은", "는", "이", "가", 
-            # 추가 조사
-            "도", "만", "조차", "까지", "부터", "에게", "한테", "께", "에서", "에게서",
-            # 복합 조사
-            "에 대해", "에 대해서", "대해", "대해서", "에 관한", "에 대한", "에 관하여",
-            # 질문/요청 표현
-            "알려주세요", "알려주시기", "알려", "주세요", "주시기", "부탁", "드립니다", 
-            "합니다", "입니다", "인가요", "인지", "인가", "인지요",
-            # 법률 도메인 일반 불용어
-            "법률", "규정", "조항", "법령", "법", "법률", "규칙"
-        }
         
         # 복합 조사 패턴 (먼저 제거)
         query_clean = query
@@ -8662,8 +8652,10 @@ class EnhancedLegalQuestionWorkflow:
             for particle_pattern in particles:
                 word_clean = re.sub(particle_pattern, '', word_clean)
             
-            # 불용어 필터링 및 중복 제거
-            if len(word_clean) >= 2 and word_clean not in stopwords:
+            # 불용어 필터링 및 중복 제거 (KoreanStopwordProcessor 사용)
+            if len(word_clean) >= 2:
+                if self.stopword_processor and self.stopword_processor.is_stopword(word_clean):
+                    continue
                 word_lower = word_clean.lower()
                 if word_lower not in seen_keywords:
                     keywords.append(word_clean)

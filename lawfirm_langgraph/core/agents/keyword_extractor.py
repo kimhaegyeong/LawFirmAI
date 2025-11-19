@@ -8,6 +8,14 @@ import logging
 import re
 from typing import List, Optional, Set
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,21 +25,6 @@ class KeywordExtractor:
     형태소 분석을 활용하여 조사/어미를 자동 제거하고 핵심 키워드를 추출합니다.
     """
     
-    # 기본 불용어 목록 (클래스 변수) - 개선: 불용어 리스트 확장
-    BASIC_STOPWORDS: Set[str] = {
-        # 기본 조사
-        '에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은',
-        '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고',
-        '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등',
-        # 질문/요청 표현
-        '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문',
-        '답변', '알려주세요', '알려주시기', '바랍니다',
-        # 추가 불용어 (개선)
-        '인한', '찾아주세요', '찾아', '주세요', '주시기', '부탁', '드립니다',
-        '합니다', '입니다', '인가요', '인지', '인가', '인지요', '에 대해',
-        '에 대해서', '에 관한', '에 대한', '에 관하여', '로 인한', '로 인해',
-        '으로 인한', '으로 인해', '때문', '때문에', '위해서', '위하여'
-    }
     
     # 조사 패턴 (정규식)
     JOSA_PATTERN = re.compile(
@@ -89,7 +82,16 @@ class KeywordExtractor:
         self.use_morphology = use_morphology
         self.logger = logger_instance or logging.getLogger(__name__)
         
-        # KoNLPy 형태소 분석기 초기화 (선택적)
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+        
+        # KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
         self._okt = None
         if use_morphology:
             try:
@@ -182,8 +184,8 @@ class KeywordExtractor:
         
         # 형태소 분석으로 핵심 키워드 추출
         for word, pos in pos_tags:
-            # 불용어 필터링 (개선)
-            if word in self.BASIC_STOPWORDS:
+            # 불용어 필터링 (KoreanStopwordProcessor 사용)
+            if self.stopword_processor and self.stopword_processor.is_stopword(word):
                 continue
             
             # 허용된 품사만 선택
@@ -250,8 +252,8 @@ class KeywordExtractor:
             if not w_clean or len(w_clean) < 2:
                 continue
             
-            # 불용어 필터링 (개선: 확장된 불용어 리스트 사용)
-            if w_clean in self.BASIC_STOPWORDS or w_clean in keywords:
+            # 불용어 필터링 (KoreanStopwordProcessor 사용)
+            if (self.stopword_processor and self.stopword_processor.is_stopword(w_clean)) or w_clean in keywords:
                 continue
             
             # 한글/영문 포함 단어만
@@ -264,8 +266,11 @@ class KeywordExtractor:
         if not keywords:
             for w in words[:10]:
                 w_clean = self.JOSA_PATTERN.sub('', w.strip())
-                if w_clean and len(w_clean) >= 2 and w_clean not in self.BASIC_STOPWORDS:
-                    keywords.append(w_clean)
+                if w_clean and len(w_clean) >= 2:
+                    if self.stopword_processor and not self.stopword_processor.is_stopword(w_clean):
+                        keywords.append(w_clean)
+                    elif not self.stopword_processor:
+                        keywords.append(w_clean)
                     if len(keywords) >= max_keywords:
                         break
         

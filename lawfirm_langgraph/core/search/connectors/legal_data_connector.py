@@ -13,6 +13,14 @@ from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +75,16 @@ class LegalDataConnectorV2:
             # FTS 테이블 존재 여부 확인
             self._check_fts_tables()
         
-        # KoNLPy 형태소 분석기 초기화 (선택적)
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+        
+        # KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
         self._okt = None
         try:
             from konlpy.tag import Okt
@@ -301,15 +318,6 @@ class LegalDataConnectorV2:
         
         words = query.split()
         
-        # 불용어 목록 (set으로 변환하여 빠른 조회)
-        stopwords = {
-            '에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은', 
-            '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고', 
-            '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등', 
-            '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문', 
-            '답변', '알려주세요', '알려주시기', '바랍니다'
-        }
-        
         # 조사 패턴 (정규식으로 한 번에 제거)
         josa_pattern = re.compile(r'(에|에서|에게|한테|께|으로|로|의|을|를|이|가|는|은|와|과|도|만|부터|까지)$')
         
@@ -338,14 +346,15 @@ class LegalDataConnectorV2:
                     core_keywords.append(article_text)
                 break
         
-        # 나머지 키워드 처리
+        # 나머지 키워드 처리 (KoreanStopwordProcessor 사용)
         for w in words:
             w_clean = josa_pattern.sub('', w.strip())  # 조사 제거
             
             if not w_clean or len(w_clean) < 2:
                 continue
             
-            if w_clean in stopwords or w_clean in core_keywords:
+            # 불용어 필터링 (KoreanStopwordProcessor 사용)
+            if (self.stopword_processor and self.stopword_processor.is_stopword(w_clean)) or w_clean in core_keywords:
                 continue
             
             # 한글/영문 포함 단어만
@@ -358,8 +367,11 @@ class LegalDataConnectorV2:
         if not core_keywords:
             for w in words:
                 w_clean = josa_pattern.sub('', w.strip())
-                if w_clean and len(w_clean) >= 2 and w_clean not in stopwords:
-                    core_keywords.append(w_clean)
+                if w_clean and len(w_clean) >= 2:
+                    if self.stopword_processor and not self.stopword_processor.is_stopword(w_clean):
+                        core_keywords.append(w_clean)
+                    elif not self.stopword_processor:
+                        core_keywords.append(w_clean)
                     if len(core_keywords) >= 5:
                         break
         
@@ -702,9 +714,12 @@ class LegalDataConnectorV2:
                 if law_match:
                     keyword_query = law_match.group()
                 else:
-                    # 핵심 키워드 추출 (2자 이상, 불용어 제외)
-                    stopwords = ['에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은']
-                    keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                    # 핵심 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
+                    keywords = []
+                    for w in words[:3]:
+                        if len(w) >= 2:
+                            if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                                keywords.append(w)
                     if keywords:
                         keyword_query = keywords[0]  # 첫 번째 핵심 키워드만
                     else:
@@ -868,18 +883,17 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색 (개선: 더 공격적인 키워드 추출)
+            # 전략 1: 핵심 키워드만으로 검색 (개선: 더 공격적인 키워드 추출 - KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은',
-                            '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고',
-                            '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등',
-                            '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문',
-                            '답변', '알려주세요', '알려주시기', '바랍니다', '해주세요', '해주시기'}
                 # 더 많은 키워드 추출 (3개 -> 5개)
-                keywords = [w for w in words[:5] if w not in stopwords and len(w) >= 1]  # 최소 길이 2 -> 1로 완화
+                keywords = []
+                for w in words[:5]:
+                    if len(w) >= 1:
+                        if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                            keywords.append(w)
                 if not keywords:
                     # 키워드가 없으면 모든 단어 사용 (불용어만 제거)
-                    keywords = [w for w in words if w not in stopwords and len(w) >= 1]
+                    keywords = [w for w in words if len(w) >= 1 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 
                 if keywords:
                     # OR 조건으로 연결 (검색 범위 확장)
@@ -951,9 +965,8 @@ class LegalDataConnectorV2:
                 # 원본 쿼리에서 모든 한글/영문 단어 추출
                 all_words = re.findall(r'[가-힣a-zA-Z]+', original_query)
                 if all_words:
-                    # 불용어 제거
-                    stopwords = {'에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은'}
-                    keywords = [w for w in all_words if w not in stopwords and len(w) >= 1]
+                    # 불용어 제거 (KoreanStopwordProcessor 사용)
+                    keywords = [w for w in all_words if len(w) >= 1 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                     if keywords:
                         keyword_query = " OR ".join(keywords[:3])  # 최대 3개
                         self.logger.info(f"Fallback case search (strategy 2): Using keywords from original query: '{keyword_query}'")
@@ -1032,10 +1045,9 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색
+            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은'}
-                keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 if keywords:
                     keyword_query = " OR ".join(keywords)
                     self.logger.info(f"Fallback decision search: Using keywords: '{keyword_query}'")
@@ -1110,10 +1122,9 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색
+            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은'}
-                keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 if keywords:
                     keyword_query = " OR ".join(keywords)
                     self.logger.info(f"Fallback interpretation search: Using keywords: '{keyword_query}'")

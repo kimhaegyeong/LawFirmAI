@@ -8,8 +8,24 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
 logger = logging.getLogger(__name__)
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
+_stopword_processor = None
+if KoreanStopwordProcessor:
+    try:
+        _stopword_processor = KoreanStopwordProcessor()
+        logger.debug("KoreanStopwordProcessor initialized at module level")
+    except Exception as e:
+        logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
 
 class ContextValidator:
@@ -505,27 +521,80 @@ class AnswerValidator:
                 overlap = len(context_words.intersection(answer_words))
                 keyword_coverage = overlap / max(1, min(len(context_words), 100))
 
-            # 2. 법률 조항/판례 인용 포함 여부 확인
-            citation_pattern = r'[가-힣]+법\s*제?\s*\d+\s*조|\[법령:\s*[^\]]+\]'
-            citations_in_answer = len(re.findall(citation_pattern, answer))
+            # 2. 법률 조항/판례 인용 포함 여부 확인 (개선: 더 유연한 패턴)
+            # 법령 인용 패턴 (다양한 형식 지원)
+            citation_patterns = [
+                r'[가-힣]+법\s*제?\s*\d+\s*조',  # 기본 형식: 민법 제750조
+                r'\[법령:\s*[^\]]+\]',  # 태그 형식: [법령: ...]
+                r'법\s*제\s*\d+\s*조',  # 간단한 형식: 법 제750조
+                r'제\s*\d+\s*조',  # 매우 간단한 형식: 제750조
+                r'[가-힣]+법\s*\d+\s*조',  # 공백 없는 형식: 민법750조
+            ]
+            citations_in_answer = 0
+            for pattern in citation_patterns:
+                matches = re.findall(pattern, answer)
+                if matches:
+                    citations_in_answer += len(matches)
+                    break  # 첫 번째 매칭 패턴 사용
+            
+            # 판례 인용 패턴 (다양한 형식 지원)
+            precedent_patterns = [
+                r'대법원|법원.*\d{4}[다나마]\d+',  # 기본 형식: 대법원 2020다12345
+                r'\[판례:\s*[^\]]+\]',  # 태그 형식: [판례: ...]
+                r'대법원\s*\d{4}[다나마]\d+',  # 간단한 형식: 대법원 2020다12345
+                r'법원\s*\d{4}[다나마]\d+',  # 법원 형식: 법원 2020다12345
+                r'판례\s*\d{4}[다나마]\d+',  # 판례 형식: 판례 2020다12345
+            ]
+            precedents_in_answer = 0
+            for pattern in precedent_patterns:
+                matches = re.findall(pattern, answer)
+                if matches:
+                    precedents_in_answer += len(matches)
+                    break  # 첫 번째 매칭 패턴 사용
 
-            precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+|\[판례:\s*[^\]]+\]'
-            precedents_in_answer = len(re.findall(precedent_pattern, answer))
-
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 문서 인용 패턴 확인 (다양한 형식 지원)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # 기본 형식: [문서: ...]
+                r'\[출처:\s*[^\]]+\]',  # 출처 형식: [출처: ...]
+                r'\[참고:\s*[^\]]+\]',  # 참고 형식: [참고: ...]
+                r'\(출처[^)]+\)',  # 괄호 형식: (출처: ...)
+            ]
+            document_citations = 0
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer)
+                if matches:
+                    document_citations += len(matches)
+                    break  # 첫 번째 매칭 패턴 사용
 
             total_citations_in_answer = citations_in_answer + precedents_in_answer + document_citations
 
-            # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인
+            # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 더 유연한 매칭)
             has_document_references = False
             if document_sources:
                 for source in document_sources:
-                    source_keywords = source.split()[:3]
-                    if any(keyword in answer_lower for keyword in source_keywords if len(keyword) > 2):
+                    if not source:
+                        continue
+                    source_lower = source.lower()
+                    # 전체 출처명이 포함되어 있는지 확인
+                    if source_lower in answer_lower:
                         has_document_references = True
                         break
+                    # 출처의 핵심 키워드 추출 (2글자 이상)
+                    source_keywords = [kw for kw in source_lower.split() if len(kw) > 2][:5]
+                    # 핵심 키워드 중 2개 이상이 답변에 포함되어 있는지 확인
+                    matched_keywords = sum(1 for keyword in source_keywords if keyword in answer_lower)
+                    if matched_keywords >= 2:
+                        has_document_references = True
+                        break
+                    # 출처명의 일부가 포함되어 있는지 확인 (3글자 이상 부분 문자열)
+                    if len(source_lower) >= 3:
+                        for i in range(len(source_lower) - 2):
+                            substring = source_lower[i:i+3]
+                            if substring in answer_lower and len(substring) >= 3:
+                                has_document_references = True
+                                break
+                        if has_document_references:
+                            break
 
             # 컨텍스트에서 추출한 인용 정보와 비교 (개선: 정규화 및 유연한 매칭)
             expected_citations_raw = []
@@ -786,9 +855,12 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue

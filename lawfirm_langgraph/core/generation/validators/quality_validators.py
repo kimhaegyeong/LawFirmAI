@@ -8,8 +8,24 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
 logger = logging.getLogger(__name__)
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
+_stopword_processor = None
+if KoreanStopwordProcessor:
+    try:
+        _stopword_processor = KoreanStopwordProcessor()
+        logger.debug("KoreanStopwordProcessor initialized at module level")
+    except Exception as e:
+        logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
 
 class ContextValidator:
@@ -541,17 +557,22 @@ class AnswerValidator:
             context_sentences = re.split(r'[.!?。！？\n]+', context_text)
             answer_sentences = re.split(r'[.!?。！？\n]+', answer_lower)
             
-            # 중요한 키워드 추출 (2자 이상, 불용어 제외)
-            stop_words = {'의', '가', '이', '은', '는', '을', '를', '에', '에서', '와', '과', '도', '로', '으로', '에서', '에게', '께', '한테', '더', '또', '그', '이', '저', '그것', '이것', '저것', '그런', '이런', '저런', '그렇게', '이렇게', '저렇게'}
+            # 중요한 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
             context_words = set()
             for sentence in context_sentences:
                 words = re.findall(r'\b\w+\b', sentence.lower())
-                context_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
+                for w in words:
+                    if len(w) >= 2:
+                        if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                            context_words.add(w)
             
             answer_words = set()
             for sentence in answer_sentences:
                 words = re.findall(r'\b\w+\b', sentence.lower())
-                answer_words.update(w for w in words if len(w) >= 2 and w not in stop_words)
+                for w in words:
+                    if len(w) >= 2:
+                        if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                            answer_words.add(w)
 
             keyword_coverage = 0.0
             if context_words and answer_words:
@@ -598,9 +619,20 @@ class AnswerValidator:
                             has_law_in_docs = True
                             break
 
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 문서 인용 패턴 확인 (개선: "[문서 N]" 형식도 감지)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식
+                r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
+                r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
+            ]
+            document_citations = 0
+            unique_doc_citations = set()
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    unique_doc_citations.add(match)
+            document_citations = len(unique_doc_citations)
 
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
             has_document_references = False
@@ -897,6 +929,27 @@ class AnswerValidator:
             # 재생성 필요 여부 초기화 (개선: 변수 초기화 문제 해결)
             needs_regeneration = False
 
+            # 개선: 표 형식 생성 검증 (우선순위 1)
+            has_table_format = False
+            table_patterns = [
+                r'\|.*\|.*\|',  # 마크다운 테이블 형식 (| col1 | col2 |)
+                r'문서별\s*근거\s*비교',  # "문서별 근거 비교" 제목
+                r'문서\s*번호.*출처.*핵심\s*근거',  # 테이블 헤더
+            ]
+            for pattern in table_patterns:
+                if re.search(pattern, answer, re.IGNORECASE):
+                    has_table_format = True
+                    break
+            
+            # 표 형식이 없으면 경고 (프롬프트에서 요구했지만 생성하지 않은 경우)
+            if not has_table_format and retrieved_docs and len(retrieved_docs) >= 3:
+                logger.warning(
+                    f"⚠️ [TABLE VALIDATION] Table format not found in answer. "
+                    f"Expected table format for {len(retrieved_docs)} documents."
+                )
+                # 표 형식이 없으면 coverage_score 약간 감소 (5%)
+                coverage_score = max(0.0, coverage_score - 0.05)
+
             # 법령 조문 인용 필수 체크 결과 (검색 결과에 법령 조문이 있는데 답변에 없으면 경고)
             law_citation_required = has_law_in_docs and not has_law_citation
             if law_citation_required:
@@ -926,7 +979,8 @@ class AnswerValidator:
                 "missing_key_info": missing_citations[:5],
                 "has_law_citation": has_law_citation,
                 "has_law_in_docs": has_law_in_docs,
-                "law_citation_required": law_citation_required
+                "law_citation_required": law_citation_required,
+                "has_table_format": has_table_format  # 개선: 표 형식 검증 결과 추가
             }
 
             return validation_result
@@ -1098,9 +1152,12 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue
@@ -1122,9 +1179,13 @@ class AnswerValidator:
                 sentence_key_phrases = [w for w in sentence_words if len(w) > 2][:5]  # 핵심 구문 추출
                 phrase_match_score = sum(1 for phrase in sentence_key_phrases if phrase in source_text) / max(len(sentence_key_phrases), 1) if sentence_key_phrases else 0.0
                 
-                # 의미적 유사도 (공통 단어 비율)
+                # 의미적 유사도 (공통 단어 비율 - KoreanStopwordProcessor 사용)
                 source_words = re.findall(r'[가-힣]+', source_text.lower())
-                source_words_set = set([w for w in source_words if len(w) > 1 and w not in stopwords])
+                source_words_set = set()
+                for w in source_words:
+                    if len(w) > 1:
+                        if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                            source_words_set.add(w)
                 sentence_words_set = set(sentence_words)
                 semantic_similarity = len(sentence_words_set & source_words_set) / max(len(sentence_words_set), 1) if sentence_words_set else 0.0
 

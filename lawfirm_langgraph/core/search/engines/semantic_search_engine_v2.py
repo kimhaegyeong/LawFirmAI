@@ -15,6 +15,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 # FAISS import (optional)
 try:
     import faiss
@@ -786,7 +794,7 @@ class SemanticSearchEngineV2:
             db_path: lawfirm_v2.db 경로 (None이면 환경변수 DATABASE_PATH 사용)
             model_name: 임베딩 모델명 (None이면 데이터베이스에서 자동 감지)
             mlflow_run_id: MLflow run ID (선택, None이면 프로덕션 run 자동 조회)
-            use_mlflow_index: MLflow 인덱스 사용 여부
+            use_mlflow_index: MLflow 인덱스 사용 여부 (기본값: True)
         """
         if db_path is None:
             from core.utils.config import Config
@@ -795,38 +803,59 @@ class SemanticSearchEngineV2:
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         
-        # 설정에서 MLflow 인덱스 사용 여부 확인
-        # use_mlflow_index가 명시적으로 False로 전달된 경우 환경 변수 무시
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+        
+        # 설정에서 MLflow 인덱스 사용 여부 확인 (기본값: True)
         if use_mlflow_index is False:
-            # 명시적으로 False로 설정된 경우 환경 변수나 설정 파일 무시
-            pass
-        elif not use_mlflow_index:
-            # use_mlflow_index가 None이거나 제공되지 않은 경우에만 환경 변수/설정 확인
+            # 명시적으로 False로 설정된 경우 환경 변수나 설정 파일 확인
             import os
             env_use_mlflow = os.getenv("USE_MLFLOW_INDEX", "").lower()
             if env_use_mlflow in ("true", "1", "yes"):
                 use_mlflow_index = True
                 self.logger.info("USE_MLFLOW_INDEX environment variable is set to true")
+            elif env_use_mlflow in ("false", "0", "no"):
+                # 명시적으로 False로 설정된 경우
+                use_mlflow_index = False
+                self.logger.warning("USE_MLFLOW_INDEX is explicitly set to false. MLflow will not be used.")
             else:
+                # 환경 변수가 없으면 Config에서 확인 (기본값 True)
                 try:
                     from core.utils.config import Config
                     config = Config()
-                    use_mlflow_index = config.use_mlflow_index if hasattr(config, 'use_mlflow_index') else False
+                    use_mlflow_index = config.use_mlflow_index if hasattr(config, 'use_mlflow_index') else True
                     if use_mlflow_index:
                         mlflow_run_id = mlflow_run_id or (config.mlflow_run_id if hasattr(config, 'mlflow_run_id') else None)
+                        self.logger.info("MLflow index will be used as default")
                 except Exception as e:
                     self.logger.debug(f"Could not load config for MLflow index settings: {e}")
+                    use_mlflow_index = True  # 기본값
+        elif not use_mlflow_index:
+            # use_mlflow_index가 None이거나 제공되지 않은 경우 기본값 True 사용
+            use_mlflow_index = True
+            self.logger.info("MLflow index will be used as default (no explicit setting)")
+            try:
+                from core.utils.config import Config
+                config = Config()
+                mlflow_run_id = mlflow_run_id or (config.mlflow_run_id if hasattr(config, 'mlflow_run_id') else None)
+            except Exception as e:
+                self.logger.debug(f"Could not load config for MLflow index settings: {e}")
         
         self.use_mlflow_index = use_mlflow_index
         self.mlflow_run_id = mlflow_run_id
 
         # 모델명이 제공되지 않으면 MLflow에서 자동 감지
         if model_name is None:
-            # 환경 변수에서 먼저 확인 (법률 특화 SBERT 모델 지원)
             import os
-            model_name = os.getenv("EMBEDDING_MODEL")
             
-            if model_name is None and self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
+            # MLflow 인덱스를 사용할 때는 MLflow의 모델 정보를 우선 사용
+            if self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
                 try:
                     run_id = self.mlflow_run_id
                     if not run_id:
@@ -834,27 +863,37 @@ class SemanticSearchEngineV2:
                     
                     if run_id:
                         import mlflow
-                        version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
+                        version_info = None
+                        if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
+                            version_info = self.mlflow_manager.load_version_info_from_local(run_id)
+                        
+                        if version_info is None:
+                            version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
+                        
                         embedding_config = version_info.get('embedding_config', {})
                         model_name = embedding_config.get('model')
                         if model_name:
-                            self.logger.info(f"Detected model from MLflow run {run_id}: {model_name}")
+                            self.logger.info(f"✅ MLflow에서 모델 감지: {model_name} (run_id: {run_id})")
+                            # MLflow 모델 정보에서 차원 정보도 확인
+                            mlflow_dimension = embedding_config.get('dimension')
+                            if mlflow_dimension:
+                                self.logger.info(f"   MLflow 인덱스 차원: {mlflow_dimension}")
                 except Exception as e:
-                    self.logger.debug(f"Could not detect model from MLflow: {e}")
+                    self.logger.warning(f"⚠️  MLflow에서 모델 정보를 가져올 수 없습니다: {e}")
+                    self.logger.info("   환경 변수 또는 Config 기본값을 사용합니다.")
             
+            # MLflow에서 모델 정보를 가져오지 못한 경우 환경 변수 확인
+            if model_name is None:
+                model_name = os.getenv("EMBEDDING_MODEL")
+                if model_name:
+                    self.logger.info(f"환경 변수에서 모델 사용: {model_name}")
+            
+            # 환경 변수도 없으면 Config 기본값 사용
             if model_name is None:
                 from ..utils.config import Config
                 config = Config()
                 model_name = config.embedding_model
-                self.logger.warning(f"Could not detect model from MLflow, using config default: {model_name}")
-            elif model_name and model_name != os.getenv("EMBEDDING_MODEL"):
-                self.logger.info(f"Using embedding model: {model_name}")
-
-        # 모델 이름 정리 (따옴표 제거)
-        if model_name:
-            model_name = model_name.strip().strip('"').strip("'")
-        
-        self.model_name = model_name
+                self.logger.warning(f"⚠️  MLflow 및 환경 변수에서 모델을 찾을 수 없어 Config 기본값 사용: {model_name}")
 
         # FAISS 인덱스 관련 속성
         # 기본 경로: data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss
@@ -959,6 +998,47 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"Failed to initialize MLflow manager: {e}")
                 self.use_mlflow_index = False
         
+        # MLflow manager 초기화 후 모델 정보 확인 (MLflow 인덱스 사용 시)
+        # MLflow 인덱스를 사용할 때는 항상 MLflow의 모델 정보를 우선 사용
+        if self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
+            try:
+                run_id = self.mlflow_run_id
+                if not run_id:
+                    run_id = self.mlflow_manager.get_production_run()
+                
+                if run_id:
+                    import mlflow
+                    version_info = None
+                    if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
+                        self.logger.debug(f"로컬 파일 시스템에서 version_info.json 로드 시도: run_id={run_id}")
+                        version_info = self.mlflow_manager.load_version_info_from_local(run_id)
+                        if version_info:
+                            self.logger.info("✅ 로컬 파일 시스템에서 version_info.json 직접 로드 완료")
+                    
+                    if version_info is None:
+                        self.logger.debug("로컬 경로에서 version_info.json을 찾을 수 없어 MLflow에서 다운로드 시도")
+                        version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
+                    
+                    embedding_config = version_info.get('embedding_config', {})
+                    mlflow_model_name = embedding_config.get('model')
+                    if mlflow_model_name:
+                        # MLflow에서 모델 정보를 찾았으면 무조건 사용 (기존 model_name 무시)
+                        model_name = mlflow_model_name
+                        self.logger.info(f"✅ MLflow에서 모델 감지: {model_name} (run_id: {run_id})")
+                        # MLflow 모델 정보에서 차원 정보도 확인
+                        mlflow_dimension = embedding_config.get('dimension')
+                        if mlflow_dimension:
+                            self.logger.info(f"   MLflow 인덱스 차원: {mlflow_dimension}")
+                        # 모델 이름 정리
+                        if model_name:
+                            model_name = model_name.strip().strip('"').strip("'")
+                    else:
+                        self.logger.warning(f"⚠️  MLflow version_info에 모델 정보가 없습니다. embedding_config: {embedding_config}")
+            except Exception as e:
+                self.logger.warning(f"⚠️  MLflow에서 모델 정보를 가져올 수 없습니다: {e}")
+                if model_name is None:
+                    self.logger.info("   환경 변수 또는 Config 기본값을 사용합니다.")
+        
         # 성능 모니터링 초기화
         self.performance_monitor = None
         self.enable_performance_monitoring = False
@@ -973,28 +1053,36 @@ class SemanticSearchEngineV2:
         except ImportError:
             self.logger.debug("VersionPerformanceMonitor not available")
 
+        # 모델 이름 최종 설정 (MLflow에서 가져온 경우 업데이트)
+        if model_name:
+            model_name = model_name.strip().strip('"').strip("'")
+        self.model_name = model_name
+        
         # 임베딩 모델 로드
         self.embedder = None
         self.dim = None
-        self._initialize_embedder(model_name)
+        self._initialize_embedder(self.model_name)
 
         if not Path(db_path).exists():
             self.logger.warning(f"Database {db_path} not found")
 
-        # FAISS 인덱스 로드 (MLflow 전용)
+        # FAISS 인덱스 로드 (MLflow만 사용)
         if FAISS_AVAILABLE and self.embedder:
             if self.use_mlflow_index:
+                # MLflow 벡터 스토어 사용 (기본값)
                 if not self.mlflow_manager:
                     raise RuntimeError("MLflow manager is not initialized. Check MLflow configuration.")
                 try:
                     self._load_mlflow_index()
+                    self.logger.info("✅ MLflow 벡터 스토어 로드 성공")
                 except RuntimeError as e:
                     self.logger.error(f"Failed to load MLflow index: {e}", exc_info=True)
                     raise
             else:
-                # use_mlflow_index가 False인 경우 인덱스 빌드 모드
-                # 인덱스는 나중에 빌드되므로 로드하지 않음
-                self.logger.debug("Skipping index load (build mode: use_mlflow_index=False)")
+                # MLflow가 비활성화된 경우 (인덱스 빌드 모드 등)
+                # 인덱스는 나중에 빌드되거나 로드될 수 있으므로 에러를 발생시키지 않음
+                self.logger.info("ℹ️  MLflow 인덱스 비활성화됨 (인덱스 빌드 모드 또는 다른 용도)")
+                self.index = None
     
     def _initialize_embedder(self, model_name: str, retry_count: int = 0, max_retries: int = 2) -> bool:
         """
@@ -1499,8 +1587,10 @@ class SemanticSearchEngineV2:
     
     def _encode_query(self, query: str) -> Optional[np.ndarray]:
         """쿼리 인코딩 (캐시 사용, 재정규화 포함)"""
-        query_vec = self._get_cached_query_vector(query)
+        normalized_query = self._normalize_query(query)
+        query_vec = self._get_cached_query_vector(normalized_query)
         if query_vec is not None:
+            self.logger.debug(f"🔍 [QUERY ENCODING] Cache hit for query: '{normalized_query[:80]}...'")
             return query_vec
         
         if not self._ensure_embedder_initialized():
@@ -1508,7 +1598,11 @@ class SemanticSearchEngineV2:
             return None
         
         try:
-            query_vec = self.embedder.encode([query], batch_size=1, normalize=True)[0]
+            self.logger.info(
+                f"🔍 [QUERY ENCODING] Encoding new query: '{normalized_query[:100]}...' "
+                f"(length={len(normalized_query)}, cache_miss=True)"
+            )
+            query_vec = self.embedder.encode([normalized_query], batch_size=1, normalize=True)[0]
             
             query_norm = np.linalg.norm(query_vec)
             if abs(query_norm - 1.0) > 0.01:
@@ -1701,34 +1795,52 @@ class SemanticSearchEngineV2:
         """
         try:
             import numpy as np
+            import math
             
             if hasattr(self.index, 'metric_type'):
                 if self.index.metric_type == faiss.METRIC_INNER_PRODUCT:
                     # Inner Product: 값이 클수록 유사도가 높음
-                    similarity = (float(distance) + 1.0) / 2.0
+                    # 정규화 개선: sigmoid 함수 사용으로 더 부드러운 변환
+                    similarity = 1.0 / (1.0 + np.exp(-float(distance)))
                 elif self.index.metric_type == faiss.METRIC_L2:
-                    # L2 거리: 지수 감쇠 함수 사용 (0.85 목표 달성을 위해 스케일 조정)
+                    # L2 거리: 지수 감쇠 함수 사용 (개선된 정규화)
                     # IndexIVFPQ는 압축 인덱스이므로 더 큰 스케일 사용
                     index_type = type(self.index).__name__ if self.index else ''
                     if 'IndexIVFPQ' in index_type:
-                        # IndexIVFPQ: 더 큰 스케일 (거리 값이 클 수 있음, 0.85 목표 달성을 위해 8.0 → 10.0으로 증가)
-                        scale = 10.0  # 스케일 증가로 유사도 점수 향상
+                        # IndexIVFPQ: 개선된 스케일링 (거리 값이 클 수 있음)
+                        # 거리 분포를 고려한 동적 스케일링
+                        scale = 12.0  # 스케일 증가로 유사도 점수 향상 (10.0 → 12.0)
+                        # 지수 감쇠 + 최소값 보장
                         similarity = np.exp(-float(distance) / scale)
+                        # 거리가 작을 때 더 높은 점수 부여 (보너스)
+                        if distance < 1.0:
+                            similarity = min(1.0, similarity * 1.1)
                     else:
-                        # 일반 L2: 표준 스케일 (2.0 → 3.0으로 증가)
-                        scale = 3.0  # 스케일 증가로 유사도 점수 향상
+                        # 일반 L2: 개선된 스케일링
+                        scale = 4.0  # 스케일 증가로 유사도 점수 향상 (3.0 → 4.0)
                         similarity = np.exp(-float(distance) / scale)
+                        # 거리가 작을 때 더 높은 점수 부여 (보너스)
+                        if distance < 0.5:
+                            similarity = min(1.0, similarity * 1.15)
                 else:
-                    # 기본: 역변환
-                    similarity = 1.0 / (1.0 + float(distance))
+                    # 기본: 개선된 역변환 (로그 스케일 적용)
+                    similarity = 1.0 / (1.0 + math.log1p(float(distance)))
             else:
-                # metric_type이 없는 경우: 기본 변환
-                similarity = 1.0 / (1.0 + float(distance))
+                # metric_type이 없는 경우: 개선된 기본 변환
+                similarity = 1.0 / (1.0 + math.log1p(float(distance)))
         except Exception as e:
             self.logger.debug(f"Error calculating similarity: {e}, using default conversion")
             similarity = 1.0 / (1.0 + float(distance))
         
-        return max(0.0, min(1.0, similarity))
+        # 정규화: 0-1 범위로 제한하되, 높은 점수에 보너스 적용
+        similarity = max(0.0, min(1.0, similarity))
+        
+        # 점수 향상: 높은 유사도에 추가 보너스 (0.7 이상일 때)
+        if similarity >= 0.7:
+            # 높은 유사도에 작은 보너스 (최대 1.0으로 제한)
+            similarity = min(1.0, similarity * 1.05)
+        
+        return float(similarity)
     
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """코사인 유사도 계산"""
@@ -1747,7 +1859,7 @@ class SemanticSearchEngineV2:
                                quality_score: float = 0.5,
                                weights: Optional[Dict[str, float]] = None) -> float:
         """
-        하이브리드 점수 계산 (유사도 + ML 신뢰도 + 품질 점수)
+        하이브리드 점수 계산 (유사도 + ML 신뢰도 + 품질 점수) - 개선된 가중치
         
         Args:
             similarity: 유사도 점수 (0-1)
@@ -1759,12 +1871,12 @@ class SemanticSearchEngineV2:
             하이브리드 점수 (0-1)
         """
         if weights is None:
-            # 기본 가중치: 유사도 85%, ML 신뢰도 7.5%, 품질 점수 7.5%
-            # similarity 가중치를 0.8 → 0.85로 증가하여 실제 유사도가 더 반영되도록 (0.85 목표 달성)
+            # 개선된 가중치: 유사도 90%, ML 신뢰도 5%, 품질 점수 5%
+            # similarity 가중치를 0.85 → 0.90으로 증가하여 실제 유사도가 더 반영되도록
             weights = {
-                "similarity": 0.85,
-                "ml_confidence": 0.075,
-                "quality": 0.075
+                "similarity": 0.90,
+                "ml_confidence": 0.05,
+                "quality": 0.05
             }
         
         # 가중치 합이 1이 되도록 정규화
@@ -1772,11 +1884,23 @@ class SemanticSearchEngineV2:
         if total_weight > 0:
             weights = {k: v / total_weight for k, v in weights.items()}
         
+        # 개선된 하이브리드 점수 계산
+        # similarity가 높을 때 더 강한 가중치 적용 (비선형 가중치)
+        similarity_weight = weights.get("similarity", 0.9)
+        if similarity >= 0.7:
+            # 높은 유사도에 추가 보너스 (비선형 가중치)
+            similarity_weight = min(0.95, similarity_weight * 1.05)
+        
         hybrid_score = (
-            weights.get("similarity", 0.7) * similarity +
-            weights.get("ml_confidence", 0.15) * ml_confidence +
-            weights.get("quality", 0.15) * quality_score
+            similarity_weight * similarity +
+            weights.get("ml_confidence", 0.05) * ml_confidence +
+            weights.get("quality", 0.05) * quality_score
         )
+        
+        # 점수 향상: 높은 similarity에 추가 보너스
+        if similarity >= 0.75:
+            # 매우 높은 유사도에 작은 보너스
+            hybrid_score = min(1.0, hybrid_score * 1.03)
         
         return float(max(0.0, min(1.0, hybrid_score)))  # 0-1 범위로 제한
 
@@ -1823,6 +1947,12 @@ class SemanticSearchEngineV2:
         start_time = time.time()
         used_version = faiss_version or (getattr(self, 'current_faiss_version', None) or "default")
         
+        # 확장된 쿼리 사용 여부 로깅
+        self.logger.info(
+            f"🔍 [SEARCH ENGINE] Received query: '{query[:100]}...' "
+            f"(length={len(query)}, normalized will be applied)"
+        )
+        
         # 활성 버전 정보 로깅 및 데이터 존재 여부 확인
         active_version_id = self._get_active_embedding_version_id()
         if active_version_id:
@@ -1860,7 +1990,10 @@ class SemanticSearchEngineV2:
                     self.logger.error(f"Failed to load MLflow index during search: {e}")
                     raise
             else:
-                raise RuntimeError("MLflow index is required but not available. Set USE_MLFLOW_INDEX=true")
+                raise RuntimeError(
+                    "MLflow index is required but not available. "
+                    "Please set USE_MLFLOW_INDEX=true (default)"
+                )
         
         # Embedder 초기화 상태 확인 및 필요시 재초기화
         if not self._ensure_embedder_initialized():
@@ -1883,11 +2016,30 @@ class SemanticSearchEngineV2:
                 self.logger.error(f"Final embedder initialization attempt failed: {e}")
                 return []
 
+        # 검색 파라미터 동적 조정 (쿼리 복잡도 기반)
+        adjusted_threshold = similarity_threshold
+        if not disable_retry:
+            # 쿼리 복잡도 추정
+            query_length = len(query)
+            word_count = len(query.split())
+            legal_terms = ["법", "조문", "판례", "계약", "손해배상", "불법행위", "해지", "해제", "시효"]
+            legal_term_count = sum(1 for term in legal_terms if term in query)
+            
+            # 복잡도에 따른 threshold 조정
+            if query_length < 15 and word_count < 4 and legal_term_count < 2:
+                # 간단한 쿼리: 낮은 threshold (다양한 결과)
+                adjusted_threshold = max(0.25, similarity_threshold - 0.1)
+                self.logger.debug(f"Simple query detected, lowering threshold: {adjusted_threshold:.3f}")
+            elif query_length > 80 or word_count > 12 or legal_term_count > 4:
+                # 복잡한 쿼리: 높은 threshold (정확한 결과)
+                adjusted_threshold = min(0.85, similarity_threshold + 0.1)
+                self.logger.debug(f"Complex query detected, raising threshold: {adjusted_threshold:.3f}")
+        
         # 재시도 로직 비활성화 옵션
         if disable_retry:
             # 높은 신뢰도만 원할 때는 첫 번째 임계값만 사용
             results = self._search_with_threshold(
-                query, k, source_types, similarity_threshold,
+                query, k, source_types, adjusted_threshold,
                 min_ml_confidence=min_ml_confidence,
                 min_quality_score=min_quality_score,
                 filter_by_confidence=filter_by_confidence,
@@ -2123,6 +2275,12 @@ class SemanticSearchEngineV2:
             embedding_version_id: 임베딩 버전 ID 필터
         """
         try:
+            normalized_query = self._normalize_query(query)
+            self.logger.info(
+                f"🔍 [SEARCH WITH THRESHOLD] query: original='{query[:80]}...', "
+                f"normalized='{normalized_query[:80]}...', "
+                f"k={k}, threshold={similarity_threshold}, version_id={embedding_version_id}"
+            )
             self.logger.debug(f"_search_with_threshold called: query='{query[:50]}...', k={k}, threshold={similarity_threshold}, version_id={embedding_version_id}")
             import time
             step_times = {}
@@ -2130,6 +2288,7 @@ class SemanticSearchEngineV2:
             
             # 1. 쿼리 임베딩 생성 (캐시 사용)
             encode_start = time.time()
+            self.logger.debug(f"🔍 [QUERY ENCODING] Encoding query: '{normalized_query[:80]}...'")
             query_vec = self._encode_query(query)
             if query_vec is None:
                 return []
@@ -2198,7 +2357,62 @@ class SemanticSearchEngineV2:
                 filtered_by_source = 0
                 filtered_by_threshold = 0
                 filtered_by_not_found = 0
-                for distance, idx in zip(distances[0], indices[0]):
+                
+                # source_type 필터 완화를 위한 플래그
+                source_types_relaxed = False
+                original_source_types = source_types.copy() if source_types else None
+                
+                # 필터링 전 타입 분포 샘플링 (처음 100개만 확인)
+                if source_types and len(indices[0]) > 100:
+                    sample_size = min(100, len(indices[0]))
+                    sample_types = {}
+                    sample_checked = 0
+                    for i, (distance, idx) in enumerate(zip(distances[0][:sample_size], indices[0][:sample_size])):
+                        if idx < 0 or idx >= len(self._chunk_ids):
+                            continue
+                        
+                        chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
+                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                        sample_type = chunk_meta.get('source_type')
+                        
+                        if not sample_type:
+                            try:
+                                conn_temp = self._get_connection()
+                                cursor_temp = conn_temp.execute(
+                                    "SELECT source_type FROM text_chunks WHERE id = ?",
+                                    (chunk_id,)
+                                )
+                                row_temp = cursor_temp.fetchone()
+                                conn_temp.close()
+                                if row_temp:
+                                    sample_type = row_temp['source_type']
+                            except Exception:
+                                pass
+                        
+                        if sample_type:
+                            sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
+                        sample_checked += 1
+                    
+                    # 샘플에서 요청한 타입이 있는지 확인
+                    requested_types_found = sum(1 for st in source_types if sample_types.get(st, 0) > 0)
+                    if requested_types_found == 0 and sample_checked > 0:
+                        self.logger.warning(
+                            f"⚠️  Requested source_types {source_types} not found in sample ({sample_checked} chunks). "
+                            f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
+                        )
+                        source_types = None
+                        source_types_relaxed = True
+                    elif requested_types_found > 0:
+                        requested_ratio = sum(sample_types.get(st, 0) for st in source_types) / sample_checked
+                        if requested_ratio < 0.05:  # 5% 미만이면 필터 완화
+                            self.logger.warning(
+                                f"⚠️  Requested source_types {source_types} are very rare in sample ({requested_ratio:.1%}). "
+                                f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
+                            )
+                            source_types = None
+                            source_types_relaxed = True
+                
+                for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
                     if idx < 0 or idx >= len(self._chunk_ids):
                         skipped_count += 1
                         continue
@@ -2280,9 +2494,35 @@ class SemanticSearchEngineV2:
                                     pass
                         
                         # source_type이 source_types에 없으면 건너뛰기
+                        # 단, 필터링 비율이 높으면 필터 완화
                         if chunk_source_type and chunk_source_type not in source_types:
                             filtered_by_source += 1
-                            continue
+                            
+                            # 필터링 중간에 비율 확인 및 필터 완화 (처리한 항목의 20% 이상 필터링 시 - 개선)
+                            processed_count = i + 1 - skipped_count - filtered_by_not_found
+                            if processed_count > 20 and not source_types_relaxed:
+                                current_filter_ratio = filtered_by_source / processed_count
+                                if current_filter_ratio >= 0.7:  # 70% 이상 필터링 (80%에서 완화)
+                                    self.logger.warning(
+                                        f"⚠️  High source_type filtering rate detected: {current_filter_ratio:.1%} "
+                                        f"({filtered_by_source}/{processed_count}). "
+                                        f"Requested types: {original_source_types}, current chunk type: {chunk_source_type}. "
+                                        f"Relaxing source_type filter to ensure minimum results."
+                                    )
+                                    source_types = None
+                                    source_types_relaxed = True
+                                    # 필터가 완화되었으므로 이 chunk는 통과
+                                elif current_filter_ratio >= 0.5 and len(similarities) == 0:
+                                    # 50% 이상 필터링되고 아직 결과가 없으면 경고
+                                    self.logger.warning(
+                                        f"⚠️  Moderate source_type filtering rate: {current_filter_ratio:.1%} "
+                                        f"({filtered_by_source}/{processed_count}). "
+                                        f"Requested types: {original_source_types}, current chunk type: {chunk_source_type}."
+                                    )
+                            
+                            # 필터가 완화되지 않았으면 건너뛰기
+                            if source_types:
+                                continue
                     
                     # embedding_version_id 필터링 (IndexIVFPQ 인덱스 사용 시 선택적 적용)
                     # is_indexivfpq는 이미 위에서 정의됨 (라인 1944)
@@ -2368,10 +2608,33 @@ class SemanticSearchEngineV2:
                 
                 step_times['faiss_search'] = time.time() - search_start
                 
-                # 필터링 통계 로깅
+                # 필터링 통계 로깅 및 source_type 필터 완화
+                if source_types_relaxed:
+                    self.logger.info(
+                        f"✅ Source_type filter was relaxed during filtering. "
+                        f"Original types: {original_source_types}, "
+                        f"Final results: {len(similarities)} (from {len(indices[0])} FAISS results)"
+                    )
+                
                 if len(similarities) == 0 and len(indices[0]) > 0:
                     self.logger.warning(f"⚠️  No results after filtering! FAISS returned {len(indices[0])} results but all were filtered out.")
                     self.logger.warning(f"   Filtering stats: skipped={skipped_count}, by_version={filtered_by_version}, by_source={filtered_by_source}, by_threshold={filtered_by_threshold}, not_found={filtered_by_not_found}")
+                    
+                    # source_type 필터링으로 인한 결과 손실이 큰 경우
+                    if filtered_by_source > 0 and filtered_by_source >= len(indices[0]) * 0.8:
+                        if source_types_relaxed:
+                            self.logger.warning(
+                                f"⚠️  Filter was relaxed but still no results. "
+                                f"Most results filtered by source_type ({filtered_by_source}/{len(indices[0])}). "
+                                f"Original requested types: {original_source_types}."
+                            )
+                        else:
+                            self.logger.warning(
+                                f"⚠️  Most results filtered by source_type ({filtered_by_source}/{len(indices[0])}). "
+                                f"Requested types: {original_source_types if original_source_types else source_types}. "
+                                f"Consider relaxing source_type filter at higher level."
+                            )
+                    
                     if filtered_by_not_found > 0:
                         self.logger.warning(f"   ⚠️  {filtered_by_not_found} chunk_ids not found in database - FAISS index may be built with different version. Please rebuild the index.")
                     self.logger.warning(f"   Possible causes: similarity_threshold too high ({similarity_threshold:.3f}) or embedding_version_id mismatch (requested={embedding_version_id})")
@@ -2870,18 +3133,44 @@ class SemanticSearchEngineV2:
                                 self.logger.error(f"❌ [SEMANTIC SEARCH] Failed to restore text for chunk_id={chunk_id}")
                                 continue  # text가 없으면 건너뛰기
                     
-                    # 타입별 최소 길이 차등 적용 (P1-4: 더욱 완화 - 10자 → 5자)
+                    # 타입별 최소 길이 차등 적용 (텍스트 품질 개선: 최소 길이 보장)
                     if source_type == 'statute_article':
                         min_text_length = 30
                     elif source_type in ['case_paragraph', 'decision_paragraph']:
-                        min_text_length = 5
+                        min_text_length = 100  # 텍스트 품질 개선: 5자 → 100자로 증가
                     else:
-                        min_text_length = 50
-                    if text and len(text.strip()) < min_text_length:
+                        min_text_length = 100  # 텍스트 품질 개선: 50자 → 100자로 증가
+                    
+                    # 텍스트 길이 보장 로직 강화 (추가 개선: 인접 청크에서 텍스트 복원)
+                    original_text_length = len(text.strip()) if text else 0
+                    if text and original_text_length < min_text_length:
+                        # 1차: 원본 소스에서 복원 시도
                         restored_text = self._restore_text_from_source(conn, source_type, source_id)
-                        if restored_text and len(restored_text.strip()) > len(text.strip()):
+                        if restored_text and len(restored_text.strip()) > original_text_length:
                             text = restored_text
-                            self.logger.debug(f"Extended text for chunk_id={chunk_id} to {len(text)} chars")
+                            self.logger.debug(f"Extended text for chunk_id={chunk_id} from {original_text_length} to {len(text)} chars")
+                        
+                        # 2차: 여전히 짧으면 인접 청크에서 텍스트 가져오기 시도
+                        if text and len(text.strip()) < min_text_length:
+                            # 인접한 청크에서 텍스트 복원 시도
+                            try:
+                                adjacent_text = self._restore_text_from_source(conn, source_type, source_id)
+                                if adjacent_text and len(adjacent_text.strip()) > len(text.strip()):
+                                    text = adjacent_text
+                                    self.logger.debug(f"Extended text for chunk_id={chunk_id} from source to {len(text)} chars")
+                            except Exception as e:
+                                self.logger.debug(f"Could not restore text from adjacent chunks for chunk_id={chunk_id}: {e}")
+                    
+                    # 최소 길이 미만이면 건너뛰기 (텍스트 품질 개선 강화)
+                    # 단, statute_article은 30자 이상이면 허용 (법령 조문은 짧을 수 있음)
+                    final_text_length = len(text.strip()) if text else 0
+                    if final_text_length < min_text_length:
+                        # statute_article은 30자 이상이면 허용
+                        if source_type == 'statute_article' and final_text_length >= 30:
+                            pass  # 허용
+                        else:
+                            self.logger.debug(f"Skipping chunk {chunk_id}: text too short ({final_text_length} < {min_text_length})")
+                            continue
                 else:
                     # conn, source_type, source_id가 없는 경우 기본값 설정
                     if self.use_mlflow_index and metadata:
@@ -3051,6 +3340,60 @@ class SemanticSearchEngineV2:
                             del source_meta[typo_field]
                             self.logger.debug(f"✅ Normalized typo field {typo_field} → interpretation_id={correct_value} in source_meta for chunk_id={chunk_id}")
                 
+                # source_type 필드 보장 (메타데이터 완전성 개선)
+                if not source_type:
+                    source_type = chunk_metadata.get('source_type') or 'unknown'
+                
+                # ccourt 필드 보장 (court 필드에서 가져오기) - 메타데이터 완전성 개선 강화
+                court_value = source_meta.get("court")
+                ccourt_value = source_meta.get("ccourt") or court_value
+                # court가 없으면 DB에서 직접 조회 시도 (case_paragraph의 경우)
+                if not ccourt_value and source_type == "case_paragraph" and source_id and conn:
+                    try:
+                        # 먼저 case_paragraphs를 통해 조회
+                        cursor_court = conn.execute(
+                            "SELECT c.court FROM case_paragraphs cp JOIN cases c ON cp.case_id = c.id WHERE cp.id = ?",
+                            (source_id,)
+                        )
+                        row_court = cursor_court.fetchone()
+                        if row_court and row_court.get("court"):
+                            ccourt_value = row_court["court"]
+                            court_value = ccourt_value
+                        else:
+                            # case_paragraphs 조회 실패 시 cases 테이블에서 직접 조회
+                            cursor_court = conn.execute(
+                                "SELECT court FROM cases WHERE id = ?",
+                                (source_id,)
+                            )
+                            row_court = cursor_court.fetchone()
+                            if row_court and row_court.get("court"):
+                                ccourt_value = row_court["court"]
+                                court_value = ccourt_value
+                    except Exception as e:
+                        self.logger.debug(f"Failed to fetch court for case_paragraph {source_id}: {e}")
+                
+                # 검색 결과 설명 개선: 출처 정보 명확화
+                source_description = source_name
+                if source_type == "statute_article":
+                    statute_name = source_meta.get("statute_name") or source_meta.get("law_name")
+                    article_no = source_meta.get("article_no") or source_meta.get("article_number")
+                    if statute_name and article_no:
+                        source_description = f"{statute_name} {article_no}"
+                elif source_type == "case_paragraph":
+                    casenames = source_meta.get("casenames")
+                    doc_id = source_meta.get("doc_id")
+                    if casenames and doc_id:
+                        source_description = f"{casenames} ({doc_id})"
+                    elif casenames:
+                        source_description = casenames
+                elif source_type == "interpretation_paragraph":
+                    title = source_meta.get("title")
+                    org = source_meta.get("org")
+                    if title and org:
+                        source_description = f"{org} {title}"
+                    elif title:
+                        source_description = title
+                
                 result = {
                     "id": f"chunk_{chunk_id}",
                     "text": text,
@@ -3059,7 +3402,9 @@ class SemanticSearchEngineV2:
                     "similarity": float(score),
                     "direct_similarity": direct_similarity,  # 직접 계산된 유사도 추가
                     "type": source_type,
+                    "source_type": source_type,  # source_type 필드 명시적 추가 (메타데이터 완전성 개선)
                     "source": source_name,
+                    "source_description": source_description,  # 검색 결과 설명 개선: 명확한 출처 정보
                     "source_url": source_url,  # URL 필드 추가
                     "embedding_version_id": result_embedding_version_id,  # 버전 정보 추가
                     # 최상위 필드에 상세 정보 추가 (answer_formatter에서 쉽게 접근)
@@ -3069,7 +3414,8 @@ class SemanticSearchEngineV2:
                     "article_number": source_meta.get("article_no") if source_type == "statute_article" else None,
                     "clause_no": source_meta.get("clause_no") if source_type == "statute_article" else None,
                     "item_no": source_meta.get("item_no") if source_type == "statute_article" else None,
-                    "court": source_meta.get("court") if source_type == "case_paragraph" else None,
+                    "court": court_value if source_type == "case_paragraph" else None,
+                    "ccourt": ccourt_value if source_type == "case_paragraph" else None,  # ccourt 필드 추가 (메타데이터 완전성 개선 - 항상 포함)
                     "doc_id": source_meta.get("doc_id") if source_type in ["case_paragraph", "decision_paragraph", "interpretation_paragraph"] else None,
                     "casenames": source_meta.get("casenames") if source_type == "case_paragraph" else None,
                     "org": source_meta.get("org") if source_type in ["decision_paragraph", "interpretation_paragraph"] else None,
@@ -3093,7 +3439,14 @@ class SemanticSearchEngineV2:
                     "hybrid_score": hybrid_score,
                     "ml_confidence": ml_confidence,
                     "quality_score": quality_score,
-                    "search_type": "semantic"
+                    "search_type": "semantic",
+                    # 검색 결과 순위 개선: 소스 타입별 가중치 추가
+                    "source_type_weight": {
+                        "statute_article": 1.3,
+                        "interpretation_paragraph": 1.2,
+                        "decision_paragraph": 1.1,
+                        "case_paragraph": 1.0
+                    }.get(source_type, 1.0)
                 }
                 
                 # 신뢰도 기반 필터링
@@ -3109,11 +3462,24 @@ class SemanticSearchEngineV2:
                 
                 results.append(result)
 
-            # 그룹별 중복 제거 (하이브리드 청킹 지원)
+            # 그룹별 중복 제거 (하이브리드 청킹 지원) + 소스 ID 기반 중복 제거 강화
             if deduplicate_by_group:
                 seen_groups = {}
+                seen_source_ids = {}  # 소스 ID 기반 중복 제거 (추가 개선)
                 deduplicated_results = []
                 for result in results:
+                    # 우선순위 1: 소스 ID 기반 중복 제거 (최우선)
+                    source_type = result.get("source_type") or result.get("type", "")
+                    source_id = result.get("metadata", {}).get("source_id") if isinstance(result.get("metadata"), dict) else None
+                    if source_id and source_type:
+                        source_key = f"{source_type}_{source_id}"
+                        if source_key in seen_source_ids:
+                            # 동일 소스에서 이미 결과가 있으면 건너뛰기
+                            continue
+                        else:
+                            seen_source_ids[source_key] = result
+                    
+                    # 우선순위 2: 그룹 ID 기반 중복 제거
                     group_id = result.get("metadata", {}).get("chunk_group_id")
                     if group_id and group_id != 'N/A':
                         if group_id not in seen_groups:
@@ -3129,7 +3495,20 @@ class SemanticSearchEngineV2:
                         deduplicated_results.append(result)
                 results = deduplicated_results[:k]
             else:
-                results = results[:k]
+                # deduplicate_by_group이 False여도 소스 ID 기반 중복 제거는 수행
+                seen_source_ids = {}
+                deduplicated_results = []
+                for result in results:
+                    source_type = result.get("source_type") or result.get("type", "")
+                    source_id = result.get("metadata", {}).get("source_id") if isinstance(result.get("metadata"), dict) else None
+                    if source_id and source_type:
+                        source_key = f"{source_type}_{source_id}"
+                        if source_key in seen_source_ids:
+                            continue
+                        else:
+                            seen_source_ids[source_key] = result
+                    deduplicated_results.append(result)
+                results = deduplicated_results[:k]
 
             if conn:
                 conn.close()
@@ -3448,9 +3827,33 @@ class SemanticSearchEngineV2:
                 # 2. 메타데이터 완전성 검증 (개선 사항 #2)
                 source_type = result.get('type') or result.get('source_type') or result.get('metadata', {}).get('source_type')
                 if not source_type:
-                    issues_found['missing_metadata'] += 1
-                    self.logger.warning(f"⚠️  Result {i+1}: source_type is missing")
-                    continue  # source_type이 없으면 건너뛰기
+                    # source_type 복원 시도
+                    chunk_id = result.get('chunk_id') or result.get('metadata', {}).get('chunk_id')
+                    if chunk_id:
+                        try:
+                            conn_temp = self._get_connection()
+                            cursor_temp = conn_temp.execute(
+                                "SELECT source_type FROM text_chunks WHERE id = ?",
+                                (chunk_id,)
+                            )
+                            row_temp = cursor_temp.fetchone()
+                            if row_temp and row_temp.get('source_type'):
+                                source_type = row_temp['source_type']
+                                result['source_type'] = source_type
+                                result['type'] = source_type
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['source_type'] = source_type
+                                self.logger.debug(f"✅ Restored source_type for result {i+1}: {source_type}")
+                            conn_temp.close()
+                        except Exception as e:
+                            self.logger.debug(f"Failed to restore source_type for chunk_id={chunk_id}: {e}")
+                    
+                    # 복원 실패 시에만 경고 및 건너뛰기
+                    if not source_type:
+                        issues_found['missing_metadata'] += 1
+                        self.logger.warning(f"⚠️  Result {i+1}: source_type is missing and could not be restored")
+                        continue  # source_type이 없으면 건너뛰기
                 
                 # 타입별 필수 필드 검증
                 required_fields = self._get_required_metadata_fields(source_type)
@@ -3894,33 +4297,66 @@ class SemanticSearchEngineV2:
             # source_id가 None인 경우에도 chunk_id로 직접 복원 시도 (우선 처리)
             if not source_id and chunk_id:
                 try:
-                    # case_paragraph의 경우: doc_id, casenames, court 복원
+                    # case_paragraph의 경우: doc_id, casenames, court 복원 (강화)
                     if source_type == 'case_paragraph':
-                        cursor_case = conn.execute("""
-                            SELECT cp.case_id, c.casenames, c.doc_id, c.court
-                            FROM text_chunks tc
-                            JOIN case_paragraphs cp ON tc.source_id = cp.id
-                            JOIN cases c ON cp.case_id = c.id
-                            WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
-                        """, (chunk_id,))
-                        case_row = cursor_case.fetchone()
+                        # 먼저 source_id로 조회 시도
+                        cursor_case = None
+                        if source_id:
+                            cursor_case = conn.execute("""
+                                SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                                FROM case_paragraphs cp
+                                JOIN cases c ON cp.case_id = c.id
+                                WHERE cp.id = ?
+                            """, (source_id,))
+                        else:
+                            # source_id가 없으면 chunk_id로 직접 조회
+                            cursor_case = conn.execute("""
+                                SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                                FROM text_chunks tc
+                                JOIN case_paragraphs cp ON tc.source_id = cp.id
+                                JOIN cases c ON cp.case_id = c.id
+                                WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
+                            """, (chunk_id,))
+                        
+                        case_row = cursor_case.fetchone() if cursor_case else None
                         if case_row:
+                            restored_count = 0
                             if 'doc_id' in missing_fields and case_row['doc_id']:
                                 result['doc_id'] = case_row['doc_id']
                                 if 'metadata' not in result:
                                     result['metadata'] = {}
                                 result['metadata']['doc_id'] = case_row['doc_id']
+                                restored_count += 1
                             if 'casenames' in missing_fields and case_row['casenames']:
                                 result['casenames'] = case_row['casenames']
                                 if 'metadata' not in result:
                                     result['metadata'] = {}
                                 result['metadata']['casenames'] = case_row['casenames']
-                            if 'court' in missing_fields and case_row['court']:
-                                result['court'] = case_row['court']
+                                restored_count += 1
+                            if 'court' in missing_fields:
+                                if case_row['court']:
+                                    result['court'] = case_row['court']
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['court'] = case_row['court']
+                                    restored_count += 1
+                                else:
+                                    # court가 NULL인 경우 기본값 설정
+                                    result['court'] = "법원명 미상"
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['court'] = "법원명 미상"
+                                    self.logger.debug(f"⚠️  court is NULL for chunk_id={chunk_id}, set default value")
+                            if restored_count > 0:
+                                self.logger.debug(f"✅ Restored {restored_count} case metadata fields for chunk_id={chunk_id} (doc_id, casenames, court)")
+                        else:
+                            # 조회 실패 시 기본값 설정
+                            if 'court' in missing_fields:
+                                result['court'] = "법원명 미상"
                                 if 'metadata' not in result:
                                     result['metadata'] = {}
-                                result['metadata']['court'] = case_row['court']
-                            self.logger.debug(f"✅ Restored case metadata for chunk_id={chunk_id} (doc_id, casenames, court)")
+                                result['metadata']['court'] = "법원명 미상"
+                                self.logger.debug(f"⚠️  Could not restore court for chunk_id={chunk_id}, set default value")
                     
                     # decision_paragraph의 경우: org, doc_id 복원
                     elif source_type == 'decision_paragraph':
@@ -4799,7 +5235,235 @@ class SemanticSearchEngineV2:
             
             # 인덱스 타입 감지 및 로깅
             index_type = type(self.index).__name__
-            self.logger.info(f"Loaded MLflow FAISS index: {index_type} ({self.index.ntotal:,} vectors) from run {run_id}")
+            index_dimension = self.index.d
+            self.logger.info(f"Loaded MLflow FAISS index: {index_type} ({self.index.ntotal:,} vectors, dimension: {index_dimension}) from run {run_id}")
+            
+            # MLflow version_info에서 모델 정보 확인 및 차원 검증
+            mlflow_model_name = None
+            mlflow_dimension = None
+            try:
+                import mlflow
+                self.logger.info(f"📖 MLflow version_info.json 로드 시도: run_id={run_id}")
+                
+                version_info = None
+                if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
+                    version_info = self.mlflow_manager.load_version_info_from_local(run_id)
+                    if version_info:
+                        self.logger.info("✅ 로컬 파일 시스템에서 version_info.json 직접 로드 완료")
+                
+                if version_info is None:
+                    self.logger.debug("로컬 경로에서 version_info.json을 찾을 수 없어 MLflow에서 다운로드 시도")
+                    version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
+                
+                self.logger.debug(f"version_info keys: {list(version_info.keys()) if isinstance(version_info, dict) else 'Not a dict'}")
+                
+                if isinstance(version_info, dict):
+                    embedding_config = version_info.get('embedding_config', {})
+                    self.logger.debug(f"embedding_config: {embedding_config}")
+                    
+                    mlflow_model_name = embedding_config.get('model')
+                    mlflow_dimension = embedding_config.get('dimension')
+                    
+                    if mlflow_model_name:
+                        self.logger.info(f"✅ MLflow version_info에서 모델 정보 확인: {mlflow_model_name}")
+                        if mlflow_dimension:
+                            self.logger.info(f"   MLflow 인덱스 차원: {mlflow_dimension}")
+                    else:
+                        self.logger.warning(f"⚠️  MLflow version_info에 모델 정보가 없습니다. embedding_config: {embedding_config}")
+                        if index_dimension:
+                            dimension_model_map = {
+                                768: "woong0322/ko-legal-sbert-finetuned",
+                                384: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                                512: "jhgan/ko-sroberta-multitask",
+                            }
+                            inferred_model = dimension_model_map.get(index_dimension)
+                            if inferred_model:
+                                self.logger.info(f"   💡 차원({index_dimension}) 기반 추론 모델: {inferred_model}")
+                                self.logger.info("   💡 이 모델 정보를 MLflow version_info.json에 저장하려면 scripts/rag/update_mlflow_version_info.py를 실행하세요.")
+                else:
+                    self.logger.warning(f"⚠️  MLflow version_info가 dict가 아닙니다: {type(version_info)}")
+            except Exception as e:
+                self.logger.warning(f"⚠️  MLflow version_info.json 로드 실패: {e}", exc_info=True)
+            
+            # 차원 불일치 시 MLflow 모델로 재초기화 시도
+            if self.dim is not None and index_dimension != self.dim:
+                self.logger.warning(
+                    f"⚠️  차원 불일치 감지:\n"
+                    f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                    f"   - 현재 임베딩 모델 차원: {self.dim}\n"
+                    f"   - 현재 사용 모델: {self.model_name}"
+                )
+                
+                # MLflow에서 모델 정보를 가져왔고, 현재 모델과 다른 경우 재초기화 시도
+                if mlflow_model_name and mlflow_model_name != self.model_name:
+                    self.logger.info(
+                        f"🔄 MLflow 인덱스에 사용된 모델({mlflow_model_name})로 재초기화 시도..."
+                    )
+                    try:
+                        # 임베딩 모델 재초기화
+                        self._initialize_embedder(mlflow_model_name)
+                        self.model_name = mlflow_model_name
+                        self.logger.info(f"✅ 모델 재초기화 완료: {mlflow_model_name} (차원: {self.dim})")
+                        
+                        # 차원 재검증
+                        if self.dim is not None and index_dimension != self.dim:
+                            error_msg = (
+                                f"❌ 차원 불일치가 지속됩니다!\n"
+                                f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                                f"   - 재초기화된 모델 차원: {self.dim}\n"
+                                f"   - 재초기화된 모델: {self.model_name}\n"
+                                f"해결 방법:\n"
+                                f"   1. MLflow 인덱스를 재빌드하거나\n"
+                                f"   2. 올바른 모델을 사용하세요."
+                            )
+                            self.logger.error(error_msg)
+                            raise RuntimeError(
+                                f"Dimension mismatch persists: MLflow index dimension ({index_dimension}) "
+                                f"does not match embedding model dimension ({self.dim}) after reinitialization."
+                            )
+                        else:
+                            self.logger.info(f"✅ 차원 일치 확인: 인덱스 차원({index_dimension}) = 모델 차원({self.dim})")
+                    except Exception as e:
+                        self.logger.error(f"❌ 모델 재초기화 실패: {e}")
+                        error_msg = (
+                            f"❌ 차원 불일치 및 모델 재초기화 실패!\n"
+                            f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                            f"   - 현재 임베딩 모델 차원: {self.dim}\n"
+                            f"   - 현재 사용 모델: {self.model_name}\n"
+                            f"   - MLflow 인덱스 모델: {mlflow_model_name}\n"
+                            f"해결 방법:\n"
+                            f"   1. MLflow 인덱스에 사용된 모델({mlflow_model_name})을 설치하거나\n"
+                            f"   2. 현재 모델({self.model_name})과 호환되는 MLflow 인덱스를 사용하거나\n"
+                            f"   3. 새로운 MLflow run으로 인덱스를 재빌드하세요."
+                        )
+                        self.logger.error(error_msg)
+                        raise RuntimeError(
+                            f"Dimension mismatch: MLflow index dimension ({index_dimension}) "
+                            f"does not match embedding model dimension ({self.dim}). "
+                            f"Failed to reinitialize with MLflow model {mlflow_model_name}: {e}"
+                        )
+                elif not mlflow_model_name:
+                    # MLflow 모델 정보가 없는 경우, 차원 기반으로 알려진 모델 시도
+                    self.logger.warning(f"⚠️  MLflow version_info에 모델 정보가 없어 차원 기반으로 모델 추론 시도...")
+                    
+                    # 차원에 맞는 알려진 모델 매핑
+                    dimension_model_map = {
+                        768: "woong0322/ko-legal-sbert-finetuned",
+                        384: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                        512: "jhgan/ko-sroberta-multitask",
+                    }
+                    
+                    candidate_model = dimension_model_map.get(index_dimension)
+                    if candidate_model and candidate_model != self.model_name:
+                        self.logger.info(
+                            f"🔄 차원({index_dimension})에 맞는 모델({candidate_model})로 재초기화 시도..."
+                        )
+                        try:
+                            # 임베딩 모델 재초기화
+                            self._initialize_embedder(candidate_model)
+                            self.model_name = candidate_model
+                            self.logger.info(f"✅ 모델 재초기화 완료: {candidate_model} (차원: {self.dim})")
+                            
+                            # 차원 재검증
+                            if self.dim is not None and index_dimension != self.dim:
+                                error_msg = (
+                                    f"❌ 차원 불일치가 지속됩니다!\n"
+                                    f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                                    f"   - 재초기화된 모델 차원: {self.dim}\n"
+                                    f"   - 재초기화된 모델: {self.model_name}\n"
+                                    f"해결 방법:\n"
+                                    f"   1. MLflow 인덱스를 재빌드하거나\n"
+                                    f"   2. 올바른 모델을 사용하세요."
+                                )
+                                self.logger.error(error_msg)
+                                raise RuntimeError(
+                                    f"Dimension mismatch persists: MLflow index dimension ({index_dimension}) "
+                                    f"does not match embedding model dimension ({self.dim}) after reinitialization."
+                                )
+                            else:
+                                self.logger.info(f"✅ 차원 일치 확인: 인덱스 차원({index_dimension}) = 모델 차원({self.dim})")
+                        except Exception as e:
+                            self.logger.error(f"❌ 모델 재초기화 실패: {e}")
+                            error_msg = (
+                                f"❌ 차원 불일치 및 모델 재초기화 실패!\n"
+                                f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                                f"   - 현재 임베딩 모델 차원: {self.dim}\n"
+                                f"   - 현재 사용 모델: {self.model_name}\n"
+                                f"   - 시도한 모델: {candidate_model}\n"
+                                f"해결 방법:\n"
+                                f"   1. MLflow 인덱스에 사용된 모델을 확인하고 설치하거나\n"
+                                f"   2. 현재 모델({self.model_name})과 호환되는 MLflow 인덱스를 사용하거나\n"
+                                f"   3. 새로운 MLflow run으로 인덱스를 재빌드하세요."
+                            )
+                            self.logger.error(error_msg)
+                            raise RuntimeError(
+                                f"Dimension mismatch: MLflow index dimension ({index_dimension}) "
+                                f"does not match embedding model dimension ({self.dim}). "
+                                f"Failed to reinitialize with candidate model {candidate_model}: {e}"
+                            )
+                    else:
+                        # 차원에 맞는 모델을 찾지 못한 경우
+                        error_msg = (
+                            f"❌ 차원 불일치 감지!\n"
+                            f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                            f"   - 현재 임베딩 모델 차원: {self.dim}\n"
+                            f"   - 현재 사용 모델: {self.model_name}\n"
+                            f"   - MLflow version_info에 모델 정보가 없습니다.\n"
+                            f"해결 방법:\n"
+                            f"   1. MLflow 인덱스에 사용된 모델과 동일한 모델을 사용하거나\n"
+                            f"   2. 현재 모델({self.model_name})과 호환되는 MLflow 인덱스를 사용하거나\n"
+                            f"   3. 새로운 MLflow run으로 인덱스를 재빌드하세요."
+                        )
+                        self.logger.error(error_msg)
+                        raise RuntimeError(
+                            f"Dimension mismatch: MLflow index dimension ({index_dimension}) "
+                            f"does not match embedding model dimension ({self.dim}). "
+                            f"Please use the same model that was used to build the index, or rebuild the index."
+                        )
+                else:
+                    # MLflow 모델 정보가 있지만 현재 모델과 동일한 경우
+                    error_msg = (
+                        f"❌ 차원 불일치 감지!\n"
+                        f"   - MLflow 인덱스 차원: {index_dimension}\n"
+                        f"   - 현재 임베딩 모델 차원: {self.dim}\n"
+                        f"   - 현재 사용 모델: {self.model_name}\n"
+                        f"   - MLflow 인덱스 모델: {mlflow_model_name}\n"
+                        f"해결 방법:\n"
+                        f"   1. MLflow 인덱스에 사용된 모델과 동일한 모델을 사용하거나\n"
+                        f"   2. 현재 모델({self.model_name})과 호환되는 MLflow 인덱스를 사용하거나\n"
+                        f"   3. 새로운 MLflow run으로 인덱스를 재빌드하세요."
+                    )
+                    self.logger.error(error_msg)
+                    raise RuntimeError(
+                        f"Dimension mismatch: MLflow index dimension ({index_dimension}) "
+                        f"does not match embedding model dimension ({self.dim}). "
+                        f"Please use the same model that was used to build the index, or rebuild the index."
+                    )
+            elif self.dim is not None:
+                # 차원 일치 확인
+                self.logger.info(f"✅ 차원 일치 확인: 인덱스 차원({index_dimension}) = 모델 차원({self.dim})")
+                if mlflow_model_name and mlflow_model_name != self.model_name:
+                    self.logger.warning(
+                        f"⚠️  모델 이름 불일치 (차원은 일치):\n"
+                        f"   - MLflow 인덱스 모델: {mlflow_model_name}\n"
+                        f"   - 현재 사용 모델: {self.model_name}\n"
+                        f"   차원이 일치하므로 검색은 가능하지만, 모델이 다를 수 있습니다."
+                    )
+            else:
+                self.logger.warning(f"⚠️  임베딩 모델 차원을 확인할 수 없습니다. 검색 시 차원 불일치 오류가 발생할 수 있습니다.")
+            
+            # MLflow version_info의 차원 정보와 실제 인덱스 차원 비교
+            if mlflow_dimension:
+                if mlflow_dimension != index_dimension:
+                    self.logger.warning(
+                        f"⚠️  MLflow version_info의 차원 정보({mlflow_dimension})와 "
+                        f"실제 인덱스 차원({index_dimension})이 일치하지 않습니다."
+                    )
+                elif self.dim and mlflow_dimension != self.dim:
+                    self.logger.warning(
+                        f"⚠️  MLflow version_info의 차원 정보({mlflow_dimension})와 "
+                        f"현재 모델 차원({self.dim})이 일치하지 않습니다."
+                    )
             
             # IndexIVF 계열 인덱스 (IndexIVFFlat, IndexIVFPQ 등) 확인
             if hasattr(self.index, 'nprobe'):
@@ -6126,16 +6790,17 @@ class SemanticSearchEngineV2:
         return structured_info
 
     def _extract_core_keywords_simple(self, query: str) -> List[str]:
-        """핵심 키워드 추출 (간단한 구현)"""
+        """핵심 키워드 추출 (간단한 구현 - KoreanStopwordProcessor 사용)"""
         import re
-        
-        # 불용어 제거
-        stopwords = ["이", "가", "을", "를", "의", "에", "에서", "로", "으로", "와", "과", "는", "은", "도", "만", "란", "이란"]
         
         # 한글 단어 추출
         words = re.findall(r'[가-힣]+', query)
         
-        # 불용어 제거 및 길이 필터링
-        core_keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+        # 불용어 제거 및 길이 필터링 (KoreanStopwordProcessor 사용)
+        core_keywords = []
+        for w in words:
+            if len(w) >= 2:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                    core_keywords.append(w)
         
         return core_keywords[:5]  # 상위 5개

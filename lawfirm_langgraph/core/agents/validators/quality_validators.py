@@ -8,8 +8,24 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
 logger = logging.getLogger(__name__)
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
+_stopword_processor = None
+if KoreanStopwordProcessor:
+    try:
+        _stopword_processor = KoreanStopwordProcessor()
+        logger.debug("KoreanStopwordProcessor initialized at module level")
+    except Exception as e:
+        logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
 
 class ContextValidator:
@@ -529,9 +545,20 @@ class AnswerValidator:
                             has_law_in_docs = True
                             break
 
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 문서 인용 패턴 확인 (개선: "[문서 N]" 형식도 감지)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식
+                r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
+                r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
+            ]
+            document_citations = 0
+            unique_doc_citations = set()
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    unique_doc_citations.add(match)
+            document_citations = len(unique_doc_citations)
 
             # 3. 검색된 문서의 출처가 답변에 포함되어 있는지 확인 (개선: 유연한 패턴 매칭)
             has_document_references = False
@@ -632,11 +659,65 @@ class AnswerValidator:
                     if has_document_references:
                         break
                     
-                    # 일반적인 키워드 매칭 (최소 3자 이상)
-                    source_keywords = [w for w in source.split() if len(w) >= 3][:3]
-                    if source_keywords and any(keyword.lower() in answer_lower for keyword in source_keywords):
+                    # 방법 3: 법령명 확인 (개선)
+                    statute_patterns = [
+                        r'([가-힣]+법)',
+                        r'([가-힣]+법령)',
+                        r'([가-힣]+규칙)'
+                    ]
+                    statute_found = False
+                    for statute_pattern in statute_patterns:
+                        statute_match = re.search(statute_pattern, source_lower)
+                        if statute_match:
+                            statute_name = statute_match.group(1)
+                            if statute_name in answer_lower:
+                                statute_found = True
+                                break
+                    
+                    # 방법 4: 조문번호 확인
+                    article_pattern = r'제\s*(\d+)\s*조'
+                    article_match = re.search(article_pattern, source_lower)
+                    article_found = False
+                    if article_match:
+                        article_no = article_match.group(1)
+                        if f"제{article_no}조" in answer_lower or f"{article_no}조" in answer_lower:
+                            article_found = True
+                    
+                    # 방법 5: 기관명 확인
+                    org_patterns = [
+                        r'([가-힣]+부)',
+                        r'([가-힣]+청)',
+                        r'([가-힣]+원)'
+                    ]
+                    org_found = False
+                    for org_pattern in org_patterns:
+                        org_match = re.search(org_pattern, source_lower)
+                        if org_match:
+                            org_name = org_match.group(1)
+                            if org_name in answer_lower:
+                                org_found = True
+                                break
+                    
+                    # 방법 6: 제목이나 사건명 확인 (핵심 키워드 추출)
+                    title_keywords = [w for w in source_lower.split() if len(w) >= 2 and w not in ['법원', '법', '조', '제', '선고']][:5]
+                    title_found = False
+                    if title_keywords:
+                        matched_keywords = sum(1 for kw in title_keywords if kw in answer_lower)
+                        if matched_keywords >= min(2, len(title_keywords) // 2):  # 최소 2개 또는 절반 이상 매칭
+                            title_found = True
+                    
+                    # 하나라도 매칭되면 문서 참조로 인정
+                    if court_found or case_found or statute_found or article_found or org_found or title_found:
                         has_document_references = True
                         break
+                    
+                    # 방법 7: 일반적인 키워드 매칭 (최소 3자 이상, 더 많은 키워드 확인)
+                    source_keywords = [w for w in source_lower.split() if len(w) >= 3][:5]  # 3개 → 5개로 증가
+                    if source_keywords:
+                        matched_keywords = sum(1 for kw in source_keywords if kw in answer_lower)
+                        if matched_keywords >= min(2, len(source_keywords) // 2):  # 최소 2개 또는 절반 이상 매칭
+                            has_document_references = True
+                            break
 
             # 컨텍스트에서 추출한 인용 정보와 비교 (개선: 정규화 및 유연한 매칭)
             expected_citations_raw = []
@@ -986,9 +1067,12 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue
@@ -1010,9 +1094,13 @@ class AnswerValidator:
                 sentence_key_phrases = [w for w in sentence_words if len(w) > 2][:5]  # 핵심 구문 추출
                 phrase_match_score = sum(1 for phrase in sentence_key_phrases if phrase in source_text) / max(len(sentence_key_phrases), 1) if sentence_key_phrases else 0.0
                 
-                # 의미적 유사도 (공통 단어 비율)
+                # 의미적 유사도 (공통 단어 비율 - KoreanStopwordProcessor 사용)
                 source_words = re.findall(r'[가-힣]+', source_text.lower())
-                source_words_set = set([w for w in source_words if len(w) > 1 and w not in stopwords])
+                source_words_set = set()
+                for w in source_words:
+                    if len(w) > 1:
+                        if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                            source_words_set.add(w)
                 sentence_words_set = set(sentence_words)
                 semantic_similarity = len(sentence_words_set & source_words_set) / max(len(sentence_words_set), 1) if sentence_words_set else 0.0
 

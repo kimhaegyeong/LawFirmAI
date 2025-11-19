@@ -8,8 +8,24 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
 
 logger = logging.getLogger(__name__)
+
+# 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
+_stopword_processor = None
+if KoreanStopwordProcessor:
+    try:
+        _stopword_processor = KoreanStopwordProcessor()
+        logger.debug("KoreanStopwordProcessor initialized at module level")
+    except Exception as e:
+        logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
 
 class ContextValidator:
@@ -273,9 +289,20 @@ class AnswerValidator:
             precedent_pattern = r'대법원|법원.*\d{4}[다나마]\d+|\[판례:\s*[^\]]+\]'
             precedents_in_answer = len(re.findall(precedent_pattern, answer))
 
-            # 문서 인용 패턴 확인
-            document_citation_pattern = r'\[문서:\s*[^\]]+\]'
-            document_citations = len(re.findall(document_citation_pattern, answer))
+            # 문서 인용 패턴 확인 (개선: "[문서 N]" 형식도 감지)
+            document_citation_patterns = [
+                r'\[문서:\s*[^\]]+\]',  # [문서: ...] 형식
+                r'\[문서\s*\d+\]',  # [문서 1], [문서 2] 형식
+                r'문서\s*\[\s*\d+\s*\]',  # 문서[1], 문서[2] 형식
+                r'문서\s*\d+',  # 문서1, 문서2 형식 (표 내에서 사용)
+            ]
+            document_citations = 0
+            unique_doc_citations = set()
+            for pattern in document_citation_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    unique_doc_citations.add(match)
+            document_citations = len(unique_doc_citations)
 
             total_citations_in_answer = citations_in_answer + precedents_in_answer + document_citations
 
@@ -434,9 +461,12 @@ class AnswerValidator:
         for sentence in answer_sentences:
             sentence_lower = sentence.lower()
 
-            # 문장의 핵심 키워드 추출 (불용어 제거)
-            stopwords = {'는', '은', '이', '가', '을', '를', '에', '의', '와', '과', '로', '으로', '에서', '도', '만', '부터', '까지'}
-            sentence_words = [w for w in re.findall(r'[가-힣]+', sentence_lower) if len(w) > 1 and w not in stopwords]
+            # 문장의 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
+            sentence_words = []
+            for w in re.findall(r'[가-힣]+', sentence_lower):
+                if len(w) > 1:
+                    if not _stopword_processor or not _stopword_processor.is_stopword(w):
+                        sentence_words.append(w)
 
             if not sentence_words:
                 continue

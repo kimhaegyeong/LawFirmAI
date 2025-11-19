@@ -9,6 +9,14 @@ import re
 from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,13 +39,14 @@ class QueryOptimizer:
             self.terms_db = None
             logger.warning("LegalTermsDatabase not available")
 
-        # 불용어 리스트 (법률 도메인 특화)
-        self.stopwords = {
-            '은', '는', '이', '가', '을', '를', '에', '의', '과', '와', '에서',
-            '으로', '로', '도', '만', '부터', '까지', '에서', '에게', '께',
-            '에서부터', '로부터', '같이', '처럼', '만큼', '도', '조차',
-            '마저', '밖에', '만큼', '만', '뿐', '따름'
-        }
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
     def optimize_search_query(
         self,
@@ -80,40 +89,40 @@ class QueryOptimizer:
                 domain,
                 original_query
             )
-            # 관련도 0.3 이상만 선별
+            # 관련도 기준 완화: 0.3 → 0.25로 낮춰 더 많은 키워드 포함
             filtered_expanded = [
                 kw for kw, score in scored_expanded
-                if score >= 0.3
+                if score >= 0.25
             ]
-            logger.debug(f"Filtered expanded keywords: {len(filtered_expanded)}/{len(expanded_keywords)}")
+            logger.debug(f"Filtered expanded keywords: {len(filtered_expanded)}/{len(expanded_keywords)} (threshold: 0.25)")
 
             # 3. 최종 쿼리 구성
             # 원본 핵심 키워드 우선 (상위 3-5개)
             core_count = min(len(core_keywords), 5)
             core_selected = core_keywords[:core_count]
 
-            # 확장 키워드 보조 (상위 2-3개, weight >= 0.7)
+            # 확장 키워드 보조 (상위 3-5개, weight >= 0.6으로 완화)
             expanded_selected = []
             for kw, score in scored_expanded:
-                if score >= 0.7 and kw not in core_selected:
+                if score >= 0.6 and kw not in core_selected:
                     expanded_selected.append(kw)
-                    if len(expanded_selected) >= 3:
+                    if len(expanded_selected) >= 5:
                         break
 
             # 최종 키워드 조합 (중복 제거)
             final_keywords = list(dict.fromkeys(core_selected + expanded_selected))  # 순서 유지하며 중복 제거
 
-            # 최소 3개, 최대 5개 키워드 (Semantic Search용)
+            # 최소 3개, 최대 7개 키워드 (Semantic Search용 - 개선)
             if len(final_keywords) < 3:
-                # 부족하면 확장 키워드 추가
+                # 부족하면 확장 키워드 추가 (기준 완화: 0.2 → 0.15)
                 for kw, score in scored_expanded:
-                    if kw not in final_keywords and score >= 0.2:
+                    if kw not in final_keywords and score >= 0.15:
                         final_keywords.append(kw)
                         if len(final_keywords) >= 3:
                             break
 
-            # Semantic Search용으로 최대 5개 키워드 사용
-            final_keywords = final_keywords[:5]
+            # Semantic Search용으로 최대 7개 키워드 사용 (5개 → 7개로 증가)
+            final_keywords = final_keywords[:7]
 
             search_query = " ".join(final_keywords)
             logger.info(f"Optimized search query for semantic search: '{search_query}' (core: {len(core_selected)}, expanded: {len(expanded_selected)})")
@@ -181,9 +190,12 @@ class QueryOptimizer:
 
         # 3. 기본 추출 (형태소 분석 없이 단순 분리)
         if not core_keywords:
-            # 불용어 제거 및 단어 추출
+            # 불용어 제거 및 단어 추출 (KoreanStopwordProcessor 사용)
             words = re.findall(r'[가-힣]+', query)
-            words = [w for w in words if w not in self.stopwords and len(w) >= 2]
+            if self.stopword_processor:
+                words = [w for w in words if len(w) >= 2 and not self.stopword_processor.is_stopword(w)]
+            else:
+                words = [w for w in words if len(w) >= 2]
             core_keywords = list(dict.fromkeys(words))  # 중복 제거
 
         return core_keywords[:10]  # 최대 10개
@@ -307,28 +319,34 @@ class QueryOptimizer:
         for keyword in keywords:
             score = 0.0
 
-            # 1. 법률 용어 사전 weight (40%)
+            # 1. 법률 용어 사전 weight (45% - 증가)
             term_weight = self._get_term_weight(keyword, domain)
-            score += term_weight * 0.4
+            score += term_weight * 0.45
 
-            # 2. 원본 쿼리와의 유사도 (30%)
+            # 2. 원본 쿼리와의 유사도 (35% - 증가)
             # 단순 키워드 매칭 기반 (TF-IDF 대신)
             keyword_words = re.findall(r'[가-힣]+', keyword)
             overlap = sum(1 for w in keyword_words if w in query_words)
             if keyword_words:
                 overlap_ratio = overlap / len(keyword_words)
-                score += overlap_ratio * 0.3
+                score += overlap_ratio * 0.35
+            else:
+                # 키워드가 없으면 부분 문자열 매칭 시도
+                if keyword in original_query:
+                    score += 0.2
 
-            # 3. 키워드 길이 및 구체성 (20%)
+            # 3. 키워드 길이 및 구체성 (15% - 감소)
             # 짧은 키워드(2-4자)가 더 구체적일 가능성
             if 2 <= len(keyword) <= 4:
-                score += 0.2
-            elif len(keyword) > 10:
-                score += 0.1  # 너무 긴 키워드는 감점
-
-            # 4. 불용어 제거 (10%)
-            if keyword not in self.stopwords:
+                score += 0.15
+            elif 5 <= len(keyword) <= 8:
                 score += 0.1
+            elif len(keyword) > 10:
+                score += 0.05  # 너무 긴 키워드는 감점
+
+            # 4. 불용어 제거 (5% - 감소, KoreanStopwordProcessor 사용)
+            if not self.stopword_processor or not self.stopword_processor.is_stopword(keyword):
+                score += 0.05
 
             scored_keywords.append((keyword, min(score, 1.0)))
 

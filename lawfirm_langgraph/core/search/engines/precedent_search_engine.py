@@ -17,6 +17,14 @@ from core.data.vector_store import LegalVectorStore
 from core.utils.config import Config
 from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +58,15 @@ class PrecedentSearchEngine:
         if db_path is None:
             config = Config()
             db_path = config.database_path
+
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
         # 데이터베이스 연결
         self.db_manager = DatabaseManager(db_path)
@@ -373,16 +390,14 @@ class PrecedentSearchEngine:
         # 조사 제거 패턴 (한글 조사)
         josa_pattern = r'(에|에서|로|으로|와|과|의|을|를|이|가|은|는|도|만|부터|까지|대해|관련)$'
         
-        # 키워드 정리 (1글자 제외, 불용어 제거, 조사 제거)
-        stopwords = {'의', '을', '를', '이', '가', '은', '는', '에', '에서', '로', '으로', 
-                     '와', '과', '도', '만', '부터', '까지', '에', '대해', '관련', '질문'}
-        
+        # 키워드 정리 (1글자 제외, 불용어 제거, 조사 제거 - KoreanStopwordProcessor 사용)
         filtered_keywords = []
         for kw in keywords:
             # 조사 제거
             cleaned_kw = re.sub(josa_pattern, '', kw)
-            if cleaned_kw and len(cleaned_kw) > 1 and cleaned_kw not in stopwords:
-                filtered_keywords.append(cleaned_kw)
+            if cleaned_kw and len(cleaned_kw) > 1:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(cleaned_kw):
+                    filtered_keywords.append(cleaned_kw)
         
         return filtered_keywords if filtered_keywords else keywords[:3]
     

@@ -12,17 +12,23 @@ Utils Module
 try:
     from .config import Config
     from .logger import setup_logging, get_logger
+    from .korean_stopword_processor import KoreanStopwordProcessor
 except ImportError:
     # Fallback: core.shared.utils 경로
     try:
         from core.shared.utils.config import Config
         from core.shared.utils.logger import setup_logging, get_logger
+        from .korean_stopword_processor import KoreanStopwordProcessor
     except ImportError:
         # 최종 Fallback: 직접 정의
-        pass
+        try:
+            from .korean_stopword_processor import KoreanStopwordProcessor
+        except ImportError:
+            pass
 
 __all__ = [
     "Config",
     "setup_logging",
-    "get_logger"
+    "get_logger",
+    "KoreanStopwordProcessor"
 ]

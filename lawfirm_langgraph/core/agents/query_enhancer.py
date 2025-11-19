@@ -74,17 +74,30 @@ class QueryEnhancer:
                 "llm_enhanced": bool  # LLM 강화 사용 여부
             }
         """
-        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (기준 완화)
-        # 쿼리가 짧고 키워드가 충분하면 LLM 강화 생략
+        # 성능 최적화: 간단한 쿼리는 LLM 호출 스킵 (조건 완화 - 더 많은 쿼리에서 LLM 확장 사용)
+        # 쿼리 복잡도 계산
+        query_complexity = self._calculate_query_complexity(query, query_type, extracted_keywords)
+        
+        # 더 엄격한 스킵 조건: 매우 간단한 쿼리만 스킵
         should_skip_llm = (
-            (len(query) < 50 and len(extracted_keywords) >= 2) or  # 짧은 쿼리 + 키워드 2개 이상
-            (len(query) < 30 and len(extracted_keywords) >= 1) or  # 매우 짧은 쿼리 + 키워드 1개 이상
-            (query_type in ["general_question", "definition_question"] and len(extracted_keywords) >= 2)  # 간단한 질문 유형 + 키워드 2개 이상
+            # 매우 짧고 명확한 쿼리만 스킵 (20자 미만 + 키워드 3개 이상)
+            (len(query) < 20 and len(extracted_keywords) >= 3) or
+            # 법령 조문 직접 질문은 스킵 (이미 명확함) - 예: "민법 제15조"
+            (len(query) < 30 and self._is_direct_law_inquiry(query) and len(extracted_keywords) >= 2) or
+            # 매우 간단한 정의 질문만 스킵 (30자 미만 + 키워드 3개 이상)
+            (query_type == "definition_question" and len(query) < 30 and len(extracted_keywords) >= 3) or
+            # 복잡도가 매우 낮은 경우만 스킵
+            (query_complexity < 0.3)
         )
         
         # LLM 쿼리 강화 시도 (간단한 쿼리는 스킵)
         llm_enhanced = None
         if not should_skip_llm:
+            self.logger.info(
+                f"🔍 [LLM QUERY ENHANCEMENT] Attempting LLM enhancement: "
+                f"query='{query[:50]}...', query_type={query_type}, "
+                f"keywords={len(extracted_keywords)}, legal_field={legal_field}"
+            )
             try:
                 llm_enhanced = self.enhance_query_with_llm(
                     query=query,
@@ -124,18 +137,20 @@ class QueryEnhancer:
             expanded_terms,
             key=lambda x: term_weights.get(x, 0.5),
             reverse=True
-        )[:15]  # 최대 15개로 제한
+        )[:20]  # 최대 20개로 제한 (15개 → 20개로 증가)
 
-        # LLM 실패 시 추가 키워드 확장 시도
+        # LLM 실패 시 추가 키워드 확장 시도 (개선)
         if not llm_used and extracted_keywords:
-            # extracted_keywords에서 핵심 키워드 선택
-            core_keywords = [kw for kw in extracted_keywords[:5] if isinstance(kw, str) and len(kw) >= 2]
+            # extracted_keywords에서 핵심 키워드 선택 (5개 → 7개로 증가)
+            core_keywords = [kw for kw in extracted_keywords[:7] if isinstance(kw, str) and len(kw) >= 2]
             expanded_terms.extend(core_keywords)
-            expanded_terms = list(set(expanded_terms))[:15]  # 최대 15개로 제한
+            expanded_terms = list(set(expanded_terms))[:20]  # 최대 20개로 제한 (15개 → 20개로 증가)
 
-        # LLM 키워드 병합
+        # LLM 키워드 병합 (개선: 더 많은 키워드 포함)
         if llm_keywords:
             expanded_terms = list(set(expanded_terms + llm_keywords))
+            # 최대 20개로 제한
+            expanded_terms = expanded_terms[:20]
 
         # 3. 의미적 쿼리 생성 (LLM 강화 쿼리 우선 사용)
         semantic_query = self.build_semantic_query(base_query, expanded_terms)
@@ -145,8 +160,8 @@ class QueryEnhancer:
             self.logger.warning(f"optimize_search_query: semantic_query is empty, using base_query: '{base_query[:50]}...'")
             semantic_query = base_query
         
-        # 쿼리 길이 최적화 적용
-        semantic_query = self.optimize_query_length(semantic_query, max_length=100)
+        # 쿼리 길이 최적화 적용 (개선: 최대 길이 증가)
+        semantic_query = self.optimize_query_length(semantic_query, max_length=120)  # 100 → 120으로 증가
 
         # 4. 키워드 쿼리 생성 (법률 조항, 판례 검색용)
         keyword_queries = self.build_keyword_queries(base_query, expanded_terms, query_type)
@@ -210,7 +225,7 @@ class QueryEnhancer:
 
         result = {
             "semantic_query": semantic_query,
-            "keyword_queries": keyword_queries[:5],  # 최대 5개로 제한
+            "keyword_queries": keyword_queries[:7],  # 최대 7개로 제한 (5개 → 7개로 증가)
             "expanded_keywords": expanded_terms,
             "llm_enhanced": llm_used,
             "citation_queries": citation_queries  # Citation 쿼리 추가
@@ -1094,17 +1109,85 @@ class QueryEnhancer:
             if isinstance(term, str) and term in synonym_mapping:
                 expanded.extend(synonym_mapping[term])
 
-        return list(set(expanded))[:15]  # 최대 15개로 제한
+        return list(set(expanded))[:20]  # 최대 20개로 제한 (15개 → 20개로 증가)
+
+    def _calculate_query_complexity(
+        self,
+        query: str,
+        query_type: str,
+        extracted_keywords: List[str]
+    ) -> float:
+        """
+        쿼리 복잡도 계산 (0.0-1.0)
+        
+        복잡도가 높을수록 LLM 확장이 더 유용함
+        """
+        complexity = 0.0
+        
+        # 길이 기반 복잡도
+        if len(query) > 100:
+            complexity += 0.3
+        elif len(query) > 50:
+            complexity += 0.2
+        elif len(query) > 30:
+            complexity += 0.1
+        
+        # 키워드 수 기반 복잡도
+        keyword_count = len(extracted_keywords) if extracted_keywords else 0
+        if keyword_count < 2:
+            complexity += 0.3  # 키워드가 적으면 복잡할 수 있음 (의미 파악 필요)
+        elif keyword_count > 5:
+            complexity += 0.2  # 키워드가 많으면 복잡함
+        elif keyword_count >= 2:
+            complexity += 0.1  # 적절한 키워드 수
+        
+        # 질문 유형 기반 복잡도
+        if query_type in ["legal_advice", "precedent_search", "law_inquiry"]:
+            complexity += 0.3  # 법률 조언, 판례 검색, 법령 조회는 복잡함
+        elif query_type == "general_question":
+            complexity += 0.1  # 일반 질문은 상대적으로 간단
+        
+        # 복잡한 질문 패턴 감지
+        complex_patterns = [
+            r'권리.*의무', r'요건.*절차', r'효력.*범위', r'관련.*판례',
+            r'상세.*설명', r'알려주세요', r'어떻게', r'무엇인가'
+        ]
+        for pattern in complex_patterns:
+            if re.search(pattern, query):
+                complexity += 0.1
+                break
+        
+        return min(1.0, complexity)
+    
+    def _is_direct_law_inquiry(self, query: str) -> bool:
+        """
+        법령 조문 직접 질문인지 판별
+        예: "민법 제15조", "형법 제250조" 등
+        """
+        # 법령명 + 제XX조 패턴
+        pattern = r'^[가-힣\s]+제\d+조'
+        if re.match(pattern, query.strip()):
+            return True
+        
+        # "XX법 제XX조에 대해서" 같은 패턴
+        pattern2 = r'[가-힣]+법\s*제\d+조'
+        if re.search(pattern2, query):
+            return True
+        
+        return False
 
     def clean_query_for_fallback(self, query: str) -> str:
         """LLM 실패 시 기본 쿼리 정제 (폴백 강화)"""
         if not query or not isinstance(query, str):
             return ""
 
-        # 불용어 제거 및 정제
-        stopwords = ["은", "는", "이", "가", "을", "를", "에", "의", "로", "으로", "와", "과", "도", "만"]
+        # 불용어 제거 및 정제 (KoreanStopwordProcessor 사용)
         words = query.split()
-        cleaned_words = [w for w in words if w not in stopwords and len(w) >= 2]
+        cleaned_words = []
+        for w in words:
+            if len(w) >= 2:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                    cleaned_words.append(w)
 
         # 정제된 쿼리 반환 (비어있으면 원본 반환)
         cleaned = " ".join(cleaned_words) if cleaned_words else query
@@ -1131,10 +1214,13 @@ class QueryEnhancer:
         if len(query) <= max_length:
             return query
         
-        # 핵심 키워드 추출 (불용어 제거)
-        stopwords = ["은", "는", "이", "가", "을", "를", "에", "의", "로", "으로", "와", "과", "도", "만", "주세요", "요청", "설명"]
+        # 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
         words = query.split()
-        keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+        keywords = []
+        for w in words:
+            if len(w) >= 2:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                    keywords.append(w)
         
         # 최대 5개 키워드 선택
         optimized = " ".join(keywords[:5])

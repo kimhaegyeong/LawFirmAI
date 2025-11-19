@@ -19,6 +19,14 @@ from core.agents.workflow_constants import WorkflowConstants
 from core.agents.workflow_utils import WorkflowUtils
 from core.workflow.utils.query_diversifier import QueryDiversifier
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 
 class QueryEnhancer:
     """
@@ -50,6 +58,15 @@ class QueryEnhancer:
         self.term_integrator = term_integrator
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
+
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
         # 쿼리 강화 캐시
         self._query_enhancement_cache: Dict[str, Dict[str, Any]] = {}
@@ -1166,10 +1183,13 @@ class QueryEnhancer:
         if not query or not isinstance(query, str):
             return ""
 
-        # 불용어 제거 및 정제
-        stopwords = ["은", "는", "이", "가", "을", "를", "에", "의", "로", "으로", "와", "과", "도", "만"]
+        # 불용어 제거 및 정제 (KoreanStopwordProcessor 사용)
         words = query.split()
-        cleaned_words = [w for w in words if w not in stopwords and len(w) >= 2]
+        cleaned_words = []
+        for w in words:
+            if len(w) >= 2:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                    cleaned_words.append(w)
 
         # 정제된 쿼리 반환 (비어있으면 원본 반환)
         cleaned = " ".join(cleaned_words) if cleaned_words else query
@@ -1196,10 +1216,13 @@ class QueryEnhancer:
         if len(query) <= max_length:
             return query
         
-        # 핵심 키워드 추출 (불용어 제거)
-        stopwords = ["은", "는", "이", "가", "을", "를", "에", "의", "로", "으로", "와", "과", "도", "만", "주세요", "요청", "설명"]
+        # 핵심 키워드 추출 (불용어 제거 - KoreanStopwordProcessor 사용)
         words = query.split()
-        keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+        keywords = []
+        for w in words:
+            if len(w) >= 2:
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                    keywords.append(w)
         
         # 최대 5개 키워드 선택
         optimized = " ".join(keywords[:5])

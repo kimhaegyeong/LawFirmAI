@@ -13,6 +13,14 @@ from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+try:
+    from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
+except ImportError:
+    try:
+        from core.utils.korean_stopword_processor import KoreanStopwordProcessor
+    except ImportError:
+        KoreanStopwordProcessor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +75,16 @@ class LegalDataConnectorV2:
             # FTS 테이블 존재 여부 확인
             self._check_fts_tables()
         
-        # KoNLPy 형태소 분석기 초기화 (선택적)
+        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+        
+        # KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
         self._okt = None
         try:
             from konlpy.tag import Okt
@@ -301,15 +318,6 @@ class LegalDataConnectorV2:
         
         words = query.split()
         
-        # 불용어 목록 (set으로 변환하여 빠른 조회)
-        stopwords = {
-            '에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은', 
-            '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고', 
-            '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등', 
-            '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문', 
-            '답변', '알려주세요', '알려주시기', '바랍니다'
-        }
-        
         # 조사 패턴 (정규식으로 한 번에 제거)
         josa_pattern = re.compile(r'(에|에서|에게|한테|께|으로|로|의|을|를|이|가|는|은|와|과|도|만|부터|까지)$')
         
@@ -338,14 +346,15 @@ class LegalDataConnectorV2:
                     core_keywords.append(article_text)
                 break
         
-        # 나머지 키워드 처리
+        # 나머지 키워드 처리 (KoreanStopwordProcessor 사용)
         for w in words:
             w_clean = josa_pattern.sub('', w.strip())  # 조사 제거
             
             if not w_clean or len(w_clean) < 2:
                 continue
             
-            if w_clean in stopwords or w_clean in core_keywords:
+            # 불용어 필터링 (KoreanStopwordProcessor 사용)
+            if (self.stopword_processor and self.stopword_processor.is_stopword(w_clean)) or w_clean in core_keywords:
                 continue
             
             # 한글/영문 포함 단어만
@@ -358,8 +367,11 @@ class LegalDataConnectorV2:
         if not core_keywords:
             for w in words:
                 w_clean = josa_pattern.sub('', w.strip())
-                if w_clean and len(w_clean) >= 2 and w_clean not in stopwords:
-                    core_keywords.append(w_clean)
+                if w_clean and len(w_clean) >= 2:
+                    if self.stopword_processor and not self.stopword_processor.is_stopword(w_clean):
+                        core_keywords.append(w_clean)
+                    elif not self.stopword_processor:
+                        core_keywords.append(w_clean)
                     if len(core_keywords) >= 5:
                         break
         
@@ -376,43 +388,67 @@ class LegalDataConnectorV2:
         - 단순 키워드 검색에 최적화
         - FTS5는 기본적으로 공백으로 구분된 단어를 AND 조건으로 처리
         - 따옴표와 AND/OR 구문을 포함한 복잡한 쿼리 처리
+        - 개선: 법령명과 조문번호 추출, "제XX조" 패턴 인식, 불필요한 단어 필터링
         """
         if not query or not query.strip():
             return ""
-
+        
         import re
         query = query.strip()
-
-        # FTS5 특수 문자 목록 (FTS5 문법에서 사용되는 문자)
-        special_chars = ['"', ':', '(', ')', '?', '*', '-']
-
-        # 1단계: 따옴표로 묶인 구문 제거 (예: "월세 50만원" -> 월세 50만원)
-        # 따옴표 안의 내용은 단어로 추출
+        
+        # 1단계: 법령명과 조문번호 추출 (개선)
+        law_pattern = re.compile(r'([가-힣]+법)\s*제\s*(\d+)\s*조')
+        law_matches = law_pattern.findall(query)
+        
+        # 2단계: "제XX조" 패턴 추출 (법령명 없이)
+        article_pattern = re.compile(r'제\s*(\d+)\s*조')
+        article_matches = article_pattern.findall(query)
+        
+        # 3단계: 따옴표로 묶인 구문 제거
         quoted_phrases = re.findall(r'"([^"]+)"', query)
         query_no_quotes = re.sub(r'"[^"]*"', '', query)
         
-        # 2단계: AND, OR, NOT 키워드 제거 (대소문자 구분 없이)
+        # 4단계: AND, OR, NOT 키워드 제거
         query_cleaned = re.sub(r'\b(AND|OR|NOT)\b', ' ', query_no_quotes, flags=re.IGNORECASE)
         
-        # 3단계: 따옴표로 묶인 구문에서 단어 추출
-        all_words = []
-        for phrase in quoted_phrases:
-            # 따옴표 안의 구문을 단어로 분리
-            phrase_words = re.findall(r'[가-힣a-zA-Z0-9]+', phrase)
-            all_words.extend(phrase_words)
-        
-        # 4단계: 나머지 쿼리에서 단어 추출
-        remaining_words = re.findall(r'[가-힣a-zA-Z0-9]+', query_cleaned)
-        all_words.extend(remaining_words)
-        
-        # 5단계: 중복 제거 및 길이 필터링
+        # 5단계: 법령명과 조문번호를 구문으로 추가 (우선순위 높음)
         clean_words = []
         seen = set()
-        for word in all_words:
-            # 최소 2자 이상, 최대 20자 이하
+        article_nos_in_law_matches = set()
+        
+        # 법령명과 조문번호 조합 추가 (우선)
+        for law_name, article_no in law_matches:
+            phrase = f"{law_name} 제{article_no}조"
+            if phrase not in seen:
+                clean_words.append(phrase)
+                seen.add(phrase)
+                article_nos_in_law_matches.add(article_no)
+        
+        # "제XX조" 패턴 추가 (법령명과 조합되지 않은 경우만)
+        for article_no in article_matches:
+            if article_no not in article_nos_in_law_matches:
+                phrase = f"제{article_no}조"
+                if phrase not in seen:
+                    clean_words.append(phrase)
+                    seen.add(phrase)
+        
+        # 6단계: 따옴표로 묶인 구문에서 단어 추출
+        for phrase in quoted_phrases:
+            phrase_words = re.findall(r'[가-힣a-zA-Z0-9]+', phrase)
+            for word in phrase_words:
+                if len(word) >= 2 and len(word) <= 20 and word not in seen:
+                    if not self.stopword_processor or not self.stopword_processor.is_stopword(word):
+                        clean_words.append(word)
+                        seen.add(word)
+        
+        # 7단계: 나머지 쿼리에서 단어 추출 (불필요한 단어 제외)
+        remaining_words = re.findall(r'[가-힣a-zA-Z0-9]+', query_cleaned)
+        for word in remaining_words:
+            # 불필요한 단어 필터링 강화 (KoreanStopwordProcessor 사용)
             if len(word) >= 2 and len(word) <= 20 and word not in seen:
-                clean_words.append(word)
-                seen.add(word)
+                if not self.stopword_processor or not self.stopword_processor.is_stopword(word):
+                    clean_words.append(word)
+                    seen.add(word)
         
         # 6단계: 단어가 없으면 빈 문자열 반환 (개선: 더 공격적인 폴백)
         if not clean_words:
@@ -465,25 +501,36 @@ class LegalDataConnectorV2:
             else:
                 return ""
         
-        # 7단계: 최대 5개 단어만 사용 (FTS5 성능 최적화)
+        # 8단계: 최대 5개 단어/구문만 사용 (FTS5 성능 최적화)
         clean_words = clean_words[:5]
         
-        # 8단계: FTS5 쿼리 생성 (공백으로 구분하면 기본 AND 조건)
-        # 개선: 단어가 1개일 때도 검색 가능하도록 처리, 더 공격적인 OR 조건 사용
-        if len(clean_words) == 1:
-            # 단어가 1개일 때는 그대로 사용
+        # 9단계: FTS5 쿼리 생성 (개선: 법령명+조문번호 구문은 하나의 구문으로 처리)
+        if not clean_words:
+            sanitized = ""
+        elif len(clean_words) == 1:
             sanitized = clean_words[0]
-        elif len(clean_words) == 2:
-            # 2개일 때는 OR 조건으로 연결 (검색 범위 확장)
-            sanitized = " OR ".join(clean_words)
-        elif len(clean_words) > 2:
-            # 3개 이상이면 OR 조건으로 연결 (검색 범위 확장)
-            sanitized = " OR ".join(clean_words)
         else:
-            # 빈 경우는 이미 처리됨
-            sanitized = " ".join(clean_words) if clean_words else ""
+            # 법령명+조문번호 구문이 있으면 우선 사용, 나머지는 OR
+            law_article_phrases = [w for w in clean_words if '제' in w and '조' in w and '법' in w]
+            article_only_phrases = [w for w in clean_words if '제' in w and '조' in w and '법' not in w]
+            other_words = [w for w in clean_words if w not in law_article_phrases and w not in article_only_phrases]
+            
+            if law_article_phrases:
+                # 법령명+조문번호 구문이 있으면 이것만 사용 (가장 정확함)
+                sanitized = law_article_phrases[0]
+                if other_words:
+                    # 추가 키워드가 있으면 OR로 연결
+                    sanitized = f"{sanitized} OR {' OR '.join(other_words[:2])}"
+            elif article_only_phrases:
+                # "제XX조"만 있으면 이것을 우선 사용
+                sanitized = article_only_phrases[0]
+                if other_words:
+                    sanitized = f"{sanitized} OR {' OR '.join(other_words[:2])}"
+            else:
+                # 일반 단어만 있으면 OR 조건
+                sanitized = " OR ".join(clean_words[:3])
         
-        # 9단계: SQL injection 방지
+        # 10단계: SQL injection 방지
         sanitized = sanitized.replace("'", "''")
         
         self.logger.debug(f"FTS5 query sanitized: '{query[:100]}' -> '{sanitized}'")
@@ -572,10 +619,15 @@ class LegalDataConnectorV2:
                 
                 results.append({
                     "id": f"statute_article_{row['id']}",
-                    "type": "statute",
+                    "type": "statute_article",
+                    "source_type": "statute_article",
                     "content": text_content,
                     "text": text_content,  # text 필드도 추가 (호환성)
                     "source": row['statute_name'],
+                    "statute_name": row['statute_name'],
+                    "article_no": row['article_no'],
+                    "clause_no": row['clause_no'],
+                    "item_no": row['item_no'],
                     "metadata": {
                         "statute_id": row['statute_id'],
                         "article_no": row['article_no'],
@@ -585,6 +637,7 @@ class LegalDataConnectorV2:
                         "statute_abbrv": row['statute_abbrv'],
                         "statute_type": row['statute_type'],
                         "category": row['category'],
+                        "source_type": "statute_article"
                     },
                     "relevance_score": relevance_score,
                     "search_type": "keyword"
@@ -798,10 +851,15 @@ class LegalDataConnectorV2:
                         
                         fallback_results.append({
                             "id": f"statute_article_{row['id']}",
-                            "type": "statute",
+                            "type": "statute_article",
+                            "source_type": "statute_article",
                             "content": text_content,
                             "text": text_content,
                             "source": row['statute_name'],
+                            "statute_name": row['statute_name'],
+                            "article_no": row['article_no'],
+                            "clause_no": row['clause_no'],
+                            "item_no": row['item_no'],
                             "metadata": {
                                 "statute_id": row['statute_id'],
                                 "article_no": row['article_no'],
@@ -811,6 +869,7 @@ class LegalDataConnectorV2:
                                 "statute_abbrv": row['statute_abbrv'],
                                 "statute_type": row['statute_type'],
                                 "category": row['category'],
+                                "source_type": "statute_article"
                             },
                             "relevance_score": relevance_score,
                             "search_type": "keyword",
@@ -829,9 +888,12 @@ class LegalDataConnectorV2:
                 if law_match:
                     keyword_query = law_match.group()
                 else:
-                    # 핵심 키워드 추출 (2자 이상, 불용어 제외)
-                    stopwords = ['에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은']
-                    keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                    # 핵심 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
+                    keywords = []
+                    for w in words[:3]:
+                        if len(w) >= 2:
+                            if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                                keywords.append(w)
                     if keywords:
                         keyword_query = keywords[0]  # 첫 번째 핵심 키워드만
                     else:
@@ -878,10 +940,15 @@ class LegalDataConnectorV2:
                         
                         fallback_results.append({
                             "id": f"statute_article_{row['id']}",
-                            "type": "statute",
+                            "type": "statute_article",
+                            "source_type": "statute_article",
                             "content": text_content,
                             "text": text_content,
                             "source": row['statute_name'],
+                            "statute_name": row['statute_name'],
+                            "article_no": row['article_no'],
+                            "clause_no": row['clause_no'],
+                            "item_no": row['item_no'],
                             "metadata": {
                                 "statute_id": row['statute_id'],
                                 "article_no": row['article_no'],
@@ -891,6 +958,7 @@ class LegalDataConnectorV2:
                                 "statute_abbrv": row['statute_abbrv'],
                                 "statute_type": row['statute_type'],
                                 "category": row['category'],
+                                "source_type": "statute_article"
                             },
                             "relevance_score": relevance_score,
                             "search_type": "keyword",
@@ -954,10 +1022,15 @@ class LegalDataConnectorV2:
                             
                             fallback_results.append({
                                 "id": f"statute_article_{row['id']}",
-                                "type": "statute",
+                                "type": "statute_article",
+                                "source_type": "statute_article",
                                 "content": text_content,
                                 "text": text_content,
                                 "source": row['statute_name'],
+                                "statute_name": row['statute_name'],
+                                "article_no": row['article_no'],
+                                "clause_no": row['clause_no'],
+                                "item_no": row['item_no'],
                                 "metadata": {
                                     "statute_id": row['statute_id'],
                                     "article_no": row['article_no'],
@@ -967,6 +1040,7 @@ class LegalDataConnectorV2:
                                     "statute_abbrv": row['statute_abbrv'],
                                     "statute_type": row['statute_type'],
                                     "category": row['category'],
+                                    "source_type": "statute_article"
                                 },
                                 "relevance_score": relevance_score,
                                 "search_type": "keyword",
@@ -995,18 +1069,16 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색 (개선: 더 공격적인 키워드 추출)
+            # 전략 1: 핵심 키워드만으로 검색 (개선: 더 공격적인 키워드 추출 - KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은',
-                            '으로', '로', '에서', '에게', '한테', '께', '와', '과', '하고', '그리고',
-                            '또는', '또한', '때문에', '위해', '통해', '관련', '및', '등', '등등',
-                            '어떻게', '무엇', '언제', '어디', '어떤', '무엇인가', '요청', '질문',
-                            '답변', '알려주세요', '알려주시기', '바랍니다', '해주세요', '해주시기'}
                 # 더 많은 키워드 추출 (3개 -> 5개)
-                keywords = [w for w in words[:5] if w not in stopwords and len(w) >= 1]  # 최소 길이 2 -> 1로 완화
+                keywords = []
+                for w in words[:5]:
+                    if len(w) >= 1 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w)):
+                        keywords.append(w)
                 if not keywords:
                     # 키워드가 없으면 모든 단어 사용 (불용어만 제거)
-                    keywords = [w for w in words if w not in stopwords and len(w) >= 1]
+                    keywords = [w for w in words if len(w) >= 1 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 
                 if keywords:
                     # OR 조건으로 연결 (검색 범위 확장)
@@ -1078,9 +1150,8 @@ class LegalDataConnectorV2:
                 # 원본 쿼리에서 모든 한글/영문 단어 추출
                 all_words = re.findall(r'[가-힣a-zA-Z]+', original_query)
                 if all_words:
-                    # 불용어 제거
-                    stopwords = {'에', '대해', '설명해주세요', '설명', '의', '을', '를', '이', '가', '는', '은'}
-                    keywords = [w for w in all_words if w not in stopwords and len(w) >= 1]
+                    # 불용어 제거 (KoreanStopwordProcessor 사용)
+                    keywords = [w for w in all_words if len(w) >= 1 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                     if keywords:
                         keyword_query = " OR ".join(keywords[:3])  # 최대 3개
                         self.logger.info(f"Fallback case search (strategy 2): Using keywords from original query: '{keyword_query}'")
@@ -1159,10 +1230,9 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색
+            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은'}
-                keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 if keywords:
                     keyword_query = " OR ".join(keywords)
                     self.logger.info(f"Fallback decision search: Using keywords: '{keyword_query}'")
@@ -1237,10 +1307,9 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 전략 1: 핵심 키워드만으로 검색
+            # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
             if words:
-                stopwords = {'에', '대해', '설명해주세요', '의', '을', '를', '이', '가', '는', '은'}
-                keywords = [w for w in words[:3] if w not in stopwords and len(w) >= 2]
+                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
                 if keywords:
                     keyword_query = " OR ".join(keywords)
                     self.logger.info(f"Fallback interpretation search: Using keywords: '{keyword_query}'")
@@ -1348,6 +1417,15 @@ class LegalDataConnectorV2:
                 LIMIT ?
             """, (safe_query, limit))
 
+            # 법령명과 조문번호 추출 (점수 가중치 계산용)
+            import re
+            law_pattern = re.compile(r'([가-힣]+법)')
+            article_pattern = re.compile(r'제\s*(\d+)\s*조')
+            law_match = law_pattern.search(query)
+            article_match = article_pattern.search(query)
+            query_law_name = law_match.group(1) if law_match else None
+            query_article_no = article_match.group(1) if article_match else None
+            
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
@@ -1358,6 +1436,17 @@ class LegalDataConnectorV2:
                 else:
                     # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
                     relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                
+                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                if query_law_name and query_article_no:
+                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                    law_in_text = query_law_name in text_content
+                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                    
+                    if law_in_text and article_in_text:
+                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
+                        relevance_score = min(1.0, relevance_score * 1.5)
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
                 
                 results.append({
                     "id": f"case_para_{row['id']}",
@@ -1439,6 +1528,15 @@ class LegalDataConnectorV2:
                 LIMIT ?
             """, (safe_query, limit))
 
+            # 법령명과 조문번호 추출 (점수 가중치 계산용)
+            import re
+            law_pattern = re.compile(r'([가-힣]+법)')
+            article_pattern = re.compile(r'제\s*(\d+)\s*조')
+            law_match = law_pattern.search(query)
+            article_match = article_pattern.search(query)
+            query_law_name = law_match.group(1) if law_match else None
+            query_article_no = article_match.group(1) if article_match else None
+            
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
@@ -1449,6 +1547,17 @@ class LegalDataConnectorV2:
                 else:
                     # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
                     relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                
+                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                if query_law_name and query_article_no:
+                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                    law_in_text = query_law_name in text_content
+                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                    
+                    if law_in_text and article_in_text:
+                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
+                        relevance_score = min(1.0, relevance_score * 1.5)
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
                 
                 results.append({
                     "id": f"decision_para_{row['id']}",
@@ -1529,6 +1638,15 @@ class LegalDataConnectorV2:
                 LIMIT ?
             """, (safe_query, limit))
 
+            # 법령명과 조문번호 추출 (점수 가중치 계산용)
+            import re
+            law_pattern = re.compile(r'([가-힣]+법)')
+            article_pattern = re.compile(r'제\s*(\d+)\s*조')
+            law_match = law_pattern.search(query)
+            article_match = article_pattern.search(query)
+            query_law_name = law_match.group(1) if law_match else None
+            query_article_no = article_match.group(1) if article_match else None
+            
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
@@ -1539,6 +1657,17 @@ class LegalDataConnectorV2:
                 else:
                     # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
                     relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                
+                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                if query_law_name and query_article_no:
+                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                    law_in_text = query_law_name in text_content
+                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                    
+                    if law_in_text and article_in_text:
+                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
+                        relevance_score = min(1.0, relevance_score * 1.5)
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
                 
                 results.append({
                     "id": f"interpretation_para_{row['id']}",
@@ -1624,6 +1753,12 @@ class LegalDataConnectorV2:
         start_time = time.time()
         results = []
         
+        # 법령명과 조문번호가 있는 경우 직접 검색 먼저 시도
+        direct_statute_results = self.search_statute_article_direct(query, limit=limit)
+        if direct_statute_results:
+            results.extend(direct_statute_results)
+            self.logger.info(f"✅ [DIRECT STATUTE] {len(direct_statute_results)}개 조문 직접 검색 성공")
+        
         # 병렬 검색 작업 정의
         search_tasks = {
             'statute': (self.search_statutes_fts, query, limit),
@@ -1658,13 +1793,84 @@ class LegalDataConnectorV2:
                     )
                     # 에러가 발생해도 다른 검색 결과는 계속 수집
         
-        # relevance_score 기준 정렬
-        results.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        # 중복 제거 (direct_match가 True인 결과 우선)
+        seen_ids = set()
+        unique_results = []
+        direct_results = []
+        other_results = []
+        
+        for doc in results:
+            doc_id = doc.get("id") or doc.get("doc_id")
+            if doc_id and doc_id in seen_ids:
+                continue
+            seen_ids.add(doc_id)
+            
+            # direct_match가 True인 결과는 별도로 분리
+            if doc.get("direct_match", False):
+                direct_results.append(doc)
+            else:
+                other_results.append(doc)
+        
+        # direct_match 결과를 먼저 추가
+        unique_results.extend(direct_results)
+        unique_results.extend(other_results)
+        results = unique_results
+        
+        # relevance_score 기준 정렬 (statute_article 타입 우선)
+        def sort_key(x):
+            doc_type = x.get("type") or x.get("source_type", "")
+            score = x.get("relevance_score", 0.0)
+            # direct_match는 최우선
+            if x.get("direct_match", False):
+                return score + 2.0
+            # statute_article 타입은 우선순위 부여 (점수에 1.0 추가)
+            if doc_type == "statute_article":
+                return score + 1.0
+            return score
+        
+        results.sort(key=sort_key, reverse=True)
+        
+        # 점수 필터링: 0.7 이하는 제외 (단, direct_match와 법령명+조문번호 일치는 예외)
+        min_score_threshold = 0.7
+        original_count = len(results)
+        filtered_results = []
+        
+        # 법령명과 조문번호 추출 (예외 처리용)
+        import re
+        law_pattern = re.compile(r'([가-힣]+법)')
+        article_pattern = re.compile(r'제\s*(\d+)\s*조')
+        law_match = law_pattern.search(query)
+        article_match = article_pattern.search(query)
+        query_law_name = law_match.group(1) if law_match else None
+        query_article_no = article_match.group(1) if article_match else None
+        
+        for doc in results:
+            score = doc.get("relevance_score", 0.0)
+            # direct_match는 점수와 무관하게 포함
+            if doc.get("direct_match", False):
+                filtered_results.append(doc)
+            # 법령명과 조문번호가 일치하는 경우 예외 처리
+            elif query_law_name and query_article_no:
+                text_content = doc.get("content") or doc.get("text") or ""
+                law_in_text = query_law_name in text_content
+                article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                if law_in_text and article_in_text:
+                    # 법령명과 조문번호가 모두 일치하면 점수와 무관하게 포함
+                    filtered_results.append(doc)
+                elif score > min_score_threshold:
+                    filtered_results.append(doc)
+            # 점수가 0.7 초과인 경우만 포함
+            elif score > min_score_threshold:
+                filtered_results.append(doc)
+        
+        results = filtered_results
+        filtered_count = len(results)
         
         # 성능 로깅
         elapsed_time = time.time() - start_time
         self.logger.info(
-            f"Parallel FTS search completed: {len(results)} total results "
+            f"Parallel FTS search completed: {filtered_count} total results "
+            f"(filtered from {original_count} results, min_score={min_score_threshold}) "
             f"from 4 tables in {elapsed_time:.3f}s for query: '{query[:50]}...'"
         )
         
