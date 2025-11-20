@@ -905,9 +905,9 @@ class AnswerStructureEnhancer:
             # 예외 발생 시 재시도
             structured_answer = str(self.llm.invoke(prompt))
 
-        # LLM 응답 후처리 - 원본 내용 보존 검증
+        # LLM 응답 후처리 - 원본 내용 보존 검증 및 출처 형식 통일
         structured_answer = self._post_process_llm_response(
-            structured_answer, answer, question_type
+            structured_answer, answer, question_type, retrieved_docs
         )
 
         # 품질 메트릭 계산
@@ -992,9 +992,94 @@ class AnswerStructureEnhancer:
 
 """
 
-        prompt = f"""당신은 법률 답변 품질 향상 전문가입니다. 주어진 답변의 품질을 향상시키되, 원본의 모든 법적 정보와 상세한 설명을 보존하세요.
+        prompt = f"""당신은 법률 답변 포맷팅 전문가입니다. 아래 변환 규칙을 정확히 적용하세요.
 
-**중요**: 최종 답변에는 작업 과정(STEP, 평가, 체크리스트 등)을 포함하지 마세요. 오직 향상된 답변 내용만 작성하세요.
+**중요**: 최종 답변에는 작업 과정(STEP, 평가, 체크리스트 등)을 포함하지 마세요. 오직 변환된 답변 내용만 작성하세요.
+
+## 🔧 변환 규칙 (반드시 순서대로 적용)
+
+### 규칙 1: 출처 형식 변환
+
+다음 패턴을 찾아 변환하세요:
+
+```
+패턴 1: [출처: 문서 N] → [문서 N]
+패턴 2: [출처: 문서명] → [문서 N] (문서명을 번호로 매핑)
+패턴 3: **출처**: [문서명] → [문서 N]
+패턴 4: (출처: 문서명) → [문서 N]
+패턴 5: [1], [2], [3] → [문서 1], [문서 2], [문서 3]
+패턴 6: 문서[1], 문서[2] → [문서 1], [문서 2]
+```
+
+**변환 예시**:
+- "민법 제543조에 따르면..." [출처: 문서 1] → "민법 제543조에 따르면..." [문서 1]
+- "대법원 판결에 의하면..." [출처: 문서 2] → "대법원 판결에 의하면..." [문서 2]
+- "민법 제543조에 따르면..." [1] → "민법 제543조에 따르면..." [문서 1]
+
+### 규칙 2: 표 형식 제거
+
+"문서별 근거 비교" 표를 찾아 다음 규칙으로 변환:
+
+```
+표 행 형식:
+| [문서 N] | 출처 | 핵심 근거 | 관련 내용 |
+
+또는
+
+| [N] | 출처 | 핵심 근거 | 관련 내용 |
+
+변환 후 형식:
+[문서 N]에 따르면 (출처) 핵심 근거. 관련 내용.
+```
+
+**변환 예시**:
+```
+변환 전:
+| [1] | 민법 제543조 | 해지권 발생 | 계약 또는 법률 규정에 의한 해지권 |
+
+변환 후:
+[문서 1]에 따르면 (민법 제543조) 해지권이 발생합니다. 계약 또는 법률 규정에 의한 해지권입니다.
+```
+
+### 규칙 3: 인사말 제거
+
+다음 패턴을 찾아 제거:
+- "말씀하신...", "참고로...", "본 답변은..."
+- "구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다"
+- "일반적인 법률 정보 제공을 목적으로 하며..."
+
+### 규칙 4: 구조 정리
+
+- 연속된 빈 줄을 2개 이하로 제한
+- 섹션 제목은 `##` 또는 `###` 형식 유지
+- 불필요한 마커 제거
+
+## 📄 원본 답변
+
+{answer}
+
+## 📋 문서 매핑 정보
+
+{self._build_document_mapping(retrieved_docs) if retrieved_docs else "문서 정보 없음"}
+
+## 🔄 변환 작업
+
+위 규칙을 순서대로 적용하여 원본 답변을 변환하세요.
+
+**작업 순서**:
+1. 규칙 1 적용: 출처 형식 변환
+2. 규칙 2 적용: 표 형식 제거
+3. 규칙 3 적용: 인사말 제거
+4. 규칙 4 적용: 구조 정리
+
+## ✅ 변환 검증
+
+변환 후 다음을 확인하세요:
+- [ ] 모든 `[출처: 문서 N]`가 `[문서 N]`으로 변환되었는가?
+- [ ] 모든 `[1]`, `[2]` 등이 `[문서 1]`, `[문서 2]`로 변환되었는가?
+- [ ] 모든 표가 제거되고 텍스트로 변환되었는가?
+- [ ] 인사말이 제거되었는가?
+- [ ] 원본의 법적 정보가 보존되었는가?
 
 ## 🎯 핵심 원칙
 
@@ -1003,8 +1088,6 @@ class AnswerStructureEnhancer:
 2. **최소 침습 원칙**: 원본 구조, 설명 방식, 예시를 최대한 존중하세요. 구조가 명확하면 그대로 유지하고, 섹션 제목을 함부로 추가하지 마세요.
 
 3. **형식 개선만**: 인사말 제거, 불필요한 반복 통합, 어투 통일(전문적 어조)만 수행하세요.
-
-4. **작업 과정 제외**: STEP, 평가, 체크리스트, 작업 가이드 등은 최종 답변에 포함하지 마세요. 오직 답변 내용만 작성하세요.
 
 
 원본의 핵심 키워드 확인: {keywords_preview}
@@ -1020,31 +1103,7 @@ class AnswerStructureEnhancer:
 
 {answer}
 
-## 📋 구조 가이드 (참고용 - 원본 구조 존중 우선)
-
-**중요**: 원본 답변이 이미 잘 구조화되어 있으면 이 가이드를 따르지 않아도 됩니다.
-
-**제목**: {template.get('title', '법률 질문 답변')}
-
-**섹션 구성 (참고용)**: 구조가 불명확한 경우에만 참고하세요.
-
 """
-
-        # 템플릿 섹션 정보 추가 (더 유연하게)
-        sections = template.get('sections', [])
-        priority_order = {'high': 1, 'medium': 2, 'low': 3}
-        sorted_sections = sorted(sections, key=lambda x: priority_order.get(x.get('priority', 'medium'), 2))
-
-        for i, section in enumerate(sorted_sections, 1):
-            priority_marker = {'high': '권장', 'medium': '참고', 'low': '선택'}.get(
-                section.get('priority', 'medium'), '참고'
-            )
-            prompt += f"""
-{i}. [{priority_marker}] `### {section['name']}`: {section.get('content_guide', '')}
-   (원본에 해당 내용이 이미 포함되어 있으면 그대로 유지)
-"""
-            if section.get('legal_citations'):
-                prompt += "   법적 근거는 설명 문장 바로 다음에 자연스럽게 포함\n"
 
         # 법적 문서 정보 (있는 경우 - 보완용)
         if legal_docs_text and legal_docs_text.strip() != "검색된 문서가 없습니다.":
@@ -1057,7 +1116,7 @@ class AnswerStructureEnhancer:
 **사용 규칙**:
 - 원본 답변에 이미 포함된 내용이면 추가하지 마세요
 - 원본에 빠진 중요한 법적 정보가 있을 때만 자연스럽게 통합하세요
-- 문서 인용 시 "**출처**: [문서명]" 형식으로 표시하세요
+- 문서 인용 시 `[문서 N]` 형식으로 표시하세요 (예: `[문서 1]`, `[문서 2]`)
 """
 
         if legal_references:
@@ -1093,25 +1152,18 @@ class AnswerStructureEnhancer:
 
         prompt += """
 
-## ✅ 최종 확인
-
-**작업 전 확인사항**:
-1. Step 0에서 원본 품질을 평가했는가?
-2. 원본이 우수하면 최소한의 형식 정리만 수행하는가?
-3. 원본에 개선이 필요하면 모든 법적 정보를 보존하면서 개선하는가?
-4. [ ] 모든 법적 정보 포함? [ ] 인사말만 제거? [ ] 원본 구조 존중? [ ] 어투 통일?
-
 ## 📐 출력 형식
 
 - 제목: `## 제목` (원본 구조 존중)
 - 섹션: `### 섹션명` (표시 문구 금지)
 - 강조: `**텍스트**`
 - 리스트: `- 항목` 또는 `1. 항목`
+- **표 형식 사용 금지**: 모든 내용을 텍스트로만 표현
 
 ## 📤 출력
 
-Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개선만 적용하세요.
-설명 없이 바로 향상된 답변을 시작하세요:
+위 변환 규칙을 순서대로 적용하여 변환된 답변을 작성하세요.
+설명 없이 바로 변환된 답변을 시작하세요:
 
 """
 
@@ -1366,7 +1418,8 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
         self,
         structured_answer: str,
         original_answer: str,
-        question_type: QuestionType
+        question_type: QuestionType,
+        retrieved_docs: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """LLM 응답 후처리 - 원본 내용 보존 검증 및 개선 (개선된 버전)"""
 
@@ -1374,10 +1427,13 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
             return structured_answer if structured_answer else original_answer
 
         try:
-            # 1. 통합 정리 함수 사용
+            # 1. 문서별 근거 비교 표 제거 (CRITICAL)
+            structured_answer = self._remove_comparison_table(structured_answer)
+            
+            # 2. 통합 정리 함수 사용
             structured_answer = self._clean_structured_answer(structured_answer, question_type)
 
-            # 2. 원본의 중요 법률 정보 추출 및 검증
+            # 3. 원본의 중요 법률 정보 추출 및 검증
             original_lower = original_answer.lower()
             structured_lower = structured_answer.lower()
 
@@ -1433,7 +1489,64 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
                             )
                             logger.info(f"판례 복원 시도: {precedent}")
 
-            # 4. 핵심 키워드 보존률 확인
+            # 5. 출처 정보를 [문서 N] 형식으로 통일 (CRITICAL)
+            structured_answer = self._normalize_source_citations(
+                structured_answer, retrieved_docs
+            )
+            
+            # 원본 답변의 출처 정보도 추출하여 누락 확인
+            source_citation_patterns = [
+                r'\*\*출처\*\*:\s*\[[^\]]+\]',  # **출처**: [문서명]
+                r'\[출처:\s*[^\]]+\]',  # [출처: 문서명]
+                r'\(출처:\s*[^\)]+\)',  # (출처: 문서명)
+                r'출처:\s*\[[^\]]+\]',  # 출처: [문서명]
+            ]
+            
+            original_sources = []
+            for pattern in source_citation_patterns:
+                matches = re.findall(pattern, original_answer, re.IGNORECASE)
+                original_sources.extend(matches)
+            
+            # 문서 번호 패턴 추출 ([1], [2], [문서 1] 등)
+            document_number_patterns = [
+                r'\[문서\s*\d+\]',  # [문서 1]
+                r'\[문서\s*번호\s*\d+\]',  # [문서 번호 1]
+                r'\[[1-9]\d*\]',  # [1], [2], [3] 등
+            ]
+            
+            original_doc_numbers = []
+            for pattern in document_number_patterns:
+                matches = re.findall(pattern, original_answer, re.IGNORECASE)
+                original_doc_numbers.extend(matches)
+            
+            # 구조화된 답변에서 문서 번호 확인
+            structured_doc_numbers = []
+            for pattern in document_number_patterns:
+                matches = re.findall(pattern, structured_answer, re.IGNORECASE)
+                structured_doc_numbers.extend(matches)
+            
+            # 누락된 문서 번호 복원
+            missing_doc_numbers = [d for d in original_doc_numbers if d.lower() not in [dd.lower() for dd in structured_doc_numbers]]
+            
+            if missing_doc_numbers:
+                logger.warning(f"누락된 문서 번호 감지: {len(missing_doc_numbers)}개")
+                
+                # 문서 번호 복원
+                for doc_num in missing_doc_numbers[:5]:  # 최대 5개만 복원
+                    doc_num_escaped = re.escape(doc_num)
+                    doc_match = re.search(doc_num_escaped, original_answer, re.IGNORECASE)
+                    if doc_match:
+                        start_pos = max(0, doc_match.start() - 100)
+                        end_pos = min(len(original_answer), doc_match.end() + 200)
+                        doc_context = original_answer[start_pos:end_pos]
+                        
+                        if doc_num.lower() not in structured_lower:
+                            structured_answer = self._restore_missing_source(
+                                structured_answer, doc_context, doc_num
+                            )
+                            logger.info(f"문서 번호 복원: {doc_num}")
+
+            # 6. 핵심 키워드 보존률 확인
             original_keywords = set(re.findall(r'[\w가-힣]{3,}', original_lower))
             # 법률 관련 키워드 필터링
             important_keywords = {
@@ -1704,6 +1817,317 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
             logger.warning(f"내용 복원 실패 ({identifier}): {e}")
             return structured_answer
 
+    def _restore_missing_source(self, structured_answer: str, content: str, source_info: str) -> str:
+        """
+        누락된 출처 정보를 구조화된 답변의 적절한 위치에 복원
+
+        Args:
+            structured_answer: 구조화된 답변
+            content: 출처 정보가 포함된 원본 문맥
+            source_info: 복원할 출처 정보 (예: "**출처**: [문서명]", "[1]")
+
+        Returns:
+            출처 정보가 복원된 구조화된 답변
+        """
+        try:
+            if not content or not content.strip() or not source_info:
+                return structured_answer
+
+            # 출처 정보가 포함된 문장 추출
+            source_sentences = []
+            sentences = re.split(r'[.!?]\s+', content)
+            
+            for sentence in sentences:
+                if source_info.lower() in sentence.lower():
+                    # 출처 정보 앞뒤 문맥 포함 (최대 200자)
+                    source_sentences.append(sentence.strip())
+                    if len(source_sentences) >= 2:  # 최대 2개 문장만
+                        break
+
+            if not source_sentences:
+                return structured_answer
+
+            # 구조화된 답변에서 출처 정보가 있어야 할 위치 찾기
+            # 1. 법조문이나 판례가 언급된 위치 찾기
+            lines = structured_answer.split('\n')
+            insertion_point = -1
+            
+            # 출처 정보와 관련된 키워드가 있는 문장 찾기
+            source_keywords = ['법', '조', '항', '판례', '법원', '판결', '법령']
+            for i, line in enumerate(lines):
+                line_lower = line.lower()
+                # 출처 정보가 없고, 관련 키워드가 있는 라인 찾기
+                if source_info.lower() not in line_lower:
+                    if any(keyword in line_lower for keyword in source_keywords):
+                        # 해당 라인에 출처 정보 추가
+                        if line.strip() and not line.strip().startswith('#'):
+                            # 출처 정보를 문장 끝에 추가
+                            if not re.search(r'출처|\[.*\]', line, re.IGNORECASE):
+                                insertion_point = i
+                                break
+
+            if insertion_point >= 0:
+                # 해당 라인에 출처 정보 추가
+                original_line = lines[insertion_point]
+                # 출처 정보가 이미 있는지 확인
+                if source_info.lower() not in original_line.lower():
+                    # 문장 끝에 출처 정보 추가
+                    if original_line.strip().endswith(('.', '!', '?')):
+                        lines[insertion_point] = f"{original_line.rstrip('.!?')} {source_info}."
+                    else:
+                        lines[insertion_point] = f"{original_line} {source_info}"
+                    structured_answer = '\n'.join(lines)
+                    logger.info(f"출처 정보 복원 성공: {source_info[:30]}...")
+            else:
+                # 적절한 위치를 찾지 못한 경우, 관련 섹션 끝에 추가
+                legal_section_keywords = ['법적 근거', '관련 법령', '법령', '법조문', '판례', '법적 해설', '결론']
+                for i, line in enumerate(lines):
+                    if re.match(r'^###\s+', line):
+                        section_title = re.sub(r'^###\s+', '', line).strip().lower()
+                        if any(keyword in section_title for keyword in legal_section_keywords):
+                            # 해당 섹션 끝에 출처 정보 추가
+                            next_section = -1
+                            for j in range(i + 1, len(lines)):
+                                if re.match(r'^###\s+', lines[j]):
+                                    next_section = j
+                                    break
+                            
+                            if next_section == -1:
+                                # 다음 섹션이 없으면 끝에 추가
+                                lines.append(f"\n{source_sentences[0]} {source_info}")
+                            else:
+                                # 다음 섹션 전에 삽입
+                                lines.insert(next_section, f"{source_sentences[0]} {source_info}\n")
+                            
+                            structured_answer = '\n'.join(lines)
+                            logger.info(f"출처 정보 복원 성공 (섹션 끝): {source_info[:30]}...")
+                            break
+
+            return structured_answer
+
+        except Exception as e:
+            logger.warning(f"출처 정보 복원 실패 ({source_info[:30]}...): {e}")
+            return structured_answer
+
+    def _remove_comparison_table(self, answer: str) -> str:
+        """
+        문서별 근거 비교 표를 제거하고 내용을 자연스러운 문장으로 변환
+        
+        Args:
+            answer: 답변 텍스트
+        
+        Returns:
+            표가 제거되고 텍스트로 변환된 답변
+        """
+        if not answer:
+            return answer
+        
+        try:
+            result = answer
+            lines = result.split('\n')
+            new_lines = []
+            in_table = False
+            table_start_idx = -1
+            table_title_line = None
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                
+                # 표 제목 감지 ("문서별 근거 비교", "문서별 근거", "근거 비교" 등)
+                if re.search(r'문서별\s*근거\s*비교|근거\s*비교|문서\s*근거', line, re.IGNORECASE):
+                    table_title_line = line
+                    table_start_idx = len(new_lines)
+                    in_table = True
+                    # 표 제목 라인은 제거
+                    i += 1
+                    continue
+                
+                # 표 시작 감지 (헤더 라인: | 문서 번호 | ...)
+                if in_table and re.match(r'^\s*\|.*문서.*번호.*\|', line, re.IGNORECASE):
+                    # 헤더 라인 제거
+                    i += 1
+                    # 구분선 제거 (|-----------|...)
+                    if i < len(lines) and re.match(r'^\s*\|[\s\-:]+\|', lines[i]):
+                        i += 1
+                    continue
+                
+                # 표 내용 라인 감지 (| [1] | ... |)
+                if in_table and re.match(r'^\s*\|.*\[.*\].*\|', line):
+                    # 표 내용을 텍스트로 변환
+                    cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+                    if len(cells) >= 3:
+                        doc_num = cells[0]  # 문서 번호
+                        source = cells[1] if len(cells) > 1 else ""  # 출처
+                        key_basis = cells[2] if len(cells) > 2 else ""  # 핵심 근거
+                        related_content = cells[3] if len(cells) > 3 else ""  # 관련 내용
+                        
+                        # 텍스트로 변환
+                        text_parts = []
+                        if doc_num:
+                            # [1] 형식을 [문서 1] 형식으로 변환
+                            doc_num_normalized = re.sub(r'\[(\d+)\]', r'[문서 \1]', doc_num)
+                            text_parts.append(f"{doc_num_normalized}에 따르면")
+                        if source:
+                            text_parts.append(f"({source})")
+                        if key_basis:
+                            text_parts.append(key_basis)
+                        if related_content:
+                            text_parts.append(related_content)
+                        
+                        if text_parts:
+                            new_lines.append(" ".join(text_parts) + ".")
+                    
+                    i += 1
+                    continue
+                
+                # 표 종료 감지 (빈 줄 또는 다른 섹션 시작)
+                if in_table:
+                    # 빈 줄이거나 다른 제목이면 표 종료
+                    if not line.strip() or re.match(r'^#+\s+', line):
+                        in_table = False
+                        # 표 종료 후 빈 줄 하나 추가
+                        if new_lines and new_lines[-1].strip():
+                            new_lines.append("")
+                    else:
+                        # 표가 아닌 일반 텍스트인 경우 표 종료
+                        if not re.match(r'^\s*\|', line):
+                            in_table = False
+                
+                # 표가 아닌 경우 일반 라인 추가
+                if not in_table:
+                    new_lines.append(line)
+                
+                i += 1
+            
+            result = '\n'.join(new_lines)
+            
+            # 연속된 빈 줄 정리
+            result = re.sub(r'\n{3,}', '\n\n', result)
+            
+            if table_start_idx >= 0:
+                logger.info("문서별 근거 비교 표 제거 및 텍스트 변환 완료")
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"표 제거 실패: {e}")
+            return answer
+
+    def _normalize_source_citations(
+        self,
+        answer: str,
+        retrieved_docs: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """
+        출처 정보를 [문서 N] 형식으로 통일
+        
+        Args:
+            answer: 답변 텍스트
+            retrieved_docs: 검색된 문서 목록 (문서명 매핑용)
+        
+        Returns:
+            출처 정보가 [문서 N] 형식으로 통일된 답변
+        """
+        if not answer:
+            return answer
+        
+        try:
+            result = answer
+            
+            # 문서명 매핑 생성 (retrieved_docs가 있는 경우)
+            doc_name_to_index = {}
+            if retrieved_docs:
+                for idx, doc in enumerate(retrieved_docs, 1):
+                    if not isinstance(doc, dict):
+                        continue
+                    
+                    # 문서명 추출 (다양한 필드에서 시도)
+                    doc_name = (
+                        doc.get("name") or
+                        doc.get("title") or
+                        doc.get("source") or
+                        doc.get("type") or
+                        doc.get("metadata", {}).get("name") or
+                        doc.get("metadata", {}).get("title") or
+                        doc.get("metadata", {}).get("source_type") or
+                        ""
+                    )
+                    
+                    if doc_name:
+                        # 소문자로 정규화하여 매칭
+                        doc_name_to_index[doc_name.lower()] = idx
+                        # 타입도 매핑 (statute_article, case_paragraph 등)
+                        doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
+                        if doc_type:
+                            doc_name_to_index[doc_type.lower()] = idx
+            
+            # 1. **출처**: [문서명] 형식을 [문서 N] 형식으로 변환
+            def replace_source_citation(match):
+                source_text = match.group(0)
+                source_name_match = re.search(r'\[([^\]]+)\]', source_text)
+                if source_name_match:
+                    source_name = source_name_match.group(1).strip()
+                    # 문서명 매핑에서 찾기
+                    doc_index = doc_name_to_index.get(source_name.lower())
+                    if doc_index:
+                        return f"[문서 {doc_index}]"
+                    # 매핑이 없으면 원본 유지 (나중에 처리)
+                return source_text
+            
+            # **출처**: [문서명] 패턴 변환
+            result = re.sub(
+                r'\*\*출처\*\*:\s*\[[^\]]+\]',
+                replace_source_citation,
+                result,
+                flags=re.IGNORECASE
+            )
+            
+            # [출처: 문서명] 패턴 변환
+            result = re.sub(
+                r'\[출처:\s*([^\]]+)\]',
+                lambda m: f"[문서 {doc_name_to_index.get(m.group(1).strip().lower(), '?')}]" if doc_name_to_index.get(m.group(1).strip().lower()) else m.group(0),
+                result,
+                flags=re.IGNORECASE
+            )
+            
+            # (출처: 문서명) 패턴 변환
+            result = re.sub(
+                r'\(출처:\s*([^\)]+)\)',
+                lambda m: f"[문서 {doc_name_to_index.get(m.group(1).strip().lower(), '?')}]" if doc_name_to_index.get(m.group(1).strip().lower()) else m.group(0),
+                result,
+                flags=re.IGNORECASE
+            )
+            
+            # 출처: [문서명] 패턴 변환
+            result = re.sub(
+                r'출처:\s*\[([^\]]+)\]',
+                lambda m: f"[문서 {doc_name_to_index.get(m.group(1).strip().lower(), '?')}]" if doc_name_to_index.get(m.group(1).strip().lower()) else m.group(0),
+                result,
+                flags=re.IGNORECASE
+            )
+            
+            # 2. [1], [2] 형식을 [문서 1], [문서 2] 형식으로 변환
+            result = re.sub(
+                r'\[([1-9]\d*)\]',
+                r'[문서 \1]',
+                result
+            )
+            
+            # 3. 문서[1], 문서[2] 형식을 [문서 1], [문서 2] 형식으로 변환
+            result = re.sub(
+                r'문서\s*\[\s*([1-9]\d*)\s*\]',
+                r'[문서 \1]',
+                result
+            )
+            
+            logger.info(f"출처 정보 정규화 완료: {len(doc_name_to_index)}개 문서 매핑")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"출처 정보 정규화 실패: {e}")
+            return answer
+
     def _normalize_tone(self, text: str) -> str:
         """친근한 어투를 전문적인 어투로 변환"""
         try:
@@ -1909,6 +2333,53 @@ Step 0 평가를 먼저 수행하고, 평가 결과에 따라 최소한의 개�
             )
 
         return "\n\n".join(formatted_docs)
+
+    def _build_document_mapping(self, retrieved_docs: List[Dict[str, Any]]) -> str:
+        """문서명을 문서 번호로 매핑하는 정보 생성"""
+        if not retrieved_docs:
+            return "문서 정보 없음"
+        
+        mapping_lines = []
+        for idx, doc in enumerate(retrieved_docs, 1):
+            if not isinstance(doc, dict):
+                continue
+            
+            # 문서명 추출 (다양한 필드에서 시도)
+            doc_name = (
+                doc.get("name") or
+                doc.get("title") or
+                doc.get("source") or
+                doc.get("type") or
+                doc.get("metadata", {}).get("name") or
+                doc.get("metadata", {}).get("title") or
+                doc.get("metadata", {}).get("source_type") or
+                ""
+            )
+            
+            # 법조문 정보
+            law_name = doc.get("law_name", "")
+            article_no = doc.get("article_no", "")
+            
+            # 판례 정보
+            case_name = doc.get("case_name", "")
+            case_number = doc.get("case_number", "")
+            
+            # 매핑 정보 구성
+            if law_name and article_no:
+                mapping_info = f"[문서 {idx}]: {law_name} 제{article_no}조"
+            elif case_name or case_number:
+                mapping_info = f"[문서 {idx}]: {case_name or case_number}"
+            elif doc_name:
+                mapping_info = f"[문서 {idx}]: {doc_name}"
+            else:
+                mapping_info = f"[문서 {idx}]: 문서 {idx}"
+            
+            mapping_lines.append(mapping_info)
+        
+        if not mapping_lines:
+            return "문서 정보 없음"
+        
+        return "\n".join(mapping_lines)
 
     def _enhance_with_template(
         self,
