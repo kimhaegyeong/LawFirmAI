@@ -17,6 +17,7 @@ interface CompactReferencesBadgeProps {
   sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
   sourcesByType?: SourcesByType;  // 우선 사용
   onOpenSidebar?: (selectedType: ReferenceType) => void;
+  onReferenceClick?: (reference: { id: string; type: ReferenceType; title: string; subtitle?: string; metadata?: Record<string, unknown>; sourceDetail?: SourceInfo }, sourceDetail?: SourceInfo) => void;
 }
 
 export function CompactReferencesBadge({
@@ -26,6 +27,7 @@ export function CompactReferencesBadge({
   sourcesDetail = [],
   sourcesByType: propSourcesByType,
   onOpenSidebar,
+  onReferenceClick,
 }: CompactReferencesBadgeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -268,6 +270,14 @@ export function CompactReferencesBadge({
   const previewReferences = parsedReferences.slice(0, 3);
   const remainingCount = totalCount - previewReferences.length;
 
+  const handleReferenceClick = (ref: typeof parsedReferences[0]) => {
+    if (onReferenceClick) {
+      onReferenceClick(ref, ref.sourceDetail);
+    } else if (onOpenSidebar) {
+      onOpenSidebar(ref.type);
+    }
+  };
+
   // 참고자료가 없으면 렌더링하지 않음 (모든 hooks 호출 후에 체크)
   if (totalCount === 0) {
     return null;
@@ -351,7 +361,8 @@ export function CompactReferencesBadge({
             {previewReferences.map((ref) => (
               <div
                 key={ref.id}
-                className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors"
+                onClick={() => handleReferenceClick(ref)}
+                className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <div className="flex items-start gap-2">
                   {ref.type === 'law' && <FileText className="w-3 h-3 text-blue-600 mt-0.5 flex-shrink-0" />}
@@ -381,7 +392,8 @@ export function CompactReferencesBadge({
             {parsedReferences.slice(3).map((ref) => (
               <div
                 key={ref.id}
-                className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors"
+                onClick={() => handleReferenceClick(ref)}
+                className="text-xs p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <div className="flex items-start gap-2">
                   {ref.type === 'law' && <FileText className="w-3 h-3 text-blue-600 mt-0.5 flex-shrink-0" />}

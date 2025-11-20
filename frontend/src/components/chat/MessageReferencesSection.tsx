@@ -17,6 +17,7 @@ interface MessageReferencesSectionProps {
   sourcesDetail?: SourceInfo[];  // deprecated, 하위 호환성
   sourcesByType?: SourcesByType;  // 우선 사용
   onOpenSidebar?: (selectedType: ReferenceType) => void;
+  onReferenceClick?: (reference: { id: string; type: ReferenceType; title: string; subtitle?: string; metadata?: Record<string, unknown>; sourceDetail?: SourceInfo }, sourceDetail?: SourceInfo) => void;
   defaultExpanded?: boolean;
 }
 
@@ -27,6 +28,7 @@ export function MessageReferencesSection({
   sourcesDetail = [],
   sourcesByType: propSourcesByType,
   onOpenSidebar,
+  onReferenceClick,
   defaultExpanded = false,
 }: MessageReferencesSectionProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
@@ -203,6 +205,7 @@ export function MessageReferencesSection({
             sourcesDetail={effectiveSourcesDetail}
             sourcesByType={propSourcesByType}
             onOpenSidebar={onOpenSidebar}
+            onReferenceClick={onReferenceClick}
           />
         </div>
       )}

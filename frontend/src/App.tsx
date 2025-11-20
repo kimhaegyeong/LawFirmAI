@@ -39,6 +39,7 @@ function App() {
     referencesSidebarOpen,
     selectedMessageForReferences,
     selectedReferenceType,
+    selectedReferenceId,
     openReferencesSidebar,
     closeReferencesSidebar,
   } = useSidebar();
@@ -461,8 +462,8 @@ function App() {
           onQuestionClick={handleRelatedQuestionClick}
           onSendMessage={handleSendMessage}
           onDocumentClick={handleDocumentClick}
-          onOpenReferencesSidebar={(message, selectedType) => {
-            openReferencesSidebar(message, selectedType);
+          onOpenReferencesSidebar={(message, selectedType, referenceId) => {
+            openReferencesSidebar(message, selectedType, referenceId);
           }}
           onRetryMessage={(messageId) => {
             const error = streamErrors.get(messageId);
@@ -510,6 +511,7 @@ function App() {
           sourcesDetail={selectedMessageForReferences.metadata?.sources_detail}
           sourcesByType={selectedMessageForReferences.metadata?.sources_by_type}
           initialSelectedType={selectedReferenceType}
+          initialSelectedReferenceId={selectedReferenceId}
         />
       )}
     </MainLayout>

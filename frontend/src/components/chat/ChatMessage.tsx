@@ -30,7 +30,7 @@ interface ChatMessageProps {
   sessionId?: string;
   onQuestionClick?: (question: string) => void;
   onDocumentClick?: (message: ChatMessageType, documentIndex: number) => void; // 문서 클릭 핸들러
-  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation') => void; // 참고자료 사이드바 열기 핸들러
+  onOpenReferencesSidebar?: (message: ChatMessageType, selectedType: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation', referenceId?: string | null) => void; // 참고자료 사이드바 열기 핸들러
   isStreaming?: boolean; // 스트리밍 중인지 여부
   error?: StreamError; // 에러 상태
   onRetry?: () => void; // 재시도 핸들러
@@ -616,7 +616,20 @@ export function ChatMessage({
                 legalReferences={legalReferencesArray}
                 sources={sourcesArray}
                 sourcesDetail={sourcesDetailArray}
+                sourcesByType={sourcesByType}
                 onOpenSidebar={(selectedType) => onOpenReferencesSidebar?.(safeMessage, selectedType)}
+                onReferenceClick={(ref, sourceDetail) => {
+                  const referenceId = sourceDetail?.case_number || 
+                                    sourceDetail?.article_no || 
+                                    sourceDetail?.decision_number || 
+                                    sourceDetail?.interpretation_number ||
+                                    sourceDetail?.metadata?.doc_id ||
+                                    ref.metadata?.doc_id ||
+                                    ref.metadata?.case_number ||
+                                    ref.metadata?.article_no ||
+                                    ref.id;
+                  onOpenReferencesSidebar?.(safeMessage, ref.type, referenceId);
+                }}
                 defaultExpanded={false}
               />
             )}

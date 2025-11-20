@@ -14,6 +14,7 @@ export function useSidebar() {
   const [referencesSidebarOpen, setReferencesSidebarOpen] = useState(false);
   const [selectedMessageForReferences, setSelectedMessageForReferences] = useState<ChatMessage | null>(null);
   const [selectedReferenceType, setSelectedReferenceType] = useState<ReferenceType>('all');
+  const [selectedReferenceId, setSelectedReferenceId] = useState<string | null>(null);
 
   const openDocumentSidebar = useCallback((message: ChatMessage, index: number) => {
     setSelectedMessageForDocument(message);
@@ -27,9 +28,10 @@ export function useSidebar() {
     setSelectedMessageForDocument(null);
   }, []);
 
-  const openReferencesSidebar = useCallback((message: ChatMessage, selectedType: ReferenceType = 'all') => {
+  const openReferencesSidebar = useCallback((message: ChatMessage, selectedType: ReferenceType = 'all', referenceId?: string | null) => {
     setSelectedMessageForReferences(message);
     setSelectedReferenceType(selectedType);
+    setSelectedReferenceId(referenceId || null);
     setReferencesSidebarOpen(true);
   }, []);
 
@@ -37,6 +39,7 @@ export function useSidebar() {
     setReferencesSidebarOpen(false);
     setSelectedMessageForReferences(null);
     setSelectedReferenceType('all');
+    setSelectedReferenceId(null);
   }, []);
 
   const updateSelectedMessageForDocument = useCallback((updater: (message: ChatMessage | null) => ChatMessage | null) => {
@@ -56,6 +59,7 @@ export function useSidebar() {
     referencesSidebarOpen,
     selectedMessageForReferences,
     selectedReferenceType,
+    selectedReferenceId,
     openReferencesSidebar,
     closeReferencesSidebar,
   };

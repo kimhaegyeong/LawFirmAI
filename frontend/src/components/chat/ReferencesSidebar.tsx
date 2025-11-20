@@ -2,7 +2,7 @@
  * 참고자료 사이드바 컴포넌트
  * 오른쪽에서 슬라이드되는 사이드바로 참고자료 목록을 표시합니다.
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { ReferencesModalContent } from './ReferencesModalContent';
 import { ReferenceDetailView } from './ReferenceDetailView';
@@ -18,6 +18,7 @@ interface ReferencesSidebarProps {
   sourcesDetail?: SourceInfo[];
   sourcesByType?: SourcesByType;
   initialSelectedType?: 'all' | 'law' | 'precedent' | 'decision' | 'interpretation' | 'regulation';
+  initialSelectedReferenceId?: string | null;
 }
 
 export function ReferencesSidebar({
@@ -29,6 +30,7 @@ export function ReferencesSidebar({
   sourcesDetail = [],
   sourcesByType: propSourcesByType,
   initialSelectedType = 'all',
+  initialSelectedReferenceId,
 }: ReferencesSidebarProps) {
   const [selectedReference, setSelectedReference] = useState<LegalReferenceDetail | null>(null);
   const [selectedSourceDetail, setSelectedSourceDetail] = useState<SourceInfo | null>(null);
@@ -137,6 +139,45 @@ export function ReferencesSidebar({
     
     return all.length;
   }, [references, allLegalRefs, sources, effectiveSourcesDetail]);
+
+  // initialSelectedReferenceId가 있으면 해당 참고자료를 찾아서 자동으로 선택
+  useEffect(() => {
+    if (initialSelectedReferenceId && effectiveSourcesDetail.length > 0 && !selectedReference) {
+      const foundDetail = effectiveSourcesDetail.find(detail => {
+        const detailId = detail.case_number || 
+                        detail.article_no ||
+                        detail.decision_number ||
+                        detail.interpretation_number ||
+                        detail.metadata?.doc_id || 
+                        '';
+        return detailId === initialSelectedReferenceId || 
+               detail.metadata?.doc_id === initialSelectedReferenceId ||
+               (detail.case_number && detail.case_number === initialSelectedReferenceId) ||
+               (detail.article_no && detail.article_no === initialSelectedReferenceId);
+      });
+      
+      if (foundDetail) {
+        const legalRef: LegalReferenceDetail = {
+          id: foundDetail.metadata?.doc_id || foundDetail.case_number || foundDetail.article_no || '',
+          type: foundDetail.type === 'statute_article' ? 'law' :
+                foundDetail.type === 'case_paragraph' ? 'precedent' :
+                foundDetail.type === 'decision_paragraph' ? 'decision' :
+                foundDetail.type === 'interpretation_paragraph' ? 'interpretation' : 'regulation',
+          law_name: foundDetail.statute_name || foundDetail.metadata?.statute_name,
+          case_name: foundDetail.case_name || foundDetail.metadata?.casenames,
+          case_number: foundDetail.case_number || foundDetail.metadata?.case_number || foundDetail.metadata?.doc_id,
+          article_number: foundDetail.article_no ? `제${foundDetail.article_no}조` : undefined,
+          decision_number: foundDetail.decision_number || foundDetail.metadata?.decision_number,
+          interpretation_number: foundDetail.interpretation_number || foundDetail.metadata?.interpretation_number,
+          content: foundDetail.content,
+          article_content: foundDetail.content,
+          summary: foundDetail.content,
+        };
+        setSelectedReference(legalRef);
+        setSelectedSourceDetail(foundDetail);
+      }
+    }
+  }, [initialSelectedReferenceId, effectiveSourcesDetail, selectedReference]);
 
   if (!isOpen) {
     return null;
