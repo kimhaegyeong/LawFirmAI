@@ -12,6 +12,46 @@ from typing import Any, Optional
 from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 
+# 환경 변수 로드 (프로젝트 루트 .env 파일 사용)
+# core/utils/config.py -> core/utils/ -> core/ -> lawfirm_langgraph/ -> 프로젝트 루트
+try:
+    _config_file_dir = Path(__file__).parent
+    _core_dir = _config_file_dir.parent
+    _langgraph_dir = _core_dir.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
+    try:
+        if str(_project_root) not in sys.path:
+            sys.path.insert(0, str(_project_root))
+        from utils.env_loader import ensure_env_loaded, load_all_env_files
+        
+        # 프로젝트 루트 .env 파일 명시적으로 로드
+        ensure_env_loaded(_project_root)
+        loaded_files = load_all_env_files(_project_root)
+        if loaded_files:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"✅ Config: 환경 변수 로드 완료 ({len(loaded_files)}개 .env 파일)")
+    except ImportError:
+        # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
+        try:
+            from dotenv import load_dotenv
+            
+            # 프로젝트 루트 .env 먼저 로드
+            root_env = _project_root / ".env"
+            if root_env.exists():
+                load_dotenv(dotenv_path=str(root_env), override=False)
+            
+            # lawfirm_langgraph/.env 로드 (덮어쓰기)
+            langgraph_env = _langgraph_dir / ".env"
+            if langgraph_env.exists():
+                load_dotenv(dotenv_path=str(langgraph_env), override=True)
+        except ImportError:
+            pass  # python-dotenv가 없으면 환경 변수만 사용
+except Exception:
+    pass  # 환경 변수 로드 실패 시 기본값 사용
+
 # 한글 출력을 위한 인코딩 설정
 if sys.platform == "win32":
     # Windows에서 한글 출력을 위한 설정

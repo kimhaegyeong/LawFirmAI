@@ -36,6 +36,16 @@ import asyncio  # noqa: E402
 import logging  # noqa: E402
 from pathlib import Path  # noqa: E402
 from datetime import datetime  # noqa: E402
+import cProfile  # noqa: E402
+import pstats  # noqa: E402
+import tracemalloc  # noqa: E402
+try:
+    import psutil  # noqa: E402
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
+# os는 이미 import되어 있으므로 재import 불필요
 
 # UTF-8 인코딩 설정 (Windows PowerShell 호환)
 _original_stdout = sys.stdout
@@ -75,6 +85,33 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 if str(lawfirm_langgraph_dir) not in sys.path:
     sys.path.insert(0, str(lawfirm_langgraph_dir))
+
+# 환경 변수 로드 (프로젝트 루트 .env 파일 사용)
+try:
+    from utils.env_loader import ensure_env_loaded, load_all_env_files
+    # 프로젝트 루트의 .env 파일을 명시적으로 로드
+    ensure_env_loaded(project_root)
+    loaded_files = load_all_env_files(project_root)
+    if loaded_files:
+        print(f"✅ 환경 변수 로드 완료: {len(loaded_files)}개 .env 파일")
+    else:
+        print("⚠️  .env 파일을 찾을 수 없습니다. 환경 변수만 사용합니다.")
+except ImportError:
+    # python-dotenv 직접 사용 (fallback)
+    try:
+        from dotenv import load_dotenv
+        # 프로젝트 루트 .env 파일 로드
+        root_env = project_root / ".env"
+        if root_env.exists():
+            load_dotenv(dotenv_path=str(root_env), override=False)
+            print(f"✅ 환경 변수 로드 완료: {root_env}")
+        else:
+            print(f"⚠️  .env 파일을 찾을 수 없습니다: {root_env}")
+    except ImportError:
+        print("⚠️  python-dotenv가 설치되지 않았습니다. .env 파일을 로드할 수 없습니다.")
+        print("   설치: pip install python-dotenv")
+except Exception as e:
+    print(f"⚠️  환경 변수 로드 중 오류 발생: {e}")
 
 # 상수 정의
 MIN_ANSWER_LENGTH = 100
@@ -611,12 +648,42 @@ def _evaluate_answer_quality(answer, answer_length, answer_is_valid, has_error_m
     return answer_quality_score
 
 
-async def run_query_test(query: str):
-    """질의 테스트 실행"""
+async def run_query_test(query: str, enable_profiling: bool = False, enable_memory_monitoring: bool = False):
+    """질의 테스트 실행
+    
+    Args:
+        query: 테스트할 질의
+        enable_profiling: 프로파일링 활성화 여부
+        enable_memory_monitoring: 메모리 모니터링 활성화 여부
+    """
     logger.info("\n" + "="*80)
     logger.info("LangGraph 질의 테스트")
     logger.info("="*80)
     logger.info(f"\n📋 질의: {query}\n")
+    
+    # 프로파일링 설정
+    profiler = None
+    profile_file = None
+    if enable_profiling:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        profile_file = str(project_root / "logs" / "test" / f"profile_{timestamp}.prof")
+        os.makedirs(os.path.dirname(profile_file), exist_ok=True)
+        logger.info(f"📊 프로파일링 활성화: {profile_file}")
+    
+    # 메모리 모니터링 설정
+    memory_snapshots = []
+    if enable_memory_monitoring:
+        tracemalloc.start()
+        if PSUTIL_AVAILABLE:
+            process = psutil.Process(os.getpid())
+            initial_memory = process.memory_info().rss / 1024 / 1024
+            memory_snapshots.append(("초기", initial_memory))
+            logger.info(f"💾 메모리 모니터링 활성화: 초기 메모리 {initial_memory:.2f} MB")
+        else:
+            logger.warning("💾 psutil이 설치되지 않아 프로세스 메모리 모니터링을 사용할 수 없습니다. tracemalloc만 사용합니다.")
+            memory_snapshots.append(("초기", 0))
     
     # 로그 파일 경로 출력 (환경 변수로 설정된 경우)
     log_file_path = os.getenv("TEST_LOG_FILE", None)
@@ -670,12 +737,57 @@ async def run_query_test(query: str):
         logger.info("\n3️⃣  질의 처리 중...")
         logger.info("   (이 작업은 몇 초에서 몇 분이 걸릴 수 있습니다)")
         
-        result = await service.process_query(
-            query=query,
-            session_id="query_test",
-            enable_checkpoint=False,
-            use_astream_events=True
-        )
+        # 메모리 스냅샷 (처리 전)
+        if enable_memory_monitoring:
+            if PSUTIL_AVAILABLE:
+                process = psutil.Process(os.getpid())
+                memory_before = process.memory_info().rss / 1024 / 1024
+                memory_snapshots.append(("처리 전", memory_before))
+            current, peak = tracemalloc.get_traced_memory()
+            traced_before = current / 1024 / 1024
+            if PSUTIL_AVAILABLE:
+                logger.info(f"   💾 메모리 (처리 전): {memory_before:.2f} MB (traced: {traced_before:.2f} MB)")
+            else:
+                logger.info(f"   💾 메모리 (처리 전): traced: {traced_before:.2f} MB")
+        
+        try:
+            result = await service.process_query(
+                query=query,
+                session_id="query_test",
+                enable_checkpoint=False,
+                use_astream_events=True
+            )
+        except asyncio.CancelledError:
+            logger.warning("\n⚠️  작업이 취소되었습니다 (CancelledError)")
+            if enable_profiling and profiler:
+                profiler.disable()
+            if enable_memory_monitoring:
+                tracemalloc.stop()
+            raise
+        except KeyboardInterrupt:
+            logger.warning("\n⚠️  사용자에 의해 중단되었습니다 (KeyboardInterrupt)")
+            if enable_profiling and profiler:
+                profiler.disable()
+            if enable_memory_monitoring:
+                tracemalloc.stop()
+            raise
+        finally:
+            # 메모리 스냅샷 (처리 후) - 항상 실행되도록 finally 블록에 배치
+            if enable_memory_monitoring:
+                try:
+                    if PSUTIL_AVAILABLE:
+                        process = psutil.Process(os.getpid())
+                        memory_after = process.memory_info().rss / 1024 / 1024
+                        memory_snapshots.append(("처리 후", memory_after))
+                    current, peak = tracemalloc.get_traced_memory()
+                    traced_after = current / 1024 / 1024
+                    traced_peak = peak / 1024 / 1024
+                    if PSUTIL_AVAILABLE:
+                        logger.info(f"   💾 메모리 (처리 후): {memory_after:.2f} MB (traced: {traced_after:.2f} MB, peak: {traced_peak:.2f} MB)")
+                    else:
+                        logger.info(f"   💾 메모리 (처리 후): traced: {traced_after:.2f} MB, peak: {traced_peak:.2f} MB")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  메모리 스냅샷 저장 실패: {e}")
         
         # 결과 출력
         logger.info("\n4️⃣  결과:")
@@ -889,6 +1001,64 @@ async def run_query_test(query: str):
         
         _log_performance_metrics(service)
         
+        # 프로파일링 결과 저장 및 출력
+        if enable_profiling and profiler:
+            try:
+                profiler.disable()
+                profiler.dump_stats(profile_file)
+                logger.info("\n" + "="*80)
+                logger.info("📊 프로파일링 결과")
+                logger.info("="*80)
+                logger.info(f"프로파일링 결과 저장: {profile_file}")
+                
+                stats = pstats.Stats(profiler)
+                stats.sort_stats('cumulative')
+                logger.info("\n상위 20개 함수 (cumulative time):")
+                stats.print_stats(20)
+                
+                logger.info("\n상위 20개 함수 (tottime):")
+                stats.sort_stats('tottime')
+                stats.print_stats(20)
+            except Exception as e:
+                logger.error(f"⚠️  프로파일링 결과 저장 실패: {e}")
+        
+        # 메모리 모니터링 결과 출력
+        if enable_memory_monitoring:
+            try:
+                logger.info("\n" + "="*80)
+                logger.info("💾 메모리 사용량 모니터링 결과")
+                logger.info("="*80)
+                
+                if PSUTIL_AVAILABLE:
+                    for label, memory_mb in memory_snapshots:
+                        if memory_mb > 0:
+                            logger.info(f"   {label}: {memory_mb:.2f} MB")
+                    
+                    if len(memory_snapshots) >= 2 and memory_snapshots[0][1] > 0:
+                        initial_memory = memory_snapshots[0][1]
+                        final_memory = memory_snapshots[-1][1]
+                        memory_increase = final_memory - initial_memory
+                        logger.info(f"\n   프로세스 메모리 증가량: {memory_increase:.2f} MB ({memory_increase / initial_memory * 100:.1f}%)")
+                
+                # tracemalloc 상세 정보
+                snapshot = tracemalloc.take_snapshot()
+                top_stats = snapshot.statistics('lineno')
+                
+                logger.info("\n   Python 메모리 할당 상위 10개 (tracemalloc):")
+                total_size = 0
+                for index, stat in enumerate(top_stats[:10], 1):
+                    total_size += stat.size
+                    logger.info(f"   {index}. {stat}")
+                
+                logger.info(f"\n   총 추적된 Python 메모리: {total_size / 1024 / 1024:.2f} MB")
+            except Exception as e:
+                logger.error(f"⚠️  메모리 모니터링 결과 출력 실패: {e}")
+            finally:
+                try:
+                    tracemalloc.stop()
+                except Exception:
+                    pass
+        
         # 최종 검증 및 요약
         test_passed = True
         critical_issues = []
@@ -988,6 +1158,38 @@ async def run_query_test(query: str):
         
         return result
         
+    except asyncio.CancelledError:
+        logger.warning("\n⚠️  작업이 취소되었습니다 (CancelledError)")
+        if enable_profiling and profiler:
+            try:
+                profiler.disable()
+                if profile_file:
+                    profiler.dump_stats(profile_file)
+                    logger.info(f"📊 프로파일링 결과 저장: {profile_file}")
+            except Exception:
+                pass
+        if enable_memory_monitoring:
+            try:
+                tracemalloc.stop()
+            except Exception:
+                pass
+        raise
+    except KeyboardInterrupt:
+        logger.warning("\n⚠️  사용자에 의해 중단되었습니다 (KeyboardInterrupt)")
+        if enable_profiling and profiler:
+            try:
+                profiler.disable()
+                if profile_file:
+                    profiler.dump_stats(profile_file)
+                    logger.info(f"📊 프로파일링 결과 저장: {profile_file}")
+            except Exception:
+                pass
+        if enable_memory_monitoring:
+            try:
+                tracemalloc.stop()
+            except Exception:
+                pass
+        raise
     except ImportError as e:
         logger.error(f"\n❌ Import 오류: {e}")
         logger.error("\n필요한 패키지가 설치되어 있는지 확인하세요.")
@@ -998,6 +1200,21 @@ async def run_query_test(query: str):
         
     except Exception as e:
         logger.error(f"\n❌ 오류 발생: {type(e).__name__}: {e}", exc_info=True)
+        
+        # 프로파일링 및 메모리 모니터링 정리
+        if enable_profiling and profiler:
+            try:
+                profiler.disable()
+                if profile_file:
+                    profiler.dump_stats(profile_file)
+                    logger.info(f"📊 프로파일링 결과 저장: {profile_file}")
+            except Exception:
+                pass
+        if enable_memory_monitoring:
+            try:
+                tracemalloc.stop()
+            except Exception:
+                pass
         
         # 상세 디버깅 정보 출력
         logger.error("\n📋 오류 상세 분석:")
@@ -1034,14 +1251,9 @@ async def run_query_test(query: str):
 def main():
     """메인 실행 함수"""
     try:
-        # stderr 복원 (모듈 import 후) - 이미 리다이렉트하지 않으므로 불필요
-        # global _original_stderr
-        # try:
-        #     if hasattr(sys.stderr, 'close'):
-        #         sys.stderr.close()
-        # except:
-        #     pass
-        # sys.stderr = _original_stderr
+        # 프로파일링 및 메모리 모니터링 옵션 확인
+        enable_profiling = os.getenv("ENABLE_PROFILING", "false").lower() in ("true", "1", "yes")
+        enable_memory_monitoring = os.getenv("ENABLE_MEMORY_MONITORING", "false").lower() in ("true", "1", "yes")
         
         query = get_query_from_args()
         
@@ -1051,13 +1263,24 @@ def main():
             logger.info("  python run_query_test.py \"질의 내용\"")
             logger.info("  python run_query_test.py 0  # 기본 질의 선택")
             logger.info("  $env:TEST_QUERY='질의내용'; python run_query_test.py")
+            logger.info("\n프로파일링 및 메모리 모니터링:")
+            logger.info("  $env:ENABLE_PROFILING='true'; python run_query_test.py \"질의 내용\"")
+            logger.info("  $env:ENABLE_MEMORY_MONITORING='true'; python run_query_test.py \"질의 내용\"")
             return 1
         
-        asyncio.run(run_query_test(query))
+        if enable_profiling:
+            logger.info("📊 프로파일링 모드 활성화")
+        if enable_memory_monitoring:
+            logger.info("💾 메모리 모니터링 모드 활성화")
+        
+        asyncio.run(run_query_test(query, enable_profiling, enable_memory_monitoring))
         return 0
         
     except KeyboardInterrupt:
         logger.warning("\n\n⚠️  사용자에 의해 중단되었습니다.")
+        return 1
+    except asyncio.CancelledError:
+        logger.warning("\n\n⚠️  작업이 취소되었습니다.")
         return 1
     except Exception as e:
         logger.error(f"\n\n❌ 테스트 실패: {e}", exc_info=True)
