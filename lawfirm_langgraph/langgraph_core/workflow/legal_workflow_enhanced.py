@@ -1784,7 +1784,7 @@ class EnhancedLegalQuestionWorkflow:
                     try:
                         classified_type, confidence, complexity, needs_search = self._classify_query_with_chain(query)
                         self.logger.info(
-                            f"✅ [CHAIN CLASSIFICATION] "
+                            f"✅ [UNIFIED CLASSIFICATION] "
                             f"QuestionType={classified_type.value}, complexity={complexity.value}, "
                             f"needs_search={needs_search}, confidence={confidence:.2f}"
                         )
@@ -2116,43 +2116,77 @@ class EnhancedLegalQuestionWorkflow:
     # 호환성을 위한 래퍼 메서드
     def _classify_with_llm(self, query: str) -> Tuple[QuestionType, float]:
         """ClassificationHandler.classify_with_llm 래퍼"""
+        if not self.classification_handler:
+            return self._fallback_classification(query)
         return self.classification_handler.classify_with_llm(query)
 
     def _fallback_classification(self, query: str) -> Tuple[QuestionType, float]:
         """ClassificationHandler.fallback_classification 래퍼"""
-        return self.classification_handler.fallback_classification(query)
+        try:
+            handler = self.classification_handler
+            if handler:
+                return handler.fallback_classification(query)
+        except AttributeError:
+            pass
+        
+        self.logger.warning(
+            "ClassificationHandler not available, using direct fallback. "
+            "Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+        )
+        query_lower = query.lower()
+        if any(k in query_lower for k in ["판례", "사건", "판결"]):
+            return QuestionType.PRECEDENT_SEARCH, 0.7
+        elif any(k in query_lower for k in ["법률", "조문", "법령", "규정"]):
+            return QuestionType.LAW_INQUIRY, 0.7
+        elif any(k in query_lower for k in ["절차", "방법", "대응"]):
+            return QuestionType.PROCEDURE_GUIDE, 0.7
+        else:
+            return QuestionType.GENERAL_QUESTION, 0.7
 
     def _fallback_complexity_classification(self, query: str) -> Tuple[QueryComplexity, bool]:
         """ClassificationHandler.fallback_complexity_classification 래퍼"""
-        return self.classification_handler.fallback_complexity_classification(query)
+        try:
+            handler = self.classification_handler
+            if handler:
+                return handler.fallback_complexity_classification(query)
+        except AttributeError:
+            pass
+        
+        self.logger.warning(
+            "ClassificationHandler not available, using direct fallback for complexity. "
+            "Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+        )
+        return QueryComplexity.MODERATE, True
 
     def _parse_complexity_response(self, response: str) -> Optional[Dict[str, Any]]:
         """ClassificationHandler.parse_complexity_response 래퍼"""
+        if not self.classification_handler:
+            self.logger.warning("ClassificationHandler not available for parse_complexity_response")
+            return None
         return self.classification_handler.parse_complexity_response(response)
 
     def _parse_unified_classification_response(self, response: str) -> Optional[Dict[str, Any]]:
         """ClassificationHandler.parse_unified_classification_response 래퍼"""
+        if not self.classification_handler:
+            self.logger.warning("ClassificationHandler not available for parse_unified_classification_response")
+            return None
         return self.classification_handler.parse_unified_classification_response(response)
 
     def _classify_query_with_chain(self, query: str) -> Tuple[QuestionType, float, QueryComplexity, bool]:
         """
-        Prompt Chaining을 사용한 질문 분류 (다단계 체인)
-
-        Step 1: 질문 유형 분류
-        Step 2: 법률 분야 추출 (질문 유형 기반)
-        Step 3: 복잡도 평가 (질문 + 유형 + 분야 기반)
-        Step 4: 검색 필요성 판단 (복잡도 기반)
-
+        단일 통합 프롬프트로 질문 분류 (최적화: 4회 → 1회 LLM 호출)
+        
+        기존 체인 방식(4회 LLM 호출) 대신 단일 통합 프롬프트를 사용하여
+        질문 유형, 복잡도, 검색 필요성을 한 번에 분류합니다.
+        
         Returns:
             Tuple[QuestionType, float, QueryComplexity, bool]: (질문 유형, 신뢰도, 복잡도, 검색 필요 여부)
         """
         try:
-            # 캐시 키 생성
-            cache_key = f"query_chain:{query}"
+            cache_key = f"query_and_complexity:{query}"
 
-            # 캐시 확인
             if cache_key in self._classification_cache:
-                self.logger.debug(f"Using cached chain classification for: {query[:50]}...")
+                self.logger.debug(f"Using cached unified classification for: {query[:50]}...")
                 if hasattr(self, 'stats'):
                     self.stats['complexity_cache_hits'] = self.stats.get('complexity_cache_hits', 0) + 1
                 return self._classification_cache[cache_key]
@@ -2162,301 +2196,172 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
 
-            # PromptChainExecutor 인스턴스 생성
-            llm = self.llm_fast if hasattr(self, 'llm_fast') and self.llm_fast else self.llm
-            chain_executor = PromptChainExecutor(llm, self.logger)
-
-            # 체인 스텝 정의
-            chain_steps = []
-
-            # Step 1: 질문 유형 분류
-            def build_question_type_prompt(prev_output, initial_input):
-                query = prev_output.get("query") if isinstance(prev_output, dict) else (initial_input.get("query") if isinstance(initial_input, dict) else "")
-                if not query:
-                    query = str(prev_output) if not isinstance(prev_output, dict) else ""
-
-                return f"""다음 법률 질문의 유형을 분류해주세요.
-
-질문: {query}
-
-다음 유형 중 하나를 선택하세요:
-1. precedent_search - 판례, 사건, 법원 판결, 판시사항 관련
-2. law_inquiry - 법률 조문, 법령, 규정의 내용을 묻는 질문
-3. legal_advice - 법률 조언, 해석, 권리 구제 방법을 묻는 질문
-4. procedure_guide - 법적 절차, 소송 방법, 대응 방법을 묻는 질문
-5. term_explanation - 법률 용어의 정의나 의미를 묻는 질문
-6. general_question - 범용적인 법률 질문
-
-다음 형식으로 응답해주세요:
-{{
-    "question_type": "precedent_search" | "law_inquiry" | "legal_advice" | "procedure_guide" | "term_explanation" | "general_question",
-    "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
-}}
-"""
-
-            chain_steps.append({
-                "name": "question_type_classification",
-                "prompt_builder": build_question_type_prompt,
-                "input_extractor": lambda prev: {"query": query} if isinstance(prev, dict) or not prev else prev,
-                "output_parser": lambda response, prev: ClassificationParser.parse_question_type_response(response),
-                "validator": lambda output: output and isinstance(output, dict) and "question_type" in output,
-                "required": True
-            })
-
-            # Step 2: 법률 분야 추출 (질문 유형 기반)
-            def build_legal_field_prompt(prev_output, initial_input):
-                # prev_output은 Step 1의 결과 (question_type 포함)
-                if not isinstance(prev_output, dict):
-                    return None
-
-                question_type = prev_output.get("question_type", "")
-                query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-
-                if not question_type:
-                    return None
-
-                return f"""다음 질문과 질문 유형을 바탕으로 법률 분야를 추출해주세요.
-
-질문: {query_value}
-질문 유형: {question_type}
-
-법률 분야 예시:
-- family_law (가족법): 이혼, 양육권, 상속, 부양 등
-- civil_law (민법): 계약, 손해배상, 물권, 채권 등
-- corporate_law (기업법): 회사법, 상법, 금융법 등
-- intellectual_property (지적재산권): 특허, 상표, 저작권 등
-- criminal_law (형법): 형사소송, 범죄 등
-- labor_law (노동법): 근로법, 근로기준법 등
-- administrative_law (행정법): 행정처분, 행정소송 등
-- general (일반): 분류되지 않는 경우
-
-다음 형식으로 응답해주세요:
-{{
-    "legal_field": "family_law" | "civil_law" | "corporate_law" | "intellectual_property" | "criminal_law" | "labor_law" | "administrative_law" | "general",
-    "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
-}}
-"""
-
-            chain_steps.append({
-                "name": "legal_field_extraction",
-                "prompt_builder": build_legal_field_prompt,
-                "input_extractor": lambda prev: prev,  # Step 1의 출력을 그대로 사용
-                "output_parser": lambda response, prev: ClassificationParser.parse_legal_field_response(response),
-                "validator": lambda output: output is None or (isinstance(output, dict) and "legal_field" in output),
-                "required": False,  # 선택 단계 (없어도 진행 가능)
-                "skip_if": lambda prev: not isinstance(prev, dict) or not prev.get("question_type")
-            })
-
-            # Step 3: 복잡도 평가 (질문 + 유형 + 분야 기반)
-            def build_complexity_prompt(prev_output, initial_input):
-                # prev_output은 Step 2의 결과 또는 Step 1의 결과
-                if not isinstance(prev_output, dict):
-                    prev_output = {}
-
-                # Step 1과 Step 2의 결과 통합
-                question_type = prev_output.get("question_type", "")
-                legal_field = prev_output.get("legal_field", "")
-                query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-
-                # Step 1 결과에서 질문 유형 찾기
-                if not question_type:
-                    # prev_output에서 질문 유형 찾기 시도 (이전 단계 출력 통합)
-                    if isinstance(prev_output, dict):
-                        question_type = prev_output.get("question_type", "")
-
-                return f"""다음 질문의 복잡도를 평가해주세요.
-
-질문: {query_value}
-질문 유형: {question_type}
-법률 분야: {legal_field if legal_field else "미지정"}
-
-다음 복잡도 중 하나를 선택하세요:
-1. simple (간단):
-   - 단순 인사말: "안녕하세요", "고마워요" 등
-   - 매우 간단한 법률 용어 정의 (10자 이내, 일반 상식 수준)
-   - 검색이 불필요한 경우
-
-2. moderate (중간):
-   - 특정 법령 조문 조회: "민법 제123조", "형법 제250조" 등
-   - 단일 법률 개념 질문: "계약이란?", "손해배상의 요건은?"
-   - 단일 판례 검색: "XX 사건 판례"
-   - 검색이 필요하지만 단순한 경우
-
-3. complex (복잡):
-   - 비교 분석 질문: "계약 해지와 해제의 차이", "이혼과 재혼의 차이"
-   - 절차/방법 질문: "이혼 절차는?", "소송 방법은?"
-   - 다중 법령/판례 필요: "손해배상 관련 최근 판례와 법령"
-   - 복합적 법률 분석: "계약 해지 시 위약금과 손해배상"
-   - 검색과 분석이 모두 필요한 경우
-
-다음 형식으로 응답해주세요:
-{{
-    "complexity": "simple" | "moderate" | "complex",
-    "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
-}}
-"""
-
-            chain_steps.append({
-                "name": "complexity_assessment",
-                "prompt_builder": build_complexity_prompt,
-                "input_extractor": lambda prev: prev,  # 이전 단계의 통합 결과 사용
-                "output_parser": lambda response, prev: ClassificationParser.parse_complexity_response(response),
-                "validator": lambda output: output and isinstance(output, dict) and "complexity" in output,
-                "required": True
-            })
-
-            # Step 4: 검색 필요성 판단 (복잡도 기반)
-            def build_search_necessity_prompt(prev_output, initial_input):
-                # prev_output은 Step 3의 결과 (complexity 포함)
-                if not isinstance(prev_output, dict):
-                    return None
-
-                complexity = prev_output.get("complexity", "")
-                query_value = initial_input.get("query") if isinstance(initial_input, dict) else query
-
-                if not complexity:
-                    return None
-
-                return f"""다음 질문의 검색 필요성을 판단해주세요.
-
-질문: {query_value}
-복잡도: {complexity}
-
-검색이 필요한 경우:
-- simple이 아닌 경우 (moderate 또는 complex)
-- 법률 조문, 판례, 규정을 찾아야 하는 경우
-- 최신 정보가 필요한 경우
-
-검색이 불필요한 경우:
-- simple 복잡도인 경우
-- 일반적인 법률 상식으로 답변 가능한 경우
-- 단순 인사말이나 정의 질문
-
-다음 형식으로 응답해주세요:
-{{
-    "needs_search": true | false,
-    "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 (한국어)"
-}}
-"""
-
-            chain_steps.append({
-                "name": "search_necessity_assessment",
-                "prompt_builder": build_search_necessity_prompt,
-                "input_extractor": lambda prev: prev,  # Step 3의 출력 사용
-                "output_parser": lambda response, prev: ClassificationParser.parse_search_necessity_response(response),
-                "validator": lambda output: output is None or (isinstance(output, dict) and "needs_search" in output),
-                "required": False,  # 선택 단계
-                "skip_if": lambda prev: not isinstance(prev, dict) or not prev.get("complexity")
-            })
-
-            # 체인 실행
-            initial_input_dict = {"query": query}
-            chain_result = chain_executor.execute_chain(
-                chain_steps=chain_steps,
-                initial_input=initial_input_dict,
-                max_iterations=2,
-                stop_on_failure=False
-            )
-
-            # 결과 추출 및 변환
-            chain_history = chain_result.get("chain_history", [])
-
-            # Step 1 결과: 질문 유형
-            question_type_result = None
-            for step in chain_history:
-                if step.get("step_name") == "question_type_classification" and step.get("success"):
-                    question_type_result = step.get("output", {})
-                    break
-
-            # Step 2 결과: 법률 분야 (선택적)
-            legal_field_result = None
-            for step in chain_history:
-                if step.get("step_name") == "legal_field_extraction" and step.get("success"):
-                    legal_field_result = step.get("output", {})
-                    break
-
-            # Step 3 결과: 복잡도
-            complexity_result = None
-            for step in chain_history:
-                if step.get("step_name") == "complexity_assessment" and step.get("success"):
-                    complexity_result = step.get("output", {})
-                    break
-
-            # Step 4 결과: 검색 필요성
-            search_necessity_result = None
-            for step in chain_history:
-                if step.get("step_name") == "search_necessity_assessment" and step.get("success"):
-                    search_necessity_result = step.get("output", {})
-                    break
-
-            # 결과 변환
-            if not question_type_result or not isinstance(question_type_result, dict):
-                raise ValueError("Question type classification failed")
-
-            # QuestionType 변환
-            question_type_mapping = {
-                "precedent_search": QuestionType.PRECEDENT_SEARCH,
-                "law_inquiry": QuestionType.LAW_INQUIRY,
-                "legal_advice": QuestionType.LEGAL_ADVICE,
-                "procedure_guide": QuestionType.PROCEDURE_GUIDE,
-                "term_explanation": QuestionType.TERM_EXPLANATION,
-                "general_question": QuestionType.GENERAL_QUESTION,
-            }
-            question_type_str = question_type_result.get("question_type", "general_question")
-            classified_type = question_type_mapping.get(question_type_str, QuestionType.GENERAL_QUESTION)
-            confidence = float(question_type_result.get("confidence", 0.85))
-
-            # QueryComplexity 변환
-            if complexity_result and isinstance(complexity_result, dict):
-                complexity_str = complexity_result.get("complexity", "moderate")
-            else:
-                complexity_str = "moderate"
-
-            complexity_mapping = {
-                "simple": QueryComplexity.SIMPLE,
-                "moderate": QueryComplexity.MODERATE,
-                "complex": QueryComplexity.COMPLEX,
-            }
-            complexity = complexity_mapping.get(complexity_str, QueryComplexity.MODERATE)
-
-            # 검색 필요성
-            if search_necessity_result and isinstance(search_necessity_result, dict):
-                needs_search = search_necessity_result.get("needs_search", True)
-            else:
-                # 복잡도 기반 기본값
-                needs_search = complexity != QueryComplexity.SIMPLE
+            # classification_handler 확인
+            try:
+                handler = self.classification_handler
+                if not handler:
+                    self.logger.warning(
+                        "ClassificationHandler not available, using fallback. "
+                        "Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+                    )
+                    question_type, confidence = self._fallback_classification(query)
+                    complexity, needs_search = self._fallback_complexity_classification(query)
+                    return (question_type, confidence, complexity, needs_search)
+                
+                # 단일 통합 프롬프트 사용 (4회 → 1회 호출로 최적화)
+                result_tuple = handler.classify_query_and_complexity_with_llm(query)
+            except AttributeError as e:
+                self.logger.warning(f"ClassificationHandler property not available: {e}, using fallback")
+                question_type, confidence = self._fallback_classification(query)
+                complexity, needs_search = self._fallback_complexity_classification(query)
+                return (question_type, confidence, complexity, needs_search)
 
             elapsed_time = time.time() - start_time
 
+            # 성능 메트릭 업데이트
+            if hasattr(self, 'stats'):
+                self.stats['unified_classification_calls'] = self.stats.get('unified_classification_calls', 0) + 1
+                self.stats['unified_classification_llm_calls'] = self.stats.get('unified_classification_llm_calls', 0) + 1
+                current_avg = self.stats.get('avg_unified_classification_time', 0.0)
+                count = self.stats.get('unified_classification_calls', 1)
+                self.stats['avg_unified_classification_time'] = (current_avg * (count - 1) + elapsed_time) / count
+                self.stats['total_unified_classification_time'] = self.stats.get('total_unified_classification_time', 0.0) + elapsed_time
+
             self.logger.info(
-                f"✅ [CHAIN CLASSIFICATION] "
-                f"question_type={classified_type.value}, complexity={complexity.value}, "
-                f"needs_search={needs_search}, confidence={confidence:.2f}, "
-                f"(시간: {elapsed_time:.3f}s)"
+                f"✅ [UNIFIED CLASSIFICATION] "
+                f"question_type={result_tuple[0].value}, complexity={result_tuple[2].value}, "
+                f"needs_search={result_tuple[3]}, confidence={result_tuple[1]:.2f}, "
+                f"(시간: {elapsed_time:.3f}s, LLM 호출: 1회)"
             )
 
-            result_tuple = (classified_type, confidence, complexity, needs_search)
-
-            # 캐시에 저장
-            if len(self._classification_cache) >= 100:
+            # 캐시 크기 제한
+            if len(self._classification_cache) >= 200:
                 oldest_key = next(iter(self._classification_cache))
                 del self._classification_cache[oldest_key]
+                self.logger.debug(f"[CACHE] Removed oldest classification cache entry: {oldest_key[:50]}")
 
             self._classification_cache[cache_key] = result_tuple
 
             return result_tuple
 
         except Exception as e:
-            self.logger.warning(f"Chain classification failed: {e}, using fallback")
-            if hasattr(self, 'stats'):
+            # 예외 타입별 원인 분류
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            if "timeout" in error_message.lower() or "timed out" in error_message.lower():
+                fallback_reason = "LLM timeout"
+            elif "network" in error_message.lower() or "connection" in error_message.lower():
+                fallback_reason = "Network error"
+            elif "rate limit" in error_message.lower() or "429" in error_message:
+                fallback_reason = "Rate limit"
+            elif "api" in error_message.lower() or "key" in error_message.lower():
+                fallback_reason = "API error"
+            else:
+                fallback_reason = f"Exception: {error_type}"
+            
+            self.logger.warning(
+                f"Unified classification failed: {fallback_reason} ({error_type}: {error_message}), using fallback"
+            )
+            if hasattr(self, 'stats') and self.stats:
                 self.stats['complexity_fallback_count'] = self.stats.get('complexity_fallback_count', 0) + 1
+                # 폴백 원인 분류
+                if 'fallback_reasons' not in self.stats:
+                    self.stats['fallback_reasons'] = {}
+                self.stats['fallback_reasons'][fallback_reason] = self.stats['fallback_reasons'].get(fallback_reason, 0) + 1
             question_type, confidence = self._fallback_classification(query)
             complexity, needs_search = self._fallback_complexity_classification(query)
             return (question_type, confidence, complexity, needs_search)
+
+    def _parse_question_type_response(self, response: str) -> Dict[str, Any]:
+        """질문 유형 분류 응답 파싱"""
+        try:
+            import json
+            import re
+
+            # JSON 추출
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                return json.loads(json_str)
+
+            # 기본값
+            return {
+                "question_type": "general_question",
+                "confidence": 0.7,
+                "reasoning": "JSON 파싱 실패"
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to parse question type response: {e}")
+            return {
+                "question_type": "general_question",
+                "confidence": 0.7,
+                "reasoning": f"파싱 에러: {e}"
+            }
+
+    def _parse_legal_field_response(self, response: str) -> Optional[Dict[str, Any]]:
+        """법률 분야 추출 응답 파싱"""
+        try:
+            import json
+            import re
+
+            # JSON 추출
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                return json.loads(json_str)
+
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to parse legal field response: {e}")
+            return None
+
+    def _parse_complexity_response(self, response: str) -> Dict[str, Any]:
+        """복잡도 평가 응답 파싱"""
+        try:
+            import json
+            import re
+
+            # JSON 추출
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                return json.loads(json_str)
+
+            # 기본값
+            return {
+                "complexity": "moderate",
+                "confidence": 0.7,
+                "reasoning": "JSON 파싱 실패"
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to parse complexity response: {e}")
+            return {
+                "complexity": "moderate",
+                "confidence": 0.7,
+                "reasoning": f"파싱 에러: {e}"
+            }
+
+    def _parse_search_necessity_response(self, response: str) -> Optional[Dict[str, Any]]:
+        """검색 필요성 판단 응답 파싱"""
+        try:
+            import json
+            import re
+
+            # JSON 추출
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                return json.loads(json_str)
+
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to parse search necessity response: {e}")
+            return None
+
+    def _classify_query_and_complexity_with_llm(self, query: str) -> Tuple[QuestionType, float, QueryComplexity, bool]:
+        """ClassificationHandler.classify_query_and_complexity_with_llm 래퍼"""
+        return self.classification_handler.classify_query_and_complexity_with_llm(query)
 
     def _parse_question_type_response(self, response: str) -> Dict[str, Any]:
         """질문 유형 분류 응답 파싱"""
@@ -2813,18 +2718,39 @@ class EnhancedLegalQuestionWorkflow:
         """
         if not self._classification_handler_initialized:
             try:
-                from core.agents.handlers.classification_handler import ClassificationHandler
-                # LLM과 llm_fast는 property로 접근하여 지연 로딩
+                # LLM 초기화 상태 확인
+                llm_available = self.llm is not None
+                llm_fast_available = self.llm_fast is not None
+                
+                if not llm_available:
+                    self.logger.warning(
+                        "ClassificationHandler not available: llm is None. "
+                        "Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+                    )
+                    self._classification_handler = None
+                    self._classification_handler_initialized = True
+                    return None
+                
+                from core.classification.handlers.classification_handler import ClassificationHandler
+                
+                # ClassificationHandler 초기화
                 self._classification_handler = ClassificationHandler(
-                    llm=self.llm,  # property 접근으로 지연 로딩 트리거
-                    llm_fast=self.llm_fast,  # property 접근으로 지연 로딩 트리거
+                    llm=self.llm,
+                    llm_fast=self.llm_fast if llm_fast_available else self.llm,
                     stats=self.stats,
                     logger=self.logger
                 )
                 self._classification_handler_initialized = True
-                self.logger.info("ClassificationHandler lazy-loaded successfully")
+                self.logger.info(
+                    f"ClassificationHandler lazy-loaded successfully "
+                    f"(llm={'available' if llm_available else 'None'}, "
+                    f"llm_fast={'available' if llm_fast_available else 'using llm'})"
+                )
             except Exception as e:
-                self.logger.warning(f"Failed to lazy-load ClassificationHandler: {e}")
+                self.logger.warning(
+                    f"Failed to lazy-load ClassificationHandler: {e}. "
+                    "Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+                )
                 self._classification_handler = None
                 self._classification_handler_initialized = True
         return self._classification_handler
@@ -4790,35 +4716,6 @@ class EnhancedLegalQuestionWorkflow:
         """AnswerFormatterHandler.set_metadata 래퍼"""
         self.answer_formatter_handler.set_metadata(state, answer, keyword_coverage)
 
-    # Phase 11 리팩토링: 중복된 원본 메서드 코드 제거 완료
-    # 답변 포맷팅 관련 메서드는 AnswerFormatterHandler로 이동되어 래퍼만 남음
-    #
-    # DEPRECATED: 이 메서드는 더 이상 워크플로우 그래프에서 사용되지 않습니다.
-    # 포맷팅 로직은 generate_and_validate_answer와 direct_answer_node에 통합되었습니다.
-    # 호환성을 위해 남겨두었지만, 향후 제거될 수 있습니다.
-    @observe(name="format_and_prepare_final")
-    @with_state_optimization("format_and_prepare_final", enable_reduction=False)
-    def format_and_prepare_final(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """통합된 답변 포맷팅 및 최종 준비 (DEPRECATED: generate_and_validate_answer에 통합됨)"""
-        try:
-            # Phase 4 리팩토링: AnswerFormatterHandler 사용
-            state = self.answer_formatter_handler.format_and_prepare_final(state)
-
-            # 통계 업데이트
-            self.update_statistics(state)
-
-            confidence = state.get("confidence", 0.0)
-            self.logger.info(
-                f"format_and_prepare_final completed, confidence: {confidence:.3f}"
-            )
-
-        except Exception as e:
-            self._handle_error(state, str(e), "답변 포맷팅 및 최종 준비 중 오류 발생")
-            answer = self._get_state_value(state, "answer", "")
-            if not state.get("answer"):
-                state["answer"] = self._normalize_answer(answer)
-
-        return state
 
     def update_statistics(self, state: LegalWorkflowState):
         """통계 업데이트 (이동 평균 사용)"""
@@ -8858,15 +8755,37 @@ class EnhancedLegalQuestionWorkflow:
                     f"(no content, content too short, or relevance < 0.3). Valid docs: {len(valid_docs)}"
                 )
 
-            # 유효한 문서가 없으면 에러 반환
+            # 유효한 문서가 없으면 에러 반환 (단, retrieved_docs가 있으면 최소한 일부 문서라도 포함)
             if not valid_docs:
                 self.logger.error("_build_prompt_optimized_context: No valid documents with content found")
-                return {
-                    "prompt_optimized_text": "",
-                    "structured_documents": {},
-                    "document_count": 0,
-                    "total_context_length": 0
-                }
+                # retrieved_docs가 있으면 필터링 기준을 완화하여 최소한 일부 문서 포함
+                if retrieved_docs:
+                    self.logger.warning("⚠️  All documents filtered, attempting to include documents with relaxed criteria")
+                    # 필터링 기준을 완화하여 최소한 상위 문서 포함
+                    relaxed_docs = []
+                    for doc in retrieved_docs[:min(5, len(retrieved_docs))]:
+                        if isinstance(doc, dict):
+                            content = doc.get("content") or doc.get("text") or ""
+                            if content and len(content.strip()) >= 3:  # 최소 길이만 확인
+                                relaxed_docs.append(doc)
+                    
+                    if relaxed_docs:
+                        self.logger.info(f"✅ Included {len(relaxed_docs)} documents with relaxed criteria")
+                        valid_docs = relaxed_docs
+                    else:
+                        return {
+                            "prompt_optimized_text": "",
+                            "structured_documents": {},
+                            "document_count": 0,
+                            "total_context_length": 0
+                        }
+                else:
+                    return {
+                        "prompt_optimized_text": "",
+                        "structured_documents": {},
+                        "document_count": 0,
+                        "total_context_length": 0
+                    }
 
             # 최종 가중치 점수로 정렬 (이미 reranked되어 있을 수 있음)
             sorted_docs = sorted(

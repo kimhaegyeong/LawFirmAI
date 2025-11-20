@@ -15,9 +15,56 @@ logger = logging.getLogger(__name__)
 class WorkflowDocumentProcessor:
     """워크플로우 문서 처리 프로세서"""
     
-    def __init__(self, logger: Optional[logging.Logger] = None, query_enhancer=None):
+    def __init__(self, logger: Optional[logging.Logger] = None, query_enhancer=None, semantic_search_engine=None):
         self.logger = logger or logging.getLogger(__name__)
         self.query_enhancer = query_enhancer
+        self.semantic_search_engine = semantic_search_engine
+    
+    def _extract_doc_content(self, doc: Dict[str, Any]) -> str:
+        """문서 내용 추출 (강화된 버전)"""
+        
+        # 1. 기본 필드 확인
+        content = doc.get("content") or doc.get("text") or doc.get("content_text")
+        
+        # 2. metadata에서 확인
+        if not content:
+            metadata = doc.get("metadata", {})
+            if isinstance(metadata, dict):
+                content = metadata.get("content") or metadata.get("text")
+        
+        # 3. content가 문자열이 아니면 변환 시도
+        if content and not isinstance(content, str):
+            try:
+                content = str(content)
+            except Exception:
+                content = ""
+        
+        # 4. 내용이 비어있으면 DB에서 복원 시도
+        if not content or len(content.strip()) < 10:
+            doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id")
+            chunk_id = doc.get("chunk_id")
+            
+            if doc_id or chunk_id:
+                try:
+                    if self.semantic_search_engine and hasattr(self.semantic_search_engine, '_ensure_text_content'):
+                        restored_content = self.semantic_search_engine._ensure_text_content(doc)
+                        if restored_content and len(restored_content.strip()) >= 10:
+                            content = restored_content
+                            doc["content"] = content
+                            self.logger.debug(f"✅ [CONTENT RESTORE] 문서 내용 복원 성공: doc_id={doc_id}")
+                except Exception as e:
+                    self.logger.debug(f"문서 내용 복원 실패: {e}")
+        
+        # 5. 최종 검증
+        if not content or len(content.strip()) < 10:
+            self.logger.warning(
+                f"⚠️ [CONTENT EXTRACT] 문서 내용 부족: "
+                f"doc_id={doc.get('id', 'unknown')}, "
+                f"content_len={len(content) if content else 0}, "
+                f"keys={list(doc.keys())[:10]}"
+            )
+        
+        return content or ""
     
     def build_prompt_optimized_context(
         self,
@@ -44,10 +91,51 @@ class WorkflowDocumentProcessor:
             valid_docs = []
             invalid_docs_count = 0
             
+            # 질의와 검색된 문서의 relevance_score 로깅 (모든 문서)
+            self.logger.info(f"📊 [RELEVANCE SCORES] 질의: '{query}'")
+            self.logger.info(f"📊 [RELEVANCE SCORES] 검색된 문서 수: {len(retrieved_docs)}개")
+            
             # 개선: 동적 임계값 조정 (검색 결과 점수 분포 분석) - 개선 버전
             scores = [doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0) 
                      for doc in retrieved_docs if isinstance(doc, dict)]
             
+            # 모든 문서의 점수 상세 로깅
+            doc_scores = []
+            for doc in retrieved_docs:
+                if not isinstance(doc, dict):
+                    continue
+                score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                similarity = doc.get("similarity", 0.0)
+                keyword_score = doc.get("keyword_match_score", 0.0)
+                doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or "unknown"
+                doc_type = doc.get("type") or doc.get("source_type", "unknown")
+                source = doc.get("source", "")[:100] or "unknown"
+                content_preview = (doc.get("content", "")[:100] or "").replace("\n", " ")
+                doc_scores.append((score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc))
+            
+            # 점수 분포 통계
+            if doc_scores:
+                scores_only = [s[0] for s in doc_scores]
+                avg_score = sum(scores_only) / len(scores_only)
+                max_score = max(scores_only)
+                min_score = min(scores_only)
+                median_score = sorted(scores_only)[len(scores_only) // 2]
+                self.logger.info(
+                    f"📊 [SCORE STATS] 평균={avg_score:.3f}, 최대={max_score:.3f}, 최소={min_score:.3f}, 중앙값={median_score:.3f}"
+                )
+                
+                # 모든 문서의 점수 상세 로깅 (정렬된 순서)
+                doc_scores_sorted = sorted(doc_scores, key=lambda x: x[0], reverse=True)
+                self.logger.info(f"📊 [ALL DOCS SCORES] 모든 {len(doc_scores_sorted)}개 문서의 relevance_score:")
+                for i, (score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc) in enumerate(doc_scores_sorted, 1):
+                    self.logger.info(
+                        f"   {i}. final_score={score:.3f}, similarity={similarity:.3f}, keyword={keyword_score:.3f}, "
+                        f"type={doc_type}, id={doc_id[:50]}, source={source}, "
+                        f"content_preview={content_preview}"
+                    )
+            
+            # avg_score를 외부에서도 사용할 수 있도록 미리 정의
+            avg_score = 0.0
             if scores:
                 import statistics
                 avg_score = sum(scores) / len(scores)
@@ -58,7 +146,7 @@ class WorkflowDocumentProcessor:
                 # 표준편차 계산 (더 정교한 분포 분석)
                 try:
                     std_dev = statistics.stdev(scores) if len(scores) > 1 else 0.0
-                except:
+                except Exception:
                     std_dev = 0.0
                 
                 # 분위수 계산 (25%, 50%, 75%)
@@ -86,23 +174,30 @@ class WorkflowDocumentProcessor:
                     threshold_adjustment = 0.0
                 
                 # 점수 분포에 따라 동적 임계값 계산 (개선된 로직)
-                if score_range < 0.15:
-                    # 점수가 매우 비슷하면 중위수 기준으로 낮춤
-                    dynamic_threshold = max(0.20, q50 - 0.15 + threshold_adjustment)
+                # 실제 점수 범위를 고려하여 threshold를 더 낮게 설정
+                # avg_score가 낮으면(0.2 미만) 임계값을 더 낮춤
+                if avg_score < 0.20:
+                    # 평균 점수가 매우 낮으면 최소값 기준으로 매우 낮게 설정
+                    # 최소값의 95% 이상을 포함하도록 (거의 모든 문서 포함)
+                    dynamic_threshold = max(0.10, min_score * 0.95 + threshold_adjustment)
+                    self.logger.info(f"📊 [LOW SCORE] Average score is very low ({avg_score:.3f}), using minimum-based threshold: {dynamic_threshold:.3f}")
+                elif score_range < 0.15:
+                    # 점수가 매우 비슷하면 최소값 기준으로 낮춤 (최소값의 90% 이상)
+                    dynamic_threshold = max(0.12, min_score * 0.90 + threshold_adjustment)
                 elif score_range < 0.25:
-                    # 점수가 비슷하면 25% 분위수 기준
-                    dynamic_threshold = max(0.25, q25 - 0.10 + threshold_adjustment)
+                    # 점수가 비슷하면 25% 분위수 기준 (더 낮게)
+                    dynamic_threshold = max(0.15, q25 - 0.05 + threshold_adjustment)
                 elif score_range < 0.4:
-                    # 점수 차이가 중간이면 평균 기준 (표준편차 고려)
+                    # 점수 차이가 중간이면 평균 기준 (표준편차 고려, 더 낮게)
                     if std_dev > 0.1:
-                        # 분산이 크면 평균 - 표준편차
-                        dynamic_threshold = max(0.30, avg_score - std_dev * 0.5 + threshold_adjustment)
+                        # 분산이 크면 평균 - 표준편차 * 1.5 (더 완화)
+                        dynamic_threshold = max(0.15, avg_score - std_dev * 1.5 + threshold_adjustment)
                     else:
-                        # 분산이 작으면 평균 기준
-                        dynamic_threshold = max(0.30, avg_score - 0.05 + threshold_adjustment)
+                        # 분산이 작으면 평균 - 0.10 (더 완화)
+                        dynamic_threshold = max(0.15, avg_score - 0.10 + threshold_adjustment)
                 else:
-                    # 점수 차이가 크면 중위수 기준 (이상치 영향 최소화)
-                    dynamic_threshold = max(0.35, q50 + threshold_adjustment)
+                    # 점수 차이가 크면 중위수 기준 (이상치 영향 최소화, 더 낮게)
+                    dynamic_threshold = max(0.20, q50 - 0.05 + threshold_adjustment)
                 
                 threshold_msg = (
                     f"📊 [DYNAMIC THRESHOLD] avg={avg_score:.3f}, "
@@ -115,13 +210,24 @@ class WorkflowDocumentProcessor:
             else:
                 dynamic_threshold = 0.35
             
-            # 개선 1, 4: 문서 타입별 필터링 기준 차등화 (동적 임계값 적용)
-            # 검색 결과 평균 점수: 0.458, 범위: 0.373~0.732
-            min_relevance_score_semantic = max(0.25, dynamic_threshold - 0.05)
-            min_relevance_score_keyword = max(0.25, dynamic_threshold - 0.05)
-            min_relevance_score_statute_article = max(0.20, dynamic_threshold - 0.10)
-            min_relevance_score_precedent = max(0.25, dynamic_threshold - 0.05)
-            min_relevance_score_general = max(0.30, dynamic_threshold)
+            # 개선 1, 4: 문서 타입별 필터링 기준 차등화 (동적 임계값 적용 - 검색 품질 개선)
+            # 실제 점수 범위를 고려하여 더 완화된 기준 적용
+            # avg_score가 낮으면(0.2 미만) 모든 타입의 기준을 더 낮춤
+            if avg_score < 0.20:
+                # 평균 점수가 낮으면 모든 타입의 기준을 매우 낮게 설정
+                min_relevance_score_semantic = max(0.10, dynamic_threshold - 0.05)
+                min_relevance_score_keyword = max(0.10, dynamic_threshold - 0.05)
+                min_relevance_score_statute_article = max(0.08, dynamic_threshold - 0.12)
+                min_relevance_score_precedent = max(0.10, dynamic_threshold - 0.05)
+                min_relevance_score_general = max(0.12, dynamic_threshold - 0.08)
+                self.logger.info(f"📊 [LOW SCORE FILTER] Using relaxed thresholds due to low average score ({avg_score:.3f})")
+            else:
+                # 평균 점수가 정상이면 기존 로직 사용
+                min_relevance_score_semantic = max(0.15, dynamic_threshold - 0.05)
+                min_relevance_score_keyword = max(0.15, dynamic_threshold - 0.05)
+                min_relevance_score_statute_article = max(0.10, dynamic_threshold - 0.10)
+                min_relevance_score_precedent = max(0.15, dynamic_threshold - 0.05)
+                min_relevance_score_general = max(0.20, dynamic_threshold)
             
             # 개선 7: 질문 핵심 키워드 추출 (간단한 버전)
             query_lower = query.lower()
@@ -130,47 +236,63 @@ class WorkflowDocumentProcessor:
                 if keyword and len(keyword) > 1:
                     query_keywords.append(keyword.lower())
             
+            # 개선 2.2: 문서 내용 추출 및 검증 (강화된 버전)
+            valid_docs_for_prompt = []
             for doc in retrieved_docs:
                 if not isinstance(doc, dict):
                     invalid_docs_count += 1
                     continue
                 
-                content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                # _extract_doc_content 사용 (강화된 내용 추출)
+                content = self._extract_doc_content(doc)
                 
-                # content가 없거나 너무 짧은 경우 복원 시도 (최소 길이 완화: 10자 → 5자)
-                if not content or len(content.strip()) < 5:
-                    # metadata에서 복원 시도
-                    metadata = doc.get("metadata", {})
-                    if isinstance(metadata, dict):
-                        content = metadata.get("content") or metadata.get("text") or content
-                    
-                    # 여전히 없으면 최소한의 정보라도 유지 (필터링하지 않음, 최소 길이 완화: 10자 → 5자)
-                    if not content or len(content.strip()) < 5:
-                        # doc의 다른 필드에서 정보 추출
-                        title = doc.get("title") or doc.get("name") or ""
-                        if title:
-                            content = title
-                        else:
-                            # 최후의 수단: doc_id나 다른 식별자 사용
-                            doc_id = doc.get("doc_id") or doc.get("id") or ""
-                            if doc_id:
-                                content = f"Document {doc_id}"
-                    
-                    # content를 doc에 다시 설정
-                    if content:
-                        doc["content"] = content
-                        doc["text"] = content
-                
-                # 최소 길이 검증 (더욱 완화된 기준)
-                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
-                source_type = doc.get("source_type", "").lower() if doc.get("source_type") else ""
-                is_legal_doc = "statute" in doc_type or "statute" in source_type or "case" in doc_type or "case" in source_type
-                # 법령/판례 문서는 3자, 기타는 5자로 더 완화
-                min_content_length = 3 if is_legal_doc else 5
-                
-                if not content or len(content.strip()) < min_content_length:
+                # 최소 길이 검증
+                if content and len(content.strip()) >= 10:
+                    valid_docs_for_prompt.append({
+                        **doc,
+                        "content": content  # 확실히 content 필드 설정
+                    })
+                else:
+                    self.logger.warning(
+                        f"⚠️ [PROMPT BUILD] 문서 제외 (내용 부족): "
+                        f"doc_id={doc.get('id', 'unknown')}, "
+                        f"content_len={len(content) if content else 0}"
+                    )
                     invalid_docs_count += 1
-                    self.logger.debug(f"Document filtered: content too short or empty (length: {len(content) if content else 0}, min_required: {min_content_length}, source: {doc.get('source', 'Unknown')})")
+            
+            # 유효한 문서가 없으면 경고 및 폴백
+            if not valid_docs_for_prompt:
+                self.logger.error(
+                    f"❌ [PROMPT BUILD] 유효한 문서 없음: "
+                    f"retrieved_docs={len(retrieved_docs)}, "
+                    f"valid_docs=0"
+                )
+                # 폴백: 원본 문서에서 최소한의 내용이라도 추출
+                for doc in retrieved_docs[:5]:  # 최대 5개만 시도
+                    if not isinstance(doc, dict):
+                        continue
+                    content = str(doc.get("content", "")) + str(doc.get("text", ""))
+                    if len(content.strip()) >= 5:  # 최소 길이 완화
+                        valid_docs_for_prompt.append({**doc, "content": content})
+            
+            if not valid_docs_for_prompt:
+                self.logger.error(
+                    f"❌ [PROMPT BUILD] 폴백 후에도 유효한 문서 없음"
+                )
+                return {
+                    "prompt_optimized_text": f"질문: {query}\n\n참고할 문서가 없습니다.",
+                    "structured_documents": {},
+                    "document_count": 0,
+                    "total_context_length": 0
+                }
+            
+            # valid_docs_for_prompt를 사용하여 필터링 및 점수 검증 진행
+            retrieved_docs = valid_docs_for_prompt  # 검증된 문서 사용
+            
+            for doc in retrieved_docs:
+                content = doc.get("content", "")
+                if not content or len(content.strip()) < 10:
+                    invalid_docs_count += 1
                     continue
                 
                 search_type = doc.get("search_type", "semantic")
@@ -178,6 +300,18 @@ class WorkflowDocumentProcessor:
                 keyword_match_score = doc.get("keyword_match_score", 0.0)
                 matched_keywords = doc.get("matched_keywords", [])
                 has_keyword_match = keyword_match_score > 0.0 or len(matched_keywords) > 0
+                
+                # 문서 타입 및 소스 타입 정의 (doc_type 오류 수정)
+                doc_type = doc.get("type") or doc.get("source_type", "unknown")
+                source_type = doc.get("source_type") or doc.get("type", "unknown")
+                is_legal_doc = (
+                    "법" in content[:200] or
+                    "조문" in content[:200] or
+                    "판례" in content[:200] or
+                    "대법원" in content[:200] or
+                    doc_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"] or
+                    source_type in ["statute_article", "case_paragraph", "decision_paragraph", "interpretation_paragraph"]
+                )
                 
                 # 개선 6: 키워드 매칭 점수 기반 필터링 (더욱 완화)
                 if keyword_match_score == 0.0 and not matched_keywords:
@@ -198,7 +332,7 @@ class WorkflowDocumentProcessor:
                         )
                         continue
                 
-                # 문서 타입 확인 (이미 위에서 정의됨, 추가 확인만 수행)
+                # 문서 타입 확인
                 is_statute_article = (
                     doc_type == "statute_article" or 
                     source_type == "statute_article" or
@@ -219,10 +353,19 @@ class WorkflowDocumentProcessor:
                 )
                 # is_legal_doc는 이미 위에서 정의됨
                 
-                # 개선 4: 문서 타입별 필터링 기준 차등화 (키워드 매칭이 있으면 완화)
+                # 개선: 법률 조문 필터링 예외 (우선순위 2) - 법률 조문은 관련도와 무관하게 포함
                 if is_statute_article:
-                    min_score = min_relevance_score_statute_article
-                elif is_precedent:
+                    # 법률 조문은 항상 포함 (관련도 점수 무시)
+                    print(f"[STATUTE EXCEPTION] 법률 조문 포함 (관련도 무시): source={doc.get('source', 'Unknown')}, relevance={relevance_score:.3f}", flush=True, file=sys.stdout)
+                    self.logger.debug(
+                        f"✅ [STATUTE EXCEPTION] 법률 조문 포함 (관련도 무시): "
+                        f"source={doc.get('source', 'Unknown')}, relevance={relevance_score:.3f}"
+                    )
+                    valid_docs.append(doc)
+                    continue
+                
+                # 개선 4: 문서 타입별 필터링 기준 차등화 (키워드 매칭이 있으면 완화)
+                if is_precedent:
                     min_score = min_relevance_score_precedent
                 elif search_type == "keyword" and has_keyword_match:
                     min_score = min_relevance_score_keyword
@@ -231,14 +374,23 @@ class WorkflowDocumentProcessor:
                 else:
                     min_score = min_relevance_score_general
                 
-                # 키워드 매칭이 있으면 기준을 더 완화 (0.10 감소)
+                # 키워드 매칭이 있으면 기준을 더 완화 (검색 품질 개선 - avg_score가 낮으면 더 완화)
                 if has_keyword_match or has_query_keyword:
-                    min_score = max(0.20, min_score - 0.10)
+                    if avg_score < 0.25:
+                        # 평균 점수가 낮으면 매우 완화된 기준 사용 (0.20 → 0.25로 확장)
+                        min_score = max(0.08, min_score - 0.15)
+                    else:
+                        min_score = max(0.15, min_score - 0.10)
                 
                 # 첫 번째 필터링(키워드 매칭 없을 때)을 통과한 경우, 두 번째 필터링은 더 완화
-                if not has_keyword_match and not has_query_keyword and relevance_score >= 0.30:
-                    # 이미 첫 번째 필터링을 통과했으므로 두 번째 필터링은 더 완화
-                    min_score = max(0.25, min_score - 0.15)
+                if not has_keyword_match and not has_query_keyword:
+                    # relevance_score >= 0.30 조건 제거 (avg_score가 낮으면 모든 문서에 적용)
+                    if avg_score < 0.25:
+                        # 평균 점수가 낮으면 매우 완화된 기준 사용 (0.20 → 0.25로 확장)
+                        min_score = max(0.10, min_score - 0.20)
+                    elif relevance_score >= 0.30:
+                        # 평균 점수가 정상이고 relevance_score가 높으면 기존 로직
+                        min_score = max(0.20, min_score - 0.15)
                 
                 if relevance_score < min_score:
                     invalid_docs_count += 1
@@ -257,8 +409,67 @@ class WorkflowDocumentProcessor:
                     f"(no content, content too short, or relevance < threshold). Valid docs: {len(valid_docs)}"
                 )
             
+            # 검색 결과가 적을 때 필터링 기준 완화하여 최소 문서 수 보장 (검색 품질 개선)
+            if not valid_docs and retrieved_docs:
+                self.logger.warning(
+                    f"build_prompt_optimized_context: No valid documents after filtering. "
+                    f"Relaxing criteria to ensure minimum documents (total retrieved: {len(retrieved_docs)})"
+                )
+                
+                # relevance_score 분포 분석
+                relevance_scores = []
+                for doc in retrieved_docs:
+                    if isinstance(doc, dict):
+                        score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                        relevance_scores.append(score)
+                
+                if relevance_scores:
+                    min_rel_score = min(relevance_scores)
+                    max_rel_score = max(relevance_scores)
+                    avg_rel_score = sum(relevance_scores) / len(relevance_scores)
+                    
+                    # 분포에 따라 동적으로 relaxed_min_score 설정
+                    if avg_rel_score < 0.20:
+                        # 평균이 매우 낮으면 최소값 기준으로 설정
+                        relaxed_min_score = max(0.05, min_rel_score * 0.90)
+                    elif avg_rel_score < 0.30:
+                        # 평균이 낮으면 평균의 80% 기준
+                        relaxed_min_score = max(0.08, avg_rel_score * 0.80)
+                    else:
+                        # 평균이 정상이면 기존 로직
+                        relaxed_min_score = 0.10
+                    
+                    self.logger.info(
+                        f"📊 [RELAXED FILTER] Score distribution - min={min_rel_score:.3f}, "
+                        f"max={max_rel_score:.3f}, avg={avg_rel_score:.3f}, "
+                        f"relaxed_threshold={relaxed_min_score:.3f}"
+                    )
+                else:
+                    relaxed_min_score = 0.10
+                
+                # 필터링 기준을 매우 완화하여 재시도
+                for doc in retrieved_docs:
+                    if not isinstance(doc, dict):
+                        continue
+                    
+                    content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                    if not content or len(content.strip()) < 5:
+                        continue
+                    
+                    relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                    if relevance_score >= relaxed_min_score:
+                        valid_docs.append(doc)
+                        if len(valid_docs) >= 5:  # 최소 5개까지는 보장 (3개 → 5개로 증가)
+                            break
+                
+                if valid_docs:
+                    self.logger.info(
+                        f"✅ build_prompt_optimized_context: Relaxed criteria applied. "
+                        f"Found {len(valid_docs)} documents with relaxed threshold ({relaxed_min_score:.3f})"
+                    )
+            
             if not valid_docs:
-                self.logger.error("build_prompt_optimized_context: No valid documents with content found")
+                self.logger.error("build_prompt_optimized_context: No valid documents with content found even after relaxing criteria")
                 return {
                     "prompt_optimized_text": "",
                     "structured_documents": {},
@@ -300,51 +511,269 @@ class WorkflowDocumentProcessor:
                         f"({docs_before_filter} → {docs_after_filter}, min_coverage={min_coverage})"
                     )
             
-            sorted_docs = sorted(
-                valid_docs,
+            # textToSQL 결과와 벡터 임베딩 결과 분리
+            text2sql_docs = []
+            vector_docs = []
+            seen_ids = set()
+            
+            for doc in valid_docs:
+                doc_id = doc.get("id") or doc.get("document_id") or doc.get("doc_id") or str(doc.get("source", ""))
+                if doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                
+                # textToSQL 결과 판별
+                search_type = doc.get("search_type", "")
+                direct_match = doc.get("direct_match", False)
+                is_text2sql = (
+                    search_type == "text2sql" or
+                    search_type == "direct_statute" or
+                    direct_match is True or
+                    (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
+                )
+                
+                if is_text2sql:
+                    text2sql_docs.append(doc)
+                else:
+                    vector_docs.append(doc)
+            
+            # 우선순위 5: 벡터 결과 관련성 점수 동적 임계값 적용
+            # 우선순위 7: 성능 최적화 - 점수 계산 캐싱
+            if vector_docs:
+                # 점수 계산을 한 번만 수행하여 재사용
+                doc_scores = []
+                for doc in vector_docs:
+                    score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                    doc_scores.append((doc, score))
+                
+                scores = [score for _, score in doc_scores]
+                avg_score = sum(scores) / len(scores) if scores else 0.0
+                max_score = max(scores) if scores else 0.0
+                min_score = min(scores) if scores else 0.0
+                
+                # 동적 임계값 계산: 평균 점수의 80% 또는 최소 0.60
+                dynamic_threshold = max(0.60, min(0.75, avg_score * 0.8))
+                
+                # 점수 분포가 낮으면 임계값 완화
+                if avg_score < 0.70:
+                    dynamic_threshold = max(0.50, avg_score * 0.7)
+                
+                # statute_article 타입은 더 낮은 임계값 적용
+                statute_docs = [d for d in vector_docs if (d.get("type") == "statute_article" or d.get("source_type") == "statute_article")]
+                if statute_docs:
+                    statute_threshold = max(0.40, dynamic_threshold * 0.8)
+                else:
+                    statute_threshold = dynamic_threshold
+            else:
+                dynamic_threshold = 0.75
+                statute_threshold = 0.60
+            
+            # 우선순위 6: 성능 최적화 - 검증 결과 캐싱 및 배치 처리
+            filtered_vector_docs = []
+            validation_cache = {}  # doc_id -> validation_result
+            
+            for doc, score in doc_scores:
+                doc_type = doc.get("type") or doc.get("source_type", "")
+                
+                # 타입별 차등 임계값 적용
+                threshold = statute_threshold if doc_type == "statute_article" else dynamic_threshold
+                
+                if score >= threshold:
+                    # 우선순위 6: 검증 결과 캐싱 (동일 문서 재검증 방지)
+                    doc_id = doc.get("id") or doc.get("doc_id") or str(doc.get("source", ""))
+                    if doc_id in validation_cache:
+                        if validation_cache[doc_id]:
+                            filtered_vector_docs.append(doc)
+                        continue
+                    
+                    # 우선순위 2: 메타데이터 검증
+                    metadata_valid = self._validate_document_metadata(doc)
+                    if not metadata_valid:
+                        validation_cache[doc_id] = False
+                        continue
+                    
+                    # 우선순위 3: 내용 품질 검증
+                    content = doc.get("content") or doc.get("text", "")
+                    content_valid = self._validate_document_content_quality(doc, content)
+                    if not content_valid:
+                        validation_cache[doc_id] = False
+                        continue
+                    
+                    # 우선순위 3: 출처 신뢰도 검증
+                    source_valid = self._validate_document_source_reliability(doc)
+                    if not source_valid:
+                        validation_cache[doc_id] = False
+                        continue
+                    
+                    # 모든 검증 통과
+                    validation_cache[doc_id] = True
+                    filtered_vector_docs.append(doc)
+            
+            # 결과가 부족하면 임계값을 점진적으로 낮춤
+            min_docs_needed = 3
+            if len(filtered_vector_docs) < min_docs_needed and len(vector_docs) >= min_docs_needed:
+                # 임계값을 0.1씩 낮춰가며 재시도
+                for relaxed_threshold in [dynamic_threshold - 0.1, dynamic_threshold - 0.2, 0.30]:
+                    if len(filtered_vector_docs) >= min_docs_needed:
+                        break
+                    for doc in vector_docs:
+                        if doc in filtered_vector_docs:
+                            continue
+                        score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                        if score >= relaxed_threshold:
+                            # 검증은 완화된 기준으로 수행
+                            content = doc.get("content") or doc.get("text", "")
+                            if content and len(content.strip()) >= 5:  # 최소 길이만 확인
+                                filtered_vector_docs.append(doc)
+                                if len(filtered_vector_docs) >= min_docs_needed:
+                                    break
+                if len(filtered_vector_docs) < min_docs_needed:
+                    self.logger.warning(
+                        f"⚠️ [VECTOR FILTER] 최소 문서 수 미달: {len(filtered_vector_docs)}개 (목표: {min_docs_needed}개)"
+                    )
+            
+            # 우선순위 7: 로깅 및 모니터링 개선 - 상세 필터링 통계
+            if len(filtered_vector_docs) < len(vector_docs):
+                filtered_count = len(vector_docs) - len(filtered_vector_docs)
+                filter_reasons = {
+                    "threshold": 0,
+                    "metadata": 0,
+                    "content": 0,
+                    "source": 0
+                }
+                
+                # 필터링 사유별 통계 (간단한 추정)
+                for doc, score in doc_scores:
+                    if doc not in filtered_vector_docs:
+                        doc_type = doc.get("type") or doc.get("source_type", "")
+                        threshold = statute_threshold if doc_type == "statute_article" else dynamic_threshold
+                        if score < threshold:
+                            filter_reasons["threshold"] += 1
+                        else:
+                            # 검증 실패 원인 추정
+                            doc_id = doc.get("id") or doc.get("doc_id") or str(doc.get("source", ""))
+                            if doc_id in validation_cache and not validation_cache[doc_id]:
+                                # 어떤 검증이 실패했는지 확인 (간단한 추정)
+                                if not self._validate_document_metadata(doc):
+                                    filter_reasons["metadata"] += 1
+                                elif not self._validate_document_content_quality(doc, doc.get("content") or doc.get("text", "")):
+                                    filter_reasons["content"] += 1
+                                elif not self._validate_document_source_reliability(doc):
+                                    filter_reasons["source"] += 1
+                
+                self.logger.info(
+                    f"🔀 [VECTOR FILTER] 관련성 점수 필터링: "
+                    f"{len(vector_docs)}개 → {len(filtered_vector_docs)}개 "
+                    f"(동적 임계값: {dynamic_threshold:.2f}, statute: {statute_threshold:.2f})"
+                )
+                self.logger.info(
+                    f"📊 [FILTER STATS] 필터링 사유별 통계: "
+                    f"임계값={filter_reasons['threshold']}, "
+                    f"메타데이터={filter_reasons['metadata']}, "
+                    f"내용={filter_reasons['content']}, "
+                    f"출처={filter_reasons['source']}"
+                )
+            
+            # 벡터 임베딩 결과만 재랭킹
+            sorted_vector_docs = sorted(
+                filtered_vector_docs,
                 key=lambda x: (
                     x.get("final_weighted_score", x.get("relevance_score", 0.0)),
+                    x.get("similarity", 0.0),
                     x.get("keyword_match_score", 0.0)
                 ),
                 reverse=True
             )
             
-            # 개선 8: 프롬프트에 포함할 문서 수 제한 (문서 손실 방지: 7 → 10으로 증가)
+            # textToSQL 결과를 최우선으로 포함
             max_docs_for_prompt = 10
+            text2sql_count = len(text2sql_docs)
+            max_vector_docs = max(0, max_docs_for_prompt - text2sql_count)
             
-            # 개선 12: 문서 선택 로직 개선 (관련성 우선)
-            if select_balanced_documents_func:
-                balanced_docs = select_balanced_documents_func(sorted_docs, max_docs=max_docs_for_prompt)
+            # 벡터 결과 선택 (관련성 우선)
+            if select_balanced_documents_func and sorted_vector_docs:
+                selected_vector_docs = select_balanced_documents_func(
+                    sorted_vector_docs, max_docs=max_vector_docs
+                )
             else:
-                balanced_docs = self.select_balanced_documents_relevance_first(
-                    sorted_docs, 
+                selected_vector_docs = self.select_balanced_documents_relevance_first(
+                    sorted_vector_docs, 
                     query=query,
                     extracted_keywords=extracted_keywords,
                     query_type=query_type,
-                    max_docs=max_docs_for_prompt
-                )
+                    max_docs=max_vector_docs
+                ) if sorted_vector_docs else []
             
-            if not balanced_docs and sorted_docs:
-                balanced_docs = sorted_docs[:min(max_docs_for_prompt, len(sorted_docs))]
+            if not selected_vector_docs and sorted_vector_docs:
+                selected_vector_docs = sorted_vector_docs[:max_vector_docs]
             
-            sorted_docs = balanced_docs
+            # textToSQL 결과 + 재랭킹된 벡터 결과 결합
+            sorted_docs = text2sql_docs + selected_vector_docs
             
-            # 문서 손실 로깅 (개선)
+            self.logger.info(
+                f"📋 [FINAL DOCS] textToSQL: {len(text2sql_docs)}개, "
+                f"벡터(재랭킹): {len(selected_vector_docs)}개, "
+                f"총: {len(sorted_docs)}개"
+            )
+            
+            # 우선순위 7: 로깅 및 모니터링 개선 - 문서 손실 상세 분석
             if len(sorted_docs) < len(valid_docs):
                 lost_count = len(valid_docs) - len(sorted_docs)
-                self.logger.warning(
-                    f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
-                    f"({len(valid_docs)} → {len(sorted_docs)}, max_docs={max_docs_for_prompt})"
-                )
+                loss_ratio = lost_count / len(valid_docs) if valid_docs else 0.0
+                
+                # 손실된 문서의 점수 분포 분석
+                lost_docs = [doc for doc in valid_docs if doc not in sorted_docs]
+                if lost_docs:
+                    lost_scores = [
+                        doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                        for doc in lost_docs
+                    ]
+                    avg_lost_score = sum(lost_scores) / len(lost_scores) if lost_scores else 0.0
+                    min_lost_score = min(lost_scores) if lost_scores else 0.0
+                    max_lost_score = max(lost_scores) if lost_scores else 0.0
+                    
+                    self.logger.warning(
+                        f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
+                        f"({len(valid_docs)} → {len(sorted_docs)}, max_docs={max_docs_for_prompt}, "
+                        f"loss_ratio={loss_ratio:.1%})"
+                    )
+                    self.logger.info(
+                        f"📊 [LOST DOCS STATS] 손실된 문서 점수 분포: "
+                        f"평균={avg_lost_score:.3f}, 최대={max_lost_score:.3f}, 최소={min_lost_score:.3f}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
+                        f"({len(valid_docs)} → {len(sorted_docs)}, max_docs={max_docs_for_prompt})"
+                    )
             
+            # 우선순위 1 개선: 빈 문서 처리 - 원본 retrieved_docs에서 상위 문서 선택
             if not sorted_docs:
-                self.logger.error("build_prompt_optimized_context: sorted_docs is empty after filtering")
-                return {
-                    "prompt_optimized_text": "",
-                    "structured_documents": {},
-                    "document_count": 0,
-                    "total_context_length": 0
-                }
+                self.logger.warning("⚠️ [EMPTY DOCS] build_prompt_optimized_context: sorted_docs is empty after filtering")
+                # Fallback: 원본 valid_docs에서 상위 문서 선택
+                if valid_docs:
+                    # 점수 기준으로 정렬하여 상위 문서 선택
+                    fallback_docs = sorted(
+                        valid_docs,
+                        key=lambda x: (
+                            x.get("final_weighted_score", x.get("relevance_score", 0.0)),
+                            x.get("similarity", 0.0),
+                            x.get("keyword_match_score", 0.0)
+                        ),
+                        reverse=True
+                    )[:max_docs_for_prompt]
+                    sorted_docs = fallback_docs
+                    self.logger.info(
+                        f"📋 [FALLBACK] 원본 문서에서 {len(sorted_docs)}개 선택 (fallback)"
+                    )
+                else:
+                    self.logger.error("build_prompt_optimized_context: valid_docs도 비어있음")
+                    return {
+                        "prompt_optimized_text": "",
+                        "structured_documents": {},
+                        "document_count": 0,
+                        "total_context_length": 0
+                    }
             
             if generate_document_based_instructions_func:
                 document_instructions = generate_document_based_instructions_func(
@@ -387,6 +816,7 @@ class WorkflowDocumentProcessor:
                 relevance_score = doc.get("final_weighted_score") or doc.get("relevance_score", 0.0)
                 source = doc.get("source", "Unknown")
                 content = doc.get("content", "")
+                original_content_length = len(content)  # 원본 문서 길이 저장
                 
                 if extract_query_relevant_sentences_func:
                     relevant_sentences = extract_query_relevant_sentences_func(
@@ -438,10 +868,34 @@ class WorkflowDocumentProcessor:
                     max_tokens_per_doc = 1000  # 복잡한 질문: 더 긴 컨텍스트 허용
                     max_content_length = int(max_tokens_per_doc * 2.5)  # 약 2500자
                 
+                # 스마트 문서 축약 (긴 문서 처리)
+                is_truncated = False
                 if len(content) > max_content_length:
-                    content = content[:max_content_length] + "..."
+                    is_truncated = True
+                    content = self._smart_truncate_long_document(
+                        content=content,
+                        doc_type=doc.get("type", ""),
+                        query=query,
+                        extracted_keywords=extracted_keywords,
+                        max_length=max_content_length,
+                        relevant_sentences=relevant_sentences,
+                        metadata=doc.get("metadata", {})
+                    )
                 
-                doc_section += f"""**전체 내용:**
+                # 프롬프트 구조 개선 (핵심 내용 + 전체 요약)
+                if is_truncated:
+                    doc_section += f"""**핵심 내용 (질문과 직접 관련된 부분):**
+{content}
+
+**문서 정보:**
+- 전체 문서 길이: {original_content_length:,}자
+- 추출된 핵심 내용: {len(content):,}자
+- 축약 비율: {len(content)/original_content_length*100:.1f}%
+
+---
+"""
+                else:
+                    doc_section += f"""**전체 내용:**
 {content}
 
 ---
@@ -470,31 +924,126 @@ class WorkflowDocumentProcessor:
                 "documents_with_content": 0
             }
             
+            # 개선 2.2: 최종 검증 강화 (더 정확한 검증)
             for doc in sorted_docs:
-                content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                content = self._extract_doc_content(doc)
                 if content and len(content.strip()) >= 10:
-                    content_preview = content[:100]
-                    if content_preview in prompt_section:
+                    # 여러 방법으로 문서 내용 포함 여부 확인
+                    content_preview = content[:200]  # 더 긴 프리뷰로 확인
+                    content_middle = content[len(content)//2:len(content)//2+200] if len(content) > 400 else ""
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id", "")
+                    source = doc.get("source", "") or doc.get("title", "")
+                    
+                    # 프롬프트에 문서 내용이 포함되어 있는지 확인
+                    has_content = (
+                        content_preview in prompt_section or
+                        (content_middle and content_middle in prompt_section) or
+                        (doc_id and f"문서 {doc_id}" in prompt_section) or
+                        (source and source in prompt_section and len(content.strip()) > 0)
+                    )
+                    
+                    if has_content:
                         content_validation["has_document_content"] = True
                         content_validation["total_content_length"] += len(content)
                         content_validation["documents_with_content"] += 1
             
-            if not content_validation["has_document_content"]:
+            # 프롬프트 길이 검증
+            if len(prompt_section.strip()) < 100:
                 self.logger.error(
-                    f"build_prompt_optimized_context: WARNING - prompt_section does not contain actual document content! "
-                    f"Documents processed: {len(sorted_docs)}, "
-                    f"Prompt length: {len(prompt_section)}"
+                    f"❌ [PROMPT BUILD] 프롬프트가 너무 짧음: "
+                    f"length={len(prompt_section)}, "
+                    f"valid_docs={len(sorted_docs)}"
                 )
+            
+            # 문서 내용 포함 여부 확인
+            has_document_content = any(
+                len(self._extract_doc_content(doc).strip()) >= 10 
+                for doc in sorted_docs
+            )
+            
+            # 문서 내용이 없을 때 재구성 시도
+            if not content_validation["has_document_content"] and len(sorted_docs) > 0:
+                self.logger.error(
+                    f"❌ [PROMPT BUILD] 프롬프트에 문서 내용 없음: "
+                    f"valid_docs={len(sorted_docs)}, "
+                    f"prompt_length={len(prompt_section)}"
+                )
+                
+                # 재구성 시도: 문서 내용을 직접 추가
+                self.logger.warning(
+                    f"⚠️ [PROMPT BUILD] 문서 내용 재구성 시도 중..."
+                )
+                
+                # 문서 내용이 있는 문서만 필터링
+                docs_with_content = [
+                    doc for doc in sorted_docs 
+                    if len(self._extract_doc_content(doc).strip()) >= 10
+                ]
+                
+                if docs_with_content:
+                    # 프롬프트 재구성: 문서 내용 직접 추가
+                    reconstructed_section = "\n\n## 참고 문서 내용\n\n"
+                    for idx, doc in enumerate(docs_with_content[:5], 1):
+                        content = self._extract_doc_content(doc)
+                        if content and len(content.strip()) >= 10:
+                            source = doc.get("source", "") or doc.get("title", "") or f"문서 {idx}"
+                            doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id", f"doc_{idx}")
+                            
+                            reconstructed_section += f"### 문서 {idx}: {source} (ID: {doc_id})\n\n"
+                            reconstructed_section += f"{content[:2000]}\n\n"  # 최대 2000자
+                            reconstructed_section += "---\n\n"
+                            
+                            content_validation["has_document_content"] = True
+                            content_validation["total_content_length"] += len(content)
+                            content_validation["documents_with_content"] += 1
+                    
+                    # 재구성된 섹션을 프롬프트에 추가 (여러 위치 시도)
+                    if "## 문서 인용 규칙" in prompt_section:
+                        prompt_section = prompt_section.replace(
+                            "## 문서 인용 규칙",
+                            reconstructed_section + "## 문서 인용 규칙"
+                        )
+                    elif "## 참고 문서" in prompt_section:
+                        prompt_section = prompt_section.replace(
+                            "## 참고 문서",
+                            reconstructed_section + "## 참고 문서"
+                        )
+                    elif "## 검색된 문서" in prompt_section:
+                        prompt_section = prompt_section.replace(
+                            "## 검색된 문서",
+                            reconstructed_section + "## 검색된 문서"
+                        )
+                    else:
+                        # 문서 인용 규칙이 없으면 프롬프트 끝에 추가
+                        prompt_section = prompt_section + "\n\n" + reconstructed_section
+                    
+                    if content_validation["has_document_content"]:
+                        self.logger.info(
+                            f"✅ [PROMPT BUILD] 문서 내용 재구성 성공: "
+                            f"{content_validation['documents_with_content']}개 문서 추가됨, "
+                            f"프롬프트 길이: {len(prompt_section)}자"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ [PROMPT BUILD] 문서 내용 재구성 실패: "
+                            f"문서 내용을 추출할 수 없음"
+                        )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [PROMPT BUILD] 재구성할 문서 없음: "
+                        f"모든 문서의 내용이 비어있음"
+                    )
             else:
                 self.logger.info(
-                    f"build_prompt_optimized_context: Successfully included content from {content_validation['documents_with_content']} documents "
-                    f"(total content length: {content_validation['total_content_length']} chars, "
-                    f"prompt length: {len(prompt_section)} chars)"
+                    f"✅ [PROMPT BUILD] 프롬프트에 문서 내용 포함됨: "
+                    f"{content_validation['documents_with_content']}개 문서, "
+                    f"총 내용 길이: {content_validation.get('total_content_length', 0)}자, "
+                    f"프롬프트 길이: {len(prompt_section)}자"
                 )
             
             if not content_validation["has_document_content"] and len(sorted_docs) > 0:
                 self.logger.warning(
-                    f"build_prompt_optimized_context: Content validation failed, but returning prompt anyway "
+                    f"⚠️ [PROMPT BUILD] Content validation failed, but returning prompt anyway "
                     f"(may contain instructions only without actual document content)"
                 )
             
@@ -530,7 +1079,7 @@ class WorkflowDocumentProcessor:
             }
         
         except Exception as e:
-            self.logger.error(f"Prompt optimized context building failed: {e}")
+            self.logger.error(f"Prompt optimized context building failed: {e}", exc_info=True)
             return {
                 "prompt_optimized_text": "",
                 "structured_documents": {},
@@ -538,55 +1087,392 @@ class WorkflowDocumentProcessor:
                 "total_context_length": 0
             }
     
+    def _smart_truncate_long_document(
+        self,
+        content: str,
+        doc_type: str,
+        query: str,
+        extracted_keywords: List[str],
+        max_length: int,
+        relevant_sentences: List[Dict[str, Any]] = None,
+        metadata: Dict[str, Any] = None
+    ) -> str:
+        """긴 문서를 스마트하게 축약 (우선순위 1)"""
+        if not content or len(content) <= max_length:
+            return content
+        
+        doc_type_lower = doc_type.lower() if doc_type else ""
+        metadata = metadata or {}
+        
+        # 문서 타입별 최적화
+        if "case" in doc_type_lower or "precedent" in doc_type_lower:
+            return self._extract_precedent_key_parts(
+                content=content,
+                metadata=metadata,
+                query=query,
+                keywords=extracted_keywords,
+                max_length=max_length,
+                relevant_sentences=relevant_sentences
+            )
+        elif "statute" in doc_type_lower:
+            return self._extract_statute_key_parts(
+                content=content,
+                metadata=metadata,
+                query=query,
+                keywords=extracted_keywords,
+                max_length=max_length,
+                relevant_sentences=relevant_sentences
+            )
+        elif "interpretation" in doc_type_lower or "decision" in doc_type_lower:
+            return self._extract_interpretation_key_parts(
+                content=content,
+                metadata=metadata,
+                query=query,
+                keywords=extracted_keywords,
+                max_length=max_length,
+                relevant_sentences=relevant_sentences
+            )
+        else:
+            return self._extract_general_key_parts(
+                content=content,
+                query=query,
+                keywords=extracted_keywords,
+                max_length=max_length,
+                relevant_sentences=relevant_sentences
+            )
+    
+    def _extract_precedent_key_parts(
+        self,
+        content: str,
+        metadata: Dict[str, Any],
+        query: str,
+        keywords: List[str],
+        max_length: int,
+        relevant_sentences: List[Dict[str, Any]] = None
+    ) -> str:
+        """판례 핵심 부분 추출 (우선순위 2)"""
+        parts = []
+        remaining_length = max_length
+        
+        # 1. 판시사항 (최우선, 최대 400자)
+        holding_text = None
+        if metadata.get("case_holding"):
+            holding_text = metadata["case_holding"][:400]
+        elif "판시사항" in content:
+            holding_match = re.search(r'판시사항[:\s]*(.+?)(?=\n|판결요지|$)', content, re.DOTALL)
+            if holding_match:
+                holding_text = holding_match.group(1).strip()[:400]
+        
+        if holding_text and len(holding_text) <= remaining_length:
+            parts.append(f"**판시사항**: {holding_text}")
+            remaining_length -= len(holding_text) + 20
+        
+        # 2. 판결요지 (최대 400자)
+        reasoning_text = None
+        if metadata.get("case_reasoning"):
+            reasoning_text = metadata["case_reasoning"][:400]
+        elif "판결요지" in content:
+            reasoning_match = re.search(r'판결요지[:\s]*(.+?)(?=\n|$)', content, re.DOTALL)
+            if reasoning_match:
+                reasoning_text = reasoning_match.group(1).strip()[:400]
+        
+        if reasoning_text and len(reasoning_text) <= remaining_length:
+            parts.append(f"**판결요지**: {reasoning_text}")
+            remaining_length -= len(reasoning_text) + 20
+        
+        # 3. 관련 문장 (키워드 포함, 최대 3개)
+        if relevant_sentences:
+            relevant_list = []
+            for sent in relevant_sentences[:3]:
+                sent_text = sent.get("sentence", "")[:300]
+                if sent_text and len(sent_text) <= remaining_length - 50:
+                    relevant_list.append(f"- {sent_text}")
+                    remaining_length -= len(sent_text) + 10
+            
+            if relevant_list:
+                parts.append(f"**관련 문장**:\n" + "\n".join(relevant_list))
+        
+        # 4. 키워드 주변 문맥 추출 (남은 공간 활용)
+        if remaining_length > 200 and keywords:
+            keyword_contexts = self._extract_keyword_contexts(content, keywords, remaining_length)
+            if keyword_contexts:
+                parts.append(f"**키워드 관련 문맥**:\n{keyword_contexts}")
+        
+        result = "\n\n".join(parts)
+        
+        # 최종 길이 확인
+        if len(result) > max_length:
+            # 비율에 맞춰 축약
+            ratio = max_length / len(result)
+            result = "\n\n".join([
+                part[:int(len(part) * ratio)] + ("..." if len(part) > int(len(part) * ratio) else "")
+                for part in parts
+            ])
+        
+        return result[:max_length] if len(result) > max_length else result
+    
+    def _extract_statute_key_parts(
+        self,
+        content: str,
+        metadata: Dict[str, Any],
+        query: str,
+        keywords: List[str],
+        max_length: int,
+        relevant_sentences: List[Dict[str, Any]] = None
+    ) -> str:
+        """법령 핵심 부분 추출"""
+        parts = []
+        remaining_length = max_length
+        
+        # 1. 조문번호 정보
+        article_no = metadata.get("article_no") or metadata.get("article_number")
+        if article_no:
+            parts.append(f"**조문번호**: 제{article_no}조")
+            remaining_length -= 50
+        
+        # 2. 제목/헤딩
+        heading = metadata.get("heading") or metadata.get("title")
+        if heading and len(heading) <= remaining_length:
+            parts.append(f"**제목**: {heading[:200]}")
+            remaining_length -= len(heading) + 20
+        
+        # 3. 관련 문장 (최우선)
+        if relevant_sentences:
+            relevant_list = []
+            for sent in relevant_sentences[:5]:
+                sent_text = sent.get("sentence", "")[:400]
+                if sent_text and len(sent_text) <= remaining_length - 50:
+                    relevant_list.append(f"- {sent_text}")
+                    remaining_length -= len(sent_text) + 10
+            
+            if relevant_list:
+                parts.append(f"**관련 조문 내용**:\n" + "\n".join(relevant_list))
+        
+        # 4. 키워드 주변 문맥
+        if remaining_length > 200 and keywords:
+            keyword_contexts = self._extract_keyword_contexts(content, keywords, remaining_length)
+            if keyword_contexts:
+                parts.append(f"**관련 문맥**:\n{keyword_contexts}")
+        
+        result = "\n\n".join(parts)
+        return result[:max_length] if len(result) > max_length else result
+    
+    def _extract_interpretation_key_parts(
+        self,
+        content: str,
+        metadata: Dict[str, Any],
+        query: str,
+        keywords: List[str],
+        max_length: int,
+        relevant_sentences: List[Dict[str, Any]] = None
+    ) -> str:
+        """해석례/결정례 핵심 부분 추출"""
+        parts = []
+        remaining_length = max_length
+        
+        # 1. 제목
+        title = metadata.get("title") or metadata.get("heading")
+        if title and len(title) <= remaining_length:
+            parts.append(f"**제목**: {title[:200]}")
+            remaining_length -= len(title) + 20
+        
+        # 2. 관련 문장 (최우선)
+        if relevant_sentences:
+            relevant_list = []
+            for sent in relevant_sentences[:5]:
+                sent_text = sent.get("sentence", "")[:400]
+                if sent_text and len(sent_text) <= remaining_length - 50:
+                    relevant_list.append(f"- {sent_text}")
+                    remaining_length -= len(sent_text) + 10
+            
+            if relevant_list:
+                parts.append(f"**핵심 내용**:\n" + "\n".join(relevant_list))
+        
+        # 3. 키워드 주변 문맥
+        if remaining_length > 200 and keywords:
+            keyword_contexts = self._extract_keyword_contexts(content, keywords, remaining_length)
+            if keyword_contexts:
+                parts.append(f"**관련 문맥**:\n{keyword_contexts}")
+        
+        result = "\n\n".join(parts)
+        return result[:max_length] if len(result) > max_length else result
+    
+    def _extract_general_key_parts(
+        self,
+        content: str,
+        query: str,
+        keywords: List[str],
+        max_length: int,
+        relevant_sentences: List[Dict[str, Any]] = None
+    ) -> str:
+        """일반 문서 핵심 부분 추출"""
+        parts = []
+        remaining_length = max_length
+        
+        # 1. 관련 문장 (최우선)
+        if relevant_sentences:
+            relevant_list = []
+            for sent in relevant_sentences[:5]:
+                sent_text = sent.get("sentence", "")[:400]
+                if sent_text and len(sent_text) <= remaining_length - 50:
+                    relevant_list.append(f"- {sent_text}")
+                    remaining_length -= len(sent_text) + 10
+            
+            if relevant_list:
+                parts.append(f"**핵심 내용**:\n" + "\n".join(relevant_list))
+        
+        # 2. 키워드 주변 문맥
+        if remaining_length > 200 and keywords:
+            keyword_contexts = self._extract_keyword_contexts(content, keywords, remaining_length)
+            if keyword_contexts:
+                parts.append(f"**관련 문맥**:\n{keyword_contexts}")
+        
+        # 3. 폴백: 앞부분 + 뒷부분
+        if not parts and len(content) > max_length:
+            front = content[:max_length // 2]
+            back = content[-max_length // 2:] if len(content) > max_length else ""
+            return f"{front}\n\n[... 중간 생략 ...]\n\n{back}"
+        
+        result = "\n\n".join(parts) if parts else content[:max_length]
+        return result[:max_length] if len(result) > max_length else result
+    
+    def _extract_keyword_contexts(
+        self,
+        content: str,
+        keywords: List[str],
+        max_length: int
+    ) -> str:
+        """키워드 주변 문맥 추출"""
+        if not keywords or not content:
+            return ""
+        
+        contexts = []
+        content_lower = content.lower()
+        used_positions = set()
+        
+        for keyword in keywords[:5]:
+            if not keyword or len(keyword) < 2:
+                continue
+            
+            keyword_lower = keyword.lower()
+            if keyword_lower not in content_lower:
+                continue
+            
+            # 키워드 위치 찾기 (중복 방지)
+            start_pos = 0
+            while True:
+                idx = content_lower.find(keyword_lower, start_pos)
+                if idx == -1:
+                    break
+                
+                # 이미 사용된 위치 근처인지 확인
+                is_duplicate = any(abs(idx - pos) < 100 for pos in used_positions)
+                if not is_duplicate:
+                    # 앞뒤 200자씩 추출
+                    context_start = max(0, idx - 200)
+                    context_end = min(len(content), idx + len(keyword) + 200)
+                    context = content[context_start:context_end]
+                    
+                    if context and context not in contexts:
+                        contexts.append(context)
+                        used_positions.add(idx)
+                    
+                    if len("\n\n[...]\n\n".join(contexts)) >= max_length:
+                        break
+                
+                start_pos = idx + 1
+            
+            if len("\n\n[...]\n\n".join(contexts)) >= max_length:
+                break
+        
+        if contexts:
+            result = "\n\n[...]\n\n".join(contexts[:3])
+            return result[:max_length]
+        
+        return ""
+    
     def select_balanced_documents(
         self,
         sorted_docs: List[Dict[str, Any]],
         max_docs: int = 10
     ) -> List[Dict[str, Any]]:
-        """의미적 검색과 키워드 검색 결과의 균형을 맞춰서 문서 선택"""
+        """의미적 검색과 키워드 검색 결과의 균형을 맞춰서 문서 선택 (문서 손실 방지 강화)"""
         if not sorted_docs:
             return []
+        
+        # 개선: 문서 수가 max_docs보다 적으면 모든 문서 반환 (손실 방지)
+        if len(sorted_docs) <= max_docs:
+            self.logger.debug(
+                f"✅ [DOCUMENT SELECTION] 모든 문서 선택 (문서 수={len(sorted_docs)} <= max_docs={max_docs})"
+            )
+            return sorted_docs
         
         semantic_docs = [doc for doc in sorted_docs if doc.get("search_type") == "semantic"]
         keyword_docs = [doc for doc in sorted_docs if doc.get("search_type") == "keyword"]
         hybrid_docs = [doc for doc in sorted_docs if doc.get("search_type") not in ["semantic", "keyword"]]
         
         selected_docs = []
+        seen_ids = set()  # 중복 방지를 위한 ID 추적
+        
+        # 문서 ID 추출 함수
+        def get_doc_id(doc):
+            return (
+                doc.get("id") or 
+                doc.get("doc_id") or 
+                doc.get("document_id") or 
+                id(doc)  # 최후의 폴백
+            )
         
         top_count = max(1, max_docs // 2)
-        selected_docs.extend(sorted_docs[:top_count])
+        for doc in sorted_docs[:top_count]:
+            doc_id = get_doc_id(doc)
+            if doc_id not in seen_ids:
+                selected_docs.append(doc)
+                seen_ids.add(doc_id)
         
         remaining_slots = max_docs - len(selected_docs)
         
         if remaining_slots > 0:
             semantic_to_add = []
             for doc in semantic_docs:
-                if doc not in selected_docs:
+                doc_id = get_doc_id(doc)
+                if doc_id not in seen_ids:
                     semantic_to_add.append(doc)
             
             keyword_to_add = []
             for doc in keyword_docs:
-                if doc not in selected_docs:
+                doc_id = get_doc_id(doc)
+                if doc_id not in seen_ids:
                     keyword_to_add.append(doc)
             
             max_alternate = remaining_slots // 2
             for i in range(min(max_alternate, max(len(semantic_to_add), len(keyword_to_add)))):
                 if i < len(semantic_to_add) and len(selected_docs) < max_docs:
-                    if semantic_to_add[i] not in selected_docs:
-                        selected_docs.append(semantic_to_add[i])
+                    doc = semantic_to_add[i]
+                    doc_id = get_doc_id(doc)
+                    if doc_id not in seen_ids:
+                        selected_docs.append(doc)
+                        seen_ids.add(doc_id)
                 if i < len(keyword_to_add) and len(selected_docs) < max_docs:
-                    if keyword_to_add[i] not in selected_docs:
-                        selected_docs.append(keyword_to_add[i])
+                    doc = keyword_to_add[i]
+                    doc_id = get_doc_id(doc)
+                    if doc_id not in seen_ids:
+                        selected_docs.append(doc)
+                        seen_ids.add(doc_id)
             
             if len(selected_docs) < max_docs:
                 for doc in hybrid_docs:
-                    if doc not in selected_docs and len(selected_docs) < max_docs:
+                    doc_id = get_doc_id(doc)
+                    if doc_id not in seen_ids and len(selected_docs) < max_docs:
                         selected_docs.append(doc)
+                        seen_ids.add(doc_id)
             
             if len(selected_docs) < max_docs:
                 for doc in sorted_docs:
-                    if doc not in selected_docs and len(selected_docs) < max_docs:
+                    doc_id = get_doc_id(doc)
+                    if doc_id not in seen_ids and len(selected_docs) < max_docs:
                         selected_docs.append(doc)
+                        seen_ids.add(doc_id)
         
         selected_docs = sorted(
             selected_docs,
@@ -597,7 +1483,22 @@ class WorkflowDocumentProcessor:
             reverse=True
         )
         
-        return selected_docs[:max_docs]
+        result = selected_docs[:max_docs]
+        
+        # 문서 손실 확인 및 로깅
+        if len(result) < len(sorted_docs):
+            lost_count = len(sorted_docs) - len(result)
+            loss_ratio = lost_count / len(sorted_docs) if sorted_docs else 0.0
+            self.logger.warning(
+                f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
+                f"({len(sorted_docs)} → {len(result)}, max_docs={max_docs}, loss_ratio={loss_ratio:.1%})"
+            )
+        else:
+            self.logger.debug(
+                f"✅ [DOCUMENT SELECTION] 문서 선택 완료: {len(result)}개 선택됨"
+            )
+        
+        return result
     
     def select_balanced_documents_relevance_first(
         self,
@@ -608,7 +1509,7 @@ class WorkflowDocumentProcessor:
         max_docs: int = 7
     ) -> List[Dict[str, Any]]:
         """
-        개선 12: 관련성 우선 문서 선택 (다양성보다 관련성 우선)
+        개선 12: 관련성 우선 문서 선택 (다양성보다 관련성 우선) - 문서 손실 방지 강화
         
         Args:
             sorted_docs: 점수로 정렬된 문서 리스트
@@ -622,6 +1523,13 @@ class WorkflowDocumentProcessor:
         """
         if not sorted_docs:
             return []
+        
+        # 개선: 문서 수가 max_docs보다 적으면 모든 문서 반환 (손실 방지)
+        if len(sorted_docs) <= max_docs:
+            self.logger.debug(
+                f"✅ [DOCUMENT SELECTION] 모든 문서 선택 (문서 수={len(sorted_docs)} <= max_docs={max_docs})"
+            )
+            return sorted_docs
         
         # 개선 9: 질문 유형별 문서 필터링 기준 적용
         query_lower = query.lower()
@@ -656,10 +1564,20 @@ class WorkflowDocumentProcessor:
             
             doc["citation_potential_score"] = min(1.0, citation_score)
         
-        # 1단계: 관련도가 높고 citation 가능성이 높은 문서 우선 선택
+        # 개선: 문서 수가 적을 때 필터링 완화 (문서 손실 방지)
+        # 문서 수가 max_docs의 1.5배 이하면 모든 문서 반환
+        if len(sorted_docs) <= int(max_docs * 1.5):
+            self.logger.debug(
+                f"✅ [DOCUMENT SELECTION] 문서 수가 적어 모든 문서 선택 "
+                f"(문서 수={len(sorted_docs)} <= {int(max_docs * 1.5)})"
+            )
+            return sorted_docs[:max_docs]
+        
+        # 우선순위 1 개선: 관련도 임계값 대폭 완화 (문서 손실 방지)
+        # 1단계: 관련도가 높은 문서 우선 선택 (임계값 완화: 0.40 → 0.20)
         high_relevance_docs = [
             doc for doc in sorted_docs 
-            if (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) >= 0.65
+            if (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) >= 0.20
         ]
         
         # citation 가능성 순으로 정렬
@@ -675,21 +1593,21 @@ class WorkflowDocumentProcessor:
             if len(selected_docs) >= max_docs:
                 break
             
-            source = doc.get("source", "")
-            if source and source not in seen_sources:
+            source = doc.get("source", "") or doc.get("id", "") or str(doc.get("doc_id", ""))
+            if not source or source not in seen_sources:
                 selected_docs.append(doc)
-                seen_sources.add(source)
+                if source:
+                    seen_sources.add(source)
         
-        # 2단계: 관련도가 중간이지만 citation 가능성이 높은 문서 우선 선택
+        # 2단계: 관련도가 낮아도 citation 가능성이 높은 문서 선택 (임계값 완화: 0.30 → 0.10)
         if len(selected_docs) < max_docs:
-            medium_relevance_docs = [
+            low_relevance_docs = [
                 doc for doc in sorted_docs 
-                if 0.55 <= (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) < 0.65
+                if (doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)) >= 0.10
                 and doc not in selected_docs
             ]
             
-            # citation 가능성 순으로 정렬
-            medium_relevance_docs.sort(
+            low_relevance_docs.sort(
                 key=lambda x: (
                     x.get("citation_potential_score", 0.0),
                     x.get("relevance_score", 0.0) or x.get("final_weighted_score", 0.0)
@@ -697,11 +1615,10 @@ class WorkflowDocumentProcessor:
                 reverse=True
             )
             
-            for doc in medium_relevance_docs:
+            for doc in low_relevance_docs:
                 if len(selected_docs) >= max_docs:
                     break
                 
-                # 개선: citation 가능성이 높거나 키워드 매칭이 있는 문서 우선
                 content = (doc.get("content") or doc.get("text") or "").lower()
                 has_relevant_keyword = False
                 
@@ -713,15 +1630,14 @@ class WorkflowDocumentProcessor:
                 citation_potential = doc.get("citation_potential_score", 0.0)
                 keyword_match = doc.get("keyword_match_score", 0.0)
                 
-                # citation 가능성이 높거나 키워드 매칭이 있으면 선택
-                if citation_potential >= 0.3 or has_relevant_keyword or keyword_match > 0.0:
+                if citation_potential >= 0.2 or has_relevant_keyword or keyword_match > 0.0:
                     source = doc.get("source", "")
                     if not source or source not in seen_sources:
                         selected_docs.append(doc)
                         if source:
                             seen_sources.add(source)
         
-        # 3단계: 부족하면 상위 문서로 채우기
+        # 3단계: 부족하면 상위 문서로 채우기 (필터링 없이)
         if len(selected_docs) < max_docs:
             for doc in sorted_docs:
                 if len(selected_docs) >= max_docs:
@@ -729,9 +1645,35 @@ class WorkflowDocumentProcessor:
                 if doc not in selected_docs:
                     selected_docs.append(doc)
         
+        # 최소 문서 수 보장 (문서 손실 방지)
+        min_docs = min(len(sorted_docs), max_docs)
+        if len(selected_docs) < min_docs:
+            for doc in sorted_docs:
+                if len(selected_docs) >= min_docs:
+                    break
+                if doc not in selected_docs:
+                    selected_docs.append(doc)
+            self.logger.info(
+                f"📊 [MIN DOCS] 최소 문서 수 보장: {len(selected_docs)}개 (목표: {min_docs}개)"
+            )
+        
+        # 문서 손실 확인 및 로깅
+        if len(selected_docs) < len(sorted_docs):
+            lost_count = len(sorted_docs) - len(selected_docs)
+            loss_ratio = lost_count / len(sorted_docs) if sorted_docs else 0.0
+            self.logger.warning(
+                f"⚠️ [DOCUMENT LOSS] select_balanced_documents_relevance_first: {lost_count} documents lost "
+                f"({len(sorted_docs)} → {len(selected_docs)}, max_docs={max_docs}, loss_ratio={loss_ratio:.1%})"
+            )
+        else:
+            self.logger.debug(
+                f"✅ [DOCUMENT SELECTION] 문서 선택 완료: {len(selected_docs)}개 선택됨"
+            )
+        
         self.logger.info(
             f"select_balanced_documents_relevance_first: Selected {len(selected_docs)}/{len(sorted_docs)} documents "
-            f"(high_relevance: {len([d for d in selected_docs if (d.get('relevance_score', 0.0) or d.get('final_weighted_score', 0.0)) >= 0.65])})"
+            f"(high_relevance: {len([d for d in selected_docs if (d.get('relevance_score', 0.0) or d.get('final_weighted_score', 0.0)) >= 0.40])}, "
+            f"medium_relevance: {len([d for d in selected_docs if 0.30 <= (d.get('relevance_score', 0.0) or d.get('final_weighted_score', 0.0)) < 0.40])})"
         )
         
         return selected_docs[:max_docs]
@@ -1068,4 +2010,93 @@ class WorkflowDocumentProcessor:
 """
         
         return instructions
+    
+    def _validate_document_metadata(self, doc: Dict[str, Any]) -> bool:
+        """우선순위 4 개선: 메타데이터 검증 (완화된 기준)"""
+        # 필수 필드만 검증 (content는 필수, source와 type은 선택적)
+        has_content = bool(doc.get("content") or doc.get("text"))
+        
+        if not has_content:
+            return False
+        
+        # source와 type이 없어도 경고만 출력하고 통과
+        has_source = bool(doc.get("source"))
+        has_type = bool(doc.get("type") or doc.get("source_type"))
+        
+        if not has_source:
+            self.logger.debug(f"⚠️ [METADATA] source 필드 없음: {doc.get('id', 'unknown')}")
+        if not has_type:
+            self.logger.debug(f"⚠️ [METADATA] type 필드 없음: {doc.get('id', 'unknown')}")
+        
+        # 메타데이터 완전성 검증
+        metadata = doc.get("metadata", {})
+        if isinstance(metadata, dict):
+            # metadata가 있으면 최소한의 구조는 있어야 함
+            pass
+        
+        return True
+    
+    def _validate_document_content_quality(self, doc: Dict[str, Any], content: str) -> bool:
+        """우선순위 4 개선: 문서 내용 품질 검증 (완화된 기준)"""
+        # 최소 길이 완화: 10자 → 5자
+        if not content or len(content.strip()) < 5:
+            return False
+        
+        content_stripped = content.strip()
+        
+        # 특수 문자만 있는 문서 제외
+        # 의미 있는 문자(한글, 영문, 숫자) 비율 계산
+        meaningful_chars = re.findall(r'[가-힣a-zA-Z0-9]', content_stripped)
+        total_chars = len(content_stripped)
+        if total_chars == 0:
+            return False
+        
+        meaningful_ratio = len(meaningful_chars) / total_chars
+        # 의미 있는 문자 비율 완화: 50% → 40%
+        if meaningful_ratio < 0.4:
+            return False
+        
+        # 불완전한 문장 제외 (문장 끝이 없는 경우가 너무 많으면 제외)
+        # 100자 이상인 경우에만 문장 끝 확인 (더 긴 텍스트에서만 적용)
+        sentence_endings = content_stripped.count('.') + content_stripped.count('。') + content_stripped.count('!') + content_stripped.count('?')
+        if len(content_stripped) > 200 and sentence_endings == 0:
+            # 200자 이상인데 문장 끝이 없으면 제외 (100자 → 200자로 완화)
+            return False
+        
+        return True
+    
+    def _validate_document_source_reliability(self, doc: Dict[str, Any]) -> bool:
+        """우선순위 4 개선: 출처 신뢰도 검증 (완화된 기준)"""
+        import re
+        source = doc.get("source", "")
+        
+        # 출처가 없어도 내용이 유용하면 포함 (완화)
+        if not source or len(source.strip()) < 1:
+            # 출처가 없어도 통과 (경고만 출력)
+            self.logger.debug(f"⚠️ [SOURCE] source 필드 없음 또는 너무 짧음: {doc.get('id', 'unknown')}")
+            return True  # 출처가 없어도 통과
+        
+        source_stripped = source.strip()
+        
+        # 출처 형식 검증 (완화된 기준)
+        # 기본적인 출처 형식 검증 - 더 관대한 기준
+        has_valid_format = (
+            any(keyword in source_stripped for keyword in ["법", "법원", "위원회", "부", "청", "원"]) or
+            bool(re.match(r'[가-힣]+법', source_stripped)) or
+            bool(re.match(r'.*법원.*', source_stripped)) or
+            len(source_stripped) >= 2  # 최소 길이 완화: 3 → 2
+        )
+        
+        # 형식이 맞지 않아도 통과 (경고만 출력)
+        if not has_valid_format:
+            self.logger.debug(f"⚠️ [SOURCE] 출처 형식이 표준과 다름: {source_stripped}")
+            return True  # 형식이 맞지 않아도 통과
+        
+        # 메타데이터에서 출처 정보 확인
+        metadata = doc.get("metadata", {})
+        if isinstance(metadata, dict):
+            # statute_name, case_name 등이 있으면 더 신뢰할 수 있음
+            pass
+        
+        return True
 

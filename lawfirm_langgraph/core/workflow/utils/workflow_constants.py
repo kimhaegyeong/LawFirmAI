@@ -14,13 +14,13 @@ class WorkflowConstants:
     MAX_OUTPUT_TOKENS = 8192  # 실용적인 값 (약 32,000자, 법률 답변에 충분)
     # MAX_OUTPUT_TOKENS = 65536  # 최대값 (매우 긴 답변을 위한 경우)
     TEMPERATURE = 0.3
-    TIMEOUT = 15
+    TIMEOUT = 30  # 15초 → 30초 (긴 문서 처리 시간 고려)
 
-    # 검색 설정 (개선: 검색 결과 수 증가)
-    SEMANTIC_SEARCH_K = 15  # 10 -> 15 (더 많은 결과 검색)
-    KEYWORD_SEARCH_K = 10  # 키워드 검색 결과 수
-    MAX_DOCUMENTS = 10  # 5 -> 10 (최종 문서 수 증가)
-    CATEGORY_SEARCH_LIMIT = 5  # 3 -> 5 (카테고리별 검색 결과 증가)
+    # 검색 설정 (성능 최적화: 결과 수 제한)
+    SEMANTIC_SEARCH_K = 12  # 15 -> 12 (성능 최적화)
+    KEYWORD_SEARCH_K = 8  # 10 -> 8 (성능 최적화)
+    MAX_DOCUMENTS = 10  # 최종 문서 수
+    CATEGORY_SEARCH_LIMIT = 4  # 5 -> 4 (성능 최적화)
 
     # 재시도 설정
     MAX_RETRIES = 3

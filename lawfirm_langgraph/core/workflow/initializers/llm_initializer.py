@@ -40,15 +40,18 @@ class LLMInitializer:
         return self.create_mock_llm()
 
     def initialize_gemini(self) -> ChatGoogleGenerativeAI:
-        """Google Gemini LLM 초기화"""
+        """Google Gemini LLM 초기화 (최종 답변 생성용)"""
+        # 최종 답변용 모델 설정 (환경 변수 우선, 없으면 gemini-2.5-flash 기본값)
+        answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash")
+        
         gemini_llm = ChatGoogleGenerativeAI(
-            model=self.config.google_model,
+            model=answer_model,
             temperature=WorkflowConstants.TEMPERATURE,
             max_output_tokens=WorkflowConstants.MAX_OUTPUT_TOKENS,
             timeout=WorkflowConstants.TIMEOUT,
             api_key=self.config.google_api_key
         )
-        logger.info(f"Initialized Google Gemini LLM: {self.config.google_model}")
+        logger.info(f"Initialized Google Gemini LLM for answer generation: {answer_model}")
         return gemini_llm
 
     def initialize_ollama(self) -> Ollama:

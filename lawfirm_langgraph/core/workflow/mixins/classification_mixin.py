@@ -69,7 +69,7 @@ class ClassificationMixin:
                 try:
                     classified_type, confidence, complexity, needs_search = self._classify_query_with_chain(query)
                     self.logger.info(
-                        f"✅ [CHAIN CLASSIFICATION] "
+                        f"✅ [UNIFIED CLASSIFICATION] "
                         f"QuestionType={classified_type.value}, complexity={complexity.value}, "
                         f"needs_search={needs_search}, confidence={confidence:.2f}"
                     )

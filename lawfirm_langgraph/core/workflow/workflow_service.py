@@ -176,9 +176,21 @@ class LangGraphWorkflowService:
     """LangGraph 워크플로우 서비스"""
     
     # 상수 정의
-    SLOW_NODE_THRESHOLD = 5.0  # 노드 실행 시간 임계값 (초)
     DEFAULT_RECURSION_LIMIT = 200  # 기본 재귀 제한
     MAX_PARAMETER_CHECK_COUNT = 5  # 모델 검증 시 확인할 파라미터 개수
+    
+    # LLM 호출 노드 목록 (더 긴 임계값 사용)
+    LLM_NODES = {
+        'expand_keywords', 'prepare_search_query', 'generate_answer', 
+        'generate_answer_final', 'classify_query_and_complexity', 
+        'generate_answer_stream', 'refine_answer'
+    }
+    
+    # 검색/처리 노드 목록 (가장 긴 임계값 사용)
+    SEARCH_NODES = {
+        'execute_searches_parallel', 'process_search_results_combined',
+        'process_search_results', 'merge_search_results'
+    }
 
     def __init__(self, config: Optional[LangGraphConfig] = None):
         """
@@ -189,6 +201,11 @@ class LangGraphWorkflowService:
         """
         self.config = config or LangGraphConfig.from_env()
         self.logger = logging.getLogger(__name__)
+        
+        # 성능 임계값 설정 (config에서 가져오기)
+        self.slow_node_threshold = self.config.slow_node_threshold
+        self.slow_llm_node_threshold = self.config.slow_llm_node_threshold
+        self.slow_search_node_threshold = self.config.slow_search_node_threshold
 
         # 초기 input 보존을 위한 인스턴스 변수
         self._initial_input: Optional[Dict[str, str]] = None
@@ -554,10 +571,11 @@ class LangGraphWorkflowService:
                                 node_duration = current_time - node_start_times[node_name]
                                 node_durations[node_name] = node_duration
                                 
-                                if node_duration > self.SLOW_NODE_THRESHOLD:
+                                threshold = self._get_node_threshold(node_name)
+                                if node_duration > threshold:
                                     self.logger.warning(
                                         f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                        f"(임계값: {self.SLOW_NODE_THRESHOLD}초)"
+                                        f"(임계값: {threshold}초)"
                                     )
                             
                             # 노드 출력 데이터에서 상태 업데이트
@@ -627,10 +645,11 @@ class LangGraphWorkflowService:
                                 print(progress_msg, flush=True)
                                 
                                 # 병목 지점 감지: 느린 노드에 대한 경고
-                                if node_duration > self.SLOW_NODE_THRESHOLD:
+                                threshold = self._get_node_threshold(node_name)
+                                if node_duration > threshold:
                                     self.logger.warning(
                                         f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                        f"(임계값: {self.SLOW_NODE_THRESHOLD}초)"
+                                        f"(임계값: {threshold}초)"
                                     )
 
                                 # 노드 이름을 한국어로 변환하여 더 명확하게 표시
@@ -1145,12 +1164,16 @@ class LangGraphWorkflowService:
                             print(summary_msg, flush=True)
                         
                         # 가장 느린 노드 경고
-                        if sorted_nodes and sorted_nodes[0][1] > self.SLOW_NODE_THRESHOLD:
+                        if sorted_nodes:
                             slowest_node = sorted_nodes[0]
-                            self.logger.warning(
-                                f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node[0]} "
-                                f"({slowest_node[1]:.2f}초, 전체의 {slowest_node[1]/total_execution_time*100:.1f}%)"
-                            )
+                            slowest_node_name = slowest_node[0]
+                            slowest_node_duration = slowest_node[1]
+                            threshold = self._get_node_threshold(slowest_node_name)
+                            if slowest_node_duration > threshold:
+                                self.logger.warning(
+                                    f"⚠️ [PERFORMANCE] 가장 느린 노드: {slowest_node_name} "
+                                    f"({slowest_node_duration:.2f}초, 전체의 {slowest_node_duration/total_execution_time*100:.1f}%, 임계값: {threshold}초)"
+                                )
                     
                     # 실행된 노드 목록 표시
                     if total_nodes > 0:
@@ -2599,6 +2622,23 @@ class LangGraphWorkflowService:
                 if not node_input.get("session_id") and self._initial_input.get("session_id"):
                     node_state["input"]["session_id"] = self._initial_input["session_id"]
                 self.logger.debug(f"astream: Restored query in input group for {node_name}")
+    
+    def _get_node_threshold(self, node_name: str) -> float:
+        """
+        노드 타입에 따른 성능 임계값 반환
+        
+        Args:
+            node_name: 노드 이름
+        
+        Returns:
+            float: 임계값 (초)
+        """
+        if node_name in self.SEARCH_NODES:
+            return self.slow_search_node_threshold
+        elif node_name in self.LLM_NODES:
+            return self.slow_llm_node_threshold
+        else:
+            return self.slow_node_threshold
     
     def _get_node_display_name(self, node_name: str) -> str:
         """

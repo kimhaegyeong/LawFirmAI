@@ -25,7 +25,8 @@ class WorkflowGraphBuilder:
         route_after_agentic_func=None,
         should_analyze_document_func=None,
         should_skip_search_adaptive_func=None,
-        should_retry_validation_func=None
+        should_retry_validation_func=None,
+        should_skip_final_node_func=None
     ):
         self.config = config
         self.logger = logger
@@ -35,6 +36,7 @@ class WorkflowGraphBuilder:
         self._should_analyze_document_func = should_analyze_document_func
         self._should_skip_search_adaptive_func = should_skip_search_adaptive_func
         self._should_retry_validation_func = should_retry_validation_func
+        self._should_skip_final_node_func = should_skip_final_node_func
 
     def build_graph(
         self,
@@ -134,8 +136,16 @@ class WorkflowGraphBuilder:
         # 답변 생성 노드 라우팅 (환경 변수 기반)
         answer_node = self._get_answer_generation_node()
         if answer_node == "generate_answer_stream":
-            # 스트리밍 노드 -> 최종 노드 -> 검증
-            workflow.add_edge("generate_answer_stream", "generate_answer_final")
+            # 성능 최적화: 조건부로 최종 노드 스킵 가능
+            # 스트리밍 노드 -> 조건부 최종 노드 -> 검증
+            workflow.add_conditional_edges(
+                "generate_answer_stream",
+                self._should_skip_final_node_func,
+                {
+                    "skip": END,  # 이미 검증/포맷팅 완료된 경우 스킵
+                    "finalize": "generate_answer_final"  # 검증/포맷팅 필요한 경우
+                }
+            )
             workflow.add_conditional_edges(
                 "generate_answer_final",
                 self._should_retry_validation_func,

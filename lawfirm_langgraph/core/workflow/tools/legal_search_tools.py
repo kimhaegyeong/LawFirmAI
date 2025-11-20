@@ -39,16 +39,8 @@ try:
         from core.services.search.search_handler import SearchHandler
     HYBRID_SEARCH_AVAILABLE = True
 except ImportError:
-    try:
-        try:
-            from core.search.engines.hybrid_search_engine import HybridSearchEngine
-        except ImportError:
-            # 호환성을 위한 fallback
-            from core.services.hybrid_search_engine import HybridSearchEngine
-        HYBRID_SEARCH_AVAILABLE = True
-    except ImportError:
-        HYBRID_SEARCH_AVAILABLE = False
-        logging.warning("HybridSearchEngine not available")
+    HYBRID_SEARCH_AVAILABLE = False
+    logging.warning("HybridSearchEngineV2 not available")
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +57,10 @@ def get_search_engine():
                 _search_engine_instance = SearchHandler()
                 logger.info("SearchHandler initialized for tools")
             except:
-                # Fallback: HybridSearchEngine
+                # Fallback: HybridSearchEngineV2
                 try:
-                    try:
-            from core.search.engines.hybrid_search_engine import HybridSearchEngine
-        except ImportError:
-            # 호환성을 위한 fallback
-            from core.services.hybrid_search_engine import HybridSearchEngine
-                    _search_engine_instance = HybridSearchEngine()
-                    logger.info("HybridSearchEngine initialized for tools")
+                    _search_engine_instance = HybridSearchEngineV2()
+                    logger.info("HybridSearchEngineV2 initialized for tools")
                 except:
                     logger.error("Failed to initialize search engine")
                     return None

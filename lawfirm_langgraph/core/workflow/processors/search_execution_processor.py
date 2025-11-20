@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_helpers import ensure_state_group
+from core.workflow.state.state_helpers import ensure_state_group, get_retrieved_docs, set_retrieved_docs
 from core.workflow.utils.workflow_constants import WorkflowConstants
 from core.workflow.utils.query_diversifier import QueryDiversifier
 from core.workflow.utils.search_result_balancer import SearchResultBalancer
@@ -54,19 +54,35 @@ class SearchExecutionProcessor:
         # 검색 쿼리 다변화 및 결과 균형 조정 유틸리티
         self.query_diversifier = QueryDiversifier()
         self.result_balancer = SearchResultBalancer(min_per_type=1, max_per_type=5)
+        
+        # State 접근 캐싱 (성능 최적화)
+        self._state_cache = {}
+        self._state_cache_key = None
 
     def get_search_params(self, state: LegalWorkflowState) -> Dict[str, Any]:
         """검색에 필요한 모든 파라미터를 한 번에 가져오기 (State 접근 최적화)"""
         from core.workflow.state.state_helpers import get_field
+        import hashlib
 
+        # State 캐싱: state 해시로 캐시 키 생성
+        state_str = str(sorted(state.items())) if isinstance(state, dict) else str(state)
+        state_hash = hashlib.md5(state_str.encode()).hexdigest()
+        
+        # 캐시 히트 확인
+        if self._state_cache_key == state_hash and self._state_cache:
+            self.logger.debug("✅ [PERFORMANCE] State cache hit in get_search_params")
+            return self._state_cache.copy()
+        
+        # 캐시 미스: State에서 값 가져오기
         # Multi-Query 강화: state의 여러 위치에서 optimized_queries 찾기 (순서 중요)
         # _get_state_value가 None을 반환할 수 있으므로, 먼저 직접 확인
         optimized_queries = None
         
-        # 디버깅: state 구조 확인
-        state_keys = list(state.keys()) if isinstance(state, dict) else []
-        print(f"[MULTI-QUERY] get_search_params: state keys={state_keys}", flush=True, file=sys.stdout)
-        self.logger.debug(f"🔍 [MULTI-QUERY] get_search_params: state keys={state_keys}")
+        # 디버깅: state 구조 확인 (디버그 모드에서만)
+        if os.getenv("DEBUG_STATE_ACCESS", "false").lower() == "true":
+            state_keys = list(state.keys()) if isinstance(state, dict) else []
+            print(f"[MULTI-QUERY] get_search_params: state keys={state_keys}", flush=True, file=sys.stdout)
+            self.logger.debug(f"🔍 [MULTI-QUERY] get_search_params: state keys={state_keys}")
         
         # search와 common 그룹의 구조도 확인
         if "search" in state and isinstance(state["search"], dict):
@@ -230,7 +246,7 @@ class SearchExecutionProcessor:
         if not original_query and "input" in state and isinstance(state.get("input"), dict):
             original_query = state["input"].get("query", "")
 
-        return {
+        result = {
             "optimized_queries": optimized_queries,
             "search_params": search_params,
             "query_type_str": query_type_str,
@@ -238,6 +254,12 @@ class SearchExecutionProcessor:
             "extracted_keywords": extracted_keywords,
             "original_query": original_query
         }
+        
+        # 캐시 저장
+        self._state_cache = result.copy()
+        self._state_cache_key = state_hash
+        
+        return result
 
     def execute_searches_parallel(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """의미적 검색과 키워드 검색을 병렬로 실행"""
@@ -254,20 +276,35 @@ class SearchExecutionProcessor:
             extracted_keywords = params["extracted_keywords"]
             original_query = params["original_query"]
 
+            # 성능 최적화: extracted_keywords를 한 번만 확인 (중복 접근 제거)
             if not extracted_keywords or len(extracted_keywords) == 0:
-                extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
-                if not extracted_keywords and "search" in state and isinstance(state.get("search"), dict):
-                    extracted_keywords = state["search"].get("extracted_keywords", [])
-                if not extracted_keywords:
-                    extracted_keywords = state.get("extracted_keywords", [])
-                self.logger.info(f"🔍 [SEARCH] extracted_keywords from batch was empty, got {len(extracted_keywords)} from state directly")
-            else:
-                self.logger.info(f"🔍 [SEARCH] extracted_keywords from batch: {len(extracted_keywords)} keywords")
+                # 한 번에 모든 가능한 위치 확인
+                extracted_keywords = (
+                    self._get_state_value(state, "extracted_keywords", []) or
+                    (state.get("search", {}).get("extracted_keywords", []) if isinstance(state.get("search"), dict) else []) or
+                    state.get("extracted_keywords", []) or
+                    []
+                )
+                if debug_mode:
+                    self.logger.debug(f"extracted_keywords from batch was empty, got {len(extracted_keywords)} from state directly")
+            elif debug_mode:
+                self.logger.debug(f"extracted_keywords from batch: {len(extracted_keywords)} keywords")
 
-            if debug_mode:
-                self.logger.debug(f"execute_searches_parallel: START")
-                self.logger.debug(f"  - optimized_queries: {type(optimized_queries).__name__}, exists={bool(optimized_queries)}")
-                self.logger.debug(f"  - search_params: {type(search_params).__name__}, exists={bool(search_params)}")
+            # 로깅 최적화: 로깅 레벨 체크 및 배치 로깅
+            if self.logger.isEnabledFor(logging.DEBUG):
+                debug_info = {
+                    "optimized_queries": {
+                        "type": type(optimized_queries).__name__,
+                        "exists": bool(optimized_queries),
+                        "keys": list(optimized_queries.keys()) if isinstance(optimized_queries, dict) else None
+                    },
+                    "search_params": {
+                        "type": type(search_params).__name__,
+                        "exists": bool(search_params),
+                        "keys": list(search_params.keys()) if isinstance(search_params, dict) else None
+                    }
+                }
+                self.logger.debug(f"execute_searches_parallel: START - {debug_info}")
 
             semantic_query_value = optimized_queries.get("semantic_query", "") if optimized_queries else ""
 
@@ -290,10 +327,20 @@ class SearchExecutionProcessor:
 
             has_keyword_queries = optimized_queries and keyword_queries_value and len(keyword_queries_value) > 0
 
-            if debug_mode:
-                self.logger.debug(f"  - Validation: semantic_query='{semantic_query_value[:50] if semantic_query_value else 'EMPTY'}...', has_semantic_query={has_semantic_query}")
-                self.logger.debug(f"  - Validation: keyword_queries={len(keyword_queries_value) if keyword_queries_value else 0}, has_keyword_queries={has_keyword_queries}")
-                self.logger.debug(f"  - Validation: search_params is None={search_params is None}, is empty={search_params == {}}, keys={list(search_params.keys()) if search_params else []}")
+            # 로깅 최적화: 검증 정보 배치 로깅
+            if self.logger.isEnabledFor(logging.DEBUG):
+                validation_info = {
+                    "semantic_query": semantic_query_value[:50] if semantic_query_value else 'EMPTY',
+                    "has_semantic_query": has_semantic_query,
+                    "keyword_queries_count": len(keyword_queries_value) if keyword_queries_value else 0,
+                    "has_keyword_queries": has_keyword_queries,
+                    "search_params": {
+                        "is_none": search_params is None,
+                        "is_empty": search_params == {},
+                        "keys": list(search_params.keys()) if search_params else []
+                    }
+                }
+                self.logger.debug(f"Validation: {validation_info}")
 
             if not search_params or not isinstance(search_params, dict) or len(search_params) == 0:
                 self.logger.warning(f"🔍 [SEARCH] search_params is empty, setting default values")
@@ -307,7 +354,22 @@ class SearchExecutionProcessor:
 
             optimized_queries_valid = optimized_queries and isinstance(optimized_queries, dict) and len(optimized_queries) > 0
             search_params_valid = search_params and isinstance(search_params, dict) and len(search_params) > 0
-            self.logger.info(f"🔍 [SEARCH] Validation check: optimized_queries_valid={optimized_queries_valid} (type: {type(optimized_queries).__name__}, len: {len(optimized_queries) if isinstance(optimized_queries, dict) else 'N/A'}), search_params_valid={search_params_valid} (type: {type(search_params).__name__}, len: {len(search_params) if isinstance(search_params, dict) else 'N/A'}), has_semantic_query={has_semantic_query}")
+            # 로깅 최적화: 검증 체크 배치 로깅
+            if self.logger.isEnabledFor(logging.DEBUG):
+                validation_check_info = {
+                    "optimized_queries_valid": optimized_queries_valid,
+                    "optimized_queries": {
+                        "type": type(optimized_queries).__name__,
+                        "len": len(optimized_queries) if isinstance(optimized_queries, dict) else 'N/A'
+                    },
+                    "search_params_valid": search_params_valid,
+                    "search_params": {
+                        "type": type(search_params).__name__,
+                        "len": len(search_params) if isinstance(search_params, dict) else 'N/A'
+                    },
+                    "has_semantic_query": has_semantic_query
+                }
+                self.logger.debug(f"🔍 [SEARCH] Validation check: {validation_check_info}")
 
             if not optimized_queries_valid or not search_params_valid or not has_semantic_query:
                 self.logger.warning(f"🔍 [SEARCH] PARALLEL SEARCH SKIP: optimized_queries_valid={optimized_queries_valid}, search_params_valid={search_params_valid}, has_semantic_query={has_semantic_query}")
@@ -325,36 +387,64 @@ class SearchExecutionProcessor:
             keyword_results = []
             keyword_count = 0
 
-            # Multi-Query 확인 로그
+            # Multi-Query 확인 로그 (로깅 최적화)
             multi_queries = optimized_queries.get("multi_queries", [])
-            if multi_queries:
+            if multi_queries and debug_mode:
                 print(f"[MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries in optimized_queries", flush=True, file=sys.stdout)
-                self.logger.info(f"🔍 [MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries: {[q[:30] + '...' if len(q) > 30 else q for q in multi_queries]}")
-            else:
-                print(f"[MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries (keys: {list(optimized_queries.keys()) if optimized_queries else 'None'})", flush=True, file=sys.stdout)
-                self.logger.warning(f"⚠️ [MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries (keys: {list(optimized_queries.keys()) if optimized_queries else 'None'})")
+                self.logger.debug(f"🔍 [MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries")
+            elif not multi_queries and debug_mode:
+                self.logger.debug(f"⚠️ [MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries")
             
             if debug_mode:
                 self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, multi_queries={len(multi_queries) if multi_queries else 0}, original_query={original_query[:50] if original_query else 'N/A'}...")
 
-            self.logger.info(f"🔍 [SEARCH] Before check: extracted_keywords={len(extracted_keywords) if extracted_keywords else 0} (type: {type(extracted_keywords).__name__})")
-            if not extracted_keywords or len(extracted_keywords) == 0:
-                extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
-                if not extracted_keywords and "search" in state and isinstance(state.get("search"), dict):
-                    extracted_keywords = state["search"].get("extracted_keywords", [])
-                if not extracted_keywords:
-                    extracted_keywords = state.get("extracted_keywords", [])
-                self.logger.info(f"🔍 [SEARCH] Re-fetched extracted_keywords for semantic search: {len(extracted_keywords)} keywords")
-            else:
-                self.logger.info(f"🔍 [SEARCH] extracted_keywords already has {len(extracted_keywords)} keywords, skipping re-fetch")
-
+            # 성능 최적화: extracted_keywords 재확인 제거 (이미 위에서 확인함)
             final_keywords = extracted_keywords if extracted_keywords else []
-            self.logger.info(f"🔍 [SEARCH] Final extracted_keywords before ThreadPoolExecutor: {len(final_keywords)} keywords (type: {type(final_keywords).__name__}, is_empty: {not final_keywords})")
-
             keywords_copy = list(final_keywords) if final_keywords else []
-            self.logger.info(f"🔍 [SEARCH] keywords_copy created: {len(keywords_copy)} keywords (type: {type(keywords_copy).__name__})")
+            
+            if debug_mode:
+                self.logger.debug(f"Final extracted_keywords: {len(final_keywords)} keywords, keywords_copy: {len(keywords_copy)} keywords")
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            # 성능 최적화: ThreadPoolExecutor를 사용하되 더 효율적으로 실행
+            # 법령 조문 직접 검색도 병렬화하여 성능 향상
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            semantic_results, semantic_count = [], 0
+            keyword_results, keyword_count = [], 0
+            
+            # 조기 종료 최적화: 동적 임계값 계산
+            semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K)
+            keyword_k = search_params.get("keyword_k", WorkflowConstants.KEYWORD_SEARCH_K)
+            min_required_results = semantic_k + keyword_k
+            early_exit_threshold = int(min_required_results * 1.2)  # 20% 여유
+            max_results_threshold = min_required_results * 2  # 최대 2배까지만
+            
+            # 조기 종료 플래그
+            early_exit_triggered = False
+            early_exit_reason = None
+            
+            # 법령 조문 직접 검색도 병렬 실행 (max_workers=3)
+            needs_direct_statute = original_query and query_type_str == "law_inquiry"
+            
+            # Multi-Query 병렬 처리 최적화: Multi-Query 준비
+            multi_queries = optimized_queries.get("multi_queries", [])
+            multi_queries_to_process = []
+            if multi_queries and len(multi_queries) > 1:
+                max_semantic_results_before_multi = semantic_k * 2
+                multi_queries_to_process = multi_queries[1:]  # 첫 번째는 이미 처리됨
+                max_multi_queries = min(len(multi_queries_to_process), 2)
+                multi_queries_to_process = multi_queries_to_process[:max_multi_queries]
+            
+            # 동적 worker 수 계산 (Multi-Query 포함)
+            base_workers = 2  # semantic + keyword
+            if needs_direct_statute:
+                base_workers += 1
+            if multi_queries_to_process:
+                base_workers += len(multi_queries_to_process)
+            max_workers = min(base_workers, 6)  # 최대 6개로 제한
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 모든 작업을 한 번에 제출
                 semantic_future = executor.submit(
                     self.execute_semantic_search,
                     optimized_queries,
@@ -372,157 +462,299 @@ class SearchExecutionProcessor:
                     extracted_keywords,
                     original_query
                 )
-
-                try:
-                    semantic_results, semantic_count = semantic_future.result(timeout=20)
-                    if debug_mode:
-                        self.logger.debug(f"Semantic future completed: {semantic_count} results")
-                except Exception as e:
-                    self.logger.error(f"Semantic search failed: {e}")
-                    if debug_mode:
-                        self.logger.debug(f"Semantic search exception: {e}")
-                    semantic_results, semantic_count = [], 0
-
-                try:
-                    keyword_results, keyword_count = keyword_future.result(timeout=20)
-                    if debug_mode:
-                        self.logger.debug(f"Keyword future completed: {keyword_count} results")
-                except Exception as e:
-                    self.logger.error(f"Keyword search failed: {e}")
-                    if debug_mode:
-                        self.logger.debug(f"Keyword search exception: {e}")
-                    keyword_results, keyword_count = [], 0
-
-            # 법령 조문 직접 검색 추가 (개선 #10) - ThreadPoolExecutor 완료 후 병합
-            direct_statute_results = []
-            try:
-                if original_query and query_type_str == "law_inquiry":
-                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
-                    data_connector = LegalDataConnectorV2()
-                    direct_statute_results = data_connector.search_statute_article_direct(original_query, limit=5)
-                    if direct_statute_results:
-                        self.logger.info(f"⚖️ [DIRECT STATUTE] {len(direct_statute_results)}개 조문 직접 검색 성공")
-                        # 직접 검색된 조문을 keyword_results 최상위에 추가 (relevance_score=1.0이므로 최상위로)
-                        keyword_results = direct_statute_results + keyword_results
-                        keyword_count += len(direct_statute_results)
-                        self.logger.info(f"⚖️ [DIRECT STATUTE] keyword_results에 {len(direct_statute_results)}개 조문 추가 완료 (총 {keyword_count}개)")
-            except Exception as e:
-                self.logger.warning(f"법령 조문 직접 검색 실패: {e}")
-
-            # 검색 결과 타입 균형 조정 (개선)
-            try:
-                # numpy 타입 변환 함수 (msgpack 직렬화 오류 방지)
-                def convert_numpy_types(obj):
-                    import numpy as np
-                    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
-                        return int(obj)
-                    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
-                        return float(obj)
-                    elif isinstance(obj, np.ndarray):
-                        return obj.tolist()
-                    elif isinstance(obj, dict):
-                        return {k: convert_numpy_types(v) for k, v in obj.items()}
-                    elif isinstance(obj, (list, tuple)):
-                        return [convert_numpy_types(item) for item in obj]
-                    return obj
                 
-                # 검색 결과에 numpy 타입 변환 적용
-                semantic_results = [convert_numpy_types(doc) for doc in semantic_results]
-                keyword_results = [convert_numpy_types(doc) for doc in keyword_results]
-                
-                # semantic_results와 keyword_results를 타입별로 그룹화
-                all_results = semantic_results + keyword_results
-                grouped_results = self.result_balancer.group_results_by_type(all_results)
-                
-                # Phase 3: 타입별 분포 확인 및 경고
-                type_distribution = {}
-                for doc_type, docs in grouped_results.items():
-                    count = len(docs)
-                    type_distribution[doc_type] = count
-                    self.logger.info(f"📊 [SEARCH BALANCE] {doc_type}: {count}개")
-                
-                # 단일 타입만 검색된 경우 경고
-                non_zero_types = [t for t, c in type_distribution.items() if c > 0]
-                if len(non_zero_types) == 1:
-                    single_type = non_zero_types[0]
-                    self.logger.warning(
-                        f"⚠️ [TYPE DIVERSITY] 단일 타입만 검색됨: {single_type} ({type_distribution[single_type]}개). "
-                        f"다른 타입의 문서가 검색되지 않았습니다. 데이터 불균형 또는 검색 쿼리 최적화가 필요할 수 있습니다."
-                    )
-                elif len(non_zero_types) == 0:
-                    self.logger.warning(
-                        f"⚠️ [TYPE DIVERSITY] 검색 결과가 없습니다. 검색 쿼리나 데이터를 확인하세요."
-                    )
-                else:
-                    # 타입 다양성 점수 계산 (0.0 ~ 1.0)
-                    total_docs = sum(type_distribution.values())
-                    if total_docs > 0:
-                        # 엔트로피 기반 다양성 점수
-                        import math
-                        entropy = 0.0
-                        for count in type_distribution.values():
-                            if count > 0:
-                                p = count / total_docs
-                                entropy -= p * math.log2(p)
-                        max_entropy = math.log2(len(non_zero_types)) if len(non_zero_types) > 1 else 1.0
-                        diversity_score = entropy / max_entropy if max_entropy > 0 else 0.0
-                        
-                        self.logger.info(
-                            f"✅ [TYPE DIVERSITY] 타입 다양성 점수: {diversity_score:.2f} "
-                            f"(검색된 타입: {len(non_zero_types)}개, 총 문서: {total_docs}개)"
+                # 법령 조문 직접 검색도 병렬 실행
+                direct_statute_future = None
+                if needs_direct_statute:
+                    def _search_direct_statute():
+                        try:
+                            from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                            data_connector = LegalDataConnectorV2()
+                            return data_connector.search_statute_article_direct(original_query, limit=5)
+                        except Exception as e:
+                            if debug_mode:
+                                self.logger.debug(f"Direct statute search error: {e}")
+                            return []
+                    
+                    direct_statute_future = executor.submit(_search_direct_statute)
+
+                # Multi-Query 병렬 처리 최적화: Multi-Query futures 추가
+                multi_query_futures = {}
+                if multi_queries_to_process:
+                    for mq in multi_queries_to_process:
+                        mq_future = executor.submit(
+                            self._execute_semantic_search_single,
+                            mq,
+                            max(5, semantic_k // 3),
+                            keywords_copy,
+                            None
                         )
-                        
-                        if diversity_score < 0.5:
-                            self.logger.warning(
-                                f"⚠️ [TYPE DIVERSITY] 타입 다양성이 낮습니다 (점수: {diversity_score:.2f}). "
-                                f"검색 쿼리 다변화 또는 데이터 균형 조정을 고려하세요."
-                            )
+                        multi_query_futures[mq_future] = ('multi_query', mq[:30])
                 
-                # 균형 조정된 결과 생성
-                semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K)
-                keyword_k = search_params.get("keyword_k", WorkflowConstants.KEYWORD_SEARCH_K)
-                balanced_results = self.result_balancer.balance_search_results(
-                    grouped_results,
-                    total_limit=semantic_k + keyword_k
-                )
+                # as_completed를 사용하여 먼저 완료되는 작업부터 처리 (성능 최적화)
+                futures_map = {
+                    semantic_future: ('semantic', 'main'),
+                    keyword_future: ('keyword', None)
+                }
+                if direct_statute_future:
+                    futures_map[direct_statute_future] = ('direct_statute', None)
+                futures_map.update(multi_query_futures)
                 
-                # 균형 조정된 결과를 semantic_results와 keyword_results로 재분배
-                # (기존 로직과의 호환성을 위해 유지하되, 균형 조정된 결과를 우선 사용)
-                if balanced_results:
-                    # semantic_results와 keyword_results를 균형 조정된 결과로 업데이트
-                    # 관련도가 높은 결과를 semantic_results에, 나머지를 keyword_results에 배치
-                    semantic_results_balanced = [
-                        doc for doc in balanced_results 
-                        if doc.get("relevance_score", 0.0) >= 0.5
-                    ]
-                    keyword_results_balanced = [
-                        doc for doc in balanced_results 
-                        if doc.get("relevance_score", 0.0) < 0.5 or doc not in semantic_results_balanced
-                    ]
+                completed_count = 0
+                direct_statute_results = []
+                unfinished_futures = []
+                
+                # 타임아웃 증가: 10초 → 20초 (대량 검색 결과 처리 시간 확보)
+                # 로깅 최적화: 완료된 작업을 모아서 한 번에 로깅
+                completed_tasks = []
+                try:
+                    for future in as_completed(futures_map.keys(), timeout=20):
+                        search_type, query_type = futures_map[future]
+                        try:
+                            if search_type == 'semantic':
+                                if query_type == 'main':
+                                    semantic_results, semantic_count = future.result()
+                                    completed_tasks.append(('semantic', semantic_count))
+                                elif query_type and query_type.startswith('multi_query'):
+                                    # Multi-Query 결과 처리
+                                    mq_results, mq_count = future.result()
+                                    if mq_results:
+                                        # 중복 제거 후 추가
+                                        seen_ids = {doc.get("id") or doc.get("doc_id") 
+                                                  for doc in semantic_results}
+                                        new_results = [
+                                            doc for doc in mq_results
+                                            if (doc.get("id") or doc.get("doc_id")) not in seen_ids
+                                        ]
+                                        semantic_results.extend(new_results)
+                                        completed_tasks.append(('multi_query', len(new_results)))
+                            elif search_type == 'keyword':
+                                keyword_results, keyword_count = future.result()
+                                completed_tasks.append(('keyword', keyword_count))
+                            elif search_type == 'direct_statute':
+                                direct_statute_results = future.result()
+                                completed_tasks.append(('direct_statute', len(direct_statute_results) if direct_statute_results else 0))
+                            
+                            completed_count += 1
+                            
+                            # 조기 종료 체크: 결과가 충분하면 나머지 취소
+                            current_total = len(semantic_results) + len(keyword_results)
+                            if current_total >= early_exit_threshold:
+                                early_exit_triggered = True
+                                early_exit_reason = f"Sufficient results: {current_total} >= {early_exit_threshold}"
+                                
+                                # 나머지 미완료 future 취소
+                                remaining_futures = [f for f in futures_map.keys() if not f.done()]
+                                for remaining_future in remaining_futures:
+                                    if remaining_future.running():
+                                        remaining_future.cancel()
+                                        if self.logger.isEnabledFor(logging.DEBUG):
+                                            remaining_type, _ = futures_map[remaining_future]
+                                            self.logger.debug(f"Cancelled {remaining_type} search (early exit)")
+                                
+                                if self.logger.isEnabledFor(logging.DEBUG):
+                                    self.logger.debug(f"⚡ [EARLY EXIT] {early_exit_reason}")
+                                break
+                                
+                        except Exception as e:
+                            if search_type == 'direct_statute':
+                                if self.logger.isEnabledFor(logging.DEBUG):
+                                    self.logger.debug(f"Direct statute search failed: {e}")
+                                direct_statute_results = []
+                                completed_tasks.append(('direct_statute', 'error', str(e)))
+                            else:
+                                self.logger.error(f"{search_type} search failed: {e}")
+                                if self.logger.isEnabledFor(logging.DEBUG):
+                                    self.logger.debug(f"{search_type} search exception: {e}")
+                                completed_tasks.append((search_type, 'error', str(e)))
+                                if search_type == 'semantic':
+                                    semantic_results, semantic_count = [], 0
+                                else:
+                                    keyword_results, keyword_count = [], 0
+                            completed_count += 1
                     
-                    # 기존 결과와 병합 (중복 제거)
-                    existing_semantic_ids = {id(doc) for doc in semantic_results}
-                    existing_keyword_ids = {id(doc) for doc in keyword_results}
-                    
-                    semantic_results = semantic_results + [
-                        doc for doc in semantic_results_balanced 
-                        if id(doc) not in existing_semantic_ids
-                    ]
-                    keyword_results = keyword_results + [
-                        doc for doc in keyword_results_balanced 
-                        if id(doc) not in existing_keyword_ids and id(doc) not in existing_semantic_ids
-                    ]
-                    
-                    semantic_count = len(semantic_results)
-                    keyword_count = len(keyword_results)
-                    
-                    self.logger.info(
-                        f"✅ [SEARCH BALANCE] 균형 조정 완료: "
-                        f"semantic={semantic_count}, keyword={keyword_count}, "
-                        f"타입별 분포={dict((k, len(v)) for k, v in grouped_results.items())}"
+                    # 로깅 최적화: 완료된 작업 한 번에 로깅
+                    if self.logger.isEnabledFor(logging.DEBUG) and completed_tasks:
+                        self.logger.debug(f"Completed tasks: {completed_tasks}")
+                except TimeoutError:
+                    # 타임아웃 발생 시 완료되지 않은 future 수집
+                    unfinished_futures = [f for f in futures_map.keys() if not f.done()]
+                    self.logger.warning(
+                        f"⚠️ 병렬 검색 타임아웃 발생: {len(unfinished_futures)} (of {len(futures_map)}) futures unfinished"
                     )
-            except Exception as e:
-                self.logger.warning(f"검색 결과 균형 조정 실패 (기존 결과 사용): {e}")
+                
+                # 타임아웃으로 완료되지 않은 작업 처리 (부분 결과라도 반환)
+                expected_count = 3 if needs_direct_statute else 2
+                if completed_count < expected_count:
+                    # 각 미완료 future에 대해 더 긴 시간(5초) 기다리기
+                    if not semantic_results and semantic_future.running():
+                        try:
+                            semantic_results, semantic_count = semantic_future.result(timeout=5)
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Semantic search completed after timeout: {semantic_count} results")
+                        except Exception as e:
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Semantic search timeout or error: {e}")
+                            semantic_results, semantic_count = [], 0
+                    
+                    if not keyword_results and keyword_future.running():
+                        try:
+                            keyword_results, keyword_count = keyword_future.result(timeout=5)
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Keyword search completed after timeout: {keyword_count} results")
+                        except Exception as e:
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Keyword search timeout or error: {e}")
+                            keyword_results, keyword_count = [], 0
+                    
+                    if needs_direct_statute and not direct_statute_results and direct_statute_future and direct_statute_future.running():
+                        try:
+                            direct_statute_results = direct_statute_future.result(timeout=5)
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Direct statute search completed after timeout: {len(direct_statute_results)} results")
+                        except Exception as e:
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                self.logger.debug(f"Direct statute search timeout or error: {e}")
+                            direct_statute_results = []
+                    
+                    # 미완료 future 취소 시도
+                    for future in unfinished_futures:
+                        if future.running():
+                            future.cancel()
+                            if self.logger.isEnabledFor(logging.DEBUG):
+                                search_type, _ = futures_map[future]
+                                self.logger.debug(f"Cancelled unfinished {search_type} search")
+                
+                # 법령 조문 직접 검색 결과 병합
+                if direct_statute_results:
+                    keyword_results = direct_statute_results + keyword_results
+                    keyword_count += len(direct_statute_results)
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(f"⚖️ [DIRECT STATUTE] {len(direct_statute_results)}개 조문 추가 완료 (총 {keyword_count}개)")
+                
+                # 조기 종료 로깅
+                if early_exit_triggered:
+                    self.logger.info(
+                        f"⚡ [EARLY EXIT] {early_exit_reason} - "
+                        f"Semantic: {len(semantic_results)}, Keyword: {len(keyword_results)}"
+                    )
+
+            # 검색 결과 타입 균형 조정 (성능 최적화: 결과가 많을 때만 수행)
+            total_results = len(semantic_results) + len(keyword_results)
+            should_balance = total_results > 20  # 결과가 20개 이상일 때만 균형 조정
+            
+            if should_balance:
+                try:
+                    # numpy 타입 변환 함수 (최적화: 필요한 경우에만 변환)
+                    def convert_numpy_types(obj, _depth=0):
+                        # 재귀 깊이 제한으로 성능 향상
+                        if _depth > 5:
+                            return obj
+                        import numpy as np
+                        if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                            return int(obj)
+                        elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                            return float(obj)
+                        elif isinstance(obj, np.ndarray):
+                            return obj.tolist()
+                        elif isinstance(obj, dict):
+                            return {k: convert_numpy_types(v, _depth + 1) for k, v in obj.items()}
+                        elif isinstance(obj, (list, tuple)):
+                            return [convert_numpy_types(item, _depth + 1) for item in obj]
+                        return obj
+                    
+                    # 검색 결과에 numpy 타입 변환 적용 (필요한 경우에만)
+                    has_numpy = False
+                    for doc in semantic_results[:5] + keyword_results[:5]:
+                        import numpy as np
+                        if any(isinstance(v, (np.integer, np.floating, np.ndarray)) for v in (doc.values() if isinstance(doc, dict) else [])):
+                            has_numpy = True
+                            break
+                    
+                    if has_numpy:
+                        semantic_results = [convert_numpy_types(doc) for doc in semantic_results]
+                        keyword_results = [convert_numpy_types(doc) for doc in keyword_results]
+                    
+                    # semantic_results와 keyword_results를 타입별로 그룹화
+                    all_results = semantic_results + keyword_results
+                    grouped_results = self.result_balancer.group_results_by_type(all_results)
+                    
+                    # 타입별 분포 확인 (로깅 최적화)
+                    type_distribution = {doc_type: len(docs) for doc_type, docs in grouped_results.items()}
+                    # 로깅 최적화: 타입별 분포 배치 로깅
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        non_zero_types = {k: v for k, v in type_distribution.items() if v > 0}
+                        if non_zero_types:
+                            self.logger.debug(f"📊 [SEARCH BALANCE] Type distribution: {non_zero_types}")
+                    
+                    # 단일 타입만 검색된 경우 경고 (로깅 최적화)
+                    non_zero_types = [t for t, c in type_distribution.items() if c > 0]
+                    if len(non_zero_types) == 1:
+                        single_type = non_zero_types[0]
+                        self.logger.warning(
+                            f"⚠️ [TYPE DIVERSITY] 단일 타입만 검색됨: {single_type} ({type_distribution[single_type]}개)"
+                        )
+                    elif len(non_zero_types) == 0:
+                        self.logger.warning(f"⚠️ [TYPE DIVERSITY] 검색 결과가 없습니다")
+                    elif debug_mode:
+                        # 타입 다양성 점수 계산 (디버그 모드에서만)
+                        total_docs = sum(type_distribution.values())
+                        if total_docs > 0:
+                            import math
+                            entropy = 0.0
+                            for count in type_distribution.values():
+                                if count > 0:
+                                    p = count / total_docs
+                                    entropy -= p * math.log2(p)
+                            max_entropy = math.log2(len(non_zero_types)) if len(non_zero_types) > 1 else 1.0
+                            diversity_score = entropy / max_entropy if max_entropy > 0 else 0.0
+                            self.logger.debug(
+                                f"✅ [TYPE DIVERSITY] 타입 다양성 점수: {diversity_score:.2f} "
+                                f"(검색된 타입: {len(non_zero_types)}개, 총 문서: {total_docs}개)"
+                            )
+                    
+                    # 균형 조정된 결과 생성
+                    semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K)
+                    keyword_k = search_params.get("keyword_k", WorkflowConstants.KEYWORD_SEARCH_K)
+                    balanced_results = self.result_balancer.balance_search_results(
+                        grouped_results,
+                        total_limit=semantic_k + keyword_k
+                    )
+                    
+                    # 균형 조정된 결과를 semantic_results와 keyword_results로 재분배
+                    if balanced_results:
+                        semantic_results_balanced = [
+                            doc for doc in balanced_results 
+                            if doc.get("relevance_score", 0.0) >= 0.5
+                        ]
+                        keyword_results_balanced = [
+                            doc for doc in balanced_results 
+                            if doc.get("relevance_score", 0.0) < 0.5 or doc not in semantic_results_balanced
+                        ]
+                        
+                        # 기존 결과와 병합 (중복 제거 - 성능 최적화)
+                        existing_ids = {id(doc) for doc in semantic_results + keyword_results}
+                        
+                        semantic_results = semantic_results + [
+                            doc for doc in semantic_results_balanced 
+                            if id(doc) not in existing_ids
+                        ]
+                        keyword_results = keyword_results + [
+                            doc for doc in keyword_results_balanced 
+                            if id(doc) not in existing_ids
+                        ]
+                        
+                        semantic_count = len(semantic_results)
+                        keyword_count = len(keyword_results)
+                        
+                        if debug_mode:
+                            self.logger.debug(
+                                f"✅ [SEARCH BALANCE] 균형 조정 완료: "
+                                f"semantic={semantic_count}, keyword={keyword_count}"
+                            )
+                except Exception as e:
+                    if debug_mode:
+                        self.logger.warning(f"검색 결과 균형 조정 실패 (기존 결과 사용): {e}")
 
             ensure_state_group(state, "search")
 
@@ -533,6 +765,10 @@ class SearchExecutionProcessor:
             self._set_state_value(state, "keyword_results", keyword_results)
             self._set_state_value(state, "semantic_count", semantic_count)
             self._set_state_value(state, "keyword_count", keyword_count)
+            
+            # State 구조 일관성 확보: retrieved_docs를 헬퍼 함수로 저장
+            merged_docs = semantic_results + keyword_results
+            set_retrieved_docs(state, merged_docs)
 
             if debug_mode:
                 stored_semantic = self._get_state_value(state, "semantic_results", [])
@@ -579,9 +815,49 @@ class SearchExecutionProcessor:
                 else:
                     self.logger.warning("⚠️ [DEBUG] Keyword search returned 0 results")
 
+        except TimeoutError as timeout_err:
+            self.logger.warning(f"⚠️ 병렬 검색 타임아웃 발생: {timeout_err}")
+            self.logger.info("🔄 순차 검색으로 폴백 시도 중...")
+            try:
+                return self.fallback_sequential_search(state)
+            except Exception as fallback_err:
+                self.logger.error(f"❌ 순차 검색 폴백도 실패: {fallback_err}", exc_info=True)
+                # 최후의 수단: 빈 결과로라도 계속 진행
+                self.logger.warning("⚠️ 최소한의 결과로 계속 진행합니다.")
+                semantic_results, semantic_count = [], 0
+                keyword_results, keyword_count = [], 0
+                # 미완료된 future 취소 시도
+                try:
+                    if 'semantic_future' in locals() and not semantic_future.done():
+                        semantic_future.cancel()
+                    if 'keyword_future' in locals() and not keyword_future.done():
+                        keyword_future.cancel()
+                except Exception:
+                    pass
+                # 빈 결과라도 state에 저장하여 워크플로우가 계속 진행되도록 함
+                ensure_state_group(state, "search")
+                state["search"]["semantic_results"] = semantic_results
+                state["search"]["keyword_results"] = keyword_results
+                state["search"]["semantic_count"] = semantic_count
+                state["search"]["keyword_count"] = keyword_count
+                return state
         except Exception as e:
-            self.logger.error(f"Error in parallel search: {e}", exc_info=True)
-            return self.fallback_sequential_search(state)
+            self.logger.error(f"❌ 병렬 검색 중 예상치 못한 오류: {e}", exc_info=True)
+            self.logger.info("🔄 순차 검색으로 폴백 시도 중...")
+            try:
+                return self.fallback_sequential_search(state)
+            except Exception as fallback_err:
+                self.logger.error(f"❌ 순차 검색 폴백도 실패: {fallback_err}", exc_info=True)
+                # 최후의 수단: 빈 결과로라도 계속 진행
+                self.logger.warning("⚠️ 최소한의 결과로 계속 진행합니다.")
+                semantic_results, semantic_count = [], 0
+                keyword_results, keyword_count = [], 0
+                ensure_state_group(state, "search")
+                state["search"]["semantic_results"] = semantic_results
+                state["search"]["keyword_results"] = keyword_results
+                state["search"]["semantic_count"] = semantic_count
+                state["search"]["keyword_count"] = keyword_count
+                return state
 
         debug_mode = os.getenv("DEBUG_SEARCH", "false").lower() == "true"
 
@@ -598,6 +874,28 @@ class SearchExecutionProcessor:
 
         return state
 
+    def _execute_semantic_search_single(
+        self,
+        query: str,
+        k: int,
+        extracted_keywords: Optional[List[str]] = None,
+        original_query: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """단일 semantic 검색 실행 (Multi-Query용)"""
+        if not query or not query.strip():
+            return [], 0
+        
+        try:
+            results, count = self.search_handler.semantic_search(
+                query,
+                k=k,
+                extracted_keywords=extracted_keywords
+            )
+            return results, count
+        except Exception as e:
+            self.logger.warning(f"Single semantic search failed for '{query[:30]}...': {e}")
+            return [], 0
+
     def execute_semantic_search(
         self,
         optimized_queries: Dict[str, Any],
@@ -611,11 +909,52 @@ class SearchExecutionProcessor:
         semantic_results = []
         semantic_count = 0
 
-        semantic_query = optimized_queries.get("semantic_query", "")
-        semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K)
+        semantic_query = optimized_queries.get("semantic_query", "") if optimized_queries else ""
+        semantic_k = search_params.get("semantic_k", WorkflowConstants.SEMANTIC_SEARCH_K) if search_params else WorkflowConstants.SEMANTIC_SEARCH_K
+        expanded_keywords = optimized_queries.get("expanded_keywords", []) if optimized_queries else []
+        
+        # 빈 쿼리 검증: semantic_query가 비어있으면 original_query 사용, 둘 다 비어있으면 빈 결과 반환
+        if not semantic_query or not str(semantic_query).strip():
+            if original_query and original_query.strip():
+                semantic_query = original_query
+                if optimized_queries:
+                    optimized_queries["semantic_query"] = original_query
+                self.logger.info(f"🔍 [EXECUTE_SEMANTIC_SEARCH] semantic_query가 비어있어 original_query 사용: '{original_query[:50]}...'")
+            else:
+                self.logger.warning("⚠️ [EXECUTE_SEMANTIC_SEARCH] semantic_query와 original_query가 모두 비어있어 검색을 수행할 수 없습니다.")
+                return [], 0
+        
+        # 개선: textToSQL 라우팅 확인 및 적용 (우선순위 1)
+        if original_query and original_query.strip():
+            from core.agents.legal_data_connector_v2 import route_query, LegalDataConnectorV2
+            route = route_query(original_query)
+            self.logger.info(f"🔍 [TEXT2SQL SEMANTIC] route_query result: '{route}' for query: '{original_query[:50]}...'")
+            if route == "text2sql":
+                self.logger.info(f"🔍 [TEXT2SQL SEMANTIC] Detected text2sql route for semantic search: '{original_query[:50]}...'")
+                try:
+                    data_connector = LegalDataConnectorV2()
+                    text2sql_results = data_connector.search_documents(original_query, limit=semantic_k)
+                    if text2sql_results:
+                        semantic_results.extend(text2sql_results)
+                        semantic_count += len(text2sql_results)
+                        self.logger.info(f"✅ [TEXT2SQL SEMANTIC] {len(text2sql_results)}개 결과 검색 성공 (semantic_results에 추가)")
+                    else:
+                        self.logger.warning(f"⚠️ [TEXT2SQL SEMANTIC] 검색 결과 없음")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [TEXT2SQL SEMANTIC] 검색 실패: {e}")
 
         if extracted_keywords is None:
             extracted_keywords = []
+
+        self.logger.info(
+            f"🔍 [QUERY USAGE] semantic_query from optimized_queries: '{semantic_query[:100]}...' "
+            f"(length={len(semantic_query)}, expanded_keywords_count={len(expanded_keywords) if expanded_keywords else 0})"
+        )
+        if expanded_keywords:
+            self.logger.info(
+                f"🔍 [QUERY USAGE] expanded_keywords: {expanded_keywords[:10]} "
+                f"(total={len(expanded_keywords)}, included_in_query={len([t for t in expanded_keywords if t in semantic_query])})"
+            )
 
         self.logger.info(
             f"🔍 [DEBUG] _execute_semantic_search_internal received: extracted_keywords={len(extracted_keywords)} (type: {type(extracted_keywords).__name__}), query='{semantic_query[:50]}...', k={semantic_k}"
@@ -640,7 +979,24 @@ class SearchExecutionProcessor:
                 new_keywords = [kw for kw in core_keywords if kw not in query_keywords]
                 if new_keywords:
                     enhanced_semantic_query = f"{semantic_query} {' '.join(new_keywords[:3])}"
-                    self.logger.info(f"🔍 [SEMANTIC SEARCH] Enhanced semantic query with keywords: '{enhanced_semantic_query[:100]}...'")
+                    self.logger.info(
+                        f"🔍 [QUERY ENHANCEMENT] Enhanced semantic query: "
+                        f"original='{semantic_query[:80]}...', "
+                        f"enhanced='{enhanced_semantic_query[:100]}...', "
+                        f"added_keywords={new_keywords[:3]}"
+                    )
+                else:
+                    self.logger.info(
+                        f"🔍 [QUERY ENHANCEMENT] No new keywords to add (all keywords already in query): "
+                        f"query='{semantic_query[:80]}...'"
+                    )
+            else:
+                self.logger.debug(f"🔍 [QUERY ENHANCEMENT] No core keywords extracted from extracted_keywords")
+        else:
+            self.logger.info(
+                f"🔍 [QUERY ENHANCEMENT] Using original semantic_query (no extracted_keywords): "
+                f"'{semantic_query[:100]}...'"
+            )
 
         main_semantic, main_count = self.search_handler.semantic_search(
             enhanced_semantic_query,
@@ -654,6 +1010,15 @@ class SearchExecutionProcessor:
             f"🔍 [DEBUG] Main semantic search: {main_count} results (query: '{enhanced_semantic_query[:50]}...')"
         )
 
+        # 조기 종료 체크: 메인 검색만으로 충분한 경우
+        max_results_threshold = semantic_k * 3
+        if len(semantic_results) >= max_results_threshold:
+            self.logger.info(
+                f"⏭️ [EARLY EXIT] Main semantic search sufficient: "
+                f"{len(semantic_results)} >= {max_results_threshold}, skipping additional searches"
+            )
+            return semantic_results, semantic_count
+
         if original_query and original_query.strip():
             enhanced_original_query = original_query
             if extracted_keywords and len(extracted_keywords) > 0:
@@ -664,46 +1029,182 @@ class SearchExecutionProcessor:
                     if new_keywords:
                         enhanced_original_query = f"{original_query} {' '.join(new_keywords[:2])}"
 
-            original_semantic, original_count = self.search_handler.semantic_search(
-                enhanced_original_query,
-                k=semantic_k // 2,
-                extracted_keywords=extracted_keywords
-            )
-            semantic_results.extend(original_semantic)
-            semantic_count += original_count
-            self.logger.info(
-                f"🔍 [DEBUG] Original query semantic search: {original_count} results (query: '{enhanced_original_query[:50]}...')"
-            )
-            print(f"[DEBUG] _execute_semantic_search_internal: Added {original_count} results from original query search")
+            # 조기 종료 체크: original_query 검색 전 확인
+            if len(semantic_results) >= max_results_threshold:
+                self.logger.info(
+                    f"⏭️ [EARLY EXIT] Skipping original query search: "
+                    f"{len(semantic_results)} >= {max_results_threshold}"
+                )
+            else:
+                original_semantic, original_count = self.search_handler.semantic_search(
+                    enhanced_original_query,
+                    k=semantic_k // 2,
+                    extracted_keywords=extracted_keywords
+                )
+                semantic_results.extend(original_semantic)
+                semantic_count += original_count
+                self.logger.info(
+                    f"🔍 [DEBUG] Original query semantic search: {original_count} results (query: '{enhanced_original_query[:50]}...')"
+                )
+                print(f"[DEBUG] _execute_semantic_search_internal: Added {original_count} results from original query search")
+                
+                # 다시 조기 종료 체크
+                if len(semantic_results) >= max_results_threshold:
+                    self.logger.info(
+                        f"⏭️ [EARLY EXIT] After original query search: "
+                        f"{len(semantic_results)} >= {max_results_threshold}, skipping multi-query"
+                    )
+                    return semantic_results, semantic_count
 
         # Multi-Query Retrieval 적용 (LLM 기반 질문 재작성)
+        # 개선: 조기 종료 조건 및 병렬 실행
         multi_queries = optimized_queries.get("multi_queries", [])
-        if multi_queries and len(multi_queries) > 1:
-            print(f"[MULTI-QUERY] Found {len(multi_queries)} queries, executing searches...", flush=True, file=sys.stdout)
-            self.logger.info(f"🔍 [MULTI-QUERY] Found {len(multi_queries)} queries, executing searches...")
-            # 첫 번째는 이미 semantic_query로 검색됨 (원본)
-            for i, mq in enumerate(multi_queries[1:], 1):
-                if mq and mq.strip() and mq != semantic_query:
-                    mq_semantic, mq_count = self.search_handler.semantic_search(
-                        mq,
-                        k=semantic_k // 2,
-                        extracted_keywords=extracted_keywords
-                    )
-                    semantic_results.extend(mq_semantic)
-                    semantic_count += mq_count
-                    self.logger.info(
-                        f"🔍 [MULTI-QUERY] Query #{i}: {mq_count} results (query: '{mq[:50]}...')"
-                    )
-                    print(f"[MULTI-QUERY] Query #{i}: {mq_count} results (query: '{mq[:50]}...')", flush=True, file=sys.stdout)
+        min_results_threshold = semantic_k  # 최소 결과 수
+        max_results_threshold = semantic_k * 3  # 최대 결과 수 제한
+        
+        # 조기 종료: 이미 충분한 결과가 있으면 멀티 쿼리 스킵
+        if len(semantic_results) >= max_results_threshold:
+            self.logger.info(f"⏭️ [MULTI-QUERY] Skipping multi-query: already have {len(semantic_results)} results (threshold: {max_results_threshold})")
+        elif multi_queries and len(multi_queries) > 1:
+            # 개선: Multi-Query 병렬 실행
+            # 개선: Multi-Query 병렬 실행 (성능 최적화: 결과가 충분하면 스킵)
+            max_semantic_results_before_multi = semantic_k * 2  # Multi-Query 전 최대 결과 수
+            if len(semantic_results) >= max_semantic_results_before_multi:
+                self.logger.info(
+                    f"⚡ [PERFORMANCE] Skipping multi-query search "
+                    f"(already have {len(semantic_results)} results, threshold={max_semantic_results_before_multi})"
+                )
+                multi_queries_to_process = []
+            else:
+                multi_queries_to_process = multi_queries[1:]  # 첫 번째는 이미 처리됨
+                # 최대 처리 개수 제한 (성능 최적화)
+                max_multi_queries = min(len(multi_queries_to_process), 2)  # 최대 2개로 감소 (3 → 2)
+                multi_queries_to_process = multi_queries_to_process[:max_multi_queries]
+            
+            if multi_queries_to_process:
+                print(f"[MULTI-QUERY] Found {len(multi_queries)} queries, processing {len(multi_queries_to_process)} in parallel...", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [MULTI-QUERY] Found {len(multi_queries)} queries, processing {len(multi_queries_to_process)} in parallel...")
+                
+                # 중복 제거를 위한 seen_ids 및 내용 유사도 추적
+                seen_ids = set()
+                seen_contents = {}  # content_hash -> doc
+                
+                # 원본 쿼리 결과의 ID와 내용 해시 수집
+                for doc in semantic_results:
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id")
+                    if doc_id:
+                        seen_ids.add(doc_id)
+                    # 내용 해시로도 중복 확인
+                    content = doc.get("content") or doc.get("text", "")
+                    if content:
+                        import hashlib
+                        content_hash = hashlib.md5(content[:200].encode('utf-8')).hexdigest()
+                        if content_hash not in seen_contents:
+                            seen_contents[content_hash] = doc
+                from concurrent.futures import as_completed
+                import threading
+                
+                # 스레드 안전을 위한 락
+                results_lock = threading.Lock()
+                
+                def process_multi_query(mq: str) -> List[Dict[str, Any]]:
+                    """단일 Multi-Query 처리 함수"""
+                    if not mq or not mq.strip() or mq == semantic_query:
+                        return []
+                    
+                    try:
+                        # 성능 최적화: 결과 수 제한
+                        mq_semantic, mq_count = self.search_handler.semantic_search(
+                            mq,
+                            k=max(5, semantic_k // 3),  # 최소 5개, 최대 semantic_k // 3
+                            extracted_keywords=extracted_keywords
+                        )
+                        return mq_semantic
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ [MULTI-QUERY] Query '{mq[:30]}...' failed: {e}")
+                        return []
+                
+                # 병렬 실행
+                multi_query_results = []
+                with ThreadPoolExecutor(max_workers=min(len(multi_queries_to_process), 4)) as executor:
+                    # 모든 Multi-Query 작업 제출
+                    future_to_query = {
+                        executor.submit(process_multi_query, mq): mq 
+                        for mq in multi_queries_to_process
+                    }
+                    
+                    # 완료되는 대로 결과 수집
+                    for future in as_completed(future_to_query, timeout=20):
+                        query = future_to_query[future]
+                        try:
+                            mq_semantic = future.result()
+                            if mq_semantic:
+                                with results_lock:
+                                    # 조기 종료 확인
+                                    if len(semantic_results) >= max_results_threshold:
+                                        self.logger.info(
+                                            f"⏭️ [MULTI-QUERY] Early exit: {len(semantic_results)} results "
+                                            f"(threshold: {max_results_threshold})"
+                                        )
+                                        break
+                                    
+                                    # 중복 제거 및 결과 추가
+                                    added_count = 0
+                                    for doc in mq_semantic:
+                                        doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id")
+                                        content = doc.get("content") or doc.get("text", "")
+                                        
+                                        # ID 기반 중복 확인
+                                        if doc_id and doc_id in seen_ids:
+                                            continue
+                                        
+                                        # 내용 기반 중복 확인
+                                        is_duplicate = False
+                                        if content:
+                                            import hashlib
+                                            content_hash = hashlib.md5(content[:200].encode('utf-8')).hexdigest()
+                                            if content_hash in seen_contents:
+                                                existing_doc = seen_contents[content_hash]
+                                                existing_content = existing_doc.get("content") or existing_doc.get("text", "")
+                                                if len(content) > 0 and len(existing_content) > 0:
+                                                    common_chars = len(set(content[:100]) & set(existing_content[:100]))
+                                                    similarity = common_chars / max(len(set(content[:100])), len(set(existing_content[:100])), 1)
+                                                    if similarity > 0.8:
+                                                        is_duplicate = True
+                                            else:
+                                                seen_contents[content_hash] = doc
+                                        
+                                        if not is_duplicate:
+                                            semantic_results.append(doc)
+                                            if doc_id:
+                                                seen_ids.add(doc_id)
+                                            added_count += 1
+                                    
+                                    if added_count > 0:
+                                        self.logger.info(
+                                            f"🔍 [MULTI-QUERY] Query '{query[:30]}...' added {added_count} unique results"
+                                        )
+                        except Exception as e:
+                            self.logger.warning(f"⚠️ [MULTI-QUERY] Query '{query[:30]}...' processing failed: {e}")
+            
+            # 최종 결과 수 업데이트
+            semantic_count = len(semantic_results)
+            self.logger.info(
+                f"✅ [MULTI-QUERY] Parallel processing completed: {semantic_count} total results "
+                f"(from {len(multi_queries_to_process)} queries)"
+            )
         
         # 키워드 쿼리로 추가 의미적 검색 (Multi-Query가 없거나 부족한 경우)
-        if not multi_queries or len(multi_queries) <= 1:
-            keyword_queries = optimized_queries.get("keyword_queries", [])[:2]
+        # 성능 최적화: 결과 수가 이미 충분하면 스킵
+        max_semantic_results = semantic_k * 3  # 최대 결과 수 제한 (예: 12 * 3 = 36)
+        if len(semantic_results) < max_semantic_results and (not multi_queries or len(multi_queries) <= 1):
+            keyword_queries = optimized_queries.get("keyword_queries", [])[:1]  # 2개 → 1개로 감소
             for i, kw_query in enumerate(keyword_queries, 1):
                 if kw_query and kw_query.strip() and kw_query != semantic_query:
+                    # 성능 최적화: 결과 수 제한
                     kw_semantic, kw_count = self.search_handler.semantic_search(
                         kw_query,
-                        k=semantic_k // 2,
+                        k=max(5, semantic_k // 3),  # 최소 5개, 최대 semantic_k // 3
                         extracted_keywords=extracted_keywords
                     )
                     semantic_results.extend(kw_semantic)
@@ -712,43 +1213,121 @@ class SearchExecutionProcessor:
                         f"🔍 [DEBUG] Keyword-based semantic search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
                     )
                     print(f"[DEBUG] _execute_semantic_search_internal: Added {kw_count} results from keyword query #{i}")
+                    
+                    # 성능 최적화: 결과 수가 이미 충분하면 중단
+                    if len(semantic_results) >= max_semantic_results:
+                        self.logger.info(f"⚡ [PERFORMANCE] Stopping keyword-based search (already have {len(semantic_results)} results)")
+                        break
 
         # Phase 1 + Phase 2: 타입별 별도 검색 수행 및 쿼리 다변화 적용 (타입 다양성 개선)
-        document_types = {
-            "statute_article": "statute",
-            "case_paragraph": "case",
-            "decision_paragraph": "decision",
-            "interpretation_paragraph": "interpretation"
-        }
+        # 개선: 타입별 검색 전 조건 체크 (조기 스킵)
+        max_semantic_results = semantic_k * 3  # 최대 결과 수 제한
+        
+        # 조건 1: 결과가 충분하면 스킵 (60% 이상으로 완화하여 더 빨리 스킵)
+        should_skip_type_diversity = False
+        if len(semantic_results) >= max_semantic_results * 0.6:
+            self.logger.info(
+                f"⚡ [PERFORMANCE] Skipping type diversity search "
+                f"(already have {len(semantic_results)} results, threshold={max_semantic_results * 0.6:.0f})"
+            )
+            should_skip_type_diversity = True
+        else:
+            # 조건 2: 타입 분포 확인
+            def _calculate_type_distribution(docs):
+                """타입 분포 계산"""
+                type_counts = {}
+                for doc in docs:
+                    doc_type = (
+                        doc.get("type") or
+                        doc.get("source_type") or
+                        (doc.get("metadata", {}).get("source_type") if isinstance(doc.get("metadata"), dict) else "") or
+                        "unknown"
+                    )
+                    # 타입 매핑
+                    type_mapping = {
+                        "statute_article": "statute",
+                        "case_paragraph": "case",
+                        "decision_paragraph": "decision",
+                        "interpretation_paragraph": "interpretation"
+                    }
+                    mapped_type = type_mapping.get(doc_type, doc_type)
+                    type_counts[mapped_type] = type_counts.get(mapped_type, 0) + 1
+                return type_counts
+            
+            type_distribution = _calculate_type_distribution(semantic_results)
+            
+            # 이미 2개 이상 타입이면 스킵 (3개 → 2개로 완화)
+            if len(type_distribution) >= 2:
+                self.logger.info(
+                    f"⚡ [PERFORMANCE] Skipping type diversity search "
+                    f"(sufficient type diversity: {len(type_distribution)} types)"
+                )
+                should_skip_type_diversity = True
+        
         type_specific_results = {}
         type_specific_count = 0
         
-        # semantic_search_engine 확인 (여러 방법 시도)
-        semantic_engine = None
+        if not should_skip_type_diversity:
+            document_types = {
+                "statute_article": "statute",
+                "case_paragraph": "case",
+                "decision_paragraph": "decision",
+                "interpretation_paragraph": "interpretation"
+            }
+            
+            # semantic_search_engine 확인 (여러 방법 시도)
+            semantic_engine = None
         print(f"[TYPE DIVERSITY] semantic_search_engine 확인 시작")
         print(f"[TYPE DIVERSITY] self.semantic_search_engine: {self.semantic_search_engine is not None}")
         self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_search_engine 확인 시작")
         self.logger.info(f"🔍 [TYPE DIVERSITY] self.semantic_search_engine: {self.semantic_search_engine is not None}")
         
-        if self.semantic_search_engine:
+        # SemanticSearchEngineV2 인스턴스인지 확인하는 헬퍼 함수
+        def is_semantic_search_engine(obj):
+            """SemanticSearchEngineV2 인스턴스인지 확인"""
+            if obj is None:
+                return False
+            # 타입 이름으로 확인 (import 없이)
+            type_name = type(obj).__name__
+            if type_name == 'SemanticSearchEngineV2':
+                return True
+            # hasattr로 search 메서드 확인
+            if hasattr(obj, 'search') and callable(getattr(obj, 'search', None)):
+                # 함수가 아닌 인스턴스인지 확인
+                if not callable(obj) or hasattr(obj, '__class__'):
+                    return True
+            return False
+        
+        if self.semantic_search_engine and is_semantic_search_engine(self.semantic_search_engine):
             semantic_engine = self.semantic_search_engine
             self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from self: {type(semantic_engine).__name__}")
         elif hasattr(self.search_handler, 'semantic_search_engine') and self.search_handler.semantic_search_engine:
-            semantic_engine = self.search_handler.semantic_search_engine
-            self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler: {type(semantic_engine).__name__}")
+            candidate = self.search_handler.semantic_search_engine
+            if is_semantic_search_engine(candidate):
+                semantic_engine = candidate
+                self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler: {type(semantic_engine).__name__}")
+            else:
+                self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search_engine is not a valid engine: {type(candidate).__name__}")
         elif hasattr(self.search_handler, 'semantic_search') and self.search_handler.semantic_search:
-            semantic_engine = self.search_handler.semantic_search
-            self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
+            candidate = self.search_handler.semantic_search
+            # semantic_search가 함수인지 확인
+            if callable(candidate) and not is_semantic_search_engine(candidate):
+                self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search is a function, not an engine instance")
+            elif is_semantic_search_engine(candidate):
+                semantic_engine = candidate
+                self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
+            else:
+                self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search is not a valid engine: {type(candidate).__name__}")
         else:
             self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine not found")
-            self.logger.warning(f"   - self.semantic_search_engine: {self.semantic_search_engine}")
+            self.logger.warning(f"   - self.semantic_search_engine: {self.semantic_search_engine} ({type(self.semantic_search_engine).__name__ if self.semantic_search_engine else 'None'})")
             self.logger.warning(f"   - search_handler.semantic_search_engine: {getattr(self.search_handler, 'semantic_search_engine', 'N/A')}")
             self.logger.warning(f"   - search_handler.semantic_search: {getattr(self.search_handler, 'semantic_search', 'N/A')}")
         
         print(f"[TYPE DIVERSITY] semantic_engine 확인 결과: {semantic_engine is not None}")
         self.logger.info(f"🔍 [TYPE DIVERSITY] semantic_engine 확인 결과: {semantic_engine is not None}")
         
-        if semantic_engine:
+        if semantic_engine and not should_skip_type_diversity:
             print(f"[TYPE DIVERSITY] semantic_engine 발견, 타입별 검색 진행")
             self.logger.info("✅ [TYPE DIVERSITY] semantic_engine 발견, 타입별 검색 진행")
             # Phase 2: QueryDiversifier로 타입별 쿼리 생성
@@ -787,16 +1366,35 @@ class SearchExecutionProcessor:
                     else:
                         self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 기본 쿼리 사용: '{search_query[:50]}...'")
                     
-                    # 각 타입별로 별도 의미적 검색 수행 (재시도 로직 활용)
-                    self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type} 검색 시작 (k=20, threshold=0.05, source_types=[{doc_type}])")
+                    # 우선순위 5: 타입별 검색 강화 (성능 최적화: k 값 감소)
+                    k_per_type = 15  # 20 → 15로 감소 (성능 개선)
+                    min_score_by_type = {
+                        "statute_article": 0.4,  # 법령 조문: 낮은 임계값
+                        "case_paragraph": 0.5,
+                        "decision_paragraph": 0.5,
+                        "interpretation_paragraph": 0.5
+                    }
+                    min_score = min_score_by_type.get(doc_type, 0.5)
+                    
+                    self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type} 검색 시작 (k={k_per_type}, threshold={min_score}, source_types=[{doc_type}])")
                     type_results = semantic_engine.search(
                         search_query,
-                        k=20,  # 더 많은 결과 검색
+                        k=k_per_type,  # k * 2 → k로 감소 (성능 개선)
                         source_types=[doc_type],  # 타입별 필터 적용
-                        similarity_threshold=0.05,  # 낮은 임계값으로 시작 (재시도 로직이 더 낮춤)
+                        similarity_threshold=min_score,  # 타입별 최소 점수
                         min_results=1,  # 최소 1개는 보장
                         disable_retry=False  # 재시도 로직 활성화 (임계값 자동 조정)
                     )
+                    
+                    # 품질 필터링 (타입별 최소 점수)
+                    if type_results:
+                        filtered_results = [
+                            doc for doc in type_results
+                            if doc.get("similarity", doc.get("relevance_score", 0.0)) >= min_score
+                        ]
+                        # 상위 k_per_type개 선택
+                        type_results = filtered_results[:k_per_type]
+                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: {len(type_results)}개 결과 (필터링 후)")
                     
                     # 결과가 없으면 더 일반적인 쿼리로 재시도
                     if not type_results:
@@ -818,31 +1416,8 @@ class SearchExecutionProcessor:
                         except Exception as e:
                             self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 폴백 검색 실패: {e}")
                     
-                    # 결과가 여전히 없으면 매우 일반적인 키워드로 재시도
-                    if not type_results:
-                        # 타입별 일반 키워드 사용
-                        type_keywords = {
-                            "statute_article": "법령 조문",
-                            "case_paragraph": "판례",
-                            "decision_paragraph": "결정례",
-                            "interpretation_paragraph": "해석례"
-                        }
-                        general_query = type_keywords.get(doc_type, "법률")
-                        self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 일반 키워드로 재시도: '{general_query}'")
-                        try:
-                            type_results = semantic_engine.search(
-                                general_query,
-                                k=5,  # 최소한 5개만
-                                source_types=[doc_type],
-                                similarity_threshold=0.0,
-                                min_results=1,
-                                disable_retry=False
-                            )
-                            if type_results:
-                                self.logger.info(f"✅ [TYPE DIVERSITY] {doc_type}: 일반 키워드로 {len(type_results)}개 검색 성공")
-                        except Exception as e:
-                            self.logger.debug(f"⚠️ [TYPE DIVERSITY] {doc_type} 일반 키워드 검색 실패: {e}")
-                    
+                    # 개선: 일반 키워드 재시도 제거 (3단계 → 2단계로 단순화)
+                    # 결과가 없으면 샘플링으로 대체
                     self.logger.info(f"🔍 [TYPE DIVERSITY] {doc_type}: 최종 {len(type_results)}개 검색됨")
                     
                     # 최종 방안: 검색 결과가 없으면 타입별 샘플링으로 대체
@@ -885,7 +1460,7 @@ class SearchExecutionProcessor:
                 for future in futures:
                     doc_type = futures[future]
                     try:
-                        result_doc_type, type_results = future.result(timeout=30)
+                        result_doc_type, type_results = future.result(timeout=15)  # 30초 → 15초로 최적화
                         if type_results:
                             type_specific_results[result_doc_type] = type_results
                             semantic_results.extend(type_results)
@@ -902,7 +1477,14 @@ class SearchExecutionProcessor:
                             )
                     except Exception as e:
                         self.logger.error(f"❌ [TYPE DIVERSITY] {doc_type} 병렬 검색 실패: {e}")
-        else:
+                
+                # 타입별 검색 결과 로깅
+                if 'type_specific_count' in locals() and type_specific_count > 0:
+                    self.logger.info(
+                        f"✅ [TYPE DIVERSITY] 타입별 검색 완료: 총 {type_specific_count}개 추가 "
+                        f"(총 semantic_results: {len(semantic_results)}개)"
+                    )
+        elif not semantic_engine:
             self.logger.warning("⚠️ [TYPE DIVERSITY] semantic_search_engine을 찾을 수 없어 타입별 검색을 수행할 수 없습니다")
             self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine 확인: self.semantic_search_engine={self.semantic_search_engine is not None}")
             if hasattr(self, 'search_handler'):
@@ -974,7 +1556,36 @@ class SearchExecutionProcessor:
             f"original_query='{original_query[:50] if original_query else 'N/A'}...'"
         )
 
+        # 개선: textToSQL 라우팅 확인 및 적용
+        from core.agents.legal_data_connector_v2 import route_query, LegalDataConnectorV2
+        
+        # original_query에 대해 라우팅 확인
+        print(f"[TEXT2SQL DEBUG] original_query='{original_query[:50] if original_query else 'EMPTY'}...', has_query={bool(original_query and original_query.strip())}", flush=True, file=sys.stdout)
+        self.logger.info(f"🔍 [TEXT2SQL DEBUG] original_query='{original_query[:50] if original_query else 'EMPTY'}...', has_query={bool(original_query and original_query.strip())}")
         if original_query and original_query.strip():
+            route = route_query(original_query)
+            print(f"[TEXT2SQL DEBUG] route_query result: '{route}' for query: '{original_query[:50]}...'", flush=True, file=sys.stdout)
+            self.logger.info(f"🔍 [TEXT2SQL DEBUG] route_query result: '{route}' for query: '{original_query[:50]}...'")
+            if route == "text2sql":
+                # textToSQL 방식으로 검색
+                print(f"[TEXT2SQL] Detected text2sql route for query: '{original_query[:50]}...'", flush=True, file=sys.stdout)
+                self.logger.info(f"🔍 [TEXT2SQL] Detected text2sql route for query: '{original_query[:50]}...'")
+                try:
+                    data_connector = LegalDataConnectorV2()
+                    text2sql_results = data_connector.search_documents(original_query, limit=keyword_limit)
+                    if text2sql_results:
+                        keyword_results.extend(text2sql_results)
+                        keyword_count += len(text2sql_results)
+                        print(f"[TEXT2SQL] {len(text2sql_results)}개 결과 검색 성공", flush=True, file=sys.stdout)
+                        self.logger.info(f"✅ [TEXT2SQL] {len(text2sql_results)}개 결과 검색 성공")
+                    else:
+                        print(f"[TEXT2SQL] 검색 결과 없음", flush=True, file=sys.stdout)
+                        self.logger.warning(f"⚠️ [TEXT2SQL] 검색 결과 없음")
+                except Exception as e:
+                    print(f"[TEXT2SQL] 검색 실패: {e}", flush=True, file=sys.stdout)
+                    self.logger.warning(f"⚠️ [TEXT2SQL] 검색 실패: {e}")
+            
+            # 기존 keyword_search_func 로직도 유지 (하이브리드)
             if self.keyword_search_func:
                 original_kw_results, original_kw_count = self.keyword_search_func(
                     query=original_query,
@@ -983,16 +1594,29 @@ class SearchExecutionProcessor:
                     legal_field=legal_field,
                     extracted_keywords=extracted_keywords
                 )
-            else:
-                original_kw_results, original_kw_count = [], 0
-            keyword_results.extend(original_kw_results)
-            keyword_count += original_kw_count
-            self.logger.info(
-                f"🔍 [DEBUG] Original query keyword search: {original_kw_count} results (query: '{original_query[:50]}...')"
-            )
+                keyword_results.extend(original_kw_results)
+                keyword_count += original_kw_count
+                self.logger.info(
+                    f"🔍 [DEBUG] Original query keyword search: {original_kw_count} results (query: '{original_query[:50]}...')"
+                )
 
+        # keyword_queries에 대해서도 라우팅 확인
         for i, kw_query in enumerate(keyword_queries, 1):
             if kw_query and kw_query.strip() and kw_query != original_query:
+                route = route_query(kw_query)
+                if route == "text2sql":
+                    self.logger.info(f"🔍 [TEXT2SQL] Detected text2sql route for keyword query #{i}: '{kw_query[:50]}...'")
+                    try:
+                        data_connector = LegalDataConnectorV2()
+                        text2sql_results = data_connector.search_documents(kw_query, limit=keyword_limit)
+                        if text2sql_results:
+                            keyword_results.extend(text2sql_results)
+                            keyword_count += len(text2sql_results)
+                            self.logger.info(f"✅ [TEXT2SQL] Query #{i}: {len(text2sql_results)}개 결과 검색 성공")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ [TEXT2SQL] Query #{i} 검색 실패: {e}")
+                
+                # 기존 keyword_search_func 로직도 유지 (하이브리드)
                 if self.keyword_search_func:
                     kw_results, kw_count = self.keyword_search_func(
                         query=kw_query,
@@ -1001,13 +1625,11 @@ class SearchExecutionProcessor:
                         legal_field=legal_field,
                         extracted_keywords=extracted_keywords
                     )
-                else:
-                    kw_results, kw_count = [], 0
-                keyword_results.extend(kw_results)
-                keyword_count += kw_count
-                self.logger.info(
-                    f"🔍 [DEBUG] Keyword search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
-                )
+                    keyword_results.extend(kw_results)
+                    keyword_count += kw_count
+                    self.logger.info(
+                        f"🔍 [DEBUG] Keyword search #{i}: {kw_count} results (query: '{kw_query[:50]}...')"
+                    )
 
         self.logger.info(
             f"🔍 [DEBUG] Total keyword search results: {keyword_count} (unique: {len(keyword_results)})"
@@ -1017,9 +1639,12 @@ class SearchExecutionProcessor:
         return keyword_results, keyword_count
 
     def fallback_sequential_search(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """순차 검색 실행 (폴백)"""
+        """순차 검색 실행 (폴백) - 안전한 오류 처리"""
+        semantic_results, semantic_count = [], 0
+        keyword_results, keyword_count = [], 0
+        
         try:
-            self.logger.warning("Falling back to sequential search")
+            self.logger.info("🔄 순차 검색 실행 중...")
 
             optimized_queries = self._get_state_value(state, "optimized_queries", {})
             search_params = self._get_state_value(state, "search_params", {})
@@ -1030,26 +1655,75 @@ class SearchExecutionProcessor:
             original_query = self._get_state_value(state, "query", "")
             if not original_query and "input" in state and isinstance(state.get("input"), dict):
                 original_query = state["input"].get("query", "")
+            
+            # 빈 쿼리 검증 추가
+            if not original_query or not original_query.strip():
+                self.logger.error("❌ 순차 검색: query가 비어있어 검색을 수행할 수 없습니다.")
+                self.logger.warning("⚠️ 순차 검색: query를 찾을 수 없습니다. state 구조 확인:")
+                self.logger.debug(f"   state keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+                if "input" in state:
+                    self.logger.debug(f"   input type: {type(state.get('input'))}")
+                    if isinstance(state.get("input"), dict):
+                        self.logger.debug(f"   input keys: {list(state.get('input', {}).keys())}")
+                # 빈 결과 반환
+                self._set_state_value(state, "semantic_results", [])
+                self._set_state_value(state, "keyword_results", [])
+                self._set_state_value(state, "semantic_count", 0)
+                self._set_state_value(state, "keyword_count", 0)
+                return state
 
             extracted_keywords_for_search = self._get_state_value(state, "extracted_keywords", [])
-            semantic_results, semantic_count = self.execute_semantic_search(
-                optimized_queries, search_params, original_query, extracted_keywords_for_search
-            )
+            
+            # 의미적 검색 시도 (오류 발생해도 계속 진행)
+            try:
+                semantic_results, semantic_count = self.execute_semantic_search(
+                    optimized_queries, search_params, original_query, extracted_keywords_for_search
+                )
+                self.logger.info(f"✅ 순차 검색: 의미적 검색 완료 ({semantic_count}개 결과)")
+            except Exception as semantic_err:
+                self.logger.warning(f"⚠️ 순차 검색: 의미적 검색 실패: {semantic_err}")
+                self.logger.debug(f"   의미적 검색 오류 상세: {semantic_err}", exc_info=True)
+                semantic_results, semantic_count = [], 0
 
-            keyword_results, keyword_count = self.execute_keyword_search(
-                optimized_queries, search_params, query_type_str, legal_field, extracted_keywords, original_query
-            )
+            # 키워드 검색 시도 (오류 발생해도 계속 진행)
+            try:
+                keyword_results, keyword_count = self.execute_keyword_search(
+                    optimized_queries, search_params, query_type_str, legal_field, extracted_keywords, original_query
+                )
+                self.logger.info(f"✅ 순차 검색: 키워드 검색 완료 ({keyword_count}개 결과)")
+            except Exception as keyword_err:
+                self.logger.warning(f"⚠️ 순차 검색: 키워드 검색 실패: {keyword_err}")
+                self.logger.debug(f"   키워드 검색 오류 상세: {keyword_err}", exc_info=True)
+                keyword_results, keyword_count = [], 0
 
+            # 결과 저장 (일부라도 성공하면 저장)
             self._set_state_value(state, "semantic_results", semantic_results)
             self._set_state_value(state, "keyword_results", keyword_results)
             self._set_state_value(state, "semantic_count", semantic_count)
             self._set_state_value(state, "keyword_count", keyword_count)
+            
+            # State 구조 일관성 확보: retrieved_docs를 헬퍼 함수로 저장
+            merged_docs = semantic_results + keyword_results
+            set_retrieved_docs(state, merged_docs)
 
-            self.logger.info(f"Sequential search completed: {semantic_count} semantic, {keyword_count} keyword")
+            total_results = semantic_count + keyword_count
+            if total_results > 0:
+                self.logger.info(f"✅ 순차 검색 완료: 의미적 {semantic_count}개, 키워드 {keyword_count}개 (총 {total_results}개)")
+            else:
+                self.logger.warning(f"⚠️ 순차 검색 완료: 결과 없음 (의미적 {semantic_count}개, 키워드 {keyword_count}개)")
 
         except Exception as e:
-            self.logger.error(f"Error in sequential search: {e}", exc_info=True)
+            self.logger.error(f"❌ 순차 검색 중 예상치 못한 오류: {e}", exc_info=True)
             self._handle_error(state, str(e), "순차 검색 중 오류 발생")
+            # 최소한의 결과라도 저장
+            self._set_state_value(state, "semantic_results", semantic_results)
+            self._set_state_value(state, "keyword_results", keyword_results)
+            self._set_state_value(state, "semantic_count", semantic_count)
+            self._set_state_value(state, "keyword_count", keyword_count)
+            
+            # State 구조 일관성 확보: retrieved_docs를 헬퍼 함수로 저장
+            merged_docs = semantic_results + keyword_results
+            set_retrieved_docs(state, merged_docs)
 
         return state
 
