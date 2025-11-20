@@ -41,7 +41,6 @@ LawFirmAI/
 │   │   ├── data/           # 데이터 레이어
 │   │   ├── models/         # AI 모델
 │   │   └── utils/          # 유틸리티
-│   ├── langgraph_core/     # LangGraph 핵심 모듈
 │   └── tests/             # 테스트 코드
 ├── api/                    # FastAPI 애플리케이션
 ├── frontend/               # React 프론트엔드
