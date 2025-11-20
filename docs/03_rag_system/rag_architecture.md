@@ -62,10 +62,11 @@ LawFirmAI 프로젝트의 LangChain 기반 RAG(Retrieval-Augmented Generation) �
 #### 2. 검색 엔진
 **파일**: `lawfirm_langgraph/core/search/engines/`
 
-- **HybridSearchEngineV2**: 하이브리드 검색 (의미적 + 정확 매칭)
+- **HybridSearchEngineV2**: 하이브리드 검색 (의미적 + 정확 매칭) - 메인 검색 엔진
 - **SemanticSearchEngineV2**: FAISS 벡터 기반 의미적 검색
 - **ExactSearchEngineV2**: SQLite FTS5 기반 정확한 매칭 검색
-- **QuestionClassifier**: 질문 유형 분류
+- **KeywordSearchEngine**: 키워드 기반 검색
+- **PrecedentSearchEngine**: 판례 전용 검색 엔진
 - **Keyword Coverage 기반 동적 가중치**: 검색 결과의 키워드 커버리지에 따라 가중치 조정
 
 #### 3. 검색 결과 처리 및 순위 결정
@@ -190,15 +191,17 @@ lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플�
     ├── classify_query (질문 분류)
     ├── expand_keywords (키워드 확장 - LLM 기반)
     ├── retrieve_documents (문서 검색)
-    │   ├── lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py
-    │   ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py
-    │   └── lawfirm_langgraph/core/search/engines/exact_search_engine_v2.py
+    │   ├── core/search/engines/hybrid_search_engine_v2.py
+    │   ├── core/search/engines/semantic_search_engine_v2.py
+    │   └── core/search/engines/exact_search_engine_v2.py
     ├── process_search_results_combined (검색 결과 처리)
-    │   ├── lawfirm_langgraph/core/search/processors/result_merger.py
-    │   ├── lawfirm_langgraph/core/search/processors/result_ranker.py
-    │   └── lawfirm_langgraph/core/search/processors/search_result_processor.py
+    │   ├── core/search/processors/result_merger.py
+    │   ├── core/search/processors/result_ranker.py
+    │   └── core/search/processors/search_result_processor.py
     └── generate_answer (답변 생성)
-        └── lawfirm_langgraph/core/workflow/processors/workflow_document_processor.py
+        ├── core/generation/generators/answer_generator.py
+        ├── core/generation/generators/context_builder.py
+        └── core/generation/validators/quality_validators.py
     ↓
 최종 응답 반환
 ```
@@ -339,6 +342,7 @@ results = engine.search("민법 제543조", k=5)
 **주요 기능**:
 - SQLite FTS5 기반 키워드 검색
 - 법령명, 조문번호 등 정확한 매칭
+- 빠른 응답 시간 (< 100ms)
 
 #### 3. 하이브리드 검색 엔진
 **파일**: `lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py`

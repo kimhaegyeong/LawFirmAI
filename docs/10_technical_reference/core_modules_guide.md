@@ -9,14 +9,37 @@
 ```
 lawfirm_langgraph/core/
 ├── workflow/        # LangGraph 워크플로우 (메인)
+│   ├── nodes/       # 워크플로우 노드
+│   ├── state/       # 상태 정의 및 관리
+│   ├── tools/       # Agentic AI Tools
+│   ├── builders/    # 체인 빌더
+│   ├── mixins/      # 워크플로우 믹스인
+│   ├── processors/  # 워크플로우 프로세서
 │   ├── callbacks/   # 스트리밍 콜백 핸들러
-│   └── ...
-├── agents/          # 에이전트 및 프롬프트 빌더
+│   └── utils/       # 워크플로우 유틸리티
 ├── search/          # 검색 엔진 및 핸들러
+│   ├── engines/     # 검색 엔진
+│   ├── handlers/    # 검색 핸들러
+│   ├── processors/  # 검색 결과 처리
+│   └── optimizers/  # 검색 최적화
 ├── generation/      # 답변 생성 및 포맷팅
-├── processing/      # 데이터 처리 및 검증
+│   ├── generators/  # 답변 생성기
+│   ├── formatters/  # 답변 포맷터
+│   └── validators/  # 답변 검증기
 ├── classification/  # 분류 및 분석
-└── shared/          # 공유 유틸리티
+│   ├── classifiers/ # 분류기
+│   ├── handlers/    # 분류 핸들러
+│   └── analyzers/   # 분석기
+├── processing/      # 데이터 처리 및 검증
+│   ├── extractors/  # 추출기
+│   ├── processors/  # 프로세서
+│   └── parsers/     # 파서
+├── conversation/    # 대화 관리
+├── agents/          # 에이전트 및 유틸리티
+├── services/        # 통합 서비스
+├── data/            # 데이터 레이어
+├── shared/          # 공유 유틸리티
+└── utils/           # 유틸리티
 ```
 
 ## 1. Workflow 모듈 (`lawfirm_langgraph/core/workflow/`)
@@ -262,194 +285,148 @@ def classify_query(state: LegalWorkflowState) -> LegalWorkflowState:
 #### search_mixin.py
 **역할**: 검색 믹스인
 
-## 2. Agents 모듈 (`lawfirm_langgraph/core/agents/`) - 레거시
+## 2. Search 모듈 (`lawfirm_langgraph/core/search/`)
 
-**참고**: 새로운 코드는 `core/workflow/`를 사용하세요. 이 디렉토리는 하위 호환성을 위해 유지됩니다.
+### 2.1 검색 엔진 (`engines/`)
 
-### 2.1 레거시 핸들러
-
-#### handlers/
-**역할**: 레거시 핸들러 모듈
-
-**주요 파일**:
-- `answer_formatter.py`: 답변 포맷터
-- `answer_generator.py`: 답변 생성기
-- `classification_handler.py`: 분류 핸들러
-- `context_builder.py`: 컨텍스트 빌더
-- `direct_answer_handler.py`: 직접 답변 핸들러
-- `search_handler.py`: 검색 핸들러
-
-### 2.2 유틸리티
-
-#### keyword_mapper.py
-**역할**: 법률 키워드 매핑
+#### hybrid_search_engine_v2.py
+**역할**: 하이브리드 검색 엔진 (의미적 + 정확 매칭)
 
 **주요 클래스**:
-- `LegalKeywordMapper`: 법률 키워드 매퍼
-
-#### legal_data_connector_v2.py
-**역할**: 법률 데이터 커넥터 (벡터 스토어 + 데이터베이스)
-
-**주요 클래스**:
-- `LegalDataConnectorV2`: 통합 데이터 커넥터
-
-**주요 메서드**:
-- `retrieve_documents()`: 문서 검색
-- `search_by_similarity()`: 유사도 검색
-- `search_by_keywords()`: 키워드 검색
-
-### 2.3 최적화 및 모니터링
-
-#### optimizers/performance_optimizer.py
-**역할**: 성능 최적화
-
-**주요 기능**:
-- State 최적화
-- 메모리 관리
-- 캐시 관리
-
-#### optimizers/query_optimizer.py
-**역할**: 쿼리 최적화
-
-**주요 기능**:
-- 검색 쿼리 개선
-- 키워드 확장
-- 동의어 처리
-
-#### search_performance_monitor.py
-**역할**: 검색 성능 모니터링
-
-**주요 기능**:
-- 검색 시간 측정
-- 결과 품질 평가
-- 성능 메트릭 수집
-
-### 2.4 기타 유틸리티
-
-#### workflow_logger.py
-**역할**: 워크플로우 로깅
-
-**주요 기능**:
-- 노드 실행 로깅
-- State 변화 추적
-- 오류 로깅
-
-#### checkpoint_manager.py
-**역할**: 체크포인트 관리
-
-**주요 기능**:
-- State 저장
-- 워크플로우 재개
-- 이력 관리
-
-### 1.4 데이터 커넥터
-
-#### legal_data_connector_v2.py
-**역할**: 법률 데이터 커넥터 (벡터 스토어 + 데이터베이스)
-
-**주요 클래스**:
-- `LegalDataConnectorV2`: 통합 데이터 커넥터
-
-**주요 메서드**:
-- `retrieve_documents()`: 문서 검색
-- `search_by_similarity()`: 유사도 검색
-- `search_by_keywords()`: 키워드 검색
-
-#### keyword_mapper.py
-**역할**: 법률 키워드 매핑
-
-**주요 클래스**:
-- `LegalKeywordMapper`: 법률 키워드 매퍼
-
-### 1.5 최적화 및 모니터링
-
-#### performance_optimizer.py
-**역할**: 성능 최적화
-
-**주요 기능**:
-- State 최적화
-- 메모리 관리
-- 캐시 관리
-
-#### query_optimizer.py
-**역할**: 쿼리 최적화
-
-**주요 기능**:
-- 검색 쿼리 개선
-- 키워드 확장
-- 동의어 처리
-
-#### search_performance_monitor.py
-**역할**: 검색 성능 모니터링
-
-**주요 기능**:
-- 검색 시간 측정
-- 결과 품질 평가
-- 성능 메트릭 수집
-
-### 1.6 기타 유틸리티
-
-#### workflow_logger.py
-**역할**: 워크플로우 로깅
-
-**주요 기능**:
-- 노드 실행 로깅
-- State 변화 추적
-- 오류 로깅
-
-#### checkpoint_manager.py
-**역할**: 체크포인트 관리
-
-**주요 기능**:
-- State 저장
-- 워크플로우 재개
-- 이력 관리
-
-## 2. Services 모듈 (`lawfirm_langgraph/core/services/`)
-
-### 2.1 검색 서비스
-
-#### hybrid_search_engine.py
-**역할**: 하이브리드 검색 엔진 (의미적 + 정확한 매칭)
-
-**주요 클래스**:
-- `HybridSearchEngine`: 통합 검색 엔진
+- `HybridSearchEngineV2`: 통합 검색 엔진
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.hybrid_search_engine import HybridSearchEngine
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
 
-engine = HybridSearchEngine()
-results = engine.search("민법 제543조", question_type="law_inquiry")
+engine = HybridSearchEngineV2()
+results = engine.search("계약 해지", question_type="law_inquiry")
 ```
 
-#### semantic_search_engine.py
+#### semantic_search_engine_v2.py
 **역할**: 의미적 검색 엔진 (FAISS 벡터)
 
 **주요 클래스**:
-- `SemanticSearchEngine`: 의미적 검색
+- `SemanticSearchEngineV2`: 의미적 검색
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.semantic_search_engine import SemanticSearchEngine
+from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
 
-engine = SemanticSearchEngine()
+engine = SemanticSearchEngineV2()
 results = engine.search("계약 해지", k=5)
 ```
 
-#### exact_search_engine.py
-**역할**: 정확한 매칭 검색 (SQLite FTS)
+#### exact_search_engine_v2.py
+**역할**: 정확한 매칭 검색 (SQLite FTS5)
 
 **주요 클래스**:
-- `ExactSearchEngine`: 정확한 매칭 검색
+- `ExactSearchEngineV2`: 정확한 매칭 검색
 
 **사용 예시**:
 ```python
-from lawfirm_langgraph.core.services.exact_search_engine import ExactSearchEngine
+from lawfirm_langgraph.core.search.engines.exact_search_engine_v2 import ExactSearchEngineV2
 
-engine = ExactSearchEngine()
+engine = ExactSearchEngineV2()
 results = engine.search("민법 제543조", k=5)
 ```
+
+### 2.2 검색 결과 처리 (`processors/`)
+
+#### result_merger.py
+**역할**: 검색 결과 병합 및 재순위화
+
+**주요 클래스**:
+- `ResultMerger`: 결과 병합기
+- `ResultRanker`: 결과 재순위화
+
+**사용 예시**:
+```python
+from lawfirm_langgraph.core.search.processors.result_merger import ResultMerger, ResultRanker
+
+merger = ResultMerger()
+ranker = ResultRanker()
+
+merged = merger.merge_results(exact_results, semantic_results, weights, query)
+ranked = ranker.rank_results(merged, top_k=20, query=query)
+```
+
+#### search_result_processor.py
+**역할**: 검색 결과 처리 및 키워드 매칭
+
+**주요 클래스**:
+- `SearchResultProcessor`: 검색 결과 프로세서
+
+### 2.3 검색 최적화 (`optimizers/`)
+
+#### legal_query_optimizer.py
+**역할**: 법률 쿼리 최적화
+
+#### keyword_mapper.py
+**역할**: 법률 키워드 매핑
+
+**주요 클래스**:
+- `LegalKeywordMapper`: 법률 키워드 매퍼
+
+#### query_enhancer.py
+**역할**: 쿼리 강화 및 확장
+
+## 3. Generation 모듈 (`lawfirm_langgraph/core/generation/`)
+
+### 3.1 답변 생성기 (`generators/`)
+
+#### answer_generator.py
+**역할**: LLM 기반 답변 생성
+
+**주요 클래스**:
+- `AnswerGenerator`: 답변 생성기
+
+**사용 예시**:
+```python
+from lawfirm_langgraph.core.generation.generators.answer_generator import AnswerGenerator
+
+generator = AnswerGenerator()
+answer = generator.generate(query, context)
+```
+
+#### context_builder.py
+**역할**: 검색 결과 기반 컨텍스트 구축
+
+**주요 클래스**:
+- `ContextBuilder`: 컨텍스트 빌더
+
+### 3.2 답변 포맷터 (`formatters/`)
+
+#### answer_structure_enhancer.py
+**역할**: 답변 구조 강화
+
+**주요 클래스**:
+- `AnswerStructureEnhancer`: 답변 구조 강화기
+
+#### legal_citation_enhancer.py
+**역할**: 법률 인용 강화
+
+**주요 클래스**:
+- `LegalCitationEnhancer`: 법률 인용 강화기
+
+### 3.3 답변 검증기 (`validators/`)
+
+#### quality_validators.py
+**역할**: 답변 품질 검증
+
+**주요 클래스**:
+- `AnswerValidator`: 답변 검증기
+- `SearchValidator`: 검색 검증기
+
+#### confidence_calculator.py
+**역할**: 답변 신뢰도 계산
+
+**주요 클래스**:
+- `ConfidenceCalculator`: 신뢰도 계산기
+
+## 4. Classification 모듈 (`lawfirm_langgraph/core/classification/`)
+
+### 4.1 분류기 (`classifiers/`)
 
 #### question_classifier.py
 **역할**: 질문 유형 분류
@@ -464,53 +441,112 @@ results = engine.search("민법 제543조", k=5)
 - `document_analysis`: 문서 분석
 - `general_question`: 일반 질문
 
-#### result_merger.py
-**역할**: 검색 결과 병합 및 재순위화
+#### domain_classifier.py
+**역할**: 도메인 분류
 
 **주요 클래스**:
-- `ResultMerger`: 결과 병합기
-- `ResultRanker`: 결과 재순위화
+- `DomainClassifier`: 도메인 분류기
 
-### 2.2 답변 생성 서비스
+### 4.2 분류 핸들러 (`handlers/`)
 
-#### answer_generator.py
-**역할**: LLM 기반 답변 생성
-
-**주요 클래스**:
-- `AnswerGenerator`: 답변 생성기
-
-**사용 예시**:
-```python
-from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
-
-generator = AnswerGenerator()
-answer = generator.generate(query, context)
-```
-
-#### context_builder.py
-**역할**: 검색 결과 기반 컨텍스트 구축
+#### classification_handler.py
+**역할**: 분류 핸들러
 
 **주요 클래스**:
-- `ContextBuilder`: 컨텍스트 빌더
+- `ClassificationHandler`: 분류 핸들러
+
+## 5. Processing 모듈 (`lawfirm_langgraph/core/processing/`)
+
+### 5.1 추출기 (`extractors/`)
+
+#### query_extractor.py
+**역할**: 쿼리 추출
+
+#### document_extractor.py
+**역할**: 문서 추출
+
+#### reasoning_extractor.py
+**역할**: 추론 추출
+
+### 5.2 파서 (`parsers/`)
+
+#### query_parser.py
+**역할**: 쿼리 파싱
+
+#### answer_parser.py
+**역할**: 답변 파싱
+
+#### response_parsers.py
+**역할**: 응답 파싱
+
+## 6. Conversation 모듈 (`lawfirm_langgraph/core/conversation/`)
+
+### 6.1 대화 관리
+
+#### conversation_manager.py
+**역할**: 대화 관리
+
+**주요 클래스**:
+- `ConversationManager`: 대화 관리자
+
+#### multi_turn_handler.py
+**역할**: 멀티턴 처리
+
+**주요 클래스**:
+- `MultiTurnHandler`: 멀티턴 핸들러
+
+#### conversation_flow_tracker.py
+**역할**: 대화 흐름 추적
+
+**주요 클래스**:
+- `ConversationFlowTracker`: 대화 흐름 추적기
+
+## 7. Agents 모듈 (`lawfirm_langgraph/core/agents/`)
+
+**참고**: 이 모듈은 워크플로우에서 사용되는 유틸리티 및 헬퍼 함수를 포함합니다.
+
+### 7.1 핸들러 (`handlers/`)
+
+#### search_handler.py
+**역할**: 검색 핸들러
 
 #### answer_formatter.py
-**역할**: 답변 포맷팅
+**역할**: 답변 포맷터
+
+### 7.2 유틸리티
+
+#### keyword_mapper.py
+**역할**: 법률 키워드 매핑
 
 **주요 클래스**:
-- `AnswerFormatter`: 답변 포맷터
+- `LegalKeywordMapper`: 법률 키워드 매퍼
 
-**주요 기능**:
-- Markdown 포맷팅
-- 법령 인용 형식화
-- 목록/표 구조화
-
-### 2.3 품질 개선 서비스
-
-#### confidence_calculator.py
-**역할**: 답변 신뢰도 계산
+#### legal_data_connector_v2.py
+**역할**: 법률 데이터 커넥터 (벡터 스토어 + 데이터베이스)
 
 **주요 클래스**:
-- `ConfidenceCalculator`: 신뢰도 계산기
+- `LegalDataConnectorV2`: 통합 데이터 커넥터
+
+**주요 메서드**:
+- `retrieve_documents()`: 문서 검색
+- `search_by_similarity()`: 유사도 검색
+- `search_by_keywords()`: 키워드 검색
+
+## 8. Services 모듈 (`lawfirm_langgraph/core/services/`)
+
+### 8.1 통합 서비스
+
+#### gemini_client.py
+**역할**: Google Gemini API 클라이언트
+
+**주요 클래스**:
+- `GeminiClient`: Gemini 클라이언트
+
+#### unified_prompt_manager.py
+**역할**: 통합 프롬프트 관리
+
+**주요 클래스**:
+- `UnifiedPromptManager`: 통합 프롬프트 관리자
 
 ## 3. Data 모듈 (`lawfirm_langgraph/core/data/`)
 
@@ -690,12 +726,16 @@ workflow/legal_workflow_enhanced
     ↓
     ├── workflow/nodes/ (워크플로우 노드)
     ├── workflow/state/ (상태 관리)
-    ├── services/search (검색)
-    ├── services/generation (답변 생성)
-    ├── services/enhancement (품질 개선)
+    ├── search/engines/ (검색 엔진)
+    ├── search/processors/ (검색 결과 처리)
+    ├── generation/generators/ (답변 생성)
+    ├── generation/validators/ (답변 검증)
+    ├── classification/classifiers/ (질문 분류)
+    ├── processing/extractors/ (데이터 추출)
+    ├── conversation/ (대화 관리)
     ├── data/database (데이터베이스)
     ├── data/vector_store (벡터 스토어)
-    └── models (AI 모델)
+    └── services/ (통합 서비스)
 ```
 
 ## 설계 원칙

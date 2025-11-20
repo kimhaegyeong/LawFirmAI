@@ -21,36 +21,53 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 │      ├── state_definitions.py         (상태 정의)         │
 │      └── modular_states.py            (모듈화된 상태)      │
 ├─────────────────────────────────────────────────────────────┤
-│                    핵심 서비스 레이어                        │
-│  ├── lawfirm_langgraph/core/services/                      │
-│  │   ├── hybrid_search_engine.py          (하이브리드 검색) │
-│  │   ├── semantic_search_engine.py        (의미적 검색)    │
-│  │   ├── exact_search_engine.py           (정확 매칭)      │
-│  │   ├── question_classifier.py          (질문 분류)      │
-│  │   ├── answer_generator.py             (답변 생성)      │
-│  │   ├── context_builder.py              (컨텍스트 구축)   │
-│  │   └── confidence_calculator.py        (신뢰도 계산)    │
+│                    검색 레이어                              │
+│  ├── lawfirm_langgraph/core/search/engines/                │
+│  │   ├── hybrid_search_engine_v2.py       (하이브리드 검색) │
+│  │   ├── semantic_search_engine_v2.py    (의미적 검색)    │
+│  │   ├── exact_search_engine_v2.py       (정확 매칭)      │
+│  │   └── keyword_search_engine.py        (키워드 검색)    │
+│  ├── lawfirm_langgraph/core/search/handlers/               │
+│  │   └── search_handler.py               (검색 핸들러)    │
+│  ├── lawfirm_langgraph/core/search/processors/             │
+│  │   ├── result_merger.py                 (결과 병합)      │
+│  │   ├── result_ranker.py                 (결과 순위 결정) │
+│  │   └── search_result_processor.py       (검색 결과 처리) │
+│  └── lawfirm_langgraph/core/search/optimizers/             │
+│      ├── legal_query_optimizer.py          (쿼리 최적화)    │
+│      └── keyword_mapper.py                (키워드 매핑)    │
+├─────────────────────────────────────────────────────────────┤
+│                    답변 생성 레이어                         │
+│  ├── lawfirm_langgraph/core/generation/generators/          │
+│  │   ├── answer_generator.py              (답변 생성)      │
+│  │   └── context_builder.py               (컨텍스트 구축)   │
+│  ├── lawfirm_langgraph/core/generation/formatters/          │
+│  │   ├── answer_structure_enhancer.py     (답변 구조 강화) │
+│  │   └── legal_citation_enhancer.py      (법률 인용 강화) │
+│  └── lawfirm_langgraph/core/generation/validators/         │
+│      ├── quality_validators.py            (품질 검증)      │
+│      └── confidence_calculator.py         (신뢰도 계산)    │
+├─────────────────────────────────────────────────────────────┤
+│                    분류 레이어                              │
+│  ├── lawfirm_langgraph/core/classification/classifiers/    │
+│  │   ├── question_classifier.py           (질문 분류)      │
+│  │   └── domain_classifier.py             (도메인 분류)    │
+│  └── lawfirm_langgraph/core/classification/handlers/        │
+│      └── classification_handler.py        (분류 핸들러)    │
 ├─────────────────────────────────────────────────────────────┤
 │                    데이터 레이어                            │
 │  ├── lawfirm_langgraph/core/data/database.py               │
 │  ├── lawfirm_langgraph/core/data/vector_store.py          │
 │  └── lawfirm_langgraph/core/data/conversation_store.py    │
 ├─────────────────────────────────────────────────────────────┤
-│                    검색 레이어                              │
-│  ├── lawfirm_langgraph/core/search/engines/                │
-│  │   ├── semantic_search_engine_v2.py                     │
-│  │   ├── keyword_search_engine.py                         │
-│  │   └── hybrid_search_engine_v2.py                       │
-│  └── lawfirm_langgraph/core/search/handlers/               │
-│      └── search_handler.py                                 │
+│                    대화 관리 레이어                         │
+│  ├── lawfirm_langgraph/core/conversation/                  │
+│  │   ├── conversation_manager.py           (대화 관리)      │
+│  │   └── multi_turn_handler.py            (멀티턴 처리)    │
 ├─────────────────────────────────────────────────────────────┤
 │                    AI 모델 레이어                            │
 │  ├── lawfirm_langgraph/core/services/gemini_client.py     │
 │  └── lawfirm_langgraph/core/models/sentence_bert.py        │
-├─────────────────────────────────────────────────────────────┤
-│                    분류 레이어                              │
-│  └── lawfirm_langgraph/core/classification/                │
-│      └── domain_classifier.py                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,13 +76,14 @@ LawFirmAI의 서비스 아키텍처는 **lawfirm_langgraph 모듈 기반**의 �
 | 모듈 | 책임 | 주요 컴포넌트 |
 |------|------|-------------|
 | **lawfirm_langgraph/core/workflow/** | LangGraph 워크플로우 관리 | workflow_service, legal_workflow_enhanced, nodes, state |
-| **lawfirm_langgraph/core/search/** | 검색 엔진 | semantic_search_engine_v2, keyword_search_engine, hybrid_search_engine_v2 |
-| **lawfirm_langgraph/core/services/** | 비즈니스 서비스 | gemini_client, unified_prompt_manager, keyword_mapper |
-| **lawfirm_langgraph/core/search/processors/** | 검색 결과 처리 | result_merger, result_ranker, search_result_processor |
-| **lawfirm_langgraph/core/workflow/processors/** | 워크플로우 문서 처리 | workflow_document_processor |
+| **lawfirm_langgraph/core/search/** | 검색 엔진 및 처리 | hybrid_search_engine_v2, semantic_search_engine_v2, exact_search_engine_v2, result_merger, result_ranker |
+| **lawfirm_langgraph/core/generation/** | 답변 생성 및 검증 | answer_generator, context_builder, quality_validators, answer_structure_enhancer |
+| **lawfirm_langgraph/core/classification/** | 분류 시스템 | question_classifier, domain_classifier, classification_handler |
+| **lawfirm_langgraph/core/processing/** | 데이터 처리 | query_extractor, document_extractor, response_parsers |
+| **lawfirm_langgraph/core/conversation/** | 대화 관리 | conversation_manager, multi_turn_handler, conversation_flow_tracker |
+| **lawfirm_langgraph/core/services/** | 통합 서비스 | gemini_client, unified_prompt_manager |
 | **lawfirm_langgraph/core/data/** | 데이터 관리 | database, vector_store, conversation_store |
-| **lawfirm_langgraph/core/models/** | AI 모델 관리 | sentence_bert |
-| **lawfirm_langgraph/core/classification/** | 분류 시스템 | domain_classifier |
+| **lawfirm_langgraph/core/shared/** | 공유 유틸리티 | cache, clients, monitoring, utils |
 | **lawfirm_langgraph/config/** | 설정 관리 | langgraph_config, app_config |
 
 ## 핵심 서비스
@@ -123,11 +141,11 @@ results = engine.search("계약 해지", k=10)
 - 유사도 검색
 - 결과 랭킹
 
-### 4. 키워드 검색 엔진
+### 4. 정확 매칭 검색 엔진
 
-**파일**: `lawfirm_langgraph/core/search/engines/keyword_search_engine.py`
+**파일**: `lawfirm_langgraph/core/search/engines/exact_search_engine_v2.py`
 
-**역할**: FTS5 기반 키워드 검색
+**역할**: FTS5 기반 정확한 매칭 검색
 
 **기능**:
 - FTS5 풀텍스트 검색
@@ -175,27 +193,27 @@ ranked = ranker.rank_results(merged, top_k=20, query=query)
 quality = ranker.evaluate_search_quality(query, ranked, query_type, extracted_keywords)
 ```
 
-### 7. 컨텍스트 빌더
+### 7. 답변 생성기
 
-**파일**: `lawfirm_langgraph/core/services/context_builder.py`
+**파일**: `lawfirm_langgraph/core/generation/generators/answer_generator.py`
 
-**역할**: 검색 결과를 바탕으로 답변 생성에 필요한 컨텍스트 구성
-
-**기능**:
-- 관련 문서 선별
-- 컨텍스트 압축
-- 우선순위 정렬
-
-### 8. 신뢰도 계산기
-
-**파일**: `lawfirm_langgraph/core/services/confidence_calculator.py`
-
-**역할**: 답변의 신뢰도 계산
+**역할**: LLM 기반 답변 생성
 
 **기능**:
-- 소스 신뢰도 평가
-- 검색 결과 품질 평가
-- 종합 신뢰도 계산
+- 컨텍스트 기반 답변 생성
+- 법률 도메인 특화 프롬프트
+- 스트리밍 지원
+
+### 8. 답변 품질 검증기
+
+**파일**: `lawfirm_langgraph/core/generation/validators/quality_validators.py`
+
+**역할**: 답변 품질 검증 및 신뢰도 계산
+
+**기능**:
+- 답변 품질 평가
+- 법적 근거 검증
+- 신뢰도 계산
 
 ## 데이터 레이어
 
@@ -262,14 +280,16 @@ lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
 lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── nodes/classification_nodes.py (질문 분류)
+    │   └── core/classification/classifiers/question_classifier.py
     ├── nodes/search_nodes.py (문서 검색)
-    │   ├── lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py
-    │   ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py
-    │   └── lawfirm_langgraph/core/search/engines/keyword_search_engine.py
+    │   ├── core/search/engines/hybrid_search_engine_v2.py
+    │   ├── core/search/engines/semantic_search_engine_v2.py
+    │   └── core/search/engines/exact_search_engine_v2.py
+    ├── core/search/processors/result_merger.py (결과 병합)
     └── nodes/answer_nodes.py (답변 생성)
-        ├── lawfirm_langgraph/core/services/answer_generator.py
-        ├── lawfirm_langgraph/core/services/context_builder.py
-        └── lawfirm_langgraph/core/services/confidence_calculator.py
+        ├── core/generation/generators/answer_generator.py
+        ├── core/generation/generators/context_builder.py
+        └── core/generation/validators/quality_validators.py
     ↓
 User Output
 ```
@@ -282,10 +302,14 @@ Query
 lawfirm_langgraph/core/classification/classifiers/question_classifier.py (질문 분류)
     ↓
 lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py (하이브리드 검색)
-    ├── lawfirm_langgraph/core/search/engines/semantic_search_engine_v2.py (의미적 검색)
-    └── lawfirm_langgraph/core/search/engines/keyword_search_engine.py (키워드 검색)
+    ├── core/search/engines/semantic_search_engine_v2.py (의미적 검색)
+    └── core/search/engines/exact_search_engine_v2.py (정확 매칭 검색)
     ↓
 lawfirm_langgraph/core/search/processors/result_merger.py (결과 병합)
+    ↓
+lawfirm_langgraph/core/search/processors/result_ranker.py (결과 순위 결정)
+    ↓
+lawfirm_langgraph/core/search/processors/search_result_processor.py (검색 결과 처리)
     ↓
 Results
 ```

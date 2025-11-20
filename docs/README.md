@@ -8,6 +8,14 @@ LawFirmAI는 **LangGraph 기반 법률 AI 어시스턴트**로, 법률 질문 �
 
 **현재 기술 스택**: LangGraph + Google Gemini 2.5 Flash Lite + FAISS + React + FastAPI
 
+**핵심 아키텍처**: 
+- `lawfirm_langgraph/core/workflow/` - LangGraph 워크플로우 (메인)
+- `lawfirm_langgraph/core/search/` - 하이브리드 검색 시스템
+- `lawfirm_langgraph/core/generation/` - 답변 생성 및 검증
+- `lawfirm_langgraph/core/classification/` - 질문 분류 시스템
+- `lawfirm_langgraph/core/processing/` - 데이터 처리
+- `lawfirm_langgraph/core/conversation/` - 대화 관리
+
 ## 📁 문서 디렉토리
 
 ### 01. 시작하기 (`01_getting_started/`)
@@ -45,10 +53,8 @@ AI 모델 성능 최적화 및 벤치마크
 ### 05. 품질 관리 (`05_quality/`)
 품질 개선, 키워드 시스템, 프롬프트 강화
 - [품질 개선 시스템](05_quality/quality_improvement_system.md)
-- [키워드 확장 보고서](05_quality/keyword_expansion_report.md)
 - [하이브리드 키워드 시스템](05_quality/hybrid_keyword_management.md)
-- [프롬프트 시스템 강화](05_quality/prompt_system_enhancement.md)
-- [의미적 도메인 분류](05_quality/semantic_domain_classification.md)
+- [검색 품질 평가 가이드](05_quality/search_quality_evaluation_guide.md)
 
 ### 06. 배포 (`06_deployment/`)
 배포 가이드 및 운영 문서

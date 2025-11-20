@@ -12,27 +12,45 @@ LawFirmAI/
 │   ├── config/              # 설정 파일
 │   ├── core/                # 핵심 비즈니스 로직
 │   │   ├── workflow/        # LangGraph 워크플로우 (메인)
-│   │   ├── agents/          # 레거시 에이전트 코드 (유틸리티)
+│   │   ├── search/          # 검색 시스템
+│   │   │   ├── engines/     # 검색 엔진
+│   │   │   ├── handlers/    # 검색 핸들러
+│   │   │   ├── processors/  # 검색 결과 처리
+│   │   │   └── optimizers/  # 검색 최적화
+│   │   ├── generation/      # 답변 생성 시스템
+│   │   │   ├── generators/  # 답변 생성기
+│   │   │   ├── formatters/  # 답변 포맷터
+│   │   │   └── validators/  # 답변 검증기
+│   │   ├── classification/  # 분류 시스템
+│   │   │   ├── classifiers/ # 분류기
+│   │   │   ├── handlers/   # 분류 핸들러
+│   │   │   └── analyzers/   # 분석기
+│   │   ├── processing/      # 데이터 처리
+│   │   │   ├── extractors/  # 추출기
+│   │   │   ├── processors/  # 프로세서
+│   │   │   └── parsers/     # 파서
+│   │   ├── conversation/    # 대화 관리
+│   │   ├── agents/          # 에이전트 및 유틸리티
 │   │   ├── services/        # 비즈니스 서비스
 │   │   ├── data/            # 데이터 레이어
-│   │   ├── models/          # AI 모델
+│   │   ├── shared/          # 공유 유틸리티
 │   │   └── utils/           # 유틸리티
 │   ├── tests/               # 테스트 코드
 │   └── data/                # 데이터 파일
+├── api/                     # FastAPI 애플리케이션
+├── frontend/                # React 프론트엔드
 ├── scripts/                 # 유틸리티 스크립트
-│   ├── data_collection/     # 데이터 수집
-│   ├── data_processing/     # 데이터 전처리
-│   ├── database/            # 데이터베이스 관리
-│   ├── ml_training/         # ML 모델 훈련
-│   └── monitoring/          # 모니터링
+│   ├── checks/              # 체크 스크립트
+│   ├── ingest/              # 데이터 수집
+│   ├── rag/                 # RAG 관련 스크립트
+│   ├── tests/               # 테스트 스크립트
+│   ├── tools/               # 도구 스크립트
+│   └── utils/               # 유틸리티 스크립트
 ├── data/                    # 데이터 파일
 │   ├── raw/                 # 원본 데이터
-│   ├── processed/           # 전처리된 데이터
+│   ├── processed/          # 전처리된 데이터
 │   ├── embeddings/          # 벡터 임베딩
 │   └── database/            # 데이터베이스 파일
-├── monitoring/              # 모니터링 시스템
-│   ├── grafana/             # Grafana 설정
-│   └── prometheus/          # Prometheus 설정
 ├── docs/                    # 프로젝트 문서
 └── README.md                # 프로젝트 문서
 ```
@@ -88,33 +106,119 @@ result = await workflow.process_query_async("질문", "session_id")
 ```
 
 
-### lawfirm_langgraph/core/services/ - 비즈니스 서비스
-**역할**: 답변 생성, 컨텍스트 구축, 신뢰도 계산 등
-
-```
-lawfirm_langgraph/core/services/
-├── answer_generator.py                # 답변 생성
-├── context_builder.py                 # 컨텍스트 빌더
-├── confidence_calculator.py          # 신뢰도 계산
-├── gemini_client.py                   # Gemini 클라이언트
-├── unified_prompt_manager.py          # 통합 프롬프트 관리
-└── ... (기타 서비스 파일)
-```
-
-**참고**: 검색 엔진은 `core/search/engines/`에 위치합니다.
-
 ### lawfirm_langgraph/core/search/ - 검색 시스템
 **역할**: 하이브리드 검색 엔진 및 검색 결과 처리
 
 ```
 lawfirm_langgraph/core/search/
 ├── engines/                          # 검색 엔진
-│   ├── hybrid_search_engine_v2.py    # 하이브리드 검색
-│   ├── semantic_search_engine_v2.py  # 의미적 검색
-│   └── keyword_search_engine.py      # 키워드 검색
-└── processors/                        # 검색 결과 처리
-    ├── result_merger.py              # 결과 병합
-    └── result_ranker.py              # 결과 순위 결정
+│   ├── hybrid_search_engine_v2.py    # 하이브리드 검색 (메인)
+│   ├── semantic_search_engine_v2.py  # 의미적 검색 (FAISS)
+│   ├── exact_search_engine_v2.py    # 정확 매칭 검색 (FTS5)
+│   ├── keyword_search_engine.py      # 키워드 검색
+│   └── precedent_search_engine.py    # 판례 검색
+├── handlers/                         # 검색 핸들러
+│   └── search_handler.py            # 검색 핸들러
+├── processors/                       # 검색 결과 처리
+│   ├── result_merger.py             # 결과 병합
+│   ├── result_ranker.py             # 결과 순위 결정
+│   └── search_result_processor.py    # 검색 결과 프로세서
+└── optimizers/                       # 검색 최적화
+    ├── legal_query_optimizer.py     # 쿼리 최적화
+    ├── keyword_mapper.py            # 키워드 매핑
+    └── query_enhancer.py            # 쿼리 강화
+```
+
+**사용 예시**:
+```python
+from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
+
+engine = HybridSearchEngineV2()
+results = engine.search("계약 해지", k=10)
+```
+
+### lawfirm_langgraph/core/generation/ - 답변 생성 시스템
+**역할**: 답변 생성, 포맷팅, 검증
+
+```
+lawfirm_langgraph/core/generation/
+├── generators/                       # 답변 생성기
+│   ├── answer_generator.py           # 답변 생성기
+│   ├── context_builder.py            # 컨텍스트 빌더
+│   └── direct_answer_handler.py      # 직접 답변 핸들러
+├── formatters/                       # 답변 포맷터
+│   ├── answer_structure_enhancer.py # 답변 구조 강화
+│   ├── legal_citation_enhancer.py   # 법률 인용 강화
+│   └── unified_source_formatter.py  # 통합 소스 포맷터
+└── validators/                       # 답변 검증기
+    ├── answer_quality_enhancer.py   # 답변 품질 강화
+    ├── confidence_calculator.py     # 신뢰도 계산
+    ├── legal_basis_validator.py     # 법적 근거 검증
+    └── quality_validators.py        # 품질 검증기
+```
+
+### lawfirm_langgraph/core/classification/ - 분류 시스템
+**역할**: 질문 분류 및 분석
+
+```
+lawfirm_langgraph/core/classification/
+├── classifiers/                      # 분류기
+│   ├── question_classifier.py      # 질문 분류기
+│   └── domain_classifier.py        # 도메인 분류기
+├── handlers/                        # 분류 핸들러
+│   └── classification_handler.py   # 분류 핸들러
+└── analyzers/                       # 분석기
+    └── query_analyzer.py           # 쿼리 분석기
+```
+
+### lawfirm_langgraph/core/processing/ - 데이터 처리
+**역할**: 데이터 추출, 처리, 파싱
+
+```
+lawfirm_langgraph/core/processing/
+├── extractors/                      # 추출기
+│   ├── query_extractor.py          # 쿼리 추출기
+│   ├── document_extractor.py       # 문서 추출기
+│   └── reasoning_extractor.py      # 추론 추출기
+├── processors/                     # 프로세서
+│   └── data_processor.py           # 데이터 프로세서
+└── parsers/                        # 파서
+    ├── query_parser.py             # 쿼리 파서
+    ├── answer_parser.py            # 답변 파서
+    └── response_parsers.py         # 응답 파서
+```
+
+### lawfirm_langgraph/core/conversation/ - 대화 관리
+**역할**: 대화 이력 및 세션 관리
+
+```
+lawfirm_langgraph/core/conversation/
+├── conversation_manager.py          # 대화 관리자
+├── conversation_flow_tracker.py     # 대화 흐름 추적
+├── multi_turn_handler.py           # 멀티턴 핸들러
+└── contextual_memory_manager.py    # 컨텍스트 메모리 관리
+```
+
+### lawfirm_langgraph/core/services/ - 비즈니스 서비스
+**역할**: 통합 서비스 및 유틸리티
+
+```
+lawfirm_langgraph/core/services/
+├── gemini_client.py                 # Gemini 클라이언트
+├── unified_prompt_manager.py         # 통합 프롬프트 관리
+└── ... (기타 서비스 파일)
+```
+
+### lawfirm_langgraph/core/shared/ - 공유 유틸리티
+**역할**: 공유 유틸리티 및 헬퍼
+
+```
+lawfirm_langgraph/core/shared/
+├── cache/                           # 캐싱 시스템
+├── clients/                         # 클라이언트
+├── monitoring/                      # 모니터링
+├── utils/                           # 유틸리티
+└── wrappers/                        # 래퍼
 ```
 
 **사용 예시**:
@@ -178,13 +282,19 @@ lawfirm_langgraph/core/workflow/workflow_service.py
     ↓
 lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py (LangGraph 워크플로우)
     ├── nodes/classification_nodes.py (질문 분류)
+    │   └── core/classification/classifiers/question_classifier.py
     ├── nodes/search_nodes.py (문서 검색)
+    │   └── core/search/engines/hybrid_search_engine_v2.py
+    │       ├── semantic_search_engine_v2.py (의미적 검색)
+    │       └── exact_search_engine_v2.py (정확 매칭 검색)
+    ├── core/search/processors/result_merger.py (결과 병합)
     └── nodes/answer_nodes.py (답변 생성)
+        └── core/generation/generators/answer_generator.py
     ↓
-lawfirm_langgraph/core/services/ (검색, 생성, 품질 개선)
-    ├── hybrid_search_engine.py
-    ├── answer_generator.py
-    └── confidence_calculator.py
+lawfirm_langgraph/core/generation/ (답변 생성 및 검증)
+    ├── generators/answer_generator.py
+    ├── formatters/answer_structure_enhancer.py
+    └── validators/quality_validators.py
     ↓
 User Output
 ```
@@ -195,11 +305,15 @@ Query
     ↓
 lawfirm_langgraph/core/classification/classifiers/question_classifier.py (분류)
     ↓
-lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py (검색)
-    ├── semantic_search_engine_v2.py
-    └── keyword_search_engine.py
+lawfirm_langgraph/core/search/engines/hybrid_search_engine_v2.py (하이브리드 검색)
+    ├── semantic_search_engine_v2.py (FAISS 벡터 검색)
+    └── exact_search_engine_v2.py (FTS5 키워드 검색)
     ↓
 lawfirm_langgraph/core/search/processors/result_merger.py (결과 병합)
+    ↓
+lawfirm_langgraph/core/search/processors/result_ranker.py (결과 순위 결정)
+    ↓
+lawfirm_langgraph/core/search/processors/search_result_processor.py (검색 결과 처리)
     ↓
 Results
 ```
@@ -217,45 +331,81 @@ sys.path.insert(0, str(project_root))
 
 ### Core 모듈 Import
 ```python
+# 설정
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+
+# 워크플로우
 from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
 from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+
+# 검색
 from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import HybridSearchEngineV2
-from lawfirm_langgraph.core.services.answer_generator import AnswerGenerator
+from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
+from lawfirm_langgraph.core.search.processors.result_merger import ResultMerger
+
+# 답변 생성
+from lawfirm_langgraph.core.generation.generators.answer_generator import AnswerGenerator
+from lawfirm_langgraph.core.generation.validators.quality_validators import AnswerValidator
+
+# 분류
+from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionClassifier
+
+# 데이터
+from lawfirm_langgraph.core.data.database import DatabaseManager
+from lawfirm_langgraph.core.data.vector_store import VectorStore
 ```
 
 ## 📚 scripts 모듈
 
-### scripts/data_collection/
-**역할**: 법률 데이터 수집
-- Assembly 데이터 수집
-- 국가법령정보센터 API 연동
+### scripts/checks/
+**역할**: 상태 확인 스크립트
+- `check_embedding_status.py`: 임베딩 상태 확인
+- `check_re_embedding_progress.py`: 재임베딩 진행 상황 확인
 
-### scripts/data_processing/
-**역할**: 데이터 전처리 및 임베딩 생성
-- 텍스트 정리 및 청킹
-- 벡터 임베딩 생성
-- FAISS 인덱스 구축
+### scripts/ingest/
+**역할**: 데이터 수집 및 처리
+- `ingest_cases.py`: 판례 데이터 수집
+- `check_ingestion_progress.py`: 수집 진행 상황 확인
+- `check_ip_data_format.py`: 데이터 형식 확인
 
-### scripts/database/
-**역할**: 데이터베이스 관리
-- 스키마 생성 및 마이그레이션
-- 데이터 검증
+### scripts/rag/
+**역할**: RAG 관련 스크립트
+- `build_index.py`: FAISS 인덱스 구축
+- `build_ko_legal_sbert_index.py`: 한국어 법률 SBERT 인덱스 구축
+- `mlflow_manager.py`: MLflow 모델 관리
+- `analyze_search_source_type_mismatch.py`: 검색 소스 타입 불일치 분석
+- `verify_source_type_consistency.py`: 소스 타입 일관성 검증
 
-### scripts/ml_training/
-**역할**: ML 모델 훈련
-- 모델 파인튜닝
-- 성능 평가
+### scripts/tests/
+**역할**: 테스트 스크립트
+- `unit/`: 단위 테스트
+- `integration/`: 통합 테스트
+- `functional/`: 기능 테스트
+
+### scripts/tools/
+**역할**: 도구 스크립트
+- `builds/`: 빌드 관련 스크립트
+- `checks/`: 체크 관련 스크립트
+- `wait_and_build_faiss_index.py`: FAISS 인덱스 대기 및 구축
+
+### scripts/utils/
+**역할**: 유틸리티 스크립트
+- `embedding_version_manager.py`: 임베딩 버전 관리
+- `embeddings.py`: 임베딩 유틸리티
 
 ## 🎯 모듈별 책임
 
 | 모듈 | 책임 | 의존성 |
 |------|------|--------|
-| `lawfirm_langgraph/core/workflow/` | 워크플로우 관리 및 실행 | search, services, models, data |
+| `lawfirm_langgraph/core/workflow/` | 워크플로우 관리 및 실행 | search, generation, classification, data |
 | `lawfirm_langgraph/core/search/` | 검색 엔진 및 결과 처리 | data, models |
-| `lawfirm_langgraph/core/services/` | 비즈니스 로직 | data, models |
+| `lawfirm_langgraph/core/generation/` | 답변 생성 및 검증 | search, services |
+| `lawfirm_langgraph/core/classification/` | 질문 분류 및 분석 | - |
+| `lawfirm_langgraph/core/processing/` | 데이터 처리 및 추출 | - |
+| `lawfirm_langgraph/core/conversation/` | 대화 관리 및 세션 | data |
+| `lawfirm_langgraph/core/services/` | 통합 서비스 | data, models |
 | `lawfirm_langgraph/core/data/` | 데이터 관리 | - |
-| `lawfirm_langgraph/core/models/` | AI 모델 | - |
+| `lawfirm_langgraph/core/shared/` | 공유 유틸리티 | - |
 | `lawfirm_langgraph/core/utils/` | 유틸리티 | - |
 | `scripts/` | 스크립트 및 유틸리티 | core 모듈 |
 | `data/` | 데이터 파일 | - |
