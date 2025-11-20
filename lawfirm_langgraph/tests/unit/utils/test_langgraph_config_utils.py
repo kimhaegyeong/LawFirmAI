@@ -84,7 +84,6 @@ class TestLangGraphConfigUtils:
             checkpoint_ttl=3600,
             max_iterations=10,
             recursion_limit=25,
-            ollama_timeout=15
         )
         
         errors = config.validate()
@@ -99,7 +98,6 @@ class TestLangGraphConfigUtils:
             checkpoint_ttl=-1,
             max_iterations=0,
             recursion_limit=-1,
-            ollama_timeout=0
         )
         
         errors = config.validate()
@@ -109,7 +107,6 @@ class TestLangGraphConfigUtils:
         assert any("CHECKPOINT_TTL" in error for error in errors)
         assert any("MAX_ITERATIONS" in error for error in errors)
         assert any("RECURSION_LIMIT" in error for error in errors)
-        assert any("OLLAMA_TIMEOUT" in error for error in errors)
     
     def test_config_to_dict(self):
         """설정을 딕셔너리로 변환 테스트"""
@@ -126,18 +123,6 @@ class TestLangGraphConfigUtils:
         assert "checkpoint_db_path" in config_dict
         assert "enable_streaming" in config_dict
         assert "langgraph_enabled" in config_dict
-    
-    def test_config_ollama_settings(self, monkeypatch):
-        """Ollama 설정 테스트"""
-        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:3b")
-        monkeypatch.setenv("OLLAMA_TIMEOUT", "30")
-        
-        config = LangGraphConfig.from_env()
-        
-        assert config.ollama_base_url == "http://localhost:11434"
-        assert config.ollama_model == "qwen2.5:3b"
-        assert config.ollama_timeout == 30
     
     def test_config_rag_settings(self, monkeypatch):
         """RAG 설정 테스트"""

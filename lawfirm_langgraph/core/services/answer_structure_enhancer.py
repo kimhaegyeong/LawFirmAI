@@ -12,13 +12,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 try:
-    from langchain_community.llms import Ollama
     from langchain_google_genai import ChatGoogleGenerativeAI
     LLM_AVAILABLE = True
 except ImportError:
     LLM_AVAILABLE = False
     ChatGoogleGenerativeAI = None
-    Ollama = None
 
 from .legal_basis_validator import LegalBasisValidator
 from .legal_citation_enhancer import LegalCitationEnhancer
@@ -52,7 +50,7 @@ class AnswerStructureEnhancer:
 
         Args:
             llm: LangChain LLM 인스턴스 (없으면 자동 초기화)
-                - Google Gemini 또는 Ollama 지원
+                - Google Gemini 지원
             max_few_shot_examples: Few-Shot 예시 최대 개수 (기본값: 2)
                 - 프롬프트 길이 제한에 따라 조정 가능
             enable_few_shot: Few-Shot 예시 사용 여부 (기본값: True)
@@ -787,20 +785,6 @@ class AnswerStructureEnhancer:
                     return llm
                 except Exception as e:
                     logger.error(f"Failed to initialize Google Gemini: {e}", exc_info=True)
-
-            if config.llm_provider == "ollama" and Ollama:
-                try:
-                    llm = Ollama(
-                        model=config.ollama_model or "llama2",
-                        base_url=config.ollama_base_url or "http://localhost:11434",
-                        temperature=0.3,
-                        num_predict=4000,
-                        timeout=30
-                    )
-                    logger.info(f"LLM initialized: Ollama ({config.ollama_model})")
-                    return llm
-                except Exception as e:
-                    logger.error(f"Failed to initialize Ollama: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"LLM initialization error: {e}", exc_info=True)

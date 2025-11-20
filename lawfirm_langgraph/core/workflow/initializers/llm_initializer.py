@@ -8,7 +8,6 @@ import logging
 import os
 from typing import Any, Optional
 
-from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from core.workflow.utils.workflow_constants import WorkflowConstants
@@ -24,47 +23,50 @@ class LLMInitializer:
         self.main_llm = main_llm
 
     def initialize_llm(self) -> Any:
-        """LLM 초기화 (Google Gemini 우선, Ollama 백업)"""
+        """LLM 초기화 (Google Gemini)"""
         if self.config.llm_provider == "google":
             try:
                 return self.initialize_gemini()
             except Exception as e:
-                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Falling back to Ollama.")
-
-        if self.config.llm_provider == "ollama":
-            try:
-                return self.initialize_ollama()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Ollama LLM: {e}. Using Mock LLM.")
+                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Using Mock LLM.")
 
         return self.create_mock_llm()
 
-    def initialize_gemini(self) -> ChatGoogleGenerativeAI:
-        """Google Gemini LLM 초기화 (최종 답변 생성용)"""
+    def initialize_gemini(self, timeout: Optional[int] = None) -> ChatGoogleGenerativeAI:
+        """Google Gemini LLM 초기화 (최종 답변 생성용 - RAG QA)
+        
+        Args:
+            timeout: 타임아웃 시간 (초). None이면 WorkflowConstants.TIMEOUT_RAG_QA 사용
+        """
         # 최종 답변용 모델 설정 (환경 변수 우선, 없으면 gemini-2.5-flash 기본값)
+        answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash")
+        
+        if timeout is None:
+            timeout = WorkflowConstants.TIMEOUT_RAG_QA
+        
+        gemini_llm = ChatGoogleGenerativeAI(
+            model=answer_model,
+            temperature=WorkflowConstants.TEMPERATURE,
+            max_output_tokens=WorkflowConstants.MAX_OUTPUT_TOKENS,
+            timeout=timeout,
+            api_key=self.config.google_api_key
+        )
+        logger.info(f"Initialized Google Gemini LLM for answer generation: {answer_model} (timeout: {timeout}s)")
+        return gemini_llm
+    
+    def initialize_gemini_long_text(self) -> ChatGoogleGenerativeAI:
+        """Google Gemini LLM 초기화 (긴 글/코드 생성용 - 30~60초 timeout)"""
         answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash")
         
         gemini_llm = ChatGoogleGenerativeAI(
             model=answer_model,
             temperature=WorkflowConstants.TEMPERATURE,
             max_output_tokens=WorkflowConstants.MAX_OUTPUT_TOKENS,
-            timeout=WorkflowConstants.TIMEOUT,
+            timeout=WorkflowConstants.TIMEOUT_LONG_TEXT,
             api_key=self.config.google_api_key
         )
-        logger.info(f"Initialized Google Gemini LLM for answer generation: {answer_model}")
+        logger.info(f"Initialized Google Gemini LLM for long text/code generation: {answer_model} (timeout: {WorkflowConstants.TIMEOUT_LONG_TEXT}s)")
         return gemini_llm
-
-    def initialize_ollama(self) -> Ollama:
-        """Ollama LLM 초기화"""
-        ollama_llm = Ollama(
-            model=self.config.ollama_model,
-            base_url=self.config.ollama_base_url,
-            temperature=WorkflowConstants.TEMPERATURE,
-            num_predict=WorkflowConstants.MAX_OUTPUT_TOKENS,
-            timeout=20
-        )
-        logger.info(f"Initialized Ollama LLM: {self.config.ollama_model}")
-        return ollama_llm
 
     def create_mock_llm(self) -> Any:
         """Mock LLM 생성"""

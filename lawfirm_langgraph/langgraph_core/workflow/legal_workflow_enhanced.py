@@ -21,7 +21,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
@@ -538,18 +537,12 @@ class EnhancedLegalQuestionWorkflow:
         logger.info("EnhancedLegalQuestionWorkflow initialized with UnifiedPromptManager.")
 
     def _initialize_llm(self):
-        """LLM 초기화 (Google Gemini 우선, Ollama 백업)"""
+        """LLM 초기화 (Google Gemini)"""
         if self.config.llm_provider == "google":
             try:
                 return self._initialize_gemini()
             except Exception as e:
-                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Falling back to Ollama.")
-
-        if self.config.llm_provider == "ollama":
-            try:
-                return self._initialize_ollama()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Ollama LLM: {e}. Using Mock LLM.")
+                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Using Mock LLM.")
 
         return self._create_mock_llm()
 
@@ -564,18 +557,6 @@ class EnhancedLegalQuestionWorkflow:
         )
         logger.info(f"Initialized Google Gemini LLM: {self.config.google_model}")
         return gemini_llm
-
-    def _initialize_ollama(self):
-        """Ollama LLM 초기화"""
-        ollama_llm = Ollama(
-            model=self.config.ollama_model,
-            base_url=self.config.ollama_base_url,
-            temperature=WorkflowConstants.TEMPERATURE,
-            num_predict=WorkflowConstants.MAX_OUTPUT_TOKENS,
-            timeout=20
-        )
-        logger.info(f"Initialized Ollama LLM: {self.config.ollama_model}")
-        return ollama_llm
 
     def _create_mock_llm(self):
         """Mock LLM 생성"""
@@ -3349,7 +3330,7 @@ class EnhancedLegalQuestionWorkflow:
             
             query = self._get_state_value(state, "query", "")
             question_type, domain = self._get_question_type_and_domain(query_type, query)
-            model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA
+            model_type = ModelType.GEMINI
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
 
             # 프롬프트 최적화된 컨텍스트 사용 (있는 경우)
@@ -4010,7 +3991,7 @@ class EnhancedLegalQuestionWorkflow:
             # 🔴 프롬프트 전체 저장 (평가용)
             prompt_file = None
             try:
-                debug_dir = Path("debug/prompts")
+                debug_dir = Path("logs/prompts")
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 prompt_file = debug_dir / f"prompt_{int(time.time())}.txt"
                 with open(prompt_file, "w", encoding="utf-8") as f:

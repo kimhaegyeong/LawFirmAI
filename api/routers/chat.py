@@ -578,7 +578,7 @@ async def chat_stream(
     2. FastAPI: StreamingResponse로 AsyncGenerator 처리
     3. ChatService: LangGraph의 astream_events()로 LLM 스트리밍 이벤트 캡처
     4. LangGraph: 워크플로우 실행 중 on_llm_stream/on_chat_model_stream 이벤트 발생
-    5. LLM: invoke() 호출 시에도 내부적으로 스트리밍 사용 (ChatGoogleGenerativeAI/Ollama)
+    5. LLM: invoke() 호출 시에도 내부적으로 스트리밍 사용 (ChatGoogleGenerativeAI)
     6. 각 토큰을 JSONL 형식으로 yield → SSE 형식으로 변환 → HTTP 스트리밍 전송
     """
     try:

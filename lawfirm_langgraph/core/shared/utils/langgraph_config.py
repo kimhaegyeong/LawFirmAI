@@ -44,10 +44,6 @@ class LangGraphConfig:
     google_model: str = "gemini-2.5-flash-lite"  # .env 파일의 설정에 맞게 변경
     google_api_key: str = ""
 
-    # 기존 Ollama 설정 (백업용)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:3b"
-    ollama_timeout: int = 15
 
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
@@ -119,10 +115,6 @@ class LangGraphConfig:
         config.google_model = os.getenv("GOOGLE_MODEL", config.google_model)
         config.google_api_key = os.getenv("GOOGLE_API_KEY", config.google_api_key)
 
-        # Ollama 설정 (백업용)
-        config.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.ollama_base_url)
-        config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
-        config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
         # Langfuse 설정
         config.langfuse_enabled = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
@@ -200,8 +192,6 @@ class LangGraphConfig:
             if self.recursion_limit <= 0:
                 errors.append("RECURSION_LIMIT must be positive")
 
-            if self.ollama_timeout <= 0:
-                errors.append("OLLAMA_TIMEOUT must be positive")
 
         return errors
 
@@ -214,9 +204,6 @@ class LangGraphConfig:
             "max_iterations": self.max_iterations,
             "recursion_limit": self.recursion_limit,
             "enable_streaming": self.enable_streaming,
-            "ollama_base_url": self.ollama_base_url,
-            "ollama_model": self.ollama_model,
-            "ollama_timeout": self.ollama_timeout,
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,

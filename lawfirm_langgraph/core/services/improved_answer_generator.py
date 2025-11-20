@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
 개선된 답변 생성기
-Ollama 클라이언트와 프롬프트 템플릿을 활용한 지능형 답변 생성
+프롬프트 템플릿을 활용한 지능형 답변 생성
 """
 
 import logging
@@ -152,7 +152,7 @@ class ImprovedAnswerGenerator:
                 model_type=model_type
             )
             
-            # Ollama로 답변 생성 (재시도 로직 포함)
+            # LLM으로 답변 생성 (재시도 로직 포함)
             raw_answer = self._generate_with_retry(prompt, config)
             
             # 신뢰도 계산

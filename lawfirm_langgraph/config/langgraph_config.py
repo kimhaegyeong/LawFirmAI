@@ -14,29 +14,57 @@ from typing import List
 from dotenv import load_dotenv
 
 # 환경 변수 로드 (중앙 집중식 로더 사용)
-# 프로젝트 루트를 찾아서 공통 로더 사용
+# 프로젝트 루트의 .env 파일을 우선적으로 로드
 try:
     # 프로젝트 루트 찾기: lawfirm_langgraph/config/ -> lawfirm_langgraph/ -> 프로젝트 루트
     _langgraph_dir = Path(__file__).parent.parent
     _project_root = _langgraph_dir.parent
     
-    # 공통 로더 사용 (이미 로드되었을 수 있으므로 ensure 사용)
+    # 공통 로더 사용 (프로젝트 루트 .env 파일 우선 로드)
     try:
         import sys
-        sys.path.insert(0, str(_project_root))
-        from utils.env_loader import ensure_env_loaded
+        if str(_project_root) not in sys.path:
+            sys.path.insert(0, str(_project_root))
+        from utils.env_loader import ensure_env_loaded, load_all_env_files
+        
+        # 프로젝트 루트 .env 파일 명시적으로 로드
         ensure_env_loaded(_project_root)
+        loaded_files = load_all_env_files(_project_root)
+        # logger는 아직 정의되지 않았으므로 print 사용
+        if loaded_files:
+            print(f"✅ LangGraph Config: 환경 변수 로드 완료 ({len(loaded_files)}개 .env 파일)")
     except ImportError:
-        # 공통 로더가 없으면 기존 방식으로 fallback
-        _env_file = _langgraph_dir / ".env"
-        if _env_file.exists():
-            load_dotenv(dotenv_path=str(_env_file))
-except Exception:
+        # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
+        root_env = _project_root / ".env"
+        langgraph_env = _langgraph_dir / ".env"
+        
+        # 프로젝트 루트 .env 먼저 로드
+        if root_env.exists():
+            load_dotenv(dotenv_path=str(root_env), override=False)
+        
+        # lawfirm_langgraph/.env 로드 (덮어쓰기)
+        if langgraph_env.exists():
+            load_dotenv(dotenv_path=str(langgraph_env), override=True)
+except Exception as e:
     # 모든 방법이 실패하면 기존 방식으로 fallback
     _langgraph_dir = Path(__file__).parent.parent
+    _project_root = _langgraph_dir.parent
+    
+    # 프로젝트 루트 .env 시도
+    root_env = _project_root / ".env"
+    if root_env.exists():
+        try:
+            load_dotenv(dotenv_path=str(root_env), override=False)
+        except Exception:
+            pass
+    
+    # lawfirm_langgraph/.env 시도
     _env_file = _langgraph_dir / ".env"
     if _env_file.exists():
-        load_dotenv(dotenv_path=str(_env_file))
+        try:
+            load_dotenv(dotenv_path=str(_env_file), override=True)
+        except Exception:
+            pass
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +98,6 @@ class LangGraphConfig:
     google_model: str = "gemini-2.5-flash-lite"  # .env 파일의 설정에 맞게 변경
     google_api_key: str = ""
 
-    # 기존 Ollama 설정 (백업용)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:3b"
-    ollama_timeout: int = 15
 
     # LangGraph 활성화 설정
     langgraph_enabled: bool = True
@@ -165,10 +189,6 @@ class LangGraphConfig:
         config.google_model = os.getenv("GOOGLE_MODEL", config.google_model)
         config.google_api_key = os.getenv("GOOGLE_API_KEY", config.google_api_key)
 
-        # Ollama 설정 (백업용)
-        config.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.ollama_base_url)
-        config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
-        config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
         # Embedding Model 설정 (환경 변수에서 읽음)
         embedding_model_env = os.getenv("EMBEDDING_MODEL")
@@ -278,8 +298,6 @@ class LangGraphConfig:
             if self.recursion_limit <= 0:
                 errors.append("RECURSION_LIMIT must be positive")
 
-            if self.ollama_timeout <= 0:
-                errors.append("OLLAMA_TIMEOUT must be positive")
 
         return errors
 
@@ -293,9 +311,6 @@ class LangGraphConfig:
             "max_iterations": self.max_iterations,
             "recursion_limit": self.recursion_limit,
             "enable_streaming": self.enable_streaming,
-            "ollama_base_url": self.ollama_base_url,
-            "ollama_model": self.ollama_model,
-            "ollama_timeout": self.ollama_timeout,
             "langgraph_enabled": self.langgraph_enabled,
             "langfuse_enabled": self.langfuse_enabled,
             "langsmith_enabled": self.langsmith_enabled,

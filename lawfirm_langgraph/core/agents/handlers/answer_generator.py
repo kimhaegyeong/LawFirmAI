@@ -496,7 +496,7 @@ class AnswerGenerator:
             LLM 응답 문자열
         
         Note:
-            LangChain의 ChatGoogleGenerativeAI와 Ollama는 invoke() 호출 시에도
+            LangChain의 ChatGoogleGenerativeAI는 invoke() 호출 시에도
             내부적으로 스트리밍을 사용합니다. LangGraph의 astream_events()가 이를
             감지하여 on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
             따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.

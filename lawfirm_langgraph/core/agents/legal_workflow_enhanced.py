@@ -22,7 +22,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
@@ -75,6 +74,8 @@ from core.agents.workflow_constants import (
 )
 from core.agents.workflow_routes import WorkflowRoutes
 from core.agents.workflow_utils import WorkflowUtils
+from core.agents.decorators.error_handler import handle_workflow_errors
+from core.agents.decorators.performance_monitor import measure_performance
 from core.services.question_classifier import QuestionType
 from core.services.result_merger import ResultMerger, ResultRanker
 # 설정 파일 import (lawfirm_langgraph 구조 우선 시도)
@@ -366,6 +367,48 @@ class EnhancedLegalQuestionWorkflow:
             logger=self.logger
         )
 
+        # 향상된 캐싱 전략 초기화 (Phase 6 리팩토링)
+        try:
+            from core.agents.optimizers.enhanced_cache_strategy import EnhancedCacheStrategy
+            self.enhanced_cache = EnhancedCacheStrategy(base_cache=self.performance_optimizer.cache)
+            self.logger.info("EnhancedCacheStrategy initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize EnhancedCacheStrategy: {e}")
+            self.enhanced_cache = None
+
+        # 검색 결과 처리 핸들러 초기화 (Phase 2 리팩토링 - 의존성 주입)
+        from core.agents.handlers.search_result_processor import SearchResultProcessor
+        self.search_result_processor = SearchResultProcessor(
+            result_merger=self.result_merger,
+            config=self.config,
+            evaluate_semantic_quality_func=self._evaluate_semantic_search_quality,
+            evaluate_keyword_quality_func=self._evaluate_keyword_search_quality,
+            calculate_keyword_weights_func=self._calculate_keyword_weights,
+            calculate_keyword_match_score_func=self._calculate_keyword_match_score,
+            calculate_weighted_final_score_func=self._calculate_weighted_final_score,
+            execute_semantic_search_func=self._execute_semantic_search_internal,
+            execute_keyword_search_func=self._execute_keyword_search_internal,
+            get_query_type_str_func=self._get_query_type_str,
+            logger=self.logger
+        )
+
+        # 검색 결과 처리 서브그래프 초기화 (Phase 2 리팩토링 - LangGraph Subgraph 활용)
+        # 현재는 옵션으로 준비, 향후 활성화 가능
+        self.use_search_results_subgraph = getattr(self.config, 'use_search_results_subgraph', False)
+        if self.use_search_results_subgraph:
+            try:
+                from core.agents.subgraphs.search_results_processing_subgraph import SearchResultsProcessingSubgraph
+                self.search_results_subgraph = SearchResultsProcessingSubgraph(
+                    search_result_processor=self.search_result_processor,
+                    logger=self.logger
+                ).build_subgraph()
+                self.logger.info("SearchResultsProcessingSubgraph initialized and ready to use")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize SearchResultsProcessingSubgraph: {e}. Using default node.")
+                self.use_search_results_subgraph = False
+        else:
+            self.search_results_subgraph = None
+
         # 워크플로우 문서 처리 프로세서 초기화 (WorkflowDocumentProcessor 사용)
         from core.workflow.processors.workflow_document_processor import WorkflowDocumentProcessor
         self.workflow_document_processor = WorkflowDocumentProcessor(
@@ -521,18 +564,12 @@ class EnhancedLegalQuestionWorkflow:
         logger.info("EnhancedLegalQuestionWorkflow initialized with UnifiedPromptManager.")
 
     def _initialize_llm(self):
-        """LLM 초기화 (Google Gemini 우선, Ollama 백업)"""
+        """LLM 초기화 (Google Gemini)"""
         if self.config.llm_provider == "google":
             try:
                 return self._initialize_gemini()
             except Exception as e:
-                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Falling back to Ollama.")
-
-        if self.config.llm_provider == "ollama":
-            try:
-                return self._initialize_ollama()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Ollama LLM: {e}. Using Mock LLM.")
+                logger.warning(f"Failed to initialize Google Gemini LLM: {e}. Using Mock LLM.")
 
         return self._create_mock_llm()
 
@@ -547,18 +584,6 @@ class EnhancedLegalQuestionWorkflow:
         )
         logger.info(f"Initialized Google Gemini LLM: {self.config.google_model}")
         return gemini_llm
-
-    def _initialize_ollama(self):
-        """Ollama LLM 초기화"""
-        ollama_llm = Ollama(
-            model=self.config.ollama_model,
-            base_url=self.config.ollama_base_url,
-            temperature=WorkflowConstants.TEMPERATURE,
-            num_predict=WorkflowConstants.MAX_OUTPUT_TOKENS,
-            timeout=20
-        )
-        logger.info(f"Initialized Ollama LLM: {self.config.ollama_model}")
-        return ollama_llm
 
     def _create_mock_llm(self):
         """Mock LLM 생성"""
@@ -621,7 +646,13 @@ class EnhancedLegalQuestionWorkflow:
         workflow.add_node("execute_searches_parallel", self.execute_searches_parallel)
 
         # 검색 결과 처리 통합 (6개 노드 병합)
-        workflow.add_node("process_search_results_combined", self.process_search_results_combined)
+        # Phase 2 리팩토링: Subgraph 사용 옵션 제공
+        if self.use_search_results_subgraph and self.search_results_subgraph:
+            workflow.add_node("process_search_results", self.search_results_subgraph)
+            self.logger.info("Using SearchResultsProcessingSubgraph for search results processing")
+        else:
+            workflow.add_node("process_search_results_combined", self.process_search_results_combined)
+            self.logger.info("Using process_search_results_combined node (default)")
 
         # 통합된 문서 준비 및 용어 처리 노드 (Phase 3)
         workflow.add_node("prepare_documents_and_terms", self.prepare_documents_and_terms)
@@ -707,8 +738,13 @@ class EnhancedLegalQuestionWorkflow:
         )
 
         # 병렬 검색 → 통합 검색 결과 처리 (6개 노드 병합)
-        workflow.add_edge("execute_searches_parallel", "process_search_results_combined")
-        workflow.add_edge("process_search_results_combined", "prepare_documents_and_terms")
+        # Phase 2 리팩토링: Subgraph 사용 시 노드 이름 변경
+        if self.use_search_results_subgraph and self.search_results_subgraph:
+            workflow.add_edge("execute_searches_parallel", "process_search_results")
+            workflow.add_edge("process_search_results", "prepare_documents_and_terms")
+        else:
+            workflow.add_edge("execute_searches_parallel", "process_search_results_combined")
+            workflow.add_edge("process_search_results_combined", "prepare_documents_and_terms")
         workflow.add_edge("prepare_documents_and_terms", "generate_and_validate_answer")
 
         # 통합된 답변 생성, 검증, 포맷팅 후 제한된 재시도 (Phase 5 + Phase 2 통합)
@@ -1337,8 +1373,6 @@ class EnhancedLegalQuestionWorkflow:
                 f"[ANSWER WARNING] Answer is very short (length: {len(normalized_answer)})"
             )
 
-    # Phase 1 리팩토링: 추론 과정 분리 메서드들은 ReasoningExtractor로 이동됨
-    # Phase 8 리팩토링: 유틸리티 메서드들은 WorkflowUtils로 이동됨
 
     def _save_metadata_safely(self, state: LegalWorkflowState, key: str, value: Any,
                              save_to_top_level: bool = False) -> None:
@@ -1355,6 +1389,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="classify_query")
     @with_state_optimization("classify_query", enable_reduction=True)
+    @measure_performance("classify_query")
+    @handle_workflow_errors(error_message="질의 분류 중 오류 발생")
     def classify_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
         # 중요: 노드 시작 시 input 그룹 보장
         # LangGraph가 초기 state를 제대로 전달하지 않는 경우 대비
@@ -1411,7 +1447,17 @@ class EnhancedLegalQuestionWorkflow:
         try:
             start_time = time.time()
 
-            query = self._get_state_value(state, "query", "")
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["query", "session_id"],
+                defaults={
+                    "query": "",
+                    "session_id": ""
+                }
+            )
+            
+            query = state_values["query"]
             classified_type, confidence = self._classify_with_llm(query)
 
             # QuestionType enum을 문자열로 변환하여 저장
@@ -2773,6 +2819,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="generate_answer_enhanced")
     @with_state_optimization("generate_answer_enhanced", enable_reduction=True)
+    @measure_performance("generate_answer_enhanced")
+    @handle_workflow_errors(error_message="답변 생성 중 오류 발생")
     def generate_answer_enhanced(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """개선된 답변 생성 - UnifiedPromptManager 활용"""
         try:
@@ -2796,15 +2844,26 @@ class EnhancedLegalQuestionWorkflow:
 
             start_time = time.time()
 
-            query_type = self._get_state_value(state, "query_type", "")
-            query = self._get_state_value(state, "query", "")
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["query_type", "query", "extracted_keywords", "prompt_optimized_context", "retrieved_docs"],
+                defaults={
+                    "query_type": "",
+                    "query": "",
+                    "extracted_keywords": [],
+                    "prompt_optimized_context": {},
+                    "retrieved_docs": []
+                }
+            )
+            
+            query_type = state_values["query_type"]
+            query = state_values["query"]
             question_type, domain = self._get_question_type_and_domain(query_type, query)
-            model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA
-            extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
-
-            # 프롬프트 최적화된 컨텍스트 사용 (있는 경우)
-            prompt_optimized_context = self._get_state_value(state, "prompt_optimized_context", {})
-            retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+            model_type = ModelType.GEMINI
+            extracted_keywords = state_values["extracted_keywords"]
+            prompt_optimized_context = state_values["prompt_optimized_context"]
+            retrieved_docs = state_values["retrieved_docs"]
             
             # interpretation_paragraph 확인
             if retrieved_docs:
@@ -2859,6 +2918,27 @@ class EnhancedLegalQuestionWorkflow:
                             self._set_state_value(state, "retrieved_docs", retrieved_docs)
                 except (ImportError, AttributeError, TypeError) as e:
                     self.logger.debug(f"Could not restore from global cache: {e}")
+            
+            # 검색 결과가 여전히 없으면 빠른 응답 생성 (timeout 방지)
+            if not retrieved_docs or len(retrieved_docs) == 0:
+                self.logger.warning(
+                    f"⚠️ [NO SEARCH RESULTS] retrieved_docs is empty. "
+                    f"Generating quick response without document references to avoid timeout. "
+                    f"Query: '{query[:50]}...'"
+                )
+                # 빠른 응답 생성 (LLM 호출 최소화)
+                quick_answer = (
+                    f"죄송합니다. '{query[:50]}...'에 대한 관련 법률 문서를 데이터베이스에서 찾지 못했습니다.\n\n"
+                    f"일반적인 법률 정보를 바탕으로 답변을 드리면, 해당 질문에 대한 구체적인 조문이나 판례를 "
+                    f"인용할 수 없어 정확한 답변을 제공하기 어렵습니다.\n\n"
+                    f"더 정확한 답변을 위해 질문을 구체화하시거나, 다른 키워드로 검색해 주시기 바랍니다."
+                )
+                self._set_answer_safely(state, quick_answer)
+                self._set_state_value(state, "retrieved_docs", [])
+                self._set_state_value(state, "sources", [])
+                self._update_processing_time(state, start_time)
+                self.logger.info(f"✅ [QUICK RESPONSE] Generated quick response without LLM call (retrieved_docs empty)")
+                return state
 
             # 검색 결과 통계 계산 (답변 생성에 활용)
             semantic_results_count = sum(1 for doc in retrieved_docs if doc.get("search_type") == "semantic") if retrieved_docs else 0
@@ -3530,7 +3610,7 @@ class EnhancedLegalQuestionWorkflow:
             # 🔴 프롬프트 전체 저장 (평가용)
             prompt_file = None
             try:
-                debug_dir = Path("debug/prompts")
+                debug_dir = Path("logs/prompts")
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 prompt_file = debug_dir / f"prompt_{int(time.time())}.txt"
                 with open(prompt_file, "w", encoding="utf-8") as f:
@@ -5377,6 +5457,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="prepare_search_query")
     @with_state_optimization("prepare_search_query", enable_reduction=False)
+    @measure_performance("prepare_search_query")
+    @handle_workflow_errors(error_message="검색 쿼리 준비 중 오류 발생")
     def prepare_search_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """검색 쿼리 준비 및 최적화 전용 노드 (Part 2)"""
         try:
@@ -5406,6 +5488,30 @@ class EnhancedLegalQuestionWorkflow:
             # input 그룹 확인 및 생성
             if "input" not in state or not isinstance(state.get("input"), dict):
                 state["input"] = {}
+
+            # Phase 6: 향상된 캐싱 전략 - 쿼리 최적화 결과 확인
+            query = state["input"].get("query", "") or state.get("query", "")
+            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
+            
+            if self.enhanced_cache and query:
+                cached_optimization = self.enhanced_cache.get_query_optimization(
+                    query=query,
+                    query_type=query_type_str
+                )
+                if cached_optimization:
+                    self.logger.info(f"Using cached query optimization for: {query[:50]}...")
+                    self._set_state_value(state, "optimized_queries", cached_optimization)
+                    # search_params는 캐시에 포함되지 않으므로 재계산 필요
+                    extracted_keywords = cached_optimization.get("expanded_keywords", [])
+                    search_params = self._determine_search_parameters(
+                        query_type=query_type_str,
+                        query_complexity=len(query),
+                        keyword_count=len(extracted_keywords),
+                        is_retry=False
+                    )
+                    self._set_state_value(state, "search_params", search_params)
+                    self._update_processing_time(state, start_time)
+                    return state
 
             # query가 없으면 여러 위치에서 찾기
             current_query = state["input"].get("query", "")
@@ -5452,13 +5558,32 @@ class EnhancedLegalQuestionWorkflow:
             retry_counts = self.retry_manager.get_retry_counts(state)
             if retry_counts["total"] >= RetryConfig.MAX_TOTAL_RETRIES:
                 self.logger.error("Maximum total retry count reached")
-                if not self._get_state_value(state, "answer", ""):
-                    query = self._get_state_value(state, "query", "")
+                # 배치로 State 값 가져오기
+                state_values = WorkflowUtils.get_state_values_batch(
+                    state,
+                    keys=["answer", "query"],
+                    defaults={"answer": "", "query": ""}
+                )
+                if not state_values["answer"]:
+                    query = state_values["query"]
                     # Phase 1/Phase 7: 에러 메시지 설정 - _set_answer_safely 사용
                     self._set_answer_safely(state,
                         f"죄송합니다. 질문 '{query}'에 대한 답변을 생성하는데 어려움이 있습니다.")
                 return state
 
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["query", "search_query", "query_type", "extracted_keywords", "legal_field"],
+                defaults={
+                    "query": "",
+                    "search_query": "",
+                    "query_type": "",
+                    "extracted_keywords": [],
+                    "legal_field": ""
+                }
+            )
+            
             # 쿼리 정보 가져오기 및 검증 (여러 방법 시도)
             # 중요: state의 input 그룹에서 query 가져오기 (이미 시작 부분에서 복원했어야 함)
             query = None
@@ -5467,16 +5592,16 @@ class EnhancedLegalQuestionWorkflow:
             if "input" in state and isinstance(state["input"], dict):
                 query = state["input"].get("query", "")
 
-            # 우선순위 2: _get_state_value 사용
+            # 우선순위 2: 배치에서 가져온 값 사용
             if not query or not str(query).strip():
-                query = self._get_state_value(state, "query", "")
+                query = state_values["query"]
 
             # 우선순위 3: state에서 직접 읽기
             if not query or not str(query).strip():
                 if isinstance(state, dict) and "query" in state:
                     query = state["query"]
 
-            search_query = self._get_state_value(state, "search_query") or query
+            search_query = state_values["search_query"] or query
 
             # query가 빈 문자열이면 에러
             if not query or not str(query).strip():
@@ -5488,13 +5613,13 @@ class EnhancedLegalQuestionWorkflow:
                 return state
 
             # query_type 정규화
-            query_type_raw = self._get_state_value(state, "query_type", "")
+            query_type_raw = state_values["query_type"]
             query_type_str = self._get_query_type_str(query_type_raw)
             # 프롬프트용으로 한번 더 정규화
             query_type_str = self._normalize_query_type_for_prompt(query_type_str)
 
             # extracted_keywords 검증
-            extracted_keywords_raw = self._get_state_value(state, "extracted_keywords", [])
+            extracted_keywords_raw = state_values["extracted_keywords"]
             if not isinstance(extracted_keywords_raw, list):
                 self.logger.warning(f"extracted_keywords is not a list: {type(extracted_keywords_raw)}, converting to empty list")
                 extracted_keywords = []
@@ -5590,6 +5715,14 @@ class EnhancedLegalQuestionWorkflow:
             self._set_state_value(state, "search_params", search_params)
             self._set_state_value(state, "is_retry_search", is_retry)
             self._set_state_value(state, "search_start_time", start_time)
+            
+            # Phase 6: 향상된 캐싱 전략 - 쿼리 최적화 결과 캐싱
+            if self.enhanced_cache and optimized_queries:
+                self.enhanced_cache.put_query_optimization(
+                    query=query,
+                    query_type=query_type_str,
+                    optimization_result=optimized_queries
+                )
 
             # semantic_query 검증 및 수정 (빈 문자열이면 기본 쿼리 사용)
             semantic_query_created = optimized_queries.get("semantic_query", "")
@@ -5684,6 +5817,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="process_search_results_combined")
     @with_state_optimization("process_search_results_combined", enable_reduction=True)
+    @measure_performance("process_search_results_combined")
+    @handle_workflow_errors(error_message="검색 결과 처리 중 오류 발생")
     def process_search_results_combined(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """검색 결과 처리 통합 노드 (6개 노드를 1개로 병합)"""
         # 개선: print 문을 추가하여 즉시 출력 보장 (로거 설정과 무관)
@@ -5696,15 +5831,31 @@ class EnhancedLegalQuestionWorkflow:
         try:
             start_time = time.time()
 
-            # 검색 결과 가져오기
-            semantic_results = self._get_state_value(state, "semantic_results", [])
-            keyword_results = self._get_state_value(state, "keyword_results", [])
-            semantic_count = self._get_state_value(state, "semantic_count", 0)
-            keyword_count = self._get_state_value(state, "keyword_count", 0)
-            query = self._get_state_value(state, "query", "")
-            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
-            search_params = self._get_state_value(state, "search_params", {})
-            extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["semantic_results", "keyword_results", "semantic_count", "keyword_count", 
+                      "query", "query_type", "search_params", "extracted_keywords"],
+                defaults={
+                    "semantic_results": [],
+                    "keyword_results": [],
+                    "semantic_count": 0,
+                    "keyword_count": 0,
+                    "query": "",
+                    "query_type": "",
+                    "search_params": {},
+                    "extracted_keywords": []
+                }
+            )
+            
+            semantic_results = state_values["semantic_results"]
+            keyword_results = state_values["keyword_results"]
+            semantic_count = state_values["semantic_count"]
+            keyword_count = state_values["keyword_count"]
+            query = state_values["query"]
+            query_type_str = self._get_query_type_str(state_values["query_type"])
+            search_params = state_values["search_params"]
+            extracted_keywords = state_values["extracted_keywords"]
 
             # 개선 1: 입력 검증 로깅 (print + logger)
             input_msg = f"📥 [SEARCH RESULTS] 입력 데이터 - semantic: {len(semantic_results)}, keyword: {len(keyword_results)}, semantic_count: {semantic_count}, keyword_count: {keyword_count}"
@@ -6074,17 +6225,28 @@ class EnhancedLegalQuestionWorkflow:
 
                 # 폴백: 낮은 점수라도 문서가 있으면 사용 (최소 1개라도 제공)
                 if weighted_docs:
-                    # 점수 순으로 정렬되어 있으므로, 상위 3개를 선택 (점수가 낮아도)
+                    # 점수 순으로 정렬되어 있으므로, 상위 5개를 선택 (점수가 낮아도)
                     fallback_docs = []
-                    for doc in weighted_docs[:3]:
+                    for doc in weighted_docs[:5]:
                         content = doc.get("content", "") or doc.get("text", "")
-                        if content and len(content.strip()) >= 10:
+                        if content and len(content.strip()) >= 5:  # 최소 길이 완화: 10자 → 5자
                             # 점수가 낮아도 최소 임계값 이상이면 사용
                             relevance_score = doc.get("relevance_score", 0.0) or doc.get("score", 0.0) or doc.get("similarity", 0.0)
                             final_weighted_score = doc.get("final_weighted_score", 0.0)
-                            # 최소 기준을 낮춘 폴백 임계값 사용
-                            if relevance_score >= 0.50 and final_weighted_score >= 0.45:
+                            # 폴백 임계값 완화: 0.50/0.45 → 0.30/0.25
+                            if relevance_score >= 0.30 or final_weighted_score >= 0.25:
                                 fallback_docs.append(doc)
+                                if len(fallback_docs) >= 3:  # 최소 3개까지만
+                                    break
+                    
+                    # 점수 조건 없이도 최소 1개라도 보장
+                    if not fallback_docs and weighted_docs:
+                        for doc in weighted_docs[:3]:
+                            content = doc.get("content", "") or doc.get("text", "")
+                            if content and len(content.strip()) >= 5:
+                                fallback_docs.append(doc)
+                                if len(fallback_docs) >= 1:  # 최소 1개만
+                                    break
 
                     if fallback_docs:
                         final_docs = fallback_docs
@@ -6275,243 +6437,24 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="execute_searches_parallel")
     @with_state_optimization("execute_searches_parallel", enable_reduction=True)
+    @measure_performance("execute_searches_parallel")
+    @handle_workflow_errors(error_message="병렬 검색 실행 중 오류 발생")
     def execute_searches_parallel(self, state: LegalWorkflowState) -> LegalWorkflowState:
-        """의미적 검색과 키워드 검색을 병렬로 실행"""
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-
-            start_time = time.time()
-
-            optimized_queries = self._get_state_value(state, "optimized_queries", {})
-            search_params = self._get_state_value(state, "search_params", {})
-            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
-            legal_field = self._get_state_value(state, "legal_field", "")
-
-            # 디버깅: state에서 직접 확인
-            from .state_helpers import get_field
-            optimized_queries_raw = get_field(state, "optimized_queries")
-            search_params_raw = get_field(state, "search_params")
-
-            self.logger.debug(f"execute_searches_parallel: START")
-            self.logger.debug(f"  - optimized_queries (via _get_state_value): {type(optimized_queries).__name__}, exists={bool(optimized_queries)}")
-            self.logger.debug(f"  - optimized_queries (via get_field): {type(optimized_queries_raw).__name__}, is None={optimized_queries_raw is None}")
-            self.logger.debug(f"  - search_params (via _get_state_value): {type(search_params).__name__}, exists={bool(search_params)}")
-            self.logger.debug(f"  - search_params (via get_field): {type(search_params_raw).__name__}, is None={search_params_raw is None}")
-
-            # state 구조 확인
-            if "search" in state:
-                self.logger.debug(f"  - state has 'search' key: {type(state['search']).__name__}")
-                if isinstance(state.get("search"), dict):
-                    self.logger.debug(f"  - search keys: {list(state['search'].keys())}")
-
-            # state["search"]에서 직접 읽기 (get_field가 빈 딕셔너리를 반환하는 경우 대비)
-            if "search" in state and isinstance(state["search"], dict):
-                direct_optimized = state["search"].get("optimized_queries")
-                if direct_optimized and isinstance(direct_optimized, dict) and len(direct_optimized) > 0:
-                    optimized_queries = direct_optimized
-                    extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    self.logger.debug(f"  - Using direct state['search']['optimized_queries'], keys: {list(optimized_queries.keys())}")
-                    self.logger.debug(f"  - semantic_query: '{optimized_queries.get('semantic_query', 'N/A')[:50]}...'")
-                    self.logger.debug(f"  - keyword_queries: {len(optimized_queries.get('keyword_queries', []))} queries")
-                elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
-                    optimized_queries = optimized_queries_raw
-                    extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                    self.logger.debug(f"  - Using optimized_queries_raw (direct was empty), keys: {list(optimized_queries.keys())}")
-                else:
-                    optimized_queries = {}
-                    extracted_keywords = []
-                    self.logger.debug(f"  - Both direct and raw are empty/None")
-            elif optimized_queries_raw is not None and len(optimized_queries_raw) > 0:
-                optimized_queries = optimized_queries_raw
-                extracted_keywords = optimized_queries.get("expanded_keywords", [])
-                self.logger.debug(f"  - Using optimized_queries_raw (no direct access), keys: {list(optimized_queries.keys())}")
-            else:
-                optimized_queries = {}
-                extracted_keywords = []
-                self.logger.debug(f"  - optimized_queries not found anywhere")
-
-            # search_params_raw도 확인
-            if search_params_raw is not None and len(search_params_raw) > 0:
-                search_params = search_params_raw
-                self.logger.debug(f"  - Using search_params_raw, keys: {list(search_params.keys())}")
-            elif search_params_raw is not None:
-                # 빈 딕셔너리인 경우 - 직접 state["search"]에서 확인
-                self.logger.debug(f"  - search_params_raw is empty dict, checking state['search'] directly")
-                if "search" in state and isinstance(state["search"], dict):
-                    direct_params = state["search"].get("search_params")
-                    if direct_params and len(direct_params) > 0:
-                        search_params = direct_params
-                        self.logger.debug(f"  - Found in state['search'], keys: {list(search_params.keys())}")
-                    else:
-                        search_params = {}
-                else:
-                    search_params = {}
-            else:
-                search_params = {}
-
-            # 검증: optimized_queries와 search_params가 None이 아니고, 필수 키가 있는지 확인
-            semantic_query_value = optimized_queries.get("semantic_query", "") if optimized_queries else ""
-
-            # semantic_query가 빈 문자열이면 기본 쿼리 사용
-            if not semantic_query_value or not str(semantic_query_value).strip():
-                query = self._get_state_value(state, "query", "")
-                if query:
-                    self.logger.warning(f"semantic_query is empty in execute_searches_parallel, using base query: '{query[:50]}...'")
-                    optimized_queries["semantic_query"] = query
-                    semantic_query_value = query
-
-            has_semantic_query = optimized_queries and semantic_query_value and len(str(semantic_query_value).strip()) > 0
-            keyword_queries_value = optimized_queries.get("keyword_queries", []) if optimized_queries else []
-
-            # keyword_queries가 비어있으면 기본 쿼리 사용
-            if not keyword_queries_value or len(keyword_queries_value) == 0:
-                query = self._get_state_value(state, "query", "")
-                if query:
-                    self.logger.warning(f"keyword_queries is empty in execute_searches_parallel, using base query")
-                    optimized_queries["keyword_queries"] = [query]
-                    keyword_queries_value = [query]
-
-            has_keyword_queries = optimized_queries and keyword_queries_value and len(keyword_queries_value) > 0
-
-            self.logger.debug(f"  - Validation: semantic_query='{semantic_query_value[:50] if semantic_query_value else 'EMPTY'}...', has_semantic_query={has_semantic_query}")
-            self.logger.debug(f"  - Validation: keyword_queries={len(keyword_queries_value) if keyword_queries_value else 0}, has_keyword_queries={has_keyword_queries}")
-            self.logger.debug(f"  - Validation: search_params is None={search_params is None}, is empty={search_params == {}}, keys={list(search_params.keys()) if search_params else []}")
-
-            if optimized_queries_raw is None or search_params_raw is None or not has_semantic_query:
-                self.logger.warning("Optimized queries or search params not found")
-                self.logger.debug(f"PARALLEL SEARCH SKIP: optimized_queries={optimized_queries is not None}, search_params={search_params is not None}")
-                self._set_state_value(state, "semantic_results", [])
-                self._set_state_value(state, "keyword_results", [])
-                self._set_state_value(state, "semantic_count", 0)
-                self._set_state_value(state, "keyword_count", 0)
-                return state
-
-            semantic_results = []
-            semantic_count = 0
-            keyword_results = []
-            keyword_count = 0
-
-            # 원본 query 가져오기 (추가 검색용)
-            original_query = self._get_state_value(state, "query", "")
-            if not original_query:
-                # input 그룹에서도 확인
-                if "input" in state and isinstance(state.get("input"), dict):
-                    original_query = state["input"].get("query", "")
-
-            self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, original_query={original_query[:50] if original_query else 'N/A'}...")
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                # 의미적 검색 작업 제출 (원본 query 포함)
-                semantic_future = executor.submit(
-                    self._execute_semantic_search_internal,
-                    optimized_queries,
-                    search_params,
-                    original_query  # 원본 query 추가
-                )
-
-                # 키워드 검색 작업 제출 (원본 query 포함)
-                keyword_future = executor.submit(
-                    self._execute_keyword_search_internal,
-                    optimized_queries,
-                    search_params,
-                    query_type_str,
-                    legal_field,
-                    extracted_keywords,
-                    original_query  # 원본 query 추가
-                )
-
-                # 두 작업이 완료될 때까지 대기
-                try:
-                    semantic_results, semantic_count = semantic_future.result(timeout=30)
-                    self.logger.debug(f"Semantic future completed: {semantic_count} results")
-                except Exception as e:
-                    self.logger.error(f"Semantic search failed: {e}")
-                    self.logger.debug(f"Semantic search exception: {e}")
-                    semantic_results, semantic_count = [], 0
-
-                try:
-                    keyword_results, keyword_count = keyword_future.result(timeout=30)
-                    self.logger.debug(f"Keyword future completed: {keyword_count} results")
-                except Exception as e:
-                    self.logger.error(f"Keyword search failed: {e}")
-                    self.logger.debug(f"Keyword search exception: {e}")
-                    keyword_results, keyword_count = [], 0
-
-            # 결과 저장
-            # 중요: search 그룹이 확실히 존재하도록 ensure_state_group 호출
-            from .state_helpers import ensure_state_group
-            ensure_state_group(state, "search")
-
-            self.logger.debug(f"PARALLEL SEARCH: Before save - semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}")
-
-            self._set_state_value(state, "semantic_results", semantic_results)
-            self._set_state_value(state, "keyword_results", keyword_results)
-            self._set_state_value(state, "semantic_count", semantic_count)
-            self._set_state_value(state, "keyword_count", keyword_count)
-
-            # 저장 확인 로그
-            stored_semantic = self._get_state_value(state, "semantic_results", [])
-            stored_keyword = self._get_state_value(state, "keyword_results", [])
-            self.logger.debug(f"PARALLEL SEARCH: After save - semantic_results={len(stored_semantic)}, keyword_results={len(stored_keyword)}")
-
-            # state["search"]에서 직접 확인 (디버깅)
-            if "search" in state and isinstance(state.get("search"), dict):
-                direct_semantic = state["search"].get("semantic_results", [])
-                direct_keyword = state["search"].get("keyword_results", [])
-                self.logger.debug(f"PARALLEL SEARCH: Direct state['search'] check - semantic={len(direct_semantic)}, keyword={len(direct_keyword)}")
-            else:
-                self.logger.debug(f"PARALLEL SEARCH: state['search'] not found or not dict, state keys: {list(state.keys()) if isinstance(state, dict) else 'N/A'}")
-
-            self._save_metadata_safely(state, "_last_executed_node", "execute_searches_parallel")
-            self._update_processing_time(state, start_time)
-
-            elapsed_time = time.time() - start_time
-
-            # 상세 디버깅 로그
-            self.logger.info(
-                f"✅ [PARALLEL SEARCH] Completed in {elapsed_time:.3f}s - "
-                f"Semantic: {semantic_count} results, Keyword: {keyword_count} results"
-            )
-            self.logger.debug(f"PARALLEL SEARCH: Semantic={semantic_count}, Keyword={keyword_count}")
-
-            # 검색 결과 상세 정보 로깅
-            if semantic_results:
-                semantic_scores = [doc.get("relevance_score", 0.0) for doc in semantic_results[:5]]
-                self.logger.info(
-                    f"🔍 [DEBUG] Semantic search details: "
-                    f"Top scores: {semantic_scores}, "
-                    f"Sample sources: {[doc.get('source', 'Unknown')[:30] for doc in semantic_results[:3]]}"
-                )
-            else:
-                self.logger.warning("⚠️ [DEBUG] Semantic search returned 0 results")
-
-            if keyword_results:
-                keyword_scores = [doc.get("relevance_score", doc.get("score", 0.0)) for doc in keyword_results[:5]]
-                self.logger.info(
-                    f"🔍 [DEBUG] Keyword search details: "
-                    f"Top scores: {keyword_scores}, "
-                    f"Sample sources: {[doc.get('source', 'Unknown')[:30] for doc in keyword_results[:3]]}"
-                )
-            else:
-                self.logger.warning("⚠️ [DEBUG] Keyword search returned 0 results")
-
-        except Exception as e:
-            self._handle_error(state, str(e), "병렬 검색 중 오류 발생")
-            # 폴백: 순차 실행
-            return self._fallback_sequential_search(state)
-
-        # 반환 전에 search 그룹 확인 및 로깅
-        if "search" in state and isinstance(state.get("search"), dict):
-            final_search = state["search"]
-            final_semantic = len(final_search.get("semantic_results", []))
-            final_keyword = len(final_search.get("keyword_results", []))
-            print(f"[DEBUG] execute_searches_parallel: Returning state with search group - semantic_results={final_semantic}, keyword_results={final_keyword}")
-            print(f"[DEBUG] execute_searches_parallel: Returning state keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
-        else:
-            print(f"[DEBUG] execute_searches_parallel: WARNING - Returning state WITHOUT search group!")
-            print(f"[DEBUG] execute_searches_parallel: Returning state keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
-
-        return state
+        """의미적 검색과 키워드 검색을 병렬로 실행 - SearchHandler로 위임"""
+        # Phase 2 리팩토링: SearchHandler로 위임
+        return self.search_handler.execute_searches_parallel(
+            state=state,
+            execute_semantic_search_func=self._execute_semantic_search_internal,
+            execute_keyword_search_func=self._execute_keyword_search_internal,
+            get_query_type_str_func=self._get_query_type_str,
+            get_state_value_func=self._get_state_value,
+            set_state_value_func=self._set_state_value,
+            update_processing_time_func=self._update_processing_time,
+            save_metadata_safely_func=self._save_metadata_safely,
+            handle_error_func=self._handle_error,
+            fallback_sequential_search_func=self._fallback_sequential_search,
+            enhanced_cache=self.enhanced_cache
+        )
 
     def _execute_semantic_search_internal(
         self,
@@ -6944,11 +6887,30 @@ class EnhancedLegalQuestionWorkflow:
         try:
             start_time = time.time()
 
-            quality_evaluation = self._get_state_value(state, "search_quality_evaluation", {})
-            semantic_results = self._get_state_value(state, "semantic_results", [])
-            keyword_results = self._get_state_value(state, "keyword_results", [])
-            optimized_queries = self._get_state_value(state, "optimized_queries", {})
-            search_params = self._get_state_value(state, "search_params", {})
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["search_quality_evaluation", "semantic_results", "keyword_results", 
+                      "optimized_queries", "search_params", "search_retry_metadata", 
+                      "query_type", "legal_field"],
+                defaults={
+                    "search_quality_evaluation": {},
+                    "semantic_results": [],
+                    "keyword_results": [],
+                    "optimized_queries": {},
+                    "search_params": {},
+                    "search_retry_metadata": {},
+                    "query_type": "",
+                    "legal_field": ""
+                }
+            )
+            
+            quality_evaluation = state_values["search_quality_evaluation"]
+            semantic_results = state_values["semantic_results"]
+            keyword_results = state_values["keyword_results"]
+            optimized_queries = state_values["optimized_queries"]
+            search_params = state_values["search_params"]
+            retry_metadata = state_values["search_retry_metadata"]
 
             semantic_quality = quality_evaluation.get("semantic_quality", {})
             keyword_quality = quality_evaluation.get("keyword_quality", {})
@@ -6957,7 +6919,6 @@ class EnhancedLegalQuestionWorkflow:
             keyword_needs_retry = keyword_quality.get("needs_retry", False)
 
             # 재검색 카운터 확인 (무한 루프 방지)
-            retry_metadata = self._get_state_value(state, "search_retry_metadata", {})
             semantic_retry_count = retry_metadata.get("semantic_retry_count", 0)
             keyword_retry_count = retry_metadata.get("keyword_retry_count", 0)
 
@@ -6988,8 +6949,8 @@ class EnhancedLegalQuestionWorkflow:
             if keyword_needs_retry and keyword_retry_count < max_retry_per_type:
                 self.logger.info(f"🔄 [RETRY KEYWORD] Retrying keyword search (count: {keyword_retry_count})")
 
-                query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
-                legal_field = self._get_state_value(state, "legal_field", "")
+                query_type_str = self._get_query_type_str(state_values["query_type"])
+                legal_field = state_values["legal_field"]
                 extracted_keywords = optimized_queries.get("expanded_keywords", [])
 
                 # 키워드 검색 재실행
@@ -7032,13 +6993,29 @@ class EnhancedLegalQuestionWorkflow:
 
             print("[DEBUG] MERGE: START - merge_and_rerank_with_keyword_weights")
 
-            semantic_results = self._get_state_value(state, "semantic_results", [])
-            keyword_results = self._get_state_value(state, "keyword_results", [])
-            search_params = self._get_state_value(state, "search_params", {})
-            query = self._get_state_value(state, "query", "")
-            extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
-            query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
-            legal_field = self._get_state_value(state, "legal_field", "")
+            # 배치로 State 값 가져오기 (성능 최적화)
+            state_values = WorkflowUtils.get_state_values_batch(
+                state,
+                keys=["semantic_results", "keyword_results", "search_params", "query", 
+                      "extracted_keywords", "query_type", "legal_field"],
+                defaults={
+                    "semantic_results": [],
+                    "keyword_results": [],
+                    "search_params": {},
+                    "query": "",
+                    "extracted_keywords": [],
+                    "query_type": "",
+                    "legal_field": ""
+                }
+            )
+            
+            semantic_results = state_values["semantic_results"]
+            keyword_results = state_values["keyword_results"]
+            search_params = state_values["search_params"]
+            query = state_values["query"]
+            extracted_keywords = state_values["extracted_keywords"]
+            query_type_str = self._get_query_type_str(state_values["query_type"])
+            legal_field = state_values["legal_field"]
 
             print(f"[DEBUG] MERGE: Input - semantic_results={len(semantic_results)}, keyword_results={len(keyword_results)}")
 
@@ -7731,6 +7708,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="prepare_document_context_for_prompt")
     @with_state_optimization("prepare_document_context_for_prompt", enable_reduction=True)
+    @measure_performance("prepare_document_context_for_prompt")
+    @handle_workflow_errors(error_message="문서 컨텍스트 준비 중 오류 발생")
     def prepare_document_context_for_prompt(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """프롬프트에 최대한 반영되도록 문서 컨텍스트 준비"""
         try:
@@ -7741,6 +7720,19 @@ class EnhancedLegalQuestionWorkflow:
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
             query_type_str = self._get_query_type_str(self._get_state_value(state, "query_type", ""))
             legal_field = self._get_state_value(state, "legal_field", "")
+            
+            # Phase 6: 향상된 캐싱 전략 - 컨텍스트 캐시 확인
+            if self.enhanced_cache and retrieved_docs:
+                cached_context = self.enhanced_cache.get_context(
+                    query=query,
+                    retrieved_docs=retrieved_docs,
+                    query_type=query_type_str
+                )
+                if cached_context:
+                    self.logger.info(f"Using cached context for query: {query[:50]}...")
+                    self._set_state_value(state, "prompt_optimized_context", cached_context)
+                    self._update_processing_time(state, start_time)
+                    return state
 
             # retrieved_docs 검증
             if not retrieved_docs:
@@ -7828,6 +7820,15 @@ class EnhancedLegalQuestionWorkflow:
                 query_type=query_type_str,
                 legal_field=legal_field
             )
+            
+            # Phase 6: 향상된 캐싱 전략 - 컨텍스트 캐싱
+            if self.enhanced_cache and prompt_optimized_context:
+                self.enhanced_cache.put_context(
+                    query=query,
+                    retrieved_docs=retrieved_docs,
+                    query_type=query_type_str,
+                    context=prompt_optimized_context
+                )
 
             # State에 저장
             self._set_state_value(state, "prompt_optimized_context", prompt_optimized_context)
@@ -7882,6 +7883,8 @@ class EnhancedLegalQuestionWorkflow:
 
     @observe(name="prepare_documents_and_terms")
     @with_state_optimization("prepare_documents_and_terms", enable_reduction=True)
+    @measure_performance("prepare_documents_and_terms")
+    @handle_workflow_errors(error_message="문서 및 용어 준비 중 오류 발생")
     def prepare_documents_and_terms(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """통합된 문서 준비 및 용어 처리 (prepare_document_context_for_prompt + process_legal_terms)"""
         try:
@@ -8258,69 +8261,6 @@ class EnhancedLegalQuestionWorkflow:
                     break
 
         return selected_docs[:max_docs]
-
-    def _extract_keywords_from_query(self, query: str) -> List[str]:
-        """질문에서 핵심 키워드 추출 (개선 버전: 복합 키워드 인식 포함)"""
-        import re
-        if not query:
-            return []
-        
-        # 복합 조사 패턴 (먼저 제거)
-        query_clean = query
-        complex_particles = [
-            r'에\s+대해\s*서?', r'에\s+관한', r'에\s+대한', r'에\s+관하여',
-            r'에\s+대해', r'에\s+대해서'
-        ]
-        for pattern in complex_particles:
-            query_clean = re.sub(pattern, ' ', query_clean, flags=re.IGNORECASE)
-        
-        keywords = []
-        seen_keywords = set()  # 중복 제거
-        
-        # 1. 복합 키워드 패턴 인식 (법률 도메인 특화, 우선순위 높음)
-        # 2-4단어로 구성된 복합 키워드 패턴
-        complex_patterns = [
-            r'전세금\s*반환\s*보증',  # 전세금 반환 보증
-            r'전세\s*보증금',  # 전세 보증금
-            r'보증금\s*반환',  # 보증금 반환
-            r'임대차\s*보증금',  # 임대차 보증금
-            r'계약\s*해지',  # 계약 해지
-            r'손해\s*배상',  # 손해 배상
-            r'법률\s*상담',  # 법률 상담
-        ]
-        
-        # 복합 키워드 추출 (우선순위 높음)
-        extracted_positions = []  # 추출된 위치 추적
-        for pattern in complex_patterns:
-            matches = re.finditer(pattern, query_clean, re.IGNORECASE)
-            for match in matches:
-                keyword = match.group().strip()
-                if keyword and keyword not in seen_keywords:
-                    keywords.append(keyword)
-                    seen_keywords.add(keyword)
-                    extracted_positions.append((match.start(), match.end()))
-        
-        # 2. 단일 키워드 추출 (복합 키워드와 겹치지 않는 부분만 - KoreanStopwordProcessor 사용)
-        words = re.findall(r'\b\w+\b', query_clean)
-        for word in words:
-            word_clean = word.strip()
-            if word_clean and len(word_clean) > 1 and word_clean not in seen_keywords:
-                # 불용어 필터링 (KoreanStopwordProcessor 사용)
-                if self.stopword_processor and self.stopword_processor.is_stopword(word_clean):
-                    continue
-                # 추출된 복합 키워드와 겹치는지 확인
-                word_pos = query_clean.find(word_clean)
-                is_overlapping = False
-                for start, end in extracted_positions:
-                    if start <= word_pos < end:
-                        is_overlapping = True
-                        break
-                
-                if not is_overlapping:
-                    keywords.append(word_clean)
-                    seen_keywords.add(word_clean)
-        
-        return keywords
 
     def _extract_keywords_from_query(self, query: str) -> List[str]:
         """질문에서 핵심 키워드 추출 (개선 버전: 복합 키워드 인식 포함)"""

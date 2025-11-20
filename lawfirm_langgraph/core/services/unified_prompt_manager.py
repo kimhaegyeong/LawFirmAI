@@ -56,7 +56,6 @@ class LegalDomain(Enum):
 class ModelType(Enum):
     """지원 모델 타입"""
     GEMINI = "gemini"
-    OLLAMA = "ollama"
     OPENAI = "openai"
 
 
@@ -286,12 +285,6 @@ class UnifiedPromptManager:
                 "temperature": 0.3,
                 "system_prompt_style": "structured",
                 "context_window": 0.8
-            },
-            ModelType.OLLAMA: {
-                "max_tokens": 4096,
-                "temperature": 0.2,
-                "system_prompt_style": "conversational",
-                "context_window": 0.7
             },
             ModelType.OPENAI: {
                 "max_tokens": 4096,

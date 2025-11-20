@@ -28,7 +28,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 LAW_PATTERN = re.compile(r'[가-힣]+법\s*제?\s*\d+\s*조')
 PRECEDENT_PATTERN = re.compile(r'대법원|법원.*\d{4}[다나마]\d+')
 
-from langchain_community.llms import Ollama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
@@ -397,6 +396,9 @@ class EnhancedLegalQuestionWorkflow(
         
         # 품질 검증용 LLM 초기화 (별도)
         self.validator_llm = self._initialize_validator_llm()
+        
+        # 긴 글/코드 생성용 LLM 초기화 (60초 timeout)
+        self.llm_long_text = self._initialize_llm_long_text()
 
         # DocumentAnalysisProcessor 초기화
         try:
@@ -505,11 +507,33 @@ class EnhancedLegalQuestionWorkflow(
         # HybridQueryProcessor 초기화 (HuggingFace + LLM 하이브리드)
         try:
             from core.search.optimizers.hybrid_query_processor import HybridQueryProcessor
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from core.workflow.utils.workflow_constants import WorkflowConstants
+            
             embedding_model_name = getattr(self.config, 'embedding_model', None)
+            
+            # prepare_search_query에서 사용할 LLM: gemini-2.5-flash-lite
+            search_query_llm = None
+            if self.config.llm_provider == "google":
+                try:
+                    search_query_llm = ChatGoogleGenerativeAI(
+                        model="gemini-2.5-flash-lite",
+                        temperature=WorkflowConstants.TEMPERATURE,
+                        max_output_tokens=WorkflowConstants.MAX_OUTPUT_TOKENS,
+                        timeout=WorkflowConstants.TIMEOUT_RAG_QA,
+                        api_key=self.config.google_api_key
+                    )
+                    self.logger.info("✅ Initialized gemini-2.5-flash-lite LLM for prepare_search_query")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to initialize gemini-2.5-flash-lite LLM: {e}, using main LLM")
+                    search_query_llm = self.llm
+            else:
+                search_query_llm = self.llm
+            
             self.hybrid_query_processor = HybridQueryProcessor(
                 keyword_extractor=self.keyword_extractor,
                 term_integrator=self.term_integrator,
-                llm=self.llm,
+                llm=search_query_llm,
                 embedding_model_name=embedding_model_name,
                 logger=self.logger
             )
@@ -679,11 +703,6 @@ class EnhancedLegalQuestionWorkflow(
             return self.llm_initializer.initialize_gemini()
         return self._create_mock_llm_fallback()
 
-    def _initialize_ollama(self):
-        """LLMInitializer.initialize_ollama 래퍼"""
-        if self.llm_initializer:
-            return self.llm_initializer.initialize_ollama()
-        return self._create_mock_llm_fallback()
 
     def _create_mock_llm(self):
         """LLMInitializer.create_mock_llm 래퍼"""
@@ -701,6 +720,12 @@ class EnhancedLegalQuestionWorkflow(
         """LLMInitializer.initialize_validator_llm 래퍼"""
         if self.llm_initializer:
             return self.llm_initializer.initialize_validator_llm()
+        return self.llm
+    
+    def _initialize_llm_long_text(self) -> Any:
+        """긴 글/코드 생성용 LLM 초기화 (60초 timeout)"""
+        if self.llm_initializer:
+            return self.llm_initializer.initialize_gemini_long_text()
         return self.llm
 
     def _create_mock_llm_fallback(self):
@@ -3421,7 +3446,7 @@ class EnhancedLegalQuestionWorkflow(
             
             query = self._get_state_value(state, "query", "")
             question_type, domain = WorkflowUtils.get_question_type_and_domain(query_type, query, self.logger)
-            model_type = ModelType.GEMINI if self.config.llm_provider == "google" else ModelType.OLLAMA
+            model_type = ModelType.GEMINI
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
 
             prompt_optimized_context = self._validate_and_generate_prompt_context(
@@ -4107,8 +4132,8 @@ class EnhancedLegalQuestionWorkflow(
             return self.answer_quality_validator.validate_with_llm(answer, state)
         return {}
 
-    def _call_llm_with_retry(self, prompt: str, max_retries: int = WorkflowConstants.MAX_RETRIES) -> str:
-        """LLM 호출 (재시도 로직 포함)"""
+    def _call_llm_with_retry(self, prompt: str, max_retries: int = WorkflowConstants.MAX_RETRIES, timeout: float = 30.0) -> str:
+        """LLM 호출 (재시도 로직 및 타임아웃 포함)"""
         if hasattr(self, 'answer_generator') and self.answer_generator and hasattr(self.answer_generator, 'call_llm_with_retry'):
             return self.answer_generator.call_llm_with_retry(prompt, max_retries)
         
@@ -4117,16 +4142,39 @@ class EnhancedLegalQuestionWorkflow(
             self.logger.error("LLM not available for multi-query generation")
             raise RuntimeError("LLM not available")
         
+        import asyncio
         for attempt in range(max_retries):
             try:
-                response = self.llm.invoke(prompt)
+                # 비동기 호출이 가능한 경우 타임아웃 적용
+                if hasattr(self.llm, 'ainvoke'):
+                    try:
+                        response = asyncio.run(
+                            asyncio.wait_for(
+                                self.llm.ainvoke(prompt),
+                                timeout=timeout
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        raise TimeoutError(f"LLM call timed out after {timeout} seconds")
+                else:
+                    # 동기 호출의 경우 타임아웃을 시뮬레이션하기 어려우므로 그대로 호출
+                    response = self.llm.invoke(prompt)
+                
                 from core.agents.workflow_utils import WorkflowUtils
                 result = WorkflowUtils.extract_response_content(response)
                 return result
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                if attempt < max_retries - 1:
+                    self.logger.warning(f"LLM call timed out (attempt {attempt + 1}/{max_retries}): {e}, retrying...")
+                    wait_time = min(0.1 * (2 ** attempt), 0.5)
+                    time.sleep(wait_time)
+                else:
+                    self.logger.error(f"LLM call timed out after {max_retries} attempts: {e}")
+                    raise
             except Exception as e:
                 if attempt < max_retries - 1:
                     self.logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}, retrying...")
-                    wait_time = min(0.1 * (2 ** attempt), 0.5)  # 0.2 → 0.1, 1.0 → 0.5로 최적화
+                    wait_time = min(0.1 * (2 ** attempt), 0.5)
                     time.sleep(wait_time)
                 else:
                     self.logger.error(f"LLM call failed after {max_retries} attempts: {e}")
@@ -5590,14 +5638,14 @@ class EnhancedLegalQuestionWorkflow(
             search_params=search_params
         )
         
-        # 개선: 재랭킹 조건 로직 개선 - 품질 점수와 문서 수를 별도로 고려
+        # 개선: 재랭킹 조건 로직 개선 - 조기 종료 조건 강화
         # 문서 수가 매우 적으면 (5개 이하) 재랭킹 스킵
-        # 품질이 매우 높고 문서 수가 적으면 (품질 >= 0.95 and 문서 <= 15) 재랭킹 스킵
-        # 품질이 높고 문서 수가 매우 적으면 (품질 >= 0.85 and 문서 <= 8) 재랭킹 스킵
+        # 품질이 높으면 (품질 >= 0.85) 재랭킹 스킵
+        # 품질이 중간 이상이고 문서 수가 적으면 (품질 >= 0.75 and 문서 <= 10) 재랭킹 스킵
         should_skip_rerank = (
             len(weighted_docs) <= 5 or  # 문서 수가 매우 적으면 스킵
-            (overall_quality >= 0.95 and len(weighted_docs) <= 15) or  # 품질이 매우 높고 문서 수가 적으면 스킵
-            (overall_quality >= 0.85 and len(weighted_docs) <= 8)  # 품질이 높고 문서 수가 매우 적으면 스킵
+            overall_quality >= 0.85 or  # 품질이 높으면 스킵 (강화)
+            (overall_quality >= 0.75 and len(weighted_docs) <= 10)  # 품질이 중간 이상이고 문서 수가 적으면 스킵
         )
         
         # 재랭킹 조건 확인 로그 (INFO 레벨로 변경하여 가시성 향상)
@@ -5724,24 +5772,72 @@ class EnhancedLegalQuestionWorkflow(
                 if isinstance(kw, str) and len(kw) >= 2:
                     core_query_keywords.add(kw.lower())
         
-        # 벡터 점수 계산 (병렬 처리 전에 미리 계산)
-        vector_scores = [
-            doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-            for doc in weighted_docs
-            if not (
-                doc.get("search_type") == "text2sql" or
-                doc.get("search_type") == "direct_statute" or
-                doc.get("direct_match", False) or
-                (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
-            )
-        ]
-        if vector_scores:
-            avg_score = sum(vector_scores) / len(vector_scores)
-            default_min_score_threshold = max(0.60, min(0.75, avg_score * 0.8))
-            if avg_score < 0.70:
-                default_min_score_threshold = max(0.50, avg_score * 0.7)
-        else:
-            default_min_score_threshold = 0.75
+        # 벡터 점수 계산 (NumPy 벡터 연산으로 최적화)
+        try:
+            import numpy as np
+            
+            # 점수 배열 생성 (벡터화)
+            scores = np.array([
+                doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                for doc in weighted_docs
+            ])
+            
+            # text2sql 문서 마스크 생성 (벡터화)
+            is_text2sql_mask = np.array([
+                bool(
+                    doc.get("search_type") == "text2sql" or
+                    doc.get("search_type") == "direct_statute" or
+                    doc.get("direct_match", False) or
+                    (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
+                )
+                for doc in weighted_docs
+            ], dtype=bool)
+            
+            # scores를 numpy array로 변환 (타입 안전성 보장)
+            if not isinstance(scores, np.ndarray):
+                scores = np.array(scores, dtype=float)
+            
+            # 벡터 점수만 추출 (text2sql 제외)
+            # 마스크와 scores의 길이가 일치하는지 확인
+            if len(scores) != len(is_text2sql_mask):
+                self.logger.warning(
+                    f"⚠️ [FILTER] scores length ({len(scores)}) != mask length ({len(is_text2sql_mask)}). "
+                    f"Using fallback filtering method."
+                )
+                vector_scores = [
+                    score for i, score in enumerate(scores)
+                    if i < len(is_text2sql_mask) and not is_text2sql_mask[i]
+                ]
+                vector_scores = np.array(vector_scores, dtype=float) if vector_scores else np.array([], dtype=float)
+            else:
+                vector_scores = scores[~is_text2sql_mask]
+            
+            if len(vector_scores) > 0:
+                avg_score = float(np.mean(vector_scores))
+                default_min_score_threshold = max(0.60, min(0.75, avg_score * 0.8))
+                if avg_score < 0.70:
+                    default_min_score_threshold = max(0.50, avg_score * 0.7)
+            else:
+                default_min_score_threshold = 0.75
+        except ImportError:
+            # NumPy가 없으면 기존 방식 사용
+            vector_scores = [
+                doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                for doc in weighted_docs
+                if not (
+                    doc.get("search_type") == "text2sql" or
+                    doc.get("search_type") == "direct_statute" or
+                    doc.get("direct_match", False) or
+                    (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
+                )
+            ]
+            if vector_scores:
+                avg_score = sum(vector_scores) / len(vector_scores)
+                default_min_score_threshold = max(0.60, min(0.75, avg_score * 0.8))
+                if avg_score < 0.70:
+                    default_min_score_threshold = max(0.50, avg_score * 0.7)
+            else:
+                default_min_score_threshold = 0.75
         
         # 병렬 처리 (문서가 5개 이상일 때만)
         if len(weighted_docs) >= 5:
@@ -5818,10 +5914,8 @@ class EnhancedLegalQuestionWorkflow(
                     (doc.get("type") == "statute_article" and doc.get("statute_name") and doc.get("article_no"))
                 )
                 
-                if is_text2sql:
-                    min_score_threshold = 0.0
-                else:
-                    min_score_threshold = default_min_score_threshold
+                # 점수 필터링 (벡터화된 계산 결과 활용)
+                min_score_threshold = 0.0 if is_text2sql else default_min_score_threshold
                 
                 if score < min_score_threshold:
                     with skipped_score_lock:
@@ -6657,21 +6751,28 @@ class EnhancedLegalQuestionWorkflow(
         self._save_search_results_to_state(state, final_docs)
         
         processing_time = self._update_processing_time(state, start_time)
-        self._add_step(
-            state,
-            "검색 결과 처리",
-            f"검색 결과 처리 완료: {len(final_docs)}개 문서 (품질 점수: {overall_quality:.2f}, 시간: {processing_time:.3f}s)"
-        )
         
+        # 배치 로깅 최적화: 여러 로그를 한 번에 처리
         if len(final_docs) > 0:
-            processed_msg = f"✅ [SEARCH RESULTS] Processed {len(final_docs)} documents (quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s)"
+            final_scores = [doc.get("final_weighted_score", doc.get("relevance_score", 0.0)) for doc in final_docs]
+            min_score = min(final_scores) if final_scores else 0.0
+            max_score = max(final_scores) if final_scores else 0.0
+            avg_score = sum(final_scores) / len(final_scores) if final_scores else 0.0
+            
+            # 배치 로깅: 한 번에 모든 정보 출력
+            processed_msg = (
+                f"✅ [SEARCH RESULTS] Processed {len(final_docs)} documents "
+                f"(quality: {overall_quality:.2f}, retry: {needs_retry}, time: {processing_time:.3f}s, "
+                f"scores: min={min_score:.3f}, max={max_score:.3f}, avg={avg_score:.3f})"
+            )
             print(processed_msg, flush=True, file=sys.stdout)
             self.logger.info(processed_msg)
-            final_scores = [doc.get("final_weighted_score", doc.get("relevance_score", 0.0)) for doc in final_docs]
-            if final_scores:
-                final_score_msg = f"📊 [SEARCH RESULTS] Final documents score range - Min: {min(final_scores):.3f}, Max: {max(final_scores):.3f}, Avg: {sum(final_scores)/len(final_scores):.3f}"
-                print(final_score_msg, flush=True, file=sys.stdout)
-                self.logger.info(final_score_msg)
+            
+            self._add_step(
+                state,
+                "검색 결과 처리",
+                f"검색 결과 처리 완료: {len(final_docs)}개 문서 (품질 점수: {overall_quality:.2f}, 시간: {processing_time:.3f}s)"
+            )
             
             # 검색 품질 메트릭 로깅 추가
             if final_docs:
@@ -6866,37 +6967,40 @@ class EnhancedLegalQuestionWorkflow(
         state: LegalWorkflowState,
         final_docs: List[Dict[str, Any]]
     ) -> None:
-        """검색 결과를 State에 저장 (중복 코드 제거) - 개선: 여러 위치에 저장"""
+        """검색 결과를 State에 저장 (성능 최적화: 한 번만 복사, 배치 저장)"""
         debug_mode = os.getenv("DEBUG_SEARCH_RESULTS", "false").lower() == "true"
         
-        # 최상위 레벨에 저장
-        self._set_state_value(state, "retrieved_docs", final_docs.copy())
-        self._set_state_value(state, "merged_documents", final_docs.copy())
+        # 성능 최적화: final_docs를 한 번만 복사하여 재사용
+        final_docs_copy = final_docs.copy() if final_docs else []
         
-        # search 그룹에 저장 (명시적)
+        # 최상위 레벨에 저장
+        self._set_state_value(state, "retrieved_docs", final_docs_copy)
+        self._set_state_value(state, "merged_documents", final_docs_copy)
+        
+        # search 그룹에 저장
         if "search" not in state:
             state["search"] = {}
-        state["search"]["retrieved_docs"] = final_docs.copy()
-        state["search"]["merged_documents"] = final_docs.copy()
+        state["search"]["retrieved_docs"] = final_docs_copy
+        state["search"]["merged_documents"] = final_docs_copy
         
         # common 그룹에 저장
         if "common" not in state:
             state["common"] = {}
         if "search" not in state["common"]:
             state["common"]["search"] = {}
-        state["common"]["search"]["retrieved_docs"] = final_docs.copy()
-        state["common"]["search"]["merged_documents"] = final_docs.copy()
+        state["common"]["search"]["retrieved_docs"] = final_docs_copy
+        state["common"]["search"]["merged_documents"] = final_docs_copy
         
         # metadata에도 저장 (복구를 위해)
         metadata = self._get_metadata_safely(state)
         if "search" not in metadata:
             metadata["search"] = {}
-        metadata["search"]["retrieved_docs"] = final_docs
-        metadata["search"]["merged_documents"] = final_docs
-        metadata["retrieved_docs"] = final_docs
+        metadata["search"]["retrieved_docs"] = final_docs_copy
+        metadata["search"]["merged_documents"] = final_docs_copy
+        metadata["retrieved_docs"] = final_docs_copy
         self._set_state_value(state, "metadata", metadata)
         
-        # 개선: global cache에도 저장 (복구를 위해)
+        # global cache에도 저장 (한 번만 복사하여 재사용)
         try:
             from core.shared.wrappers.node_wrappers import _global_search_results_cache
             if _global_search_results_cache is None or not isinstance(_global_search_results_cache, dict):
@@ -6904,46 +7008,39 @@ class EnhancedLegalQuestionWorkflow(
                 node_wrappers_module._global_search_results_cache = {}
                 _global_search_results_cache = node_wrappers_module._global_search_results_cache
             
-            _global_search_results_cache["retrieved_docs"] = final_docs.copy()
-            _global_search_results_cache["merged_documents"] = final_docs.copy()
+            # 한 번만 복사하여 여러 위치에 재사용
+            _global_search_results_cache["retrieved_docs"] = final_docs_copy
+            _global_search_results_cache["merged_documents"] = final_docs_copy
+            
             if "search" not in _global_search_results_cache:
                 _global_search_results_cache["search"] = {}
-            _global_search_results_cache["search"]["retrieved_docs"] = final_docs.copy()
-            _global_search_results_cache["search"]["merged_documents"] = final_docs.copy()
+            _global_search_results_cache["search"]["retrieved_docs"] = final_docs_copy
+            _global_search_results_cache["search"]["merged_documents"] = final_docs_copy
+            
             if "common" not in _global_search_results_cache:
                 _global_search_results_cache["common"] = {}
             if "search" not in _global_search_results_cache["common"]:
                 _global_search_results_cache["common"]["search"] = {}
-            _global_search_results_cache["common"]["search"]["retrieved_docs"] = final_docs.copy()
-            self.logger.info(
-                f"✅ [SAVE RESULTS] 저장 완료: {len(final_docs)}개 문서 "
-                f"(최상위, search, common, 전역 캐시)"
-            )
+            _global_search_results_cache["common"]["search"]["retrieved_docs"] = final_docs_copy
+            
+            # 배치 로깅 (한 번만 로깅)
+            if debug_mode:
+                saved_retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
+                saved_search_group = state.get("search", {}).get("retrieved_docs", [])
+                saved_common_group = state.get("common", {}).get("search", {}).get("retrieved_docs", [])
+                self.logger.info(
+                    f"✅ [SAVE RESULTS] 저장 완료: {len(final_docs_copy)}개 문서 "
+                    f"(최상위: {len(saved_retrieved_docs)}, search: {len(saved_search_group)}, "
+                    f"common: {len(saved_common_group)}, 전역 캐시)"
+                )
+            else:
+                self.logger.debug(
+                    f"✅ [SAVE RESULTS] 저장 완료: {len(final_docs_copy)}개 문서 "
+                    f"(최상위, search, common, 전역 캐시)"
+                )
         except (ImportError, AttributeError, TypeError) as e:
-            self.logger.debug(f"Could not save to global cache: {e}")
-        
-        if debug_mode:
-            saved_retrieved_docs = self._get_state_value(state, "retrieved_docs", [])
-            saved_search_group = state.get("search", {}).get("retrieved_docs", [])
-            saved_common_group = state.get("common", {}).get("search", {}).get("retrieved_docs", [])
-            self.logger.info(f"✅ [SEARCH RESULTS] State 저장 완료 - 최상위: {len(saved_retrieved_docs)}, search 그룹: {len(saved_search_group)}, common 그룹: {len(saved_common_group)}")
-        
-        try:
-            from core.shared.wrappers.node_wrappers import _global_search_results_cache
-            if not _global_search_results_cache:
-                _global_search_results_cache = {}
-            
-            _global_search_results_cache["retrieved_docs"] = final_docs.copy()
-            _global_search_results_cache["merged_documents"] = final_docs.copy()
-            
-            if "search" not in _global_search_results_cache:
-                _global_search_results_cache["search"] = {}
-            _global_search_results_cache["search"]["retrieved_docs"] = final_docs.copy()
-            _global_search_results_cache["search"]["merged_documents"] = final_docs.copy()
-            
-            self.logger.info(f"✅ [SEARCH RESULTS] 전역 캐시에 직접 저장 완료 - 개수: {len(final_docs)}")
-        except Exception as e:
-            self.logger.warning(f"⚠️ [SEARCH RESULTS] 전역 캐시 직접 저장 실패: {e}")
+            if debug_mode:
+                self.logger.debug(f"Could not save to global cache: {e}")
 
     @observe(name="process_search_results_combined")
     @with_state_optimization("process_search_results_combined", enable_reduction=True)
@@ -7042,27 +7139,54 @@ class EnhancedLegalQuestionWorkflow(
             for doc in semantic_results + keyword_results:
                 doc = self._ensure_scores(doc)
                 # type 정보 보존 (검색 결과에서 가져온 type 정보 유지)
-                if "type" not in doc and "source_type" not in doc:
-                    # 원본 검색 결과에서 type 정보 복구 시도
-                    original_type = doc.get("metadata", {}).get("type") or doc.get("metadata", {}).get("source_type")
-                    if original_type:
+                # 1. 이미 type이 있으면 유지
+                if "type" in doc and doc.get("type") and doc.get("type") != "unknown":
+                    if "source_type" not in doc:
+                        doc["source_type"] = doc["type"]
+                    continue
+                
+                # 2. source_type이 있으면 type으로 복사
+                if "source_type" in doc and doc.get("source_type") and doc.get("source_type") != "unknown":
+                    doc["type"] = doc["source_type"]
+                    continue
+                
+                # 3. metadata에서 복구 시도
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    original_type = metadata.get("type") or metadata.get("source_type")
+                    if original_type and original_type != "unknown":
                         doc["type"] = original_type
                         doc["source_type"] = original_type
+                        continue
+                
+                # 4. source에서 추론 시도
+                source = doc.get("source", "")
+                if source:
+                    if "민법" in source or "법" in source or "규칙" in source:
+                        doc["type"] = "statute_article"
+                        doc["source_type"] = "statute_article"
+                    elif "대법원" in source or "법원" in source or "판결" in source or "사건" in source:
+                        doc["type"] = "case_paragraph"
+                        doc["source_type"] = "case_paragraph"
 
-            self.logger.info(
-                f"🔍 [BEFORE RERANK] About to call _apply_keyword_weights_and_rerank: "
-                f"merged_docs={len(merged_docs)}, overall_quality={overall_quality:.2f}"
-            )
+            # 로깅 최적화: DEBUG 레벨로 변경 (성능 향상)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    f"🔍 [BEFORE RERANK] About to call _apply_keyword_weights_and_rerank: "
+                    f"merged_docs={len(merged_docs)}, overall_quality={overall_quality:.2f}"
+                )
             
             weighted_docs = self._apply_keyword_weights_and_rerank(
                 state, merged_docs, query, query_type_str, extracted_keywords,
                 search_params, overall_quality
             )
             
-            self.logger.info(
-                f"🔍 [AFTER RERANK] _apply_keyword_weights_and_rerank completed: "
-                f"weighted_docs={len(weighted_docs)}"
-            )
+            # 로깅 최적화: DEBUG 레벨로 변경 (성능 향상)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    f"🔍 [AFTER RERANK] _apply_keyword_weights_and_rerank completed: "
+                    f"weighted_docs={len(weighted_docs)}"
+                )
 
             filtered_docs = self._filter_and_validate_documents(
                 state, weighted_docs, query, extracted_keywords, merged_docs
@@ -7078,48 +7202,184 @@ class EnhancedLegalQuestionWorkflow(
                 state, vector_docs, query, query_type_str, extracted_keywords
             )
             
-            # 우선순위 4: 법령 조문 부스팅 적용 (병렬 처리)
-            from concurrent.futures import ThreadPoolExecutor
+            # 우선순위 4: 법령 조문 부스팅 적용 (병렬 처리 최적화)
+            from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+            
+            start_boosting_time = time.time()
+            doc_count = len(text2sql_docs) + len(reranked_vector_docs)
+            timeout = max(10.0, min(30.0, doc_count * 0.1))
+            
+            results = {}
             with ThreadPoolExecutor(max_workers=2) as executor:
-                text2sql_future = executor.submit(self._apply_statute_article_boosting, text2sql_docs, query)
-                reranked_future = executor.submit(self._apply_statute_article_boosting, reranked_vector_docs, query)
-                text2sql_docs = text2sql_future.result(timeout=5)
-                reranked_vector_docs = reranked_future.result(timeout=5)
+                futures = {
+                    executor.submit(self._apply_statute_article_boosting, text2sql_docs, query): "text2sql",
+                    executor.submit(self._apply_statute_article_boosting, reranked_vector_docs, query): "reranked"
+                }
+                
+                for future in as_completed(futures, timeout=timeout):
+                    task_name = futures[future]
+                    try:
+                        results[task_name] = future.result()
+                        self.logger.debug(f"{task_name} boosting completed")
+                    except FutureTimeoutError:
+                        self.logger.warning(f"{task_name} boosting timeout ({timeout}s), using original docs")
+                        results[task_name] = text2sql_docs if task_name == "text2sql" else reranked_vector_docs
+                    except Exception as e:
+                        self.logger.error(f"{task_name} boosting error: {e}, using original docs", exc_info=self.logger.isEnabledFor(logging.DEBUG))
+                        results[task_name] = text2sql_docs if task_name == "text2sql" else reranked_vector_docs
+            
+            text2sql_docs = results.get("text2sql", text2sql_docs)
+            reranked_vector_docs = results.get("reranked", reranked_vector_docs)
+            
+            elapsed = time.time() - start_boosting_time
+            self.logger.info(f"Statute article boosting completed in {elapsed:.2f}s")
             
             # textToSQL 결과와 재랭킹된 벡터 결과 결합
             final_docs = self._combine_text2sql_and_reranked_vector(
                 text2sql_docs, reranked_vector_docs, query_type_str
             )
             
-            # 개선: final_docs의 모든 문서에 type 정보 보장
+            # 개선: final_docs가 비어있을 때 원본 검색 결과에서 최소한의 결과 보장
+            if not final_docs or len(final_docs) == 0:
+                self.logger.warning(
+                    f"⚠️ [SEARCH RESULTS] final_docs가 비어있음. "
+                    f"원본 검색 결과에서 최소한의 결과 보장 시도: "
+                    f"semantic={len(semantic_results)}, keyword={len(keyword_results)}, "
+                    f"merged={len(merged_docs)}, weighted={len(weighted_docs)}, "
+                    f"filtered={len(filtered_docs)}"
+                )
+                
+                # 원본 검색 결과에서 최소한의 결과 선택
+                fallback_candidates = []
+                
+                # 1. text2sql_docs가 있으면 우선 사용
+                if text2sql_docs:
+                    fallback_candidates.extend(text2sql_docs[:3])
+                
+                # 2. reranked_vector_docs가 있으면 사용
+                if reranked_vector_docs:
+                    fallback_candidates.extend(reranked_vector_docs[:3])
+                
+                # 3. filtered_docs가 있으면 사용
+                if filtered_docs:
+                    fallback_candidates.extend(filtered_docs[:3])
+                
+                # 4. weighted_docs가 있으면 사용
+                if weighted_docs and not fallback_candidates:
+                    fallback_candidates.extend(weighted_docs[:5])
+                
+                # 5. merged_docs가 있으면 사용
+                if merged_docs and not fallback_candidates:
+                    fallback_candidates.extend(merged_docs[:5])
+                
+                # 6. 원본 검색 결과에서 직접 선택
+                if not fallback_candidates:
+                    all_original_results = semantic_results + keyword_results
+                    if all_original_results:
+                        # 점수 순으로 정렬하여 상위 문서 선택
+                        sorted_original = sorted(
+                            all_original_results,
+                            key=lambda x: (
+                                x.get("relevance_score", 0.0),
+                                x.get("similarity", 0.0),
+                                x.get("final_weighted_score", 0.0)
+                            ),
+                            reverse=True
+                        )
+                        fallback_candidates = sorted_original[:5]
+                
+                # 중복 제거
+                seen_ids = set()
+                final_fallback = []
+                for doc in fallback_candidates:
+                    doc_id = doc.get("id") or doc.get("document_id") or doc.get("doc_id") or str(doc.get("source", ""))
+                    if doc_id not in seen_ids:
+                        seen_ids.add(doc_id)
+                        final_fallback.append(doc)
+                        if len(final_fallback) >= 5:
+                            break
+                
+                if final_fallback:
+                    final_docs = final_fallback
+                    self.logger.info(
+                        f"✅ [SEARCH RESULTS] 원본 검색 결과에서 {len(final_docs)}개 문서 복원 완료"
+                    )
+                else:
+                    self.logger.error(
+                        f"❌ [SEARCH RESULTS] 원본 검색 결과에서도 문서를 찾을 수 없음. "
+                        f"검색이 완전히 실패했을 수 있습니다."
+                    )
+            
+            # 개선: final_docs의 모든 문서에 type 정보 보장 (성능 최적화: O(n²) → O(n))
+            # 사전에 ID -> 타입 매핑 생성 (O(n) 한 번만 실행) + hashset으로 중복 처리 방지
+            type_mapping = {}
+            processed_ids = set()  # hashset으로 이미 처리된 ID 추적 (중복 처리 방지)
+            all_source_docs = semantic_results + keyword_results + merged_docs
+            for source_doc in all_source_docs:
+                if not isinstance(source_doc, dict):
+                    continue
+                doc_id = source_doc.get("id") or source_doc.get("doc_id") or source_doc.get("chunk_id")
+                # hashset으로 빠른 중복 체크 (O(1))
+                if doc_id and doc_id not in processed_ids:
+                    doc_type = source_doc.get("type") or source_doc.get("source_type")
+                    if doc_type and doc_type != "unknown":
+                        type_mapping[doc_id] = doc_type
+                        processed_ids.add(doc_id)  # hashset에 추가하여 중복 처리 방지
+            
+            # final_docs의 각 문서에 타입 정보 보장 (O(n) 딕셔너리 조회 + hashset으로 빠른 스킵)
+            docs_with_type = set()  # 이미 타입이 있는 문서 ID 추적 (빠른 스킵)
             for doc in final_docs:
-                if isinstance(doc, dict):
-                    # type 정보가 없으면 source_type에서 가져오거나, 원본 검색 결과에서 복구
-                    if "type" not in doc and "source_type" not in doc:
-                        # metadata에서 복구 시도
-                        metadata = doc.get("metadata", {})
-                        if isinstance(metadata, dict):
-                            original_type = metadata.get("type") or metadata.get("source_type")
-                            if original_type:
-                                doc["type"] = original_type
-                                doc["source_type"] = original_type
-                        # merged_docs에서 같은 id의 문서 찾아서 type 복구
-                        if "type" not in doc and "source_type" not in doc:
-                            doc_id = doc.get("id") or doc.get("doc_id") or doc.get("chunk_id")
-                            if doc_id:
-                                for merged_doc in merged_docs:
-                                    merged_id = merged_doc.get("id") or merged_doc.get("doc_id") or merged_doc.get("chunk_id")
-                                    if merged_id == doc_id:
-                                        merged_type = merged_doc.get("type") or merged_doc.get("source_type")
-                                        if merged_type:
-                                            doc["type"] = merged_type
-                                            doc["source_type"] = merged_type
-                                            break
-                    # type과 source_type 모두 설정 (일관성 보장)
-                    if "type" in doc and "source_type" not in doc:
+                if not isinstance(doc, dict):
+                    continue
+                
+                doc_id = doc.get("id") or doc.get("doc_id") or doc.get("chunk_id")
+                
+                # 1. 이미 type이 있으면 hashset에 추가하고 유지
+                if "type" in doc and doc.get("type") and doc.get("type") != "unknown":
+                    if "source_type" not in doc:
                         doc["source_type"] = doc["type"]
-                    elif "source_type" in doc and "type" not in doc:
-                        doc["type"] = doc["source_type"]
+                    if doc_id:
+                        docs_with_type.add(doc_id)  # hashset에 추가
+                    continue
+                
+                # 2. source_type이 있으면 type으로 복사
+                if "source_type" in doc and doc.get("source_type") and doc.get("source_type") != "unknown":
+                    doc["type"] = doc["source_type"]
+                    if doc_id:
+                        docs_with_type.add(doc_id)  # hashset에 추가
+                    continue
+                
+                # 3. 타입 매핑에서 조회 (O(1) 딕셔너리 조회, 이미 처리된 문서는 스킵)
+                if doc_id and doc_id not in docs_with_type and doc_id in type_mapping:
+                    doc["type"] = type_mapping[doc_id]
+                    doc["source_type"] = type_mapping[doc_id]
+                    docs_with_type.add(doc_id)  # hashset에 추가
+                    continue
+                
+                # 4. metadata에서 복구 시도
+                metadata = doc.get("metadata", {})
+                if isinstance(metadata, dict):
+                    original_type = metadata.get("type") or metadata.get("source_type")
+                    if original_type and original_type != "unknown":
+                        doc["type"] = original_type
+                        doc["source_type"] = original_type
+                        continue
+                
+                # 5. source에서 추론 시도 (최후의 수단)
+                source = doc.get("source", "")
+                if source:
+                    if "민법" in source or "법" in source or "규칙" in source:
+                        doc["type"] = "statute_article"
+                        doc["source_type"] = "statute_article"
+                    elif "대법원" in source or "법원" in source or "판결" in source or "사건" in source:
+                        doc["type"] = "case_paragraph"
+                        doc["source_type"] = "case_paragraph"
+                
+                # type과 source_type 모두 설정 (일관성 보장)
+                if "type" in doc and "source_type" not in doc:
+                    doc["source_type"] = doc["type"]
+                elif "source_type" in doc and "type" not in doc:
+                    doc["type"] = doc["source_type"]
 
             # 개선 1.1: 최소 문서 수 보장
             MIN_DOCUMENTS_FOR_ANSWER = 5
@@ -7245,14 +7505,23 @@ class EnhancedLegalQuestionWorkflow(
                 state = self.search_execution_processor.execute_searches_parallel(state)
                 self._update_processing_time(state, start_time)
             else:
-                self.logger.warning("SearchExecutionProcessor not available, skipping parallel search")
-                self._handle_error(state, "SearchExecutionProcessor not initialized", "병렬 검색 중 오류 발생")
+                self.logger.warning("SearchExecutionProcessor not available, falling back to sequential search")
+                # 폴백: 순차 검색 실행
+                state = self._fallback_sequential_search(state)
+                self._update_processing_time(state, start_time)
 
         except Exception as e:
             self._handle_error(state, str(e), "병렬 검색 중 오류 발생")
             if self.search_execution_processor:
-                return self.search_execution_processor.fallback_sequential_search(state)
-            return state
+                try:
+                    return self.search_execution_processor.fallback_sequential_search(state)
+                except Exception as fallback_err:
+                    self.logger.error(f"SearchExecutionProcessor fallback also failed: {fallback_err}")
+                    # 최종 폴백: 직접 순차 검색
+                    return self._fallback_sequential_search(state)
+            else:
+                # SearchExecutionProcessor가 없으면 직접 순차 검색
+                return self._fallback_sequential_search(state)
 
         return state
 
@@ -7268,6 +7537,19 @@ class EnhancedLegalQuestionWorkflow(
             return self.search_execution_processor.execute_semantic_search(
                 optimized_queries, search_params, original_query, extracted_keywords
             )
+        # SearchExecutionProcessor가 없으면 직접 semantic_search 실행
+        if self.semantic_search and original_query:
+            try:
+                semantic_query = optimized_queries.get("semantic_query", original_query)
+                k = search_params.get("semantic_k", 10)
+                results, count = self.semantic_search.search(
+                    query=semantic_query,
+                    k=k,
+                    extracted_keywords=extracted_keywords
+                )
+                return results or [], count or 0
+            except Exception as e:
+                self.logger.warning(f"Direct semantic search failed: {e}")
         return [], 0
 
     def _execute_keyword_search_internal(
@@ -7284,6 +7566,20 @@ class EnhancedLegalQuestionWorkflow(
             return self.search_execution_processor.execute_keyword_search(
                 optimized_queries, search_params, query_type_str, legal_field, extracted_keywords, original_query
             )
+        # SearchExecutionProcessor가 없으면 직접 keyword_search 실행
+        if original_query:
+            try:
+                keyword_limit = search_params.get("keyword_limit", 10)
+                results, count = self._keyword_search(
+                    query=original_query,
+                    query_type_str=query_type_str,
+                    limit=keyword_limit,
+                    legal_field=legal_field,
+                    extracted_keywords=extracted_keywords or []
+                )
+                return results or [], count or 0
+            except Exception as e:
+                self.logger.warning(f"Direct keyword search failed: {e}")
         return [], 0
 
     def _fallback_sequential_search(self, state: LegalWorkflowState) -> LegalWorkflowState:
@@ -9097,7 +9393,7 @@ class EnhancedLegalQuestionWorkflow(
 
             prompt_file = None
             try:
-                debug_dir = Path("debug/prompts")
+                debug_dir = Path("logs/prompts")
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 prompt_file = debug_dir / f"prompt_{int(time.time())}.txt"
                 with open(prompt_file, "w", encoding="utf-8") as f:
@@ -9265,13 +9561,44 @@ class EnhancedLegalQuestionWorkflow(
                 normalized_response = cached_answer
         
         if not normalized_response:
-            normalized_response = self.answer_generator.generate_answer_with_chain(
-                optimized_prompt=optimized_prompt,
-                query=query,
-                context_dict=context_dict,
-                quality_feedback=quality_feedback,
-                is_retry=is_retry
+            # 긴 글/코드 생성이 필요한지 판단 (프롬프트 길이 또는 컨텍스트 길이 기준)
+            prompt_length = len(optimized_prompt)
+            context_length = len(str(context_dict.get("context", "")))
+            total_length = prompt_length + context_length
+            
+            # 긴 답변이 필요한 경우 판단 기준:
+            # 1. 프롬프트가 5000자 이상
+            # 2. 컨텍스트가 10000자 이상
+            # 3. 총 길이가 12000자 이상
+            # 4. 질문에 "코드", "생성", "작성", "긴" 등의 키워드 포함
+            needs_long_text = (
+                prompt_length >= 5000 or
+                context_length >= 10000 or
+                total_length >= 12000 or
+                any(keyword in query for keyword in ["코드", "생성", "작성", "긴", "상세", "자세히"])
             )
+            
+            # 적절한 LLM 선택
+            original_llm = self.answer_generator.llm
+            if needs_long_text and self.llm_long_text:
+                self.answer_generator.llm = self.llm_long_text
+                self.logger.info(
+                    f"📝 [LONG TEXT MODE] 긴 글/코드 생성 모드 활성화 "
+                    f"(프롬프트: {prompt_length}자, 컨텍스트: {context_length}자, "
+                    f"timeout: {WorkflowConstants.TIMEOUT_LONG_TEXT}초)"
+                )
+            
+            try:
+                normalized_response = self.answer_generator.generate_answer_with_chain(
+                    optimized_prompt=optimized_prompt,
+                    query=query,
+                    context_dict=context_dict,
+                    quality_feedback=quality_feedback,
+                    is_retry=is_retry
+                )
+            finally:
+                # 원래 LLM으로 복원
+                self.answer_generator.llm = original_llm
             
             if normalized_response:
                 self.logger.info(
