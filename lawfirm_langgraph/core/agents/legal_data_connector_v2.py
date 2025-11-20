@@ -14,6 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 try:
+    from core.data.connection_pool import get_connection_pool
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+    except ImportError:
+        get_connection_pool = None
+
+try:
     from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
 except ImportError:
     try:
@@ -65,6 +73,13 @@ class LegalDataConnectorV2:
             db_path = os.path.abspath(db_path)
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+        # 연결 풀 초기화
+        if get_connection_pool:
+            self._connection_pool = get_connection_pool(self.db_path)
+            self.logger.debug("Using connection pool for database connections")
+        else:
+            self._connection_pool = None
+            self.logger.warning("Connection pool not available, using direct connections")
         # 데이터베이스 경로 로깅
         self.logger.info(f"LegalDataConnectorV2 initialized with database path: {self.db_path}")
         if not Path(self.db_path).exists():
@@ -97,6 +112,10 @@ class LegalDataConnectorV2:
 
     def _check_fts_tables(self):
         """FTS 테이블 존재 여부 확인 및 초기화 필요 여부 안내"""
+        conn = None
+        missing_tables = []
+        has_embeddings = False
+        
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -109,7 +128,6 @@ class LegalDataConnectorV2:
                 'interpretation_paragraphs_fts'
             ]
             
-            missing_tables = []
             for table_name in required_fts_tables:
                 cursor.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -123,44 +141,51 @@ class LegalDataConnectorV2:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'"
             )
             has_embeddings = cursor.fetchone() is not None
-            
-            conn.close()
-            
-            if missing_tables:
-                self.logger.error(
-                    f"❌ Missing FTS tables: {', '.join(missing_tables)}. "
-                    f"Please run: python scripts/init_lawfirm_v2_db.py"
-                )
-            if not has_embeddings:
-                self.logger.warning(
-                    f"⚠️ embeddings table not found. "
-                    f"Semantic search will not work until embeddings are generated."
-                )
-            
-            if missing_tables or not has_embeddings:
-                self.logger.error(
-                    f"Database initialization incomplete. "
-                    f"Required tables missing: FTS={len(missing_tables)}, embeddings={'missing' if not has_embeddings else 'exists'}"
-                )
-            else:
-                self.logger.info(f"✅ All required FTS tables and embeddings table exist.")
-        except Exception as e:
-            self.logger.warning(f"Error checking FTS tables: {e}")
+        finally:
+            # 연결 풀링 사용 시 close() 호출하지 않음
+            if conn and not self._connection_pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        
+        if missing_tables:
+            self.logger.error(
+                f"❌ Missing FTS tables: {', '.join(missing_tables)}. "
+                f"Please run: python scripts/init_lawfirm_v2_db.py"
+            )
+        if not has_embeddings:
+            self.logger.warning(
+                f"⚠️ embeddings table not found. "
+                f"Semantic search will not work until embeddings are generated."
+            )
+        
+        if missing_tables or not has_embeddings:
+            self.logger.error(
+                f"Database initialization incomplete. "
+                f"Required tables missing: FTS={len(missing_tables)}, embeddings={'missing' if not has_embeddings else 'exists'}"
+            )
+        else:
+            self.logger.info(f"✅ All required FTS tables and embeddings table exist.")
 
     def _get_connection(self):
         """
-        Get database connection
+        Get database connection (using connection pool if available)
         
         Note: Each thread gets its own connection for thread safety.
         SQLite connections are not thread-safe, so each parallel search
         operation uses a separate connection.
+        Connection pool reuses connections per thread to improve performance.
         """
-        conn = sqlite3.connect(
-            self.db_path,
-            check_same_thread=False  # Allow use in different threads (each thread has its own connection)
-        )
-        conn.row_factory = sqlite3.Row
-        return conn
+        if self._connection_pool:
+            return self._connection_pool.get_connection()
+        else:
+            conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False
+            )
+            conn.row_factory = sqlite3.Row
+            return conn
 
     def _analyze_query_plan(self, query: str, table_name: str) -> Optional[Dict[str, Any]]:
         """
@@ -173,6 +198,7 @@ class LegalDataConnectorV2:
         Returns:
             실행 계획 정보 딕셔너리 또는 None
         """
+        conn = None
         try:
             safe_query = self._sanitize_fts5_query(query)
             if not safe_query:
@@ -192,22 +218,26 @@ class LegalDataConnectorV2:
             """
             cursor.execute(explain_query, (safe_query,))
             plan_rows = cursor.fetchall()
-
-            conn.close()
-
+            
             # 실행 계획 분석
             plan_info = {
                 "uses_index": any("FTS" in str(row) or "MATCH" in str(row) for row in plan_rows),
                 "scan_type": "FTS" if any("FTS" in str(row) for row in plan_rows) else "UNKNOWN",
                 "plan_detail": [str(row) for row in plan_rows]
             }
-
+            
             self.logger.debug(f"Query plan for '{query[:30]}': {plan_info}")
             return plan_info
-
         except Exception as e:
             self.logger.debug(f"Error analyzing query plan: {e}")
             return None
+        finally:
+            # 연결 풀링 사용 시 close() 호출하지 않음
+            if conn and not self._connection_pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _optimize_fts5_query(self, query: str) -> str:
         """
@@ -600,72 +630,79 @@ class LegalDataConnectorV2:
 
             conn = self._get_connection()
             cursor = conn.cursor()
+            
+            try:
+                # FTS5 검색 (BM25 랭킹)
+                cursor.execute("""
+                    SELECT
+                        sa.id,
+                        sa.statute_id,
+                        sa.article_no,
+                        sa.clause_no,
+                        sa.item_no,
+                        sa.heading,
+                        sa.text,
+                        s.name as statute_name,
+                        s.abbrv as statute_abbrv,
+                        s.statute_type,
+                        s.category,
+                        bm25(statute_articles_fts) as rank_score
+                    FROM statute_articles_fts
+                    JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE statute_articles_fts MATCH ?
+                    ORDER BY rank_score
+                    LIMIT ?
+                """, (safe_query, limit))
 
-            # FTS5 검색 (BM25 랭킹)
-            cursor.execute("""
-                SELECT
-                    sa.id,
-                    sa.statute_id,
-                    sa.article_no,
-                    sa.clause_no,
-                    sa.item_no,
-                    sa.heading,
-                    sa.text,
-                    s.name as statute_name,
-                    s.abbrv as statute_abbrv,
-                    s.statute_type,
-                    s.category,
-                    bm25(statute_articles_fts) as rank_score
-                FROM statute_articles_fts
-                JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
-                JOIN statutes s ON sa.statute_id = s.id
-                WHERE statute_articles_fts MATCH ?
-                ORDER BY rank_score
-                LIMIT ?
-            """, (safe_query, limit))
-
-            results = []
-            for row in cursor.fetchall():
-                # text 필드가 비어있으면 경고
-                text_content = row['text'] if row['text'] else ""
-                if not text_content:
-                    self.logger.warning(f"Empty text content for statute article id={row['id']}, article_no={row['article_no']}")
-                
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                
-                results.append({
-                    "id": f"statute_article_{row['id']}",
-                    "type": "statute_article",
-                    "source_type": "statute_article",
-                    "content": text_content,
-                    "text": text_content,  # text 필드도 추가 (호환성)
-                    "source": row['statute_name'],
-                    "statute_name": row['statute_name'],
-                    "article_no": row['article_no'],
-                    "clause_no": row['clause_no'],
-                    "item_no": row['item_no'],
-                    "metadata": {
-                        "statute_id": row['statute_id'],
+                results = []
+                for row in cursor.fetchall():
+                    # text 필드가 비어있으면 경고
+                    text_content = row['text'] if row['text'] else ""
+                    if not text_content:
+                        self.logger.warning(f"Empty text content for statute article id={row['id']}, article_no={row['article_no']}")
+                    
+                    # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                    if row['rank_score']:
+                        # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                    else:
+                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    
+                    results.append({
+                        "id": f"statute_article_{row['id']}",
+                        "type": "statute_article",
+                        "source_type": "statute_article",
+                        "content": text_content,
+                        "text": text_content,  # text 필드도 추가 (호환성)
+                        "source": row['statute_name'],
+                        "statute_name": row['statute_name'],
                         "article_no": row['article_no'],
                         "clause_no": row['clause_no'],
                         "item_no": row['item_no'],
-                        "heading": row['heading'],
-                        "statute_abbrv": row['statute_abbrv'],
-                        "statute_type": row['statute_type'],
-                        "category": row['category'],
-                        "source_type": "statute_article"
-                    },
-                    "relevance_score": relevance_score,
-                    "search_type": "keyword"
-                })
-
-            conn.close()
+                        "metadata": {
+                            "statute_id": row['statute_id'],
+                            "article_no": row['article_no'],
+                            "clause_no": row['clause_no'],
+                            "item_no": row['item_no'],
+                            "heading": row['heading'],
+                            "statute_abbrv": row['statute_abbrv'],
+                            "statute_type": row['statute_type'],
+                            "category": row['category'],
+                            "source_type": "statute_article"
+                        },
+                        "relevance_score": relevance_score,
+                        "search_type": "keyword"
+                    })
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if not self._connection_pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            
             self.logger.info(f"FTS search found {len(results)} statute articles for query: '{query}' (safe_query: '{safe_query}')")
             
             # 결과가 없으면 폴백 검색 시도
@@ -717,107 +754,112 @@ class LegalDataConnectorV2:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # 개선 2: 법령명 매칭 로직 강화 (유사도 매칭)
-            # 전략 1: 정확한 이름 매칭
-            cursor.execute("""
-                SELECT id, name, abbrv 
-                FROM statutes 
-                WHERE name = ? OR abbrv = ?
-                LIMIT 1
-            """, (law_name, law_name))
-            
-            statute_row = cursor.fetchone()
-            
-            # 전략 2: LIKE 검색 (정확한 매칭 실패 시)
-            if not statute_row:
+            try:
+                # 개선 2: 법령명 매칭 로직 강화 (유사도 매칭)
+                # 전략 1: 정확한 이름 매칭
                 cursor.execute("""
                     SELECT id, name, abbrv 
                     FROM statutes 
-                    WHERE name LIKE ? OR abbrv LIKE ? OR name LIKE ? OR abbrv LIKE ?
-                    LIMIT 5
-                """, (
-                    f"%{law_name}%", 
-                    f"%{law_name}%", 
-                    f"{law_name}%", 
-                    f"{law_name}%"
-                ))
+                    WHERE name = ? OR abbrv = ?
+                    LIMIT 1
+                """, (law_name, law_name))
                 
-                candidates = cursor.fetchall()
-                if candidates:
-                    # 가장 유사한 법령명 선택 (길이가 가장 가까운 것)
-                    best_match = min(candidates, key=lambda x: abs(len(x['name']) - len(law_name)))
-                    statute_row = best_match
-                    self.logger.info(f"법령명 유사도 매칭 성공: '{law_name}' -> '{statute_row['name']}'")
-            
-            if not statute_row:
-                self.logger.warning(f"법령을 찾을 수 없음: {law_name}")
-                conn.close()
-                return []
-            
-            statute_id = statute_row['id']
-            statute_name = statute_row['name']
-            
-            # 해당 조문 직접 조회 (SQLite는 NULLS LAST 미지원, CASE 문 사용)
-            cursor.execute("""
-                SELECT 
-                    sa.id,
-                    sa.statute_id,
-                    sa.article_no,
-                    sa.clause_no,
-                    sa.item_no,
-                    sa.heading,
-                    sa.text,
-                    s.name as statute_name,
-                    s.abbrv as statute_abbrv,
-                    s.statute_type,
-                    s.category
-                FROM statute_articles sa
-                JOIN statutes s ON sa.statute_id = s.id
-                WHERE sa.statute_id = ? AND sa.article_no = ?
-                ORDER BY 
-                    CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
-                    sa.clause_no,
-                    CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
-                    sa.item_no
-                LIMIT ?
-            """, (statute_id, article_no, limit * 2))
-            
-            for row in cursor.fetchall():
-                if row['id'] not in seen_ids:
-                    seen_ids.add(row['id'])
-                    text_content = row['text'] if row['text'] else ""
+                statute_row = cursor.fetchone()
+                
+                # 전략 2: LIKE 검색 (정확한 매칭 실패 시)
+                if not statute_row:
+                    cursor.execute("""
+                        SELECT id, name, abbrv 
+                        FROM statutes 
+                        WHERE name LIKE ? OR abbrv LIKE ? OR name LIKE ? OR abbrv LIKE ?
+                        LIMIT 5
+                    """, (
+                        f"%{law_name}%", 
+                        f"%{law_name}%", 
+                        f"{law_name}%", 
+                        f"{law_name}%"
+                    ))
                     
-                    if not text_content:
-                        continue
-                    
-                    # 직접 검색된 조문은 최고 relevance score 부여
-                    results.append({
-                        "id": f"statute_article_{row['id']}",
-                        "type": "statute_article",
-                        "source_type": "statute_article",
-                        "content": text_content,
-                        "text": text_content,
-                        "source": row['statute_name'],
-                        "metadata": {
-                            "statute_id": row['statute_id'],
-                            "statute_name": row['statute_name'],
-                            "law_name": row['statute_name'],
-                            "article_no": row['article_no'],
-                            "clause_no": row['clause_no'],
-                            "item_no": row['item_no'],
-                            "heading": row['heading'],
-                            "statute_abbrv": row['statute_abbrv'],
-                            "statute_type": row['statute_type'],
-                            "category": row['category'],
-                            "source_type": "statute_article"
-                        },
-                        "relevance_score": 1.0,
-                        "final_weighted_score": 1.0,
-                        "search_type": "direct_statute",
-                        "direct_match": True
-                    })
-            
-            conn.close()
+                    candidates = cursor.fetchall()
+                    if candidates:
+                        # 가장 유사한 법령명 선택 (길이가 가장 가까운 것)
+                        best_match = min(candidates, key=lambda x: abs(len(x['name']) - len(law_name)))
+                        statute_row = best_match
+                        self.logger.info(f"법령명 유사도 매칭 성공: '{law_name}' -> '{statute_row['name']}'")
+                
+                if not statute_row:
+                    self.logger.warning(f"법령을 찾을 수 없음: {law_name}")
+                    return []
+                
+                statute_id = statute_row['id']
+                statute_name = statute_row['name']
+                
+                # 해당 조문 직접 조회 (SQLite는 NULLS LAST 미지원, CASE 문 사용)
+                cursor.execute("""
+                    SELECT 
+                        sa.id,
+                        sa.statute_id,
+                        sa.article_no,
+                        sa.clause_no,
+                        sa.item_no,
+                        sa.heading,
+                        sa.text,
+                        s.name as statute_name,
+                        s.abbrv as statute_abbrv,
+                        s.statute_type,
+                        s.category
+                    FROM statute_articles sa
+                    JOIN statutes s ON sa.statute_id = s.id
+                    WHERE sa.statute_id = ? AND sa.article_no = ?
+                    ORDER BY 
+                        CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
+                        sa.clause_no,
+                        CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
+                        sa.item_no
+                    LIMIT ?
+                """, (statute_id, article_no, limit * 2))
+                
+                for row in cursor.fetchall():
+                    if row['id'] not in seen_ids:
+                        seen_ids.add(row['id'])
+                        text_content = row['text'] if row['text'] else ""
+                        
+                        if not text_content:
+                            continue
+                        
+                        # 직접 검색된 조문은 최고 relevance score 부여
+                        results.append({
+                            "id": f"statute_article_{row['id']}",
+                            "type": "statute_article",
+                            "source_type": "statute_article",
+                            "content": text_content,
+                            "text": text_content,
+                            "source": row['statute_name'],
+                            "metadata": {
+                                "statute_id": row['statute_id'],
+                                "statute_name": row['statute_name'],
+                                "law_name": row['statute_name'],
+                                "article_no": row['article_no'],
+                                "clause_no": row['clause_no'],
+                                "item_no": row['item_no'],
+                                "heading": row['heading'],
+                                "statute_abbrv": row['statute_abbrv'],
+                                "statute_type": row['statute_type'],
+                                "category": row['category'],
+                                "source_type": "statute_article"
+                            },
+                            "relevance_score": 1.0,
+                            "final_weighted_score": 1.0,
+                            "search_type": "direct_statute",
+                            "direct_match": True
+                        })
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if not self._connection_pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             
             if results:
                 self.logger.info(f"✅ [DIRECT STATUTE SEARCH] {len(results)}개 조문 직접 검색 성공: {law_name} 제{article_no}조")
@@ -861,177 +903,7 @@ class LegalDataConnectorV2:
                 conn = self._get_connection()
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT
-                        sa.id,
-                        sa.statute_id,
-                        sa.article_no,
-                        sa.clause_no,
-                        sa.item_no,
-                        sa.heading,
-                        sa.text,
-                        s.name as statute_name,
-                        s.abbrv as statute_abbrv,
-                        s.statute_type,
-                        s.category,
-                        bm25(statute_articles_fts) as rank_score
-                    FROM statute_articles_fts
-                    JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
-                    JOIN statutes s ON sa.statute_id = s.id
-                    WHERE statute_articles_fts MATCH ?
-                    ORDER BY rank_score
-                    LIMIT ?
-                """, (fallback_query, limit))
-                
-                for row in cursor.fetchall():
-                    if row['id'] not in seen_ids:
-                        seen_ids.add(row['id'])
-                        text_content = row['text'] if row['text'] else ""
-                        # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                        if row['rank_score']:
-                            # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                            relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                        else:
-                            # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                            relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                        
-                        fallback_results.append({
-                            "id": f"statute_article_{row['id']}",
-                            "type": "statute_article",
-                            "source_type": "statute_article",
-                            "content": text_content,
-                            "text": text_content,
-                            "source": row['statute_name'],
-                            "statute_name": row['statute_name'],
-                            "article_no": row['article_no'],
-                            "clause_no": row['clause_no'],
-                            "item_no": row['item_no'],
-                            "metadata": {
-                                "statute_id": row['statute_id'],
-                                "article_no": row['article_no'],
-                                "clause_no": row['clause_no'],
-                                "item_no": row['item_no'],
-                                "heading": row['heading'],
-                                "statute_abbrv": row['statute_abbrv'],
-                                "statute_type": row['statute_type'],
-                                "category": row['category'],
-                                "source_type": "statute_article"
-                            },
-                            "relevance_score": relevance_score,
-                            "search_type": "keyword",
-                            "fallback_strategy": "law_article_only"
-                        })
-                
-                conn.close()
-                
-                if fallback_results:
-                    self.logger.info(f"Fallback 1 found {len(fallback_results)} results")
-                    return fallback_results[:limit]
-            
-            # 전략 2: 핵심 키워드만으로 검색 (법령명 또는 주요 키워드)
-            if not fallback_results and words:
-                # 법령명이 있으면 법령명으로, 없으면 첫 번째 핵심 키워드로
-                if law_match:
-                    keyword_query = law_match.group()
-                else:
-                    # 핵심 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
-                    keywords = []
-                    for w in words[:3]:
-                        if len(w) >= 2:
-                            if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
-                                keywords.append(w)
-                    if keywords:
-                        keyword_query = keywords[0]  # 첫 번째 핵심 키워드만
-                    else:
-                        return []
-                
-                self.logger.info(f"Fallback 2: Searching with keyword only: '{keyword_query}'")
-                
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    SELECT
-                        sa.id,
-                        sa.statute_id,
-                        sa.article_no,
-                        sa.clause_no,
-                        sa.item_no,
-                        sa.heading,
-                        sa.text,
-                        s.name as statute_name,
-                        s.abbrv as statute_abbrv,
-                        s.statute_type,
-                        s.category,
-                        bm25(statute_articles_fts) as rank_score
-                    FROM statute_articles_fts
-                    JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
-                    JOIN statutes s ON sa.statute_id = s.id
-                    WHERE statute_articles_fts MATCH ?
-                    ORDER BY rank_score
-                    LIMIT ?
-                """, (keyword_query, limit))
-                
-                for row in cursor.fetchall():
-                    if row['id'] not in seen_ids:
-                        seen_ids.add(row['id'])
-                        text_content = row['text'] if row['text'] else ""
-                        # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                        if row['rank_score']:
-                            # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                            relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                        else:
-                            # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                            relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                        
-                        fallback_results.append({
-                            "id": f"statute_article_{row['id']}",
-                            "type": "statute_article",
-                            "source_type": "statute_article",
-                            "content": text_content,
-                            "text": text_content,
-                            "source": row['statute_name'],
-                            "statute_name": row['statute_name'],
-                            "article_no": row['article_no'],
-                            "clause_no": row['clause_no'],
-                            "item_no": row['item_no'],
-                            "metadata": {
-                                "statute_id": row['statute_id'],
-                                "article_no": row['article_no'],
-                                "clause_no": row['clause_no'],
-                                "item_no": row['item_no'],
-                                "heading": row['heading'],
-                                "statute_abbrv": row['statute_abbrv'],
-                                "statute_type": row['statute_type'],
-                                "category": row['category'],
-                                "source_type": "statute_article"
-                            },
-                            "relevance_score": relevance_score,
-                            "search_type": "keyword",
-                            "fallback_strategy": "keyword_only"
-                        })
-                
-                conn.close()
-                
-                if fallback_results:
-                    self.logger.info(f"Fallback 2 found {len(fallback_results)} results")
-                    return fallback_results[:limit]
-            
-            # 전략 3: 조문 번호만으로 검색 (예: "750조" 또는 "제750조")
-            if not fallback_results and article_match:
-                article_no_clean = article_match.group().replace(' ', '')
-                # 숫자만 추출
-                article_num_match = re.search(r'\d+', article_no_clean)
-                if article_num_match:
-                    article_num = article_num_match.group()
-                    # "750조" 또는 "제750조" 패턴으로 검색
-                    fallback_query = f"{article_num}조 OR 제{article_num}조"
-                    
-                    self.logger.info(f"Fallback 3: Searching with article number only: '{fallback_query}'")
-                    
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    
+                try:
                     cursor.execute("""
                         SELECT
                             sa.id,
@@ -1090,10 +962,197 @@ class LegalDataConnectorV2:
                                 },
                                 "relevance_score": relevance_score,
                                 "search_type": "keyword",
-                                "fallback_strategy": "article_number_only"
+                                "fallback_strategy": "law_article_only"
                             })
+                finally:
+                    # 연결 풀링 사용 시 close() 호출하지 않음
+                    if not self._connection_pool:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                
+                if fallback_results:
+                    self.logger.info(f"Fallback 1 found {len(fallback_results)} results")
+                    return fallback_results[:limit]
+            
+            # 전략 2: 핵심 키워드만으로 검색 (법령명 또는 주요 키워드)
+            if not fallback_results and words:
+                # 법령명이 있으면 법령명으로, 없으면 첫 번째 핵심 키워드로
+                if law_match:
+                    keyword_query = law_match.group()
+                else:
+                    # 핵심 키워드 추출 (2자 이상, 불용어 제외 - KoreanStopwordProcessor 사용)
+                    keywords = []
+                    for w in words[:3]:
+                        if len(w) >= 2:
+                            if not self.stopword_processor or not self.stopword_processor.is_stopword(w):
+                                keywords.append(w)
+                    if keywords:
+                        keyword_query = keywords[0]  # 첫 번째 핵심 키워드만
+                    else:
+                        return []
+                
+                self.logger.info(f"Fallback 2: Searching with keyword only: '{keyword_query}'")
+                
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                try:
+                    cursor.execute("""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.heading,
+                            sa.text,
+                            s.name as statute_name,
+                            s.abbrv as statute_abbrv,
+                            s.statute_type,
+                            s.category,
+                            bm25(statute_articles_fts) as rank_score
+                        FROM statute_articles_fts
+                        JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE statute_articles_fts MATCH ?
+                        ORDER BY rank_score
+                        LIMIT ?
+                    """, (keyword_query, limit))
                     
-                    conn.close()
+                    for row in cursor.fetchall():
+                        if row['id'] not in seen_ids:
+                            seen_ids.add(row['id'])
+                            text_content = row['text'] if row['text'] else ""
+                            # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                            if row['rank_score']:
+                                # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                                relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                            else:
+                                # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                            
+                            fallback_results.append({
+                                "id": f"statute_article_{row['id']}",
+                                "type": "statute_article",
+                                "source_type": "statute_article",
+                                "content": text_content,
+                                "text": text_content,
+                                "source": row['statute_name'],
+                                "statute_name": row['statute_name'],
+                                "article_no": row['article_no'],
+                                "clause_no": row['clause_no'],
+                                "item_no": row['item_no'],
+                                "metadata": {
+                                    "statute_id": row['statute_id'],
+                                    "article_no": row['article_no'],
+                                    "clause_no": row['clause_no'],
+                                    "item_no": row['item_no'],
+                                    "heading": row['heading'],
+                                    "statute_abbrv": row['statute_abbrv'],
+                                    "statute_type": row['statute_type'],
+                                    "category": row['category'],
+                                    "source_type": "statute_article"
+                                },
+                                "relevance_score": relevance_score,
+                                "search_type": "keyword",
+                                "fallback_strategy": "keyword_only"
+                            })
+                finally:
+                    # 연결 풀링 사용 시 close() 호출하지 않음
+                    if not self._connection_pool:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                
+                if fallback_results:
+                    self.logger.info(f"Fallback 2 found {len(fallback_results)} results")
+                    return fallback_results[:limit]
+            
+            # 전략 3: 조문 번호만으로 검색 (예: "750조" 또는 "제750조")
+            if not fallback_results and article_match:
+                article_no_clean = article_match.group().replace(' ', '')
+                # 숫자만 추출
+                article_num_match = re.search(r'\d+', article_no_clean)
+                if article_num_match:
+                    article_num = article_num_match.group()
+                    # "750조" 또는 "제750조" 패턴으로 검색
+                    fallback_query = f"{article_num}조 OR 제{article_num}조"
+                    
+                    self.logger.info(f"Fallback 3: Searching with article number only: '{fallback_query}'")
+                    
+                    conn = self._get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                sa.id,
+                                sa.statute_id,
+                                sa.article_no,
+                                sa.clause_no,
+                                sa.item_no,
+                                sa.heading,
+                                sa.text,
+                                s.name as statute_name,
+                                s.abbrv as statute_abbrv,
+                                s.statute_type,
+                                s.category,
+                                bm25(statute_articles_fts) as rank_score
+                            FROM statute_articles_fts
+                            JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                            JOIN statutes s ON sa.statute_id = s.id
+                            WHERE statute_articles_fts MATCH ?
+                            ORDER BY rank_score
+                            LIMIT ?
+                        """, (fallback_query, limit))
+                        
+                        for row in cursor.fetchall():
+                            if row['id'] not in seen_ids:
+                                seen_ids.add(row['id'])
+                                text_content = row['text'] if row['text'] else ""
+                                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                                if row['rank_score']:
+                                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                                else:
+                                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                
+                                fallback_results.append({
+                                    "id": f"statute_article_{row['id']}",
+                                    "type": "statute_article",
+                                    "source_type": "statute_article",
+                                    "content": text_content,
+                                    "text": text_content,
+                                    "source": row['statute_name'],
+                                    "statute_name": row['statute_name'],
+                                    "article_no": row['article_no'],
+                                    "clause_no": row['clause_no'],
+                                    "item_no": row['item_no'],
+                                    "metadata": {
+                                        "statute_id": row['statute_id'],
+                                        "article_no": row['article_no'],
+                                        "clause_no": row['clause_no'],
+                                        "item_no": row['item_no'],
+                                        "heading": row['heading'],
+                                        "statute_abbrv": row['statute_abbrv'],
+                                        "statute_type": row['statute_type'],
+                                        "category": row['category'],
+                                        "source_type": "statute_article"
+                                    },
+                                    "relevance_score": relevance_score,
+                                    "search_type": "keyword",
+                                    "fallback_strategy": "article_number_only"
+                                })
+                    finally:
+                        # 연결 풀링 사용 시 close() 호출하지 않음
+                        if not self._connection_pool:
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback 3 found {len(fallback_results)} results")
@@ -1133,58 +1192,63 @@ class LegalDataConnectorV2:
                     
                     conn = self._get_connection()
                     cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT
-                            cp.id,
-                            cp.case_id,
-                            cp.para_index,
-                            cp.text,
-                            c.doc_id,
-                            c.court,
-                            c.case_type,
-                            c.casenames,
-                            c.announce_date,
-                            bm25(case_paragraphs_fts) as rank_score
-                        FROM case_paragraphs_fts
-                        JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
-                        JOIN cases c ON cp.case_id = c.id
-                        WHERE case_paragraphs_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (keyword_query, limit))
-                    
-                    for row in cursor.fetchall():
-                        if row['id'] not in seen_ids:
-                            seen_ids.add(row['id'])
-                            text_content = row['text'] if row['text'] else ""
-                            # relevance_score 계산 개선
-                            if row['rank_score']:
-                                relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                            else:
-                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                            
-                            fallback_results.append({
-                                "id": f"case_para_{row['id']}",
-                                "type": "case",
-                                "content": text_content,
-                                "text": text_content,
-                                "source": f"{row['court']} {row['doc_id']}",
-                                "metadata": {
-                                    "case_id": row['case_id'],
-                                    "doc_id": row['doc_id'],
-                                    "court": row['court'],
-                                    "case_type": row['case_type'],
-                                    "casenames": row['casenames'],
-                                    "announce_date": row['announce_date'],
-                                    "para_index": row['para_index'],
-                                },
-                                "relevance_score": relevance_score,
-                                "search_type": "keyword",
-                                "fallback_strategy": "keyword_only"
-                            })
-                    
-                    conn.close()
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                cp.id,
+                                cp.case_id,
+                                cp.para_index,
+                                cp.text,
+                                c.doc_id,
+                                c.court,
+                                c.case_type,
+                                c.casenames,
+                                c.announce_date,
+                                bm25(case_paragraphs_fts) as rank_score
+                            FROM case_paragraphs_fts
+                            JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
+                            JOIN cases c ON cp.case_id = c.id
+                            WHERE case_paragraphs_fts MATCH ?
+                            ORDER BY rank_score
+                            LIMIT ?
+                        """, (keyword_query, limit))
+                        
+                        for row in cursor.fetchall():
+                            if row['id'] not in seen_ids:
+                                seen_ids.add(row['id'])
+                                text_content = row['text'] if row['text'] else ""
+                                # relevance_score 계산 개선
+                                if row['rank_score']:
+                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                                else:
+                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                
+                                fallback_results.append({
+                                    "id": f"case_para_{row['id']}",
+                                    "type": "case",
+                                    "content": text_content,
+                                    "text": text_content,
+                                    "source": f"{row['court']} {row['doc_id']}",
+                                    "metadata": {
+                                        "case_id": row['case_id'],
+                                        "doc_id": row['doc_id'],
+                                        "court": row['court'],
+                                        "case_type": row['case_type'],
+                                        "casenames": row['casenames'],
+                                        "announce_date": row['announce_date'],
+                                        "para_index": row['para_index'],
+                                    },
+                                    "relevance_score": relevance_score,
+                                    "search_type": "keyword",
+                                    "fallback_strategy": "keyword_only"
+                                })
+                    finally:
+                        # 연결 풀링 사용 시 close() 호출하지 않음
+                        if not self._connection_pool:
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback case search found {len(fallback_results)} results")
@@ -1205,57 +1269,62 @@ class LegalDataConnectorV2:
                         try:
                             conn = self._get_connection()
                             cursor = conn.cursor()
-                            
-                            cursor.execute("""
-                                SELECT
-                                    cp.id,
-                                    cp.case_id,
-                                    cp.para_index,
-                                    cp.text,
-                                    c.doc_id,
-                                    c.court,
-                                    c.case_type,
-                                    c.casenames,
-                                    c.announce_date,
-                                    bm25(case_paragraphs_fts) as rank_score
-                                FROM case_paragraphs_fts
-                                JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
-                                JOIN cases c ON cp.case_id = c.id
-                                WHERE case_paragraphs_fts MATCH ?
-                                ORDER BY rank_score
-                                LIMIT ?
-                            """, (keyword_query, limit))
-                            
-                            for row in cursor.fetchall():
-                                if row['id'] not in seen_ids:
-                                    seen_ids.add(row['id'])
-                                    text_content = row['text'] if row['text'] else ""
-                                    if row['rank_score']:
-                                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                                    else:
-                                        relevance_score = 0.15  # 전략 2는 더 낮은 점수
-                                    
-                                    fallback_results.append({
-                                        "id": f"case_para_{row['id']}",
-                                        "type": "case",
-                                        "content": text_content,
-                                        "text": text_content,
-                                        "source": f"{row['court']} {row['doc_id']}",
-                                        "metadata": {
-                                            "case_id": row['case_id'],
-                                            "doc_id": row['doc_id'],
-                                            "court": row['court'],
-                                            "case_type": row['case_type'],
-                                            "casenames": row['casenames'],
-                                            "announce_date": row['announce_date'],
-                                            "para_index": row['para_index'],
-                                        },
-                                        "relevance_score": relevance_score,
-                                        "search_type": "keyword",
-                                        "fallback_strategy": "original_query_keywords"
-                                    })
-                            
-                            conn.close()
+                            try:
+                                cursor.execute("""
+                                    SELECT
+                                        cp.id,
+                                        cp.case_id,
+                                        cp.para_index,
+                                        cp.text,
+                                        c.doc_id,
+                                        c.court,
+                                        c.case_type,
+                                        c.casenames,
+                                        c.announce_date,
+                                        bm25(case_paragraphs_fts) as rank_score
+                                    FROM case_paragraphs_fts
+                                    JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
+                                    JOIN cases c ON cp.case_id = c.id
+                                    WHERE case_paragraphs_fts MATCH ?
+                                    ORDER BY rank_score
+                                    LIMIT ?
+                                """, (keyword_query, limit))
+                                
+                                for row in cursor.fetchall():
+                                    if row['id'] not in seen_ids:
+                                        seen_ids.add(row['id'])
+                                        text_content = row['text'] if row['text'] else ""
+                                        if row['rank_score']:
+                                            relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                                        else:
+                                            relevance_score = 0.15  # 전략 2는 더 낮은 점수
+                                        
+                                        fallback_results.append({
+                                            "id": f"case_para_{row['id']}",
+                                            "type": "case",
+                                            "content": text_content,
+                                            "text": text_content,
+                                            "source": f"{row['court']} {row['doc_id']}",
+                                            "metadata": {
+                                                "case_id": row['case_id'],
+                                                "doc_id": row['doc_id'],
+                                                "court": row['court'],
+                                                "case_type": row['case_type'],
+                                                "casenames": row['casenames'],
+                                                "announce_date": row['announce_date'],
+                                                "para_index": row['para_index'],
+                                            },
+                                            "relevance_score": relevance_score,
+                                            "search_type": "keyword",
+                                            "fallback_strategy": "original_query_keywords"
+                                        })
+                            finally:
+                                # 연결 풀링 사용 시 close() 호출하지 않음
+                                if not self._connection_pool:
+                                    try:
+                                        conn.close()
+                                    except Exception:
+                                        pass
                             
                             if fallback_results:
                                 self.logger.info(f"Fallback case search (strategy 2) found {len(fallback_results)} results")
@@ -1285,56 +1354,61 @@ class LegalDataConnectorV2:
                     
                     conn = self._get_connection()
                     cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT
-                            dp.id,
-                            dp.decision_id,
-                            dp.para_index,
-                            dp.text,
-                            d.org,
-                            d.doc_id,
-                            d.decision_date,
-                            d.result,
-                            bm25(decision_paragraphs_fts) as rank_score
-                        FROM decision_paragraphs_fts
-                        JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
-                        JOIN decisions d ON dp.decision_id = d.id
-                        WHERE decision_paragraphs_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (keyword_query, limit))
-                    
-                    for row in cursor.fetchall():
-                        if row['id'] not in seen_ids:
-                            seen_ids.add(row['id'])
-                            text_content = row['text'] if row['text'] else ""
-                            # relevance_score 계산 개선
-                            if row['rank_score']:
-                                relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                            else:
-                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                            
-                            fallback_results.append({
-                                "id": f"decision_para_{row['id']}",
-                                "type": "decision",
-                                "content": text_content,
-                                "text": text_content,
-                                "source": f"{row['org']} {row['doc_id']}",
-                                "metadata": {
-                                    "decision_id": row['decision_id'],
-                                    "org": row['org'],
-                                    "doc_id": row['doc_id'],
-                                    "decision_date": row['decision_date'],
-                                    "result": row['result'],
-                                    "para_index": row['para_index'],
-                                },
-                                "relevance_score": relevance_score,
-                                "search_type": "keyword",
-                                "fallback_strategy": "keyword_only"
-                            })
-                    
-                    conn.close()
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                dp.id,
+                                dp.decision_id,
+                                dp.para_index,
+                                dp.text,
+                                d.org,
+                                d.doc_id,
+                                d.decision_date,
+                                d.result,
+                                bm25(decision_paragraphs_fts) as rank_score
+                            FROM decision_paragraphs_fts
+                            JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
+                            JOIN decisions d ON dp.decision_id = d.id
+                            WHERE decision_paragraphs_fts MATCH ?
+                            ORDER BY rank_score
+                            LIMIT ?
+                        """, (keyword_query, limit))
+                        
+                        for row in cursor.fetchall():
+                            if row['id'] not in seen_ids:
+                                seen_ids.add(row['id'])
+                                text_content = row['text'] if row['text'] else ""
+                                # relevance_score 계산 개선
+                                if row['rank_score']:
+                                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                                else:
+                                    relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                
+                                fallback_results.append({
+                                    "id": f"decision_para_{row['id']}",
+                                    "type": "decision",
+                                    "content": text_content,
+                                    "text": text_content,
+                                    "source": f"{row['org']} {row['doc_id']}",
+                                    "metadata": {
+                                        "decision_id": row['decision_id'],
+                                        "org": row['org'],
+                                        "doc_id": row['doc_id'],
+                                        "decision_date": row['decision_date'],
+                                        "result": row['result'],
+                                        "para_index": row['para_index'],
+                                    },
+                                    "relevance_score": relevance_score,
+                                    "search_type": "keyword",
+                                    "fallback_strategy": "keyword_only"
+                                })
+                    finally:
+                        # 연결 풀링 사용 시 close() 호출하지 않음
+                        if not self._connection_pool:
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
                     
                     if fallback_results:
                         self.logger.info(f"Fallback decision search found {len(fallback_results)} results")
@@ -1389,7 +1463,11 @@ class LegalDataConnectorV2:
                             """, (keyword_query, limit))
                         except Exception as e:
                             self.logger.warning(f"FTS query error in fallback interpretation search: {e}, query: '{keyword_query}'")
-                            conn.close()
+                            if not self._connection_pool:
+                                try:
+                                    conn.close()
+                                except Exception:
+                                    pass
                             keywords = []
                     else:
                         self.logger.warning(f"Fallback interpretation search: Invalid keyword query: '{keyword_query}', skipping")
@@ -1426,7 +1504,12 @@ class LegalDataConnectorV2:
                                         "fallback_strategy": "keyword_only"
                                     })
                         finally:
-                            conn.close()
+                            # 연결 풀링 사용 시 close() 호출하지 않음
+                            if not self._connection_pool:
+                                try:
+                                    conn.close()
+                                except Exception:
+                                    pass
                         
                         if fallback_results:
                             self.logger.info(f"Fallback interpretation search found {len(fallback_results)} results")
@@ -1456,81 +1539,88 @@ class LegalDataConnectorV2:
 
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
-                SELECT
-                    cp.id,
-                    cp.case_id,
-                    cp.para_index,
-                    cp.text,
-                    c.doc_id,
-                    c.court,
-                    c.case_type,
-                    c.casenames,
-                    c.announce_date,
-                    bm25(case_paragraphs_fts) as rank_score
-                FROM case_paragraphs_fts
-                JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
-                JOIN cases c ON cp.case_id = c.id
-                WHERE case_paragraphs_fts MATCH ?
-                ORDER BY rank_score
-                LIMIT ?
-            """, (safe_query, limit))
-
-            # 법령명과 조문번호 추출 (점수 가중치 계산용)
-            import re
-            law_pattern = re.compile(r'([가-힣]+법)')
-            article_pattern = re.compile(r'제\s*(\d+)\s*조')
-            law_match = law_pattern.search(query)
-            article_match = article_pattern.search(query)
-            query_law_name = law_match.group(1) if law_match else None
-            query_article_no = article_match.group(1) if article_match else None
             
-            results = []
-            for row in cursor.fetchall():
-                text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                
-                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
-                if query_law_name and query_article_no:
-                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
-                    law_in_text = query_law_name in text_content
-                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
-                    
-                    if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
-                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
-                        boosted_score = relevance_score * 3.0
-                        relevance_score = max(0.7, min(1.0, boosted_score))
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
-                
-                results.append({
-                    "id": f"case_para_{row['id']}",
-                    "type": "case",
-                    "content": text_content,
-                    "text": text_content,
-                    "source": f"{row['court']} {row['doc_id']}",
-                    "metadata": {
-                        "case_id": row['case_id'],
-                        "doc_id": row['doc_id'],
-                        "court": row['court'],
-                        "case_type": row['case_type'],
-                        "casenames": row['casenames'],
-                        "announce_date": row['announce_date'],
-                        "para_index": row['para_index'],
-                    },
-                    "relevance_score": relevance_score,
-                    "search_type": "keyword"
-                })
+            try:
+                # SQL injection 방지: 파라미터 바인딩 사용
+                cursor.execute("""
+                    SELECT
+                        cp.id,
+                        cp.case_id,
+                        cp.para_index,
+                        cp.text,
+                        c.doc_id,
+                        c.court,
+                        c.case_type,
+                        c.casenames,
+                        c.announce_date,
+                        bm25(case_paragraphs_fts) as rank_score
+                    FROM case_paragraphs_fts
+                    JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
+                    JOIN cases c ON cp.case_id = c.id
+                    WHERE case_paragraphs_fts MATCH ?
+                    ORDER BY rank_score
+                    LIMIT ?
+                """, (safe_query, limit))
 
-            conn.close()
+                # 법령명과 조문번호 추출 (점수 가중치 계산용)
+                import re
+                law_pattern = re.compile(r'([가-힣]+법)')
+                article_pattern = re.compile(r'제\s*(\d+)\s*조')
+                law_match = law_pattern.search(query)
+                article_match = article_pattern.search(query)
+                query_law_name = law_match.group(1) if law_match else None
+                query_article_no = article_match.group(1) if article_match else None
+                
+                results = []
+                for row in cursor.fetchall():
+                    text_content = row['text'] if row['text'] else ""
+                    # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                    if row['rank_score']:
+                        # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                    else:
+                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    
+                    # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                    if query_law_name and query_article_no:
+                        # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                        law_in_text = query_law_name in text_content
+                        article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                        
+                        if law_in_text and article_in_text:
+                            # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                            # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                            boosted_score = relevance_score * 3.0
+                            relevance_score = max(0.7, min(1.0, boosted_score))
+                            self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
+                    
+                    results.append({
+                        "id": f"case_para_{row['id']}",
+                        "type": "case",
+                        "content": text_content,
+                        "text": text_content,
+                        "source": f"{row['court']} {row['doc_id']}",
+                        "metadata": {
+                            "case_id": row['case_id'],
+                            "doc_id": row['doc_id'],
+                            "court": row['court'],
+                            "case_type": row['case_type'],
+                            "casenames": row['casenames'],
+                            "announce_date": row['announce_date'],
+                            "para_index": row['para_index'],
+                        },
+                        "relevance_score": relevance_score,
+                        "search_type": "keyword"
+                    })
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if not self._connection_pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            
             self.logger.info(f"FTS search found {len(results)} case paragraphs for query: {query}")
             
             # 결과가 없으면 폴백 검색 시도
@@ -1570,79 +1660,86 @@ class LegalDataConnectorV2:
 
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
-                SELECT
-                    dp.id,
-                    dp.decision_id,
-                    dp.para_index,
-                    dp.text,
-                    d.org,
-                    d.doc_id,
-                    d.decision_date,
-                    d.result,
-                    bm25(decision_paragraphs_fts) as rank_score
-                FROM decision_paragraphs_fts
-                JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
-                JOIN decisions d ON dp.decision_id = d.id
-                WHERE decision_paragraphs_fts MATCH ?
-                ORDER BY rank_score
-                LIMIT ?
-            """, (safe_query, limit))
-
-            # 법령명과 조문번호 추출 (점수 가중치 계산용)
-            import re
-            law_pattern = re.compile(r'([가-힣]+법)')
-            article_pattern = re.compile(r'제\s*(\d+)\s*조')
-            law_match = law_pattern.search(query)
-            article_match = article_pattern.search(query)
-            query_law_name = law_match.group(1) if law_match else None
-            query_article_no = article_match.group(1) if article_match else None
             
-            results = []
-            for row in cursor.fetchall():
-                text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                
-                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
-                if query_law_name and query_article_no:
-                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
-                    law_in_text = query_law_name in text_content
-                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
-                    
-                    if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
-                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
-                        boosted_score = relevance_score * 3.0
-                        relevance_score = max(0.7, min(1.0, boosted_score))
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
-                
-                results.append({
-                    "id": f"decision_para_{row['id']}",
-                    "type": "decision",
-                    "content": text_content,
-                    "text": text_content,
-                    "source": f"{row['org']} {row['doc_id']}",
-                    "metadata": {
-                        "decision_id": row['decision_id'],
-                        "org": row['org'],
-                        "doc_id": row['doc_id'],
-                        "decision_date": row['decision_date'],
-                        "result": row['result'],
-                        "para_index": row['para_index'],
-                    },
-                    "relevance_score": relevance_score,
-                    "search_type": "keyword"
-                })
+            try:
+                # SQL injection 방지: 파라미터 바인딩 사용
+                cursor.execute("""
+                    SELECT
+                        dp.id,
+                        dp.decision_id,
+                        dp.para_index,
+                        dp.text,
+                        d.org,
+                        d.doc_id,
+                        d.decision_date,
+                        d.result,
+                        bm25(decision_paragraphs_fts) as rank_score
+                    FROM decision_paragraphs_fts
+                    JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
+                    JOIN decisions d ON dp.decision_id = d.id
+                    WHERE decision_paragraphs_fts MATCH ?
+                    ORDER BY rank_score
+                    LIMIT ?
+                """, (safe_query, limit))
 
-            conn.close()
+                # 법령명과 조문번호 추출 (점수 가중치 계산용)
+                import re
+                law_pattern = re.compile(r'([가-힣]+법)')
+                article_pattern = re.compile(r'제\s*(\d+)\s*조')
+                law_match = law_pattern.search(query)
+                article_match = article_pattern.search(query)
+                query_law_name = law_match.group(1) if law_match else None
+                query_article_no = article_match.group(1) if article_match else None
+                
+                results = []
+                for row in cursor.fetchall():
+                    text_content = row['text'] if row['text'] else ""
+                    # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                    if row['rank_score']:
+                        # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                    else:
+                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    
+                    # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                    if query_law_name and query_article_no:
+                        # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                        law_in_text = query_law_name in text_content
+                        article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                        
+                        if law_in_text and article_in_text:
+                            # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                            # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                            boosted_score = relevance_score * 3.0
+                            relevance_score = max(0.7, min(1.0, boosted_score))
+                            self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
+                    
+                    results.append({
+                        "id": f"decision_para_{row['id']}",
+                        "type": "decision",
+                        "content": text_content,
+                        "text": text_content,
+                        "source": f"{row['org']} {row['doc_id']}",
+                        "metadata": {
+                            "decision_id": row['decision_id'],
+                            "org": row['org'],
+                            "doc_id": row['doc_id'],
+                            "decision_date": row['decision_date'],
+                            "result": row['result'],
+                            "para_index": row['para_index'],
+                        },
+                        "relevance_score": relevance_score,
+                        "search_type": "keyword"
+                    })
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if not self._connection_pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            
             self.logger.info(f"FTS search found {len(results)} decision paragraphs for query: {query}")
             
             # 결과가 없으면 폴백 검색 시도
@@ -1682,79 +1779,85 @@ class LegalDataConnectorV2:
 
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
-                SELECT
-                    ip.id,
-                    ip.interpretation_id,
-                    ip.para_index,
-                    ip.text,
-                    i.org,
-                    i.doc_id,
-                    i.title,
-                    i.response_date,
-                    bm25(interpretation_paragraphs_fts) as rank_score
-                FROM interpretation_paragraphs_fts
-                JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
-                JOIN interpretations i ON ip.interpretation_id = i.id
-                WHERE interpretation_paragraphs_fts MATCH ?
-                ORDER BY rank_score
-                LIMIT ?
-            """, (safe_query, limit))
-
-            # 법령명과 조문번호 추출 (점수 가중치 계산용)
-            import re
-            law_pattern = re.compile(r'([가-힣]+법)')
-            article_pattern = re.compile(r'제\s*(\d+)\s*조')
-            law_match = law_pattern.search(query)
-            article_match = article_pattern.search(query)
-            query_law_name = law_match.group(1) if law_match else None
-            query_article_no = article_match.group(1) if article_match else None
             
-            results = []
-            for row in cursor.fetchall():
-                text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
-                
-                # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
-                if query_law_name and query_article_no:
-                    # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
-                    law_in_text = query_law_name in text_content
-                    article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
-                    
-                    if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
-                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
-                        boosted_score = relevance_score * 3.0
-                        relevance_score = max(0.7, min(1.0, boosted_score))
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
-                
-                results.append({
-                    "id": f"interpretation_para_{row['id']}",
-                    "type": "interpretation",
-                    "content": text_content,
-                    "text": text_content,
-                    "source": f"{row['org']} {row['title']}",
-                    "metadata": {
-                        "interpretation_id": row['interpretation_id'],
-                        "org": row['org'],
-                        "doc_id": row['doc_id'],
-                        "title": row['title'],
-                        "response_date": row['response_date'],
-                        "para_index": row['para_index'],
-                    },
-                    "relevance_score": relevance_score,
-                    "search_type": "keyword"
-                })
+            try:
+                # SQL injection 방지: 파라미터 바인딩 사용
+                cursor.execute("""
+                    SELECT
+                        ip.id,
+                        ip.interpretation_id,
+                        ip.para_index,
+                        ip.text,
+                        i.org,
+                        i.doc_id,
+                        i.title,
+                        i.response_date,
+                        bm25(interpretation_paragraphs_fts) as rank_score
+                    FROM interpretation_paragraphs_fts
+                    JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
+                    JOIN interpretations i ON ip.interpretation_id = i.id
+                    WHERE interpretation_paragraphs_fts MATCH ?
+                    ORDER BY rank_score
+                    LIMIT ?
+                """, (safe_query, limit))
 
-            conn.close()
+                # 법령명과 조문번호 추출 (점수 가중치 계산용)
+                import re
+                law_pattern = re.compile(r'([가-힣]+법)')
+                article_pattern = re.compile(r'제\s*(\d+)\s*조')
+                law_match = law_pattern.search(query)
+                article_match = article_pattern.search(query)
+                query_law_name = law_match.group(1) if law_match else None
+                query_article_no = article_match.group(1) if article_match else None
+                
+                results = []
+                for row in cursor.fetchall():
+                    text_content = row['text'] if row['text'] else ""
+                    # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
+                    if row['rank_score']:
+                        # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
+                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                    else:
+                        # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
+                        relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                    
+                    # 개선: 법령명과 조문번호가 일치하는 경우 점수 가중치 부여
+                    if query_law_name and query_article_no:
+                        # 문서 내용에서 법령명과 조문번호가 모두 일치하는지 확인
+                        law_in_text = query_law_name in text_content
+                        article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
+                        
+                        if law_in_text and article_in_text:
+                            # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                            # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                            boosted_score = relevance_score * 3.0
+                            relevance_score = max(0.7, min(1.0, boosted_score))
+                            self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
+                    
+                    results.append({
+                        "id": f"interpretation_para_{row['id']}",
+                        "type": "interpretation",
+                        "content": text_content,
+                        "text": text_content,
+                        "source": f"{row['org']} {row['title']}",
+                        "metadata": {
+                            "interpretation_id": row['interpretation_id'],
+                            "org": row['org'],
+                            "doc_id": row['doc_id'],
+                            "title": row['title'],
+                            "response_date": row['response_date'],
+                            "para_index": row['para_index'],
+                        },
+                        "relevance_score": relevance_score,
+                        "search_type": "keyword"
+                    })
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if not self._connection_pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             self.logger.info(f"FTS search found {len(results)} interpretation paragraphs for query: {query}")
             
             # 결과가 없으면 폴백 검색 시도
@@ -2002,13 +2105,20 @@ class LegalDataConnectorV2:
 
     def get_all_categories(self) -> List[str]:
         """도메인 목록 반환 (하위 호환성)"""
+        conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT DISTINCT name FROM domains ORDER BY name")
             categories = [row[0] for row in cursor.fetchall()]
-            conn.close()
             return categories
         except Exception as e:
             self.logger.error(f"Error getting categories: {e}")
             return []
+        finally:
+            # 연결 풀링 사용 시 close() 호출하지 않음
+            if conn and not self._connection_pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass

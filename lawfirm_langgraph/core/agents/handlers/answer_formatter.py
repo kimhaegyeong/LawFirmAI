@@ -2291,62 +2291,73 @@ class AnswerFormatterHandler:
             
             full_text = None
             
-            if source_type == "case_paragraph":
-                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
-                if doc_id:
-                    cursor.execute("""
-                        SELECT COALESCE(full_text, searchable_text) as full_text
-                        FROM cases
-                        WHERE doc_id = ?
-                    """, (doc_id,))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        full_text = row[0]
+            try:
+                if source_type == "case_paragraph":
+                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
+                    if doc_id:
+                        cursor.execute("""
+                            SELECT COALESCE(full_text, searchable_text) as full_text
+                            FROM cases
+                            WHERE doc_id = ?
+                        """, (doc_id,))
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            full_text = row[0]
+                
+                elif source_type == "decision_paragraph":
+                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id")
+                    if doc_id:
+                        cursor.execute("""
+                            SELECT GROUP_CONCAT(dp.text, '\n\n') as full_text
+                            FROM decision_paragraphs dp
+                            JOIN decisions d ON dp.decision_id = d.id
+                            WHERE d.doc_id = ?
+                            GROUP BY d.doc_id
+                            ORDER BY dp.para_index
+                        """, (doc_id,))
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            full_text = row[0]
+                
+                elif source_type == "interpretation_paragraph":
+                    doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("interpretation_id")
+                    if doc_id:
+                        cursor.execute("""
+                            SELECT GROUP_CONCAT(ip.text, '\n\n') as full_text
+                            FROM interpretation_paragraphs ip
+                            JOIN interpretations i ON ip.interpretation_id = i.id
+                            WHERE i.doc_id = ?
+                            GROUP BY i.doc_id
+                            ORDER BY ip.para_index
+                        """, (doc_id,))
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            full_text = row[0]
+                
+                elif source_type == "statute_article":
+                    statute_id = doc.get("statute_id") or metadata.get("statute_id")
+                    article_no = doc.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
+                    if statute_id and article_no:
+                        cursor.execute("""
+                            SELECT text
+                            FROM statute_articles
+                            WHERE statute_id = ? AND article_no = ?
+                        """, (statute_id, article_no))
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            full_text = row[0]
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if hasattr(self._connector, '_connection_pool') and self._connector._connection_pool:
+                    # 연결 풀링 사용 중이면 close() 호출하지 않음
+                    pass
+                else:
+                    # 직접 연결인 경우에만 close()
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             
-            elif source_type == "decision_paragraph":
-                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("decision_id")
-                if doc_id:
-                    cursor.execute("""
-                        SELECT GROUP_CONCAT(dp.text, '\n\n') as full_text
-                        FROM decision_paragraphs dp
-                        JOIN decisions d ON dp.decision_id = d.id
-                        WHERE d.doc_id = ?
-                        GROUP BY d.doc_id
-                        ORDER BY dp.para_index
-                    """, (doc_id,))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        full_text = row[0]
-            
-            elif source_type == "interpretation_paragraph":
-                doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("interpretation_id")
-                if doc_id:
-                    cursor.execute("""
-                        SELECT GROUP_CONCAT(ip.text, '\n\n') as full_text
-                        FROM interpretation_paragraphs ip
-                        JOIN interpretations i ON ip.interpretation_id = i.id
-                        WHERE i.doc_id = ?
-                        GROUP BY i.doc_id
-                        ORDER BY ip.para_index
-                    """, (doc_id,))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        full_text = row[0]
-            
-            elif source_type == "statute_article":
-                statute_id = doc.get("statute_id") or metadata.get("statute_id")
-                article_no = doc.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
-                if statute_id and article_no:
-                    cursor.execute("""
-                        SELECT text
-                        FROM statute_articles
-                        WHERE statute_id = ? AND article_no = ?
-                    """, (statute_id, article_no))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        full_text = row[0]
-            
-            conn.close()
             return full_text if full_text and len(full_text.strip()) > 0 else None
             
         except Exception as e:
@@ -2388,86 +2399,97 @@ class AnswerFormatterHandler:
             
             full_texts = {}
             
-            cases = []
-            decisions = []
-            interpretations = []
-            statutes = []
-            
-            for detail in source_details:
-                source_type = detail.get("type")
-                doc_id = detail.get("case_number") or detail.get("decision_number") or detail.get("interpretation_number")
-                metadata = detail.get("metadata", {})
+            try:
+                cases = []
+                decisions = []
+                interpretations = []
+                statutes = []
                 
-                if source_type == "case_paragraph" and doc_id:
-                    cases.append((doc_id, detail))
-                elif source_type == "decision_paragraph" and doc_id:
-                    decisions.append((doc_id, detail))
-                elif source_type == "interpretation_paragraph" and doc_id:
-                    interpretations.append((doc_id, detail))
-                elif source_type == "statute_article":
-                    statute_id = metadata.get("statute_id")
-                    article_no = detail.get("article_no") or metadata.get("article_no")
-                    if statute_id and article_no:
-                        statutes.append((statute_id, article_no, detail))
+                for detail in source_details:
+                    source_type = detail.get("type")
+                    doc_id = detail.get("case_number") or detail.get("decision_number") or detail.get("interpretation_number")
+                    metadata = detail.get("metadata", {})
+                    
+                    if source_type == "case_paragraph" and doc_id:
+                        cases.append((doc_id, detail))
+                    elif source_type == "decision_paragraph" and doc_id:
+                        decisions.append((doc_id, detail))
+                    elif source_type == "interpretation_paragraph" and doc_id:
+                        interpretations.append((doc_id, detail))
+                    elif source_type == "statute_article":
+                        statute_id = metadata.get("statute_id")
+                        article_no = detail.get("article_no") or metadata.get("article_no")
+                        if statute_id and article_no:
+                            statutes.append((statute_id, article_no, detail))
+                
+                if cases:
+                    doc_ids = [doc_id for doc_id, _ in cases]
+                    if doc_ids:
+                        placeholders = ','.join(['?'] * len(doc_ids))
+                        cursor.execute(f"""
+                            SELECT doc_id, COALESCE(full_text, searchable_text) as full_text
+                            FROM cases
+                            WHERE doc_id IN ({placeholders})
+                        """, doc_ids)
+                        for row in cursor.fetchall():
+                            if row[0] and row[1]:
+                                full_texts[row[0]] = row[1]
+                
+                if decisions:
+                    doc_ids = [doc_id for doc_id, _ in decisions]
+                    if doc_ids:
+                        placeholders = ','.join(['?'] * len(doc_ids))
+                        cursor.execute(f"""
+                            SELECT d.doc_id, GROUP_CONCAT(dp.text, '\n\n') as full_text
+                            FROM decision_paragraphs dp
+                            JOIN decisions d ON dp.decision_id = d.id
+                            WHERE d.doc_id IN ({placeholders})
+                            GROUP BY d.doc_id
+                            ORDER BY d.doc_id, dp.para_index
+                        """, doc_ids)
+                        for row in cursor.fetchall():
+                            if row[0] and row[1]:
+                                full_texts[row[0]] = row[1]
+                
+                if interpretations:
+                    doc_ids = [doc_id for doc_id, _ in interpretations]
+                    if doc_ids:
+                        placeholders = ','.join(['?'] * len(doc_ids))
+                        cursor.execute(f"""
+                            SELECT i.doc_id, GROUP_CONCAT(ip.text, '\n\n') as full_text
+                            FROM interpretation_paragraphs ip
+                            JOIN interpretations i ON ip.interpretation_id = i.id
+                            WHERE i.doc_id IN ({placeholders})
+                            GROUP BY i.doc_id
+                            ORDER BY i.doc_id, ip.para_index
+                        """, doc_ids)
+                        for row in cursor.fetchall():
+                            if row[0] and row[1]:
+                                full_texts[row[0]] = row[1]
+                
+                if statutes:
+                    for statute_id, article_no, detail in statutes:
+                        cursor.execute("""
+                            SELECT text
+                            FROM statute_articles
+                            WHERE statute_id = ? AND article_no = ?
+                        """, (statute_id, article_no))
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            key = f"{statute_id}_{article_no}"
+                            full_texts[key] = row[0]
+            finally:
+                # 연결 풀링 사용 시 close() 호출하지 않음
+                if hasattr(self._connector, '_connection_pool') and self._connector._connection_pool:
+                    # 연결 풀링 사용 중이면 close() 호출하지 않음
+                    pass
+                else:
+                    # 직접 연결인 경우에만 close()
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             
-            if cases:
-                doc_ids = [doc_id for doc_id, _ in cases]
-                if doc_ids:
-                    placeholders = ','.join(['?'] * len(doc_ids))
-                    cursor.execute(f"""
-                        SELECT doc_id, COALESCE(full_text, searchable_text) as full_text
-                        FROM cases
-                        WHERE doc_id IN ({placeholders})
-                    """, doc_ids)
-                    for row in cursor.fetchall():
-                        if row[0] and row[1]:
-                            full_texts[row[0]] = row[1]
-            
-            if decisions:
-                doc_ids = [doc_id for doc_id, _ in decisions]
-                if doc_ids:
-                    placeholders = ','.join(['?'] * len(doc_ids))
-                    cursor.execute(f"""
-                        SELECT d.doc_id, GROUP_CONCAT(dp.text, '\n\n') as full_text
-                        FROM decision_paragraphs dp
-                        JOIN decisions d ON dp.decision_id = d.id
-                        WHERE d.doc_id IN ({placeholders})
-                        GROUP BY d.doc_id
-                        ORDER BY d.doc_id, dp.para_index
-                    """, doc_ids)
-                    for row in cursor.fetchall():
-                        if row[0] and row[1]:
-                            full_texts[row[0]] = row[1]
-            
-            if interpretations:
-                doc_ids = [doc_id for doc_id, _ in interpretations]
-                if doc_ids:
-                    placeholders = ','.join(['?'] * len(doc_ids))
-                    cursor.execute(f"""
-                        SELECT i.doc_id, GROUP_CONCAT(ip.text, '\n\n') as full_text
-                        FROM interpretation_paragraphs ip
-                        JOIN interpretations i ON ip.interpretation_id = i.id
-                        WHERE i.doc_id IN ({placeholders})
-                        GROUP BY i.doc_id
-                        ORDER BY i.doc_id, ip.para_index
-                    """, doc_ids)
-                    for row in cursor.fetchall():
-                        if row[0] and row[1]:
-                            full_texts[row[0]] = row[1]
-            
-            if statutes:
-                for statute_id, article_no, detail in statutes:
-                    cursor.execute("""
-                        SELECT text
-                        FROM statute_articles
-                        WHERE statute_id = ? AND article_no = ?
-                    """, (statute_id, article_no))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        key = f"{statute_id}_{article_no}"
-                        full_texts[key] = row[0]
-            
-            conn.close()
             return full_texts
             
         except Exception as e:
