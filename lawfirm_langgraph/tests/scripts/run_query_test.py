@@ -77,7 +77,7 @@ if str(lawfirm_langgraph_dir) not in sys.path:
     sys.path.insert(0, str(lawfirm_langgraph_dir))
 
 # 로깅 설정 (SafeStreamHandler 사용)
-def setup_logging(log_level: str = "INFO", log_file: str = None):
+def setup_logging(log_level: str = "DEBUG", log_file: str = None):
     """로깅 설정 (Windows PowerShell 호환)
     
     Args:
@@ -251,7 +251,7 @@ def setup_logging(log_level: str = "INFO", log_file: str = None):
 # 로그 파일 경로 설정 (환경 변수 또는 자동 생성)
 log_file_path = os.getenv("TEST_LOG_FILE", None)
 logger = setup_logging(
-    log_level=os.getenv("TEST_LOG_LEVEL", "INFO"),
+    log_level=os.getenv("TEST_LOG_LEVEL", "DEBUG"),
     log_file=log_file_path
 )
 
@@ -320,7 +320,6 @@ async def run_query_test(query: str):
     
     try:
         # python-dotenv 경고 억제를 위한 환경 변수 설정
-        import os
         os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
         
         # Import (순환 import 방지를 위해 함수 내부에서 수행)
@@ -369,6 +368,40 @@ async def run_query_test(query: str):
         config_obj = Config()
         if config_obj.use_mlflow_index:
             logger.info(f"   ✅ MLflow 인덱스 사용: run_id={config_obj.mlflow_run_id or '자동 조회'}")
+            
+            # MLflow 매니저 초기화하여 로컬 파일 시스템 모드 확인
+            try:
+                from scripts.rag.mlflow_manager import MLflowFAISSManager
+                mlflow_manager = MLflowFAISSManager()
+                if mlflow_manager.is_local_filesystem:
+                    logger.info(f"   ✅ 로컬 파일 시스템 모드: {mlflow_manager.local_base_path}")
+                    
+                    # 프로덕션 run 확인
+                    run_id = config_obj.mlflow_run_id or mlflow_manager.get_production_run()
+                    if run_id:
+                        run_info = mlflow_manager.client.get_run(run_id)
+                        tags = run_info.data.tags if hasattr(run_info.data, 'tags') else {}
+                        version_name = tags.get('version', None)
+                        
+                        if version_name:
+                            vector_store_path = project_root / "data" / "vector_store" / version_name
+                            index_path = vector_store_path / "index.faiss"
+                            if index_path.exists():
+                                logger.info(f"   ✅ data/vector_store 인덱스 존재: {index_path}")
+                            else:
+                                logger.info(f"   ℹ️  data/vector_store 인덱스 없음: {index_path}")
+                            
+                            # MLflow 로컬 경로 확인
+                            artifacts_path = mlflow_manager._get_local_artifact_path(run_id, "faiss_index")
+                            mlflow_index_path = artifacts_path / "index.faiss"
+                            if mlflow_index_path.exists():
+                                logger.info(f"   ✅ MLflow 로컬 경로 인덱스 존재: {mlflow_index_path}")
+                            else:
+                                logger.info(f"   ℹ️  MLflow 로컬 경로 인덱스 없음: {mlflow_index_path}")
+                else:
+                    logger.info(f"   🌐 원격 서버 모드: {mlflow_manager.tracking_uri}")
+            except Exception as e:
+                logger.debug(f"   MLflow 매니저 확인 실패: {e}")
         else:
             logger.info(f"   ℹ️  MLflow 인덱스 미사용 (DB 기반 인덱스 사용)")
         
@@ -392,17 +425,74 @@ async def run_query_test(query: str):
         logger.info("\n4️⃣  결과:")
         logger.info("="*80)
         
-        # 답변
-        answer = result.get("answer", "")
-        if isinstance(answer, dict):
-            answer = answer.get("content", answer.get("text", str(answer)))
+        # 답변 추출 및 정규화
+        answer_raw = result.get("answer", "")
         
-        if answer:
-            logger.info(f"\n📝 답변 ({len(str(answer))}자):")
+        # WorkflowUtils.normalize_answer 사용하여 정규화
+        try:
+            from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+        except ImportError:
+            try:
+                from core.workflow.utils.workflow_utils import WorkflowUtils
+            except ImportError:
+                WorkflowUtils = None
+        
+        if WorkflowUtils:
+            answer = WorkflowUtils.normalize_answer(answer_raw)
+        else:
+            # 폴백: 기본 정규화
+            if isinstance(answer_raw, dict):
+                answer = answer_raw.get("content", answer_raw.get("text", str(answer_raw)))
+            else:
+                answer = str(answer_raw) if answer_raw else ""
+            answer = answer.strip() if isinstance(answer, str) else ""
+        
+        # 답변 품질 검증
+        MIN_ANSWER_LENGTH = 100  # WorkflowConstants.MIN_ANSWER_LENGTH_VALIDATION
+        answer_length = len(answer) if isinstance(answer, str) else 0
+        answer_is_valid = answer_length >= MIN_ANSWER_LENGTH
+        
+        # 에러 메시지 패턴 확인
+        error_patterns = [
+            "죄송합니다",
+            "오류가 발생했습니다",
+            "시스템 오류",
+            "입력값에 문제가 있습니다",
+            "답변을 생성하는 중 오류가 발생했습니다"
+        ]
+        has_error_message = any(pattern in answer for pattern in error_patterns) if isinstance(answer, str) else False
+        
+        # 답변 출력
+        if answer and answer_length > 0:
+            quality_status = "✅" if answer_is_valid else "⚠️"
+            logger.info(f"\n📝 답변 ({answer_length}자) {quality_status}:")
             logger.info("-" * 80)
             logger.info(str(answer))
+            
+            # 품질 경고
+            if not answer_is_valid:
+                logger.warning(f"\n⚠️  답변이 너무 짧습니다! (최소 {MIN_ANSWER_LENGTH}자 필요, 현재 {answer_length}자)")
+                logger.warning("   가능한 원인:")
+                logger.warning("   1. 답변 생성 중 오류 발생")
+                logger.warning("   2. 검색 결과가 부족하여 답변 생성 실패")
+                logger.warning("   3. LLM 응답이 제대로 처리되지 않음")
+            
+            if has_error_message:
+                logger.warning(f"\n⚠️  답변에 오류 메시지가 포함되어 있습니다!")
+                logger.warning("   답변이 정상적으로 생성되지 않았을 수 있습니다.")
         else:
-            logger.warning("<답변 없음>")
+            logger.error("\n❌ 답변이 없습니다!")
+            logger.error("   가능한 원인:")
+            logger.error("   1. 워크플로우 실행 중 오류 발생")
+            logger.error("   2. 답변 생성 노드가 실행되지 않음")
+            logger.error("   3. state에서 answer가 손실됨")
+            
+            # 오류 정보 확인
+            errors = result.get("errors", [])
+            if errors:
+                logger.error(f"\n   발견된 오류 ({len(errors)}개):")
+                for i, error in enumerate(errors[:5], 1):
+                    logger.error(f"   {i}. {error}")
         
         # retrieved_docs (데이터베이스/벡터스토어에서 검색한 참고자료)
         retrieved_docs = result.get("retrieved_docs", [])
@@ -587,6 +677,72 @@ async def run_query_test(query: str):
         if processing_time:
             logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
         
+        # 답변 품질 종합 평가
+        logger.info("\n" + "="*80)
+        logger.info("📊 답변 품질 종합 평가")
+        logger.info("="*80)
+        
+        answer_quality_score = 0
+        quality_checks = []
+        
+        # 1. 답변 존재 여부
+        if answer and answer_length > 0:
+            answer_quality_score += 25
+            quality_checks.append("✅ 답변 존재")
+        else:
+            quality_checks.append("❌ 답변 없음")
+        
+        # 2. 최소 길이 검증
+        if answer_is_valid:
+            answer_quality_score += 25
+            quality_checks.append(f"✅ 최소 길이 충족 ({answer_length}자 >= {MIN_ANSWER_LENGTH}자)")
+        else:
+            quality_checks.append(f"⚠️  최소 길이 미달 ({answer_length}자 < {MIN_ANSWER_LENGTH}자)")
+        
+        # 3. 오류 메시지 없음
+        if not has_error_message:
+            answer_quality_score += 25
+            quality_checks.append("✅ 오류 메시지 없음")
+        else:
+            quality_checks.append("❌ 오류 메시지 포함")
+        
+        # 4. 소스/참고자료 존재
+        has_sources = len(retrieved_docs) > 0 or len(sources) > 0
+        if has_sources:
+            answer_quality_score += 25
+            quality_checks.append(f"✅ 참고자료 존재 ({len(retrieved_docs)}개 retrieved_docs, {len(sources)}개 sources)")
+        else:
+            quality_checks.append("⚠️  참고자료 없음")
+        
+        # 품질 점수 출력
+        logger.info(f"\n   품질 점수: {answer_quality_score}/100")
+        for check in quality_checks:
+            logger.info(f"   {check}")
+        
+        # 품질 등급
+        if answer_quality_score >= 100:
+            quality_grade = "🟢 우수"
+        elif answer_quality_score >= 75:
+            quality_grade = "🟡 양호"
+        elif answer_quality_score >= 50:
+            quality_grade = "🟠 보통"
+        else:
+            quality_grade = "🔴 불량"
+        
+        logger.info(f"\n   종합 평가: {quality_grade}")
+        
+        if answer_quality_score < 75:
+            logger.warning("\n⚠️  답변 품질이 기준 미만입니다!")
+            logger.warning("   다음 사항을 확인하세요:")
+            if not answer or answer_length == 0:
+                logger.warning("   - 답변이 생성되지 않았습니다")
+            if not answer_is_valid:
+                logger.warning(f"   - 답변이 너무 짧습니다 (최소 {MIN_ANSWER_LENGTH}자 필요)")
+            if has_error_message:
+                logger.warning("   - 답변에 오류 메시지가 포함되어 있습니다")
+            if not has_sources:
+                logger.warning("   - 참고자료가 없어 답변의 신뢰성이 낮을 수 있습니다")
+        
         # 디버깅: retrieved_docs와 sources 관계 분석
         logger.info("\n" + "="*80)
         logger.info("🔍 디버깅 정보:")
@@ -655,8 +811,188 @@ async def run_query_test(query: str):
         if not needs_search:
             logger.info("   → direct_answer 노드가 사용되어 검색이 수행되지 않았을 수 있습니다.")
         
+        # 분류 성능 메트릭 출력
         logger.info("\n" + "="*80)
-        logger.info("✅ 테스트 완료!")
+        logger.info("📊 분류 성능 메트릭 (최적화 결과)")
+        logger.info("="*80)
+        
+        try:
+            # 서비스에서 통계 가져오기
+            if hasattr(service, 'workflow') and hasattr(service.workflow, 'stats'):
+                stats = service.workflow.stats
+                if stats:
+                    # 통합 분류 메트릭
+                    unified_calls = stats.get('unified_classification_calls', 0)
+                    unified_llm_calls = stats.get('unified_classification_llm_calls', 0)
+                    avg_unified_time = stats.get('avg_unified_classification_time', 0.0)
+                    total_unified_time = stats.get('total_unified_classification_time', 0.0)
+                    
+                    # 캐시 메트릭
+                    cache_hits = stats.get('complexity_cache_hits', 0)
+                    cache_misses = stats.get('complexity_cache_misses', 0)
+                    total_cache_requests = cache_hits + cache_misses
+                    cache_hit_rate = (cache_hits / total_cache_requests * 100) if total_cache_requests > 0 else 0
+                    
+                    # 폴백 메트릭
+                    fallback_count = stats.get('complexity_fallback_count', 0)
+                    
+                    logger.info(f"\n✅ 통합 분류 (단일 프롬프트):")
+                    logger.info(f"   - 총 호출: {unified_calls}회")
+                    logger.info(f"   - LLM 호출: {unified_llm_calls}회 (목표: 1회/쿼리)")
+                    logger.info(f"   - 평균 처리 시간: {avg_unified_time:.3f}초")
+                    logger.info(f"   - 총 처리 시간: {total_unified_time:.3f}초")
+                    
+                    if unified_calls > 0:
+                        llm_calls_per_query = unified_llm_calls / unified_calls
+                        logger.info(f"   - LLM 호출/쿼리: {llm_calls_per_query:.2f}회 (목표: 1.0회)")
+                        if llm_calls_per_query > 1.5:
+                            logger.warning(f"   ⚠️  LLM 호출이 예상보다 많습니다! (목표: 1회)")
+                    
+                    logger.info(f"\n💾 캐시 성능:")
+                    logger.info(f"   - 캐시 히트: {cache_hits}회")
+                    logger.info(f"   - 캐시 미스: {cache_misses}회")
+                    logger.info(f"   - 캐시 히트율: {cache_hit_rate:.1f}%")
+                    if cache_hit_rate < 50 and total_cache_requests > 5:
+                        logger.warning(f"   ⚠️  캐시 히트율이 낮습니다. 캐시 전략을 검토하세요.")
+                    
+                    logger.info(f"\n🔄 폴백 사용:")
+                    logger.info(f"   - 폴백 호출: {fallback_count}회")
+                    if fallback_count > 0:
+                        fallback_rate = (fallback_count / unified_calls * 100) if unified_calls > 0 else 0
+                        logger.info(f"   - 폴백 비율: {fallback_rate:.1f}%")
+                        if fallback_rate > 10:
+                            logger.warning(f"   ⚠️  폴백 비율이 높습니다. LLM 호출 실패 원인을 확인하세요.")
+                        
+                        # 폴백 원인 분석
+                        fallback_reasons = stats.get('fallback_reasons', {})
+                        if fallback_reasons:
+                            logger.info(f"\n   📋 폴백 원인 분석:")
+                            for reason, count in sorted(fallback_reasons.items(), key=lambda x: x[1], reverse=True):
+                                reason_rate = (count / fallback_count * 100) if fallback_count > 0 else 0
+                                logger.info(f"      - {reason}: {count}회 ({reason_rate:.1f}%)")
+                                if reason in ["LLM timeout", "Network error", "Rate limit"]:
+                                    logger.warning(f"         ⚠️  {reason} - 재시도 메커니즘 고려 필요")
+                    
+                    # 개선 효과 계산
+                    if unified_calls > 0:
+                        logger.info(f"\n📈 개선 효과 (체인 방식 대비):")
+                        old_llm_calls = unified_calls * 4  # 기존: 4회/쿼리
+                        new_llm_calls = unified_llm_calls
+                        reduction = ((old_llm_calls - new_llm_calls) / old_llm_calls * 100) if old_llm_calls > 0 else 0
+                        logger.info(f"   - 기존 LLM 호출 (예상): {old_llm_calls}회")
+                        logger.info(f"   - 현재 LLM 호출: {new_llm_calls}회")
+                        logger.info(f"   - LLM 호출 감소: {reduction:.1f}%")
+                        if reduction >= 70:
+                            logger.info(f"   ✅ 목표 달성! (75% 감소 목표)")
+                        elif reduction >= 50:
+                            logger.warning(f"   ⚠️  개선되었지만 목표에 미달 (75% 목표)")
+                        else:
+                            logger.warning(f"   ⚠️  개선 효과가 낮습니다. 원인 확인 필요")
+                else:
+                    logger.warning("   ⚠️  통계가 활성화되지 않았습니다.")
+            else:
+                logger.warning("   ⚠️  통계 정보를 가져올 수 없습니다.")
+        except Exception as e:
+            logger.warning(f"   ⚠️  성능 메트릭 출력 실패: {e}")
+        
+        logger.info("\n" + "="*80)
+        
+        # 최종 검증 및 요약
+        test_passed = True
+        critical_issues = []
+        warnings = []
+        
+        # 1. 답변 존재 및 품질 확인 (강화된 검증)
+        if not answer or answer_length == 0:
+            test_passed = False
+            critical_issues.append("답변이 없습니다 (0자)")
+            # 상세 디버깅 정보
+            logger.error("\n   📋 답변 없음 상세 분석:")
+            logger.error(f"      - answer 타입: {type(answer_raw).__name__}")
+            logger.error(f"      - answer_raw 값: {repr(answer_raw[:200]) if answer_raw else 'None'}")
+            logger.error(f"      - result['answer'] 존재: {'answer' in result}")
+            logger.error(f"      - result keys: {list(result.keys())[:20]}")
+            if "errors" in result:
+                logger.error(f"      - errors: {result.get('errors', [])[:5]}")
+            if "processing_steps" in result:
+                logger.error(f"      - 마지막 processing_steps: {result.get('processing_steps', [])[-3:]}")
+        elif not answer_is_valid:
+            test_passed = False
+            critical_issues.append(f"답변이 너무 짧습니다 ({answer_length}자 < {MIN_ANSWER_LENGTH}자)")
+            # 상세 디버깅 정보
+            logger.warning("\n   📋 답변 짧음 상세 분석:")
+            logger.warning(f"      - 답변 내용 (처음 200자): {answer[:200]}")
+            logger.warning(f"      - 답변 길이: {answer_length}자")
+            logger.warning(f"      - 최소 요구 길이: {MIN_ANSWER_LENGTH}자")
+        elif has_error_message:
+            test_passed = False
+            critical_issues.append("답변에 오류 메시지가 포함되어 있습니다")
+            # 상세 디버깅 정보
+            logger.error("\n   📋 오류 메시지 상세 분석:")
+            logger.error(f"      - 답변 내용: {answer[:500]}")
+            for pattern in error_patterns:
+                if pattern in answer:
+                    logger.error(f"      - 발견된 패턴: '{pattern}'")
+        
+        # 2. 워크플로우 실행 확인 (강화된 로깅)
+        errors = result.get("errors", [])
+        if errors:
+            test_passed = False
+            critical_issues.append(f"워크플로우 실행 중 {len(errors)}개 오류 발생")
+            # 상세 디버깅 정보
+            logger.error("\n   📋 워크플로우 오류 상세:")
+            for i, error in enumerate(errors[:10], 1):
+                logger.error(f"      {i}. {error}")
+            if len(errors) > 10:
+                logger.error(f"      ... (총 {len(errors)}개 오류, 처음 10개만 표시)")
+        
+        # 3. 처리 시간 확인 (너무 오래 걸리면 경고)
+        if processing_time > 300:  # 5분 이상
+            warnings.append(f"처리 시간이 매우 깁니다 ({processing_time:.2f}초)")
+            logger.warning(f"⚠️  처리 시간이 매우 깁니다 ({processing_time:.2f}초)")
+        
+        # 4. 검색 결과 확인 (로깅 개선)
+        if not retrieved_docs and not sources:
+            warnings.append("검색 결과가 없습니다")
+            logger.warning("\n   📋 검색 결과 없음 상세 분석:")
+            logger.warning(f"      - needs_search: {result.get('needs_search', 'N/A')}")
+            logger.warning(f"      - query_type: {result.get('query_type', 'N/A')}")
+            logger.warning(f"      - complexity_level: {result.get('complexity_level', 'N/A')}")
+            if "metadata" in result:
+                metadata = result.get("metadata", {})
+                logger.warning(f"      - metadata keys: {list(metadata.keys())[:10]}")
+        
+        # 5. State 구조 디버깅 정보 (오류 발생 시)
+        if not test_passed or warnings:
+            logger.info("\n   📋 State 구조 디버깅 정보:")
+            logger.info(f"      - result keys: {list(result.keys())}")
+            logger.info(f"      - answer 존재: {'answer' in result}")
+            logger.info(f"      - retrieved_docs 존재: {'retrieved_docs' in result}")
+            logger.info(f"      - sources 존재: {'sources' in result}")
+            logger.info(f"      - errors 존재: {'errors' in result}")
+            logger.info(f"      - metadata 존재: {'metadata' in result}")
+            if "metadata" in result:
+                metadata = result.get("metadata", {})
+                logger.info(f"      - metadata keys: {list(metadata.keys())[:15]}")
+        
+        # 최종 결과 출력
+        if test_passed and not warnings:
+            logger.info("✅ 테스트 완료! (모든 검증 통과)")
+        elif test_passed and warnings:
+            logger.warning("⚠️  테스트 완료! (경고 사항 있음)")
+            logger.warning("\n   경고 사항:")
+            for i, warning in enumerate(warnings, 1):
+                logger.warning(f"   {i}. {warning}")
+        else:
+            logger.error("❌ 테스트 실패! (중요 문제 발견)")
+            logger.error("\n   발견된 문제:")
+            for i, issue in enumerate(critical_issues, 1):
+                logger.error(f"   {i}. {issue}")
+            if warnings:
+                logger.warning("\n   추가 경고:")
+                for i, warning in enumerate(warnings, 1):
+                    logger.warning(f"   {i}. {warning}")
+        
         logger.info("="*80)
         
         return result
@@ -671,6 +1007,35 @@ async def run_query_test(query: str):
         
     except Exception as e:
         logger.error(f"\n❌ 오류 발생: {type(e).__name__}: {e}", exc_info=True)
+        
+        # 상세 디버깅 정보 출력
+        logger.error("\n📋 오류 상세 분석:")
+        logger.error(f"   - 오류 타입: {type(e).__name__}")
+        logger.error(f"   - 오류 메시지: {str(e)}")
+        
+        # State 정보 (가능한 경우)
+        try:
+            if 'result' in locals():
+                logger.error(f"   - result 타입: {type(result).__name__}")
+                if isinstance(result, dict):
+                    logger.error(f"   - result keys: {list(result.keys())[:20]}")
+                    if "answer" in result:
+                        logger.error(f"   - answer 존재: {bool(result.get('answer'))}")
+                        logger.error(f"   - answer 길이: {len(str(result.get('answer', '')))}")
+                    if "errors" in result:
+                        logger.error(f"   - errors: {result.get('errors', [])[:5]}")
+        except Exception:
+            pass
+        
+        # 서비스 정보 (가능한 경우)
+        try:
+            if 'service' in locals():
+                logger.error(f"   - service 타입: {type(service).__name__}")
+                if hasattr(service, 'workflow'):
+                    logger.error(f"   - workflow 존재: {service.workflow is not None}")
+        except Exception:
+            pass
+        
         import sys
         sys.exit(1)
 
