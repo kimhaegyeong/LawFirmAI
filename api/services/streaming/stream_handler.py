@@ -89,6 +89,9 @@ class StreamHandler:
             ):
                 yield chunk
                 
+        except asyncio.CancelledError:
+            logger.debug("[stream_final_answer] Stream cancelled (client disconnected)")
+            raise
         except GeneratorExit:
             logger.debug("[stream_final_answer] Client disconnected, closing stream")
             return
@@ -100,8 +103,8 @@ class StreamHandler:
                     type(e).__name__
                 )
                 yield format_sse_event(error_event)
-            except GeneratorExit:
-                logger.debug("[stream_final_answer] Client disconnected during error handling")
+            except (GeneratorExit, asyncio.CancelledError):
+                logger.debug("[stream_final_answer] Client disconnected or cancelled during error handling")
                 return
             except Exception as yield_error:
                 logger.error(f"Failed to yield error event: {yield_error}")
@@ -374,6 +377,12 @@ class StreamHandler:
                     logger.debug("[stream_final_answer] Stream completed, generator will exit")
                     break
         
+        except asyncio.CancelledError:
+            logger.debug("[stream_final_answer] Stream cancelled (client disconnected)")
+            raise
+        except GeneratorExit:
+            logger.debug("[stream_final_answer] Generator exit (client disconnected)")
+            raise
         finally:
             callback_monitoring_active = False
             if callback_task:

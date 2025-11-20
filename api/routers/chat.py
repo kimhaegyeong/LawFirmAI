@@ -341,7 +341,7 @@ async def _generate_stream_response(
                 # chunk는 이미 "data: {...}\n\n" 형식이므로 그대로 yield
                 try:
                     yield chunk
-                except GeneratorExit:
+                except (GeneratorExit, asyncio.CancelledError):
                     # 클라이언트가 연결을 끊은 경우
                     logger.debug(f"[_generate_stream_response] Client disconnected, stopping stream")
                     break
@@ -464,12 +464,12 @@ async def _generate_stream_response(
             # 제너레이터가 정상적으로 종료되면 자동으로 연결이 닫힘
             # 추가 종료 신호는 필요 없음 (FastAPI가 자동 처리)
             pass
-        except GeneratorExit:
-            logger.debug("[_generate_stream_response] Generator exit during cleanup")
+        except (GeneratorExit, asyncio.CancelledError):
+            logger.debug("[_generate_stream_response] Generator exit or cancelled during cleanup")
             raise
     
-    except GeneratorExit:
-        logger.debug("[chat_stream] Client disconnected, closing stream")
+    except (GeneratorExit, asyncio.CancelledError):
+        logger.debug("[_generate_stream_response] Client disconnected or cancelled, closing stream")
         return
     except Exception as e:
         logger.error(f"Error in stream_message: {e}", exc_info=True)
@@ -492,8 +492,8 @@ async def _generate_stream_response(
                 "timestamp": datetime.now().isoformat()
             }
             yield format_sse_event(done_event)
-        except GeneratorExit:
-            logger.debug("[chat_stream] Client disconnected during error handling")
+        except (GeneratorExit, asyncio.CancelledError):
+            logger.debug("[chat_stream] Client disconnected or cancelled during error handling")
             return
         except Exception as yield_error:
             logger.error(f"Error yielding error message: {yield_error}")
@@ -686,8 +686,8 @@ async def chat_stream(
                         yield format_sse_event(done_event)
                         
                         _maybe_generate_session_title(stream_request.session_id)
-                    except GeneratorExit:
-                        logger.debug("[cached_stream] Client disconnected")
+                    except (GeneratorExit, asyncio.CancelledError):
+                        logger.debug("[cached_stream] Client disconnected or cancelled")
                         return
                     except Exception as e:
                         logger.error(f"Error in cached_stream: {e}", exc_info=True)
@@ -760,6 +760,9 @@ async def chat_stream(
                 "X-Cache": "MISS",
             }
         )
+    except (GeneratorExit, asyncio.CancelledError):
+        logger.debug("[chat_stream] Client disconnected or cancelled")
+        return
     except ValueError as e:
         logger.warning(f"Validation error in chat_stream endpoint: {e}")
         raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
