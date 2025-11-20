@@ -501,7 +501,7 @@ class AnswerGenerator:
             감지하여 on_llm_stream 또는 on_chat_model_stream 이벤트를 발생시킵니다.
             따라서 invoke()를 사용해도 HTTP 스트리밍이 가능합니다.
         """
-        llm_timeout = WorkflowConstants.TIMEOUT * 2  # LLM 타임아웃 (기본 30초)
+        llm_timeout = WorkflowConstants.TIMEOUT * 1.5  # LLM 타임아웃 (기본 30초 → 22.5초로 최적화)
         
         for attempt in range(max_retries):
             try:

@@ -1600,6 +1600,7 @@ class AnswerFormatterHandler:
             if not source_type:
                 content_for_inference = doc.get("content", "") or doc.get("text", "")
                 if isinstance(content_for_inference, str) and len(content_for_inference) > 10:
+                    import re
                     if re.search(r'[가-힣]+법\s*제\s*\d+\s*조', content_for_inference[:500]):
                         source_type = "statute_article"
                     elif re.search(r'(대법원|지방법원|고등법원|법원)\s*\d+[가-힣]+\s*\d+', content_for_inference[:500]) or \
@@ -2171,26 +2172,82 @@ class AnswerFormatterHandler:
         doc_id: Optional[str],
         doc_index: int
     ) -> Optional[str]:
-        """fallback source 생성"""
-        if source_type == "case_paragraph" and doc_id:
-            return f"판례 ({doc_id})"
-        elif source_type == "decision_paragraph" and doc_id:
-            return f"결정례 ({doc_id})"
-        elif source_type == "interpretation_paragraph" and doc_id:
-            return f"해석례 ({doc_id})"
+        """fallback source 생성 (개선: 더 많은 필드에서 source 추출)"""
+        # 방법 1: source_type과 doc_id 조합
+        if source_type:
+            type_names = {
+                "case_paragraph": "판례",
+                "decision_paragraph": "결정례",
+                "interpretation_paragraph": "해석례",
+                "statute_article": "법령"
+            }
+            type_name = type_names.get(source_type, "문서")
+            
+            # doc_id가 있으면 조합
+            if doc_id:
+                return f"{type_name} ({doc_id})"
+            
+            # doc_id가 없어도 다른 필드로 조합 시도
+            statute_name = doc.get("statute_name") or metadata.get("statute_name")
+            article_no = doc.get("article_no") or metadata.get("article_no")
+            court = doc.get("court") or metadata.get("court")
+            org = doc.get("org") or metadata.get("org")
+            title = doc.get("title") or metadata.get("title")
+            
+            if source_type == "statute_article" and statute_name:
+                if article_no:
+                    return f"{statute_name} 제{article_no}조"
+                return statute_name
+            elif source_type == "case_paragraph" and court:
+                if title:
+                    return f"{court} {title[:30]}"
+                return court
+            elif source_type == "interpretation_paragraph" and org:
+                if title:
+                    return f"{org} {title[:30]}"
+                return org
+            elif title and isinstance(title, str) and len(title.strip()) >= 2:
+                return f"{type_name}: {title.strip()[:50]}"
         
-        title = doc.get("title") or metadata.get("title") or metadata.get("case_name") or metadata.get("casenames")
+        # 방법 2: 여러 필드에서 source 추출 시도
+        title = (
+            doc.get("title") or 
+            metadata.get("title") or 
+            metadata.get("case_name") or 
+            metadata.get("casenames") or
+            doc.get("casenames")
+        )
+        statute_name = doc.get("statute_name") or metadata.get("statute_name") or doc.get("law_name") or metadata.get("law_name")
+        article_no = doc.get("article_no") or metadata.get("article_no") or doc.get("article_number") or metadata.get("article_number")
+        court = doc.get("court") or metadata.get("court") or doc.get("ccourt") or metadata.get("ccourt")
+        org = doc.get("org") or metadata.get("org")
         content = doc.get("content", "") or doc.get("text", "")
         
-        if doc_id:
-            return f"문서 ({doc_id})"
+        # 조합 시도
+        if statute_name and article_no:
+            return f"{statute_name} 제{article_no}조"
+        elif statute_name:
+            return statute_name
+        elif court and title:
+            return f"{court} {title[:30]}"
+        elif court:
+            return court
+        elif org and title:
+            return f"{org} {title[:30]}"
+        elif org:
+            return org
         elif title and isinstance(title, str) and len(title.strip()) >= 2:
-            return title.strip()
-        elif content and isinstance(content, str):
+            return title.strip()[:50]
+        elif doc_id:
+            return f"문서 ({doc_id})"
+        elif content and isinstance(content, str) and len(content.strip()) > 10:
             extracted = self._extract_source_from_content(content)
             if extracted:
                 return extracted
-            return self._generate_hash_based_source(content, doc_index)
+            # content에서 의미있는 부분 추출
+            content_preview = content[:50].strip().replace("\n", " ")
+            if content_preview:
+                return content_preview
         else:
             return f"문서 {doc_index}"
 
