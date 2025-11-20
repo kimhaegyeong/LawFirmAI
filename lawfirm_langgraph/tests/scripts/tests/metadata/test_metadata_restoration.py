@@ -12,8 +12,8 @@ from pathlib import Path
 
 # 프로젝트 경로 설정
 script_dir = Path(__file__).parent
-    scripts_dir = script_dir.parent
-    tests_dir = scripts_dir.parent
+scripts_dir = script_dir.parent
+tests_dir = scripts_dir.parent
 lawfirm_langgraph_dir = tests_dir.parent
 project_root = lawfirm_langgraph_dir.parent
 
