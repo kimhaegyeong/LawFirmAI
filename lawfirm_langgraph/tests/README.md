@@ -34,10 +34,20 @@ tests/
 │   ├── processing/            # core/processing 테스트
 │   │   ├── test_extractors.py
 │   │   └── test_parsers.py
-│   └── agents/                # core/agents 테스트
-│       ├── test_handlers.py
-│       ├── test_extractors.py
-│       └── test_parsers.py
+│   ├── agents/                # core/agents 테스트
+│   │   ├── test_handlers.py
+│   │   ├── test_extractors.py
+│   │   └── test_parsers.py
+│   └── workflow/              # core/workflow 테스트 (리팩토링된 구조)
+│       ├── test_classification_nodes.py
+│       ├── test_search_nodes.py
+│       ├── test_document_nodes.py
+│       ├── test_answer_nodes.py
+│       ├── test_agentic_nodes.py
+│       ├── test_ethical_rejection_node.py
+│       ├── test_subgraphs.py
+│       ├── test_edges.py
+│       └── test_registry.py
 │
 ├── integration/               # 통합 테스트
 │   ├── test_workflow_service.py
@@ -52,11 +62,7 @@ tests/
 │   ├── test_sources_detail.py
 │   └── test_unified_source_formatter.py
 │
-├── langgraph_core/            # LangGraph Core 모듈 테스트
-│   ├── test_chain_builders.py
-│   ├── test_data_reasoning_extractor.py
-│   ├── test_node_input_output_spec.py
-│   ├── test_node_wrappers.py
+│
 │   ├── test_processing_extractors.py
 │   ├── test_processing_quality_validators.py
 │   ├── test_processing_reasoning_extractor.py
@@ -80,7 +86,6 @@ tests/
 │   ├── run_query_test.py      # 메인 쿼리 테스트 스크립트 (권장)
 │   └── ...                    # 기타 테스트 스크립트들
 │
-├── run_all_tests.py           # 전체 테스트 실행 스크립트 (Windows 호환)
 ├── run_coverage.py            # 커버리지 측정 스크립트 (Windows 호환)
 ├── run_tests_manual.py        # 수동 테스트 실행 스크립트
 │
@@ -129,6 +134,17 @@ tests/
 - `test_extractors.py`: Extractors 테스트
 - `test_parsers.py`: Parsers 테스트
 
+#### unit/workflow/ (리팩토링된 구조)
+- `test_classification_nodes.py`: ClassificationNodes 클래스 테스트
+- `test_search_nodes.py`: SearchNodes 클래스 테스트
+- `test_document_nodes.py`: DocumentNodes 클래스 테스트
+- `test_answer_nodes.py`: AnswerNodes 클래스 테스트
+- `test_agentic_nodes.py`: AgenticNodes 클래스 테스트
+- `test_ethical_rejection_node.py`: EthicalRejectionNode 클래스 테스트
+- `test_subgraphs.py`: 서브그래프 (ClassificationSubgraph, SearchSubgraph 등) 테스트
+- `test_edges.py`: 엣지 빌더 (ClassificationEdges, SearchEdges 등) 테스트
+- `test_registry.py`: 레지스트리 패턴 (NodeRegistry, SubgraphRegistry) 테스트
+
 ### 통합 테스트 (integration/)
 
 - `test_workflow_service.py`: LangGraphWorkflowService 클래스 테스트
@@ -144,27 +160,6 @@ tests/
 - `test_sources_detail.py`: 소스 상세 정보 테스트
 - `test_unified_source_formatter.py`: 통합 소스 포맷터 테스트
 
-### LangGraph Core 테스트 (langgraph_core/)
-
-- `test_chain_builders.py`: Chain 빌더 테스트
-- `test_data_reasoning_extractor.py`: 데이터 추론 추출기 테스트
-- `test_node_input_output_spec.py`: 노드 입출력 스펙 테스트
-- `test_node_wrappers.py`: 노드 래퍼 테스트
-- `test_processing_extractors.py`: 처리 추출기 테스트
-- `test_processing_quality_validators.py`: 처리 품질 검증기 테스트
-- `test_processing_reasoning_extractor.py`: 처리 추론 추출기 테스트
-- `test_processing_response_parsers.py`: 처리 응답 파서 테스트
-- `test_prompt_builders.py`: 프롬프트 빌더 테스트
-- `test_state_definitions.py`: 상태 정의 테스트 (modular 구조)
-- `test_state_modular_states.py`: 모듈화된 상태 테스트
-- `test_state_utils.py`: 상태 유틸리티 테스트
-- `test_tools_legal_search_tools.py`: 법률 검색 도구 테스트
-- `test_utils_workflow_constants.py`: 워크플로우 상수 테스트
-- `test_utils_workflow_routes.py`: 워크플로우 라우팅 테스트
-- `test_workflow_legal_workflow_enhanced.py`: 향상된 법률 워크플로우 테스트
-- `test_workflow_service.py`: 워크플로우 서비스 테스트
-- `test_workflow_utils.py`: 워크플로우 유틸리티 테스트
-
 ### 설정 테스트 (config/)
 
 - `test_config.py`: LangGraphConfig 클래스 테스트, CheckpointStorageType Enum 테스트
@@ -175,21 +170,20 @@ tests/
 ### 전체 테스트 실행
 
 ```bash
-# run_all_tests.py 사용 (권장 - Windows 호환, 버퍼 이슈 해결)
-python lawfirm_langgraph/tests/run_all_tests.py
+# pytest 직접 사용 (권장)
+pytest lawfirm_langgraph/tests/ -v -s --capture=no
+
+# Windows 환경에서 버퍼 이슈가 있는 경우
+$env:PYTHONUNBUFFERED=1; pytest lawfirm_langgraph/tests/ -v -s --capture=no
 
 # 수동 테스트 실행 스크립트 (pytest 버퍼 문제 우회)
 python lawfirm_langgraph/tests/run_tests_manual.py
-
-# pytest 직접 사용 (Windows에서는 버퍼 이슈 발생 가능)
-pytest lawfirm_langgraph/tests/ -v -s --capture=no
 ```
 
 **Windows 환경 개선 사항:**
-- `run_all_tests.py`와 `run_coverage.py`는 Windows 버퍼 이슈를 해결하기 위해 개선되었습니다
 - `-s` 옵션과 `--capture=no` 옵션으로 출력 버퍼링 비활성화
-- `PYTHONUNBUFFERED=1` 환경 변수 설정
-- subprocess를 통한 직접 실행으로 버퍼 문제 우회
+- `PYTHONUNBUFFERED=1` 환경 변수 설정으로 Python 출력 버퍼링 비활성화
+- `run_coverage.py`는 Windows 버퍼 이슈를 해결하기 위해 개선되었습니다
 
 ### 단위 테스트만 실행
 
@@ -201,6 +195,11 @@ pytest lawfirm_langgraph/tests/unit/ -v
 pytest lawfirm_langgraph/tests/unit/utils/ -v
 pytest lawfirm_langgraph/tests/unit/data/ -v
 pytest lawfirm_langgraph/tests/unit/services/ -v
+
+# 워크플로우 노드 테스트 (리팩토링된 구조)
+pytest lawfirm_langgraph/tests/unit/workflow/ -v
+pytest lawfirm_langgraph/tests/unit/workflow/test_classification_nodes.py -v
+pytest lawfirm_langgraph/tests/unit/workflow/test_search_nodes.py -v
 ```
 
 ### 통합 테스트만 실행
@@ -213,12 +212,6 @@ pytest lawfirm_langgraph/tests/integration/ -v
 
 ```bash
 pytest lawfirm_langgraph/tests/e2e/ -v
-```
-
-### LangGraph Core 테스트만 실행
-
-```bash
-pytest lawfirm_langgraph/tests/langgraph_core/ -v
 ```
 
 ### 단일 질의 테스트 실행
@@ -284,6 +277,15 @@ pytest lawfirm_langgraph/tests/ --cov=lawfirm_langgraph --cov-report=html --cov-
 - `mock_answer_generator`: Mock AnswerGenerator - 답변 생성기 모의 객체
 - `cleanup_test_files`: 테스트 파일 정리 - 테스트 후 생성된 파일 정리
 - `setup_test_environment`: 테스트 환경 설정 (autouse) - 자동으로 테스트 환경 변수 설정
+- `mock_workflow_instance`: Mock 워크플로우 인스턴스 (노드 클래스용)
+- `classification_nodes`: ClassificationNodes 인스턴스
+- `search_nodes`: SearchNodes 인스턴스
+- `document_nodes`: DocumentNodes 인스턴스
+- `answer_nodes`: AnswerNodes 인스턴스
+- `agentic_nodes`: AgenticNodes 인스턴스
+- `ethical_rejection_node`: EthicalRejectionNode 인스턴스
+- `node_registry`: NodeRegistry 인스턴스
+- `subgraph_registry`: SubgraphRegistry 인스턴스
 
 ## 테스트 작성 가이드
 
@@ -329,7 +331,7 @@ class TestNewFeature:
    - Core 모듈: `lawfirm_langgraph.core.*` 형식
    - LangGraph Core 모듈: `lawfirm_langgraph.langgraph_core.*` 형식
    - Generation 모듈: `lawfirm_langgraph.core.generation.validators.*`, `lawfirm_langgraph.core.generation.formatters.*` 형식
-6. **Windows 환경**: `run_all_tests.py`와 `run_coverage.py` 사용 권장 (버퍼 이슈 해결)
+6. **Windows 환경**: pytest 직접 사용 시 `-s --capture=no` 옵션과 `PYTHONUNBUFFERED=1` 환경 변수 사용 권장 (버퍼 이슈 해결)
 
 ## 문제 해결
 
@@ -356,7 +358,7 @@ pip install pytest-asyncio
 
 ### pytest 버퍼 문제 (Windows)
 
-- `run_all_tests.py` 사용 (권장) - Windows 버퍼 이슈 해결됨
+- pytest 직접 사용 (권장) - `-s --capture=no` 옵션과 `PYTHONUNBUFFERED=1` 환경 변수로 Windows 버퍼 이슈 해결
 - `run_coverage.py` 사용 - 커버리지 측정 시 Windows 호환
 - 또는 pytest 실행 시 `-s --capture=no` 옵션 사용: `pytest lawfirm_langgraph/tests/ -v -s --capture=no`
 

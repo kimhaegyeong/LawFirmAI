@@ -188,14 +188,14 @@ def run_test_workflow_service():
                     test_method(config)
                 elif 'service' in params:
                     # service가 필요한 경우 Mock 생성
-                    with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
-                        from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+                    with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
+                        from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
                         service = LangGraphWorkflowService(config)
                         test_method(service)
                 elif method_name == 'test_validate_config':
                     # validate_config는 service가 필요
-                    with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
-                        from lawfirm_langgraph.langgraph_core.workflow.workflow_service import LangGraphWorkflowService
+                    with patch('lawfirm_langgraph.core.workflow.workflow_service.EnhancedLegalQuestionWorkflow'):
+                        from lawfirm_langgraph.core.workflow.workflow_service import LangGraphWorkflowService
                         service = LangGraphWorkflowService(config)
                         test_method(service)
                 else:
