@@ -1451,6 +1451,7 @@ class EnhancedLegalQuestionWorkflow(
                 state["answer"] = self._normalize_answer(state.get("answer", ""))
                 self._prepare_final_response_minimal(state)
             self._update_processing_time(state, formatting_start_time)
+            # CancelledError는 상위로 전파하지 않고 기본 포맷으로 처리 완료
         except Exception as format_error:
             self.logger.warning(f"Formatting failed: {format_error}, using basic format")
             state["answer"] = self._normalize_answer(state.get("answer", ""))
@@ -1608,28 +1609,66 @@ class EnhancedLegalQuestionWorkflow(
             overall_start_time = time.time()
             self.logger.info("✅ [FINAL NODE] 최종 검증 및 포맷팅 시작")
             
-            self._restore_state_data_for_final(state)
+            try:
+                self._restore_state_data_for_final(state)
+            except asyncio.CancelledError:
+                self.logger.warning("⚠️ [FINAL NODE] State restoration was cancelled.")
+                raise
+            except Exception as e:
+                self.logger.warning(f"⚠️ [FINAL NODE] State restoration failed: {e}")
             
             validation_start_time = time.time()
-            quality_check_passed = self._validate_and_handle_regeneration(state)
+            try:
+                quality_check_passed = self._validate_and_handle_regeneration(state)
+            except asyncio.CancelledError:
+                self.logger.warning("⚠️ [FINAL NODE] Validation was cancelled. Preserving existing answer.")
+                existing_answer = self._get_state_value(state, "answer", "")
+                if existing_answer and len(str(existing_answer).strip()) > 10:
+                    self._set_answer_safely(state, existing_answer)
+                    self.logger.info(f"✅ [FINAL NODE] Preserved existing answer after cancellation: length={len(str(existing_answer))}")
+                    return state
+                raise
             
-            quality_check_passed = self._handle_format_errors(state, quality_check_passed)
+            try:
+                quality_check_passed = self._handle_format_errors(state, quality_check_passed)
+            except asyncio.CancelledError:
+                self.logger.warning("⚠️ [FINAL NODE] Format error handling was cancelled. Preserving existing answer.")
+                existing_answer = self._get_state_value(state, "answer", "")
+                if existing_answer and len(str(existing_answer).strip()) > 10:
+                    self._set_answer_safely(state, existing_answer)
+                    self.logger.info(f"✅ [FINAL NODE] Preserved existing answer after cancellation: length={len(str(existing_answer))}")
+                    return state
+                raise
             
             self._update_processing_time(state, validation_start_time)
             
             if quality_check_passed:
-                self._format_and_finalize(state, overall_start_time)
+                try:
+                    self._format_and_finalize(state, overall_start_time)
+                except asyncio.CancelledError:
+                    self.logger.warning("⚠️ [FINAL NODE] Formatting was cancelled. Preserving existing answer.")
+                    existing_answer = self._get_state_value(state, "answer", "")
+                    if existing_answer and len(str(existing_answer).strip()) > 10:
+                        self._set_answer_safely(state, existing_answer)
+                        self.logger.info(f"✅ [FINAL NODE] Preserved existing answer after cancellation: length={len(str(existing_answer))}")
+                        return state
+                    raise
 
             self._update_processing_time(state, overall_start_time)
 
         except asyncio.CancelledError:
+            # 최상위 CancelledError 처리 - 이미 처리된 경우가 아니면 여기서 처리
             self.logger.warning("⚠️ [FINAL NODE] Operation was cancelled. Preserving existing answer.")
             existing_answer = self._get_state_value(state, "answer", "")
             if existing_answer and len(str(existing_answer).strip()) > 10:
                 self._set_answer_safely(state, existing_answer)
                 self.logger.info(f"✅ [FINAL NODE] Preserved existing answer after cancellation: length={len(str(existing_answer))}")
             else:
-                self._handle_final_node_error(state, asyncio.CancelledError("Operation was cancelled"))
+                # 답변이 없으면 기본 답변 설정
+                self._set_answer_safely(state, "죄송합니다. 작업이 취소되었습니다.")
+                self.logger.warning("⚠️ [FINAL NODE] No existing answer to preserve. Set default message.")
+            # CancelledError는 다시 발생시키지 않고 상태를 보존한 채로 반환
+            # LangGraph가 비동기 실행 중 취소를 처리할 수 있도록 함
         except Exception as e:
             self._handle_final_node_error(state, e)
 
@@ -7090,7 +7129,13 @@ class EnhancedLegalQuestionWorkflow(
             extracted_keywords = search_inputs["extracted_keywords"]
 
             # 🔥 개선 1: 검색 결과가 0개일 때 즉시 Early Exit (timeout 방지)
-            if (semantic_count == 0 and keyword_count == 0) or (len(semantic_results) == 0 and len(keyword_results) == 0):
+            # semantic_count/keyword_count와 실제 리스트 길이 모두 확인
+            actual_semantic_count = len(semantic_results) if semantic_results else 0
+            actual_keyword_count = len(keyword_results) if keyword_results else 0
+            total_count = semantic_count + keyword_count
+            total_actual = actual_semantic_count + actual_keyword_count
+            
+            if total_count == 0 and total_actual == 0:
                 self.logger.warning(
                     f"⚠️ [EARLY EXIT] 검색 결과가 없습니다. "
                     f"빠른 응답 생성을 위해 처리 중단: "

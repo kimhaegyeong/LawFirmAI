@@ -540,50 +540,59 @@ class LangGraphWorkflowService:
                     last_node_output = None
                     accumulated_state = initial_state.copy() if isinstance(initial_state, dict) else {}
                     
-                    async for event in self.app.astream_events(initial_state, enhanced_config, version="v2"):
-                        event_type = event.get("event", "")
-                        event_name = event.get("name", "")
-                        event_data = event.get("data", {})
-                        
-                        if event_type == "on_chain_start":
-                            node_name = event_name
-                            if node_name not in executed_nodes:
-                                node_count += 1
-                                executed_nodes.append(node_name)
-                                current_time = time.time()
-                                node_start_times[node_name] = current_time
-                                last_node_name = node_name
-                                
-                                progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
-                                self.logger.info(progress_msg)
-                                print(progress_msg, flush=True)
-                                
-                                node_display_name = self._get_node_display_name(node_name)
-                                if node_display_name != node_name:
-                                    detail_msg = f"      → {node_display_name}"
-                                    self.logger.info(detail_msg)
-                                    print(detail_msg, flush=True)
-                        
-                        elif event_type == "on_chain_end":
-                            node_name = event_name
-                            if node_name in node_start_times:
-                                current_time = time.time()
-                                node_duration = current_time - node_start_times[node_name]
-                                node_durations[node_name] = node_duration
-                                
-                                threshold = self._get_node_threshold(node_name)
-                                if node_duration > threshold:
-                                    self.logger.warning(
-                                        f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                        f"(임계값: {threshold}초)"
-                                    )
+                    try:
+                        async for event in self.app.astream_events(initial_state, enhanced_config, version="v2"):
+                            event_type = event.get("event", "")
+                            event_name = event.get("name", "")
+                            event_data = event.get("data", {})
                             
-                            # 노드 출력 데이터에서 상태 업데이트
-                            if event_data and isinstance(event_data, dict):
-                                # 노드 출력이 상태 업데이트인 경우 병합
-                                if isinstance(accumulated_state, dict):
-                                    accumulated_state.update(event_data)
-                                    last_node_output = event_data
+                            if event_type == "on_chain_start":
+                                node_name = event_name
+                                if node_name not in executed_nodes:
+                                    node_count += 1
+                                    executed_nodes.append(node_name)
+                                    current_time = time.time()
+                                    node_start_times[node_name] = current_time
+                                    last_node_name = node_name
+                                    
+                                    progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
+                                    self.logger.info(progress_msg)
+                                    print(progress_msg, flush=True)
+                                    
+                                    node_display_name = self._get_node_display_name(node_name)
+                                    if node_display_name != node_name:
+                                        detail_msg = f"      → {node_display_name}"
+                                        self.logger.info(detail_msg)
+                                        print(detail_msg, flush=True)
+                            
+                            elif event_type == "on_chain_end":
+                                node_name = event_name
+                                if node_name in node_start_times:
+                                    current_time = time.time()
+                                    node_duration = current_time - node_start_times[node_name]
+                                    node_durations[node_name] = node_duration
+                                    
+                                    threshold = self._get_node_threshold(node_name)
+                                    if node_duration > threshold:
+                                        self.logger.warning(
+                                            f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
+                                            f"(임계값: {threshold}초)"
+                                        )
+                                
+                                # 노드 출력 데이터에서 상태 업데이트
+                                if event_data and isinstance(event_data, dict):
+                                    # 노드 출력이 상태 업데이트인 경우 병합
+                                    if isinstance(accumulated_state, dict):
+                                        accumulated_state.update(event_data)
+                                        last_node_output = event_data
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [WORKFLOW] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+                        # 취소된 경우에도 현재까지의 상태를 반환
+                        if accumulated_state and isinstance(accumulated_state, dict):
+                            flat_result = accumulated_state
+                        else:
+                            flat_result = initial_state
+                        raise
                     
                     # 최종 상태 가져오기 (체크포인터 우선, 없으면 누적된 상태 사용)
                     flat_result = None
@@ -612,68 +621,69 @@ class LangGraphWorkflowService:
                             flat_result = initial_state
                 else:
                     # 기존 astream() 사용
-                    async for event in self.app.astream(initial_state, enhanced_config, stream_mode="updates"):
-                        # 각 이벤트는 {node_name: updated_state} 형태
-                        for node_name, node_state in event.items():
-                            # 새로 실행된 노드인 경우에만 카운트
-                            if node_name not in executed_nodes:
-                                node_count += 1
-                                executed_nodes.append(node_name)
-                                
-                                # 노드 시작 시간 기록 (이벤트가 발생하면 해당 노드가 완료된 것으로 간주)
-                                current_time = time.time()
-                                if node_name in node_start_times:
-                                    # 노드 실행 시간 계산 (시작 시간부터 현재까지)
-                                    node_duration = current_time - node_start_times[node_name]
-                                    node_durations[node_name] = node_duration
-                                else:
-                                    # 첫 실행 시 이전 노드 완료 시간으로 계산
-                                    node_duration = current_time - last_node_time if node_count > 1 else 0
-                                    node_durations[node_name] = node_duration
-                                
-                                # 다음 노드 시작 시간 기록 (이벤트 발생 시점)
-                                node_start_times[node_name] = current_time
-                                last_node_time = current_time
+                    try:
+                        async for event in self.app.astream(initial_state, enhanced_config, stream_mode="updates"):
+                            # 각 이벤트는 {node_name: updated_state} 형태
+                            for node_name, node_state in event.items():
+                                # 새로 실행된 노드인 경우에만 카운트
+                                if node_name not in executed_nodes:
+                                    node_count += 1
+                                    executed_nodes.append(node_name)
+                                    
+                                    # 노드 시작 시간 기록 (이벤트가 발생하면 해당 노드가 완료된 것으로 간주)
+                                    current_time = time.time()
+                                    if node_name in node_start_times:
+                                        # 노드 실행 시간 계산 (시작 시간부터 현재까지)
+                                        node_duration = current_time - node_start_times[node_name]
+                                        node_durations[node_name] = node_duration
+                                    else:
+                                        # 첫 실행 시 이전 노드 완료 시간으로 계산
+                                        node_duration = current_time - last_node_time if node_count > 1 else 0
+                                        node_durations[node_name] = node_duration
+                                    
+                                    # 다음 노드 시작 시간 기록 (이벤트 발생 시점)
+                                    node_start_times[node_name] = current_time
+                                    last_node_time = current_time
 
-                                # 진행상황 표시 (실행 시간 포함)
-                                if node_count == 1:
-                                    progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
-                                else:
-                                    progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
+                                    # 진행상황 표시 (실행 시간 포함)
+                                    if node_count == 1:
+                                        progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
+                                    else:
+                                        progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
 
-                                self.logger.info(progress_msg)
-                                print(progress_msg, flush=True)
-                                
-                                # 병목 지점 감지: 느린 노드에 대한 경고
-                                threshold = self._get_node_threshold(node_name)
-                                if node_duration > threshold:
-                                    self.logger.warning(
-                                        f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
-                                        f"(임계값: {threshold}초)"
-                                    )
+                                    self.logger.info(progress_msg)
+                                    print(progress_msg, flush=True)
+                                    
+                                    # 병목 지점 감지: 느린 노드에 대한 경고
+                                    threshold = self._get_node_threshold(node_name)
+                                    if node_duration > threshold:
+                                        self.logger.warning(
+                                            f"⚠️ [PERFORMANCE] 느린 노드 감지: {node_name}가 {node_duration:.2f}초 소요되었습니다. "
+                                            f"(임계값: {threshold}초)"
+                                        )
 
-                                # 노드 이름을 한국어로 변환하여 더 명확하게 표시
-                                node_display_name = self._get_node_display_name(node_name)
-                                if node_display_name != node_name:
-                                    detail_msg = f"      → {node_display_name}"
-                                    self.logger.info(detail_msg)
-                                    print(detail_msg, flush=True)
+                                    # 노드 이름을 한국어로 변환하여 더 명확하게 표시
+                                    node_display_name = self._get_node_display_name(node_name)
+                                    if node_display_name != node_name:
+                                        detail_msg = f"      → {node_display_name}"
+                                        self.logger.info(detail_msg)
+                                        print(detail_msg, flush=True)
 
-                            # 디버깅: node_state의 query 확인
-                            # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
-                            if node_name == "classify_query_and_complexity" and isinstance(node_state, dict):
-                                # classification 그룹을 캐시에 저장 (stream_mode="updates" 사용 시 다음 노드로 전달 보장)
-                                if "classification" in node_state and isinstance(node_state["classification"], dict):
-                                    if not self._search_results_cache:
-                                        self._search_results_cache = {}
-                                    self._search_results_cache["classification"] = node_state["classification"].copy()
-                                    # common 그룹에도 저장
-                                    if "common" not in self._search_results_cache:
-                                        self._search_results_cache["common"] = {}
-                                    if "classification" not in self._search_results_cache["common"]:
-                                        self._search_results_cache["common"]["classification"] = {}
-                                    self._search_results_cache["common"]["classification"].update(node_state["classification"])
-                                    self.logger.debug("astream: Cached classification group for future nodes")
+                                # 디버깅: node_state의 query 확인
+                                # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
+                                if node_name == "classify_query_and_complexity" and isinstance(node_state, dict):
+                                    # classification 그룹을 캐시에 저장 (stream_mode="updates" 사용 시 다음 노드로 전달 보장)
+                                    if "classification" in node_state and isinstance(node_state["classification"], dict):
+                                        if not self._search_results_cache:
+                                            self._search_results_cache = {}
+                                        self._search_results_cache["classification"] = node_state["classification"].copy()
+                                        # common 그룹에도 저장
+                                        if "common" not in self._search_results_cache:
+                                            self._search_results_cache["common"] = {}
+                                        if "classification" not in self._search_results_cache["common"]:
+                                            self._search_results_cache["common"]["classification"] = {}
+                                        self._search_results_cache["common"]["classification"].update(node_state["classification"])
+                                        self.logger.debug("astream: Cached classification group for future nodes")
                                 
                                 node_query = ""
                                 # input 그룹이 변경되었는지 확인
@@ -1122,6 +1132,12 @@ class LangGraphWorkflowService:
                                 self.logger.warning("astream: merge_and_rerank node_state has no retrieved_docs or merged_documents")
 
                         flat_result = node_state
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [WORKFLOW] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+                        # 취소된 경우에도 현재까지의 상태를 반환
+                        if flat_result is None:
+                            flat_result = initial_state
+                        raise
 
                 # 모든 노드 실행 완료 표시
                 total_nodes = len(executed_nodes)
