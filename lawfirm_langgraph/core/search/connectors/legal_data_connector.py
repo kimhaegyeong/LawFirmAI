@@ -502,50 +502,57 @@ class LegalDataConnectorV2:
         return sanitized
 
     def search_statutes_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 법령 조문 (최적화됨)"""
+        """LIKE 키워드 검색: 법령 조문 (FTS5 대신 LIKE 검색 사용)"""
         try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}' (optimized: '{optimized_query}')")
+            if not query or not query.strip():
+                self.logger.warning(f"Empty query for statute search")
+                return []
+            
+            # LIKE 검색을 위한 키워드 추출
+            import re
+            words = re.findall(r'[가-힣]+|\d+', query)
+            if not words:
+                self.logger.warning(f"No valid keywords extracted from query: '{query}'")
                 return []
             
             # 검색 쿼리 로깅
-            self.logger.info(f"FTS statute search: original='{query}', optimized='{optimized_query}', safe='{safe_query}'")
+            self.logger.info(f"🔍 [LIKE SEARCH] 법령 검색: query='{query}', keywords={words[:5]}")
             
-            # 쿼리 최적화: 불완전한 단어 제거 (예: "손해배상에" -> "손해배상")
-            import re
-            words = safe_query.split()
-            cleaned_words = []
-            original_cleaned = safe_query
-            
-            for w in words:
-                # 조사나 불완전한 단어 끝 제거 (에, 에서, 에게 등)
-                w_clean = re.sub(r'에$|에서$|에게$|한테$|께$', '', w)
-                if w_clean and len(w_clean) >= 2:  # 최소 2자 이상
-                    cleaned_words.append(w_clean)
-                elif w_clean:  # 1자 단어도 추가 (예: "에")
-                    cleaned_words.append(w_clean)
-            
-            if cleaned_words:
-                new_safe_query = " ".join(cleaned_words)
-                if new_safe_query != safe_query:
-                    safe_query = new_safe_query
-                    self.logger.info(f"Query cleaned: '{original_cleaned}' -> '{safe_query}'")
-                    words = safe_query.split()  # words 업데이트
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "statute_articles_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # FTS5 검색 (BM25 랭킹)
-            cursor.execute("""
+            
+            # LIKE 검색 쿼리 생성 (모든 키워드가 포함된 문서 검색)
+            like_conditions = []
+            params = []
+            used_keywords = []  # match_count 계산용
+            for word in words[:10]:  # 최대 10개 키워드만 사용
+                if len(word) >= 2:  # 최소 2자 이상
+                    like_conditions.append("sa.text LIKE ?")
+                    params.append(f"%{word}%")
+                    used_keywords.append(word)  # 원본 키워드 저장
+            
+            if not like_conditions:
+                self.logger.warning(f"No valid LIKE conditions for query: '{query}'")
+                return []
+            
+            # LIKE 검색 (모든 키워드가 포함된 문서)
+            where_clause = " AND ".join(like_conditions)
+            
+            # match_count 계산: 실제 사용된 키워드 수만큼만 계산
+            # VALUES 절 대신 SUM(CASE WHEN ...) 방식 사용 (SQLite 호환성 향상)
+            match_count_subquery = ""
+            match_count_params = []
+            if used_keywords:
+                # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
+                case_whens = []
+                for kw in used_keywords:
+                    case_whens.append(f"CASE WHEN sa.text LIKE ? THEN 1 ELSE 0 END")
+                    match_count_params.append(f"%{kw}%")
+                match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
+            else:
+                match_count_subquery = "0 as match_count"
+            
+            cursor.execute(f"""
                 SELECT
                     sa.id,
                     sa.statute_id,
@@ -558,14 +565,13 @@ class LegalDataConnectorV2:
                     s.abbrv as statute_abbrv,
                     s.statute_type,
                     s.category,
-                    bm25(statute_articles_fts) as rank_score
-                FROM statute_articles_fts
-                JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                    {match_count_subquery}
+                FROM statute_articles sa
                 JOIN statutes s ON sa.statute_id = s.id
-                WHERE statute_articles_fts MATCH ?
-                ORDER BY rank_score
+                WHERE {where_clause}
+                ORDER BY match_count DESC, sa.id
                 LIMIT ?
-            """, (safe_query, limit))
+            """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
             for row in cursor.fetchall():
@@ -574,19 +580,16 @@ class LegalDataConnectorV2:
                 if not text_content:
                     self.logger.warning(f"Empty text content for statute article id={row['id']}, article_no={row['article_no']}")
                 
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                # LIKE 검색 결과의 relevance_score 계산 (키워드 가중치 낮게 설정)
+                match_count = row.get('match_count', 0) if 'match_count' in row else 0
+                # 키워드 가중치를 낮게 설정: 매칭된 키워드 수에 비례하되 낮은 점수
+                relevance_score = max(0.0, min(0.5, match_count * 0.05))  # 최대 0.5, 키워드당 0.05
                 
                 results.append({
                     "id": f"statute_article_{row['id']}",
-                    "type": "statute",
+                    "type": "statute_article",
                     "content": text_content,
-                    "text": text_content,  # text 필드도 추가 (호환성)
+                    "text": text_content,
                     "source": row['statute_name'],
                     "metadata": {
                         "statute_id": row['statute_id'],
@@ -603,12 +606,7 @@ class LegalDataConnectorV2:
                 })
 
             conn.close()
-            self.logger.info(f"FTS search found {len(results)} statute articles for query: '{query}' (safe_query: '{safe_query}')")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                results = self._fallback_statute_search(query, safe_query, words, limit)
+            self.logger.info(f"✅ [LIKE SEARCH] 법령 검색 완료: {len(results)}개 결과, query='{query}'")
             
             return results
 
@@ -1193,26 +1191,57 @@ class LegalDataConnectorV2:
             return []
 
     def search_cases_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 판례 (최적화됨)"""
+        """LIKE 키워드 검색: 판례 (FTS5 대신 LIKE 검색 사용)"""
         try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
+            if not query or not query.strip():
+                self.logger.warning(f"Empty query for case search")
                 return []
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "case_paragraphs_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
+            
+            # LIKE 검색을 위한 키워드 추출
+            import re
+            words = re.findall(r'[가-힣]+|\d+', query)
+            if not words:
+                self.logger.warning(f"No valid keywords extracted from query: '{query}'")
+                return []
+            
+            # 검색 쿼리 로깅
+            self.logger.info(f"🔍 [LIKE SEARCH] 판례 검색: query='{query}', keywords={words[:5]}")
+            
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
+            
+            # LIKE 검색 쿼리 생성
+            like_conditions = []
+            params = []
+            used_keywords = []  # match_count 계산용
+            for word in words[:10]:  # 최대 10개 키워드만 사용
+                if len(word) >= 2:  # 최소 2자 이상
+                    like_conditions.append("cp.text LIKE ?")
+                    params.append(f"%{word}%")
+                    used_keywords.append(word)  # 원본 키워드 저장
+            
+            if not like_conditions:
+                self.logger.warning(f"No valid LIKE conditions for query: '{query}'")
+                return []
+            
+            # LIKE 검색
+            where_clause = " AND ".join(like_conditions)
+            
+            # match_count 계산: 실제 사용된 키워드 수만큼만 계산
+            # VALUES 절 대신 SUM(CASE WHEN ...) 방식 사용 (SQLite 호환성 향상)
+            match_count_subquery = ""
+            match_count_params = []
+            if used_keywords:
+                # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
+                case_whens = []
+                for kw in used_keywords:
+                    case_whens.append(f"CASE WHEN cp.text LIKE ? THEN 1 ELSE 0 END")
+                    match_count_params.append(f"%{kw}%")
+                match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
+            else:
+                match_count_subquery = "0 as match_count"
+            
+            cursor.execute(f"""
                 SELECT
                     cp.id,
                     cp.case_id,
@@ -1223,29 +1252,25 @@ class LegalDataConnectorV2:
                     c.case_type,
                     c.casenames,
                     c.announce_date,
-                    bm25(case_paragraphs_fts) as rank_score
-                FROM case_paragraphs_fts
-                JOIN case_paragraphs cp ON case_paragraphs_fts.rowid = cp.id
+                    {match_count_subquery}
+                FROM case_paragraphs cp
                 JOIN cases c ON cp.case_id = c.id
-                WHERE case_paragraphs_fts MATCH ?
-                ORDER BY rank_score
+                WHERE {where_clause}
+                ORDER BY match_count DESC, cp.id
                 LIMIT ?
-            """, (safe_query, limit))
+            """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                # LIKE 검색 결과의 relevance_score 계산 (키워드 가중치 낮게 설정)
+                match_count = row.get('match_count', 0) if 'match_count' in row else 0
+                # 키워드 가중치를 낮게 설정: 매칭된 키워드 수에 비례하되 낮은 점수
+                relevance_score = max(0.0, min(0.5, match_count * 0.05))  # 최대 0.5, 키워드당 0.05
                 
                 results.append({
                     "id": f"case_para_{row['id']}",
-                    "type": "case",
+                    "type": "case_paragraph",
                     "content": text_content,
                     "text": text_content,
                     "source": f"{row['court']} {row['doc_id']}",
@@ -1263,48 +1288,66 @@ class LegalDataConnectorV2:
                 })
 
             conn.close()
-            self.logger.info(f"FTS search found {len(results)} case paragraphs for query: {query}")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                import re
-                words = safe_query.split() if safe_query else []
-                results = self._fallback_case_search(query, safe_query, words, limit)
+            self.logger.info(f"✅ [LIKE SEARCH] 판례 검색 완료: {len(results)}개 결과, query='{query}'")
             
             return results
 
         except Exception as e:
-            self.logger.error(f"Error in FTS case search: {e}", exc_info=True)
-            # 에러 발생 시에도 폴백 시도
-            try:
-                import re
-                words = safe_query.split() if safe_query else []
-                return self._fallback_case_search(query, safe_query, words, limit)
-            except Exception:
-                return []
+            self.logger.error(f"Error in LIKE case search: {e}", exc_info=True)
+            return []
 
     def search_decisions_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 심결례 (최적화됨)"""
+        """LIKE 키워드 검색: 결정례 (FTS5 대신 LIKE 검색 사용)"""
         try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
+            if not query or not query.strip():
+                self.logger.warning(f"Empty query for decision search")
                 return []
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "decision_paragraphs_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
+            
+            # LIKE 검색을 위한 키워드 추출
+            import re
+            words = re.findall(r'[가-힣]+|\d+', query)
+            if not words:
+                self.logger.warning(f"No valid keywords extracted from query: '{query}'")
+                return []
+            
+            # 검색 쿼리 로깅
+            self.logger.info(f"🔍 [LIKE SEARCH] 결정례 검색: query='{query}', keywords={words[:5]}")
+            
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
+            
+            # LIKE 검색 쿼리 생성
+            like_conditions = []
+            params = []
+            used_keywords = []  # match_count 계산용
+            for word in words[:10]:  # 최대 10개 키워드만 사용
+                if len(word) >= 2:  # 최소 2자 이상
+                    like_conditions.append("dp.text LIKE ?")
+                    params.append(f"%{word}%")
+                    used_keywords.append(word)  # 원본 키워드 저장
+            
+            if not like_conditions:
+                self.logger.warning(f"No valid LIKE conditions for query: '{query}'")
+                return []
+            
+            # LIKE 검색
+            where_clause = " AND ".join(like_conditions)
+            
+            # match_count 계산: 실제 사용된 키워드 수만큼만 계산
+            # VALUES 절 대신 SUM(CASE WHEN ...) 방식 사용 (SQLite 호환성 향상)
+            match_count_subquery = ""
+            match_count_params = []
+            if used_keywords:
+                # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
+                case_whens = []
+                for kw in used_keywords:
+                    case_whens.append(f"CASE WHEN dp.text LIKE ? THEN 1 ELSE 0 END")
+                    match_count_params.append(f"%{kw}%")
+                match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
+            else:
+                match_count_subquery = "0 as match_count"
+            
+            cursor.execute(f"""
                 SELECT
                     dp.id,
                     dp.decision_id,
@@ -1314,29 +1357,25 @@ class LegalDataConnectorV2:
                     d.doc_id,
                     d.decision_date,
                     d.result,
-                    bm25(decision_paragraphs_fts) as rank_score
-                FROM decision_paragraphs_fts
-                JOIN decision_paragraphs dp ON decision_paragraphs_fts.rowid = dp.id
+                    {match_count_subquery}
+                FROM decision_paragraphs dp
                 JOIN decisions d ON dp.decision_id = d.id
-                WHERE decision_paragraphs_fts MATCH ?
-                ORDER BY rank_score
+                WHERE {where_clause}
+                ORDER BY match_count DESC, dp.id
                 LIMIT ?
-            """, (safe_query, limit))
+            """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                # LIKE 검색 결과의 relevance_score 계산 (키워드 가중치 낮게 설정)
+                match_count = row.get('match_count', 0) if 'match_count' in row else 0
+                # 키워드 가중치를 낮게 설정: 매칭된 키워드 수에 비례하되 낮은 점수
+                relevance_score = max(0.0, min(0.5, match_count * 0.05))  # 최대 0.5, 키워드당 0.05
                 
                 results.append({
                     "id": f"decision_para_{row['id']}",
-                    "type": "decision",
+                    "type": "decision_paragraph",
                     "content": text_content,
                     "text": text_content,
                     "source": f"{row['org']} {row['doc_id']}",
@@ -1353,48 +1392,66 @@ class LegalDataConnectorV2:
                 })
 
             conn.close()
-            self.logger.info(f"FTS search found {len(results)} decision paragraphs for query: {query}")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                import re
-                words = safe_query.split() if safe_query else []
-                results = self._fallback_decision_search(query, safe_query, words, limit)
+            self.logger.info(f"✅ [LIKE SEARCH] 결정례 검색 완료: {len(results)}개 결과, query='{query}'")
             
             return results
 
         except Exception as e:
-            self.logger.error(f"Error in FTS decision search: {e}", exc_info=True)
-            # 에러 발생 시에도 폴백 시도
-            try:
-                import re
-                words = safe_query.split() if safe_query else []
-                return self._fallback_decision_search(query, safe_query, words, limit)
-            except Exception:
-                return []
+            self.logger.error(f"Error in LIKE decision search: {e}", exc_info=True)
+            return []
 
     def search_interpretations_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """FTS5 키워드 검색: 유권해석 (최적화됨)"""
+        """LIKE 키워드 검색: 해석례 (FTS5 대신 LIKE 검색 사용)"""
         try:
-            # FTS5 쿼리 최적화 및 안전화
-            optimized_query = self._optimize_fts5_query(query)
-            safe_query = self._sanitize_fts5_query(optimized_query)
-            if not safe_query:
-                self.logger.warning(f"Empty or invalid FTS5 query: '{query}'")
+            if not query or not query.strip():
+                self.logger.warning(f"Empty query for interpretation search")
                 return []
-
-            # 실행 계획 분석 (디버그 모드)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                plan_info = self._analyze_query_plan(query, "interpretation_paragraphs_fts")
-                if plan_info:
-                    self.logger.debug(f"Query plan analysis: {plan_info}")
-
+            
+            # LIKE 검색을 위한 키워드 추출
+            import re
+            words = re.findall(r'[가-힣]+|\d+', query)
+            if not words:
+                self.logger.warning(f"No valid keywords extracted from query: '{query}'")
+                return []
+            
+            # 검색 쿼리 로깅
+            self.logger.info(f"🔍 [LIKE SEARCH] 해석례 검색: query='{query}', keywords={words[:5]}")
+            
             conn = self._get_connection()
             cursor = conn.cursor()
-
-            # SQL injection 방지: 파라미터 바인딩 사용
-            cursor.execute("""
+            
+            # LIKE 검색 쿼리 생성
+            like_conditions = []
+            params = []
+            used_keywords = []  # match_count 계산용
+            for word in words[:10]:  # 최대 10개 키워드만 사용
+                if len(word) >= 2:  # 최소 2자 이상
+                    like_conditions.append("ip.text LIKE ?")
+                    params.append(f"%{word}%")
+                    used_keywords.append(word)  # 원본 키워드 저장
+            
+            if not like_conditions:
+                self.logger.warning(f"No valid LIKE conditions for query: '{query}'")
+                return []
+            
+            # LIKE 검색
+            where_clause = " AND ".join(like_conditions)
+            
+            # match_count 계산: 실제 사용된 키워드 수만큼만 계산
+            # VALUES 절 대신 SUM(CASE WHEN ...) 방식 사용 (SQLite 호환성 향상)
+            match_count_subquery = ""
+            match_count_params = []
+            if used_keywords:
+                # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
+                case_whens = []
+                for kw in used_keywords:
+                    case_whens.append(f"CASE WHEN ip.text LIKE ? THEN 1 ELSE 0 END")
+                    match_count_params.append(f"%{kw}%")
+                match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
+            else:
+                match_count_subquery = "0 as match_count"
+            
+            cursor.execute(f"""
                 SELECT
                     ip.id,
                     ip.interpretation_id,
@@ -1404,29 +1461,25 @@ class LegalDataConnectorV2:
                     i.doc_id,
                     i.title,
                     i.response_date,
-                    bm25(interpretation_paragraphs_fts) as rank_score
-                FROM interpretation_paragraphs_fts
-                JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
+                    {match_count_subquery}
+                FROM interpretation_paragraphs ip
                 JOIN interpretations i ON ip.interpretation_id = i.id
-                WHERE interpretation_paragraphs_fts MATCH ?
-                ORDER BY rank_score
+                WHERE {where_clause}
+                ORDER BY match_count DESC, ip.id
                 LIMIT ?
-            """, (safe_query, limit))
+            """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
             for row in cursor.fetchall():
                 text_content = row['text'] if row['text'] else ""
-                # relevance_score 계산 개선: rank_score가 없을 때 기본값 대신 계산된 점수 사용
-                if row['rank_score']:
-                    # BM25 rank_score는 음수이므로 절댓값을 사용하여 정규화
-                    relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                else:
-                    # rank_score가 없으면 문서 타입과 키워드 매칭에 기반한 점수 계산
-                    relevance_score = 0.3  # 기본값을 낮춤 (0.5 -> 0.3)
+                # LIKE 검색 결과의 relevance_score 계산 (키워드 가중치 낮게 설정)
+                match_count = row.get('match_count', 0) if 'match_count' in row else 0
+                # 키워드 가중치를 낮게 설정: 매칭된 키워드 수에 비례하되 낮은 점수
+                relevance_score = max(0.0, min(0.5, match_count * 0.05))  # 최대 0.5, 키워드당 0.05
                 
                 results.append({
                     "id": f"interpretation_para_{row['id']}",
-                    "type": "interpretation",
+                    "type": "interpretation_paragraph",
                     "content": text_content,
                     "text": text_content,
                     "source": f"{row['org']} {row['title']}",
@@ -1443,26 +1496,13 @@ class LegalDataConnectorV2:
                 })
 
             conn.close()
-            self.logger.info(f"FTS search found {len(results)} interpretation paragraphs for query: {query}")
-            
-            # 결과가 없으면 폴백 검색 시도
-            if len(results) == 0:
-                self.logger.warning(f"No FTS results for query: '{query}' -> safe_query: '{safe_query}'. Trying fallback strategies...")
-                import re
-                words = safe_query.split() if safe_query else []
-                results = self._fallback_interpretation_search(query, safe_query, words, limit)
+            self.logger.info(f"✅ [LIKE SEARCH] 해석례 검색 완료: {len(results)}개 결과, query='{query}'")
             
             return results
 
         except Exception as e:
-            self.logger.error(f"Error in FTS interpretation search: {e}", exc_info=True)
-            # 에러 발생 시에도 폴백 시도
-            try:
-                import re
-                words = safe_query.split() if safe_query else []
-                return self._fallback_interpretation_search(query, safe_query, words, limit)
-            except Exception:
-                return []
+            self.logger.error(f"Error in LIKE interpretation search: {e}", exc_info=True)
+            return []
 
     def search_documents(self, query: str, category: Optional[str] = None, limit: int = 10, force_fts: bool = False) -> List[Dict[str, Any]]:
         """
