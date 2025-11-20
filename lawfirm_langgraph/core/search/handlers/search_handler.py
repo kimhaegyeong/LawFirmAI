@@ -166,8 +166,8 @@ class SearchHandler:
             search_k = k if k is not None else WorkflowConstants.SEMANTIC_SEARCH_K
             
             # 검색 결과 수 증가: 다양성 보장을 위해 더 많은 후보 확보
-            # 원래 k의 2배로 검색하여 판례/결정례 포함 확률 증가
-            expanded_k = search_k * 2
+            # 원래 k의 1.5배로 검색하여 판례/결정례 포함 확률 증가 (개선: 2배 → 1.5배로 최적화)
+            expanded_k = int(search_k * 1.5)
             
             # 검색 품질 강화: similarity_threshold 조정
             # IndexIVFPQ 인덱스 사용 시 더 낮은 threshold 사용 (압축 인덱스이므로)
@@ -402,6 +402,86 @@ class SearchHandler:
         except Exception as e:
             self.logger.warning(f"Semantic search failed: {e}")
             return [], 0
+    
+    def semantic_search_batch(self, queries: List[str], k: Optional[int] = None, extracted_keywords: Optional[List[str]] = None) -> List[Tuple[List[Dict[str, Any]], int]]:
+        """여러 쿼리를 배치로 의미적 벡터 검색 (배치 검색 최적화)"""
+        if not self.semantic_search_engine:
+            self.logger.info("Semantic search not available")
+            return [([], 0) for _ in queries]
+        
+        if hasattr(self.semantic_search_engine, 'is_available'):
+            if not self.semantic_search_engine.is_available():
+                self.logger.warning("Semantic search engine is not available")
+                return [([], 0) for _ in queries]
+        
+        try:
+            search_k = k if k is not None else WorkflowConstants.SEMANTIC_SEARCH_K
+            expanded_k = int(search_k * 1.5)
+            
+            config_threshold = getattr(self.config, 'similarity_threshold', 0.3)
+            
+            # IndexIVFPQ 인덱스 사용 여부 확인
+            is_indexivfpq = False
+            if self.semantic_search_engine and hasattr(self.semantic_search_engine, 'index') and self.semantic_search_engine.index:
+                index_type = type(self.semantic_search_engine.index).__name__
+                if 'IndexIVFPQ' in index_type:
+                    is_indexivfpq = True
+            
+            similarity_threshold = max(0.15, config_threshold) if is_indexivfpq else config_threshold
+            
+            # 배치 검색 수행
+            if hasattr(self.semantic_search_engine, '_search_batch_with_threshold'):
+                batch_results = self.semantic_search_engine._search_batch_with_threshold(
+                    queries=queries,
+                    k=expanded_k,
+                    source_types=None,
+                    similarity_threshold=similarity_threshold,
+                    embedding_version_id=None
+                )
+                
+                # 결과 포맷팅 (semantic_search와 동일한 형식)
+                formatted_batch_results = []
+                for results in batch_results:
+                    formatted_results = []
+                    for result in results:
+                        text_content = (
+                            result.get('text', '') or
+                            result.get('content', '') or
+                            str(result.get('metadata', {}).get('content', '')) or
+                            str(result.get('metadata', {}).get('text', '')) or
+                            ''
+                        )
+                        if not text_content:
+                            continue
+                        
+                        metadata = result.get('metadata', {})
+                        if not isinstance(metadata, dict):
+                            metadata = result if isinstance(result, dict) else {}
+                        metadata['content'] = text_content
+                        metadata['text'] = text_content
+                        
+                        formatted_results.append({
+                            'id': f"semantic_{result.get('id', hash(text_content))}",
+                            'content': text_content,
+                            'text': text_content,
+                            'source': result.get('source', 'Vector Search'),
+                            'relevance_score': result.get('relevance_score', 0.8),
+                            'type': result.get('type', 'unknown'),
+                            'metadata': metadata,
+                            'search_type': 'semantic'
+                        })
+                    
+                    formatted_batch_results.append((formatted_results, len(formatted_results)))
+                
+                return formatted_batch_results
+            else:
+                # 폴백: 개별 검색
+                self.logger.warning("Batch search not available, falling back to individual searches")
+                return [self.semantic_search(q, k, extracted_keywords) for q in queries]
+        
+        except Exception as e:
+            self.logger.warning(f"Batch semantic search failed: {e}")
+            return [([], 0) for _ in queries]
 
     def keyword_search(
         self,

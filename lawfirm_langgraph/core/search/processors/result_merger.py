@@ -651,25 +651,32 @@ class ResultRanker:
             lambda_score=dynamic_lambda
         )
         
-        # Stage 5: Cross-Encoder 재랭킹 (개선: 조건 강화)
+        # Stage 5: Cross-Encoder 재랭킹 (개선: 조기 종료 조건 강화)
         if self.use_cross_encoder and self.cross_encoder and len(diverse_docs) > 0 and query:
-            # 개선: 품질이 매우 높으면 Cross-Encoder 스킵
-            if search_quality >= 0.90 and len(diverse_docs) <= 10:
+            # 개선: 조기 종료 조건 강화 (품질 >= 0.75 또는 문서 <= 10)
+            should_skip_cross_encoder = (
+                search_quality >= 0.75 or  # 품질이 중간 이상이면 스킵 (0.85 → 0.75로 완화)
+                len(diverse_docs) <= 10  # 문서 수가 적으면 스킵 (8 → 10으로 완화)
+            )
+            
+            if should_skip_cross_encoder:
                 self.logger.info(
-                    f"⏭️ [CROSS-ENCODER SKIP] High quality ({search_quality:.2f}) and low doc count ({len(diverse_docs)}), "
-                    f"skipping Cross-Encoder reranking"
+                    f"⏭️ [CROSS-ENCODER SKIP] Skipping Cross-Encoder reranking "
+                    f"(quality: {search_quality:.2f}, docs: {len(diverse_docs)})"
                 )
                 return diverse_docs
             
             try:
-                # 개선: Cross-Encoder 재랭킹 후보 수 동적 조정 (더 보수적으로)
-                # 문서 수에 따라 동적으로 조정: 최소 8개, 최대 20개, 또는 전체의 1/3
-                if len(diverse_docs) <= 8:
-                    rerank_candidates_count = len(diverse_docs)  # 문서 수가 적으면 모두 재랭킹
+                # 개선: Cross-Encoder 재랭킹 후보 수 감소 (10-20개 → 5-10개)
+                # 문서 수에 따라 동적으로 조정: 최소 5개, 최대 10개
+                if len(diverse_docs) <= 5:
+                    rerank_candidates_count = len(diverse_docs)  # 문서 수가 매우 적으면 모두 재랭킹
+                elif len(diverse_docs) <= 10:
+                    rerank_candidates_count = min(8, len(diverse_docs))  # 중간 크기면 8개
                 elif len(diverse_docs) <= 15:
-                    rerank_candidates_count = min(10, len(diverse_docs))  # 중간 크기면 10개 (15 → 10)
+                    rerank_candidates_count = min(10, len(diverse_docs))  # 큰 경우 10개
                 else:
-                    rerank_candidates_count = min(20, max(8, len(diverse_docs) // 3))  # 큰 경우 동적 조정 (30 → 20, //2 → //3)
+                    rerank_candidates_count = min(10, max(5, len(diverse_docs) // 4))  # 매우 큰 경우 동적 조정 (최대 10개)
                 
                 candidates_for_rerank = diverse_docs[:rerank_candidates_count]
                 
