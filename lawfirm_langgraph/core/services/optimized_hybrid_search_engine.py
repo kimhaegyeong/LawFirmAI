@@ -18,7 +18,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.services.exact_search_engine import ExactSearchEngine
+from core.search.engines.exact_search_engine_v2 import ExactSearchEngineV2
 from core.services.semantic_search_engine import SemanticSearchEngine
 from core.services.precedent_search_engine import PrecedentSearchEngine
 from core.services.answer_structure_enhancer import QuestionType
@@ -87,7 +87,7 @@ class OptimizedHybridSearchEngine:
         self.config = config or OptimizedSearchConfig()
         
         # 검색 엔진 초기화
-        self.exact_search = ExactSearchEngine()
+        self.exact_search = ExactSearchEngineV2()
         self.semantic_search = SemanticSearchEngine()
         self.precedent_search = PrecedentSearchEngine()
         

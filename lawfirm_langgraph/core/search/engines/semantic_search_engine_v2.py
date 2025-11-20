@@ -850,50 +850,19 @@ class SemanticSearchEngineV2:
         self.use_mlflow_index = use_mlflow_index
         self.mlflow_run_id = mlflow_run_id
 
-        # 모델명이 제공되지 않으면 MLflow에서 자동 감지
+        # 모델명이 제공되지 않은 경우, 환경 변수나 Config에서 먼저 확인 (MLflow 초기화 전)
         if model_name is None:
             import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name:
+                self.logger.info(f"환경 변수에서 모델 사용: {model_name}")
             
-            # MLflow 인덱스를 사용할 때는 MLflow의 모델 정보를 우선 사용
-            if self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
-                try:
-                    run_id = self.mlflow_run_id
-                    if not run_id:
-                        run_id = self.mlflow_manager.get_production_run()
-                    
-                    if run_id:
-                        import mlflow
-                        version_info = None
-                        if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
-                            version_info = self.mlflow_manager.load_version_info_from_local(run_id)
-                        
-                        if version_info is None:
-                            version_info = mlflow.artifacts.load_dict(f"runs:/{run_id}/version_info.json")
-                        
-                        embedding_config = version_info.get('embedding_config', {})
-                        model_name = embedding_config.get('model')
-                        if model_name:
-                            self.logger.info(f"✅ MLflow에서 모델 감지: {model_name} (run_id: {run_id})")
-                            # MLflow 모델 정보에서 차원 정보도 확인
-                            mlflow_dimension = embedding_config.get('dimension')
-                            if mlflow_dimension:
-                                self.logger.info(f"   MLflow 인덱스 차원: {mlflow_dimension}")
-                except Exception as e:
-                    self.logger.warning(f"⚠️  MLflow에서 모델 정보를 가져올 수 없습니다: {e}")
-                    self.logger.info("   환경 변수 또는 Config 기본값을 사용합니다.")
-            
-            # MLflow에서 모델 정보를 가져오지 못한 경우 환경 변수 확인
-            if model_name is None:
-                model_name = os.getenv("EMBEDDING_MODEL")
-                if model_name:
-                    self.logger.info(f"환경 변수에서 모델 사용: {model_name}")
-            
-            # 환경 변수도 없으면 Config 기본값 사용
+            # 환경 변수도 없으면 Config 기본값 사용 (임시, MLflow에서 덮어쓸 수 있음)
             if model_name is None:
                 from ..utils.config import Config
                 config = Config()
                 model_name = config.embedding_model
-                self.logger.warning(f"⚠️  MLflow 및 환경 변수에서 모델을 찾을 수 없어 Config 기본값 사용: {model_name}")
+                self.logger.debug(f"Config 기본값 사용 (임시): {model_name}")
 
         # FAISS 인덱스 관련 속성
         # 기본 경로: data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss
@@ -960,13 +929,49 @@ class SemanticSearchEngineV2:
                 import sys
                 import os
                 # scripts/rag 경로 추가 (프로젝트 루트 기준)
-                # 여러 경로 시도
-                possible_paths = [
-                    Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rag",
-                    Path(__file__).parent.parent.parent.parent / "scripts" / "rag",
-                    Path.cwd() / "scripts" / "rag",
-                    Path.cwd().parent / "scripts" / "rag" if Path.cwd().name != "LawFirmAI" else Path.cwd() / "scripts" / "rag"
-                ]
+                # 프로젝트 루트 찾기: lawfirm_langgraph/core/search/engines/ -> LawFirmAI/
+                current_file = Path(__file__).resolve()
+                # 여러 방법으로 프로젝트 루트 찾기
+                project_root_candidates = []
+                
+                # 방법 1: lawfirm_langgraph 디렉토리의 부모 찾기
+                for parent in [current_file] + list(current_file.parents):
+                    if parent.name == "lawfirm_langgraph":
+                        project_root_candidates.append(parent.parent)
+                        break
+                
+                # 방법 2: scripts 디렉토리의 부모 찾기
+                for parent in [current_file] + list(current_file.parents):
+                    if parent.name == "scripts" and (parent / "rag" / "mlflow_manager.py").exists():
+                        project_root_candidates.append(parent.parent)
+                        break
+                
+                # 방법 3: 상대 경로로 계산 (lawfirm_langgraph/core/search/engines -> LawFirmAI)
+                project_root_candidates.append(current_file.parent.parent.parent.parent.parent)
+                
+                # 방법 4: 현재 작업 디렉토리 기준
+                cwd = Path.cwd()
+                if (cwd / "scripts" / "rag" / "mlflow_manager.py").exists():
+                    project_root_candidates.append(cwd)
+                if (cwd.parent / "scripts" / "rag" / "mlflow_manager.py").exists():
+                    project_root_candidates.append(cwd.parent)
+                
+                # 가능한 경로 생성
+                possible_paths = []
+                for root in project_root_candidates:
+                    scripts_rag_path = root / "scripts" / "rag"
+                    if scripts_rag_path.exists() and (scripts_rag_path / "mlflow_manager.py").exists():
+                        possible_paths.append(scripts_rag_path)
+                
+                # 중복 제거 (순서 유지)
+                seen = set()
+                unique_paths = []
+                for path in possible_paths:
+                    path_str = str(path)
+                    if path_str not in seen:
+                        seen.add(path_str)
+                        unique_paths.append(path)
+                possible_paths = unique_paths
                 
                 mlflow_manager_imported = False
                 for scripts_rag_path in possible_paths:
@@ -976,9 +981,10 @@ class SemanticSearchEngineV2:
                         try:
                             from mlflow_manager import MLflowFAISSManager
                             mlflow_manager_imported = True
-                            self.logger.debug(f"Successfully imported MLflowFAISSManager from {scripts_rag_path}")
+                            self.logger.info(f"✅ Successfully imported MLflowFAISSManager from {scripts_rag_path}")
                             break
-                        except ImportError:
+                        except ImportError as import_err:
+                            self.logger.debug(f"Failed to import from {scripts_rag_path}: {import_err}")
                             continue
                 
                 if not mlflow_manager_imported:
@@ -998,9 +1004,9 @@ class SemanticSearchEngineV2:
                 self.logger.warning(f"Failed to initialize MLflow manager: {e}")
                 self.use_mlflow_index = False
         
-        # MLflow manager 초기화 후 모델 정보 확인 (MLflow 인덱스 사용 시)
-        # MLflow 인덱스를 사용할 때는 항상 MLflow의 모델 정보를 우선 사용
-        if self.use_mlflow_index and hasattr(self, 'mlflow_manager') and self.mlflow_manager:
+        # ✅ 방안 1: MLflow manager 초기화 후 모델 정보 확인 (MLflow 인덱스 사용 시)
+        # MLflow 인덱스를 사용할 때는 항상 MLflow의 모델 정보를 최우선 사용
+        if self.use_mlflow_index and self.mlflow_manager:
             try:
                 run_id = self.mlflow_run_id
                 if not run_id:
@@ -1009,7 +1015,7 @@ class SemanticSearchEngineV2:
                 if run_id:
                     import mlflow
                     version_info = None
-                    if self.mlflow_manager and hasattr(self.mlflow_manager, 'load_version_info_from_local'):
+                    if hasattr(self.mlflow_manager, 'load_version_info_from_local'):
                         self.logger.debug(f"로컬 파일 시스템에서 version_info.json 로드 시도: run_id={run_id}")
                         version_info = self.mlflow_manager.load_version_info_from_local(run_id)
                         if version_info:
@@ -1022,22 +1028,38 @@ class SemanticSearchEngineV2:
                     embedding_config = version_info.get('embedding_config', {})
                     mlflow_model_name = embedding_config.get('model')
                     if mlflow_model_name:
-                        # MLflow에서 모델 정보를 찾았으면 무조건 사용 (기존 model_name 무시)
-                        model_name = mlflow_model_name
+                        # MLflow에서 모델 정보를 찾았으면 무조건 사용 (기존 model_name 덮어쓰기)
+                        model_name = mlflow_model_name.strip().strip('"').strip("'")
                         self.logger.info(f"✅ MLflow에서 모델 감지: {model_name} (run_id: {run_id})")
                         # MLflow 모델 정보에서 차원 정보도 확인
                         mlflow_dimension = embedding_config.get('dimension')
                         if mlflow_dimension:
                             self.logger.info(f"   MLflow 인덱스 차원: {mlflow_dimension}")
-                        # 모델 이름 정리
-                        if model_name:
-                            model_name = model_name.strip().strip('"').strip("'")
                     else:
                         self.logger.warning(f"⚠️  MLflow version_info에 모델 정보가 없습니다. embedding_config: {embedding_config}")
+                        if model_name is None:
+                            self.logger.warning("   환경 변수 또는 Config 기본값을 사용합니다.")
+                else:
+                    self.logger.warning("⚠️  MLflow run_id를 찾을 수 없습니다.")
+                    if model_name is None:
+                        self.logger.warning("   환경 변수 또는 Config 기본값을 사용합니다.")
             except Exception as e:
                 self.logger.warning(f"⚠️  MLflow에서 모델 정보를 가져올 수 없습니다: {e}")
                 if model_name is None:
-                    self.logger.info("   환경 변수 또는 Config 기본값을 사용합니다.")
+                    self.logger.warning("   환경 변수 또는 Config 기본값을 사용합니다.")
+        
+        # MLflow에서 모델을 가져오지 못한 경우 최종 확인
+        if model_name is None:
+            import os
+            model_name = os.getenv("EMBEDDING_MODEL")
+            if model_name:
+                self.logger.info(f"환경 변수에서 모델 사용: {model_name}")
+            
+            if model_name is None:
+                from ..utils.config import Config
+                config = Config()
+                model_name = config.embedding_model
+                self.logger.warning(f"⚠️  MLflow 및 환경 변수에서 모델을 찾을 수 없어 Config 기본값 사용: {model_name}")
         
         # 성능 모니터링 초기화
         self.performance_monitor = None
@@ -1071,13 +1093,36 @@ class SemanticSearchEngineV2:
             if self.use_mlflow_index:
                 # MLflow 벡터 스토어 사용 (기본값)
                 if not self.mlflow_manager:
-                    raise RuntimeError("MLflow manager is not initialized. Check MLflow configuration.")
-                try:
-                    self._load_mlflow_index()
-                    self.logger.info("✅ MLflow 벡터 스토어 로드 성공")
-                except RuntimeError as e:
-                    self.logger.error(f"Failed to load MLflow index: {e}", exc_info=True)
-                    raise
+                    self.logger.warning("⚠️ MLflow manager가 초기화되지 않았습니다. DB 기반 인덱스로 폴백합니다.")
+                    try:
+                        self._load_faiss_index()
+                        if self.index is not None:
+                            self.logger.info("✅ DB 기반 인덱스 초기화 성공 (MLflow 매니저 없음으로 인한 폴백)")
+                            self.use_mlflow_index = False
+                        else:
+                            self.logger.warning("⚠️ DB 기반 인덱스도 로드 실패. 인덱스는 나중에 빌드될 수 있습니다.")
+                    except Exception as fallback_error:
+                        self.logger.warning(f"⚠️ DB 기반 인덱스 폴백 실패: {fallback_error}. 인덱스는 나중에 빌드될 수 있습니다.")
+                else:
+                    try:
+                        self._load_mlflow_index()
+                        self.logger.info("✅ MLflow 벡터 스토어 로드 성공")
+                    except (RuntimeError, ImportError, Exception) as e:
+                        self.logger.warning(f"⚠️ MLflow 인덱스 초기화 실패: {e}")
+                        self.logger.info("🔄 DB 기반 인덱스로 폴백 시도 중...")
+                        # MLflow 인덱스 사용 불가 시 DB 기반 인덱스로 폴백
+                        try:
+                            self._load_faiss_index()
+                            if self.index is not None:
+                                self.logger.info("✅ DB 기반 인덱스 초기화 성공 (MLflow 폴백)")
+                                # MLflow 사용 비활성화
+                                self.use_mlflow_index = False
+                            else:
+                                self.logger.warning("⚠️ DB 기반 인덱스도 로드 실패. 인덱스는 나중에 빌드될 수 있습니다.")
+                        except Exception as fallback_error:
+                            self.logger.warning(f"⚠️ DB 기반 인덱스 폴백 실패: {fallback_error}. 인덱스는 나중에 빌드될 수 있습니다.")
+                            # 초기화 단계에서는 에러를 발생시키지 않고 경고만 출력
+                            # 인덱스는 나중에 검색 시 자동으로 빌드됨
             else:
                 # MLflow가 비활성화된 경우 (인덱스 빌드 모드 등)
                 # 인덱스는 나중에 빌드되거나 로드될 수 있으므로 에러를 발생시키지 않음
@@ -1124,7 +1169,8 @@ class SemanticSearchEngineV2:
                 if retry_count < max_retries:
                     self.logger.info(f"Retrying embedder initialization (thread config issue)...")
                     import time
-                    time.sleep(0.5)
+                    wait_time = min(0.1 * (2 ** retry_count), 0.5)
+                    time.sleep(wait_time)
                     return self._initialize_embedder(model_name, retry_count + 1, max_retries)
                 else:
                     self.logger.error(f"Failed to initialize embedder after {max_retries + 1} attempts (thread config issue)")
@@ -1136,7 +1182,8 @@ class SemanticSearchEngineV2:
                 if retry_count < max_retries:
                     self.logger.info(f"Retrying embedder initialization...")
                     import time
-                    time.sleep(0.5)
+                    wait_time = min(0.1 * (2 ** retry_count), 0.5)
+                    time.sleep(wait_time)
                     return self._initialize_embedder(model_name, retry_count + 1, max_retries)
                 else:
                     self.logger.error(f"Failed to initialize embedder after {max_retries + 1} attempts")
@@ -1150,7 +1197,8 @@ class SemanticSearchEngineV2:
             if retry_count < max_retries:
                 self.logger.info(f"Retrying embedder initialization...")
                 import time
-                time.sleep(0.5)  # 짧은 대기 후 재시도
+                wait_time = min(0.1 * (2 ** retry_count), 0.5)
+                time.sleep(wait_time)
                 return self._initialize_embedder(model_name, retry_count + 1, max_retries)
             else:
                 self.logger.error(f"Failed to initialize embedder after {max_retries + 1} attempts")
@@ -1986,14 +2034,48 @@ class SemanticSearchEngineV2:
             if self.use_mlflow_index and self.mlflow_manager:
                 try:
                     self._load_mlflow_index()
-                except RuntimeError as e:
-                    self.logger.error(f"Failed to load MLflow index during search: {e}")
-                    raise
+                    self.logger.info("✅ MLflow 인덱스 로드 성공")
+                except (RuntimeError, ImportError, Exception) as e:
+                    self.logger.warning(f"⚠️ MLflow 인덱스 로드 실패: {e}")
+                    self.logger.info("🔄 DB 기반 인덱스로 폴백 시도 중...")
+                    # MLflow 인덱스 사용 불가 시 DB 기반 인덱스로 폴백
+                    try:
+                        self._load_faiss_index()
+                        if self.index is not None:
+                            self.logger.info("✅ DB 기반 인덱스 로드 성공 (MLflow 폴백)")
+                            # MLflow 사용 비활성화하여 다음 검색에서도 DB 기반 인덱스 사용
+                            self.use_mlflow_index = False
+                        else:
+                            raise RuntimeError("DB 기반 인덱스도 로드 실패")
+                    except Exception as fallback_error:
+                        self.logger.error(f"❌ DB 기반 인덱스 폴백도 실패: {fallback_error}")
+                        raise RuntimeError(
+                            f"MLflow 인덱스 로드 실패 ({e}) 및 DB 기반 인덱스 폴백 실패 ({fallback_error}). "
+                            "인덱스 파일을 확인하거나 인덱스를 재생성하세요."
+                        )
+            elif self.use_mlflow_index and not self.mlflow_manager:
+                # MLflow가 활성화되어 있지만 매니저가 없는 경우 DB 기반 인덱스로 폴백
+                self.logger.warning("⚠️ MLflow 인덱스가 활성화되어 있지만 MLflow 매니저가 없습니다. DB 기반 인덱스로 폴백합니다.")
+                try:
+                    self._load_faiss_index()
+                    if self.index is not None:
+                        self.logger.info("✅ DB 기반 인덱스 로드 성공 (MLflow 매니저 없음으로 인한 폴백)")
+                        self.use_mlflow_index = False
+                    else:
+                        raise RuntimeError("DB 기반 인덱스 로드 실패")
+                except Exception as fallback_error:
+                    self.logger.error(f"❌ DB 기반 인덱스 폴백 실패: {fallback_error}")
+                    raise RuntimeError(
+                        f"MLflow 매니저가 없고 DB 기반 인덱스 로드도 실패했습니다 ({fallback_error}). "
+                        "인덱스 파일을 확인하거나 인덱스를 재생성하세요."
+                    )
             else:
-                raise RuntimeError(
-                    "MLflow index is required but not available. "
-                    "Please set USE_MLFLOW_INDEX=true (default)"
-                )
+                # MLflow가 비활성화된 경우 DB 기반 인덱스 사용
+                self._load_faiss_index()
+                if self.index is None:
+                    raise RuntimeError(
+                        "DB 기반 인덱스 로드 실패. 인덱스 파일을 확인하거나 인덱스를 재생성하세요."
+                    )
         
         # Embedder 초기화 상태 확인 및 필요시 재초기화
         if not self._ensure_embedder_initialized():
@@ -2274,8 +2356,23 @@ class SemanticSearchEngineV2:
             deduplicate_by_group: 그룹별 중복 제거 활성화
             embedding_version_id: 임베딩 버전 ID 필터
         """
+        # 빈 쿼리 검증 추가
+        if not query or not query.strip():
+            self.logger.warning("⚠️ [SEARCH] 빈 쿼리로 검색을 수행할 수 없습니다. 빈 결과를 반환합니다.")
+            return []
+        
         try:
             normalized_query = self._normalize_query(query)
+            
+            # 벡터 인덱스 검색 질의 로깅
+            search_query_msg = (
+                f"🔍 [VECTOR INDEX SEARCH] 질의: '{query}' "
+                f"(normalized='{normalized_query}'), "
+                f"k={k}, threshold={similarity_threshold:.3f}, "
+                f"version_id={embedding_version_id}, source_types={source_types}"
+            )
+            print(search_query_msg, flush=True, file=sys.stdout)
+            self.logger.info(search_query_msg)
             self.logger.info(
                 f"🔍 [SEARCH WITH THRESHOLD] query: original='{query[:80]}...', "
                 f"normalized='{normalized_query[:80]}...', "
@@ -2362,11 +2459,14 @@ class SemanticSearchEngineV2:
                 source_types_relaxed = False
                 original_source_types = source_types.copy() if source_types else None
                 
-                # 필터링 전 타입 분포 샘플링 (처음 100개만 확인)
-                if source_types and len(indices[0]) > 100:
-                    sample_size = min(100, len(indices[0]))
+                # 필터링 전 타입 분포 샘플링 (성능 최적화: 샘플 크기 감소 및 배치 처리)
+                if source_types and len(indices[0]) > 50:  # 100 → 50으로 감소
+                    sample_size = min(50, len(indices[0]))  # 샘플 크기 감소
                     sample_types = {}
                     sample_checked = 0
+                    chunk_ids_to_check = []
+                    
+                    # 먼저 메타데이터 캐시에서 확인
                     for i, (distance, idx) in enumerate(zip(distances[0][:sample_size], indices[0][:sample_size])):
                         if idx < 0 or idx >= len(self._chunk_ids):
                             continue
@@ -2375,23 +2475,32 @@ class SemanticSearchEngineV2:
                         chunk_meta = self._chunk_metadata.get(chunk_id, {})
                         sample_type = chunk_meta.get('source_type')
                         
-                        if not sample_type:
-                            try:
-                                conn_temp = self._get_connection()
-                                cursor_temp = conn_temp.execute(
-                                    "SELECT source_type FROM text_chunks WHERE id = ?",
-                                    (chunk_id,)
-                                )
-                                row_temp = cursor_temp.fetchone()
-                                conn_temp.close()
-                                if row_temp:
-                                    sample_type = row_temp['source_type']
-                            except Exception:
-                                pass
-                        
                         if sample_type:
                             sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
-                        sample_checked += 1
+                            sample_checked += 1
+                        else:
+                            # DB 조회가 필요한 chunk_id 수집
+                            chunk_ids_to_check.append(chunk_id)
+                    
+                    # 배치로 DB 조회 (성능 최적화)
+                    if chunk_ids_to_check:
+                        try:
+                            conn_temp = self._get_connection()
+                            placeholders = ','.join(['?'] * len(chunk_ids_to_check))
+                            cursor_temp = conn_temp.execute(
+                                f"SELECT id, source_type FROM text_chunks WHERE id IN ({placeholders})",
+                                chunk_ids_to_check
+                            )
+                            rows = cursor_temp.fetchall()
+                            conn_temp.close()
+                            
+                            for row in rows:
+                                if row and row.get('source_type'):
+                                    sample_type = row['source_type']
+                                    sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
+                                    sample_checked += 1
+                        except Exception as e:
+                            self.logger.debug(f"Batch source_type lookup failed: {e}")
                     
                     # 샘플에서 요청한 타입이 있는지 확인
                     requested_types_found = sum(1 for st in source_types if sample_types.get(st, 0) > 0)
@@ -2404,13 +2513,18 @@ class SemanticSearchEngineV2:
                         source_types_relaxed = True
                     elif requested_types_found > 0:
                         requested_ratio = sum(sample_types.get(st, 0) for st in source_types) / sample_checked
-                        if requested_ratio < 0.05:  # 5% 미만이면 필터 완화
+                        # 우선순위 2 개선: 필터 완화 임계값 완화 (5% → 10%)
+                        if requested_ratio < 0.10:  # 10% 미만이면 필터 완화
                             self.logger.warning(
                                 f"⚠️  Requested source_types {source_types} are very rare in sample ({requested_ratio:.1%}). "
                                 f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
                             )
                             source_types = None
                             source_types_relaxed = True
+                
+                # 배치 조회를 위한 chunk_id 수집
+                chunk_ids_to_fetch = []
+                chunk_id_to_index = {}
                 
                 for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
                     if idx < 0 or idx >= len(self._chunk_ids):
@@ -2419,7 +2533,52 @@ class SemanticSearchEngineV2:
                     
                     # chunk_id 추출
                     if self.use_mlflow_index:
-                        # MLflow 인덱스 사용 시: self._chunk_ids에서 조회
+                        if hasattr(self, '_chunk_ids') and self._chunk_ids and idx < len(self._chunk_ids):
+                            chunk_id = self._chunk_ids[idx]
+                        else:
+                            chunk_id = idx
+                    else:
+                        chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
+                    
+                    chunk_id_to_index[chunk_id] = i
+                    
+                    # 메타데이터가 없거나 필요한 필드가 없으면 배치 조회 대상에 추가
+                    if chunk_id not in self._chunk_metadata:
+                        chunk_ids_to_fetch.append(chunk_id)
+                    elif source_types:
+                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                        if not chunk_meta.get('source_type') or 'embedding_version_id' not in chunk_meta:
+                            chunk_ids_to_fetch.append(chunk_id)
+                
+                # 배치로 메타데이터 조회
+                if chunk_ids_to_fetch:
+                    try:
+                        conn_batch = self._get_connection()
+                        batch_metadata = self._batch_load_chunk_metadata(conn_batch, chunk_ids_to_fetch)
+                        conn_batch.close()
+                        
+                        # 조회된 메타데이터를 캐시에 저장
+                        for chunk_id, metadata in batch_metadata.items():
+                            if chunk_id not in self._chunk_metadata:
+                                self._chunk_metadata[chunk_id] = {}
+                            self._chunk_metadata[chunk_id].update(metadata)
+                            
+                            # embedding_version_id가 None이면 활성 버전 사용
+                            if self._chunk_metadata[chunk_id].get('embedding_version_id') is None:
+                                active_version_id = self._get_active_embedding_version_id()
+                                if active_version_id:
+                                    self._chunk_metadata[chunk_id]['embedding_version_id'] = active_version_id
+                    except Exception as e:
+                        self.logger.debug(f"Batch metadata fetch failed: {e}")
+                
+                # 이제 루프를 다시 돌면서 처리
+                for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
+                    if idx < 0 or idx >= len(self._chunk_ids):
+                        skipped_count += 1
+                        continue
+                    
+                    # chunk_id 추출
+                    if self.use_mlflow_index:
                         if hasattr(self, '_chunk_ids') and self._chunk_ids and idx < len(self._chunk_ids):
                             chunk_id = self._chunk_ids[idx]
                         else:
@@ -2429,80 +2588,27 @@ class SemanticSearchEngineV2:
                     
                     # chunk_id가 데이터베이스에 존재하는지 확인 (재임베딩 후 버전 불일치 방지)
                     if chunk_id not in self._chunk_metadata:
-                        # DB에서 직접 확인
-                        try:
-                            conn_temp = self._get_connection()
-                            cursor_temp = conn_temp.execute(
-                                "SELECT id FROM text_chunks WHERE id = ?",
-                                (chunk_id,)
-                            )
-                            row_temp = cursor_temp.fetchone()
-                            conn_temp.close()
-                            
-                            if not row_temp:
-                                # chunk_id가 데이터베이스에 존재하지 않음 (FAISS 인덱스가 다른 버전으로 빌드됨)
-                                filtered_by_not_found += 1
-                                if filtered_by_not_found <= 5:  # 처음 5개만 로깅
-                                    self.logger.warning(f"⚠️  chunk_id={chunk_id} not found in database (FAISS index may be built with different version)")
-                                continue
-                        except Exception as e:
-                            self.logger.debug(f"Failed to verify chunk_id={chunk_id} existence: {e}")
-                            # 검증 실패 시에도 계속 진행 (성능을 위해)
+                        filtered_by_not_found += 1
+                        if filtered_by_not_found <= 5:
+                            self.logger.warning(f"⚠️  chunk_id={chunk_id} not found in database (FAISS index may be built with different version)")
+                        continue
                     
                     # source_types 필터링 (FAISS 인덱스 사용 시 사전 필터링)
                     if source_types:
-                        # chunk_id의 source_type을 먼저 확인
                         chunk_meta = self._chunk_metadata.get(chunk_id, {})
                         chunk_source_type = chunk_meta.get('source_type')
-                        
-                        # source_type이 없으면 DB에서 조회 (embedding_version_id도 함께 조회)
-                        if not chunk_source_type or chunk_id not in self._chunk_metadata or 'embedding_version_id' not in self._chunk_metadata.get(chunk_id, {}):
-                            try:
-                                conn_temp = self._get_connection()
-                                cursor_temp = conn_temp.execute(
-                                    "SELECT source_type, embedding_version_id FROM text_chunks WHERE id = ?",
-                                    (chunk_id,)
-                                )
-                                row_temp = cursor_temp.fetchone()
-                                if row_temp:
-                                    if not chunk_source_type:
-                                        chunk_source_type = row_temp['source_type']
-                                    # 캐시에 저장
-                                    if chunk_id not in self._chunk_metadata:
-                                        self._chunk_metadata[chunk_id] = {}
-                                    self._chunk_metadata[chunk_id]['source_type'] = chunk_source_type
-                                    
-                                    # embedding_version_id 처리 (NULL인 경우 활성 버전 사용)
-                                    version_id = row_temp.get('embedding_version_id')
-                                    if version_id is None:
-                                        active_version_id = self._get_active_embedding_version_id()
-                                        if active_version_id:
-                                            version_id = active_version_id
-                                            self.logger.debug(f"Using active version {active_version_id} for chunk_id={chunk_id} (text_chunks.embedding_version_id is NULL)")
-                                    self._chunk_metadata[chunk_id]['embedding_version_id'] = version_id
-                                conn_temp.close()
-                            except Exception as e:
-                                self.logger.debug(f"Failed to get metadata for chunk_id={chunk_id}: {e}")
-                                # 예외 발생 시에도 활성 버전 시도
-                                try:
-                                    active_version_id = self._get_active_embedding_version_id()
-                                    if active_version_id:
-                                        if chunk_id not in self._chunk_metadata:
-                                            self._chunk_metadata[chunk_id] = {}
-                                        self._chunk_metadata[chunk_id]['embedding_version_id'] = active_version_id
-                                except Exception:
-                                    pass
                         
                         # source_type이 source_types에 없으면 건너뛰기
                         # 단, 필터링 비율이 높으면 필터 완화
                         if chunk_source_type and chunk_source_type not in source_types:
                             filtered_by_source += 1
                             
-                            # 필터링 중간에 비율 확인 및 필터 완화 (처리한 항목의 20% 이상 필터링 시 - 개선)
+                            # 우선순위 2 개선: 필터링 중간에 비율 확인 및 필터 완화 (더 적극적으로 완화)
                             processed_count = i + 1 - skipped_count - filtered_by_not_found
-                            if processed_count > 20 and not source_types_relaxed:
+                            if processed_count > 10 and not source_types_relaxed:  # 20 → 10으로 낮춤 (더 빠른 완화)
                                 current_filter_ratio = filtered_by_source / processed_count
-                                if current_filter_ratio >= 0.7:  # 70% 이상 필터링 (80%에서 완화)
+                                # 필터링 비율 임계값 완화: 70% → 50%
+                                if current_filter_ratio >= 0.5:  # 50% 이상 필터링 시 완화
                                     self.logger.warning(
                                         f"⚠️  High source_type filtering rate detected: {current_filter_ratio:.1%} "
                                         f"({filtered_by_source}/{processed_count}). "
@@ -2512,19 +2618,24 @@ class SemanticSearchEngineV2:
                                     source_types = None
                                     source_types_relaxed = True
                                     # 필터가 완화되었으므로 이 chunk는 통과
-                                elif current_filter_ratio >= 0.5 and len(similarities) == 0:
-                                    # 50% 이상 필터링되고 아직 결과가 없으면 경고
+                                elif current_filter_ratio >= 0.3 and len(similarities) == 0:
+                                    # 30% 이상 필터링되고 아직 결과가 없으면 경고 (50% → 30%로 완화)
                                     self.logger.warning(
                                         f"⚠️  Moderate source_type filtering rate: {current_filter_ratio:.1%} "
                                         f"({filtered_by_source}/{processed_count}). "
                                         f"Requested types: {original_source_types}, current chunk type: {chunk_source_type}."
                                     )
+                                    # 결과가 없으면 필터 완화
+                                    if len(similarities) == 0:
+                                        self.logger.warning("   No results yet, relaxing source_type filter.")
+                                        source_types = None
+                                        source_types_relaxed = True
                             
                             # 필터가 완화되지 않았으면 건너뛰기
                             if source_types:
                                 continue
                     
-                    # embedding_version_id 필터링 (IndexIVFPQ 인덱스 사용 시 선택적 적용)
+                    # 우선순위 2 개선: embedding_version_id 필터링 (더 완화된 로직)
                     # is_indexivfpq는 이미 위에서 정의됨 (라인 1944)
                     if embedding_version_id is not None:
                         chunk_version_id = self._chunk_metadata.get(chunk_id, {}).get('embedding_version_id')
@@ -2557,7 +2668,7 @@ class SemanticSearchEngineV2:
                                 if active_version_id:
                                     chunk_version_id = active_version_id
                         
-                        # 버전 필터링 (완화된 로직: 활성 버전이 요청 버전과 일치하면 허용)
+                        # 우선순위 2 개선: 버전 필터링 완화 (버전 불일치 시에도 관련성 높은 문서는 포함)
                         if chunk_version_id != embedding_version_id:
                             # 활성 버전 확인
                             active_version_id = self._get_active_embedding_version_id()
@@ -2590,10 +2701,18 @@ class SemanticSearchEngineV2:
                                 # IndexIVFPQ 인덱스 사용 시: 버전이 매칭되지 않아도 허용
                                 self.logger.debug(f"IndexIVFPQ: chunk_id={chunk_id} version_id={chunk_version_id} != {embedding_version_id}, allowing (filtering relaxed)")
                             else:
-                                # 일반 인덱스는 엄격한 필터링
-                                filtered_by_version += 1
-                                self.logger.debug(f"Filtered out chunk_id={chunk_id}: version_id={chunk_version_id} != {embedding_version_id}")
-                                continue
+                                # 우선순위 2 개선: 일반 인덱스도 결과가 부족하면 버전 필터링 완화
+                                # 결과가 없거나 매우 적으면 버전 불일치 문서도 포함
+                                if len(similarities) < 3:  # 결과가 3개 미만이면 버전 필터링 완화
+                                    self.logger.debug(
+                                        f"⚠️ [VERSION FILTER] Results insufficient ({len(similarities)}), "
+                                        f"allowing chunk_id={chunk_id} with version_id={chunk_version_id} != {embedding_version_id}"
+                                    )
+                                else:
+                                    # 결과가 충분하면 엄격한 필터링
+                                    filtered_by_version += 1
+                                    self.logger.debug(f"Filtered out chunk_id={chunk_id}: version_id={chunk_version_id} != {embedding_version_id}")
+                                    continue
                     
                     similarity = self._calculate_similarity_from_distance(distance)
 
@@ -3086,13 +3205,15 @@ class SemanticSearchEngineV2:
                             if not source_meta.get("statute_name") or not source_meta.get("article_no"):
                                 needs_reload = True
                         elif source_type == "case_paragraph":
-                            if not source_meta.get("doc_id") or not source_meta.get("casenames") or not source_meta.get("court"):
+                            # case_paragraph: doc_id만 필수, casenames와 court는 선택적
+                            if not source_meta.get("doc_id"):
                                 needs_reload = True
                         elif source_type == "decision_paragraph":
                             if not source_meta.get("org") or not source_meta.get("doc_id"):
                                 needs_reload = True
                         elif source_type == "interpretation_paragraph":
-                            if not source_meta.get("org") or not source_meta.get("doc_id"):
+                            # interpretation_paragraph: interpretation_id만 필수, org와 doc_id는 선택적
+                            if not source_meta.get("interpretation_id"):
                                 needs_reload = True
                         
                         # 필수 필드가 누락된 경우에만 재조회 (배치 조회 결과가 불완전한 경우)
@@ -3308,16 +3429,19 @@ class SemanticSearchEngineV2:
                     # 필수 필드가 누락된 경우 재조회 시도
                     required_fields_missing = False
                     if source_type == "case_paragraph":
-                        if not source_meta.get("doc_id") or not source_meta.get("casenames") or not source_meta.get("court"):
+                        # case_paragraph: doc_id만 필수, casenames와 court는 선택적
+                        if not source_meta.get("doc_id"):
                             required_fields_missing = True
                     elif source_type == "decision_paragraph":
-                        if not source_meta.get("org") or not source_meta.get("doc_id"):
+                        # decision_paragraph: doc_id만 필수, org는 선택적 (일부 결정례에 없을 수 있음, court 필드는 없음)
+                        if not source_meta.get("doc_id"):
                             required_fields_missing = True
                     elif source_type == "statute_article":
                         if not source_meta.get("statute_name") or not source_meta.get("article_no"):
                             required_fields_missing = True
                     elif source_type == "interpretation_paragraph":
-                        if not source_meta.get("org") or not source_meta.get("doc_id"):
+                        # interpretation_paragraph: interpretation_id만 필수, org와 doc_id는 선택적
+                        if not source_meta.get("interpretation_id"):
                             required_fields_missing = True
                     
                     if required_fields_missing:
@@ -3594,6 +3718,34 @@ class SemanticSearchEngineV2:
             # 검색 결과 검증 및 복원 (개선 사항 #1, #2, #3)
             if results:
                 results = self._validate_and_fix_search_results(results, embedding_version_id)
+            
+            # 벡터 인덱스 검색 결과 로깅
+            result_msg = (
+                f"✅ [VECTOR INDEX SEARCH RESULT] 질의: '{query}' → "
+                f"{len(results)}개 결과 반환"
+            )
+            print(result_msg, flush=True, file=sys.stdout)
+            self.logger.info(result_msg)
+            
+            # 상위 결과 상세 로깅 (최대 10개)
+            if results:
+                top_results = results[:10]
+                top_results_msg = f"📊 [VECTOR INDEX SEARCH TOP RESULTS] 상위 {len(top_results)}개 결과:"
+                print(top_results_msg, flush=True, file=sys.stdout)
+                self.logger.info(top_results_msg)
+                for i, result in enumerate(top_results, 1):
+                    score = result.get("similarity", result.get("score", 0.0))
+                    chunk_id = result.get("chunk_id") or result.get("id") or "unknown"
+                    source_type = result.get("type") or result.get("source_type", "unknown")
+                    source = result.get("source", "")[:100] or "unknown"
+                    content_preview = (result.get("content", result.get("text", ""))[:100] or "").replace("\n", " ")
+                    result_detail = (
+                        f"   {i}. score={score:.3f}, chunk_id={chunk_id}, "
+                        f"type={source_type}, source={source}, "
+                        f"content_preview={content_preview}"
+                    )
+                    print(result_detail, flush=True, file=sys.stdout)
+                    self.logger.info(result_detail)
             
             self.logger.info(f"✅ Semantic search completed: {len(results)} results for query: {query[:50]}")
             return results
@@ -4157,9 +4309,12 @@ class SemanticSearchEngineV2:
         """
         required_fields_map = {
             'statute_article': ['statute_name', 'article_no', 'law_name'],
-            'case_paragraph': ['doc_id', 'casenames', 'court'],
-            'decision_paragraph': ['org', 'doc_id'],
-            'interpretation_paragraph': ['title', 'interpretation_id']
+            # case_paragraph: doc_id만 필수, casenames와 court는 선택적 (일부 판례에 없을 수 있음)
+            'case_paragraph': ['doc_id'],
+            # decision_paragraph: doc_id만 필수, org는 선택적 (일부 결정례에 없을 수 있음, court 필드는 없음)
+            'decision_paragraph': ['doc_id'],
+            # interpretation_paragraph: interpretation_id만 필수, title은 선택적 (해석례에는 court 필드 없음)
+            'interpretation_paragraph': ['interpretation_id']
         }
         return required_fields_map.get(source_type, [])
     
@@ -6380,10 +6535,31 @@ class SemanticSearchEngineV2:
                 self._chunk_metadata[chunk_id]['text'] = text
             self.logger.info(f"Successfully restored text for chunk_id={chunk_id} from source table (length: {len(text)} chars)")
         elif not text or len(text.strip()) == 0:
-            self.logger.error(f"Failed to restore text for chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}")
-            if isinstance(source_id, str) and not source_id.isdigit():
-                self.logger.debug(f"  - source_id is string format: {source_id}, may need metadata lookup")
+            # 복원 실패 시 더 명확한 로깅
+            self.logger.error(
+                f"❌ [TEXT RESTORATION FAILED] chunk_id={chunk_id}, source_type={source_type}, source_id={source_id}"
+            )
+            # 복원 실패 원인 분석
+            if not source_type or not source_id:
+                self.logger.error(f"  - 원인: source_type 또는 source_id가 없음 (source_type={source_type}, source_id={source_id})")
+            elif isinstance(source_id, str) and not source_id.isdigit():
+                self.logger.error(f"  - 원인: source_id가 문자열 형식이며 숫자가 아님 (source_id={source_id})")
                 self.logger.debug(f"  - metadata keys: {list(full_metadata.keys())[:10] if full_metadata else 'N/A'}")
+            else:
+                # 데이터베이스에서 실제로 존재하는지 확인
+                try:
+                    if conn:
+                        cursor = conn.execute(
+                            "SELECT COUNT(*) as cnt FROM text_chunks WHERE id = ? AND (text IS NULL OR text = '')",
+                            (chunk_id,)
+                        )
+                        row = cursor.fetchone()
+                        if row and row['cnt'] > 0:
+                            self.logger.error(f"  - 원인: text_chunks 테이블에 chunk_id={chunk_id}의 text가 NULL 또는 빈 문자열임")
+                        else:
+                            self.logger.error(f"  - 원인: text_chunks 테이블에서 chunk_id={chunk_id}를 찾을 수 없음")
+                except Exception as db_check_err:
+                    self.logger.debug(f"  - 데이터베이스 확인 중 오류: {db_check_err}")
         else:
             self.logger.debug(f"Could not restore longer text for chunk_id={chunk_id}, using existing text (length: {len(text)} chars)")
         
