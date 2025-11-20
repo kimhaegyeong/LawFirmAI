@@ -185,7 +185,8 @@ class SearchHandler:
             if is_indexivfpq:
                 similarity_threshold = max(0.15, config_threshold)  # IndexIVFPQ는 0.15부터 시작 (더 많은 결과 확보)
             else:
-                similarity_threshold = max(0.4, config_threshold)  # 일반 인덱스는 0.4
+                # Ko-Legal-SBERT 모델 사용 시 config_threshold 사용 (높은 관련성 결과만 반환)
+                similarity_threshold = config_threshold  # 일반 인덱스는 config 값 사용 (기본값 0.75)
             
             # Query Expansion (개선 기능)
             enhanced_query = query
@@ -490,21 +491,51 @@ class SearchHandler:
     ) -> List[Dict]:
         """결과 통합 및 재정렬 (Rerank)"""
         try:
-            # 1. 중복 제거 (내용 기반)
-            seen_texts = set()
+            # 1. 중복 제거 강화 (우선순위: source_id > doc_id > content_hash)
+            seen_source_ids = {}  # 동일 소스 문서의 중복 청크 제거용 (최우선)
+            seen_doc_ids = {}  # 동일 문서의 중복 청크 제거용 (차순위)
+            seen_texts = set()  # 텍스트 해시 기반 중복 제거 (최후)
             unique_results = []
 
             for doc in semantic_results + keyword_results:
-                doc_content = doc.get("content", "")
+                doc_content = doc.get("content", "") or doc.get("text", "")
                 if not doc_content:
                     continue
 
-                # 첫 100자로 중복 판단
-                content_preview = doc_content[:100]
-                content_hash = hash(content_preview)
-
-                if content_hash not in seen_texts:
-                    seen_texts.add(content_hash)
+                source_type = doc.get("source_type") or doc.get("type", "")
+                source_id = doc.get("metadata", {}).get("source_id") if isinstance(doc.get("metadata"), dict) else None
+                doc_id = doc.get("doc_id")
+                
+                is_duplicate = False
+                
+                # 우선순위 1: source_id 기반 중복 체크 (최우선)
+                if source_id and source_type:
+                    source_key = f"{source_type}_{source_id}"
+                    if source_key in seen_source_ids:
+                        # 동일 소스 문서에서 이미 결과가 있으면 무조건 건너뛰기 (점수와 무관)
+                        is_duplicate = True
+                    else:
+                        seen_source_ids[source_key] = doc
+                
+                # 우선순위 2: doc_id 기반 중복 체크 (차순위)
+                if not is_duplicate and doc_id and source_type:
+                    doc_key = f"{source_type}_doc_{doc_id}"
+                    if doc_key in seen_doc_ids:
+                        # 동일 문서에서 이미 결과가 있으면 무조건 건너뛰기 (점수와 무관)
+                        is_duplicate = True
+                    else:
+                        seen_doc_ids[doc_key] = doc
+                
+                # 우선순위 3: 텍스트 해시 기반 중복 체크 (최후)
+                if not is_duplicate:
+                    content_preview = doc_content[:200]
+                    content_hash = hash(content_preview)
+                    if content_hash in seen_texts:
+                        is_duplicate = True
+                    else:
+                        seen_texts.add(content_hash)
+                
+                if not is_duplicate:
                     unique_results.append(doc)
 
             # 2. 유사도 점수 정규화 및 통합 (개선: 동적 가중치 조정)
@@ -707,16 +738,26 @@ class SearchHandler:
             return results[:max_results]
         
         # 개선 #6: 타입별로 균형있게 재분배 (타입별 최소 할당량 설정)
-        # 타입별 최소 할당량: statute_article 3개, case_paragraph 2개, decision_paragraph 1개
-        min_allocations = {
-            "law": 3,  # statute_article
-            "precedent": 2,  # case_paragraph
-            "decision": 1,  # decision_paragraph
-            "interpretation": 0  # 선택적
-        }
+        # 타입별 최소 할당량: max_results에 따라 동적 조정 (소스 타입 다양성 개선)
+        # max_results가 5개 이상일 때만 최소 할당량 적용
+        if max_results >= 5:
+            min_allocations = {
+                "law": min(2, max_results // 3),  # statute_article: 최소 2개 (max_results의 1/3)
+                "precedent": min(2, max_results // 3),  # case_paragraph: 최소 2개 (max_results의 1/3)
+                "decision": min(1, max_results // 5),  # decision_paragraph: 최소 1개 (max_results의 1/5)
+                "interpretation": min(1, max(1, max_results // 4))  # interpretation_paragraph: 최소 1개 (max_results의 1/4로 증가)
+            }
+        else:
+            # max_results가 5개 미만일 때는 최소 할당량 없이 점수 순서대로
+            min_allocations = {
+                "law": 0,
+                "precedent": 0,
+                "decision": 0,
+                "interpretation": 0
+            }
         
         diverse_results = []
-        seen_ids = set()
+        seen_ids = set()  # 개선: set 사용으로 중복 체크 최적화
         
         # 1단계: 각 타입에서 최소 할당량만큼 선택 (다양성 보장)
         for doc_type in ["law", "precedent", "decision", "interpretation"]:
@@ -724,10 +765,11 @@ class SearchHandler:
             if results_by_type[doc_type] and min_count > 0:
                 # 해당 타입에서 최소 할당량만큼 선택
                 for i, result in enumerate(results_by_type[doc_type][:min_count]):
-                    result_id = result.get("id") or str(hash(str(result)))
+                    result_id = result.get("id") or result.get("doc_id") or result.get("document_id") or str(hash(str(result)))
                     if result_id not in seen_ids:
                         diverse_results.append(result)
                         seen_ids.add(result_id)
+                        # 개선: 조기 종료 조건 추가
                         if len(diverse_results) >= max_results:
                             break
                     if len(diverse_results) >= max_results:
@@ -1007,6 +1049,55 @@ class SearchHandler:
 
             # Step 3: 순위 결정
             ranked = self.result_ranker.rank_results(merged, top_k=20, query=query)
+            
+            # Step 3.3: 키워드 매칭 점수 기반 재정렬 (검색 결과 관련성 검증 개선)
+            if extracted_keywords and len(extracted_keywords) > 0:
+                # MergedResult를 Dict로 변환하여 키워드 매칭 점수 계산
+                ranked_with_keywords = []
+                for result in ranked:
+                    if isinstance(result, dict):
+                        doc = result
+                    else:
+                        doc = {
+                            "text": result.text if hasattr(result, 'text') else str(result),
+                            "content": result.text if hasattr(result, 'text') else str(result),
+                            "relevance_score": result.score if hasattr(result, 'score') else 0.0,
+                            "source": result.source if hasattr(result, 'source') else "",
+                            "metadata": result.metadata if hasattr(result, 'metadata') else {}
+                        }
+                    
+                    # 키워드 매칭 점수 계산
+                    text_content = doc.get("text") or doc.get("content", "")
+                    keyword_match_count = 0
+                    for keyword in extracted_keywords[:10]:
+                        if keyword.lower() in text_content.lower():
+                            keyword_match_count += 1
+                    keyword_match_score = keyword_match_count / min(len(extracted_keywords), 10)
+                    
+                    # 유사도와 키워드 매칭 점수 결합
+                    similarity_score = doc.get("relevance_score", doc.get("similarity", 0.0))
+                    combined_relevance = 0.7 * similarity_score + 0.3 * keyword_match_score
+                    
+                    # 검색 결과 순위 개선: 소스 타입별 가중치 적용 (법령 > 해석례 > 판례 순)
+                    source_type = doc.get("source_type") or doc.get("type", "")
+                    source_type_weights = {
+                        "statute_article": 1.3,  # 법령: 가장 높은 가중치
+                        "interpretation_paragraph": 1.2,  # 해석례: 두 번째
+                        "decision_paragraph": 1.1,  # 결정례: 세 번째
+                        "case_paragraph": 1.0  # 판례: 기본 가중치
+                    }
+                    source_weight = source_type_weights.get(source_type, 1.0)
+                    combined_relevance *= source_weight
+                    
+                    doc["keyword_match_score"] = keyword_match_score
+                    doc["combined_relevance_score"] = combined_relevance
+                    doc["source_type_weight"] = source_weight
+                    
+                    ranked_with_keywords.append(doc)
+                
+                # combined_relevance_score 기준으로 재정렬
+                ranked_with_keywords.sort(key=lambda x: x.get("combined_relevance_score", x.get("relevance_score", 0.0)), reverse=True)
+                ranked = ranked_with_keywords
 
             # Step 3.5: Citation 포함 문서 우선순위 부여
             import re
@@ -1102,6 +1193,40 @@ class SearchHandler:
                         doc["relevance_score"] = original_score * (1.0 + metadata_boost * 0.2)
                     except Exception as e:
                         self.logger.debug(f"Metadata boost failed: {e}")
+                
+                # 키워드 매칭 점수 계산 (검색 결과 관련성 검증 개선)
+                if extracted_keywords and len(extracted_keywords) > 0:
+                    text_content = doc.get("text") or doc.get("content", "")
+                    keyword_match_count = 0
+                    for keyword in extracted_keywords[:10]:  # 상위 10개 키워드만 확인
+                        if keyword.lower() in text_content.lower():
+                            keyword_match_count += 1
+                    keyword_match_score = keyword_match_count / min(len(extracted_keywords), 10)
+                    doc["keyword_match_score"] = keyword_match_score
+                    doc["matched_keywords_count"] = keyword_match_count
+                else:
+                    doc["keyword_match_score"] = 0.0
+                    doc["matched_keywords_count"] = 0
+                
+                # 유사도와 키워드 매칭 점수 결합 (검색 결과 관련성 검증 개선)
+                similarity_score = doc.get("relevance_score", doc.get("similarity", 0.0))
+                keyword_score = doc.get("keyword_match_score", 0.0)
+                # 가중치: 유사도 70%, 키워드 매칭 30%
+                combined_relevance = 0.7 * similarity_score + 0.3 * keyword_score
+                
+                # 검색 결과 순위 개선: 소스 타입별 가중치 적용 (법령 > 해석례 > 판례 순)
+                source_type = doc.get("source_type") or doc.get("type", "")
+                source_type_weights = {
+                    "statute_article": 1.3,  # 법령: 가장 높은 가중치
+                    "interpretation_paragraph": 1.2,  # 해석례: 두 번째
+                    "decision_paragraph": 1.1,  # 결정례: 세 번째
+                    "case_paragraph": 1.0  # 판례: 기본 가중치
+                }
+                source_weight = source_type_weights.get(source_type, 1.0)
+                combined_relevance *= source_weight
+                
+                doc["combined_relevance_score"] = combined_relevance
+                doc["source_type_weight"] = source_weight
                 
                 # 다차원 품질 점수 계산
                 if self.use_improvements and hasattr(self, 'quality_scorer'):

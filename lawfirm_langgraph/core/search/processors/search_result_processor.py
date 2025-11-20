@@ -115,6 +115,56 @@ class SearchResultProcessor:
         """키워드별 중요도 가중치 계산"""
         keyword_weights = {}
         
+        # extracted_keywords가 비어있을 때 쿼리에서 키워드 추출 (폴백)
+        if not extracted_keywords:
+            # 한국어 단어 추출 (2글자 이상) - re는 파일 상단에서 이미 import됨
+            korean_words = re.findall(r'[가-힣]+', query)
+            extracted_keywords = [w for w in korean_words if len(w) >= 2]
+            
+            # 불용어 제거
+            stopwords = {'은', '는', '이', '가', '을', '를', '에', '의', '와', '과', '도', '로', '으로', 
+                        '에서', '에게', '한테', '께', '에게서', '한테서', '께서', '의', '것', '수', '등', 
+                        '및', '또한', '또', '그리고', '또는', '또한', '또', '그리고', '또는', '또한',
+                        '무엇', '어떤', '어떻게', '언제', '어디', '누구', '왜', '어떤', '무엇인가',
+                        '시', '할', '하는', '된', '되는', '이다', '입니다', '있습니다', '합니다'}
+            extracted_keywords = [kw for kw in extracted_keywords if kw not in stopwords]
+            
+            # 쿼리 타입/법률 분야 기반 기본 키워드 추가
+            query_type_keywords = {
+                "precedent_search": ["판례", "사건", "판결", "대법원"],
+                "law_inquiry": ["법률", "조문", "법령", "규정", "조항"],
+                "legal_advice": ["조언", "해석", "권리", "의무", "책임"],
+                "procedure_guide": ["절차", "방법", "대응", "소송"],
+                "term_explanation": ["의미", "정의", "개념", "해석"]
+            }
+            field_keywords = {
+                "family": ["가족", "이혼", "양육", "상속", "부부"],
+                "civil": ["민사", "계약", "손해배상", "채권", "채무"],
+                "criminal": ["형사", "범죄", "처벌", "형량"],
+                "labor": ["노동", "근로", "해고", "임금", "근로자"],
+                "corporate": ["기업", "회사", "주주", "법인"]
+            }
+            
+            # 타입/분야 키워드 추가
+            if query_type in query_type_keywords:
+                extracted_keywords.extend(query_type_keywords[query_type])
+            if legal_field in field_keywords:
+                extracted_keywords.extend(field_keywords[legal_field])
+            
+            # 중복 제거 및 정리
+            extracted_keywords = list(set(extracted_keywords))
+            extracted_keywords = [kw for kw in extracted_keywords if kw and len(kw.strip()) >= 2]
+            
+            if not extracted_keywords:
+                # 최후의 폴백: 쿼리의 주요 단어 사용
+                words = query.split()
+                extracted_keywords = [w.strip() for w in words if len(w.strip()) >= 2][:10]
+            
+            self.logger.info(
+                f"🔍 [KEYWORD WEIGHTS] extracted_keywords가 비어있어 쿼리에서 추출: "
+                f"{len(extracted_keywords)}개 키워드 (query='{query[:50]}...')"
+            )
+        
         if not extracted_keywords:
             return keyword_weights
         
@@ -202,6 +252,65 @@ class SearchResultProcessor:
             )
         
         return keyword_weights
+    
+    def calculate_keyword_coverage(
+        self,
+        query: str,
+        extracted_keywords: List[str],
+        results: List[Dict[str, Any]]
+    ) -> float:
+        """키워드 커버리지 계산 (강화된 버전)"""
+        
+        if not extracted_keywords:
+            import re
+            korean_words = re.findall(r'[가-힣]+', query)
+            extracted_keywords = [w for w in korean_words if len(w) >= 2]
+            
+            stopwords = {'은', '는', '이', '가', '을', '를', '에', '의', '와', '과', '도', '로', '으로'}
+            extracted_keywords = [kw for kw in extracted_keywords if kw not in stopwords]
+        
+        if not extracted_keywords:
+            self.logger.warning("⚠️ [KEYWORD COVERAGE] extracted_keywords가 비어있음")
+            return 0.0
+        
+        covered_keywords = set()
+        total_keyword_matches = 0
+        
+        for doc in results:
+            content = doc.get("content", "") or doc.get("text", "")
+            if not content:
+                continue
+            
+            content_lower = content.lower()
+            doc_matched_keywords = set()
+            
+            for keyword in extracted_keywords:
+                keyword_lower = keyword.lower()
+                if keyword_lower in content_lower:
+                    covered_keywords.add(keyword_lower)
+                    doc_matched_keywords.add(keyword_lower)
+                    total_keyword_matches += 1
+            
+            if doc_matched_keywords:
+                self.logger.debug(
+                    f"🔍 [KEYWORD COVERAGE] 문서 매칭: "
+                    f"doc_id={doc.get('id', 'unknown')[:20]}, "
+                    f"matched={len(doc_matched_keywords)}/{len(extracted_keywords)}"
+                )
+        
+        coverage = len(covered_keywords) / len(extracted_keywords) if extracted_keywords else 0.0
+        
+        weighted_coverage = min(1.0, coverage * (1 + total_keyword_matches / len(extracted_keywords) / 10))
+        
+        self.logger.info(
+            f"📊 [KEYWORD COVERAGE] 계산 완료: "
+            f"coverage={coverage:.3f}, "
+            f"weighted={weighted_coverage:.3f}, "
+            f"covered={len(covered_keywords)}/{len(extracted_keywords)}, "
+            f"total_matches={total_keyword_matches}"
+        )
+        
+        return weighted_coverage
     
     def calculate_keyword_match_score(
         self,

@@ -13,6 +13,11 @@ from .diversity_ranker import DiversityRanker
 from .advanced_reranker import AdvancedReranker, RerankerConfig
 from .multi_dimensional_quality import MultiDimensionalQualityScorer, QualityScores
 from .metadata_enhancer import MetadataEnhancer, EnhancedMetadata
+from .legal_query_analyzer import LegalQueryAnalyzer
+from .legal_keyword_expander import LegalKeywordExpander
+from .legal_query_optimizer import LegalQueryOptimizer
+from .legal_query_validator import LegalQueryValidator
+from .hybrid_query_processor import HybridQueryProcessor
 
 __all__ = [
     "QueryEnhancer",
@@ -28,5 +33,10 @@ __all__ = [
     "QualityScores",
     "MetadataEnhancer",
     "EnhancedMetadata",
+    "LegalQueryAnalyzer",
+    "LegalKeywordExpander",
+    "LegalQueryOptimizer",
+    "LegalQueryValidator",
+    "HybridQueryProcessor",
 ]
 

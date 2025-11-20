@@ -140,11 +140,27 @@ class ResultRanker:
     _semantic_model = None
     _semantic_model_name = None
     
-    def __init__(self, use_cross_encoder: bool = True):
+    def __init__(self, use_cross_encoder: bool = True, rerank_original_weight: float = None, rerank_cross_encoder_weight: float = None):
         """순위 결정기 초기화"""
         self.logger = logging.getLogger(__name__)
         self.use_cross_encoder = use_cross_encoder
         self.cross_encoder = None
+        
+        # 재랭킹 가중치 설정 (환경 변수 또는 파라미터로 설정)
+        if rerank_original_weight is None or rerank_cross_encoder_weight is None:
+            import os
+            rerank_original_weight = float(os.getenv("RERANK_ORIGINAL_WEIGHT", "0.6"))
+            rerank_cross_encoder_weight = float(os.getenv("RERANK_CROSS_ENCODER_WEIGHT", "0.4"))
+        
+        # 가중치 합이 1.0이 되도록 정규화
+        total_weight = rerank_original_weight + rerank_cross_encoder_weight
+        if total_weight > 0:
+            self.rerank_original_weight = rerank_original_weight / total_weight
+            self.rerank_cross_encoder_weight = rerank_cross_encoder_weight / total_weight
+        else:
+            # 잘못된 값이면 기본값으로 재설정
+            self.rerank_original_weight = 0.6
+            self.rerank_cross_encoder_weight = 0.4
         
         if use_cross_encoder:
             try:
@@ -158,7 +174,10 @@ class ResultRanker:
                 self.logger.warning(f"Failed to initialize Cross-Encoder: {e}, falling back to standard ranking")
                 self.use_cross_encoder = False
         
-        self.logger.info(f"ResultRanker initialized (cross_encoder={self.use_cross_encoder})")
+        self.logger.info(
+            f"ResultRanker initialized (cross_encoder={self.use_cross_encoder}, "
+            f"weights: original={self.rerank_original_weight:.2f}, cross_encoder={self.rerank_cross_encoder_weight:.2f})"
+        )
     
     @classmethod
     def _get_semantic_model(cls):
@@ -325,15 +344,39 @@ class ResultRanker:
                 text = result.text[:500]  # 길이 제한
                 pairs.append([extracted_query, text])
             
-            # 점수 계산
-            scores = self.cross_encoder.predict(pairs)
+            # 개선: 배치 크기 최적화 (Cross-Encoder의 predict는 이미 배치 처리 지원)
+            # batch_size를 명시적으로 설정하여 메모리 효율성 향상
+            batch_size = min(16, len(pairs))  # 배치 크기 제한 (메모리 효율성)
+            
+            # 점수 계산 (배치 처리)
+            if len(pairs) <= batch_size:
+                scores = self.cross_encoder.predict(pairs)
+            else:
+                # 큰 경우 배치로 나누어 처리
+                scores = []
+                for i in range(0, len(pairs), batch_size):
+                    batch_pairs = pairs[i:i + batch_size]
+                    batch_scores = self.cross_encoder.predict(batch_pairs)
+                    scores.extend(batch_scores)
+            
+            # Cross-Encoder 점수 정규화 (0-1 범위로 정규화하여 기존 점수와 스케일 일치)
+            if SKLEARN_AVAILABLE and len(scores) > 1:
+                scores_array = np.array([float(s) for s in scores])
+                min_score = scores_array.min()
+                max_score = scores_array.max()
+                if max_score > min_score:
+                    # Min-Max 정규화 (0-1 범위)
+                    normalized_scores = (scores_array - min_score) / (max_score - min_score)
+                else:
+                    normalized_scores = scores_array
+                scores = normalized_scores.tolist()
             
             # 점수 반영 및 정렬
             reranked_results = []
             for result, score in zip(results, scores):
                 # 기존 점수와 Cross-Encoder 점수 결합
                 original_score = result.score
-                cross_encoder_score = float(score)
+                cross_encoder_score = float(score)  # 정규화된 점수 사용
                 
                 # Phase 2: Keyword Coverage 기반 보너스 계산
                 keyword_bonus = 0.0
@@ -359,8 +402,19 @@ class ResultRanker:
                         
                         keyword_bonus = coverage_bonus + core_bonus
                 
-                # 가중 평균 (기존 점수 60%, Cross-Encoder 점수 40%)
-                base_combined_score = 0.6 * original_score + 0.4 * cross_encoder_score
+                # 가중 평균 (가중치 튜닝 가능, 환경 변수로 조정)
+                base_combined_score = (
+                    self.rerank_original_weight * original_score + 
+                    self.rerank_cross_encoder_weight * cross_encoder_score
+                )
+                
+                # 디버그 로그 (가중치 확인용)
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug(
+                        f"Score combination: original={original_score:.3f} (weight={self.rerank_original_weight:.2f}), "
+                        f"cross_encoder={cross_encoder_score:.3f} (weight={self.rerank_cross_encoder_weight:.2f}), "
+                        f"combined={base_combined_score:.3f}"
+                    )
                 
                 # Keyword Coverage 보너스 적용
                 combined_score = base_combined_score * (1.0 + keyword_bonus)
@@ -405,6 +459,22 @@ class ResultRanker:
             "metadata": result.metadata
         }
     
+    def _dict_to_merged_result(self, doc: Dict[str, Any]) -> MergedResult:
+        """Dict를 MergedResult로 변환"""
+        text = doc.get("text") or doc.get("content") or doc.get("chunk_text") or ""
+        score = doc.get("final_weighted_score") or doc.get("score") or doc.get("relevance_score") or doc.get("similarity", 0.0)
+        source = doc.get("source") or doc.get("title") or doc.get("document_id") or ""
+        metadata = doc.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = doc if isinstance(doc, dict) else {}
+        
+        return MergedResult(
+            text=text,
+            score=score,
+            source=source,
+            metadata=metadata
+        )
+    
     def multi_stage_rerank(
         self,
         documents: List[Dict[str, Any]],
@@ -414,11 +484,22 @@ class ResultRanker:
         search_quality: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        다단계 재정렬 전략 (개선: 키워드 매칭, Citation 매칭, 질문 유형별 특화, MMR 다양성, 검색 품질 기반 조정, 정보 밀도, 최신성)
+        다단계 재정렬 전략 (개선: 키워드 매칭, Citation 매칭, 질문 유형별 특화, MMR 다양성, 검색 품질 기반 조정, 정보 밀도, 최신성, Cross-Encoder)
+        
+        재랭킹 단계:
+        - Stage 1: 관련성 점수로 초기 정렬
+        - Stage 1.5: 키워드 매칭 점수 직접 반영
+        - Stage 2: Citation 포함 문서 우선순위
+        - Stage 3: 신뢰도 점수 적용
+        - Stage 3.5: 질문 유형별 특화 재정렬
+        - Stage 3.6: 정보 밀도 점수 적용
+        - Stage 3.7: 최신성 점수 적용
+        - Stage 4: MMR 기반 다양성 적용
+        - Stage 5: Cross-Encoder 재랭킹 (동적 후보 수 조정)
         
         Args:
             documents: 재정렬할 문서 리스트
-            query: 검색 쿼리
+            query: 검색 쿼리 (Cross-Encoder 재랭킹에 필요)
             query_type: 질문 유형
             extracted_keywords: 추출된 키워드
             search_quality: 검색 품질 점수
@@ -426,6 +507,9 @@ class ResultRanker:
         Returns:
             List[Dict]: 재정렬된 문서 리스트
         """
+        import time
+        start_time = time.time()
+        
         if not documents:
             return []
         
@@ -532,29 +616,34 @@ class ResultRanker:
                     current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
                     doc["final_weighted_score"] = current_score * 0.9  # 10% 감소
         
-        # Stage 3.6: 정보 밀도 점수 적용 (개선: 문서 길이/정보 밀도 고려)
-        for doc in citation_docs + non_citation_docs:
-            density_score = self._calculate_information_density(doc)
-            current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-            doc["final_weighted_score"] = current_score * (1.0 + density_score * 0.1)  # 최대 10% 증가
-            doc["information_density"] = density_score
-        
-        # Stage 3.7: 최신성 점수 적용 (개선: 시간적 관련성 고려)
-        for doc in citation_docs + non_citation_docs:
-            doc_type = doc.get("type", "").lower() if doc.get("type") else ""
-            if "판례" in doc_type or "precedent" in doc_type:
-                # 판례만 최신성 고려
-                recency_score = self._calculate_recency_score(doc)
+        # Stage 3.6: 정보 밀도 점수 적용 (개선: 품질이 낮을 때만 적용)
+        if search_quality < 0.85:  # 품질이 낮을 때만 적용
+            for doc in citation_docs + non_citation_docs:
+                density_score = self._calculate_information_density(doc)
                 current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
-                doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
-                doc["recency_score"] = recency_score
+                doc["final_weighted_score"] = current_score * (1.0 + density_score * 0.1)  # 최대 10% 증가
+                doc["information_density"] = density_score
         
-        # Stage 4: MMR 기반 다양성 적용 (개선: 동적 가중치 사용)
+        # Stage 3.7: 최신성 점수 적용 (개선: 품질이 낮을 때만 적용)
+        if search_quality < 0.85:  # 품질이 낮을 때만 적용
+            for doc in citation_docs + non_citation_docs:
+                doc_type = doc.get("type", "").lower() if doc.get("type") else ""
+                if "판례" in doc_type or "precedent" in doc_type:
+                    # 판례만 최신성 고려
+                    recency_score = self._calculate_recency_score(doc)
+                    current_score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                    doc["final_weighted_score"] = current_score * (1.0 + recency_score * 0.15)  # 최대 15% 증가
+                    doc["recency_score"] = recency_score
+        
+        # Stage 4: MMR 기반 다양성 적용 (개선: 동적 가중치 사용, 품질이 높으면 가중치 감소)
         dynamic_lambda = self._get_dynamic_mmr_lambda(
             query_type=query_type,
             search_quality=search_quality,
             num_results=len(citation_docs + non_citation_docs)
         )
+        # 품질이 높으면 다양성 가중치 감소 (더 빠른 처리)
+        if search_quality >= 0.85:
+            dynamic_lambda = min(dynamic_lambda, 0.3)  # 다양성 가중치 상한선 설정
         
         diverse_docs = self._apply_mmr_diversity(
             citation_docs + non_citation_docs,
@@ -562,7 +651,162 @@ class ResultRanker:
             lambda_score=dynamic_lambda
         )
         
-        return diverse_docs
+        # Stage 5: Cross-Encoder 재랭킹 (개선: 조건 강화)
+        if self.use_cross_encoder and self.cross_encoder and len(diverse_docs) > 0 and query:
+            # 개선: 품질이 매우 높으면 Cross-Encoder 스킵
+            if search_quality >= 0.90 and len(diverse_docs) <= 10:
+                self.logger.info(
+                    f"⏭️ [CROSS-ENCODER SKIP] High quality ({search_quality:.2f}) and low doc count ({len(diverse_docs)}), "
+                    f"skipping Cross-Encoder reranking"
+                )
+                return diverse_docs
+            
+            try:
+                # 개선: Cross-Encoder 재랭킹 후보 수 동적 조정 (더 보수적으로)
+                # 문서 수에 따라 동적으로 조정: 최소 8개, 최대 20개, 또는 전체의 1/3
+                if len(diverse_docs) <= 8:
+                    rerank_candidates_count = len(diverse_docs)  # 문서 수가 적으면 모두 재랭킹
+                elif len(diverse_docs) <= 15:
+                    rerank_candidates_count = min(10, len(diverse_docs))  # 중간 크기면 10개 (15 → 10)
+                else:
+                    rerank_candidates_count = min(20, max(8, len(diverse_docs) // 3))  # 큰 경우 동적 조정 (30 → 20, //2 → //3)
+                
+                candidates_for_rerank = diverse_docs[:rerank_candidates_count]
+                
+                print(f"[CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates out of {len(diverse_docs)} documents for reranking", flush=True)
+                self.logger.info(
+                    f"🔍 [CROSS-ENCODER RERANK] Selecting {rerank_candidates_count} candidates "
+                    f"out of {len(diverse_docs)} documents for reranking"
+                )
+                
+                # 개선: Dict를 MergedResult로 변환 최적화 (불필요한 복사 최소화)
+                merged_candidates = []
+                for doc in candidates_for_rerank:
+                    # 기존 _dict_to_merged_result 호출 대신 직접 생성 (성능 향상)
+                    text = doc.get("text") or doc.get("content") or doc.get("chunk_text", "")
+                    score = doc.get("final_weighted_score") or doc.get("relevance_score", 0.0)
+                    source = doc.get("source") or doc.get("title") or doc.get("document_id", "")
+                    metadata = doc.get("metadata", {})
+                    if not isinstance(metadata, dict):
+                        metadata = doc if isinstance(doc, dict) else {}
+                    
+                    merged_candidates.append(MergedResult(
+                        text=text,
+                        score=score,
+                        source=source,
+                        metadata=metadata
+                    ))
+                
+                # Cross-Encoder 재랭킹 수행
+                reranked_merged = self.cross_encoder_rerank(
+                    results=merged_candidates,
+                    query=query,
+                    top_k=rerank_candidates_count,
+                    extracted_keywords=extracted_keywords
+                )
+                
+                # MergedResult를 Dict로 변환하고 기존 점수 정보 유지
+                reranked_docs = []
+                # 원본 문서를 텍스트로 인덱싱 (빠른 매칭을 위해)
+                original_docs_by_text = {doc.get("text") or doc.get("content") or doc.get("chunk_text", ""): doc for doc in candidates_for_rerank}
+                
+                for merged_result in reranked_merged:
+                    doc_dict = self._merged_result_to_dict(merged_result)
+                    # 텍스트로 원본 문서 찾기
+                    doc_text = merged_result.text
+                    original_doc = original_docs_by_text.get(doc_text)
+                    
+                    if original_doc:
+                        # 기존 필드 유지하면서 점수만 업데이트
+                        doc_dict.update({
+                            **original_doc,
+                            "final_weighted_score": merged_result.score,
+                            "relevance_score": merged_result.score,
+                            "score": merged_result.score,
+                            "cross_encoder_applied": True
+                        })
+                    else:
+                        # 원본 문서를 찾지 못한 경우에도 점수 업데이트
+                        doc_dict.update({
+                            "final_weighted_score": merged_result.score,
+                            "relevance_score": merged_result.score,
+                            "score": merged_result.score,
+                            "cross_encoder_applied": True
+                        })
+                    reranked_docs.append(doc_dict)
+                
+                # 재랭킹된 문서와 나머지 문서 병합
+                remaining_docs = diverse_docs[rerank_candidates_count:]
+                final_docs = reranked_docs + remaining_docs
+                
+                # 개선: 재랭킹 결과 검증 - 전후 점수 분포 비교
+                # Cross-Encoder 재랭킹 직전 점수와 재랭킹 후 점수 비교
+                if reranked_docs:
+                    # 재랭킹 직전 점수: merged_candidates의 score (MergedResult.score)
+                    before_scores = [result.score for result in merged_candidates]
+                    # 재랭킹 후 점수: reranked_merged의 score (Cross-Encoder 재랭킹 후)
+                    after_scores = [result.score for result in reranked_merged]
+                    
+                    if before_scores and after_scores and len(before_scores) == len(after_scores):
+                        before_avg = sum(before_scores) / len(before_scores)
+                        after_avg = sum(after_scores) / len(after_scores)
+                        before_max = max(before_scores)
+                        after_max = max(after_scores)
+                        before_min = min(before_scores)
+                        after_min = min(after_scores)
+                        
+                        # 순위 변경 추적 (상위 3개 문서)
+                        before_top3_indices = sorted(range(len(before_scores)), key=lambda i: before_scores[i], reverse=True)[:3]
+                        after_top3_indices = sorted(range(len(after_scores)), key=lambda i: after_scores[i], reverse=True)[:3]
+                        rank_change = len(set(before_top3_indices) & set(after_top3_indices))  # 상위 3개 중 유지된 문서 수
+                        
+                        improvement_pct = (after_avg - before_avg) * 100 / before_avg if before_avg > 0 else 0
+                        max_improvement_pct = (after_max - before_max) * 100 / before_max if before_max > 0 else 0
+                        
+                        print(f"[CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents. Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), min {before_min:.3f}→{after_min:.3f}. Top 3 rank stability: {rank_change}/3", flush=True)
+                        self.logger.info(
+                            f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                            f"(out of {len(diverse_docs)} total documents). "
+                            f"Score: avg {before_avg:.3f}→{after_avg:.3f} ({improvement_pct:+.1f}%), "
+                            f"max {before_max:.3f}→{after_max:.3f} ({max_improvement_pct:+.1f}%), "
+                            f"min {before_min:.3f}→{after_min:.3f}. "
+                            f"Top 3 rank stability: {rank_change}/3"
+                        )
+                    else:
+                        self.logger.info(
+                            f"🔄 [CROSS-ENCODER RERANK] Applied Cross-Encoder reranking to {len(reranked_docs)} documents "
+                            f"(out of {len(diverse_docs)} total documents)"
+                        )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [CROSS-ENCODER RERANK] No documents were reranked "
+                        f"(expected {rerank_candidates_count}, got {len(reranked_docs)})"
+                    )
+                
+                # 개선: 재랭킹 성능 모니터링
+                rerank_time = time.time() - start_time
+                self.logger.info(
+                    f"⏱️ [RERANK PERFORMANCE] Total reranking time: {rerank_time:.3f}s "
+                    f"({len(diverse_docs)} documents, {rerank_candidates_count} reranked)"
+                )
+                
+                return final_docs
+                
+            except Exception as e:
+                rerank_time = time.time() - start_time
+                self.logger.warning(
+                    f"Cross-Encoder reranking in multi_stage_rerank failed: {e}, using MMR results "
+                    f"(time: {rerank_time:.3f}s)"
+                )
+                return diverse_docs
+        else:
+            # Cross-Encoder가 비활성화되었거나 쿼리가 없는 경우 MMR 결과 반환
+            rerank_time = time.time() - start_time
+            if not self.use_cross_encoder or not self.cross_encoder:
+                self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Cross-Encoder not available, skipping Stage 5 (time: {rerank_time:.3f}s)")
+            elif not query:
+                self.logger.info(f"⏭️ [CROSS-ENCODER SKIP] Query not provided, skipping Cross-Encoder reranking (time: {rerank_time:.3f}s)")
+            return diverse_docs
     
     def evaluate_search_quality(
         self,

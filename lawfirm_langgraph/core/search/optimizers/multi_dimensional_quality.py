@@ -260,20 +260,42 @@ class MultiDimensionalQualityScorer:
             return 0.5
     
     def _calculate_source_credibility(self, document: Dict[str, Any]) -> float:
-        """출처 신뢰도 계산"""
+        """출처 신뢰도 계산 (우선순위 4: 출처 신뢰도 점수 강화)"""
         source = document.get("source", "")
         title = document.get("title", "")
         metadata = document.get("metadata", {})
+        doc_type = document.get("type") or document.get("source_type", "")
         
-        # 출처 정보 수집
+        # 1. 문서 타입별 신뢰도
+        type_credibility = {
+            "statute_article": 1.0,  # 법령 조문: 최고 신뢰도
+            "case_paragraph": 0.9,   # 판례: 높은 신뢰도
+            "decision_paragraph": 0.85,  # 결정례: 높은 신뢰도
+            "interpretation_paragraph": 0.8  # 해석례: 중상 신뢰도
+        }
+        credibility = type_credibility.get(doc_type, 0.5)
+        
+        # 2. 출처 정보 수집
         source_text = f"{source} {title} {metadata.get('source', '')}".lower()
         
-        # 신뢰도 등급 매칭
-        for keyword, credibility in self.SOURCE_CREDIBILITY.items():
-            if keyword in source_text:
-                return credibility
+        # 3. 출처별 신뢰도 부스팅
+        if "대법원" in source_text:
+            credibility = min(1.0, credibility + 0.1)
+        elif "법원" in source_text:
+            credibility = min(1.0, credibility + 0.05)
+        elif "법제처" in source_text or "법무부" in source_text:
+            credibility = min(1.0, credibility + 0.1)
         
-        return 0.5  # 기본값
+        # 4. 기존 신뢰도 등급 매칭 (타입 신뢰도와 비교하여 더 높은 값 사용)
+        for keyword, keyword_credibility in self.SOURCE_CREDIBILITY.items():
+            if keyword in source_text:
+                credibility = max(credibility, keyword_credibility)
+        
+        # 5. 직접 매칭 부스팅
+        if document.get("direct_match", False):
+            credibility = 1.0  # 직접 매칭: 최고 신뢰도
+        
+        return credibility
     
     def calculate_batch_quality(
         self,
