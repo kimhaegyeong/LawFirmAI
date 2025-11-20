@@ -14,7 +14,11 @@ class WorkflowConstants:
     MAX_OUTPUT_TOKENS = 8192  # 실용적인 값 (약 32,000자, 법률 답변에 충분)
     # MAX_OUTPUT_TOKENS = 65536  # 최대값 (매우 긴 답변을 위한 경우)
     TEMPERATURE = 0.3
-    TIMEOUT = 30  # 15초 → 30초 (긴 문서 처리 시간 고려)
+    
+    # Timeout 설정 (Google Gemini 가이드라인 기준)
+    TIMEOUT = 30  # RAG QA용 기본 timeout (20~30초 권장)
+    TIMEOUT_RAG_QA = 30  # RAG QA: 20~30초
+    TIMEOUT_LONG_TEXT = 60  # 긴 글/코드 생성: 30~60초
 
     # 검색 설정 (성능 최적화: 결과 수 제한)
     SEMANTIC_SEARCH_K = 12  # 15 -> 12 (성능 최적화)

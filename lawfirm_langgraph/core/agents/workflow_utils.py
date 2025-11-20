@@ -141,6 +141,84 @@ class WorkflowUtils:
         return default
 
     @staticmethod
+    def get_state_values_batch(
+        state: LegalWorkflowState,
+        keys: List[str],
+        defaults: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        여러 State 값을 한 번에 가져오기 (배치 접근)
+        
+        State 구조를 한 번만 파싱하여 성능을 최적화합니다.
+        
+        Args:
+            state: State 객체
+            keys: 가져올 키 목록
+            defaults: 키별 기본값 딕셔너리 (선택사항)
+        
+        Returns:
+            {key: value} 딕셔너리
+        """
+        defaults = defaults or {}
+        result = {}
+        
+        # State 구조를 한 번만 파싱하여 재사용
+        state_groups = {
+            "search": state.get("search") if isinstance(state.get("search"), dict) else None,
+            "classification": state.get("classification") if isinstance(state.get("classification"), dict) else None,
+            "common": state.get("common") if isinstance(state.get("common"), dict) else None,
+            "input": state.get("input") if isinstance(state.get("input"), dict) else None,
+        }
+        
+        # common 내부 그룹도 미리 파싱
+        common_search = None
+        common_classification = None
+        if state_groups["common"]:
+            common_search = state_groups["common"].get("search")
+            if not isinstance(common_search, dict):
+                common_search = None
+            common_classification = state_groups["common"].get("classification")
+            if not isinstance(common_classification, dict):
+                common_classification = None
+        
+        for key in keys:
+            value = None
+            
+            # 키별 우선순위 경로 정의
+            if key in ["optimized_queries", "search_params", "semantic_results", "keyword_results", 
+                       "semantic_count", "keyword_count", "merged_documents", "retrieved_docs"]:
+                # search 그룹 우선
+                if state_groups["search"]:
+                    value = state_groups["search"].get(key)
+                if value is None and common_search:
+                    value = common_search.get(key)
+            
+            elif key in ["query_type", "legal_field", "legal_domain", "confidence", 
+                        "urgency_level", "urgency_reasoning", "complexity_level"]:
+                # classification 그룹 우선
+                if state_groups["classification"]:
+                    value = state_groups["classification"].get(key)
+                if value is None and common_classification:
+                    value = common_classification.get(key)
+                # query_type은 특별 처리
+                if key == "query_type" and value is None:
+                    value = WorkflowUtils._get_query_type_enhanced(state, defaults.get(key))
+            
+            elif key in ["query", "session_id"]:
+                # input 그룹 우선
+                if state_groups["input"]:
+                    value = state_groups["input"].get(key)
+            
+            # 최상위 레벨에서도 확인
+            if value is None:
+                value = state.get(key)
+            
+            # 기본값 적용
+            result[key] = value if value is not None else defaults.get(key, None)
+        
+        return result
+
+    @staticmethod
     def set_state_value(state: LegalWorkflowState, key: str, value: Any, logger: Optional[logging.Logger] = None) -> None:
         """
         State에 값을 안전하게 설정하기 (flat/nested 모두 지원)
