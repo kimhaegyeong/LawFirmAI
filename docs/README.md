@@ -49,6 +49,8 @@ LangGraph 기반 RAG 시스템 문서
 ### 04. 모델 (`04_models/`)
 AI 모델 성능 최적화 및 벤치마크
 - **performance/**: 성능 최적화 가이드 및 보고서
+  - [성능 최적화 가이드](04_models/performance/performance_optimization_guide.md)
+  - [성능 최적화 보고서](04_models/performance/performance_optimization_report.md)
 
 ### 05. 품질 관리 (`05_quality/`)
 품질 개선, 키워드 시스템, 프롬프트 강화
@@ -100,9 +102,13 @@ API 문서 및 통합 가이드
 모니터링 시스템 가이드
 - [모니터링 가이드](monitoring/monitoring_guide.md)
 
-### 참고 자료 (`reference/`)
-참고 문서 및 개선 계획
-- **improvement_plans/**: 개선 계획서
+### 성능 최적화 문서 (루트)
+성능 최적화 제안서 및 적용 요약
+- [LangGraph 성능 최적화 제안서](performance_optimization_proposal.md)
+- [성능 개선 제안서](performance_optimization_proposals.md)
+- [성능 개선 적용 요약](performance_optimization_summary.md)
+- [LangGraph 리팩토링 계획](refactoring_plan_langgraph.md)
+- [리팩토링 요약](refactoring_summary.md)
 
 
 ## 🔍 빠른 찾기
@@ -114,6 +120,10 @@ API 문서 및 통합 가이드
 - 개발 규칙: [10_technical_reference/development_rules.md](10_technical_reference/development_rules.md)
 - Core 모듈 가이드: [10_technical_reference/core_modules_guide.md](10_technical_reference/core_modules_guide.md)
 - LangGraph 통합: [03_rag_system/langgraph_integration_guide.md](03_rag_system/langgraph_integration_guide.md)
+- 성능 최적화: [04_models/performance/performance_optimization_guide.md](04_models/performance/performance_optimization_guide.md)
+- 성능 최적화 제안서: [performance_optimization_proposal.md](performance_optimization_proposal.md)
+- 성능 최적화 요약: [performance_optimization_summary.md](performance_optimization_summary.md)
+- LangGraph 리팩토링: [refactoring_plan_langgraph.md](refactoring_plan_langgraph.md)
 
 ### 배포 관련
 - 배포 가이드: [06_deployment/Deployment_Guide.md](06_deployment/Deployment_Guide.md)

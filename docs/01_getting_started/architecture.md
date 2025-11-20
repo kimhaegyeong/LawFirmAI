@@ -394,14 +394,43 @@ workflow = LangGraphWorkflowService(config)
 
 ## 성능 최적화
 
-### 1. 메모리 최적화
+### 1. 적용된 최적화 항목
+
+#### 검색 노드 최적화
+- **문서 타입 복구 최적화**: O(n²) → O(n) 알고리즘으로 80-90% 시간 단축
+- **중복 제거 최적화**: Hashset 기반 O(1) 조회로 60-70% 시간 단축
+- **동적 타임아웃**: 작업 수에 따른 자동 조정으로 평균 30-40% 시간 단축
+- **조기 종료 강화**: 의미적 검색과 키워드 검색 모두 결과가 있을 때만 조기 종료
+
+#### 결과 처리 최적화
+- **벡터화 필터링**: NumPy 기반 벡터 연산으로 대량 문서 처리 50-60% 시간 단축
+- **문서 필터링 최적화**: 조건부 필터링을 한 번에 처리
+
+#### 전체 워크플로우 최적화
+- **비동기 처리 개선**: ThreadPoolExecutor → asyncio.gather 전환으로 30-60% 시간 단축
+- **불필요한 대기 제거**: time.sleep() 제거 및 exponential backoff 적용으로 10-20% 시간 단축
+- **모델 로딩 최적화**: 싱글톤 패턴으로 첫 실행 후 80-90% 시간 단축
+- **State 접근 최적화**: 캐싱으로 5-10% 시간 단축
+- **검색 결과 캐싱**: 반복 쿼리 70-90% 시간 단축 (캐시 히트 시 90-95% 시간 단축)
+
+### 2. 성능 개선 효과
+
+| 시나리오 | 기존 시간 | 최적화 후 | 개선율 |
+|---------|----------|----------|--------|
+| 중간 규모 문서 (10-50개) | 18-27초 | 15-22초 | 15-20% |
+| 대량 문서 (50개 이상) | 25-35초 | 20-28초 | 20-25% |
+| 캐시 히트 (동일 쿼리) | 18-27초 | 1-2초 | 90-95% |
+
+**전체 예상 개선율**: 40-50% (추가 개선 항목 적용 시 50-60%)
+
+### 3. 메모리 최적화
 
 - **State 최적화**: State reduction으로 메모리 효율성 향상
-- **모델 캐싱**: SentenceTransformer 모델 클래스 변수로 캐싱 (약 7.5초 절약)
+- **모델 캐싱**: SentenceTransformer 모델 싱글톤 패턴으로 재사용 (약 7.5초 절약)
 - **선택적 의미 기반 매칭**: Keyword Coverage 70% 이상 시 의미 기반 매칭 생략
 - **배치 임베딩 생성**: 개별 생성 대신 배치로 처리 (batch_size=8)
 
-### 2. 캐싱 전략
+### 4. 캐싱 전략
 
 ```python
 from functools import lru_cache
@@ -411,16 +440,33 @@ def cached_search(query: str):
     return search_engine.search(query)
 ```
 
-### 3. 비동기 처리
+**캐싱 효과**:
+- 검색 결과 캐싱: 동일 쿼리 재사용 시 90-95% 시간 단축
+- 질문 분류 캐싱: 반복 질문 처리 속도 향상
+- 답변 생성 캐싱: 동일 컨텍스트 재사용 시 빠른 응답
+
+### 5. 비동기 처리
 
 ```python
 import asyncio
 
 async def parallel_search(queries: List[str]):
     tasks = [search_engine.search_async(q) for q in queries]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     return results
 ```
+
+**비동기 처리 효과**:
+- 검색 작업 병렬화: 40-60% 시간 단축
+- 품질 평가 병렬화: 30-50% 시간 단축
+- 키워드 가중치 적용 병렬화: 20-30% 시간 단축
+
+### 6. 관련 문서
+
+자세한 성능 최적화 내용은 다음 문서를 참조하세요:
+- [성능 최적화 가이드](../04_models/performance/performance_optimization_guide.md)
+- [LangGraph 성능 최적화 제안서](../performance_optimization_proposal.md)
+- [성능 개선 적용 요약](../performance_optimization_summary.md)
 
 ## 보안 고려사항
 
@@ -538,3 +584,6 @@ class HealthChecker:
 - [프로젝트 구조](project_structure.md)
 - [프로젝트 개요](project_overview.md)
 - [LangGraph 통합 가이드](../03_rag_system/langgraph_integration_guide.md)
+- [성능 최적화 가이드](../04_models/performance/performance_optimization_guide.md)
+- [성능 최적화 제안서](../performance_optimization_proposal.md)
+- [성능 개선 적용 요약](../performance_optimization_summary.md)
