@@ -69,6 +69,9 @@ if sys.platform == 'win32':
 # API에서는 USE_STREAMING_MODE=true로 설정하여 generate_answer_stream 사용
 os.environ['USE_STREAMING_MODE'] = 'false'
 
+# ModularGraphBuilder 사용 명시 (새로운 모듈화된 그래프 빌더)
+os.environ['USE_MODULAR_GRAPH_BUILDER'] = 'true'
+
 # 프로젝트 경로 설정
 # 스크립트 위치: lawfirm_langgraph/tests/scripts/run_query_test.py
 try:

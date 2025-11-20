@@ -31,6 +31,7 @@ logs/
 *.out
 !lawfirm_langgraph/logs/
 !logs/test/
+!logs/test/**
 
 # ============================================================================
 # Python Cache & Compiled Files

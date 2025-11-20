@@ -10,6 +10,7 @@ from typing import Any, Dict, Tuple
 from core.workflow.state.state_definitions import LegalWorkflowState
 from core.workflow.state.workflow_types import QueryComplexity
 from core.shared.wrappers.node_wrappers import with_state_optimization
+from core.workflow.utils.ethical_checker import EthicalChecker
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):
@@ -318,6 +319,39 @@ class ClassificationMixin:
             query_start_time = time.time()
 
             query = self._restore_and_validate_query(state)
+            
+            # 윤리적 검사 수행
+            ethical_checker = EthicalChecker(logger_instance=self.logger)
+            is_problematic, rejection_reason, severity = ethical_checker.check_query(query)
+            
+            if is_problematic:
+                # 윤리적 문제 감지 시 플래그 설정 및 거부 사유 저장
+                self._set_state_value(state, "is_ethically_problematic", True)
+                self._set_state_value(state, "ethical_rejection_reason", rejection_reason)
+                
+                # 메타데이터에 윤리 검사 결과 저장
+                metadata = self._get_state_value(state, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["ethical_check"] = {
+                    "rejected": True,
+                    "reason": rejection_reason,
+                    "severity": severity
+                }
+                self._set_state_value(state, "metadata", metadata)
+                
+                # 기본 분류 결과는 설정하되, 윤리적 문제 플래그로 라우팅에서 처리
+                self._set_state_value(state, "query_type", "ethical_rejection")
+                self._set_state_value(state, "query_complexity", QueryComplexity.SIMPLE.value)
+                self._set_state_value(state, "needs_search", False)
+                
+                self.logger.warning(
+                    f"윤리적 문제 감지: {rejection_reason} (심각도: {severity})"
+                )
+                
+                self._preserve_metadata_and_common_state(state)
+                return state
+            
             classified_type, confidence, complexity, needs_search = self._execute_classification(query)
 
             query_type_str = classified_type.value if hasattr(classified_type, 'value') else str(classified_type)

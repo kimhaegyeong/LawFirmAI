@@ -97,7 +97,16 @@ from core.workflow.utils.workflow_constants import (
     RetryConfig,
     WorkflowConstants,
 )
-from core.workflow.utils.workflow_routes import WorkflowRoutes
+# Phase 5: 새로운 라우팅 클래스들 사용
+from core.workflow.routes.classification_routes import ClassificationRoutes
+from core.workflow.routes.search_routes import SearchRoutes
+from core.workflow.routes.answer_routes import AnswerRoutes
+from core.workflow.routes.agentic_routes import AgenticRoutes
+# 호환성을 위해 기존 WorkflowRoutes도 유지 (점진적 마이그레이션)
+try:
+    from core.workflow.utils.workflow_routes import WorkflowRoutes
+except ImportError:
+    from core.agents.workflow_routes import WorkflowRoutes
 from core.workflow.utils.workflow_utils import WorkflowUtils
 from core.classification.classifiers.question_classifier import QuestionType
 from core.search.processors.result_merger import ResultMerger, ResultRanker
@@ -472,24 +481,80 @@ class EnhancedLegalQuestionWorkflow(
             self.logger.warning(f"Failed to initialize AnswerQualityValidator: {e}")
             self.answer_quality_validator = None
 
-        # WorkflowGraphBuilder 초기화
-        try:
-            from core.workflow.builders.workflow_graph_builder import WorkflowGraphBuilder
-            self.workflow_graph_builder = WorkflowGraphBuilder(
-                config=self.config,
-                logger=self.logger,
-                route_by_complexity_func=self._route_by_complexity,
-                route_by_complexity_with_agentic_func=self._route_by_complexity_with_agentic,
-                route_after_agentic_func=self._route_after_agentic,
-                should_analyze_document_func=self._should_analyze_document,
-                should_skip_search_adaptive_func=self._should_skip_search_adaptive,
-                should_retry_validation_func=self._should_retry_validation,
-                should_skip_final_node_func=self._should_skip_final_node
-            )
-            self.logger.info("WorkflowGraphBuilder initialized")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize WorkflowGraphBuilder: {e}")
-            self.workflow_graph_builder = None
+        # 그래프 빌더 초기화 (Phase 4: ModularGraphBuilder 사용, 기존 WorkflowGraphBuilder는 폴백)
+        self.use_modular_builder = os.getenv("USE_MODULAR_GRAPH_BUILDER", "true").lower() == "true"
+        
+        if self.use_modular_builder:
+            try:
+                from core.workflow.builders.modular_graph_builder import ModularGraphBuilder
+                from core.workflow.registry.node_registry import NodeRegistry
+                from core.workflow.registry.subgraph_registry import SubgraphRegistry
+                from core.workflow.edges.classification_edges import ClassificationEdges
+                from core.workflow.edges.search_edges import SearchEdges
+                from core.workflow.edges.answer_edges import AnswerEdges
+                from core.workflow.edges.agentic_edges import AgenticEdges
+                
+                # 레지스트리 초기화
+                node_registry = NodeRegistry(logger_instance=self.logger)
+                subgraph_registry = SubgraphRegistry(logger_instance=self.logger)
+                
+                # 엣지 빌더 초기화
+                classification_edges = ClassificationEdges(
+                    route_by_complexity_func=self._route_by_complexity,
+                    route_by_complexity_with_agentic_func=self._route_by_complexity_with_agentic,
+                    should_analyze_document_func=self._should_analyze_document,
+                    logger_instance=self.logger
+                )
+                search_edges = SearchEdges(
+                    should_skip_search_adaptive_func=self._should_skip_search_adaptive,
+                    logger_instance=self.logger
+                )
+                answer_edges = AnswerEdges(
+                    should_retry_validation_func=self._should_retry_validation,
+                    should_skip_final_node_func=self._should_skip_final_node,
+                    logger_instance=self.logger
+                )
+                agentic_edges = AgenticEdges(
+                    route_after_agentic_func=self._route_after_agentic,
+                    logger_instance=self.logger
+                )
+                
+                self.modular_graph_builder = ModularGraphBuilder(
+                    config=self.config,
+                    logger_instance=self.logger,
+                    node_registry=node_registry,
+                    subgraph_registry=subgraph_registry,
+                    classification_edges=classification_edges,
+                    search_edges=search_edges,
+                    answer_edges=answer_edges,
+                    agentic_edges=agentic_edges
+                )
+                self.workflow_graph_builder = None  # ModularGraphBuilder 사용
+                self.logger.info("ModularGraphBuilder initialized")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize ModularGraphBuilder: {e}, falling back to WorkflowGraphBuilder")
+                self.use_modular_builder = False
+                self.modular_graph_builder = None
+        
+        if not self.use_modular_builder:
+            # 기존 WorkflowGraphBuilder 사용 (폴백)
+            try:
+                from core.workflow.builders.workflow_graph_builder import WorkflowGraphBuilder
+                self.workflow_graph_builder = WorkflowGraphBuilder(
+                    config=self.config,
+                    logger=self.logger,
+                    route_by_complexity_func=self._route_by_complexity,
+                    route_by_complexity_with_agentic_func=self._route_by_complexity_with_agentic,
+                    route_after_agentic_func=self._route_after_agentic,
+                    should_analyze_document_func=self._should_analyze_document,
+                    should_skip_search_adaptive_func=self._should_skip_search_adaptive,
+                    should_retry_validation_func=self._should_retry_validation,
+                    should_skip_final_node_func=self._should_skip_final_node
+                )
+                self.logger.info("WorkflowGraphBuilder initialized (fallback)")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize WorkflowGraphBuilder: {e}")
+                self.workflow_graph_builder = None
 
         # QueryEnhancer 초기화 (llm, llm_fast, term_integrator, config 필요)
         self.query_enhancer = QueryEnhancer(
@@ -575,7 +640,17 @@ class EnhancedLegalQuestionWorkflow(
             self.logger.warning(f"Failed to initialize DirectAnswerHandler: {e}")
             self.direct_answer_handler = None
 
-        # 워크플로우 라우팅 핸들러 초기화 (Phase 9 리팩토링) - answer_generator 초기화 이후
+        # 워크플로우 라우팅 핸들러 초기화 (Phase 5: 새로운 라우팅 클래스들 사용)
+        self.classification_routes = ClassificationRoutes(logger_instance=self.logger)
+        self.search_routes = SearchRoutes(logger_instance=self.logger)
+        self.answer_routes = AnswerRoutes(
+            retry_manager=self.retry_manager,
+            answer_generator=self.answer_generator,
+            logger_instance=self.logger
+        )
+        self.agentic_routes = AgenticRoutes(logger_instance=self.logger)
+        
+        # 호환성을 위해 기존 WorkflowRoutes도 유지 (래퍼 메서드용)
         self.workflow_routes = WorkflowRoutes(
             retry_manager=self.retry_manager,
             answer_generator=self.answer_generator,
@@ -738,8 +813,83 @@ class EnhancedLegalQuestionWorkflow(
         return MockLLM()
 
     def _build_graph(self) -> StateGraph:
-        """WorkflowGraphBuilder.build_graph 래퍼"""
-        if self.workflow_graph_builder:
+        """그래프 빌더를 사용하여 그래프 구축 (ModularGraphBuilder 우선)"""
+        if self.use_modular_builder and self.modular_graph_builder:
+            # ModularGraphBuilder 사용
+            from core.workflow.nodes.classification_nodes import ClassificationNodes
+            from core.workflow.nodes.search_nodes import SearchNodes
+            from core.workflow.nodes.document_nodes import DocumentNodes
+            from core.workflow.nodes.answer_nodes import AnswerNodes
+            from core.workflow.nodes.agentic_nodes import AgenticNodes
+            from core.workflow.nodes.ethical_rejection_node import EthicalRejectionNode
+            
+            # 노드 클래스 인스턴스 생성
+            classification_nodes = ClassificationNodes(workflow_instance=self, logger_instance=self.logger)
+            search_nodes = SearchNodes(workflow_instance=self, logger_instance=self.logger)
+            document_nodes = DocumentNodes(workflow_instance=self, logger_instance=self.logger)
+            answer_nodes = AnswerNodes(workflow_instance=self, logger_instance=self.logger)
+            agentic_nodes = AgenticNodes(workflow_instance=self, logger_instance=self.logger)
+            
+            # 노드 레지스트리에 등록
+            node_registry = self.modular_graph_builder.node_registry
+            node_registry.register("classify_query_and_complexity", classification_nodes.classify_query_and_complexity)
+            node_registry.register("direct_answer_node", classification_nodes.direct_answer)
+            node_registry.register("classification_parallel", classification_nodes.classification_parallel)
+            node_registry.register("assess_urgency", classification_nodes.assess_urgency)
+            node_registry.register("resolve_multi_turn", classification_nodes.resolve_multi_turn)
+            node_registry.register("route_expert", classification_nodes.route_expert)
+            node_registry.register("analyze_document", document_nodes.analyze_document)
+            node_registry.register("expand_keywords", search_nodes.expand_keywords)
+            node_registry.register("prepare_search_query", search_nodes.prepare_search_query)
+            node_registry.register("execute_searches_parallel", search_nodes.execute_searches_parallel)
+            node_registry.register("process_search_results_combined", search_nodes.process_search_results_combined)
+            node_registry.register("prepare_documents_and_terms", document_nodes.prepare_documents_and_terms)
+            node_registry.register("generate_and_validate_answer", answer_nodes.generate_and_validate_answer)
+            node_registry.register("continue_answer_generation", answer_nodes.continue_answer_generation)
+            node_registry.register("ethical_rejection", EthicalRejectionNode.ethical_rejection_node)
+            
+            # 스트리밍 노드 추가
+            if hasattr(self, 'generate_answer_stream'):
+                node_registry.register("generate_answer_stream", answer_nodes.generate_answer_stream)
+            if hasattr(self, 'generate_answer_final'):
+                node_registry.register("generate_answer_final", answer_nodes.generate_answer_final)
+            
+            # Agentic 노드 추가
+            if self.config.use_agentic_mode:
+                node_registry.register("agentic_decision", agentic_nodes.agentic_decision_node)
+            
+            # 서브그래프 등록 (Phase 3: 서브그래프를 메인 그래프에 통합)
+            from core.workflow.subgraphs.classification_subgraph import ClassificationSubgraph
+            from core.workflow.subgraphs.search_subgraph import SearchSubgraph
+            from core.workflow.subgraphs.answer_generation_subgraph import AnswerGenerationSubgraph
+            
+            subgraph_registry = self.modular_graph_builder.subgraph_registry
+            
+            # 분류 서브그래프 등록
+            classification_subgraph = ClassificationSubgraph(
+                workflow_instance=self,
+                logger_instance=self.logger
+            )
+            subgraph_registry.register("classification_subgraph", classification_subgraph.build_subgraph())
+            
+            # 검색 서브그래프 등록
+            search_subgraph = SearchSubgraph(
+                workflow_instance=self,
+                logger_instance=self.logger
+            )
+            subgraph_registry.register("search_subgraph", search_subgraph.build_subgraph())
+            
+            # 답변 생성 서브그래프 등록
+            answer_subgraph = AnswerGenerationSubgraph(
+                workflow_instance=self,
+                logger_instance=self.logger
+            )
+            subgraph_registry.register("answer_generation_subgraph", answer_subgraph.build_subgraph())
+            
+            return self.modular_graph_builder.build_graph()
+        
+        elif self.workflow_graph_builder:
+            # 기존 WorkflowGraphBuilder 사용 (폴백)
             node_handlers = {
                 "generate_answer_stream": self.generate_answer_stream,
                 "generate_answer_final": self.generate_answer_final,
@@ -761,6 +911,7 @@ class EnhancedLegalQuestionWorkflow(
             }
             return self.workflow_graph_builder.build_graph(node_handlers)
         
+        # 기본 그래프 반환
         from langgraph.graph import StateGraph
         return StateGraph(LegalWorkflowState)
 
@@ -1098,16 +1249,17 @@ class EnhancedLegalQuestionWorkflow(
         return state
 
     def _should_retry_generation(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_retry_generation 래퍼"""
+        """AnswerRoutes.should_retry_generation 사용 (호환성 유지)"""
+        # 기존 WorkflowRoutes의 메서드 사용 (새로운 AnswerRoutes에는 아직 없음)
         return self.workflow_routes.should_retry_generation(state)
 
     def _should_skip_final_node(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_skip_final_node 래퍼"""
-        return self.workflow_routes.should_skip_final_node(state)
-    
+        """AnswerRoutes.should_skip_final_node 사용"""
+        return self.answer_routes.should_skip_final_node(state)
+
     def _should_retry_validation(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_retry_validation 래퍼"""
-        return self.workflow_routes.should_retry_validation(state, answer_generator=self.answer_generator)
+        """AnswerRoutes.should_retry_validation 사용"""
+        return self.answer_routes.should_retry_validation(state, answer_generator=self.answer_generator)
 
 
     @observe(name="agentic_decision")
@@ -4912,8 +5064,8 @@ class EnhancedLegalQuestionWorkflow(
         return self.workflow_routes.assess_complexity(state)
 
     def _should_analyze_document(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_analyze_document 래퍼"""
-        return self.workflow_routes.should_analyze_document(state)
+        """SearchRoutes.should_analyze_document 사용"""
+        return self.search_routes.should_analyze_document(state)
 
     # ============================================================================
     # 개선된 검색 노드들 (노드 분리 및 병렬 실행 지원)
@@ -5369,24 +5521,20 @@ class EnhancedLegalQuestionWorkflow(
         return self.workflow_routes.should_skip_search(state)
 
     def _should_skip_search_adaptive(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.should_skip_search_adaptive 래퍼"""
-        return self.workflow_routes.should_skip_search_adaptive(state)
+        """SearchRoutes.should_skip_search_adaptive 사용"""
+        return self.search_routes.should_skip_search_adaptive(state)
 
     def _route_by_complexity(self, state: LegalWorkflowState) -> str:
-        """WorkflowRoutes.route_by_complexity 래퍼"""
-        return self.workflow_routes.route_by_complexity(state)
+        """ClassificationRoutes.route_by_complexity 사용"""
+        return self.classification_routes.route_by_complexity(state)
     
     def _route_by_complexity_with_agentic(self, state: LegalWorkflowState) -> str:
-        """Agentic 모드용 복잡도 라우팅 (기존과 동일하지만 complex는 agentic_decision으로)"""
-        return self.workflow_routes.route_by_complexity(state)
+        """Agentic 모드용 복잡도 라우팅"""
+        return self.classification_routes.route_by_complexity_with_agentic(state)
     
     def _route_after_agentic(self, state: LegalWorkflowState) -> str:
         """Agentic 노드 실행 후 라우팅 (검색 결과 유무에 따라)"""
-        search_results = self._get_state_value(state, "search", {}).get("results", [])
-        if search_results and len(search_results) > 0:
-            return "has_results"
-        else:
-            return "no_results"
+        return self.agentic_routes.route_after_agentic(state)
     
     # ============================================================================
     # process_search_results_combined 헬퍼 메서드들 (메서드 분해)

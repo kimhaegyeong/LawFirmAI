@@ -54,6 +54,12 @@ class WorkflowRoutes:
 
     def route_by_complexity(self, state: LegalWorkflowState) -> str:
         """복잡도에 따라 라우팅"""
+        # 윤리적 문제 감지 확인 (최우선)
+        is_problematic = WorkflowUtils.get_state_value(state, "is_ethically_problematic", False)
+        if is_problematic:
+            self.logger.warning("윤리적 문제 감지: ethical_reject로 라우팅")
+            return "ethical_reject"
+        
         # 디버깅: state 구조 확인
         state_keys = list(state.keys()) if isinstance(state, dict) else []
         print(f"[DEBUG] _route_by_complexity: state keys={state_keys[:15]}")

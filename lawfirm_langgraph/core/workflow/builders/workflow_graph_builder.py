@@ -6,11 +6,15 @@ Workflow Graph Builder
 
 import logging
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
 from core.workflow.state.state_definitions import LegalWorkflowState
+from core.workflow.edges.classification_edges import ClassificationEdges
+from core.workflow.edges.search_edges import SearchEdges
+from core.workflow.edges.answer_edges import AnswerEdges
+from core.workflow.edges.agentic_edges import AgenticEdges
 
 
 class WorkflowGraphBuilder:
@@ -26,7 +30,11 @@ class WorkflowGraphBuilder:
         should_analyze_document_func=None,
         should_skip_search_adaptive_func=None,
         should_retry_validation_func=None,
-        should_skip_final_node_func=None
+        should_skip_final_node_func=None,
+        classification_edges: Optional[ClassificationEdges] = None,
+        search_edges: Optional[SearchEdges] = None,
+        answer_edges: Optional[AnswerEdges] = None,
+        agentic_edges: Optional[AgenticEdges] = None
     ):
         self.config = config
         self.logger = logger
@@ -37,6 +45,27 @@ class WorkflowGraphBuilder:
         self._should_skip_search_adaptive_func = should_skip_search_adaptive_func
         self._should_retry_validation_func = should_retry_validation_func
         self._should_skip_final_node_func = should_skip_final_node_func
+        
+        # 엣지 빌더 초기화 (없으면 자동 생성)
+        self.classification_edges = classification_edges or ClassificationEdges(
+            route_by_complexity_func=route_by_complexity_func,
+            route_by_complexity_with_agentic_func=route_by_complexity_with_agentic_func,
+            should_analyze_document_func=should_analyze_document_func,
+            logger_instance=logger
+        )
+        self.search_edges = search_edges or SearchEdges(
+            should_skip_search_adaptive_func=should_skip_search_adaptive_func,
+            logger_instance=logger
+        )
+        self.answer_edges = answer_edges or AnswerEdges(
+            should_retry_validation_func=should_retry_validation_func,
+            should_skip_final_node_func=should_skip_final_node_func,
+            logger_instance=logger
+        )
+        self.agentic_edges = agentic_edges or AgenticEdges(
+            route_after_agentic_func=route_after_agentic_func,
+            logger_instance=logger
+        )
 
     def build_graph(
         self,
@@ -59,6 +88,12 @@ class WorkflowGraphBuilder:
     ) -> None:
         """노드 추가"""
         workflow.add_node("classify_query_and_complexity", node_handlers.get("classify_query_and_complexity"))
+        
+        # 윤리적 거부 노드 추가
+        from core.workflow.nodes.ethical_rejection_node import EthicalRejectionNode
+        workflow.add_node("ethical_rejection", EthicalRejectionNode.ethical_rejection_node)
+        self.logger.info("ethical_rejection node added to workflow")
+        
         workflow.add_node("direct_answer", node_handlers.get("direct_answer_node"))
         workflow.add_node("classification_parallel", node_handlers.get("classification_parallel"))
         workflow.add_node("assess_urgency", node_handlers.get("assess_urgency"))
@@ -91,102 +126,35 @@ class WorkflowGraphBuilder:
         workflow.set_entry_point("classify_query_and_complexity")
 
     def setup_routing(self, workflow: StateGraph) -> None:
-        """라우팅 설정"""
-        if self.config.use_agentic_mode:
-            workflow.add_conditional_edges(
-                "classify_query_and_complexity",
-                self._route_by_complexity_with_agentic_func,
-                {
-                    "simple": "direct_answer",
-                    "moderate": "classification_parallel",
-                    "complex": "agentic_decision",
-                }
-            )
-        else:
-            workflow.add_conditional_edges(
-                "classify_query_and_complexity",
-                self._route_by_complexity_func,
-                {
-                    "simple": "direct_answer",
-                    "moderate": "classification_parallel",
-                    "complex": "classification_parallel",
-                }
-            )
-
-        # agentic_decision 라우팅은 setup_routing의 끝에서 처리
-
-        workflow.add_conditional_edges(
-            "route_expert",
-            self._should_analyze_document_func,
-            {
-                "analyze": "analyze_document",
-                "skip": "expand_keywords"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "prepare_search_query",
-            self._should_skip_search_adaptive_func,
-            {
-                "skip": self._get_answer_generation_node(),
-                "continue": "execute_searches_parallel"
-            }
-        )
-
-        # 답변 생성 노드 라우팅 (환경 변수 기반)
+        """라우팅 설정 (엣지 빌더 사용)"""
         answer_node = self._get_answer_generation_node()
-        if answer_node == "generate_answer_stream":
-            # 성능 최적화: 조건부로 최종 노드 스킵 가능
-            # 스트리밍 노드 -> 조건부 최종 노드 -> 검증
-            workflow.add_conditional_edges(
-                "generate_answer_stream",
-                self._should_skip_final_node_func,
-                {
-                    "skip": END,  # 이미 검증/포맷팅 완료된 경우 스킵
-                    "finalize": "generate_answer_final"  # 검증/포맷팅 필요한 경우
-                }
-            )
-            workflow.add_conditional_edges(
-                "generate_answer_final",
-                self._should_retry_validation_func,
-                {
-                    "accept": END,
-                    "retry_generate": "generate_answer_stream",
-                    "retry_search": "expand_keywords"
-                }
-            )
-        elif answer_node == "generate_answer_final":
-            # 최종 노드만 사용 (테스트 모드)
-            workflow.add_conditional_edges(
-                "generate_answer_final",
-                self._should_retry_validation_func,
-                {
-                    "accept": END,
-                    "retry_generate": "generate_answer_final",
-                    "retry_search": "expand_keywords"
-                }
-            )
-        else:
-            # 기본 노드 사용 (generate_and_validate_answer)
-            workflow.add_conditional_edges(
-                "generate_and_validate_answer",
-                self._should_retry_validation_func,
-                {
-                    "accept": END,
-                    "retry_generate": "generate_and_validate_answer",
-                    "retry_search": "expand_keywords"
-                }
-            )
         
-        # agentic_decision에서도 답변 생성 노드 사용
+        # 분류 관련 라우팅 엣지 추가
+        self.classification_edges.add_classification_edges(
+            workflow,
+            use_agentic_mode=self.config.use_agentic_mode
+        )
+        
+        # 문서 분석 관련 엣지 추가
+        self.classification_edges.add_document_analysis_edges(workflow)
+        
+        # 검색 관련 엣지 추가 (라우팅 포함)
+        self.search_edges.add_search_edges(
+            workflow,
+            answer_generation_node=answer_node
+        )
+        
+        # 답변 생성 관련 엣지 추가
+        self.answer_edges.add_answer_generation_edges(
+            workflow,
+            answer_node=answer_node
+        )
+        
+        # Agentic 모드 관련 엣지 추가
         if self.config.use_agentic_mode:
-            workflow.add_conditional_edges(
-                "agentic_decision",
-                self._route_after_agentic_func,
-                {
-                    "has_results": "prepare_documents_and_terms",
-                    "no_results": self._get_answer_generation_node(),
-                }
+            self.agentic_edges.add_agentic_edges(
+                workflow,
+                answer_generation_node=answer_node
             )
 
     def _get_answer_generation_node(self) -> str:
@@ -206,15 +174,16 @@ class WorkflowGraphBuilder:
             return "generate_answer_final"
     
     def add_edges(self, workflow: StateGraph) -> None:
-        """엣지 추가"""
-        workflow.add_edge("direct_answer", END)
-        workflow.add_edge("classification_parallel", "route_expert")
-        workflow.add_edge("analyze_document", "expand_keywords")
-        workflow.add_edge("expand_keywords", "prepare_search_query")
-        workflow.add_edge("execute_searches_parallel", "process_search_results_combined")
-        workflow.add_edge("process_search_results_combined", "prepare_documents_and_terms")
+        """엣지 추가 (엣지 빌더 사용)"""
+        # 윤리적 거부 노드는 END로 연결
+        workflow.add_edge("ethical_rejection", END)
         
-        # 답변 생성 노드로의 엣지 (환경 변수 기반)
-        answer_node = self._get_answer_generation_node()
-        workflow.add_edge("prepare_documents_and_terms", answer_node)
+        # 분류 병렬 처리 후 route_expert로
+        workflow.add_edge("classification_parallel", "route_expert")
+        
+        # 직접 답변 엣지 추가
+        self.answer_edges.add_direct_answer_edge(workflow)
+        
+        # 나머지 엣지들은 setup_routing에서 처리됨
+        # (검색 엣지, 답변 생성 엣지 등)
 
