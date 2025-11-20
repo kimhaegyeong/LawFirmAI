@@ -13,12 +13,26 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# 상대 import 문제 해결
+# QuestionType import
 try:
-    from .question_classifier import QuestionType
+    from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from question_classifier import QuestionType
+    try:
+        # 호환성을 위한 fallback
+        from core.services.question_classifier import QuestionType
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        try:
+            from question_classifier import QuestionType
+        except ImportError:
+            # 최종 fallback: enum 직접 정의
+            from enum import Enum
+            class QuestionType(Enum):
+                GENERAL_QUESTION = "general_question"
+                LAW_INQUIRY = "law_inquiry"
+                PRECEDENT_SEARCH = "precedent_search"
+                DOCUMENT_ANALYSIS = "document_analysis"
+                LEGAL_ADVICE = "legal_advice"
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +85,6 @@ class UnifiedPromptManager:
     def _ensure_prompts_loaded(self):
         """프롬프트가 로드되지 않았으면 로드 (지연 로딩)"""
         if not self._prompts_loaded:
-            # 디렉토리 생성 (필요한 경우)
-            self.prompts_dir.mkdir(parents=True, exist_ok=True)
-            
             # 기본 프롬프트 로드
             self._base_prompts = self._load_base_prompts()
             self._domain_templates = self._load_domain_templates()
@@ -370,7 +381,33 @@ class UnifiedPromptManager:
             # 6. 최종 프롬프트 구성
             final_prompt = self._build_final_prompt(base_prompt, query, context, question_type)
 
-            # 7. 프롬프트 검증: 문서 내용이 포함되었는지 확인 (강화된 검증)
+            # 7. 토큰 수 최종 검증
+            final_tokens = self._estimate_tokens(final_prompt)
+            MAX_INPUT_TOKENS = 1_048_576
+            
+            if final_tokens > MAX_INPUT_TOKENS:
+                logger.error(
+                    f"❌ [TOKEN LIMIT EXCEEDED] Final prompt exceeds maximum: "
+                    f"{final_tokens:,} tokens (max: {MAX_INPUT_TOKENS:,})"
+                )
+                # 긴급 축약
+                final_prompt = self._emergency_truncate_prompt(
+                    final_prompt, 
+                    MAX_INPUT_TOKENS, 
+                    base_prompt, 
+                    query
+                )
+                final_tokens = self._estimate_tokens(final_prompt)
+                logger.warning(
+                    f"⚠️ [EMERGENCY TRUNCATION] Prompt truncated to {final_tokens:,} tokens"
+                )
+            
+            logger.info(
+                f"✅ [PROMPT TOKENS] Final prompt: {final_tokens:,} tokens "
+                f"({final_tokens/MAX_INPUT_TOKENS*100:.1f}% of max)"
+            )
+
+            # 8. 프롬프트 검증: 문서 내용이 포함되었는지 확인 (강화된 검증)
             validation_result = self._validate_prompt_contains_documents(final_prompt, context)
             if not validation_result["has_document_content"]:
                 doc_count_in_context = validation_result.get("document_count_in_context", 0)
@@ -662,39 +699,35 @@ class UnifiedPromptManager:
 - WHERE 절에 정확한 필터를 명시하고, 반드시 LIMIT를 포함하세요.
 - 결과는 조문/사건번호/선고일/법원을 기준으로 재현 가능해야 합니다.
 
+### 법령 조문 검색 규칙 (중요)
+- **법령 조문은 정확한 법령명과 조문번호만 조회하세요.**
+- 법령명은 정확히 일치하거나 LIKE '%법령명%'로 매칭하되, 조문번호는 반드시 정확히 일치해야 합니다.
+- 예: "민법 제750조" → WHERE law_name LIKE '%민법%' AND article_number = 750
+
+### 판례/결정례/해석례 검색 규칙 (중요)
+- **판례, 결정례, 해석례에서는 법령명과 조문번호가 모두 일치하는 항목만 조회하세요.**
+- 질의에 법령명과 조문번호가 포함된 경우, 반드시 WHERE 절에 법령명과 조문번호 필터를 추가하세요.
+- 예: "민법 제750조 관련 판례" → WHERE content LIKE '%민법%' AND content LIKE '%제750조%' 또는 WHERE law_name LIKE '%민법%' AND article_number = 750
+
 ### 예시(한국어 → SQL)
 - 질의: "민법 제750조 조문 보여줘"
   SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%민법%' AND article_number = 750 LIMIT 5;
-- 질의: "대법원 2021다12345 사건 요지"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE case_number = '2021다12345' LIMIT 5;
-- 질의: "최근 3년 민사 손해배상 판결 건수"
-  SQL: SELECT COUNT(*) AS cnt FROM cases WHERE decision_date >= date('now','-3 years');
 - 질의: "형법 제307조 찾아줘"
   SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%형법%' AND article_number = 307 LIMIT 5;
-- 질의: "민법 개정 이력 중 2020년 이후만"
-  SQL: SELECT law_name, effective_date, description FROM amendments WHERE effective_date >= '2020-01-01' LIMIT 20;
-- 질의: "사건 2019다12345가 인용한 판례 목록"
-  SQL: SELECT from_case_id, to_case_id FROM case_citations WHERE from_case_id = '2019다12345' LIMIT 20;
 - 질의: "상법 제24조 전문 보여줘"
   SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%상법%' AND article_number = 24 LIMIT 5;
-- 질의: "서울고등법원 2022년 이후 판결 요지 10건"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE court LIKE '%고등법원%' AND decision_date >= '2022-01-01' LIMIT 10;
-- 질의: "저작권법 최근 개정 내역"
-  SQL: SELECT law_name, effective_date, description FROM amendments WHERE law_name LIKE '%저작권법%' ORDER BY effective_date DESC LIMIT 20;
-- 질의: "사건요지에 '손해배상' 포함된 판례 20건"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE summary LIKE '%손해배상%' LIMIT 20;
-- 질의: "민법 관련 조문 중 '불법행위' 포함 본문"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%민법%' AND content LIKE '%불법행위%' LIMIT 20;
 - 질의: "근로기준법 제60조 연차 규정"
   SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%근로기준법%' AND article_number = 60 LIMIT 5;
-- 질의: "고용노동부 관련 판례 2021년 이후"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE summary LIKE '%고용노동부%' AND decision_date >= '2021-01-01' LIMIT 20;
-- 질의: "부가가치세법 세금계산서 관련 조문"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%부가가치세법%' AND content LIKE '%세금계산서%' LIMIT 20;
-- 질의: "행정절차법 최근 개정사항"
-  SQL: SELECT law_name, effective_date, description FROM amendments WHERE law_name LIKE '%행정절차법%' ORDER BY effective_date DESC LIMIT 20;
-- 질의: "산재 보상' 포함 판례 10건"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE summary LIKE '%산재 보상%' LIMIT 10;
+- 질의: "민법 제750조 관련 판례"
+  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE summary LIKE '%민법%' AND summary LIKE '%제750조%' LIMIT 20;
+- 질의: "형법 제307조 관련 결정례"
+  SQL: SELECT doc_id, org, decision_date, text FROM decision_paragraphs WHERE text LIKE '%형법%' AND text LIKE '%제307조%' LIMIT 20;
+- 질의: "상법 제24조 관련 해석례"
+  SQL: SELECT doc_id, org, title, text FROM interpretation_paragraphs WHERE text LIKE '%상법%' AND text LIKE '%제24조%' LIMIT 20;
+- 질의: "대법원 2021다12345 사건 요지"
+  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE case_number = '2021다12345' LIMIT 5;
+- 질의: "서울고등법원 2022년 이후 판결 요지 10건"
+  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE court LIKE '%고등법원%' AND decision_date >= '2022-01-01' LIMIT 10;
 """
         except Exception:
             pass
@@ -708,6 +741,68 @@ class UnifiedPromptManager:
 """
         return base_prompt + context_guidance
 
+    def _remove_duplicate_document_sections(self, prompt: str) -> str:
+        """프롬프트에서 중복된 문서 섹션 제거"""
+        import re
+        
+        # 문서 섹션 패턴 찾기
+        patterns = [
+            r'## 검색된 법률 문서.*?(?=##|\n---|\n## 사용자 질문|$)',
+            r'## 제공된 법률 문서.*?(?=##|\n---|\n## 사용자 질문|$)',
+            r'## 참고 문서 목록.*?(?=##|\n---|\n## 사용자 질문|$)',
+        ]
+        
+        for pattern in patterns:
+            matches = list(re.finditer(pattern, prompt, re.DOTALL))
+            if len(matches) > 1:
+                # 첫 번째만 남기고 나머지 제거
+                for match in matches[1:]:
+                    prompt = prompt[:match.start()] + prompt[match.end():]
+        
+        return prompt
+    
+    def _remove_duplicate_citation_requirements(self, prompt: str) -> str:
+        """프롬프트에서 중복된 Citation 요구사항 제거"""
+        import re
+        
+        # Citation 관련 섹션 패턴
+        patterns = [
+            r'STEP 4: Citation 필수 요구사항.*?(?=STEP|\n---|\n## 사용자 질문|$)',
+            r'Citation 필수 요구사항.*?(?=STEP|\n---|\n## 사용자 질문|$)',
+            r'최소 2개 이상의 법률 조문.*?(?=STEP|\n---|\n## 사용자 질문|$)',
+        ]
+        
+        for pattern in patterns:
+            prompt = re.sub(pattern, '', prompt, flags=re.DOTALL)
+        
+        return prompt
+    
+    def _simplify_base_prompt(self, base_prompt: str) -> str:
+        """base_prompt 간소화 (불필요한 섹션 제거)"""
+        import re
+        
+        # 불필요한 섹션 제거
+        sections_to_remove = [
+            r'## 법률 자문 지침.*?(?=##|$)',
+            r'## 컨텍스트 처리.*?(?=##|$)',
+            r'## 답변 품질 검증 체크리스트.*?(?=##|$)',
+            r'## 모델 최적화 설정.*?(?=##|$)',
+            r'## 검색 결과 통계.*?(?=##|$)',
+        ]
+        
+        for pattern in sections_to_remove:
+            base_prompt = re.sub(pattern, '', base_prompt, flags=re.DOTALL)
+        
+        # 중복된 설명 제거
+        base_prompt = re.sub(
+            r'한국 법률 특성.*?실무적 관점.*?(?=##|$)', 
+            '## 한국 법률 특성\n- 성문법 중심, 대법원 판례 중시, 실무적 관점\n', 
+            base_prompt, 
+            flags=re.DOTALL
+        )
+        
+        return base_prompt.strip()
+    
     def _simplify_prompt_for_no_results(self, base_prompt: str) -> str:
         """검색 결과가 없을 때 프롬프트 단순화 - 프롬프트 출력 방지"""
         # base_prompt에서 검색 결과 관련 지시사항 제거
@@ -768,583 +863,462 @@ class UnifiedPromptManager:
         return base_prompt + optimization
 
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
-        """최종 프롬프트 구성 - 자연스럽고 친근한 답변 스타일"""
+        """최종 프롬프트 구성 - 토큰 제한 적용"""
+        
+        # Gemini 2.5 Flash 최대 입력 토큰
+        MAX_INPUT_TOKENS = 1_048_576
+        SAFE_MARGIN = 0.1  # 10% 안전 마진
+        MAX_SAFE_TOKENS = int(MAX_INPUT_TOKENS * (1 - SAFE_MARGIN))  # 약 943,718 토큰
+        
+        # 1단계: 기본 프롬프트 + 질문 토큰 수 계산
+        base_tokens = self._estimate_tokens(base_prompt)
+        query_tokens = self._estimate_tokens(query)
+        reserved_tokens = base_tokens + query_tokens + 1000  # 여유 공간 1000토큰
+        
+        # 사용 가능한 문서 토큰 수
+        available_doc_tokens = MAX_SAFE_TOKENS - reserved_tokens
+        
+        logger.info(
+            f"📊 [TOKEN BUDGET] Base: {base_tokens:,}, Query: {query_tokens:,}, "
+            f"Available for docs: {available_doc_tokens:,} tokens (max: {MAX_SAFE_TOKENS:,})"
+        )
 
-        # 문서 데이터 검증 및 로깅 강화
         structured_docs = context.get("structured_documents", {})
         document_count = context.get("document_count", 0)
 
-        # 문서 검증 로깅
+        # 문서 정규화 (간단 버전)
+        normalized_docs = []
         if isinstance(structured_docs, dict):
             raw_documents = structured_docs.get("documents", [])
             doc_count = len(raw_documents) if raw_documents else 0
 
-            # 문서 필드 정규화 및 유효성 검증 (개선: content 없어도 다른 필드 허용)
-            normalized_documents = []
-            skipped_docs = []
             for doc in raw_documents:
                 normalized = self._normalize_document_fields(doc)
-                if not normalized:
-                    skipped_docs.append({"doc": doc, "reason": "normalized is empty"})
-                    continue
+                if normalized:
+                    # 개선: 이중 필터링 제거 (_normalize_document_fields에서 이미 필터링)
+                    # content 체크는 _normalize_document_fields 내부에서 수행되므로 여기서는 추가 체크 불필요
+                    normalized_docs.append(normalized)
 
-                # content가 없거나 10자 이하인 경우에도 다른 필드가 있으면 포함
-                content = normalized.get("content", "")
-                source = normalized.get("source", "")
-
-                # 최소 조건: content가 10자 이상이거나, source가 있고 다른 필드가 있는 경우
-                has_valid_content = content and len(content.strip()) > 10
-                has_other_fields = source and (normalized.get("document_id") or normalized.get("metadata"))
-
-                if has_valid_content or has_other_fields:
-                    normalized_documents.append(normalized)
-                else:
-                    skipped_docs.append({
-                        "doc": doc,
-                        "reason": f"content too short ({len(content)} chars), source={source}"
-                    })
-                    logger.debug(
-                        f"⚠️ [DOCUMENT NORMALIZATION] Skipped document: "
-                        f"content_len={len(content)}, source={source}"
-                    )
-
-            # 로깅 강화: 정규화 전후 문서 수 상세 로깅
             logger.info(
-                f"📋 [FINAL PROMPT] Documents validation: "
-                f"context_count={document_count}, raw={doc_count}, "
-                f"valid={len(normalized_documents)}, skipped={len(skipped_docs)}"
+                f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={len(normalized_docs)}"
             )
-
-            if skipped_docs:
-                logger.debug(
-                    f"⚠️ [DOCUMENT NORMALIZATION] Skipped {len(skipped_docs)} documents: "
-                    f"{[d.get('reason', 'unknown') for d in skipped_docs[:3]]}"
-                )
-
-            if doc_count > 0 and len(normalized_documents) == 0:
-                logger.error(
-                    f"❌ [FINAL PROMPT] All {doc_count} documents have empty or invalid content! "
-                    f"Skipped reasons: {[d.get('reason', 'unknown') for d in skipped_docs[:3]]}"
-                )
-
-            documents = normalized_documents
         else:
-            documents = []
             logger.warning(f"⚠️ [FINAL PROMPT] structured_documents is not a dict: {type(structured_docs)}")
 
-        # 🔴 개선 1: base_prompt에 이미 문서가 포함되어 있는지 확인 (개선: 더 많은 패턴 감지)
+        # base_prompt에 이미 문서가 포함되어 있는지 확인 (개선: 실제 문서 내용 존재 여부 확인)
+        # 패턴 매칭만으로 판단하지 않고, structured_documents가 있으면 항상 문서 섹션 생성
         has_docs_in_base = False
-        doc_patterns = [
-            "검색된 법률 문서",
-            "제공된 법률 문서",
-            "검색된 판례 문서",
-            "검색된 법률 문서 및 정보",
-            "검색된 법률 문서 및 판례",
-            "## 검색된 법률 문서",
-            "## 제공된 법률 문서",
-            "## 검색된 판례 문서"
-        ]
-        if any(pattern in base_prompt for pattern in doc_patterns):
-            has_docs_in_base = True
-            logger.info("✅ [PROMPT OPTIMIZATION] Documents already in base_prompt, skipping duplicate documents section")
+        if normalized_docs:
+            # structured_documents에 실제 문서가 있으면 base_prompt에 문서가 있어도 문서 섹션 생성
+            # 단, base_prompt에 실제 문서 내용이 포함되어 있는지 확인
+            base_prompt_has_actual_content = False
+            if normalized_docs:
+                # 첫 번째 문서의 일부 내용이 base_prompt에 있는지 확인
+                first_doc_content = normalized_docs[0].get("content", "")[:100]
+                if first_doc_content and len(first_doc_content) > 10:
+                    base_prompt_has_actual_content = first_doc_content in base_prompt
+            
+            if base_prompt_has_actual_content:
+                # base_prompt에 실제 문서 내용이 있으면 중복 제거만 수행
+                base_prompt = self._remove_duplicate_document_sections(base_prompt)
+                has_docs_in_base = True
+            else:
+                # base_prompt에 실제 문서 내용이 없으면 문서 섹션 생성
+                has_docs_in_base = False
+        else:
+            # normalized_docs가 없으면 기존 로직 사용
+            has_docs_in_base = any(pattern in base_prompt for pattern in [
+                "검색된 법률 문서", "제공된 법률 문서", "검색된 판례 문서",
+                "## 검색된 법률 문서", "## 제공된 법률 문서",
+            ])
+            if has_docs_in_base:
+                base_prompt = self._remove_duplicate_document_sections(base_prompt)
 
-        # 원본 context에서 structured_documents 직접 확인 및 추가 (최우선)
+        # 문서 섹션 구성 (토큰 제한 적용)
         documents_section = ""
-        mandatory_section = ""
-
-        # 🔴 개선 2: base_prompt에 문서가 없을 때만 문서 섹션 생성
-        # 검색 결과가 있는 경우에만 문서 섹션 추가
-        # 검색 결과가 0개일 때는 문서 섹션을 생성하지 않음 (중요!)
-        # 관련도가 일정 수준 이하인 문서 필터링
-        if not has_docs_in_base and documents and len(documents) > 0:
-            # 관련도가 일정 수준 이하인 문서는 제외 (동적 계산)
-            sorted_all_docs = sorted(
-                documents,
+        if normalized_docs and not has_docs_in_base:  # base_prompt에 실제 문서가 없을 때만 생성
+            # 관련도 기준 정렬 (개선: 법률 조문 우선 포함, 최소 5개 이상 포함 보장)
+            # 법률 조문과 일반 문서를 분리하여 법률 조문을 우선 포함
+            law_docs = [doc for doc in normalized_docs if doc.get("law_name") and doc.get("article_no")]
+            other_docs = [doc for doc in normalized_docs if not (doc.get("law_name") and doc.get("article_no"))]
+            
+            # 법률 조문을 관련도 순으로 정렬
+            sorted_law_docs = sorted(
+                law_docs,
                 key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
                 reverse=True
             )
-
-            # 개선 3: 동적 관련성 임계값 적용 강화
-            if sorted_all_docs and len(sorted_all_docs) > 0:
-                max_score = sorted_all_docs[0].get("relevance_score", 0.0) if isinstance(sorted_all_docs[0], dict) else 0.0
+            
+            # 일반 문서를 관련도 순으로 정렬
+            sorted_other_docs = sorted(
+                other_docs,
+                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                reverse=True
+            )
+            
+            # 토큰 제한 내에서 문서 선택 및 축약
+            selected_docs = []
+            current_doc_tokens = 0
+            
+            # 법률 조문 우선 선택 (최대 3개)
+            for doc in sorted_law_docs[:3]:
+                doc_content = doc.get("content", "")
+                doc_tokens = self._estimate_tokens(doc_content)
                 
-                # 동적 임계값 계산: 최고 점수의 70% 이상이면서 절대 임계값 0.60 이상
-                dynamic_threshold = max_score * 0.7 if max_score > 0 else 0.5
-                absolute_threshold = 0.60
-                low_relevance_threshold = max(dynamic_threshold, absolute_threshold)
+                # 문서당 최대 토큰 수 제한
+                max_tokens_per_doc = min(2000, available_doc_tokens // 5)  # 문서당 최대 2000토큰 또는 평균값
                 
-                # 개선 2: 프롬프트 생성 단계에서 문서 재필터링 (질문과의 관련성 재검증)
-                query_lower = query.lower() if query else ""
-                filtered_documents = []
+                if doc_tokens > max_tokens_per_doc:
+                    # 문서 축약
+                    max_chars = int(max_tokens_per_doc * 2.5)
+                    doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                    doc_tokens = self._estimate_tokens(doc_content)
+                    doc["content"] = doc_content
+                    doc["truncated"] = True
                 
-                for d in sorted_all_docs:
-                    if not isinstance(d, dict):
-                        continue
-                    
-                    relevance_score = d.get("relevance_score", 0.0)
-                    
-                    # 동적 임계값 필터링
-                    if relevance_score < low_relevance_threshold:
-                        continue
-                    
-                    # 개선 2: 질문과의 관련성 재검증
-                    content = (d.get("content") or d.get("text") or "").lower()
-                    source = (d.get("source") or "").lower()
-                    
-                    # 질문의 핵심 키워드가 문서에 포함되어 있는지 확인
-                    has_relevant_content = False
-                    if query_lower:
-                        query_words = [w for w in query_lower.split() if len(w) > 2]
-                        for word in query_words[:5]:  # 상위 5개 단어만 확인
-                            if word in content or word in source:
-                                has_relevant_content = True
-                                break
-                    
-                    # 관련도가 높으면(0.70 이상) 키워드 체크 생략
-                    if relevance_score >= 0.70 or has_relevant_content:
-                        filtered_documents.append(d)
+                if current_doc_tokens + doc_tokens <= available_doc_tokens:
+                    selected_docs.append(doc)
+                    current_doc_tokens += doc_tokens
+                else:
+                    # 남은 토큰이 있으면 축약하여 추가
+                    remaining_tokens = available_doc_tokens - current_doc_tokens
+                    if remaining_tokens > 500:  # 최소 500토큰 이상 남아있을 때만
+                        max_chars = int(remaining_tokens * 2.5)
+                        doc_content = self._smart_truncate_document(doc.get("content", ""), max_chars, query)
+                        doc["content"] = doc_content
+                        doc["truncated"] = True
+                        selected_docs.append(doc)
+                    break
+            
+            # 일반 문서 선택 (최대 8개까지)
+            for doc in sorted_other_docs:
+                if len(selected_docs) >= 8:  # 최대 8개
+                    break
+                
+                doc_content = doc.get("content", "")
+                doc_tokens = self._estimate_tokens(doc_content)
+                
+                max_tokens_per_doc = min(1000, available_doc_tokens // 8)  # 문서당 최대 1000토큰
+                
+                if doc_tokens > max_tokens_per_doc:
+                    max_chars = int(max_tokens_per_doc * 2.5)
+                    doc_content = self._smart_truncate_document(doc_content, max_chars, query)
+                    doc_tokens = self._estimate_tokens(doc_content)
+                    doc["content"] = doc_content
+                    doc["truncated"] = True
+                
+                if current_doc_tokens + doc_tokens <= available_doc_tokens:
+                    selected_docs.append(doc)
+                    current_doc_tokens += doc_tokens
+                else:
+                    remaining_tokens = available_doc_tokens - current_doc_tokens
+                    if remaining_tokens > 500:
+                        max_chars = int(remaining_tokens * 2.5)
+                        doc_content = self._smart_truncate_document(doc.get("content", ""), max_chars, query)
+                        doc["content"] = doc_content
+                        doc["truncated"] = True
+                        selected_docs.append(doc)
+                    break
+            
+            sorted_docs = selected_docs
 
-                if len(filtered_documents) < len(sorted_all_docs):
-                    logger.info(
-                        f"🔍 [DOCUMENT FILTERING] Filtered {len(sorted_all_docs) - len(filtered_documents)} documents "
-                        f"with relevance < {low_relevance_threshold:.3f} or no query relevance "
-                        f"(max_score: {max_score:.3f}, kept: {len(filtered_documents)})"
-                    )
+            if sorted_docs:
+                documents_section = "\n\n## 검색된 법률 문서\n\n"
+                documents_section += "위 문서들을 인용할 때는 법원명과 판결일을 직접 언급하여 자연스럽게 표기하세요. 예: '서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...' '[문서 N]' 형식은 사용하지 마세요.\n\n"
+                
+                for idx, doc in enumerate(sorted_docs, 1):
+                    # 개선: 문서 유형에 따라 내용 길이 조정
+                    law_name = doc.get("law_name", "")
+                    article_no = doc.get("article_no", "")
+                    case_name = doc.get("case_name", "")
+                    case_number = doc.get("case_number", "")
+                    
+                    doc_type = ""
+                    if law_name and article_no:
+                        doc_type = "법률 전문"
+                        # 법률 조문은 전체 포함 (600자 제한 완화)
+                        content = doc.get("content", "")
+                        max_length = 2000 if doc_type == "법률 전문" else 600
+                        if len(content) > max_length:
+                            content = content[:max_length] + "..."
+                    elif case_name or case_number:
+                        doc_type = "판례 요약"
+                        content = doc.get("content", "")[:1000]  # 판례는 1000자
+                        if len(doc.get("content", "")) > 1000:
+                            content += "..."
+                    else:
+                        doc_type = "해설"
+                        content = doc.get("content", "")[:600]  # 해설은 600자
+                        if len(doc.get("content", "")) > 600:
+                            content += "..."
+                    
+                    title = doc.get("title", f"[문서 {idx}]")
+                    relevance = doc.get("relevance_score", 0.0)
+                    
+                    # 일관된 형식으로 표시 (문서 유형 구분 추가, [문서 N] 형식 통일)
+                    documents_section += f"**[문서 {idx}]**: {title} (유형: {doc_type}, 관련성: {relevance:.2f})\n{content}\n\n"
 
-                # 개선 8: 프롬프트에 포함할 문서 수 제한 (5-7개)
-                max_docs_for_prompt = 7
-                documents = filtered_documents[:max_docs_for_prompt] if filtered_documents else sorted_all_docs[:max_docs_for_prompt]
-            else:
-                documents = sorted_all_docs[:5] if sorted_all_docs else []
+                logger.info(
+                    f"✅ [FINAL PROMPT] Added {len(sorted_docs)} documents "
+                    f"(law_docs: {len([d for d in sorted_docs if d.get('law_name')])}, "
+                    f"other_docs: {len([d for d in sorted_docs if not d.get('law_name')])}, "
+                    f"tokens: {current_doc_tokens:,}/{available_doc_tokens:,})"
+                )
 
-            if documents and len(documents) > 0:
-                # 관련도 점수 기준으로 문서 분류
-                # 옵션: 상위 N개를 최우선 문서로 지정 (관련도 0.7 이상 문서가 없을 경우 대비)
+        # 폴백 처리: documents_section이 없을 때 (개선: structured_documents 우선 사용)
+        if not documents_section:
+            # 우선순위 1: structured_documents에서 직접 생성 시도
+            if normalized_docs:
                 sorted_docs = sorted(
-                    documents,
+                    normalized_docs,
                     key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
                     reverse=True
-                )
-
-                # 관련도 0.65 이상 문서를 최우선 문서로 분류 (기준 완화)
-                high_relevance_docs = [d for d in sorted_docs if isinstance(d, dict) and d.get("relevance_score", 0.0) >= 0.65]
-
-                # 관련도 0.65 미만 0.35 이상 문서를 중요 문서로 분류
-                medium_relevance_docs = [d for d in sorted_docs if isinstance(d, dict) and 0.35 <= d.get("relevance_score", 0.0) < 0.65]
-
-                # 관련도 0.65 이상 문서가 없으면 상위 3개를 최우선 문서로 지정
-                if not high_relevance_docs and len(sorted_docs) > 0:
-                    top_count = min(3, len(sorted_docs))
-                    high_relevance_docs = sorted_docs[:top_count]
-                    medium_relevance_docs = sorted_docs[top_count:] if len(sorted_docs) > top_count else []
-
-                # 🔴 개선: 관련도 기반 유연한 검색 결과 활용 지침
-                mandatory_section = "\n\n## ⚠️ 검색 결과 활용 지침\n\n"
-
-                # 관련도 점수 활용 전략 명시
-                mandatory_section += "**검색 결과 활용 우선순위**:\n"
-                mandatory_section += "- 관련도 0.8 이상: 핵심 법적 근거로 직접 인용\n"
-                mandatory_section += "- 관련도 0.6-0.8: 관련성이 높으면 보충 설명에 활용 권장\n"
-                mandatory_section += "- 관련도 0.6 미만: 질문과 직접 관련 없으면 언급하지 않아도 됨\n\n"
-
-                # 관련도별 문서 목록 제공 (참고용)
-                if high_relevance_docs:
-                    doc_refs = []
-                    for idx, doc in enumerate(high_relevance_docs[:3], 1):
+                )[:5]
+                
+                if sorted_docs:
+                    documents_section = "\n\n## 검색된 법률 문서\n\n"
+                    documents_section += "위 문서들을 인용할 때는 법원명과 판결일을 직접 언급하여 자연스럽게 표기하세요. 예: '서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...' '[문서 N]' 형식은 사용하지 마세요.\n\n"
+                    
+                    for idx, doc in enumerate(sorted_docs, 1):
                         law_name = doc.get("law_name", "")
                         article_no = doc.get("article_no", "")
-                        score = doc.get("relevance_score", 0.0)
-                        if law_name and article_no:
-                            doc_refs.append(f"문서 {idx}({law_name} 제{article_no}조, 관련도: {score:.2f})")
-                        else:
-                            source = doc.get("source", "")
-                            if source:
-                                doc_refs.append(f"문서 {idx}({source}, 관련도: {score:.2f})")
+                        case_name = doc.get("case_name", "")
+                        case_number = doc.get("case_number", "")
+                        
+                        doc_type = "법률 전문" if (law_name and article_no) else ("판례 요약" if (case_name or case_number) else "해설")
+                        content = doc.get("content", "")
+                        max_length = 2000 if doc_type == "법률 전문" else (1000 if doc_type == "판례 요약" else 600)
+                        if len(content) > max_length:
+                            content = content[:max_length] + "..."
+                        
+                        title = doc.get("title", f"[문서 {idx}]")
+                        relevance = doc.get("relevance_score", 0.0)
+                        documents_section += f"**[문서 {idx}]**: {title} (유형: {doc_type}, 관련성: {relevance:.2f})\n{content}\n\n"
+                    
+                    logger.info(f"✅ [FINAL PROMPT] Created documents_section from normalized_docs ({len(sorted_docs)} docs)")
+            
+            # 우선순위 2: prompt_optimized_text 사용
+            if not documents_section:
+                prompt_optimized_text = context.get("prompt_optimized_text", "")
+                if prompt_optimized_text and len(prompt_optimized_text.strip()) > 100:
+                    documents_section = "\n\n## 검색된 법률 문서\n\n"
+                    documents_section += prompt_optimized_text[:5000] + ("..." if len(prompt_optimized_text) > 5000 else "")
+                    documents_section += "\n\n"
+                    logger.info("✅ [FINAL PROMPT] Added prompt_optimized_text as fallback")
+            
+            # 우선순위 3: context_text 사용
+            if not documents_section:
+                context_text = context.get("context", "")
+                if context_text and len(context_text.strip()) > 100 and document_count > 0:
+                    documents_section = "\n\n## 검색된 법률 문서\n\n"
+                    documents_section += context_text[:5000] + ("..." if len(context_text) > 5000 else "")
+                    documents_section += "\n\n"
+                    logger.info("✅ [FINAL PROMPT] Added context_text as fallback")
 
-                    if doc_refs:
-                        mandatory_section += f"**고관련도 문서 (참고용)**: {', '.join(doc_refs)}\n"
-                        mandatory_section += "→ 질문과 직접 관련이 높으면 우선 활용하세요\n\n"
-
-                mandatory_section += "**검색 결과가 질문과 부합하지 않을 때**:\n"
-                mandatory_section += "- 검색된 자료에 [구체적 내용]이 없어서, [법령명]의 기본 원칙을 바탕으로 설명드릴게요...\n\n"
-
-                mandatory_section += "**절대 금지**:\n"
-                mandatory_section += "- ❌ 검색 결과를 무시하고 일반 지식만으로 답변\n"
-                mandatory_section += "- ❌ 검색 결과 없이 추측으로 답변\n"
-                mandatory_section += "- ❌ '정보가 부족합니다'만 답변\n"
-                mandatory_section += "- ❌ 관련도가 낮은 문서를 무리하게 인용\n\n"
-
-                # 🔴 개선 4: 문서 섹션 단일화 (중복 형식 제거, 헬퍼 메서드 사용)
-                documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-
-                # 🔴 추가 개선: 관련도 활용 전략 간단히 명시 (mandatory_section과 중복 제거)
-                # mandatory_section에 이미 상세한 전략이 있으므로 간단한 참고만 추가
-                documents_section += "**참고**: 위 문서들의 관련도 점수를 참고하여 우선순위를 정하세요. 관련도가 높은 문서를 우선적으로 활용하세요.\n\n"
-
-                # 최우선 문서
-                if high_relevance_docs:
-                    # 관련도 기준에 따라 섹션 제목 조정
-                    max_high_score = max([d.get("relevance_score", 0.0) for d in high_relevance_docs if isinstance(d, dict)]) if high_relevance_docs else 0.0
-                    if max_high_score >= 0.65:
-                        documents_section += "### 🔴 최우선 문서 (관련도 0.65 이상)\n\n"
-                    else:
-                        documents_section += "### 🔴 최우선 문서 (상위 문서)\n\n"
-                    for idx, doc in enumerate(high_relevance_docs[:5], 1):
-                        documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=True)
-
-                # 중요 문서
-                if medium_relevance_docs:
-                    documents_section += "### 🟡 중요 문서 (관련도 0.35~0.65)\n\n"
-                    for idx, doc in enumerate(medium_relevance_docs[:3], 1):
-                        documents_section += self._format_document_for_prompt(doc, idx, is_high_priority=False)
-
-                logger.info(f"✅ [FINAL PROMPT] Added {len(documents)} documents (High: {len(high_relevance_docs)}, Medium: {len(medium_relevance_docs)})")
-
-        # 🔴 개선 3: 필수 준수 사항 섹션이 비어있을 때 처리
-        if has_docs_in_base and not mandatory_section:
-            # base_prompt에 문서가 있지만 mandatory_section이 없는 경우 간단한 지침 추가
-            mandatory_section = "\n\n## ⚠️ 핵심 지침\n\n"
-            mandatory_section += "**위 검색된 문서들을 반드시 참고하여 답변하세요.**\n\n"
-            mandatory_section += "**절대 금지**:\n"
-            mandatory_section += "- ❌ 검색 결과를 무시하고 일반 지식만으로 답변\n"
-            mandatory_section += "- ❌ 검색 결과 없이 추측으로 답변\n"
-            mandatory_section += "- ❌ '정보가 부족합니다'만 답변\n\n"
-
-        # 문서 섹션이 생성되지 않았는데 문서가 있는 경우 폴백 처리
-        if not documents_section and documents and len(documents) > 0 and not has_docs_in_base:
-            logger.warning(
-                f"⚠️ [FINAL PROMPT] No documents section created despite having {len(documents)} documents! "
-                f"Creating fallback section."
-            )
-            documents_section = self._build_fallback_documents_section(documents)
-            if documents_section and not mandatory_section:
-                mandatory_section = "\n\n## ⚠️ 핵심 지침\n\n"
-                mandatory_section += "**🔴 검색 결과 반드시 활용**: 아래 문서들의 내용을 반드시 참고하여 답변하세요.\n\n"
-
-        # structured_documents가 비어있지만 context 텍스트나 prompt_optimized_text가 있는 경우 폴백 처리
-        if not documents_section:
-            prompt_optimized_text = context.get("prompt_optimized_text", "")
-            context_text = context.get("context", "")
-
-            # prompt_optimized_text 우선 사용
-            # 🔴 개선: 문서 섹션 제목 통일 및 지침 문구 간소화
-            if prompt_optimized_text and len(prompt_optimized_text.strip()) > 100:
-                documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-                documents_section += prompt_optimized_text[:5000] + ("..." if len(prompt_optimized_text) > 5000 else "")
-                documents_section += "\n\n"
-                if not mandatory_section:
-                    mandatory_section = "\n\n## ⚠️ 핵심 지침\n\n"
-                    mandatory_section += "**위 검색된 문서들을 참고하여 답변하세요.**\n\n"
-                logger.info(
-                    f"✅ [FINAL PROMPT] Added prompt_optimized_text to final prompt as fallback "
-                    f"({len(prompt_optimized_text)} chars)"
-                )
-            # context_text가 있고 document_count가 0보다 크면 문서가 있다는 의미
-            elif context_text and len(context_text.strip()) > 100 and document_count > 0:
-                documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
-                documents_section += context_text[:5000] + ("..." if len(context_text) > 5000 else "")
-                documents_section += "\n\n"
-                if not mandatory_section:
-                    mandatory_section = "\n\n## ⚠️ 핵심 지침\n\n"
-                    mandatory_section += "**위 검색된 문서들을 참고하여 답변하세요.**\n\n"
-                logger.info(
-                    f"✅ [FINAL PROMPT] Added context_text to final prompt as fallback "
-                    f"({len(context_text)} chars, document_count: {document_count})"
-                )
-
-        # Few-shot 예시 추가 (실제 검색 결과 기반)
-        relevant_examples = self._get_relevant_examples(question_type, documents)
-        examples_section = f"\n{relevant_examples}\n" if relevant_examples else ""
-
-        # 🔴 개선 5: 활용 가이드 간소화 (중복 제거)
-        usage_guide = ""
-        if documents_section and documents and len(documents) > 0 and not has_docs_in_base:
-            usage_guide = """
-
-### 📖 인용 가이드
-- 인용 포맷: "[법령: 민법 제543조]", "[판례: 대법원 2020다12345]"
-- 문서 내용을 요약하여 설명하고, 출처를 명시하세요
-- 여러 문서의 정보를 종합하여 답변하세요
-"""
-
-        # 검색 결과가 없을 때 base_prompt를 단순화하여 프롬프트 길이 줄이기
-        # 검색 결과가 없으면 프롬프트를 단순화 (프롬프트 출력 방지)
-        # 개선: 원본 문서 수를 고려하여 has_no_documents 조건 완화
-        normalized_doc_count = len(documents) if documents else 0
-        raw_doc_count = (
-            len(structured_docs.get("documents", []))
-            if isinstance(structured_docs, dict) else 0
-        ) or document_count or 0
-
-        # documents_section이 비어있거나 documents가 비어있는 경우
-        has_no_documents_section = not documents_section or len(documents_section.strip()) == 0
-        has_no_normalized_documents = not documents or len(documents) == 0
-
-        # 원본 문서가 있었는데 정규화 후 비어있는 경우도 고려
+        # 검색 결과가 없을 때 base_prompt 단순화
         has_no_documents = (
-            has_no_documents_section and
-            has_no_normalized_documents and
-            raw_doc_count == 0  # 원본 문서도 없는 경우에만 True
-        )
-
-        # 로깅 강화: 문서 상태 상세 로깅
-        if raw_doc_count > 0 and normalized_doc_count == 0:
-            logger.warning(
-                f"⚠️ [PROMPT SIMPLIFICATION] Warning: {raw_doc_count} raw documents existed "
-                f"but {normalized_doc_count} normalized documents. "
-                f"documents_section={'exists' if documents_section else 'empty'}"
-            )
+            not documents_section or len(documents_section.strip()) == 0
+        ) and (not normalized_docs or len(normalized_docs) == 0)
 
         if has_no_documents:
-            # 검색 결과가 없을 때는 base_prompt를 단순화
-            # 복잡한 지시사항이 LLM에게 프롬프트 자체를 출력하게 할 수 있음
             simplified_base = self._simplify_prompt_for_no_results(base_prompt)
-            logger.info(
-                f"📝 [PROMPT SIMPLIFICATION] Simplified prompt for no search results "
-                f"(raw_docs={raw_doc_count}, normalized_docs={normalized_doc_count}, "
-                f"original: {len(base_prompt)} chars, simplified: {len(simplified_base)} chars)"
-            )
+            logger.info("📝 [PROMPT SIMPLIFICATION] Simplified prompt for no search results")
         else:
-            simplified_base = base_prompt
-            if raw_doc_count > 0:
-                logger.info(
-                    f"✅ [PROMPT SIMPLIFICATION] Keeping full prompt "
-                    f"(raw_docs={raw_doc_count}, normalized_docs={normalized_doc_count})"
-                )
+            # base_prompt 간소화 (불필요한 섹션 제거)
+            simplified_base = self._simplify_base_prompt(base_prompt)
+            # base_prompt에서 중복된 Citation 요구사항 제거
+            simplified_base = self._remove_duplicate_citation_requirements(simplified_base)
 
-        # 🔴 개선 6: 최종 지침 통합 (중복 제거, 로직 수정)
-        # 문서가 있으면 적절한 지침 표시, 없으면 "문서 없음" 표시
-        has_any_documents = (
-            (documents_section and len(documents_section.strip()) > 0) or
-            has_docs_in_base or
-            (documents and len(documents) > 0)
+        # 최종 프롬프트 구성
+        final_prompt = simplified_base + documents_section + f"\n\n## 질문\n{query}\n\n"
+        
+        # 최종 토큰 수 검증
+        final_tokens = self._estimate_tokens(final_prompt)
+        if final_tokens > MAX_SAFE_TOKENS:
+            logger.warning(
+                f"⚠️ [TOKEN LIMIT] Final prompt exceeds safe limit: "
+                f"{final_tokens:,} tokens (max: {MAX_SAFE_TOKENS:,}). "
+                f"Applying emergency truncation..."
+            )
+            # 긴급 축약: 문서 섹션만 축약
+            final_prompt = self._emergency_truncate_prompt(final_prompt, MAX_SAFE_TOKENS, simplified_base, query)
+            final_tokens = self._estimate_tokens(final_prompt)
+        
+        logger.info(
+            f"✅ [TOKEN COUNT] Final prompt: {final_tokens:,} tokens "
+            f"({final_tokens/MAX_INPUT_TOKENS*100:.1f}% of max, "
+            f"base: {base_tokens:,}, query: {query_tokens:,}, "
+            f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
         )
 
-        if has_any_documents:
-            # 제공된 문서 목록 추출
-            doc_list = []
-            if documents and len(documents) > 0:
-                # high_relevance_docs가 있으면 그것을 우선, 없으면 상위 문서 사용
-                sorted_docs = sorted(
-                    documents,
-                    key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
-                    reverse=True
-                )
+        # 단계별 답변 지침 구성
+        if documents_section and normalized_docs:
+            sorted_docs = sorted(
+                normalized_docs,
+                key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                reverse=True
+            )[:5]
 
-                high_relevance_docs_for_list = [d for d in sorted_docs if isinstance(d, dict) and d.get("relevance_score", 0.0) >= 0.65]
+            instruction_section = f"""
+## 답변 작성 단계
 
-                # 🔴 개선: high_relevance_docs가 비어있거나 적으면 전체 문서에서 상위 문서 추출
-                if not high_relevance_docs_for_list:
-                    docs_for_list = sorted_docs[:5]  # 상위 5개
-                elif len(high_relevance_docs_for_list) >= 3:
-                    docs_for_list = high_relevance_docs_for_list[:5]
-                else:
-                    # high_relevance_docs가 1-2개만 있으면 상위 문서와 함께 사용
-                    docs_for_list = sorted_docs[:5]
+**STEP 1: 질문 이해**
+- 사용자 질문의 핵심을 파악하세요
+- 질문에 답하기 위해 필요한 정보를 문서에서 찾아야 합니다
 
-                for doc in docs_for_list:
-                    if isinstance(doc, dict):
-                        law_name = doc.get("law_name", "")
-                        article_no = doc.get("article_no", "")
-                        if law_name and article_no:
-                            doc_list.append(f"{law_name} 제{article_no}조")
-                        else:
-                            source = doc.get("source", "")
-                            if source:
-                                doc_list.append(source)
+**STEP 2: 문서 분석 및 검증**
+- 위 {len(sorted_docs)}개의 검색된 문서 중 질문과 관련된 문서를 찾으세요
+- 각 문서의 핵심 내용을 파악하세요
+- **중요**: 문서에 없는 내용은 사용하지 마세요
 
-            # 🔴 개선: has_docs_in_base일 때 base_prompt에서 문서 추출
-            if not doc_list and has_docs_in_base:
-                import re
-                # base_prompt에서 문서 정보 추출
-                # 패턴: "### 문서 N: 민법 제XXX조" 또는 "**문서 N**: 민법 제XXX조"
-                doc_patterns = [
-                    r'###\s*문서\s*\d+:\s*([^\(]+)',
-                    r'\*\*문서\s*\d+\*\*:\s*([^\(]+)',
-                    r'문서\s*\d+[:\s]+([^\(]+)'
-                ]
+**STEP 3: 답변 구성 (문서 기반 원칙 준수)**
 
-                found_docs = []
-                for pattern in doc_patterns:
-                    matches = re.findall(pattern, base_prompt)
-                    for match in matches[:5]:  # 최대 5개
-                        match = match.strip()
-                        # 조문 번호 추출
-                        article_match = re.search(r'([가-힣\s]+)\s*제\s*(\d+)\s*조', match)
-                        if article_match:
-                            law_name = article_match.group(1).strip()
-                            article_no = article_match.group(2)
-                            doc_ref = f"{law_name} 제{article_no}조"
-                            if doc_ref not in found_docs:
-                                found_docs.append(doc_ref)
-                        elif match and match not in found_docs:
-                            found_docs.append(match)
+⚠️ **중요**: 각 단계마다 가능한 한 문서 인용을 포함하세요.
 
-                if found_docs:
-                    doc_list = found_docs[:5]
-                    logger.info(f"✅ [DOCUMENT EXTRACTION] Extracted {len(doc_list)} documents from base_prompt: {', '.join(doc_list[:3])}...")
+1. **질문에 대한 직접적인 답변 (1-2문단)**
+   - 문서에 근거를 두고 답변하세요
+   - 문서 인용 형식: "[문서 N]에 따르면..." 또는 "민법 제XXX조에 따르면..." [출처: 문서 N]
+   - 문서에 없는 내용은 "문서에는 해당 내용이 명시되어 있지 않습니다"라고 표현하세요
 
-            if doc_list:
-                doc_list_str = ', '.join(doc_list[:5])
-                # 🔴 개선: 실제 제공된 문서 조문을 예시로 사용
-                example_doc = doc_list[0] if doc_list else "법령명 제XX조"
-                # 판례명 예시 찾기
-                example_precedent = None
-                for doc in doc_list:
-                    if '법원' in doc or '판례' in doc or '-' in doc:
-                        example_precedent = doc
-                        break
-                
-                # 법령 조문 예시 찾기
-                example_law = None
-                for doc in doc_list:
-                    if '제' in doc and '조' in doc:
-                        example_law = doc
-                        break
-                
-                examples_text = f"""  * 예시 1: "{example_doc}에 따르면..."
-  * 예시 2: "[법령: {example_doc}]"
-  * 예시 3: "위 검색 결과 문서 중 {example_doc}에 명시된 바와 같이..."
-  * 예시 4: "민법 제750조에 따르면..." (법령 조문 인용 형식)"""
-                
-                if example_precedent:
-                    examples_text += f"\n  * 예시 5: \"{example_precedent} 판결에 의하면...\" (판례 인용 형식)"
-                else:
-                    examples_text += f"\n  * 예시 5: \"대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...\" (판례 인용 형식)"
-                
-                final_instruction_section = f"""
-## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
-- 다음 문서 중 질문과 관련성이 높은 것을 우선 활용하세요: {doc_list_str}
-- 관련도가 낮은 문서는 무리하게 인용하지 마세요
-- 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
-- **⚠️ 각 인용에 반드시 명확한 출처 표기 (필수)**:
-{examples_text}
-- **🚨 CRITICAL: 답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 3-5개 이상 명시적으로 인용하세요** (2개는 최소 기준이며, 3-5개 이상 권장)
-- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
-- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 2개 이상의 법령 조문을 반드시 인용하세요 (예: "민법 제750조에 따르면...", "형법 제250조에 따르면...")
-- **판례 인용 필수**: 검색 결과에 판례가 있으면 최소 1-2개 이상의 판례를 반드시 인용하세요
-- 판례 인용 시 구체적인 판례명과 사건번호를 포함하세요 (예: "대구지방법원 영덕지원 대구지방법원영덕지원-2021고단3 판결에 의하면...")
-- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
-- **⚠️ 인용 부족 시 답변 품질이 매우 낮게 평가되며 재생성됩니다**: 법령 조문 인용이 없거나 전체 인용이 2개 미만이면 답변이 거부됩니다
-- **⚠️ 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다**: 각 주요 주장마다 최소 1개 이상의 인용을 포함하세요
-"""
-            else:
-                # doc_list가 비어있을 때만 기본 예시 사용
-                # 실제 문서 형식 예시 추가
-                example_doc = doc_list[0] if doc_list else "민법 제750조"
-                example_law = None
-                example_precedent = None
-                for doc in doc_list[:3]:
-                    if isinstance(doc, str):
-                        if "제" in doc and "조" in doc:
-                            example_law = doc
-                            break
-                        elif "법원" in doc or "판결" in doc:
-                            example_precedent = doc
-                
-                examples_text = f"""  * 예시 1: "{example_doc}에 따르면..."
-  * 예시 2: "[법령: {example_doc}]"
-  * 예시 3: "위 검색 결과 문서 중 {example_doc}에 명시된 바와 같이..."
-  * 예시 4: "민법 제750조에 따르면..." (법령 조문 인용 형식)"""
-                if example_precedent:
-                    examples_text += f"\n  * 예시 5: \"{example_precedent} 판결에 의하면...\" (판례 인용 형식)"
-                elif example_law:
-                    examples_text += f"\n  * 예시 5: \"{example_law}에 명시된 바와 같이...\" (법령 조문 인용 형식)"
-                
-                final_instruction_section = f"""
-## 검색 결과 활용 지침 (필수 준수 - 답변 품질 평가 기준)
-- 위 검색 결과 문서에서 질문과 관련성이 높은 문서를 우선 활용하세요
-- **⚠️ 법령 조문 인용을 판례 인용보다 우선하세요** (법령 조문이 있으면 반드시 법령 조문을 먼저 인용)
-- **법령 조문 인용 필수**: 검색 결과에 법령 조문이 있으면 최소 1개 이상의 법령 조문을 반드시 인용하세요
-- **각 인용에 반드시 명확한 출처 표기 (필수)**:
-{examples_text}
-- **답변에서 검색된 문서의 출처(법령명, 조문번호, 판례명 등)를 최소 2개 이상 명시적으로 인용하세요**
-- 단순히 "법령에 따르면"이 아닌 구체적인 법령명과 조문번호를 포함하세요 (예: "민법 제750조", "형법 제250조")
-- 법령 조문 인용이 없으면 답변 품질이 낮게 평가됩니다
-- 문서 인용이 부족하면 답변 품질이 낮게 평가됩니다
-- 검색 결과가 질문과 부합하지 않으면 명시하고 기본 원칙으로 답변하세요
+2. **문서별 근거 비교 표 (필수 포함)**
+   - 위에서 검색된 문서들을 표 형식으로 정리하세요
+   - **중요**: 표의 "문서 번호" 열에는 반드시 "[1]", "[2]", "[3]" 형식으로 대괄호를 포함하세요
+   - 표 형식:
+     ```
+     ## 문서별 근거 비교
+     
+     | 문서 번호 | 출처 | 핵심 근거 | 관련 내용 |
+     |-----------|--------|------------|-------------|
+     | [1] | 문서1 제목 | 핵심 근거 요약 | 세부 설명 |
+     | [2] | 문서2 제목 | 핵심 근거 요약 | 세부 설명 |
+     | [3] | 문서3 제목 | 핵심 근거 요약 | 세부 설명 |
+     ```
+   - 최소 3개 이상의 문서를 표에 포함하세요
+   - 각 문서의 핵심 근거를 명확히 요약하세요
+   - 표를 작성한 후, 답변의 다른 부분에서도 "[문서 N]" 형식으로 이 문서들을 참조하세요
+
+3. **관련 법령 조문 인용 (문서에 있으면 포함)**
+   - 법률 전문: "민법 제XXX조에 따르면..." [출처: 문서 N]
+   - 해설: "[문서 N]의 해설에 따르면..." [출처: 문서 N]
+   - 본문과 법조문을 명확히 구분하세요
+
+4. **판례나 해석례 설명 (문서에 있으면 포함)**
+   - 판례 요약: "대법원 판결에 의하면..." [출처: 문서 N]
+   - 문서 인용: "[문서 N]에 따르면..." [출처: 문서 N]
+
+5. **결론 (표 내용 종합)**
+   - 위 표의 내용을 종합하여 결론을 제시하세요
+   - 형식: "위 표의 내용을 종합하면, 본 사안은 문서[1]과 문서[2]의 근거에 따라..."
+   - **중요**: 결론에서 반드시 "[문서 N]" 형식으로 문서 번호를 명시적으로 인용하세요
+   - 최소 2개 이상의 문서를 명시적으로 인용하세요
+   - 예시: "문서[1]에 따르면...", "문서[2]와 문서[3]의 근거에 따라..."
+
+6. **실무적 의미와 조언**
+   - 문서에 근거한 실무적 조언만 제공하세요
+   - 문서 인용 형식: "[문서 N]에 따르면..." [출처: 문서 N]
+
+**STEP 4: 검증 및 불확실성 표현**
+- 모든 답변 내용이 문서에 근거를 두고 있는지 확인하세요
+- 문서에 명시적 내용이 없으면 "문서에는 명시적 내용이 없습니다"라고 명확히 표현하세요
+- 부분적으로만 관련된 경우 "문서에는 부분적으로만 관련된 내용이 있습니다"라고 표현하세요
+
+**스타일**: 친근한 존댓말 ("~예요/~해요")
+
+**참고**: 상세한 Citation 요구사항은 위 ⚠️ 필수 요구사항 섹션을 참조하세요.
 """
         else:
-            # 검색 결과가 없을 때 명확한 제한사항 명시
-            search_failed = documents.get("search_failed", False) if isinstance(documents, dict) else False
-            search_failure_reason = documents.get("search_failure_reason", "unknown") if isinstance(documents, dict) else "unknown"
-            
-            if search_failed:
-                failure_details = ""
-                if "no_results_from_both_semantic_and_keyword" in search_failure_reason:
-                    failure_details = (
-                        "\n\n**⚠️ 중요: 검색 시스템 오류**\n"
-                        "- 의미 검색(semantic)과 키워드 검색(keyword) 모두 결과를 반환하지 못했습니다.\n"
-                        "- 이는 데이터베이스가 초기화되지 않았거나, FTS 테이블이 없거나, embeddings가 생성되지 않았을 수 있습니다.\n"
-                        "- 일반적인 법률 정보를 제공하되, 반드시 다음 사항을 명시하세요:\n"
-                        "  1. 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점\n"
-                        "  2. 제공되는 정보는 일반적인 법률 원칙에 기반한 것이며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점\n"
-                        "  3. 가능한 경우 질문과 관련된 법령명과 조문번호를 언급하되, 구체적인 내용은 확인이 필요하다는 점"
-                    )
-                
-                final_instruction_section = f"""
-## ⚠️ 참고사항 (중요)
-현재 관련 법률 문서를 찾지 못했습니다.{failure_details}
+            instruction_section = """
+## 답변 작성 단계
 
-**답변 작성 시 주의사항**:
-- 일반적인 법률 정보를 제공하되, 반드시 한계를 명시하세요
-- 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점을 명확히 밝히세요
-- 가능한 경우 관련 법령명과 조문번호를 언급하되, 구체적인 내용 확인이 필요하다는 점을 명시하세요
-- 모든 답변은 일반적인 법률 정보 제공에 그치며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점을 강조하세요
-"""
-            else:
-                final_instruction_section = """
-## ⚠️ 참고사항
-현재 관련 법률 문서를 찾지 못했습니다. 일반적인 법률 정보를 제공하되, 한계를 명시하세요.
+**STEP 1**: 질문에 대한 일반적인 법적 원칙 설명
+**STEP 2**: 관련 법령명과 조문번호 언급 (구체적 내용은 확인 필요 명시)
+**STEP 3**: 실무적 조언
 
-**답변 작성 시 주의사항**:
-- 검색된 법률 문서가 없어 정확한 법령 조문을 인용할 수 없다는 점을 명확히 밝히세요
-- 가능한 경우 관련 법령명과 조문번호를 언급하되, 구체적인 내용 확인이 필요하다는 점을 명시하세요
-- 모든 답변은 일반적인 법률 정보 제공에 그치며, 구체적인 사안에 대한 법률 자문은 변호사와 상담이 필요하다는 점을 강조하세요
+**스타일**: 친근한 존댓말
 """
 
-        final_prompt = f"""{simplified_base}{mandatory_section}{documents_section}{usage_guide}
+        # Citation 요구사항을 프롬프트 상단에 배치 (법률 RAG 핵심 원칙 통합 - 간소화)
+        citation_requirement = """
+⚠️ **필수 요구사항: 법률 RAG 답변 원칙**
+
+답변 생성 시 반드시 다음 핵심 원칙을 준수하세요:
+
+**원칙 1: 문서 외 내용 추론/생성 금지**
+- 검색된 문서에 없는 내용은 절대 추론하거나 생성하지 마세요
+- 문서에 없으면 "문서에는 해당 내용이 명시되어 있지 않습니다"라고 표현하세요
+
+**원칙 2: 문서 근거 필수 포함**
+- 모든 답변은 반드시 문서 근거를 포함해야 합니다
+- 주요 문단마다 문서 인용을 포함하세요
+- 최소 2개 이상의 문서를 인용하세요
+- 인용 형식: "[문서 N]에 따르면..." 또는 "민법 제XXX조에 따르면..." [출처: 문서 N]
+
+**원칙 3: 문서 기반 해석만 허용**
+- 문서 내용을 바탕으로 한 논리적 추론만 허용
+- 문서 외 일반 지식 사용 금지
+
+**원칙 4: 문서 유형 구분**
+- 법률 전문: "민법 제XXX조에 따르면..." [출처: 문서 N]
+- 판례 요약: "대법원 판결에 의하면..." [출처: 문서 N]
+- 해설: "[문서 N]의 해설에 따르면..." [출처: 문서 N]
+
+**원칙 5: 불확실성 명확히 표현**
+- 문서에 명시적 내용이 없으면 "문서에는 명시적 내용이 없습니다"라고 표현하세요
+
+**인용 형식 예시**:
+- ✅ "민법 제15조에 따르면..." [출처: 문서 1]
+- ✅ "[문서 1]에 따르면 민법 제15조는..." [출처: 문서 1]
+
+**검증 체크리스트**:
+- [ ] 모든 답변 내용이 문서에 근거를 두고 있는가?
+- [ ] 문서별 근거 비교 표를 포함했는가? (최소 3개 문서)
+- [ ] 최소 2개 이상의 문서를 명시적으로 인용했는가?
+- [ ] 결론에서 표의 내용을 종합하여 제시했는가?
+- [ ] 문서에 없는 내용을 추론하지 않았는가?
+- [ ] 불확실한 부분을 명확히 표현했는가?
+
+---
+"""
+        
+        # 최종 프롬프트 구성 (지침 포함)
+        final_prompt_with_instructions = f"""{citation_requirement}{simplified_base}{documents_section}
 
 ---
 
-## 📝 사용자 질문
+## 사용자 질문
 {query}
 
----
-
-{examples_section}
-
----
-
-## 📋 답변 스타일
-- 전문적이되 친근한 존댓말 사용 ("~예요/~해요" 선호)
-- "~입니다/~습니다"는 필요한 경우만 사용
-- 과도한 형식(제목, 박스, 이모지)은 피하기
-- 예: "민법 제550조에 따르면 계약을 해지하면 장래에 대해서만 효력을 잃게 돼요."
-- ⚠️ 주의: 프롬프트 내부에는 이모지 사용 가능하지만, AI 답변에는 이모지 사용 금지
-
-## 답변 구성 원칙
-- 단순 조문 질의: 조문 내용 + 간단한 해설 (2-3문단)
-- 구체적 사례 상담: 상황 파악 → 법률 적용 → 실무 조언 순서
-- 복잡한 법률 문제: 단계적으로 설명하되, 불필요한 형식(제목, 번호 매기기)은 최소화
-- 질문이 단순하면 간결하게, 복잡하면 상세하게 답변하세요
-
-## 필수 포함 요소
-각 답변에 반드시 포함:
-1. **법적 근거**: 관련 법령 조문 정확히 인용
-2. **실무적 의미**: 실제로 무엇을 의미하는지 설명
-3. **실행 가능한 조언**: 구체적으로 어떻게 해야 하는지
-4. **주의사항**: 놓치기 쉬운 함정 (필요시에만)
-
-**예시 형식**:
-❌ "민법 제550조는 해지의 효과를 규정합니다"
-✅ "민법 제550조에 따르면, 계약을 해지하면 앞으로만 효력이 없어져요. 즉, 이미 받은 돈이나 물건은 돌려주지 않아도 됩니다. 다만 해지 이후 발생한 손해에 대해서는 배상을 청구할 수 있어요."
-
-{final_instruction_section}
+{instruction_section}
 
 답변을 시작하세요:
 """
-        return final_prompt
+        
+        # 최종 토큰 수 재검증 (지침 추가 후)
+        final_tokens_after_instructions = self._estimate_tokens(final_prompt_with_instructions)
+        if final_tokens_after_instructions > MAX_SAFE_TOKENS:
+            logger.warning(
+                f"⚠️ [TOKEN LIMIT] Final prompt with instructions exceeds limit: "
+                f"{final_tokens_after_instructions:,} tokens (max: {MAX_SAFE_TOKENS:,}). "
+                f"Applying emergency truncation..."
+            )
+            # 긴급 축약: 문서 섹션만 축약
+            final_prompt_with_instructions = self._emergency_truncate_prompt(
+                final_prompt_with_instructions, 
+                MAX_SAFE_TOKENS, 
+                simplified_base, 
+                query
+            )
+            final_tokens_after_instructions = self._estimate_tokens(final_prompt_with_instructions)
+            logger.warning(
+                f"⚠️ [EMERGENCY TRUNCATION] Prompt truncated to {final_tokens_after_instructions:,} tokens"
+            )
+        
+        logger.info(
+            f"✅ [FINAL TOKEN COUNT] Final prompt with instructions: {final_tokens_after_instructions:,} tokens "
+            f"({final_tokens_after_instructions/MAX_INPUT_TOKENS*100:.1f}% of max)"
+        )
+        
+        return final_prompt_with_instructions
 
     def _validate_prompt_contains_documents(self, final_prompt: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """프롬프트에 실제 문서 내용이 포함되었는지 검증 (강화된 버전)"""
@@ -1433,21 +1407,47 @@ class UnifiedPromptManager:
 
         return validation_result
 
-    def _normalize_document_fields(self, doc: Dict[str, Any]) -> Dict[str, Any]:
-        """문서 필드명 정규화 - 법률명, 조문 번호 등 명시적 추출"""
+    def _normalize_document_fields(self, doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """문서 필드명 정규화 - 법률명, 조문 번호 등 명시적 추출 (개선: 문서 제목 생성 및 관련성 점수 포함)"""
         if not isinstance(doc, dict):
-            return {}
+            return None
 
-        # content 필드: 여러 가능한 필드명에서 추출
+        # content 필드: 여러 가능한 필드명에서 추출 (우선순위: content > text > chunk_text)
+        # 개선: content 필드를 우선 확인 (workflow_document_processor에서 content로 저장)
         content = (
             doc.get("content", "") or
             doc.get("text", "") or
+            doc.get("chunk_text", "") or
+            doc.get("content_text", "") or
             doc.get("document_text", "") or
             doc.get("full_text", "") or
             doc.get("body", "") or
+            str(doc.get("metadata", {}).get("content", "") if isinstance(doc.get("metadata"), dict) else "") or
             str(doc.get("metadata", {}).get("text", "") if isinstance(doc.get("metadata"), dict) else "") or
             ""
+        ).strip()
+        
+        # 법률 정보가 있으면 content가 짧아도 포함 (개선: 10자 → 3자로 완화)
+        has_law_info = bool(
+            doc.get("law_name") or 
+            doc.get("article_no") or 
+            doc.get("case_name") or 
+            doc.get("case_number") or
+            (isinstance(doc.get("metadata"), dict) and (
+                doc.get("metadata", {}).get("law_name") or
+                doc.get("metadata", {}).get("article_no") or
+                doc.get("metadata", {}).get("case_name")
+            ))
         )
+        
+        min_content_length = 3 if has_law_info else 10  # 법률 정보가 있으면 3자 이상
+        
+        if not content or len(content) < min_content_length:
+            if has_law_info:
+                # 법률 정보가 있으면 content가 없어도 법률 정보만으로 문서 생성
+                logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) but has law info, creating minimal doc")
+            else:
+                return None
 
         # source 필드: 여러 가능한 필드명에서 추출
         source = (
@@ -1584,14 +1584,54 @@ class UnifiedPromptManager:
             ""
         )
 
+        # 관련성 점수 추출
+        relevance_score = float(
+            doc.get("relevance_score", 0.0) or 
+            doc.get("final_weighted_score", 0.0) or
+            doc.get("score", 0.0) or 
+            doc.get("similarity_score", 0.0) or
+            doc.get("similarity", 0.0) or 
+            0.0
+        )
+        
+        # 문서 제목 생성 (개선: 일관된 형식)
+        doc_title = ""
+        if law_name and article_no:
+            doc_title = f"{law_name} 제{article_no}조"
+            if clause_no:
+                doc_title += f" 제{clause_no}항"
+            if item_no:
+                doc_title += f" 제{item_no}호"
+        elif case_name:
+            doc_title = case_name
+            if court:
+                doc_title = f"{court} {doc_title}"
+        else:
+            doc_title = source or doc.get("source_type", "법률 문서")
+        
+        # content가 없거나 짧아도 법률 정보가 있으면 최소 content 생성 (개선)
+        if not content or len(content) < min_content_length:
+            if has_law_info:
+                # 법률 정보만으로 최소 content 생성
+                if law_name and article_no:
+                    content = f"{law_name} 제{article_no}조"
+                    if clause_no:
+                        content += f" 제{clause_no}항"
+                    if heading:
+                        content += f" ({heading})"
+                elif case_name:
+                    content = case_name
+                    if court:
+                        content = f"{court} {case_name}"
+                else:
+                    content = doc_title or "법률 문서"
+                logger.debug(f"✅ [DOC NORMALIZE] Created minimal content from law info: {content[:50]}")
+        
         normalized = {
             "content": str(content).strip(),
+            "title": doc_title,  # 개선: 문서 제목 추가
             "source": str(source).strip() or "Unknown",
-            "relevance_score": (
-                float(doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0) or
-                      doc.get("score", 0.0) or doc.get("similarity_score", 0.0) or
-                      doc.get("similarity", 0.0) or 0.0)
-            ),
+            "relevance_score": relevance_score,
             "document_id": str(doc.get("document_id", "") or doc.get("id", "") or doc.get("chunk_id", "") or "").strip(),
             "metadata": metadata,
             # 법률 정보 추가
@@ -1604,6 +1644,7 @@ class UnifiedPromptManager:
             "court": str(court).strip(),
             "case_number": str(case_number).strip(),
             "case_name": str(case_name).strip(),
+            "casenames": str(case_name).strip(),  # 호환성
             "announce_date": str(announce_date).strip(),
             "case_type": str(case_type).strip(),
             # 판례 본문 정보 추가
@@ -2348,23 +2389,42 @@ class UnifiedPromptManager:
 - 법률은 해석의 여지가 있음을 인지하고 단정적 표현 자제
 - 최신 법령 개정 사항에 대해서는 확인이 필요함을 안내
 
-### 2. 명확한 한계 설정
-- 답변 시작 또는 종료 시 다음 면책 문구 포함:
-  > "본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."
+### 2. 자연스러운 출처 표기
+- 출처는 답변 내용에 자연스럽게 통합하세요
+- 법원명과 판결일을 직접 언급: "서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면..." 형식 사용
+- "[출처: 문서 N]" 형식은 사용하지 마세요
+- 같은 출처를 여러 번 인용할 때는 첫 번째만 상세히 표기하고, 이후에는 간략히 표기
+- 예시:
+  * ❌ "불법행위로 인한 손해배상청구권은 손해 및 가해자를 안 날부터 3년간 행사하지 아니하면 시효로 인해 소멸합니다 [출처: 문서 4]."
+  * ✅ "불법행위로 인한 손해배상청구권은 손해 및 가해자를 안 날부터 3년간 행사하지 아니하면 시효로 인해 소멸합니다(서울고등법원 2018. 5. 15. 선고 2017나2046429 판결)."
 
-### 3. 구조화된 답변
-- **상황 정리**: 사용자의 질문 내용을 요약 정리
-- **관련 법률**: 적용 가능한 법률 및 조항 명시
-- **법적 분석**: 쟁점과 법리 설명
-- **실질적 조언**: 실행 가능한 대응 방안 제시
-- **추가 고려사항**: 주의사항 및 참고사항
+### 3. 자연스러운 문단 흐름
+- **과도한 구조화 지양**: 표나 복잡한 섹션 구분은 최소화하세요
+- **자연스러운 문단 흐름**: 법적 내용을 논리적으로 연결된 문단으로 설명하세요
+- **표 사용 최소화**: 문서별 근거 비교 표는 답변 말미에만 간략히 포함 (선택사항)
+- **번호 매기기 제한**: 3개 이상의 항목이 연속될 때만 번호 사용, 그 외에는 자연스러운 문장으로 연결
+- **섹션 제목 최소화**: "[질문 요약]", "[핵심 답변]" 등 명시적 섹션 제목 대신 자연스러운 문단 전환 사용
+- 예시:
+  * ❌ "1. 소멸시효 관리: ... 2. 과실상계 고려: ... 3. 손해액 산정: ..."
+  * ✅ "불법행위로 인한 손해배상과 관련하여 실무에서는 소멸시효 관리가 중요합니다. 손해 및 가해자를 안 날로부터 3년 이내에 행사해야 하므로... 또한 피해자에게도 과실이 있다면 과실상계가 적용될 수 있으므로... 그리고 손해배상액을 청구할 때는..."
 
-### 4. 접근성 있는 언어
+### 4. 접근성 있는 언어 및 자연스러운 어조
 - 전문 법률 용어는 쉬운 말로 풀어서 설명
 - 필요시 예시를 들어 이해를 돕기
 - 복잡한 개념은 단계별로 설명
+- **격식체 유지하되 친근함 추가**: 존댓말을 사용하되, 딱딱하지 않게 작성
+- **직접적 표현**: "귀하의 질문은...으로 이해됩니다" 대신 "말씀하신 [내용]에 대해 설명드리겠습니다" 사용
+- **자연스러운 전환**: "또한", "그런데", "다만", "참고로" 등 자연스러운 연결어 사용
+- **불확실성 표현 자연스럽게**: "명시되어 있지 않습니다" 대신 "직접 나와 있지는 않지만" 같은 자연스러운 표현
+- 예시:
+  * ❌ "제공된 문서들에는 민법 제750조의 조문 내용이 직접적으로 명시되어 있지 않습니다. 그러나 문서들은..."
+  * ✅ "제공된 문서에는 민법 제750조의 조문이 직접 나와 있지는 않지만, 불법행위로 인한 손해배상과 관련된 중요한 내용들을 다루고 있습니다."
 
-### 5. 띄어쓰기 필수 준수
+### 5. 명확한 한계 설정
+- 답변 시작 또는 종료 시 다음 면책 문구를 자연스럽게 포함:
+  > "참고로, 본 답변은 일반적인 법률 정보 제공을 목적으로 하며, 개별 사안에 대한 법률 자문이 아닙니다. 구체적인 법률 문제는 변호사와 직접 상담하시기 바랍니다."
+
+### 6. 띄어쓰기 필수 준수
 - **반드시 모든 문장에 적절한 띄어쓰기를 적용하세요**
 - 띄어쓰기 없는 답변은 절대 생성하지 마세요
 - 예시:
@@ -2376,7 +2436,7 @@ class UnifiedPromptManager:
 - 하지만 명사와 명사 사이, 동사와 조사 사이에는 적절한 띄어쓰기를 적용하세요
 - 모든 문장에서 자연스러운 띄어쓰기를 반드시 적용하세요
 
-### 6. 윤리적 경계
+### 7. 윤리적 경계
 - 명백히 불법적이거나 비윤리적인 행위에 대한 조력 거부
 - 소송 사기, 증거 조작 등 불법 행위 관련 질문에는 답변 거부
 - 범죄 행위 방법이나 법망 회피 방법은 절대 제공하지 않음
@@ -2385,50 +2445,34 @@ class UnifiedPromptManager:
 
 ### 일반 법률 질문
 ```
-[질문 요약]
-귀하의 질문은 ~에 관한 것으로 이해됩니다.
+말씀하신 [질문 내용]에 대해 설명드리겠습니다.
 
-[관련 법률]
-- 적용 법률:
-- 주요 조항:
+[관련 법률 및 조항을 자연스럽게 언급하며 설명]
 
-[법적 해설]
-[구체적 내용 설명]
+[법적 해설을 논리적으로 연결된 문단으로 설명]
 
-[실무적 조언]
-이러한 경우 일반적으로 다음과 같은 방법을 고려할 수 있습니다:
+[실무적 조언을 자연스러운 문장으로 제시]
 
-[주의사항]
+[주의사항 및 참고사항]
 
-[면책 문구]
+[면책 문구를 자연스럽게 포함]
 ```
+
+**중요**: "[질문 요약]", "[관련 법률]" 등 명시적 섹션 제목은 사용하지 말고, 자연스러운 문단 전환으로 내용을 연결하세요.
 
 ### 분쟁/소송 관련 질문
 ```
-[상황 분석]
-말씀하신 상황을 정리하면...
+말씀하신 상황을 정리하면... 이 사안의 핵심 쟁점은... 관련 법리와 판례에 따르면...
 
-[법적 쟁점]
-이 사안의 핵심 쟁점은...
+[권리 구제 방법을 자연스럽게 설명]
+협상/조정, 민사소송, 형사고소 등의 방법이 있으며, 각각의 장단점은...
 
-[예상 법적 판단]
-관련 법리와 판례에 따르면...
+[증거 자료 및 절차를 자연스럽게 안내]
 
-[권리 구제 방법]
-1. 협상/조정
-2. 민사소송
-3. 형사고소
-[각각의 장단점 설명]
-
-[증거 자료]
-다음과 같은 자료가 중요합니다:
-
-[절차 안내]
-구체적인 절차는...
-
-[전문가 상담 권고]
-본 사안은 [이유]로 인해 변호사 상담을 적극 권장합니다.
+[전문가 상담 권고를 자연스럽게 포함]
 ```
+
+**중요**: 명시적 섹션 제목 대신 자연스러운 문단 흐름으로 내용을 연결하세요. 번호 매기기는 3개 이상의 연속 항목일 때만 사용하세요.
 
 ## 특별 지침
 
@@ -2454,11 +2498,12 @@ class UnifiedPromptManager:
 
 ## 출력 스타일
 
-- 존댓말 사용 (격식체)
-- 문단 구분 명확히
-- 중요 내용은 **강조**
-- 법조문 인용 시 정확한 출처 표시
-- 3단계 이상 복잡한 내용은 번호 매기기 사용
+- **자연스러운 대화형 어조**: 존댓말을 사용하되 딱딱하지 않게, 친근하면서도 전문적으로
+- **문단 구분 명확히**: 자연스러운 문단 전환으로 내용을 연결
+- **중요 내용은 **강조**: 핵심 법적 정보는 강조 표시
+- **출처 표기**: 법원명과 판결일을 직접 언급하여 자연스럽게 표기 (예: "서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...")
+- **번호 매기기 제한**: 3개 이상의 연속 항목일 때만 사용, 그 외에는 자연스러운 문장으로 연결
+- **표 사용 최소화**: 과도한 표는 지양하고, 필요시 답변 말미에만 간략히 포함
 - **띄어쓰기 필수**: 모든 문장에 자연스러운 띄어쓰기를 반드시 적용하세요
 ---"""
 
@@ -2804,3 +2849,144 @@ class UnifiedPromptManager:
 ## 일반 질문 지침
 - 핵심 답만 간결히 제시하고, 필요한 경우 관련 법령/판례를 링크 형태로 제시.
 """
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        한국어 기준 토큰 수 추정
+        
+        Args:
+            text: 추정할 텍스트
+            
+        Returns:
+            int: 추정된 토큰 수
+        """
+        if not text:
+            return 0
+        
+        # 한국어 기준: 1토큰 = 2.5자 (보수적 추정)
+        # 영어/숫자/특수문자는 더 적은 토큰 사용
+        # 한국어 비율 계산
+        korean_chars = sum(1 for c in text if '\uAC00' <= c <= '\uD7A3')
+        other_chars = len(text) - korean_chars
+        
+        # 한국어: 1토큰 = 2.5자, 기타: 1토큰 = 4자
+        estimated_tokens = (korean_chars / 2.5) + (other_chars / 4.0)
+        
+        return int(estimated_tokens)
+    
+    def _smart_truncate_document(self, content: str, max_chars: int, query: str) -> str:
+        """
+        질문과 관련된 부분을 우선 유지하며 문서 축약
+        
+        Args:
+            content: 원본 문서 내용
+            max_chars: 최대 문자 수
+            query: 사용자 질문
+            
+        Returns:
+            str: 축약된 문서 내용
+        """
+        if len(content) <= max_chars:
+            return content
+        
+        # 질문 키워드 추출
+        query_keywords = set(query.split())
+        
+        # 문장 단위로 분리
+        sentences = content.split('。')  # 마침표 기준
+        if len(sentences) == 1:
+            sentences = content.split('.')
+        if len(sentences) == 1:
+            sentences = content.split('\n')
+        
+        # 관련도 점수 계산
+        scored_sentences = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            score = 0
+            sentence_lower = sentence.lower()
+            for keyword in query_keywords:
+                if keyword.lower() in sentence_lower:
+                    score += 1
+            scored_sentences.append((score, sentence))
+        
+        # 관련도 순 정렬
+        scored_sentences.sort(key=lambda x: x[0], reverse=True)
+        
+        # 상위 문장들 선택
+        selected_sentences = []
+        current_length = 0
+        
+        # 관련도 높은 문장 우선
+        for score, sentence in scored_sentences:
+            if current_length + len(sentence) <= max_chars * 0.8:  # 80%는 관련 문장
+                selected_sentences.append(sentence)
+                current_length += len(sentence)
+        
+        # 나머지 공간은 원본 순서대로
+        remaining_chars = max_chars - current_length
+        if remaining_chars > 100:
+            for sentence in sentences:
+                if sentence not in [s[1] for s in selected_sentences]:
+                    if current_length + len(sentence) <= max_chars:
+                        selected_sentences.append(sentence)
+                        current_length += len(sentence)
+                    else:
+                        # 마지막 문장 부분 포함
+                        remaining = max_chars - current_length
+                        if remaining > 50:
+                            selected_sentences.append(sentence[:remaining] + "...")
+                        break
+        
+        if selected_sentences:
+            return "。".join(selected_sentences) if "。" in content else " ".join(selected_sentences)
+        else:
+            return content[:max_chars] + "..."
+    
+    def _emergency_truncate_prompt(self, prompt: str, max_tokens: int, base_prompt: str, query: str) -> str:
+        """
+        긴급 상황에서 프롬프트 축약 (문서 섹션만 축약)
+        
+        Args:
+            prompt: 원본 프롬프트
+            max_tokens: 최대 토큰 수
+            base_prompt: 기본 프롬프트
+            query: 질문
+            
+        Returns:
+            str: 축약된 프롬프트
+        """
+        base_tokens = self._estimate_tokens(base_prompt)
+        query_tokens = self._estimate_tokens(query)
+        reserved_tokens = base_tokens + query_tokens + 500  # 여유 공간
+        
+        available_doc_tokens = max_tokens - reserved_tokens
+        
+        # 문서 섹션 찾기
+        doc_section_start = prompt.find("## 검색된 법률 문서")
+        if doc_section_start == -1:
+            # 문서 섹션이 없으면 그대로 반환
+            max_chars = int(max_tokens * 2.5)
+            return prompt[:max_chars]
+        
+        # 문서 섹션만 축약
+        doc_section = prompt[doc_section_start:]
+        doc_section_tokens = self._estimate_tokens(doc_section)
+        
+        if doc_section_tokens > available_doc_tokens:
+            # 문서 섹션 축약
+            max_doc_chars = int(available_doc_tokens * 2.5)
+            truncated_doc_section = doc_section[:max_doc_chars] + "\n\n(문서 내용이 길어 일부 생략되었습니다.)"
+            
+            # 프롬프트 재구성
+            truncated_prompt = prompt[:doc_section_start] + truncated_doc_section
+            
+            logger.warning(
+                f"⚠️ [EMERGENCY TRUNCATION] Document section truncated: "
+                f"{doc_section_tokens:,} → {self._estimate_tokens(truncated_doc_section):,} tokens"
+            )
+            
+            return truncated_prompt
+        
+        return prompt

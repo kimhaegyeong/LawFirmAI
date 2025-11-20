@@ -16,7 +16,8 @@ import statistics
 from dataclasses import dataclass
 from enum import Enum
 
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType, QuestionType
+from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+from core.classification.classifiers.question_classifier import QuestionType
 
 logger = logging.getLogger(__name__)
 

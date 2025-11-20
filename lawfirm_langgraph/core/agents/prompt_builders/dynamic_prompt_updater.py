@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import hashlib
 
-from .unified_prompt_manager import UnifiedPromptManager, LegalDomain
+from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
 
 logger = logging.getLogger(__name__)
 
