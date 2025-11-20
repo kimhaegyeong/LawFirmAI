@@ -887,7 +887,25 @@ class ClassificationHandler:
 
                 # LLM 호출 (빠른 모델 사용)
                 llm = self.llm_fast if self.llm_fast else self.llm
-                response = llm.invoke(unified_prompt)
+                # 타임아웃 설정 (기본 30초)
+                import asyncio
+                timeout_seconds = 30.0
+                
+                try:
+                    # 비동기 호출이 가능한 경우 타임아웃 적용
+                    if hasattr(llm, 'ainvoke'):
+                        response = asyncio.run(
+                            asyncio.wait_for(
+                                llm.ainvoke(unified_prompt),
+                                timeout=timeout_seconds
+                            )
+                        )
+                    else:
+                        # 동기 호출
+                        response = llm.invoke(unified_prompt)
+                except (asyncio.TimeoutError, TimeoutError) as timeout_error:
+                    raise TimeoutError(f"LLM classification call timed out after {timeout_seconds} seconds")
+                
                 response_content = WorkflowUtils.extract_response_content(response)
 
                 # JSON 파싱

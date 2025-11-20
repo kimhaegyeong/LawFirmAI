@@ -803,6 +803,20 @@ class SemanticSearchEngineV2:
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         
+        # 연결 풀 초기화
+        try:
+            from core.data.connection_pool import get_connection_pool
+            self._connection_pool = get_connection_pool(self.db_path)
+            self.logger.debug("Using connection pool for database connections")
+        except ImportError:
+            try:
+                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+                self._connection_pool = get_connection_pool(self.db_path)
+                self.logger.debug("Using connection pool for database connections")
+            except ImportError:
+                self._connection_pool = None
+                self.logger.debug("Connection pool not available, using direct connections")
+        
         # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
         self.stopword_processor = None
         if KoreanStopwordProcessor:
@@ -1249,7 +1263,7 @@ class SemanticSearchEngineV2:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM embeddings LIMIT 1")
             row = cursor.fetchone()
-            conn.close()
+            self._safe_close_connection(conn)
             return row is not None and row[0] > 0
         except Exception as e:
             self.logger.debug(f"Error checking embeddings table: {e}")
@@ -1297,7 +1311,7 @@ class SemanticSearchEngineV2:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM embeddings")
             row = cursor.fetchone()
-            conn.close()
+            self._safe_close_connection(conn)
             diagnosis["embeddings_count"] = row[0] if row else 0
             
             if diagnosis["embeddings_count"] == 0:
@@ -1348,7 +1362,7 @@ class SemanticSearchEngineV2:
                 LIMIT 1
             """)
             row = cursor.fetchone()
-            conn.close()
+            self._safe_close_connection(conn)
 
             if row:
                 version_id = row['id']
@@ -1390,7 +1404,7 @@ class SemanticSearchEngineV2:
                 WHERE embedding_version_id = ?
             """, (version_id,))
             row = cursor.fetchone()
-            conn.close()
+            self._safe_close_connection(conn)
 
             if row:
                 return row['count']
@@ -1439,7 +1453,7 @@ class SemanticSearchEngineV2:
                         f"Detected embedding model from active version (ID={active_version_id}): "
                         f"{detected_model}"
                     )
-                    conn.close()
+                    self._safe_close_connection(conn)
                     return detected_model
                 
                 # embedding_versions에 모델명이 없는 경우, embeddings 테이블에서 조회
@@ -1462,7 +1476,7 @@ class SemanticSearchEngineV2:
                         f"Detected embedding model from active version embeddings (ID={active_version_id}): "
                         f"{detected_model} (count: {row['count']})"
                     )
-                    conn.close()
+                    self._safe_close_connection(conn)
                     return detected_model
 
             # 활성 버전에서 모델을 찾지 못한 경우 전체 데이터베이스에서 가장 많이 사용된 모델 조회
@@ -1474,7 +1488,7 @@ class SemanticSearchEngineV2:
                 LIMIT 1
             """)
             row = cursor.fetchone()
-            conn.close()
+            self._safe_close_connection(conn)
 
             if row:
                 detected_model = row['model']
@@ -1505,10 +1519,21 @@ class SemanticSearchEngineV2:
             return None
 
     def _get_connection(self):
-        """Get database connection"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        """Get database connection (using connection pool if available)"""
+        if hasattr(self, '_connection_pool') and self._connection_pool:
+            return self._connection_pool.get_connection()
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+    
+    def _safe_close_connection(self, conn):
+        """연결을 안전하게 닫기 (연결 풀 사용 시 닫지 않음)"""
+        if conn and not (hasattr(self, '_connection_pool') and self._connection_pool):
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _load_chunk_vectors(self,
                            source_types: Optional[List[str]] = None,
@@ -1605,7 +1630,7 @@ class SemanticSearchEngineV2:
                     'embedding_version_id': row_dict.get('embedding_version_id')  # 버전 정보 추가
                 }
 
-            conn.close()
+            self._safe_close_connection(conn)
             self.logger.info(f"Loaded {len(chunk_vectors)} chunk vectors")
 
             # 메타데이터를 인스턴스 변수로 저장
@@ -1823,7 +1848,7 @@ class SemanticSearchEngineV2:
                     if len(vector) == dim:
                         chunk_vectors[chunk_id] = vector
 
-            conn.close()
+            self._safe_close_connection(conn)
             self.logger.debug(f"Loaded {len(chunk_vectors)} vectors in batch mode")
             return chunk_vectors
 
@@ -2329,7 +2354,159 @@ class SemanticSearchEngineV2:
         except Exception as e:
             self.logger.error(f"Failed to ensemble search: {e}")
             return []
-
+    
+    def _search_batch_with_threshold(self,
+                                     queries: List[str],
+                                     k: int,
+                                     source_types: Optional[List[str]],
+                                     similarity_threshold: float,
+                                     min_ml_confidence: Optional[float] = None,
+                                     min_quality_score: Optional[float] = None,
+                                     filter_by_confidence: bool = False,
+                                     chunk_size_category: Optional[str] = None,
+                                     deduplicate_by_group: bool = True,
+                                     embedding_version_id: Optional[int] = None) -> List[List[Dict[str, Any]]]:
+        """
+        여러 쿼리를 배치로 검색 (배치 검색 최적화)
+        
+        Args:
+            queries: 검색 쿼리 목록
+            k: 각 쿼리당 반환할 최대 결과 수
+            source_types: 필터링할 소스 타입 목록
+            similarity_threshold: 최소 유사도 임계값
+            min_ml_confidence: 최소 ML 신뢰도 점수
+            min_quality_score: 최소 품질 점수
+            filter_by_confidence: 신뢰도 기반 필터링 활성화
+            chunk_size_category: 청크 크기 카테고리 필터
+            deduplicate_by_group: 그룹별 중복 제거 활성화
+            embedding_version_id: 임베딩 버전 ID 필터
+        
+        Returns:
+            각 쿼리별 검색 결과 리스트의 리스트
+        """
+        if not queries:
+            return []
+        
+        # 빈 쿼리 필터링
+        valid_queries = [q for q in queries if q and q.strip()]
+        if not valid_queries:
+            return [[] for _ in queries]
+        
+        try:
+            import time
+            batch_start = time.time()
+            
+            # 1. 모든 쿼리 임베딩 생성 (배치)
+            query_vectors = []
+            query_to_idx = {}
+            for i, query in enumerate(queries):
+                if query and query.strip():
+                    normalized_query = self._normalize_query(query)
+                    query_vec = self._encode_query(query)
+                    if query_vec is not None:
+                        query_vectors.append(query_vec)
+                        query_to_idx[len(query_vectors) - 1] = i
+            
+            if not query_vectors:
+                return [[] for _ in queries]
+            
+            # 2. FAISS 배치 검색
+            if FAISS_AVAILABLE and self.index is not None:
+                query_vec_batch = np.array(query_vectors).astype('float32')
+                
+                # 차원 검증
+                query_dim = query_vec_batch.shape[1]
+                index_dim = self.index.d
+                if query_dim != index_dim:
+                    self.logger.error(
+                        f"FAISS index dimension mismatch: query vector dimension ({query_dim}) "
+                        f"does not match index dimension ({index_dim})"
+                    )
+                    return [[] for _ in queries]
+                
+                search_k = k * 3
+                
+                # nprobe 설정
+                if hasattr(self.index, 'nprobe'):
+                    optimal_nprobe = self._calculate_optimal_nprobe(k, self.index.ntotal)
+                    if self.index.nprobe != optimal_nprobe:
+                        self.index.nprobe = optimal_nprobe
+                
+                # 배치 검색 수행
+                distances_batch, indices_batch = self.index.search(query_vec_batch, search_k)
+                
+                self.logger.info(
+                    f"✅ [BATCH SEARCH] Processed {len(query_vectors)} queries in batch, "
+                    f"returned {len(indices_batch[0])} results per query"
+                )
+                
+                # 3. 각 쿼리별 결과 처리
+                all_results = [[] for _ in queries]
+                
+                for batch_idx, query_idx in query_to_idx.items():
+                    distances = distances_batch[batch_idx]
+                    indices = indices_batch[batch_idx]
+                    query = queries[query_idx]
+                    
+                    # 단일 쿼리 결과 처리 (기존 로직 재사용)
+                    results = []
+                    for i, (distance, idx) in enumerate(zip(distances, indices)):
+                        if idx < 0 or idx >= len(self._chunk_ids):
+                            continue
+                        
+                        chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
+                        
+                        # 메타데이터 확인
+                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                        
+                        # source_types 필터링
+                        if source_types:
+                            chunk_source_type = chunk_meta.get('source_type')
+                            if chunk_source_type and chunk_source_type not in source_types:
+                                continue
+                        
+                        # similarity_threshold 필터링
+                        similarity = 1.0 - distance  # FAISS distance를 similarity로 변환
+                        if similarity < similarity_threshold:
+                            continue
+                        
+                        # 결과 생성
+                        result = {
+                            'id': chunk_id,
+                            'relevance_score': float(similarity),
+                            'content': chunk_meta.get('text', ''),
+                            'source': chunk_meta.get('source', ''),
+                            'source_type': chunk_meta.get('source_type', ''),
+                            'type': chunk_meta.get('type', ''),
+                        }
+                        results.append(result)
+                        
+                        if len(results) >= k:
+                            break
+                    
+                    all_results[query_idx] = results
+                
+                batch_time = time.time() - batch_start
+                self.logger.debug(f"⏱️  Batch search completed in {batch_time:.3f}s ({len(query_vectors)} queries)")
+                
+                return all_results
+            else:
+                # FAISS 없으면 단일 쿼리 검색으로 폴백
+                self.logger.warning("FAISS not available, falling back to individual searches")
+                return [
+                    self._search_with_threshold(
+                        q, k, source_types, similarity_threshold,
+                        min_ml_confidence, min_quality_score,
+                        filter_by_confidence, chunk_size_category,
+                        deduplicate_by_group, embedding_version_id
+                    ) if q and q.strip() else []
+                    for q in queries
+                ]
+                
+        except Exception as e:
+            self.logger.error(f"Batch search failed: {e}", exc_info=True)
+            return [[] for _ in queries]
+    
     def _search_with_threshold(self,
                                query: str,
                                k: int,
@@ -2415,7 +2592,7 @@ class SemanticSearchEngineV2:
                     self.logger.error(f"❌ {error_msg}")
                     raise ValueError(error_msg)
                 
-                search_k = k * 5  # 여유 있게 검색 (개선: 2배 → 5배로 확대)
+                search_k = k * 3  # 여유 있게 검색 (개선: 5배 → 3배로 최적화)
                 
                 # nprobe 설정 (IndexIVF 계열만 지원)
                 if hasattr(self.index, 'nprobe'):
@@ -2436,13 +2613,18 @@ class SemanticSearchEngineV2:
                     self.logger.error(f"❌ _chunk_ids is empty or not loaded! FAISS index has {self.index.ntotal} vectors but _chunk_ids has {len(self._chunk_ids) if hasattr(self, '_chunk_ids') else 0} entries")
                     self.logger.error("Attempting to reload _chunk_ids from database...")
                     try:
+                        # 연결 풀 사용 (이미 최적화됨)
                         conn = self._get_connection()
-                        cursor = conn.execute(
-                            "SELECT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
-                            (embedding_version_id or self._get_active_embedding_version_id(),)
-                        )
-                        self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                        conn.close()
+                        try:
+                            cursor = conn.execute(
+                                "SELECT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                                (embedding_version_id or self._get_active_embedding_version_id(),)
+                            )
+                            self._chunk_ids = [row[0] for row in cursor.fetchall()]
+                        finally:
+                            # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
+                            if not self._connection_pool:
+                                self._safe_close_connection(conn)
                         self.logger.info(f"✅ Reloaded {len(self._chunk_ids)} chunk_ids from database")
                     except Exception as e:
                         self.logger.error(f"Failed to reload _chunk_ids: {e}")
@@ -2555,7 +2737,9 @@ class SemanticSearchEngineV2:
                     try:
                         conn_batch = self._get_connection()
                         batch_metadata = self._batch_load_chunk_metadata(conn_batch, chunk_ids_to_fetch)
-                        conn_batch.close()
+                        # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
+                        if not self._connection_pool:
+                            conn_batch.close()
                         
                         # 조회된 메타데이터를 캐시에 저장
                         for chunk_id, metadata in batch_metadata.items():
@@ -3635,7 +3819,7 @@ class SemanticSearchEngineV2:
                 results = deduplicated_results[:k]
 
             if conn:
-                conn.close()
+                self._safe_close_connection(conn)
             
             step_times['result_processing'] = time.time() - result_processing_start
             step_times['total'] = time.time() - step_start
@@ -3787,7 +3971,7 @@ class SemanticSearchEngineV2:
                 cursor.execute("SELECT COUNT(*) as count FROM text_chunks")
                 row = cursor.fetchone()
                 total_chunks = row['count'] if row else 0
-                conn.close()
+                self._safe_close_connection(conn)
                 if total_chunks == 0:
                     self.logger.warning("   ❌ No chunks found in database")
                 else:
@@ -3959,7 +4143,7 @@ class SemanticSearchEngineV2:
                                     result['metadata']['embedding_version_id'] = version_id
                                     self.logger.debug(f"Restored embedding_version_id={version_id} for chunk_id={chunk_id}")
                                     restoration_stats['version_id_restored'] += 1
-                            conn.close()
+                            self._safe_close_connection(conn)
                         except Exception as e:
                             self.logger.debug(f"Failed to restore embedding_version_id for chunk_id={chunk_id}: {e}")
                     
@@ -4161,7 +4345,7 @@ class SemanticSearchEngineV2:
                                     f"✅ Restored text for result {i+1} (length: {len(restored_text)} chars)"
                                 )
                                 restoration_stats['text_restored'] += 1
-                            conn.close()
+                            self._safe_close_connection(conn)
                         except Exception as e:
                             self.logger.debug(f"Failed to restore text for result {i+1}: {e}")
                     
@@ -4257,7 +4441,7 @@ class SemanticSearchEngineV2:
                     else:
                         self.logger.debug(f"Direct query for chunk_id={sample_id} also returned no rows - chunk may not exist")
             
-            conn.close()
+            self._safe_close_connection(conn)
             
             result = {}
             active_version_id = self._get_active_embedding_version_id()
@@ -4352,11 +4536,11 @@ class SemanticSearchEngineV2:
                         else:
                             # source_id가 None인 경우에도 계속 진행 (다른 방법으로 복원 시도)
                             self.logger.debug(f"⚠️  source_id is None for chunk_id={chunk_id}, will try alternative restoration methods")
-                        conn.close()
+                        self._safe_close_connection(conn)
                     except Exception as e:
                         self.logger.debug(f"Failed to get source_id from text_chunks for chunk_id={chunk_id}: {e}")
                         if conn:
-                            conn.close()
+                            self._safe_close_connection(conn)
                         # source_id가 없어도 계속 진행 (다른 방법으로 복원 시도)
                         pass
                 else:
@@ -4391,11 +4575,11 @@ class SemanticSearchEngineV2:
                                     result['metadata']['text'] = restored_text
                                     result['metadata']['content'] = restored_text
                                     self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks (length: {len(restored_text)} chars)")
-                        conn.close()
+                        self._safe_close_connection(conn)
                     except Exception as e:
                         self.logger.debug(f"Failed to get metadata from text_chunks for chunk_id={chunk_id}: {e}")
                         if conn:
-                            conn.close()
+                            self._safe_close_connection(conn)
             
             # source_id가 여전히 None이면 복원 불가능하므로 경고만 출력하고 계속 진행
             if not source_id:
@@ -5006,7 +5190,7 @@ class SemanticSearchEngineV2:
                     if not final_value:
                         self.logger.warning(f"⚠️  Failed to restore {field} for chunk_id={chunk_id}, source_id={source_id}")
             
-            conn.close()
+            self._safe_close_connection(conn)
             
         except Exception as e:
             self.logger.warning(f"Failed to restore missing metadata for chunk_id={chunk_id}, source_type={source_type}: {e}")
@@ -5056,7 +5240,7 @@ class SemanticSearchEngineV2:
                     cursor.execute("SELECT COUNT(*) as count FROM text_chunks")
                     row = cursor.fetchone()
                     chunk_count = row['count'] if row else 0
-                    conn.close()
+                    self._safe_close_connection(conn)
                     self.logger.info(f"      - Database embeddings: {emb_count}")
                     self.logger.info(f"      - Database chunks: {chunk_count}")
                 else:
@@ -5081,10 +5265,16 @@ class SemanticSearchEngineV2:
         # nlist 추정 (일반적으로 total/10 ~ total/100)
         estimated_nlist = max(10, min(100, total_vectors // 10))
         
-        # 더 공격적인 nprobe 계산 (개선: base_nprobe 계산 방식 변경)
-        base_nprobe = max(32, int(np.sqrt(total_vectors) / 10))
+        # 더 공격적인 nprobe 계산 (추가 개선: base_nprobe 계산 방식 최적화)
+        # total_vectors에 따라 동적으로 조정하여 검색 속도와 정확도 균형
+        if total_vectors < 10000:
+            base_nprobe = max(16, int(np.sqrt(total_vectors) / 5))
+        elif total_vectors < 100000:
+            base_nprobe = max(32, int(np.sqrt(total_vectors) / 10))
+        else:
+            base_nprobe = max(64, int(np.sqrt(total_vectors) / 15))
 
-        # k 값에 따라 nprobe 조정 (개선: 더 많은 후보 검색)
+        # k 값에 따라 nprobe 조정 (추가 개선: 더 정밀한 조정)
         if k <= 10:
             nprobe = min(base_nprobe * 2, 256)
         elif k <= 20:
@@ -5382,7 +5572,7 @@ class SemanticSearchEngineV2:
                     (self.model_name,)
                 )
                 self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                conn.close()
+                self._safe_close_connection(conn)
             
             # 메타데이터 처리
             if metadata:
@@ -5677,7 +5867,7 @@ class SemanticSearchEngineV2:
                                 (self.model_name,)
                             )
                             self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                            conn.close()
+                            self._safe_close_connection(conn)
                         
                         metadata = index_data.get('metadata', [])
                         if metadata:
@@ -5767,7 +5957,7 @@ class SemanticSearchEngineV2:
                             (self.model_name,)
                         )
                     self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                    conn.close()
+                    self._safe_close_connection(conn)
             else:
                 # chunk_ids.json이 없으면 embeddings 테이블에서 로드 (활성 버전 사용)
                 conn = self._get_connection()
@@ -5783,7 +5973,7 @@ class SemanticSearchEngineV2:
                         (self.model_name,)
                     )
                 self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                conn.close()
+                self._safe_close_connection(conn)
             
             # FAISS 인덱스 크기와 _chunk_ids 길이 일치 확인
             if self.index and hasattr(self.index, 'ntotal'):
@@ -5841,7 +6031,9 @@ class SemanticSearchEngineV2:
                         batch_ids = self._chunk_ids[i:i + batch_size]
                         batch_metadata = self._batch_load_chunk_metadata(conn, batch_ids)
                         self._chunk_metadata.update(batch_metadata)
-                    conn.close()
+                    # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
+                    if not self._connection_pool:
+                        self._safe_close_connection(conn)
                     self.logger.info(f"Loaded metadata for {len(self._chunk_metadata)} chunks")
                 except Exception as e:
                     self.logger.warning(f"Failed to load chunk metadata: {e}")
@@ -6837,7 +7029,7 @@ class SemanticSearchEngineV2:
             
             results = self.search(
                 query=var_query,
-                k=k * 2,  # 여유 있게 검색
+                k=int(k * 1.5),  # 여유 있게 검색 (개선: 2배 → 1.5배로 최적화)
                 source_types=source_types,
                 similarity_threshold=similarity_threshold,
                 disable_retry=True  # 빠른 검색

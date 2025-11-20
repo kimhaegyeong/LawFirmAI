@@ -66,6 +66,44 @@ class WorkflowDocumentProcessor:
         
         return content or ""
     
+    def _deduplicate_documents(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        중복 문서 제거 (같은 content 또는 같은 source_id를 가진 문서)
+        """
+        seen_content = set()
+        seen_source_ids = set()
+        deduplicated = []
+        
+        for doc in documents:
+            content = self._extract_doc_content(doc)
+            source_id = doc.get("source_id") or doc.get("id") or doc.get("chunk_id")
+            
+            # content 해시로 중복 확인 (처음 500자만 해시)
+            content_hash = hash(content[:500]) if content else None
+            if content_hash and content_hash in seen_content:
+                self.logger.debug(f"중복 문서 제거 (content): source_id={source_id}")
+                continue
+            
+            # source_id로 중복 확인
+            if source_id and source_id in seen_source_ids:
+                self.logger.debug(f"중복 문서 제거 (source_id): source_id={source_id}")
+                continue
+            
+            if content_hash:
+                seen_content.add(content_hash)
+            if source_id:
+                seen_source_ids.add(source_id)
+            
+            deduplicated.append(doc)
+        
+        if len(documents) != len(deduplicated):
+            self.logger.info(
+                f"중복 문서 제거: {len(documents)}개 → {len(deduplicated)}개 "
+                f"({len(documents) - len(deduplicated)}개 제거됨)"
+            )
+        
+        return deduplicated
+    
     def build_prompt_optimized_context(
         self,
         retrieved_docs: List[Dict[str, Any]],
@@ -775,6 +813,9 @@ class WorkflowDocumentProcessor:
                         "total_context_length": 0
                     }
             
+            # 중복 문서 제거
+            sorted_docs = self._deduplicate_documents(sorted_docs)
+            
             if generate_document_based_instructions_func:
                 document_instructions = generate_document_based_instructions_func(
                     documents=sorted_docs,
@@ -788,10 +829,6 @@ class WorkflowDocumentProcessor:
                     query_type=query_type
                 )
             
-            semantic_count = sum(1 for doc in sorted_docs if doc.get("search_type") == "semantic")
-            keyword_count = sum(1 for doc in sorted_docs if doc.get("search_type") == "keyword")
-            hybrid_count = len(sorted_docs) - semantic_count - keyword_count
-            
             prompt_section = f"""## 답변 생성 지시사항
 
 {document_instructions}
@@ -800,15 +837,6 @@ class WorkflowDocumentProcessor:
 
 다음 {len(sorted_docs)}개의 문서를 반드시 참고하여 답변을 생성하세요.
 각 문서는 관련성 점수와 핵심 내용이 표시되어 있습니다.
-
-**검색 결과 통계:**
-- 의미적 검색 결과: {semantic_count}개
-- 키워드 검색 결과: {keyword_count}개
-- 하이브리드 검색 결과: {hybrid_count}개
-- 총 문서 수: {len(sorted_docs)}개
-
-**참고:** 의미적 검색 결과는 의미적 유사도를, 키워드 검색 결과는 키워드 매칭 정도를 나타냅니다.
-두 검색 방식의 결과를 종합하여 정확하고 포괄적인 답변을 생성하세요.
 
 """
             
@@ -831,18 +859,8 @@ class WorkflowDocumentProcessor:
                 else:
                     relevant_sentences = []
                 
-                search_type = doc.get("search_type", "hybrid")
-                search_method = doc.get("search_method", "hybrid_search")
-                keyword_match_score = doc.get("keyword_match_score", 0.0)
-                matched_keywords = doc.get("matched_keywords", [])
-                
                 doc_section = f"""
 ### 문서 {idx}: {source} (관련성 점수: {relevance_score:.2f})
-
-**검색 정보:**
-- 검색 방식: {search_type} ({search_method})
-- 키워드 매칭 점수: {keyword_match_score:.2f}
-- 매칭된 키워드: {', '.join(matched_keywords[:5]) if matched_keywords else '없음'}
 
 **핵심 내용:**
 """
