@@ -549,7 +549,7 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
-### 2. React 규칙
+### 3. React 규칙
 ```typescript
 // frontend/src/App.tsx
 import React, { useState } from 'react';
@@ -586,7 +586,120 @@ function App() {
 export default App;
 ```
 
-### 3. 데이터베이스 규칙
+### 4. 데이터베이스 규칙
+
+#### 4-1. 연결 풀링 시스템 사용 규칙 (CRITICAL)
+
+**SQLite 데이터베이스 연결은 반드시 연결 풀링 시스템을 사용해야 합니다.**
+
+##### 원칙
+1. **연결 풀링 필수 사용**
+   - 모든 SQLite 데이터베이스 연결은 `core.data.connection_pool`의 `ThreadLocalConnectionPool` 사용
+   - 매번 `sqlite3.connect()`를 직접 호출하는 방식 금지
+   - Thread-local storage를 사용하여 스레드 안전성 보장
+
+2. **연결 풀 초기화 패턴**
+   ```python
+   # ✅ 좋은 예: 연결 풀 사용
+   from core.data.connection_pool import get_connection_pool
+   
+   class DatabaseService:
+       def __init__(self, db_path: str):
+           self.db_path = db_path
+           self._connection_pool = get_connection_pool(self.db_path)
+       
+       def _get_connection(self):
+           """연결 풀에서 연결 가져오기"""
+           return self._connection_pool.get_connection()
+       
+       def execute_query(self, query: str, params: tuple = ()):
+           conn = self._get_connection()
+           cursor = conn.cursor()
+           cursor.execute(query, params)
+           return cursor.fetchall()
+   ```
+
+3. **기존 코드 마이그레이션 패턴**
+   ```python
+   # ❌ 나쁜 예: 매번 새 연결 생성
+   def get_data(self):
+       conn = sqlite3.connect(self.db_path)
+       cursor = conn.cursor()
+       cursor.execute("SELECT * FROM table")
+       result = cursor.fetchall()
+       conn.close()
+       return result
+   
+   # ✅ 좋은 예: 연결 풀 사용
+   def __init__(self, db_path: str):
+       self.db_path = db_path
+       try:
+           from core.data.connection_pool import get_connection_pool
+           self._connection_pool = get_connection_pool(self.db_path)
+       except ImportError:
+           try:
+               from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
+               self._connection_pool = get_connection_pool(self.db_path)
+           except ImportError:
+               self._connection_pool = None
+   
+   def get_data(self):
+       if self._connection_pool:
+           conn = self._connection_pool.get_connection()
+       else:
+           conn = sqlite3.connect(self.db_path)
+       cursor = conn.cursor()
+       cursor.execute("SELECT * FROM table")
+       result = cursor.fetchall()
+       if not self._connection_pool:
+           conn.close()
+       return result
+   ```
+
+4. **연결 닫기 처리**
+   ```python
+   # ✅ 좋은 예: 연결 풀 사용 시 close() 호출 생략 가능
+   def process_data(self):
+       conn = self._connection_pool.get_connection()
+       cursor = conn.cursor()
+       cursor.execute("SELECT ...")
+       result = cursor.fetchall()
+       # 연결 풀 사용 시 conn.close() 호출 불필요 (자동 재사용)
+       return result
+   
+   # ✅ 좋은 예: 폴백 지원 (연결 풀 없을 때)
+   def process_data(self):
+       if self._connection_pool:
+           conn = self._connection_pool.get_connection()
+       else:
+           conn = sqlite3.connect(self.db_path)
+       
+       try:
+           cursor = conn.cursor()
+           cursor.execute("SELECT ...")
+           return cursor.fetchall()
+       finally:
+           if not self._connection_pool:
+               conn.close()
+   ```
+
+5. **금지 사항**
+   - `sqlite3.connect()` 직접 호출 금지 (연결 풀 사용 필수)
+   - 연결 풀 없이 매번 새 연결 생성하는 방식 금지
+   - 스레드 간 연결 공유 금지 (Thread-local storage 사용 필수)
+
+6. **적용 대상**
+   - `LegalDataConnectorV2`: `_get_connection()` 메서드
+   - `SemanticSearchEngineV2`: `_get_connection()` 메서드
+   - `PerformanceCache`: 모든 데이터베이스 접근 메서드
+   - 기타 SQLite 데이터베이스를 사용하는 모든 클래스
+
+7. **성능 이점**
+   - 연결 생성 오버헤드 감소 (20-30% 성능 향상)
+   - 스레드 안전성 보장
+   - 메모리 사용량 최적화
+
+#### 4-2. 기본 데이터베이스 규칙
 ```python
 import sqlite3
 from contextlib import contextmanager
@@ -597,27 +710,46 @@ class DatabaseManager:
     
     def __init__(self, db_path: str):
         self.db_path = db_path
+        # 연결 풀 초기화
+        try:
+            from core.data.connection_pool import get_connection_pool
+            self._connection_pool = get_connection_pool(self.db_path)
+        except ImportError:
+            self._connection_pool = None
         self._create_tables()
+    
+    def _get_connection(self):
+        """연결 풀에서 연결 가져오기"""
+        if self._connection_pool:
+            return self._connection_pool.get_connection()
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
     
     @contextmanager
     def get_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         try:
             yield conn
         finally:
-            conn.close()
+            if not self._connection_pool:
+                conn.close()
     
     def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         """쿼리 실행"""
-        with self.get_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
+        conn = self._get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        result = [dict(row) for row in cursor.fetchall()]
+        if not self._connection_pool:
+            conn.close()
+        return result
 ```
 
-### 4. AI 모델 규칙
+### 5. AI 모델 규칙
 ```python
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -663,7 +795,7 @@ class ModelManager:
         return response
 ```
 
-### 4-1. 한국어 불용어 처리 규칙 (CRITICAL)
+### 5-1. 한국어 불용어 처리 규칙 (CRITICAL)
 
 **한국어 텍스트 처리 시 KoNLPy를 우선적으로 사용하여 불용어를 처리합니다.**
 
@@ -785,7 +917,7 @@ class ModelManager:
    - KoNLPy는 선택적 의존성으로 처리 (ImportError 처리 필수)
    - KoNLPy 미설치 시에도 동작하도록 폴백 구현 필수
 
-### 5. Batch File (.bat) 규칙
+### 6. Batch File (.bat) 규칙
 ```batch
 @echo off
 REM All REM comments in batch files must be written in English only
@@ -814,6 +946,180 @@ python -m uvicorn api.main:app --host %API_HOST% --port %API_PORT%
 - **이유**: 다양한 Windows 로케일에서 호환성 보장 및 인코딩 문제 방지
 - **echo 메시지**: 사용자에게 표시되는 메시지는 한글 사용 가능 (인코딩 설정 필요 시)
 - **변수명**: 영어 사용 권장
+
+## 로깅 규칙 (CRITICAL)
+
+### 1. 로거 생성 방법
+
+#### 기본 패턴 (권장)
+```python
+import logging
+
+# 모듈 레벨에서 로거 생성
+logger = logging.getLogger(__name__)
+```
+
+#### 유틸리티 함수 사용 (선택)
+```python
+from lawfirm_langgraph.core.utils.logger import get_logger
+
+# 환경 변수 LOG_LEVEL을 읽어서 자동 설정
+logger = get_logger(__name__)
+```
+
+#### 클래스 내부에서 로거 사용
+```python
+class MyService:
+    def __init__(self, logger=None):
+        # 로거를 파라미터로 받거나 새로 생성
+        self.logger = logger or logging.getLogger(__name__)
+    
+    def process(self):
+        self.logger.info("Processing started")
+        try:
+            # 작업 수행
+            self.logger.debug("Detailed processing info")
+        except Exception as e:
+            self.logger.error(f"Error occurred: {e}", exc_info=True)
+```
+
+### 2. 환경 변수로 로그 레벨 제어
+
+환경 변수 `LOG_LEVEL`로 로그 레벨을 설정합니다:
+
+```bash
+# Windows PowerShell
+$env:LOG_LEVEL="DEBUG"
+
+# Linux/Mac
+export LOG_LEVEL=DEBUG
+```
+
+**지원 레벨:**
+- `CRITICAL` - 가장 심각한 오류만
+- `ERROR` - 오류 메시지
+- `WARNING` - 경고 메시지
+- `INFO` - 일반 정보 (기본값)
+- `DEBUG` - 상세 디버깅 정보
+
+**기본값**: `INFO`
+
+### 3. 로그 레벨 사용법
+
+```python
+logger.debug("상세 디버깅 정보")
+logger.info("일반 정보 메시지")
+logger.warning("경고 메시지")
+logger.error("오류 메시지")
+logger.critical("심각한 오류 메시지")
+```
+
+### 4. Windows 환경 주의사항 (CRITICAL)
+
+#### 이모지 사용 금지
+```python
+# ❌ 잘못된 예시
+logger.info("🚀 Starting process...")
+logger.info("✅ Process completed")
+
+# ✅ 올바른 예시
+logger.info("Starting process...")
+logger.info("Process completed")
+logger.info("[OK] Process completed")
+logger.info("[ERROR] Process failed")
+```
+
+#### 한국어 인코딩 처리 규칙
+
+**⚠️ 중요**: Windows 환경에서 한국어 콘솔 출력 문제 해결을 위한 규칙
+
+**환경 변수 설정 (필요 시):**
+```python
+# 모든 Python 파일 상단에 추가
+import os
+import sys
+
+# 인코딩 설정 (최우선)
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+if sys.platform == 'win32':
+    os.environ['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
+```
+
+**안전한 콘솔 출력:**
+```python
+def safe_print(message: str):
+    """안전한 콘솔 출력 (인코딩 처리)"""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode('utf-8', errors='replace').decode('utf-8'))
+
+# 사용 예시
+safe_print("법률 문서 분석을 시작합니다.")
+safe_print("벡터 저장소 로딩 완료")
+```
+
+### 5. 예외 로깅
+
+```python
+try:
+    # 작업 수행
+    pass
+except Exception as e:
+    # 스택 트레이스 포함
+    logger.error(f"Error occurred: {e}", exc_info=True)
+    
+    # 또는
+    logger.exception("Error occurred")  # 자동으로 exc_info=True
+```
+
+### 6. 로그 포맷
+
+**기본 포맷:**
+```
+%(asctime)s - %(name)s - %(levelname)s - %(message)s
+```
+
+**예시:**
+```
+2024-01-15 10:30:45 - lawfirm_langgraph.core.workflow - INFO - Workflow initialized
+```
+
+### 7. 실제 사용 예시
+
+```python
+# lawfirm_langgraph/core/workflow/legal_workflow_enhanced.py
+import logging
+
+logger = logging.getLogger(__name__)
+
+class LegalWorkflowEnhanced:
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("LegalWorkflowEnhanced initialized")
+    
+    def process(self):
+        self.logger.debug("Processing started")
+        self.logger.info("Processing completed")
+```
+
+### 8. 외부 라이브러리 로깅 제어
+
+프로젝트는 외부 라이브러리 로깅을 자동으로 비활성화합니다:
+- `faiss`, `sentence_transformers`, `transformers`, `torch`
+- `numpy`, `scipy`, `sklearn`
+- `requests`, `urllib3`, `httpx`
+- 기타 ML 라이브러리
+
+이들은 `CRITICAL` 레벨로 설정되어 출력되지 않습니다.
+
+### 9. 로깅 규칙 요약
+
+1. **로거 생성**: `logger = logging.getLogger(__name__)`
+2. **로그 레벨**: 환경 변수 `LOG_LEVEL`로 제어 (기본값: INFO)
+3. **Windows**: 이모지 사용 금지, 인코딩 설정 필요 시 추가
+4. **예외 처리**: `logger.error(..., exc_info=True)` 또는 `logger.exception()`
+5. **클래스**: `self.logger = logger or logging.getLogger(__name__)` 패턴 사용
 
 ## 성능 최적화 규칙
 
@@ -1166,25 +1472,7 @@ Closes #123
 
 ## 성능 모니터링 규칙
 
-### 1. 로깅 설정
-```python
-import logging
-import sys
-from datetime import datetime
-
-def setup_logging(log_level: str = "INFO"):
-    """로깅 설정"""
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(f'logs/lawfirm_ai_{datetime.now().strftime("%Y%m%d")}.log')
-        ]
-    )
-```
-
-### 2. 메트릭 수집
+### 1. 메트릭 수집
 ```python
 import time
 from functools import wraps
@@ -1211,6 +1499,7 @@ def measure_time(func):
 - [ ] **불필요한 주석을 과도하게 추가하지 않았는가?** (CRITICAL)
 - [ ] **Pydantic V2 스타일을 사용했는가?** (`@field_validator` 사용, `@validator` 사용 금지) (CRITICAL)
 - [ ] **한국어 불용어 처리 시 KoNLPy를 우선적으로 사용했는가?** (KoNLPy 사용 가능 시 형태소 분석 사용, 폴백 구현 필수) (CRITICAL)
+- [ ] **데이터베이스 연결 풀링 시스템을 사용했는가?** (`sqlite3.connect()` 직접 호출 금지, `get_connection_pool()` 사용 필수) (CRITICAL)
 - [ ] **Linter 오류가 없는가?** (사용되지 않는 변수, 플레이스홀더 없는 f-string, 사용되지 않는 import 등) (CRITICAL)
 - [ ] 코드가 프로젝트 구조 규칙을 따르는가?
 - [ ] 함수와 클래스에 적절한 문서화가 있는가?
