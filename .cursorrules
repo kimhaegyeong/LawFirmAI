@@ -245,6 +245,175 @@ def safe_operation(self, data: str) -> Optional[str]:
         raise
 ```
 
+### 5. Linter 오류 방지 규칙 (CRITICAL)
+
+**파이썬 개발 시 linter 오류가 발생하지 않도록 코드를 작성해야 합니다.**
+
+#### 원칙
+1. **Linter 오류 제로 목표**
+   - 코드 작성 시 linter 오류가 발생하지 않도록 주의
+   - 코드 수정 후 linter 검사를 실행하여 오류 확인
+   - 모든 linter 오류는 반드시 수정해야 함
+
+2. **주요 Linter 오류 유형 및 해결 방법**
+
+   **a. 사용되지 않는 변수 (Unused Variable)**
+   ```python
+   # ❌ 나쁜 예: 사용되지 않는 변수
+   result = asyncio.run(run_query_test(query))
+   return 0  # result 변수가 사용되지 않음
+   
+   # ✅ 좋은 예 1: 변수 제거
+   asyncio.run(run_query_test(query))
+   return 0
+   
+   # ✅ 좋은 예 2: 변수 사용
+   result = asyncio.run(run_query_test(query))
+   if result:
+       logger.info(f"Test completed with result: {result}")
+   return 0
+   
+   # ✅ 좋은 예 3: 의도적으로 사용하지 않는 경우 언더스코어 사용
+   _result = asyncio.run(run_query_test(query))  # linter 경고 무시
+   return 0
+   ```
+
+   **b. 플레이스홀더가 없는 f-string**
+   ```python
+   # ❌ 나쁜 예: 플레이스홀더가 없는 f-string
+   logger.warning(f"\n⚠️  related_questions가 없습니다!")
+   logger.info(f"   전체 구조:")
+   
+   # ✅ 좋은 예: 일반 문자열 사용
+   logger.warning("\n⚠️  related_questions가 없습니다!")
+   logger.info("   전체 구조:")
+   
+   # ✅ 좋은 예: 플레이스홀더가 있는 경우만 f-string 사용
+   logger.warning(f"\n⚠️  related_questions가 없습니다! (count: {len(questions)})")
+   logger.info(f"   전체 구조: {structure}")
+   ```
+
+   **c. 사용되지 않는 import**
+   ```python
+   # ❌ 나쁜 예: 사용되지 않는 import
+   import os
+   import sys
+   from typing import List, Dict, Optional
+   
+   def process_data(data: str) -> str:
+       return data.upper()  # os, sys, List, Dict, Optional 미사용
+   
+   # ✅ 좋은 예: 사용하는 것만 import
+   def process_data(data: str) -> str:
+       return data.upper()
+   ```
+
+   **d. 타입 힌트 누락**
+   ```python
+   # ❌ 나쁜 예: 타입 힌트 누락
+   def process_data(data):
+       return data.upper()
+   
+   # ✅ 좋은 예: 타입 힌트 포함
+   def process_data(data: str) -> str:
+       return data.upper()
+   ```
+
+   **e. 너무 긴 줄 (Line too long)**
+   ```python
+   # ❌ 나쁜 예: 100자 이상의 긴 줄
+   result = some_very_long_function_name(param1, param2, param3, param4, param5, param6, param7, param8)
+   
+   # ✅ 좋은 예: 여러 줄로 분리
+   result = some_very_long_function_name(
+       param1, param2, param3, param4,
+       param5, param6, param7, param8
+   )
+   ```
+
+   **f. 빈 except 절**
+   ```python
+   # ❌ 나쁜 예: 빈 except 절
+   try:
+       process_data()
+   except:
+       pass
+   
+   # ✅ 좋은 예: 구체적인 예외 처리
+   try:
+       process_data()
+   except ValueError as e:
+       logger.error(f"Value error: {e}")
+   except Exception as e:
+       logger.error(f"Unexpected error: {e}")
+   ```
+
+3. **Linter 검사 실행 방법**
+   ```bash
+   # flake8 검사
+   flake8 source/ --max-line-length=100 --extend-ignore=E203,W503
+   
+   # pylint 검사
+   pylint source/
+   
+   # ruff 검사 (권장: 빠르고 현대적)
+   ruff check source/
+   ruff check source/ --fix  # 자동 수정
+   
+   # mypy 타입 체크
+   mypy source/
+   ```
+
+4. **코드 작성 전 체크리스트**
+   - [ ] 사용하지 않는 변수나 import가 없는가?
+   - [ ] 플레이스홀더가 없는 f-string을 사용하지 않았는가?
+   - [ ] 모든 함수에 타입 힌트가 있는가?
+   - [ ] 한 줄이 100자를 초과하지 않는가?
+   - [ ] 빈 except 절을 사용하지 않았는가?
+   - [ ] 코드 수정 후 linter 검사를 실행했는가?
+
+5. **자동 수정 도구 활용**
+   ```bash
+   # ruff로 자동 수정 가능한 오류 수정
+   ruff check source/ --fix
+   
+   # black으로 코드 포맷팅
+   black source/
+   
+   # isort로 import 정렬
+   isort source/
+   ```
+
+6. **예외 처리 (Linter 오류 무시)**
+   ```python
+   # 필요한 경우에만 사용 (최소화)
+   
+   # 특정 줄의 특정 오류 무시
+   result = asyncio.run(run_query_test(query))  # noqa: F841
+   
+   # 특정 블록의 특정 오류 무시
+   # pylint: disable=unused-variable
+   result = asyncio.run(run_query_test(query))
+   # pylint: enable=unused-variable
+   
+   # 파일 전체의 특정 오류 무시 (비권장)
+   # flake8: noqa
+   ```
+
+7. **금지 사항**
+   - Linter 오류를 무시하고 코드를 커밋하는 것 금지
+   - `# noqa` 주석을 남용하는 것 금지 (정말 필요한 경우에만 사용)
+   - Linter 검사를 건너뛰는 것 금지
+   - 사용되지 않는 코드를 남겨두는 것 금지
+
+8. **권장 Linter 설정**
+   - **ruff**: 빠르고 현대적인 linter (권장)
+   - **flake8**: 전통적인 linter
+   - **pylint**: 상세한 코드 분석
+   - **mypy**: 정적 타입 체크
+   - **black**: 코드 포맷터
+   - **isort**: import 정렬 도구
+
 ## 기술 스택별 규칙
 
 ### 1. Pydantic V2 규칙 (CRITICAL)
@@ -1042,6 +1211,7 @@ def measure_time(func):
 - [ ] **불필요한 주석을 과도하게 추가하지 않았는가?** (CRITICAL)
 - [ ] **Pydantic V2 스타일을 사용했는가?** (`@field_validator` 사용, `@validator` 사용 금지) (CRITICAL)
 - [ ] **한국어 불용어 처리 시 KoNLPy를 우선적으로 사용했는가?** (KoNLPy 사용 가능 시 형태소 분석 사용, 폴백 구현 필수) (CRITICAL)
+- [ ] **Linter 오류가 없는가?** (사용되지 않는 변수, 플레이스홀더 없는 f-string, 사용되지 않는 import 등) (CRITICAL)
 - [ ] 코드가 프로젝트 구조 규칙을 따르는가?
 - [ ] 함수와 클래스에 적절한 문서화가 있는가?
 - [ ] 에러 처리가 적절히 구현되어 있는가?
