@@ -77,15 +77,12 @@ tests/
 │   └── test_app_config.py     # AppConfig 테스트
 │
 ├── scripts/                   # 테스트 실행 스크립트
-│   ├── run_tests_manual.py
-│   ├── run_single_query_test.py      # 기존 단일 질의 테스트 (레거시)
-│   ├── run_single_query_test_stream.py
-│   └── run_query_test.py              # 개선된 단일 질의 테스트 (권장)
+│   ├── run_query_test.py      # 메인 쿼리 테스트 스크립트 (권장)
+│   └── ...                    # 기타 테스트 스크립트들
 │
 ├── run_all_tests.py           # 전체 테스트 실행 스크립트 (Windows 호환)
 ├── run_coverage.py            # 커버리지 측정 스크립트 (Windows 호환)
 ├── run_tests_manual.py        # 수동 테스트 실행 스크립트
-├── run_single_query_test.py   # 단일 질의 테스트 스크립트
 │
 └── fixtures/                   # 테스트 픽스처 및 데이터
     └── data/                   # 테스트 데이터 디렉토리
@@ -247,16 +244,6 @@ python lawfirm_langgraph/tests/scripts/run_query_test.py -f query.txt
 - Windows PowerShell 호환 로깅 (SafeStreamHandler)
 - 간소화된 코드 구조
 - LangGraph 최신 로직 반영
-
-#### 기존 버전 (레거시)
-
-```bash
-# 기본 질의로 테스트 실행
-python lawfirm_langgraph/tests/scripts/run_single_query_test.py
-
-# 커스텀 질의로 테스트 실행
-python lawfirm_langgraph/tests/scripts/run_single_query_test.py "계약서 작성 시 주의할 사항은 무엇인가요?"
-```
 
 ### 특정 테스트 실행
 
