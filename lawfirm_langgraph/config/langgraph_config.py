@@ -86,16 +86,29 @@ class LangGraphConfig:
     langsmith_tracing: bool = True
 
     # RAG 품질 제어 설정
-    similarity_threshold: float = 0.3  # 문서 유사도 임계값
+    similarity_threshold: float = 0.75  # 문서 유사도 임계값 (높은 관련성 결과만 반환)
     max_context_length: int = 4000  # 최대 컨텍스트 길이 (문자)
     max_tokens: int = 2000  # 최대 토큰 수
     
-    # Embedding Model 설정 (한국 법률 특화 SBERT 모델)
-    embedding_model: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"  # 기본값
+    # 성능 모니터링 설정
+    slow_node_threshold: float = 10.0  # 느린 노드 경고 임계값 (초) - LLM 호출 노드는 더 오래 걸릴 수 있음
+    slow_llm_node_threshold: float = 15.0  # LLM 호출 노드 경고 임계값 (초)
+    slow_search_node_threshold: float = 30.0  # 검색/처리 노드 경고 임계값 (초)
+    
+    # 캐시 설정
+    disable_query_cache: bool = False  # 쿼리 최적화 캐시 비활성화 (환경 변수 DISABLE_QUERY_CACHE로 설정 가능)
+    disable_llm_enhancement_cache: bool = False  # LLM 쿼리 확장 캐시 비활성화 (환경 변수 DISABLE_LLM_ENHANCEMENT_CACHE로 설정 가능)
+    
+    # 재랭킹 가중치 설정 (Cross-Encoder 재랭킹)
+    rerank_original_weight: float = 0.6  # 기존 점수 가중치 (환경 변수 RERANK_ORIGINAL_WEIGHT로 설정 가능, 기본값: 0.6)
+    rerank_cross_encoder_weight: float = 0.4  # Cross-Encoder 점수 가중치 (환경 변수 RERANK_CROSS_ENCODER_WEIGHT로 설정 가능, 기본값: 0.4)
+    
+    # Embedding Model 설정 (환경 변수 EMBEDDING_MODEL에서 읽음, 없으면 기본값)
+    embedding_model: str = ""  # from_env()에서 환경 변수로 설정됨
     # 사용 가능한 법률 특화 모델:
-    # - "Ko-Legal-SBERT" (HuggingFace 모델명 확인 필요)
-    # - "LegalInsight/PretrainedModel" (HuggingFace 모델명 확인 필요)
+    # - "woong0322/ko-legal-sbert-finetuned" (법률 특화 모델)
     # - "snunlp/KR-SBERT-V40K-klueNLI-augSTS" (기본 한국어 SBERT)
+    # - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" (다국어 모델)
 
     # 통계 관리 설정
     enable_statistics: bool = True
@@ -157,6 +170,20 @@ class LangGraphConfig:
         config.ollama_model = os.getenv("OLLAMA_MODEL", config.ollama_model)
         config.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", config.ollama_timeout))
 
+        # Embedding Model 설정 (환경 변수에서 읽음)
+        embedding_model_env = os.getenv("EMBEDDING_MODEL")
+        if embedding_model_env:
+            config.embedding_model = embedding_model_env.strip().strip('"').strip("'")
+        else:
+            # 환경 변수가 없으면 Config 클래스에서 가져오기
+            try:
+                from lawfirm_langgraph.core.utils.config import Config
+                core_config = Config()
+                config.embedding_model = core_config.embedding_model
+            except Exception:
+                # 최후의 수단: 기본값 사용
+                config.embedding_model = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+        
         # LangSmith 설정 (LangSmith 환경 변수 사용, 하위 호환성을 위해 LANGCHAIN_*도 지원)
         config.langsmith_enabled = (
             os.getenv("LANGSMITH_TRACING", "false").lower() == "true" or
@@ -187,8 +214,16 @@ class LangGraphConfig:
         config.max_context_length = int(os.getenv("MAX_CONTEXT_LENGTH", config.max_context_length))
         config.max_tokens = int(os.getenv("MAX_TOKENS", config.max_tokens))
         
-        # Embedding Model 설정
-        config.embedding_model = os.getenv("EMBEDDING_MODEL", config.embedding_model)
+        # 성능 모니터링 설정
+        config.slow_node_threshold = float(os.getenv("SLOW_NODE_THRESHOLD", config.slow_node_threshold))
+        config.slow_llm_node_threshold = float(os.getenv("SLOW_LLM_NODE_THRESHOLD", config.slow_llm_node_threshold))
+        config.slow_search_node_threshold = float(os.getenv("SLOW_SEARCH_NODE_THRESHOLD", config.slow_search_node_threshold))
+        
+        # 캐시 설정
+        config.disable_query_cache = os.getenv("DISABLE_QUERY_CACHE", "false").lower() == "true"
+        config.disable_llm_enhancement_cache = os.getenv("DISABLE_LLM_ENHANCEMENT_CACHE", "false").lower() == "true"
+        
+        # Embedding Model 설정은 이미 from_env() 시작 부분에서 처리됨
 
         # 통계 관리 설정
         config.enable_statistics = os.getenv("ENABLE_STATISTICS", "true").lower() == "true"
@@ -207,8 +242,22 @@ class LangGraphConfig:
         
         # Agentic AI 모드 설정
         config.use_agentic_mode = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
+        
+        # 재랭킹 가중치 설정
+        config.rerank_original_weight = float(os.getenv("RERANK_ORIGINAL_WEIGHT", str(config.rerank_original_weight)))
+        config.rerank_cross_encoder_weight = float(os.getenv("RERANK_CROSS_ENCODER_WEIGHT", str(config.rerank_cross_encoder_weight)))
+        
+        # 가중치 합이 1.0이 되도록 정규화
+        total_weight = config.rerank_original_weight + config.rerank_cross_encoder_weight
+        if total_weight > 0:
+            config.rerank_original_weight = config.rerank_original_weight / total_weight
+            config.rerank_cross_encoder_weight = config.rerank_cross_encoder_weight / total_weight
+        else:
+            # 잘못된 값이면 기본값으로 재설정
+            config.rerank_original_weight = 0.6
+            config.rerank_cross_encoder_weight = 0.4
 
-        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}")
+        logger.info(f"LangGraph configuration loaded: enabled={config.langgraph_enabled}, langsmith_enabled={config.langsmith_enabled}, use_agentic_mode={config.use_agentic_mode}, rerank_weights: original={config.rerank_original_weight:.2f}, cross_encoder={config.rerank_cross_encoder_weight:.2f}")
         return config
 
     def validate(self) -> List[str]:

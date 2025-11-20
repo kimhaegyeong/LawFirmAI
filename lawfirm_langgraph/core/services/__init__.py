@@ -60,14 +60,6 @@ AnalysisService = None
 
 # TASK 3.2 하이브리드 검색 시스템 모듈들 - 도메인별 경로로 re-export
 try:
-    from core.search.engines.exact_search_engine import ExactSearchEngine
-except ImportError:
-    try:
-        from .exact_search_engine import ExactSearchEngine
-    except ImportError:
-        ExactSearchEngine = None
-
-try:
     from core.search.engines.semantic_search_engine import SemanticSearchEngine
 except ImportError:
     try:
@@ -83,14 +75,6 @@ except ImportError:
     except ImportError:
         ResultMerger = None
         ResultRanker = None
-
-try:
-    from core.search.engines.hybrid_search_engine import HybridSearchEngine
-except ImportError:
-    try:
-        from .hybrid_search_engine import HybridSearchEngine
-    except ImportError:
-        HybridSearchEngine = None
 
 # Generation 관련 re-export
 try:
@@ -122,7 +106,7 @@ except ImportError:
     ConversationFlowTracker = None
 
 try:
-    from core.agents.prompt_builders.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
 except ImportError:
     UnifiedPromptManager = None
     LegalDomain = None
@@ -152,11 +136,9 @@ __all__ = [
     "ChatService",
     "SearchService",
     # "AnalysisService",  # Not implemented yet
-    "ExactSearchEngine",
     "SemanticSearchEngine",
     "ResultMerger",
     "ResultRanker",
-    "HybridSearchEngine",
     # Re-exported for compatibility
     "ConversationFlowTracker",
     "UnifiedPromptManager",

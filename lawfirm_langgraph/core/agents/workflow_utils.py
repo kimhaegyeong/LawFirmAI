@@ -22,7 +22,7 @@ try:
 except ImportError:
     # 호환성을 위한 fallback
     from core.services.question_classifier import QuestionType
-from core.agents.prompt_builders.unified_prompt_manager import LegalDomain
+from core.services.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:

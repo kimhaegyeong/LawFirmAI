@@ -375,6 +375,23 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
 
                 # 2. State Reduction (활성화된 경우)
                 if enable_reduction:
+                    # 개선 8.1: Reduction 전에 중요한 데이터 보존
+                    REDUCTION_PRESERVE_FIELDS = {
+                        "retrieved_docs",
+                        "merged_documents",
+                        "semantic_results",
+                        "keyword_results",
+                        "legal_citations",
+                        "legal_references",
+                        "extracted_keywords",
+                        "query",
+                        "query_type"
+                    }
+                    preserved_data = {}
+                    for field in REDUCTION_PRESERVE_FIELDS:
+                        if field in converted_state:
+                            preserved_data[field] = converted_state[field]
+                    
                     reducer = StateReducer(aggressive_reduction=True)
                     working_state = reducer.reduce_state_for_node(converted_state, node_name)
 
@@ -382,6 +399,14 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                     if not working_state:
                         logger.warning(f"State reduction returned empty dict for {node_name}, using converted_state")
                         working_state = converted_state
+                    
+                    # 보존된 데이터 복원
+                    for field, value in preserved_data.items():
+                        working_state[field] = value
+                    
+                    logger.debug(
+                        f"✅ [STATE REDUCTION] 보존된 필드: {list(preserved_data.keys())}"
+                    )
 
                     # 상태 크기 로깅
                     if logger.isEnabledFor(logging.DEBUG):

@@ -32,16 +32,12 @@ except ImportError:
 
 # TASK 3.2 하이브리드 검색 시스템 모듈들
 try:
-    from .services.exact_search_engine import ExactSearchEngine
     from .services.semantic_search_engine import SemanticSearchEngine
     from .services.result_merger import ResultMerger, ResultRanker
-    from .services.hybrid_search_engine import HybridSearchEngine
 except ImportError:
-    ExactSearchEngine = None
     SemanticSearchEngine = None
     ResultMerger = None
     ResultRanker = None
-    HybridSearchEngine = None
 
 try:
     from .data.legal_term_normalizer import LegalTermNormalizer
@@ -55,10 +51,8 @@ __all__ = [
     "DatabaseManager",
     "VectorStore",
     "Config",
-    "ExactSearchEngine",
     "SemanticSearchEngine", 
     "ResultMerger",
     "ResultRanker",
-    "HybridSearchEngine",
     "LegalTermNormalizer"
 ]

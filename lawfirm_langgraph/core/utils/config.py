@@ -74,7 +74,7 @@ class Config(BaseSettings):
     mlflow_tracking_uri: Optional[str] = Field(default=None, env="MLFLOW_TRACKING_URI")
     mlflow_run_id: Optional[str] = Field(default=None, env="MLFLOW_RUN_ID")
     mlflow_experiment_name: str = Field(default="faiss_index_versions", env="MLFLOW_EXPERIMENT_NAME")
-    use_mlflow_index: bool = Field(default=False, env="USE_MLFLOW_INDEX")
+    use_mlflow_index: bool = Field(default=True, env="USE_MLFLOW_INDEX")
     
     # Optimized Search Parameters Configuration
     optimized_search_params_path: Optional[str] = Field(
