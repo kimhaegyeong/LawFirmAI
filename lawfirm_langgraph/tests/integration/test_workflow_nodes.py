@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-LangGraph Workflow Nodes 테스트
+LangGraph Workflow Nodes 테스트 (리팩토링된 구조)
 워크플로우 노드 및 핸들러 테스트
 """
 
@@ -9,15 +9,20 @@ from unittest.mock import Mock, MagicMock, patch
 from typing import Dict, Any
 
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
+from core.workflow.nodes.classification_nodes import ClassificationNodes
+from core.workflow.nodes.search_nodes import SearchNodes
+from core.workflow.nodes.document_nodes import DocumentNodes
+from core.workflow.nodes.answer_nodes import AnswerNodes
 
 
 class TestWorkflowNodes:
-    """워크플로우 노드 테스트"""
+    """워크플로우 노드 테스트 (리팩토링된 구조)"""
     
     @pytest.fixture
     def mock_state(self):
         """Mock 워크플로우 상태"""
         return {
+            "input": {"query": "계약서 작성 시 주의사항은?", "session_id": "test_session"},
             "query": "계약서 작성 시 주의사항은?",
             "answer": "",
             "context": [],
@@ -41,8 +46,68 @@ class TestWorkflowNodes:
             use_agentic_mode=False,
         )
     
-    def test_classification_node(self, mock_state, config):
-        """분류 노드 테스트"""
+    @pytest.fixture
+    def mock_workflow(self):
+        """Mock 워크플로우 인스턴스"""
+        workflow = MagicMock()
+        workflow.classify_query_and_complexity = Mock(return_value={"query": "test"})
+        workflow.classification_parallel = Mock(return_value={"query": "test"})
+        workflow.expand_keywords = Mock(return_value={"extracted_keywords": ["test"]})
+        workflow.prepare_search_query = Mock(return_value={"search_params": {}})
+        workflow.analyze_document = Mock(return_value={"document_analysis": {}})
+        workflow.generate_and_validate_answer = Mock(return_value={"answer": "test answer"})
+        return workflow
+    
+    def test_classification_nodes(self, mock_state, mock_workflow):
+        """분류 노드 클래스 테스트"""
+        classification_nodes = ClassificationNodes(
+            workflow_instance=mock_workflow,
+            logger_instance=Mock()
+        )
+        
+        result = classification_nodes.classify_query_and_complexity(mock_state)
+        
+        assert result == {"query": "test"}
+        mock_workflow.classify_query_and_complexity.assert_called_once_with(mock_state)
+    
+    def test_search_nodes(self, mock_state, mock_workflow):
+        """검색 노드 클래스 테스트"""
+        search_nodes = SearchNodes(
+            workflow_instance=mock_workflow,
+            logger_instance=Mock()
+        )
+        
+        result = search_nodes.expand_keywords(mock_state)
+        
+        assert result == {"extracted_keywords": ["test"]}
+        mock_workflow.expand_keywords.assert_called_once_with(mock_state)
+    
+    def test_document_nodes(self, mock_state, mock_workflow):
+        """문서 노드 클래스 테스트"""
+        document_nodes = DocumentNodes(
+            workflow_instance=mock_workflow,
+            logger_instance=Mock()
+        )
+        
+        result = document_nodes.analyze_document(mock_state)
+        
+        assert result == {"document_analysis": {}}
+        mock_workflow.analyze_document.assert_called_once_with(mock_state)
+    
+    def test_answer_nodes(self, mock_state, mock_workflow):
+        """답변 노드 클래스 테스트"""
+        answer_nodes = AnswerNodes(
+            workflow_instance=mock_workflow,
+            logger_instance=Mock()
+        )
+        
+        result = answer_nodes.generate_and_validate_answer(mock_state)
+        
+        assert result == {"answer": "test answer"}
+        mock_workflow.generate_and_validate_answer.assert_called_once_with(mock_state)
+    
+    def test_classification_node_legacy(self, mock_state, config):
+        """분류 노드 테스트 (레거시 호환)"""
         with patch('lawfirm_langgraph.core.classification.handlers.classification_handler.ClassificationHandler') as MockHandler:
             mock_handler = MockHandler.return_value
             mock_handler.classify = Mock(return_value={

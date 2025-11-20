@@ -108,7 +108,7 @@ def mock_search_results():
 @pytest.fixture
 def mock_workflow_service(mock_config):
     """Mock LangGraphWorkflowService 픽스처"""
-    with patch('lawfirm_langgraph.langgraph_core.workflow.workflow_service.LangGraphWorkflowService') as MockService:
+    with patch('lawfirm_langgraph.core.workflow.workflow_service.LangGraphWorkflowService') as MockService:
         service = MockService.return_value
         service.config = mock_config
         service.process_query_async = Mock(return_value={
@@ -292,7 +292,7 @@ def workflow_instance(workflow_config):
                     with patch('core.agents.handlers.classification_handler.ClassificationHandler'):
                         with patch('core.agents.handlers.answer_generator.AnswerGenerator'):
                             with patch('core.agents.handlers.answer_formatter.AnswerFormatterHandler'):
-                                from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+                                from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
                                 return EnhancedLegalQuestionWorkflow(workflow_config)
 
 
@@ -380,3 +380,111 @@ def complex_query_state():
             "metadata": {}
         }
     }
+
+
+# 노드 클래스용 픽스처 (리팩토링된 구조)
+@pytest.fixture
+def mock_workflow_instance():
+    """Mock 워크플로우 인스턴스 (노드 클래스용)"""
+    workflow = MagicMock()
+    workflow.logger = Mock()
+    
+    # ClassificationNodes용 메서드
+    workflow.classify_query_and_complexity = Mock(return_value={"query": "test"})
+    workflow.classification_parallel = Mock(return_value={"query": "test"})
+    workflow.assess_urgency = Mock(return_value={"query": "test"})
+    workflow.resolve_multi_turn = Mock(return_value={"query": "test"})
+    workflow.route_expert = Mock(return_value={"query": "test"})
+    workflow.direct_answer_node = Mock(return_value={"answer": "test"})
+    
+    # SearchNodes용 메서드
+    workflow.expand_keywords = Mock(return_value={"extracted_keywords": ["test"]})
+    workflow.prepare_search_query = Mock(return_value={"search_params": {}})
+    workflow.execute_searches_parallel = Mock(return_value={"semantic_results": []})
+    workflow.process_search_results_combined = Mock(return_value={"retrieved_docs": []})
+    
+    # DocumentNodes용 메서드
+    workflow.analyze_document = Mock(return_value={"document_analysis": {}})
+    workflow.prepare_documents_and_terms = Mock(return_value={"prepared_docs": []})
+    
+    # AnswerNodes용 메서드
+    workflow.generate_and_validate_answer = Mock(return_value={"answer": "test answer"})
+    workflow.generate_answer_stream = Mock(return_value={"answer": "streaming answer"})
+    workflow.generate_answer_final = Mock(return_value={"answer": "final answer"})
+    workflow.continue_answer_generation = Mock(return_value={"answer": "continued answer"})
+    
+    # AgenticNodes용 메서드
+    workflow.agentic_decision_node = Mock(return_value={"agentic_decision": "test"})
+    
+    return workflow
+
+
+@pytest.fixture
+def classification_nodes(mock_workflow_instance):
+    """ClassificationNodes 인스턴스"""
+    from core.workflow.nodes.classification_nodes import ClassificationNodes
+    return ClassificationNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def search_nodes(mock_workflow_instance):
+    """SearchNodes 인스턴스"""
+    from core.workflow.nodes.search_nodes import SearchNodes
+    return SearchNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def document_nodes(mock_workflow_instance):
+    """DocumentNodes 인스턴스"""
+    from core.workflow.nodes.document_nodes import DocumentNodes
+    return DocumentNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def answer_nodes(mock_workflow_instance):
+    """AnswerNodes 인스턴스"""
+    from core.workflow.nodes.answer_nodes import AnswerNodes
+    return AnswerNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def agentic_nodes(mock_workflow_instance):
+    """AgenticNodes 인스턴스"""
+    from core.workflow.nodes.agentic_nodes import AgenticNodes
+    return AgenticNodes(
+        workflow_instance=mock_workflow_instance,
+        logger_instance=Mock()
+    )
+
+
+@pytest.fixture
+def ethical_rejection_node():
+    """EthicalRejectionNode 인스턴스"""
+    from core.workflow.nodes.ethical_rejection_node import EthicalRejectionNode
+    return EthicalRejectionNode(logger_instance=Mock())
+
+
+@pytest.fixture
+def node_registry():
+    """NodeRegistry 인스턴스"""
+    from core.workflow.registry.node_registry import NodeRegistry
+    return NodeRegistry()
+
+
+@pytest.fixture
+def subgraph_registry():
+    """SubgraphRegistry 인스턴스"""
+    from core.workflow.registry.subgraph_registry import SubgraphRegistry
+    return SubgraphRegistry()
