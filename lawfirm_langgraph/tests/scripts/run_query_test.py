@@ -27,15 +27,15 @@ _original_stderr = sys.stderr
 #     pass
 
 # warnings 모듈도 필터링
-import warnings
+import warnings  # noqa: E402
 warnings.filterwarnings('ignore', message='.*python-dotenv.*')
 warnings.filterwarnings('ignore', category=UserWarning, message='.*python-dotenv.*')
 warnings.filterwarnings('ignore', category=Warning)
 
-import asyncio
-import logging
-from pathlib import Path
-from datetime import datetime
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+from pathlib import Path  # noqa: E402
+from datetime import datetime  # noqa: E402
 
 # UTF-8 인코딩 설정 (Windows PowerShell 호환)
 _original_stdout = sys.stdout
@@ -76,6 +76,126 @@ if str(project_root) not in sys.path:
 if str(lawfirm_langgraph_dir) not in sys.path:
     sys.path.insert(0, str(lawfirm_langgraph_dir))
 
+# 상수 정의
+MIN_ANSWER_LENGTH = 100
+ERROR_PATTERNS = [
+    "죄송합니다",
+    "오류가 발생했습니다",
+    "시스템 오류",
+    "입력값에 문제가 있습니다",
+    "답변을 생성하는 중 오류가 발생했습니다"
+]
+MAX_PROCESSING_TIME_WARNING = 300
+
+# SafeStreamHandler 클래스 정의
+class SafeStreamHandler(logging.StreamHandler):
+    """버퍼 분리 오류를 방지하는 안전한 스트림 핸들러"""
+    
+    def __init__(self, stream, original_stdout_ref=None):
+        super().__init__(stream)
+        self._original_stdout = original_stdout_ref
+        self._fallback_stream = None
+    
+    def _get_safe_stream(self):
+        """안전한 스트림 반환"""
+        streams_to_try = []
+        if self.stream and hasattr(self.stream, 'write'):
+            streams_to_try.append(self.stream)
+        if self._original_stdout is not None and hasattr(self._original_stdout, 'write'):
+            streams_to_try.append(self._original_stdout)
+        if sys.stdout and hasattr(sys.stdout, 'write'):
+            streams_to_try.append(sys.stdout)
+        if sys.stderr and hasattr(sys.stderr, 'write'):
+            streams_to_try.append(sys.stderr)
+        
+        for stream in streams_to_try:
+            try:
+                if hasattr(stream, 'buffer') or hasattr(stream, 'write'):
+                    return stream
+            except (ValueError, AttributeError, OSError):
+                continue
+        return None
+    
+    def _is_stream_valid(self, stream):
+        """스트림이 유효한지 확인"""
+        if stream is None:
+            return False
+        try:
+            if hasattr(stream, 'buffer'):
+                buffer = stream.buffer
+                if buffer is None:
+                    return False
+                if hasattr(buffer, 'raw'):
+                    raw = buffer.raw
+                    if raw is None:
+                        return False
+            if not hasattr(stream, 'write'):
+                return False
+            return True
+        except (ValueError, AttributeError, OSError):
+            return False
+    
+    def emit(self, record):
+        """안전한 로그 출력 (버퍼 분리 오류 방지)"""
+        try:
+            msg = self.format(record) + self.terminator
+            safe_stream = self._get_safe_stream()
+            if safe_stream is not None:
+                try:
+                    if hasattr(safe_stream, 'buffer'):
+                        try:
+                            buffer = safe_stream.buffer
+                            if buffer is None:
+                                raise ValueError("Buffer is None")
+                        except (ValueError, AttributeError):
+                            if hasattr(safe_stream, 'write'):
+                                safe_stream.write(msg)
+                                return
+                            else:
+                                raise ValueError("No write method")
+                    else:
+                        safe_stream.write(msg)
+                    
+                    try:
+                        safe_stream.flush()
+                    except (ValueError, AttributeError, OSError):
+                        pass
+                    return
+                except (ValueError, AttributeError, OSError) as e:
+                    if "detached" in str(e).lower() or "raw stream" in str(e).lower():
+                        pass
+                    else:
+                        pass
+            
+            try:
+                if sys.stderr and hasattr(sys.stderr, 'write'):
+                    try:
+                        sys.stderr.write(msg)
+                        try:
+                            sys.stderr.flush()
+                        except (ValueError, AttributeError, OSError):
+                            pass
+                        return
+                    except (ValueError, AttributeError, OSError) as e:
+                        if "detached" in str(e).lower() or "raw stream" in str(e).lower():
+                            pass
+            except (ValueError, AttributeError, OSError):
+                pass
+        except Exception:
+            pass
+    
+    def flush(self):
+        """안전한 flush (오류 무시)"""
+        try:
+            safe_stream = self._get_safe_stream()
+            if safe_stream is not None:
+                try:
+                    safe_stream.flush()
+                except (ValueError, AttributeError, OSError):
+                    pass
+        except (ValueError, AttributeError, OSError):
+            pass
+
 # 로깅 설정 (SafeStreamHandler 사용)
 def setup_logging(log_level: str = "DEBUG", log_file: str = None):
     """로깅 설정 (Windows PowerShell 호환)
@@ -111,121 +231,6 @@ def setup_logging(log_level: str = "DEBUG", log_file: str = None):
         logger.info(f"📝 로그 파일: {log_file}")
     except Exception as e:
         logger.warning(f"⚠️  로그 파일 생성 실패: {e} (콘솔 로그만 사용)")
-    
-    # SafeStreamHandler 클래스 정의
-    class SafeStreamHandler(logging.StreamHandler):
-        """버퍼 분리 오류를 방지하는 안전한 스트림 핸들러"""
-        
-        def __init__(self, stream, original_stdout_ref=None):
-            super().__init__(stream)
-            self._original_stdout = original_stdout_ref
-            self._fallback_stream = None
-        
-        def _get_safe_stream(self):
-            """안전한 스트림 반환"""
-            streams_to_try = []
-            if self.stream and hasattr(self.stream, 'write'):
-                streams_to_try.append(self.stream)
-            if self._original_stdout is not None and hasattr(self._original_stdout, 'write'):
-                streams_to_try.append(self._original_stdout)
-            if sys.stdout and hasattr(sys.stdout, 'write'):
-                streams_to_try.append(sys.stdout)
-            if sys.stderr and hasattr(sys.stderr, 'write'):
-                streams_to_try.append(sys.stderr)
-            
-            for stream in streams_to_try:
-                try:
-                    if hasattr(stream, 'buffer') or hasattr(stream, 'write'):
-                        return stream
-                except (ValueError, AttributeError, OSError):
-                    continue
-            return None
-        
-        def _is_stream_valid(self, stream):
-            """스트림이 유효한지 확인"""
-            if stream is None:
-                return False
-            try:
-                if hasattr(stream, 'buffer'):
-                    buffer = stream.buffer
-                    if buffer is None:
-                        return False
-                    if hasattr(buffer, 'raw'):
-                        raw = buffer.raw
-                        if raw is None:
-                            return False
-                if not hasattr(stream, 'write'):
-                    return False
-                return True
-            except (ValueError, AttributeError, OSError):
-                return False
-        
-        def emit(self, record):
-            """안전한 로그 출력 (버퍼 분리 오류 방지)"""
-            try:
-                msg = self.format(record) + self.terminator
-                safe_stream = self._get_safe_stream()
-                if safe_stream is not None:
-                    try:
-                        # 버퍼 분리 오류 방지를 위한 추가 검증
-                        if hasattr(safe_stream, 'buffer'):
-                            try:
-                                buffer = safe_stream.buffer
-                                if buffer is None:
-                                    raise ValueError("Buffer is None")
-                            except (ValueError, AttributeError):
-                                # buffer가 분리된 경우, 직접 write 시도
-                                if hasattr(safe_stream, 'write'):
-                                    safe_stream.write(msg)
-                                    return
-                                else:
-                                    raise ValueError("No write method")
-                        else:
-                            safe_stream.write(msg)
-                        
-                        try:
-                            safe_stream.flush()
-                        except (ValueError, AttributeError, OSError):
-                            pass
-                        return
-                    except (ValueError, AttributeError, OSError) as e:
-                        # 버퍼 분리 오류인 경우 무시하고 계속 진행
-                        if "detached" in str(e).lower() or "raw stream" in str(e).lower():
-                            pass
-                        else:
-                            pass
-                
-                # Fallback: stderr 사용
-                try:
-                    if sys.stderr and hasattr(sys.stderr, 'write'):
-                        # stderr도 버퍼 분리 오류가 있을 수 있으므로 안전하게 처리
-                        try:
-                            sys.stderr.write(msg)
-                            try:
-                                sys.stderr.flush()
-                            except (ValueError, AttributeError, OSError):
-                                pass
-                            return
-                        except (ValueError, AttributeError, OSError) as e:
-                            if "detached" in str(e).lower() or "raw stream" in str(e).lower():
-                                pass
-                except (ValueError, AttributeError, OSError):
-                    pass
-            except Exception:
-                # 모든 예외 무시 (로깅 실패가 전체 프로그램을 중단시키지 않도록)
-                pass
-        
-        def flush(self):
-            """안전한 flush (오류 무시)"""
-            try:
-                safe_stream = self._get_safe_stream()
-                if safe_stream is not None:
-                    try:
-                        safe_stream.flush()
-                    except (ValueError, AttributeError, OSError):
-                        pass
-            except (ValueError, AttributeError, OSError):
-                pass
     
     # 콘솔 핸들러 생성
     try:
@@ -264,16 +269,13 @@ def get_query_from_args() -> str:
         "임대차 계약 해지 시 주의사항은 무엇인가요?",
     ]
     
-    # 1. 환경 변수
     test_query = os.getenv('TEST_QUERY')
     if test_query and test_query.strip():
         return test_query.strip()
     
-    # 2. 명령줄 인자
     if len(sys.argv) > 1:
         arg = sys.argv[1].strip()
         
-        # 파일 옵션
         if arg in ['-f', '--file']:
             if len(sys.argv) > 2:
                 file_path = sys.argv[2]
@@ -287,17 +289,326 @@ def get_query_from_args() -> str:
                 logger.error("파일 경로를 지정해주세요")
                 return default_queries[1]
         
-        # 숫자 선택
         if arg.isdigit():
             idx = int(arg)
             if 0 <= idx < len(default_queries):
                 return default_queries[idx]
         
-        # 직접 질의
         return " ".join(sys.argv[1:])
     
-    # 기본 질의
     return default_queries[1]
+
+
+def _setup_mlflow_config():
+    """MLflow 설정 초기화"""
+    if not os.getenv('USE_MLFLOW_INDEX'):
+        os.environ['USE_MLFLOW_INDEX'] = 'true'
+        logger.info("   📌 USE_MLFLOW_INDEX=true 설정됨")
+    
+    if not os.getenv('MLFLOW_TRACKING_URI'):
+        mlflow_uri = str(project_root / "mlflow" / "mlruns")
+        os.environ['MLFLOW_TRACKING_URI'] = f"file:///{mlflow_uri.replace(chr(92), '/')}"
+        logger.info("   📌 MLFLOW_TRACKING_URI 설정됨")
+    
+    if not os.getenv('MLFLOW_RUN_ID'):
+        logger.info("   📌 MLFLOW_RUN_ID 비어있음 - 프로덕션 run 자동 조회 예정")
+    else:
+        logger.info(f"   📌 MLFLOW_RUN_ID={os.getenv('MLFLOW_RUN_ID')} 설정됨")
+
+
+def _check_mlflow_index(config_obj):
+    """MLflow 인덱스 설정 확인"""
+    if config_obj.use_mlflow_index:
+        logger.info(f"   ✅ MLflow 인덱스 사용: run_id={config_obj.mlflow_run_id or '자동 조회'}")
+        
+        try:
+            from scripts.rag.mlflow_manager import MLflowFAISSManager
+            mlflow_manager = MLflowFAISSManager()
+            if mlflow_manager.is_local_filesystem:
+                logger.info(f"   ✅ 로컬 파일 시스템 모드: {mlflow_manager.local_base_path}")
+                
+                run_id = config_obj.mlflow_run_id or mlflow_manager.get_production_run()
+                if run_id:
+                    run_info = mlflow_manager.client.get_run(run_id)
+                    tags = run_info.data.tags if hasattr(run_info.data, 'tags') else {}
+                    version_name = tags.get('version', None)
+                    
+                    if version_name:
+                        vector_store_path = project_root / "data" / "vector_store" / version_name
+                        index_path = vector_store_path / "index.faiss"
+                        if index_path.exists():
+                            logger.info(f"   ✅ data/vector_store 인덱스 존재: {index_path}")
+                        else:
+                            logger.info(f"   ℹ️  data/vector_store 인덱스 없음: {index_path}")
+                        
+                        artifacts_path = mlflow_manager._get_local_artifact_path(run_id, "faiss_index")
+                        mlflow_index_path = artifacts_path / "index.faiss"
+                        if mlflow_index_path.exists():
+                            logger.info(f"   ✅ MLflow 로컬 경로 인덱스 존재: {mlflow_index_path}")
+                        else:
+                            logger.info(f"   ℹ️  MLflow 로컬 경로 인덱스 없음: {mlflow_index_path}")
+            else:
+                logger.info(f"   🌐 원격 서버 모드: {mlflow_manager.tracking_uri}")
+        except Exception as e:
+            logger.debug(f"   MLflow 매니저 확인 실패: {e}")
+    else:
+        logger.info("   ℹ️  MLflow 인덱스 미사용 (DB 기반 인덱스 사용)")
+
+
+def _extract_and_normalize_answer(result):
+    """답변 추출 및 정규화"""
+    answer_raw = result.get("answer", "")
+    
+    try:
+        from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+    except ImportError:
+        try:
+            from core.workflow.utils.workflow_utils import WorkflowUtils
+        except ImportError:
+            WorkflowUtils = None
+    
+    if WorkflowUtils:
+        answer = WorkflowUtils.normalize_answer(answer_raw)
+    else:
+        if isinstance(answer_raw, dict):
+            answer = answer_raw.get("content", answer_raw.get("text", str(answer_raw)))
+        else:
+            answer = str(answer_raw) if answer_raw else ""
+        answer = answer.strip() if isinstance(answer, str) else ""
+    
+    return answer
+
+
+def _analyze_retrieved_docs(retrieved_docs):
+    """retrieved_docs 분석 및 통계 수집"""
+    type_counts = {}
+    statute_articles = []
+    version_counts = {}
+    scores = []
+    
+    for doc in retrieved_docs:
+        if isinstance(doc, dict):
+            doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+            if doc_type == "statute_article":
+                statute_articles.append(doc)
+            
+            version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
+            if version_id:
+                version_counts[version_id] = version_counts.get(version_id, 0) + 1
+            
+            score = doc.get("score") or doc.get("similarity") or doc.get("relevance_score")
+            if score is not None:
+                scores.append(float(score))
+    
+    return type_counts, statute_articles, version_counts, scores
+
+
+def _log_retrieved_docs(retrieved_docs):
+    """retrieved_docs 로깅"""
+    if not retrieved_docs:
+        logger.warning("\n⚠️  검색된 참고자료 (retrieved_docs)가 없습니다!")
+        logger.warning("   - 데이터베이스/벡터스토어에서 검색이 수행되지 않았거나")
+        logger.warning("   - 검색 결과가 없을 수 있습니다.")
+        return
+    
+    logger.info(f"\n🔍 검색된 참고자료 (retrieved_docs) ({len(retrieved_docs)}개):")
+    
+    type_counts, statute_articles, version_counts, scores = _analyze_retrieved_docs(retrieved_docs)
+    
+    logger.info(f"   타입 분포: {type_counts}")
+    if statute_articles:
+        logger.info(f"   statute_article 타입 문서: {len(statute_articles)}개")
+    
+    if version_counts:
+        logger.info(f"   📊 Embedding 버전 분포: {version_counts}")
+    else:
+        logger.warning("   ⚠️  검색 결과에 embedding_version_id가 없습니다!")
+    
+    if scores:
+        avg_score = sum(scores) / len(scores)
+        max_score = max(scores)
+        min_score = min(scores)
+        logger.info(f"   📊 유사도 점수 분포: 평균={avg_score:.3f}, 최대={max_score:.3f}, 최소={min_score:.3f}")
+    
+    for i, doc in enumerate(retrieved_docs[:10], 1):
+        if isinstance(doc, dict):
+            doc_id = doc.get("doc_id") or doc.get("id") or doc.get("_id") or f"doc_{i}"
+            doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
+            title = doc.get("title") or doc.get("name") or doc.get("content", "")[:50] or "제목 없음"
+            search_type = doc.get("search_type") or doc.get("search_method") or "unknown"
+            logger.info(f"   {i}. [{doc_type}] {title} (ID: {doc_id}, 검색방법: {search_type})")
+            
+            if doc_type == "statute_article":
+                statute_name = doc.get("statute_name") or doc.get("law_name") or doc.get("metadata", {}).get("statute_name") or doc.get("metadata", {}).get("law_name")
+                article_no = doc.get("article_no") or doc.get("article_number") or doc.get("metadata", {}).get("article_no") or doc.get("metadata", {}).get("article_number")
+                clause_no = doc.get("clause_no") or doc.get("metadata", {}).get("clause_no")
+                item_no = doc.get("item_no") or doc.get("metadata", {}).get("item_no")
+                logger.info(f"      - statute_name: {statute_name}")
+                logger.info(f"      - article_no: {article_no}")
+                logger.info(f"      - clause_no: {clause_no}")
+                logger.info(f"      - item_no: {item_no}")
+            
+            if doc.get("score"):
+                logger.info(f"      - 점수: {doc.get('score'):.4f}")
+            
+            version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
+            if version_id:
+                logger.info(f"      - embedding_version_id: {version_id}")
+            
+            if doc.get("metadata") and doc_type != "statute_article":
+                logger.info(f"      - 메타데이터: {doc.get('metadata')}")
+        else:
+            logger.info(f"   {i}. {str(doc)[:100]}")
+    
+    if len(retrieved_docs) > 10:
+        logger.info(f"   ... (총 {len(retrieved_docs)}개)")
+
+
+def _log_performance_metrics(service):
+    """성능 메트릭 로깅"""
+    logger.info("\n" + "="*80)
+    logger.info("📊 분류 성능 메트릭 (최적화 결과)")
+    logger.info("="*80)
+    
+    try:
+        if hasattr(service, 'workflow') and hasattr(service.workflow, 'stats'):
+            stats = service.workflow.stats
+            if stats:
+                unified_calls = stats.get('unified_classification_calls', 0)
+                unified_llm_calls = stats.get('unified_classification_llm_calls', 0)
+                avg_unified_time = stats.get('avg_unified_classification_time', 0.0)
+                total_unified_time = stats.get('total_unified_classification_time', 0.0)
+                
+                cache_hits = stats.get('complexity_cache_hits', 0)
+                cache_misses = stats.get('complexity_cache_misses', 0)
+                total_cache_requests = cache_hits + cache_misses
+                cache_hit_rate = (cache_hits / total_cache_requests * 100) if total_cache_requests > 0 else 0
+                
+                fallback_count = stats.get('complexity_fallback_count', 0)
+                
+                logger.info("\n✅ 통합 분류 (단일 프롬프트):")
+                logger.info(f"   - 총 호출: {unified_calls}회")
+                logger.info(f"   - LLM 호출: {unified_llm_calls}회 (목표: 1회/쿼리)")
+                logger.info(f"   - 평균 처리 시간: {avg_unified_time:.3f}초")
+                logger.info(f"   - 총 처리 시간: {total_unified_time:.3f}초")
+                
+                if unified_calls > 0:
+                    llm_calls_per_query = unified_llm_calls / unified_calls
+                    logger.info(f"   - LLM 호출/쿼리: {llm_calls_per_query:.2f}회 (목표: 1.0회)")
+                    if llm_calls_per_query > 1.5:
+                        logger.warning("   ⚠️  LLM 호출이 예상보다 많습니다! (목표: 1회)")
+                
+                logger.info("\n💾 캐시 성능:")
+                logger.info(f"   - 캐시 히트: {cache_hits}회")
+                logger.info(f"   - 캐시 미스: {cache_misses}회")
+                logger.info(f"   - 캐시 히트율: {cache_hit_rate:.1f}%")
+                if cache_hit_rate < 50 and total_cache_requests > 5:
+                    logger.warning("   ⚠️  캐시 히트율이 낮습니다. 캐시 전략을 검토하세요.")
+                
+                logger.info("\n🔄 폴백 사용:")
+                logger.info(f"   - 폴백 호출: {fallback_count}회")
+                if fallback_count > 0:
+                    fallback_rate = (fallback_count / unified_calls * 100) if unified_calls > 0 else 0
+                    logger.info(f"   - 폴백 비율: {fallback_rate:.1f}%")
+                    if fallback_rate > 10:
+                        logger.warning("   ⚠️  폴백 비율이 높습니다. LLM 호출 실패 원인을 확인하세요.")
+                    
+                    fallback_reasons = stats.get('fallback_reasons', {})
+                    if fallback_reasons:
+                        logger.info("\n   📋 폴백 원인 분석:")
+                        for reason, count in sorted(fallback_reasons.items(), key=lambda x: x[1], reverse=True):
+                            reason_rate = (count / fallback_count * 100) if fallback_count > 0 else 0
+                            logger.info(f"      - {reason}: {count}회 ({reason_rate:.1f}%)")
+                            if reason in ["LLM timeout", "Network error", "Rate limit"]:
+                                logger.warning(f"         ⚠️  {reason} - 재시도 메커니즘 고려 필요")
+                
+                if unified_calls > 0:
+                    logger.info("\n📈 개선 효과 (체인 방식 대비):")
+                    old_llm_calls = unified_calls * 4
+                    new_llm_calls = unified_llm_calls
+                    reduction = ((old_llm_calls - new_llm_calls) / old_llm_calls * 100) if old_llm_calls > 0 else 0
+                    logger.info(f"   - 기존 LLM 호출 (예상): {old_llm_calls}회")
+                    logger.info(f"   - 현재 LLM 호출: {new_llm_calls}회")
+                    logger.info(f"   - LLM 호출 감소: {reduction:.1f}%")
+                    if reduction >= 70:
+                        logger.info("   ✅ 목표 달성! (75% 감소 목표)")
+                    elif reduction >= 50:
+                        logger.warning("   ⚠️  개선되었지만 목표에 미달 (75% 목표)")
+                    else:
+                        logger.warning("   ⚠️  개선 효과가 낮습니다. 원인 확인 필요")
+            else:
+                logger.warning("   ⚠️  통계가 활성화되지 않았습니다.")
+        else:
+            logger.warning("   ⚠️  통계 정보를 가져올 수 없습니다.")
+    except Exception as e:
+        logger.warning(f"   ⚠️  성능 메트릭 출력 실패: {e}")
+    
+    logger.info("\n" + "="*80)
+
+
+def _evaluate_answer_quality(answer, answer_length, answer_is_valid, has_error_message, retrieved_docs, sources):
+    """답변 품질 평가"""
+    logger.info("\n" + "="*80)
+    logger.info("📊 답변 품질 종합 평가")
+    logger.info("="*80)
+    
+    answer_quality_score = 0
+    quality_checks = []
+    
+    if answer and answer_length > 0:
+        answer_quality_score += 25
+        quality_checks.append("✅ 답변 존재")
+    else:
+        quality_checks.append("❌ 답변 없음")
+    
+    if answer_is_valid:
+        answer_quality_score += 25
+        quality_checks.append(f"✅ 최소 길이 충족 ({answer_length}자 >= {MIN_ANSWER_LENGTH}자)")
+    else:
+        quality_checks.append(f"⚠️  최소 길이 미달 ({answer_length}자 < {MIN_ANSWER_LENGTH}자)")
+    
+    if not has_error_message:
+        answer_quality_score += 25
+        quality_checks.append("✅ 오류 메시지 없음")
+    else:
+        quality_checks.append("❌ 오류 메시지 포함")
+    
+    has_sources = len(retrieved_docs) > 0 or len(sources) > 0
+    if has_sources:
+        answer_quality_score += 25
+        quality_checks.append(f"✅ 참고자료 존재 ({len(retrieved_docs)}개 retrieved_docs, {len(sources)}개 sources)")
+    else:
+        quality_checks.append("⚠️  참고자료 없음")
+    
+    logger.info(f"\n   품질 점수: {answer_quality_score}/100")
+    for check in quality_checks:
+        logger.info(f"   {check}")
+    
+    if answer_quality_score >= 100:
+        quality_grade = "🟢 우수"
+    elif answer_quality_score >= 75:
+        quality_grade = "🟡 양호"
+    elif answer_quality_score >= 50:
+        quality_grade = "🟠 보통"
+    else:
+        quality_grade = "🔴 불량"
+    
+    logger.info(f"\n   종합 평가: {quality_grade}")
+    
+    if answer_quality_score < 75:
+        logger.warning("\n⚠️  답변 품질이 기준 미만입니다!")
+        logger.warning("   다음 사항을 확인하세요:")
+        if not answer or answer_length == 0:
+            logger.warning("   - 답변이 생성되지 않았습니다")
+        if not answer_is_valid:
+            logger.warning(f"   - 답변이 너무 짧습니다 (최소 {MIN_ANSWER_LENGTH}자 필요)")
+        if has_error_message:
+            logger.warning("   - 답변에 오류 메시지가 포함되어 있습니다")
+        if not has_sources:
+            logger.warning("   - 참고자료가 없어 답변의 신뢰성이 낮을 수 있습니다")
+    
+    return answer_quality_score
 
 
 async def run_query_test(query: str):
@@ -338,72 +649,17 @@ async def run_query_test(query: str):
             sys.path.insert(0, str(lawfirm_langgraph_dir))
             from core.workflow.workflow_service import LangGraphWorkflowService
         
-        # 설정 로드
         logger.info("1️⃣  설정 로드 중...")
-        
-        # MLflow 인덱스 사용 설정 (환경 변수 우선, 없으면 기본값)
-        if not os.getenv('USE_MLFLOW_INDEX'):
-            os.environ['USE_MLFLOW_INDEX'] = 'true'
-            logger.info("   📌 USE_MLFLOW_INDEX=true 설정됨")
-        
-        if not os.getenv('MLFLOW_TRACKING_URI'):
-            # MLflow tracking URI 설정
-            mlflow_uri = str(project_root / "mlflow" / "mlruns")
-            os.environ['MLFLOW_TRACKING_URI'] = f"file:///{mlflow_uri.replace(chr(92), '/')}"
-            logger.info(f"   📌 MLFLOW_TRACKING_URI 설정됨")
-        
-        # MLFLOW_RUN_ID가 없으면 프로덕션 run 자동 조회 (비워두면 자동)
-        if not os.getenv('MLFLOW_RUN_ID'):
-            logger.info("   📌 MLFLOW_RUN_ID 비어있음 - 프로덕션 run 자동 조회 예정")
-        else:
-            logger.info(f"   📌 MLFLOW_RUN_ID={os.getenv('MLFLOW_RUN_ID')} 설정됨")
+        _setup_mlflow_config()
         
         config = LangGraphConfig.from_env()
-        config.enable_checkpoint = False  # 테스트 모드
+        config.enable_checkpoint = False
         logger.info(f"   ✅ LangGraph 활성화: {config.langgraph_enabled}")
         logger.info(f"   ✅ 체크포인트: {config.enable_checkpoint}")
         
-        # MLflow 인덱스 설정 확인
         from lawfirm_langgraph.core.utils.config import Config
         config_obj = Config()
-        if config_obj.use_mlflow_index:
-            logger.info(f"   ✅ MLflow 인덱스 사용: run_id={config_obj.mlflow_run_id or '자동 조회'}")
-            
-            # MLflow 매니저 초기화하여 로컬 파일 시스템 모드 확인
-            try:
-                from scripts.rag.mlflow_manager import MLflowFAISSManager
-                mlflow_manager = MLflowFAISSManager()
-                if mlflow_manager.is_local_filesystem:
-                    logger.info(f"   ✅ 로컬 파일 시스템 모드: {mlflow_manager.local_base_path}")
-                    
-                    # 프로덕션 run 확인
-                    run_id = config_obj.mlflow_run_id or mlflow_manager.get_production_run()
-                    if run_id:
-                        run_info = mlflow_manager.client.get_run(run_id)
-                        tags = run_info.data.tags if hasattr(run_info.data, 'tags') else {}
-                        version_name = tags.get('version', None)
-                        
-                        if version_name:
-                            vector_store_path = project_root / "data" / "vector_store" / version_name
-                            index_path = vector_store_path / "index.faiss"
-                            if index_path.exists():
-                                logger.info(f"   ✅ data/vector_store 인덱스 존재: {index_path}")
-                            else:
-                                logger.info(f"   ℹ️  data/vector_store 인덱스 없음: {index_path}")
-                            
-                            # MLflow 로컬 경로 확인
-                            artifacts_path = mlflow_manager._get_local_artifact_path(run_id, "faiss_index")
-                            mlflow_index_path = artifacts_path / "index.faiss"
-                            if mlflow_index_path.exists():
-                                logger.info(f"   ✅ MLflow 로컬 경로 인덱스 존재: {mlflow_index_path}")
-                            else:
-                                logger.info(f"   ℹ️  MLflow 로컬 경로 인덱스 없음: {mlflow_index_path}")
-                else:
-                    logger.info(f"   🌐 원격 서버 모드: {mlflow_manager.tracking_uri}")
-            except Exception as e:
-                logger.debug(f"   MLflow 매니저 확인 실패: {e}")
-        else:
-            logger.info(f"   ℹ️  MLflow 인덱스 미사용 (DB 기반 인덱스 사용)")
+        _check_mlflow_index(config_obj)
         
         # 서비스 초기화
         logger.info("\n2️⃣  LangGraphWorkflowService 초기화 중...")
@@ -425,51 +681,18 @@ async def run_query_test(query: str):
         logger.info("\n4️⃣  결과:")
         logger.info("="*80)
         
-        # 답변 추출 및 정규화
         answer_raw = result.get("answer", "")
-        
-        # WorkflowUtils.normalize_answer 사용하여 정규화
-        try:
-            from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
-        except ImportError:
-            try:
-                from core.workflow.utils.workflow_utils import WorkflowUtils
-            except ImportError:
-                WorkflowUtils = None
-        
-        if WorkflowUtils:
-            answer = WorkflowUtils.normalize_answer(answer_raw)
-        else:
-            # 폴백: 기본 정규화
-            if isinstance(answer_raw, dict):
-                answer = answer_raw.get("content", answer_raw.get("text", str(answer_raw)))
-            else:
-                answer = str(answer_raw) if answer_raw else ""
-            answer = answer.strip() if isinstance(answer, str) else ""
-        
-        # 답변 품질 검증
-        MIN_ANSWER_LENGTH = 100  # WorkflowConstants.MIN_ANSWER_LENGTH_VALIDATION
+        answer = _extract_and_normalize_answer(result)
         answer_length = len(answer) if isinstance(answer, str) else 0
         answer_is_valid = answer_length >= MIN_ANSWER_LENGTH
+        has_error_message = any(pattern in answer for pattern in ERROR_PATTERNS) if isinstance(answer, str) else False
         
-        # 에러 메시지 패턴 확인
-        error_patterns = [
-            "죄송합니다",
-            "오류가 발생했습니다",
-            "시스템 오류",
-            "입력값에 문제가 있습니다",
-            "답변을 생성하는 중 오류가 발생했습니다"
-        ]
-        has_error_message = any(pattern in answer for pattern in error_patterns) if isinstance(answer, str) else False
-        
-        # 답변 출력
         if answer and answer_length > 0:
             quality_status = "✅" if answer_is_valid else "⚠️"
             logger.info(f"\n📝 답변 ({answer_length}자) {quality_status}:")
             logger.info("-" * 80)
             logger.info(str(answer))
             
-            # 품질 경고
             if not answer_is_valid:
                 logger.warning(f"\n⚠️  답변이 너무 짧습니다! (최소 {MIN_ANSWER_LENGTH}자 필요, 현재 {answer_length}자)")
                 logger.warning("   가능한 원인:")
@@ -478,7 +701,7 @@ async def run_query_test(query: str):
                 logger.warning("   3. LLM 응답이 제대로 처리되지 않음")
             
             if has_error_message:
-                logger.warning(f"\n⚠️  답변에 오류 메시지가 포함되어 있습니다!")
+                logger.warning("\n⚠️  답변에 오류 메시지가 포함되어 있습니다!")
                 logger.warning("   답변이 정상적으로 생성되지 않았을 수 있습니다.")
         else:
             logger.error("\n❌ 답변이 없습니다!")
@@ -487,98 +710,16 @@ async def run_query_test(query: str):
             logger.error("   2. 답변 생성 노드가 실행되지 않음")
             logger.error("   3. state에서 answer가 손실됨")
             
-            # 오류 정보 확인
             errors = result.get("errors", [])
             if errors:
                 logger.error(f"\n   발견된 오류 ({len(errors)}개):")
                 for i, error in enumerate(errors[:5], 1):
                     logger.error(f"   {i}. {error}")
         
-        # retrieved_docs (데이터베이스/벡터스토어에서 검색한 참고자료)
         retrieved_docs = result.get("retrieved_docs", [])
-        if retrieved_docs:
-            logger.info(f"\n🔍 검색된 참고자료 (retrieved_docs) ({len(retrieved_docs)}개):")
-            
-            # 타입별 분포 확인
-            type_counts = {}
-            statute_articles = []
-            version_counts = {}
-            scores = []
-            for doc in retrieved_docs:
-                if isinstance(doc, dict):
-                    doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
-                    type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
-                    if doc_type == "statute_article":
-                        statute_articles.append(doc)
-                    
-                    # 버전 정보 수집
-                    version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
-                    if version_id:
-                        version_counts[version_id] = version_counts.get(version_id, 0) + 1
-                    
-                    # 유사도 점수 수집
-                    score = doc.get("score") or doc.get("similarity") or doc.get("relevance_score")
-                    if score is not None:
-                        scores.append(float(score))
-            
-            logger.info(f"   타입 분포: {type_counts}")
-            if statute_articles:
-                logger.info(f"   statute_article 타입 문서: {len(statute_articles)}개")
-            
-            # 버전 분포 출력
-            if version_counts:
-                logger.info(f"   📊 Embedding 버전 분포: {version_counts}")
-            else:
-                logger.warning("   ⚠️  검색 결과에 embedding_version_id가 없습니다!")
-            
-            # 유사도 점수 분포 분석
-            if scores:
-                avg_score = sum(scores) / len(scores)
-                max_score = max(scores)
-                min_score = min(scores)
-                logger.info(f"   📊 유사도 점수 분포: 평균={avg_score:.3f}, 최대={max_score:.3f}, 최소={min_score:.3f}")
-            
-            for i, doc in enumerate(retrieved_docs[:10], 1):
-                if isinstance(doc, dict):
-                    doc_id = doc.get("doc_id") or doc.get("id") or doc.get("_id") or f"doc_{i}"
-                    doc_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "unknown")
-                    title = doc.get("title") or doc.get("name") or doc.get("content", "")[:50] or "제목 없음"
-                    search_type = doc.get("search_type") or doc.get("search_method") or "unknown"
-                    logger.info(f"   {i}. [{doc_type}] {title} (ID: {doc_id}, 검색방법: {search_type})")
-                    
-                    # statute_article 타입 문서의 경우 상세 정보 출력
-                    if doc_type == "statute_article":
-                        statute_name = doc.get("statute_name") or doc.get("law_name") or doc.get("metadata", {}).get("statute_name") or doc.get("metadata", {}).get("law_name")
-                        article_no = doc.get("article_no") or doc.get("article_number") or doc.get("metadata", {}).get("article_no") or doc.get("metadata", {}).get("article_number")
-                        clause_no = doc.get("clause_no") or doc.get("metadata", {}).get("clause_no")
-                        item_no = doc.get("item_no") or doc.get("metadata", {}).get("item_no")
-                        logger.info(f"      - statute_name: {statute_name}")
-                        logger.info(f"      - article_no: {article_no}")
-                        logger.info(f"      - clause_no: {clause_no}")
-                        logger.info(f"      - item_no: {item_no}")
-                    
-                    # 상세 정보 (선택적)
-                    if doc.get("score"):
-                        logger.info(f"      - 점수: {doc.get('score'):.4f}")
-                    
-                    # 버전 정보 출력
-                    version_id = doc.get("embedding_version_id") or doc.get("metadata", {}).get("embedding_version_id")
-                    if version_id:
-                        logger.info(f"      - embedding_version_id: {version_id}")
-                    
-                    if doc.get("metadata") and doc_type != "statute_article":
-                        logger.info(f"      - 메타데이터: {doc.get('metadata')}")
-                else:
-                    logger.info(f"   {i}. {str(doc)[:100]}")
-            if len(retrieved_docs) > 10:
-                logger.info(f"   ... (총 {len(retrieved_docs)}개)")
-        else:
-            logger.warning("\n⚠️  검색된 참고자료 (retrieved_docs)가 없습니다!")
-            logger.warning("   - 데이터베이스/벡터스토어에서 검색이 수행되지 않았거나")
-            logger.warning("   - 검색 결과가 없을 수 있습니다.")
-        
-        # 소스 (retrieved_docs에서 변환된 sources)
         sources = result.get("sources", [])
+        _log_retrieved_docs(retrieved_docs)
+        
         if sources:
             logger.info(f"\n📚 소스 (sources) ({len(sources)}개):")
             for i, source in enumerate(sources[:10], 1):
@@ -657,10 +798,9 @@ async def run_query_test(query: str):
             logger.warning("   2. conversation_flow_tracker가 초기화되지 않았을 수 있습니다.")
             logger.warning("   3. metadata에 저장되지 않았을 수 있습니다.")
         
-        # 메타데이터
         metadata = result.get("metadata", {})
         if metadata:
-            logger.info(f"\n📊 메타데이터:")
+            logger.info("\n📊 메타데이터:")
             for key, value in list(metadata.items())[:10]:
                 if key == "related_questions":
                     logger.info(f"   {key}: {value} ({len(value) if isinstance(value, list) else 'N/A'}개)")
@@ -672,76 +812,13 @@ async def run_query_test(query: str):
         if confidence:
             logger.info(f"\n🎯 신뢰도: {confidence:.2f}")
         
-        # 처리 시간
         processing_time = result.get("processing_time", 0.0)
         if processing_time:
             logger.info(f"\n⏱️  처리 시간: {processing_time:.2f}초")
         
-        # 답변 품질 종합 평가
-        logger.info("\n" + "="*80)
-        logger.info("📊 답변 품질 종합 평가")
-        logger.info("="*80)
-        
-        answer_quality_score = 0
-        quality_checks = []
-        
-        # 1. 답변 존재 여부
-        if answer and answer_length > 0:
-            answer_quality_score += 25
-            quality_checks.append("✅ 답변 존재")
-        else:
-            quality_checks.append("❌ 답변 없음")
-        
-        # 2. 최소 길이 검증
-        if answer_is_valid:
-            answer_quality_score += 25
-            quality_checks.append(f"✅ 최소 길이 충족 ({answer_length}자 >= {MIN_ANSWER_LENGTH}자)")
-        else:
-            quality_checks.append(f"⚠️  최소 길이 미달 ({answer_length}자 < {MIN_ANSWER_LENGTH}자)")
-        
-        # 3. 오류 메시지 없음
-        if not has_error_message:
-            answer_quality_score += 25
-            quality_checks.append("✅ 오류 메시지 없음")
-        else:
-            quality_checks.append("❌ 오류 메시지 포함")
-        
-        # 4. 소스/참고자료 존재
-        has_sources = len(retrieved_docs) > 0 or len(sources) > 0
-        if has_sources:
-            answer_quality_score += 25
-            quality_checks.append(f"✅ 참고자료 존재 ({len(retrieved_docs)}개 retrieved_docs, {len(sources)}개 sources)")
-        else:
-            quality_checks.append("⚠️  참고자료 없음")
-        
-        # 품질 점수 출력
-        logger.info(f"\n   품질 점수: {answer_quality_score}/100")
-        for check in quality_checks:
-            logger.info(f"   {check}")
-        
-        # 품질 등급
-        if answer_quality_score >= 100:
-            quality_grade = "🟢 우수"
-        elif answer_quality_score >= 75:
-            quality_grade = "🟡 양호"
-        elif answer_quality_score >= 50:
-            quality_grade = "🟠 보통"
-        else:
-            quality_grade = "🔴 불량"
-        
-        logger.info(f"\n   종합 평가: {quality_grade}")
-        
-        if answer_quality_score < 75:
-            logger.warning("\n⚠️  답변 품질이 기준 미만입니다!")
-            logger.warning("   다음 사항을 확인하세요:")
-            if not answer or answer_length == 0:
-                logger.warning("   - 답변이 생성되지 않았습니다")
-            if not answer_is_valid:
-                logger.warning(f"   - 답변이 너무 짧습니다 (최소 {MIN_ANSWER_LENGTH}자 필요)")
-            if has_error_message:
-                logger.warning("   - 답변에 오류 메시지가 포함되어 있습니다")
-            if not has_sources:
-                logger.warning("   - 참고자료가 없어 답변의 신뢰성이 낮을 수 있습니다")
+        answer_quality_score = _evaluate_answer_quality(
+            answer, answer_length, answer_is_valid, has_error_message, retrieved_docs, sources
+        )
         
         # 디버깅: retrieved_docs와 sources 관계 분석
         logger.info("\n" + "="*80)
@@ -766,7 +843,7 @@ async def run_query_test(query: str):
         elif retrieved_docs and sources:
             logger.info(f"✅ retrieved_docs ({len(retrieved_docs)}개) → sources ({len(sources)}개) 변환 성공")
             if len(retrieved_docs) > len(sources):
-                logger.warning(f"   ⚠️  일부 retrieved_docs가 sources로 변환되지 않았습니다.")
+                logger.warning("   ⚠️  일부 retrieved_docs가 sources로 변환되지 않았습니다.")
                 logger.warning(f"   ({len(retrieved_docs) - len(sources)}개 누락)")
         
         # legal_references 디버깅
@@ -783,9 +860,8 @@ async def run_query_test(query: str):
                     logger.info(f"   {i}. 전체 구조:")
                     logger.info(f"      {doc}")
         
-        # related_questions 디버깅
         if not related_questions:
-            logger.warning(f"\n⚠️  related_questions가 없습니다!")
+            logger.warning("\n⚠️  related_questions가 없습니다!")
             logger.warning("   가능한 원인:")
             logger.warning("   1. phase_info에 suggested_questions가 없을 수 있습니다.")
             logger.warning("   2. conversation_flow_tracker가 초기화되지 않았을 수 있습니다.")
@@ -793,7 +869,7 @@ async def run_query_test(query: str):
             # phase_info 확인
             if "phase_info" in result:
                 phase_info = result.get("phase_info", {})
-                logger.info(f"\n   phase_info 확인:")
+                logger.info("\n   phase_info 확인:")
                 logger.info(f"      phase_info keys: {list(phase_info.keys()) if isinstance(phase_info, dict) else 'N/A'}")
                 if isinstance(phase_info, dict) and "phase2" in phase_info:
                     phase2 = phase_info.get("phase2", {})
@@ -811,91 +887,7 @@ async def run_query_test(query: str):
         if not needs_search:
             logger.info("   → direct_answer 노드가 사용되어 검색이 수행되지 않았을 수 있습니다.")
         
-        # 분류 성능 메트릭 출력
-        logger.info("\n" + "="*80)
-        logger.info("📊 분류 성능 메트릭 (최적화 결과)")
-        logger.info("="*80)
-        
-        try:
-            # 서비스에서 통계 가져오기
-            if hasattr(service, 'workflow') and hasattr(service.workflow, 'stats'):
-                stats = service.workflow.stats
-                if stats:
-                    # 통합 분류 메트릭
-                    unified_calls = stats.get('unified_classification_calls', 0)
-                    unified_llm_calls = stats.get('unified_classification_llm_calls', 0)
-                    avg_unified_time = stats.get('avg_unified_classification_time', 0.0)
-                    total_unified_time = stats.get('total_unified_classification_time', 0.0)
-                    
-                    # 캐시 메트릭
-                    cache_hits = stats.get('complexity_cache_hits', 0)
-                    cache_misses = stats.get('complexity_cache_misses', 0)
-                    total_cache_requests = cache_hits + cache_misses
-                    cache_hit_rate = (cache_hits / total_cache_requests * 100) if total_cache_requests > 0 else 0
-                    
-                    # 폴백 메트릭
-                    fallback_count = stats.get('complexity_fallback_count', 0)
-                    
-                    logger.info(f"\n✅ 통합 분류 (단일 프롬프트):")
-                    logger.info(f"   - 총 호출: {unified_calls}회")
-                    logger.info(f"   - LLM 호출: {unified_llm_calls}회 (목표: 1회/쿼리)")
-                    logger.info(f"   - 평균 처리 시간: {avg_unified_time:.3f}초")
-                    logger.info(f"   - 총 처리 시간: {total_unified_time:.3f}초")
-                    
-                    if unified_calls > 0:
-                        llm_calls_per_query = unified_llm_calls / unified_calls
-                        logger.info(f"   - LLM 호출/쿼리: {llm_calls_per_query:.2f}회 (목표: 1.0회)")
-                        if llm_calls_per_query > 1.5:
-                            logger.warning(f"   ⚠️  LLM 호출이 예상보다 많습니다! (목표: 1회)")
-                    
-                    logger.info(f"\n💾 캐시 성능:")
-                    logger.info(f"   - 캐시 히트: {cache_hits}회")
-                    logger.info(f"   - 캐시 미스: {cache_misses}회")
-                    logger.info(f"   - 캐시 히트율: {cache_hit_rate:.1f}%")
-                    if cache_hit_rate < 50 and total_cache_requests > 5:
-                        logger.warning(f"   ⚠️  캐시 히트율이 낮습니다. 캐시 전략을 검토하세요.")
-                    
-                    logger.info(f"\n🔄 폴백 사용:")
-                    logger.info(f"   - 폴백 호출: {fallback_count}회")
-                    if fallback_count > 0:
-                        fallback_rate = (fallback_count / unified_calls * 100) if unified_calls > 0 else 0
-                        logger.info(f"   - 폴백 비율: {fallback_rate:.1f}%")
-                        if fallback_rate > 10:
-                            logger.warning(f"   ⚠️  폴백 비율이 높습니다. LLM 호출 실패 원인을 확인하세요.")
-                        
-                        # 폴백 원인 분석
-                        fallback_reasons = stats.get('fallback_reasons', {})
-                        if fallback_reasons:
-                            logger.info(f"\n   📋 폴백 원인 분석:")
-                            for reason, count in sorted(fallback_reasons.items(), key=lambda x: x[1], reverse=True):
-                                reason_rate = (count / fallback_count * 100) if fallback_count > 0 else 0
-                                logger.info(f"      - {reason}: {count}회 ({reason_rate:.1f}%)")
-                                if reason in ["LLM timeout", "Network error", "Rate limit"]:
-                                    logger.warning(f"         ⚠️  {reason} - 재시도 메커니즘 고려 필요")
-                    
-                    # 개선 효과 계산
-                    if unified_calls > 0:
-                        logger.info(f"\n📈 개선 효과 (체인 방식 대비):")
-                        old_llm_calls = unified_calls * 4  # 기존: 4회/쿼리
-                        new_llm_calls = unified_llm_calls
-                        reduction = ((old_llm_calls - new_llm_calls) / old_llm_calls * 100) if old_llm_calls > 0 else 0
-                        logger.info(f"   - 기존 LLM 호출 (예상): {old_llm_calls}회")
-                        logger.info(f"   - 현재 LLM 호출: {new_llm_calls}회")
-                        logger.info(f"   - LLM 호출 감소: {reduction:.1f}%")
-                        if reduction >= 70:
-                            logger.info(f"   ✅ 목표 달성! (75% 감소 목표)")
-                        elif reduction >= 50:
-                            logger.warning(f"   ⚠️  개선되었지만 목표에 미달 (75% 목표)")
-                        else:
-                            logger.warning(f"   ⚠️  개선 효과가 낮습니다. 원인 확인 필요")
-                else:
-                    logger.warning("   ⚠️  통계가 활성화되지 않았습니다.")
-            else:
-                logger.warning("   ⚠️  통계 정보를 가져올 수 없습니다.")
-        except Exception as e:
-            logger.warning(f"   ⚠️  성능 메트릭 출력 실패: {e}")
-        
-        logger.info("\n" + "="*80)
+        _log_performance_metrics(service)
         
         # 최종 검증 및 요약
         test_passed = True
@@ -930,7 +922,7 @@ async def run_query_test(query: str):
             # 상세 디버깅 정보
             logger.error("\n   📋 오류 메시지 상세 분석:")
             logger.error(f"      - 답변 내용: {answer[:500]}")
-            for pattern in error_patterns:
+            for pattern in ERROR_PATTERNS:
                 if pattern in answer:
                     logger.error(f"      - 발견된 패턴: '{pattern}'")
         
@@ -946,8 +938,7 @@ async def run_query_test(query: str):
             if len(errors) > 10:
                 logger.error(f"      ... (총 {len(errors)}개 오류, 처음 10개만 표시)")
         
-        # 3. 처리 시간 확인 (너무 오래 걸리면 경고)
-        if processing_time > 300:  # 5분 이상
+        if processing_time > MAX_PROCESSING_TIME_WARNING:
             warnings.append(f"처리 시간이 매우 깁니다 ({processing_time:.2f}초)")
             logger.warning(f"⚠️  처리 시간이 매우 깁니다 ({processing_time:.2f}초)")
         
@@ -1062,7 +1053,7 @@ def main():
             logger.info("  $env:TEST_QUERY='질의내용'; python run_query_test.py")
             return 1
         
-        result = asyncio.run(run_query_test(query))
+        asyncio.run(run_query_test(query))
         return 0
         
     except KeyboardInterrupt:
