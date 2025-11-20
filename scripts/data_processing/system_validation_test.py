@@ -25,7 +25,6 @@ sys.path.append(str(project_root))
 
 from source.data.database import DatabaseManager
 from source.services.chat_service import ChatService
-from source.services.hybrid_search_engine import HybridSearchEngine
 from source.services.improved_answer_generator import ImprovedAnswerGenerator
 from source.services.question_classifier import QuestionClassifier
 

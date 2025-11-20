@@ -217,7 +217,21 @@ def build_and_save_index(
                     version_info = evm.get_version_statistics(embedding_version_id)
                     
                     chunking_config = version_info.get('chunking_config', {}) if version_info else {'chunk_size': 1000, 'chunk_overlap': 200}
-                    embedding_config = version_info.get('embedding_config', {}) if version_info else {'model': model_name, 'dimension': dimension}
+                    if not chunking_config:
+                        chunking_config = {'chunk_size': 1000, 'chunk_overlap': 200}
+                    
+                    embedding_config = version_info.get('embedding_config', {}) if version_info else {}
+                    if not embedding_config or not embedding_config.get('model'):
+                        model_name_from_version = version_info.get('model_name', model_name) if version_info else model_name
+                        embedding_config = {
+                            'model': model_name_from_version,
+                            'dimension': dimension
+                        }
+                        logger.info(f"Created embedding_config: {embedding_config}")
+                    elif not embedding_config.get('dimension'):
+                        embedding_config['dimension'] = dimension
+                        logger.info(f"Updated embedding_config with dimension: {embedding_config}")
+                    
                     document_count = version_info.get('document_count', 0) if version_info else 0
                 except Exception as e:
                     logger.warning(f"Failed to get version info for MLflow: {e}")

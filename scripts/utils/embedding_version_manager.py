@@ -431,6 +431,41 @@ class EmbeddingVersionManager:
             )
             source_type_distribution = {row['source_type']: row['count'] for row in cursor.fetchall()}
             
+            # metadata 파싱
+            import json
+            metadata = None
+            if version_info.get('metadata'):
+                try:
+                    metadata = json.loads(version_info['metadata']) if isinstance(version_info['metadata'], str) else version_info['metadata']
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+            
+            # chunking_config 추출
+            chunking_config = metadata.get('chunking_config', {}) if metadata else {}
+            
+            # embedding_config 추출 및 생성
+            embedding_config = metadata.get('embedding_config', {}) if metadata else {}
+            if not embedding_config or not embedding_config.get('model'):
+                model_name = version_info.get('model_name')
+                dimension = None
+                
+                if embedding_count > 0:
+                    cursor = conn.execute(
+                        "SELECT DISTINCT dim FROM embeddings e JOIN text_chunks tc ON e.chunk_id = tc.id WHERE tc.embedding_version_id = ? LIMIT 1",
+                        (version_id,)
+                    )
+                    dim_row = cursor.fetchone()
+                    if dim_row:
+                        dimension = dim_row[0]
+                
+                if not dimension and metadata:
+                    dimension = metadata.get('dimension')
+                
+                embedding_config = {
+                    'model': model_name,
+                    'dimension': dimension
+                }
+            
             return {
                 'version_id': version_id,
                 'version_name': version_info.get('version_name'),
@@ -441,7 +476,9 @@ class EmbeddingVersionManager:
                 'chunk_count': chunk_count,
                 'embedding_count': embedding_count,
                 'document_count': document_count,
-                'source_type_distribution': source_type_distribution
+                'source_type_distribution': source_type_distribution,
+                'chunking_config': chunking_config,
+                'embedding_config': embedding_config
             }
             
         except Exception as e:

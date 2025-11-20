@@ -60,6 +60,13 @@ class MLflowFAISSManager:
         
         self.tracking_uri = mlflow.get_tracking_uri()
         
+        self.is_local_filesystem = self._is_local_filesystem()
+        if self.is_local_filesystem:
+            self.local_base_path = self._get_local_base_path()
+            logger.info(f"✅ 로컬 파일 시스템 모드: {self.local_base_path}")
+        else:
+            logger.info(f"🌐 원격 서버 모드: {self.tracking_uri}")
+        
         try:
             self.client = MlflowClient(tracking_uri=self.tracking_uri)
         except Exception as e:
@@ -89,6 +96,68 @@ class MLflowFAISSManager:
         else:
             self.experiment_id = experiment.experiment_id
             logger.info(f"Using existing MLflow experiment: {experiment_name} (id: {self.experiment_id})")
+    
+    def _is_local_filesystem(self) -> bool:
+        """로컬 파일 시스템인지 확인"""
+        return self.tracking_uri.startswith("file://")
+    
+    def _get_local_base_path(self) -> Path:
+        """로컬 파일 시스템의 기본 경로 반환"""
+        uri_path = self.tracking_uri.replace("file://", "").replace("file:///", "")
+        
+        if os.name == 'nt':
+            if uri_path.startswith('/') and len(uri_path) > 1 and uri_path[1].isalpha() and uri_path[2:4] == ':/':
+                uri_path = uri_path[1:]
+        
+        if not os.path.isabs(uri_path):
+            uri_path = os.path.abspath(uri_path)
+        else:
+            uri_path = os.path.normpath(uri_path)
+        
+        return Path(uri_path)
+    
+    def _get_local_artifact_path(self, run_id: str, artifact_path: str = "faiss_index") -> Path:
+        """로컬 파일 시스템에서 아티팩트 경로 계산"""
+        return self.local_base_path / str(self.experiment_id) / run_id / "artifacts" / artifact_path
+    
+    def load_version_info_from_local(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """로컬 파일 시스템에서 version_info.json 직접 로드"""
+        if not self.is_local_filesystem:
+            logger.debug("원격 서버 모드: 로컬 파일 시스템 직접 접근 불가")
+            return None
+        
+        try:
+            version_info_path = self.local_base_path / str(self.experiment_id) / run_id / "artifacts" / "version_info.json"
+            
+            # 파일 존재 여부 사전 확인 및 경로 검증
+            if not version_info_path.parent.exists():
+                logger.debug(f"⚠️  아티팩트 디렉토리 없음: {version_info_path.parent}")
+                return None
+            
+            if not version_info_path.exists():
+                logger.debug(f"⚠️  로컬 경로에 version_info.json 없음: {version_info_path}")
+                return None
+            
+            # 파일 크기 확인 (빈 파일 방지)
+            file_size = version_info_path.stat().st_size
+            if file_size == 0:
+                logger.warning(f"⚠️  version_info.json이 비어있음: {version_info_path}")
+                return None
+            
+            # 파일 읽기 시도
+            logger.info(f"✅ 로컬 파일 시스템에서 version_info.json 직접 로드: {version_info_path} (크기: {file_size} bytes)")
+            with open(version_info_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    logger.warning(f"⚠️  version_info.json이 딕셔너리가 아님: {type(data)}")
+                    return None
+                return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️  로컬 version_info.json JSON 파싱 실패: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️  로컬 version_info.json 로드 실패: {e}")
+            return None
     
     def create_run(
         self,
@@ -234,15 +303,126 @@ class MLflowFAISSManager:
         output_dir: Optional[Path] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        MLflow에서 FAISS 인덱스 로드
+        MLflow에서 FAISS 인덱스 로드 (로컬 파일 시스템 최적화)
         
         Args:
             run_id: MLflow run ID
-            output_dir: 다운로드할 디렉토리 (None이면 임시 디렉토리)
+            output_dir: 다운로드할 디렉토리 (None이면 로컬 직접 접근 또는 임시 디렉토리)
         
         Returns:
             Optional[Dict]: 인덱스, id_mapping, metadata를 포함한 딕셔너리
         """
+        try:
+            import faiss
+            
+            if self.is_local_filesystem and not output_dir:
+                return self._load_index_from_local_path(run_id)
+            
+            return self._load_index_from_download(run_id, output_dir)
+            
+        except Exception as e:
+            logger.error(f"Failed to load index from MLflow run {run_id}: {e}", exc_info=True)
+            return None
+    
+    def _load_index_from_local_path(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """로컬 파일 시스템에서 직접 인덱스 로드 (복사 없음)"""
+        try:
+            import faiss
+            
+            run_info = self.client.get_run(run_id)
+            run_tags = run_info.data.tags if hasattr(run_info.data, 'tags') else {}
+            version_name = run_tags.get('version', None)
+            
+            vector_store_path = project_root / "data" / "vector_store"
+            
+            if version_name and vector_store_path.exists():
+                version_path = vector_store_path / version_name
+                index_path = version_path / "index.faiss"
+                
+                if index_path.exists():
+                    logger.info(f"✅ data/vector_store에서 직접 로드: {index_path}")
+                    logger.info(f"   📁 로컬 인덱스 경로: {version_path}")
+                    
+                    index = faiss.read_index(str(index_path))
+                    
+                    id_mapping_path = version_path / "id_mapping.json"
+                    id_mapping = {}
+                    if id_mapping_path.exists():
+                        with open(id_mapping_path, 'r', encoding='utf-8') as f:
+                            id_mapping = json.load(f)
+                    
+                    metadata_path = version_path / "metadata.pkl"
+                    metadata = []
+                    if metadata_path.exists():
+                        with open(metadata_path, 'rb') as f:
+                            metadata = pickle.load(f)
+                    
+                    version_info_path = version_path / "version_info.json"
+                    stats = {}
+                    if version_info_path.exists():
+                        with open(version_info_path, 'r', encoding='utf-8') as f:
+                            stats = json.load(f)
+                    
+                    return {
+                        'index': index,
+                        'id_mapping': id_mapping,
+                        'metadata': metadata,
+                        'stats': stats,
+                        'run_info': run_info.to_dictionary(),
+                        'local_path': str(version_path)
+                    }
+            
+            artifacts_path = self._get_local_artifact_path(run_id, "faiss_index")
+            index_path = artifacts_path / "index.faiss"
+            
+            if not index_path.exists():
+                logger.warning(f"Index file not found at local path: {index_path}")
+                logger.info("Falling back to download method...")
+                return self._load_index_from_download(run_id, None)
+            
+            logger.info(f"✅ MLflow 로컬 경로에서 직접 로드: {index_path}")
+            logger.info(f"   📁 MLflow 아티팩트 경로: {artifacts_path}")
+            
+            index = faiss.read_index(str(index_path))
+            
+            id_mapping_path = artifacts_path / "id_mapping.json"
+            id_mapping = {}
+            if id_mapping_path.exists():
+                with open(id_mapping_path, 'r', encoding='utf-8') as f:
+                    id_mapping = json.load(f)
+            
+            metadata_path = artifacts_path / "metadata.pkl"
+            metadata = []
+            if metadata_path.exists():
+                with open(metadata_path, 'rb') as f:
+                    metadata = pickle.load(f)
+            
+            stats_path = artifacts_path / "index_stats.json"
+            stats = {}
+            if stats_path.exists():
+                with open(stats_path, 'r', encoding='utf-8') as f:
+                    stats = json.load(f)
+            
+            return {
+                'index': index,
+                'id_mapping': id_mapping,
+                'metadata': metadata,
+                'stats': stats,
+                'run_info': run_info.to_dictionary(),
+                'local_path': str(artifacts_path)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to load index from local path: {e}", exc_info=True)
+            logger.info("Falling back to download method...")
+            return self._load_index_from_download(run_id, None)
+    
+    def _load_index_from_download(
+        self,
+        run_id: str,
+        output_dir: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """기존 다운로드 방식으로 인덱스 로드 (원격 서버용)"""
         try:
             import faiss
             
@@ -261,26 +441,19 @@ class MLflowFAISSManager:
                 use_temp = True
             
             try:
-                # MLflow의 download_artifacts는 아티팩트 경로를 그대로 유지합니다
-                # "faiss_index/index.faiss"를 다운로드하면 download_path/faiss_index/index.faiss가 됩니다
+                logger.info(f"📥 MLflow에서 인덱스 다운로드: run_id={run_id}")
+                
                 for artifact in artifacts:
                     artifact_dest = download_path / artifact.path
                     artifact_dest.parent.mkdir(parents=True, exist_ok=True)
                     self.client.download_artifacts(run_id, artifact.path, str(artifact_dest.parent))
                 
-                # 다운로드된 파일 확인
-                logger.debug(f"Download path: {download_path}")
-                logger.debug(f"Download path contents: {list(download_path.iterdir()) if download_path.exists() else 'Directory does not exist'}")
-                
-                # 인덱스 파일 경로 확인
-                # MLflow는 아티팩트 경로를 그대로 유지하므로 faiss_index/index.faiss가 download_path/faiss_index/index.faiss가 됩니다
                 index_path = download_path / "faiss_index" / "index.faiss"
                 
                 if not index_path.exists():
-                    # 대체 경로 시도
                     possible_paths = [
-                        download_path / "index.faiss",  # 루트에 직접 다운로드된 경우
-                        download_path / "faiss_index" / "index.faiss",  # 표준 경로
+                        download_path / "index.faiss",
+                        download_path / "faiss_index" / "index.faiss",
                     ]
                     
                     for candidate_path in possible_paths:
@@ -290,7 +463,6 @@ class MLflowFAISSManager:
                             break
                     
                     if not index_path.exists():
-                        # 모든 .faiss 파일 검색
                         faiss_files = list(download_path.rglob("*.faiss"))
                         if faiss_files:
                             index_path = faiss_files[0]
@@ -336,7 +508,7 @@ class MLflowFAISSManager:
                     shutil.rmtree(download_path, ignore_errors=True)
                     
         except Exception as e:
-            logger.error(f"Failed to load index from MLflow run {run_id}: {e}", exc_info=True)
+            logger.error(f"Failed to load index from download: {e}", exc_info=True)
             return None
     
     def list_runs(

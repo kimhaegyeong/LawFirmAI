@@ -662,8 +662,8 @@ Examples:
                              dest="input_path",
                              help="Path to folder containing JSON files (recursively searches for *.json)")
 
-    parser.add_argument("--domain", default="ë¯¼ì¬ë²?,
-                        help="Domain name (default: ë¯¼ì¬ë²?")
+    parser.add_argument("--domain", default="판례",
+                        help="Domain name (default: 판례)")
     parser.add_argument("--model", default="snunlp/KR-SBERT-V40K-klueNLI-augSTS",
                         help="Sentence embedding model (default: snunlp/KR-SBERT-V40K-klueNLI-augSTS)")
     parser.add_argument("--batch-size", type=int, default=128,
