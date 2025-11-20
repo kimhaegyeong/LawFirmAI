@@ -754,7 +754,12 @@ class ConversationFlowTracker:
         try:
             handler = self._get_classification_handler()
             if not handler:
-                self.logger.warning("ClassificationHandler not available, using fallback")
+                # ClassificationHandler 초기화 실패 시 상세 로깅
+                self.logger.warning(
+                    f"ClassificationHandler not available, using fallback. "
+                    f"This may affect classification accuracy. "
+                    f"Please check LLM configuration and ensure llm/llm_fast are properly initialized."
+                )
                 return self._classify_question_type_fallback(query)
             
             question_type, confidence = handler.classify_with_llm(query)

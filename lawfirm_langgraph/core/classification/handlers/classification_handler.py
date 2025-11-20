@@ -799,31 +799,38 @@ class ClassificationHandler:
                 self.stats['complexity_fallback_count'] = self.stats.get('complexity_fallback_count', 0) + 1
             return self.fallback_complexity_classification(query)
 
-    def classify_query_and_complexity_with_llm(self, query: str) -> Tuple[QuestionType, float, QueryComplexity, bool]:
+    def classify_query_and_complexity_with_llm(self, query: str, max_retries: int = 2) -> Tuple[QuestionType, float, QueryComplexity, bool]:
         """
         LLM을 한 번 호출하여 질문 유형과 복잡도를 동시에 분류
+        
+        Args:
+            query: 분류할 질문
+            max_retries: 최대 재시도 횟수 (일시적 오류 대응)
 
         Returns:
             Tuple[QuestionType, float, QueryComplexity, bool]: (질문 유형, 신뢰도, 복잡도, 검색 필요 여부)
         """
-        try:
-            # 캐시 키 생성
-            cache_key = f"query_and_complexity:{query}"
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # 캐시 키 생성
+                cache_key = f"query_and_complexity:{query}"
 
-            # 캐시 확인
-            if cache_key in self._classification_cache:
-                self.logger.debug(f"Using cached unified classification for: {query[:50]}...")
+                # 캐시 확인
+                if cache_key in self._classification_cache:
+                    self.logger.debug(f"Using cached unified classification for: {query[:50]}...")
+                    if self.stats:
+                        self.stats['complexity_cache_hits'] = self.stats.get('complexity_cache_hits', 0) + 1
+                    return self._classification_cache[cache_key]
+
                 if self.stats:
-                    self.stats['complexity_cache_hits'] = self.stats.get('complexity_cache_hits', 0) + 1
-                return self._classification_cache[cache_key]
+                    self.stats['complexity_cache_misses'] = self.stats.get('complexity_cache_misses', 0) + 1
 
-            if self.stats:
-                self.stats['complexity_cache_misses'] = self.stats.get('complexity_cache_misses', 0) + 1
+                start_time = time.time()
 
-            start_time = time.time()
-
-            # 통합 프롬프트 생성
-            unified_prompt = f"""다음 법률 질문을 분석하여 질문 유형과 복잡도를 동시에 분류해주세요.
+                # 통합 프롬프트 생성
+                unified_prompt = f"""다음 법률 질문을 분석하여 질문 유형과 복잡도를 동시에 분류해주세요.
 
 질문: {query}
 
@@ -878,83 +885,141 @@ class ClassificationHandler:
 
 중요: 법률 정보의 정확성이 중요하므로, 불확실하면 moderate 이상으로 판단하세요."""
 
-            # LLM 호출 (빠른 모델 사용)
-            llm = self.llm_fast if self.llm_fast else self.llm
-            response = llm.invoke(unified_prompt)
-            response_content = WorkflowUtils.extract_response_content(response)
+                # LLM 호출 (빠른 모델 사용)
+                llm = self.llm_fast if self.llm_fast else self.llm
+                response = llm.invoke(unified_prompt)
+                response_content = WorkflowUtils.extract_response_content(response)
 
-            # JSON 파싱
-            result = self.parse_unified_classification_response(response_content)
+                # JSON 파싱
+                result = self.parse_unified_classification_response(response_content)
 
-            if result:
-                # QuestionType 변환
-                question_type_mapping = {
-                    "precedent_search": QuestionType.PRECEDENT_SEARCH,
-                    "law_inquiry": QuestionType.LAW_INQUIRY,
-                    "legal_advice": QuestionType.LEGAL_ADVICE,
-                    "procedure_guide": QuestionType.PROCEDURE_GUIDE,
-                    "term_explanation": QuestionType.TERM_EXPLANATION,
-                    "general_question": QuestionType.GENERAL_QUESTION,
-                }
-                question_type = question_type_mapping.get(
-                    result.get("question_type", "general_question"),
-                    QuestionType.GENERAL_QUESTION
+                if result:
+                    # QuestionType 변환
+                    question_type_mapping = {
+                        "precedent_search": QuestionType.PRECEDENT_SEARCH,
+                        "law_inquiry": QuestionType.LAW_INQUIRY,
+                        "legal_advice": QuestionType.LEGAL_ADVICE,
+                        "procedure_guide": QuestionType.PROCEDURE_GUIDE,
+                        "term_explanation": QuestionType.TERM_EXPLANATION,
+                        "general_question": QuestionType.GENERAL_QUESTION,
+                    }
+                    question_type = question_type_mapping.get(
+                        result.get("question_type", "general_question"),
+                        QuestionType.GENERAL_QUESTION
+                    )
+                    confidence = float(result.get("confidence", 0.85))
+
+                    # QueryComplexity 변환
+                    complexity_mapping = {
+                        "simple": QueryComplexity.SIMPLE,
+                        "moderate": QueryComplexity.MODERATE,
+                        "complex": QueryComplexity.COMPLEX,
+                    }
+                    complexity = complexity_mapping.get(
+                        result.get("complexity", "moderate"),
+                        QueryComplexity.MODERATE
+                    )
+                    needs_search = result.get("needs_search", True)
+                    reasoning = result.get("reasoning", "")
+
+                    elapsed_time = time.time() - start_time
+
+                    self.logger.info(
+                        f"✅ [UNIFIED LLM CLASSIFICATION] "
+                        f"question_type={question_type.value}, complexity={complexity.value}, "
+                        f"needs_search={needs_search}, confidence={confidence:.2f}, "
+                        f"reasoning: {reasoning[:100] if reasoning else 'N/A'}... "
+                        f"(시간: {elapsed_time:.3f}s)"
+                    )
+
+                    result_tuple = (question_type, confidence, complexity, needs_search)
+
+                    # 캐시에 저장 (최대 100개)
+                    if len(self._classification_cache) >= 100:
+                        oldest_key = next(iter(self._classification_cache))
+                        del self._classification_cache[oldest_key]
+
+                    self._classification_cache[cache_key] = result_tuple
+
+                    # 성능 메트릭 업데이트
+                    if self.stats:
+                        self.stats['llm_complexity_classifications'] = self.stats.get('llm_complexity_classifications', 0) + 1
+                        current_avg = self.stats.get('avg_complexity_classification_time', 0.0)
+                        count = self.stats.get('llm_complexity_classifications', 1)
+                        self.stats['avg_complexity_classification_time'] = (current_avg * (count - 1) + elapsed_time) / count
+
+                    return result_tuple
+                else:
+                    # 파싱 실패 시 폴백 (재시도 불가능)
+                    fallback_reason = "JSON parsing failed"
+                    self.logger.warning(
+                        f"Unified classification parsing failed: {fallback_reason}, using fallback. "
+                        f"Response: {response_content[:200]}..."
+                    )
+                    if self.stats:
+                        self.stats['complexity_fallback_count'] = self.stats.get('complexity_fallback_count', 0) + 1
+                        # 폴백 원인 분류
+                        if 'fallback_reasons' not in self.stats:
+                            self.stats['fallback_reasons'] = {}
+                        self.stats['fallback_reasons'][fallback_reason] = self.stats['fallback_reasons'].get(fallback_reason, 0) + 1
+                    question_type, confidence = self.fallback_classification(query)
+                    complexity, needs_search = self.fallback_complexity_classification(query)
+                    return (question_type, confidence, complexity, needs_search)
+
+            except Exception as e:
+                last_exception = e
+                error_type = type(e).__name__
+                error_message = str(e)
+                
+                # 재시도 가능한 오류인지 확인
+                is_retryable = False
+                if "timeout" in error_message.lower() or "timed out" in error_message.lower():
+                    fallback_reason = "LLM timeout"
+                    is_retryable = True
+                elif "network" in error_message.lower() or "connection" in error_message.lower():
+                    fallback_reason = "Network error"
+                    is_retryable = True
+                elif "rate limit" in error_message.lower() or "429" in error_message:
+                    fallback_reason = "Rate limit"
+                    is_retryable = False  # Rate limit은 재시도하면 안 됨
+                elif "api" in error_message.lower() or "key" in error_message.lower():
+                    fallback_reason = "API error"
+                    is_retryable = False
+                else:
+                    fallback_reason = f"Exception: {error_type}"
+                    is_retryable = False
+                
+                    # 재시도 가능하고 시도 횟수가 남아있으면 재시도
+                    if is_retryable and attempt < max_retries:
+                        self.logger.warning(
+                            f"Unified classification failed (attempt {attempt + 1}/{max_retries + 1}): "
+                            f"{fallback_reason} ({error_type}), retrying..."
+                        )
+                        time.sleep(0.5 * (attempt + 1))  # 지수 백오프
+                        continue
+                
+                # 재시도 불가능하거나 최대 재시도 횟수 초과
+                self.logger.warning(
+                    f"Unified classification failed: {fallback_reason} ({error_type}: {error_message}), using fallback"
                 )
-                confidence = float(result.get("confidence", 0.85))
-
-                # QueryComplexity 변환
-                complexity_mapping = {
-                    "simple": QueryComplexity.SIMPLE,
-                    "moderate": QueryComplexity.MODERATE,
-                    "complex": QueryComplexity.COMPLEX,
-                }
-                complexity = complexity_mapping.get(
-                    result.get("complexity", "moderate"),
-                    QueryComplexity.MODERATE
-                )
-                needs_search = result.get("needs_search", True)
-                reasoning = result.get("reasoning", "")
-
-                elapsed_time = time.time() - start_time
-
-                self.logger.info(
-                    f"✅ [UNIFIED LLM CLASSIFICATION] "
-                    f"question_type={question_type.value}, complexity={complexity.value}, "
-                    f"needs_search={needs_search}, confidence={confidence:.2f}, "
-                    f"reasoning: {reasoning[:100] if reasoning else 'N/A'}... "
-                    f"(시간: {elapsed_time:.3f}s)"
-                )
-
-                result_tuple = (question_type, confidence, complexity, needs_search)
-
-                # 캐시에 저장 (최대 100개)
-                if len(self._classification_cache) >= 100:
-                    oldest_key = next(iter(self._classification_cache))
-                    del self._classification_cache[oldest_key]
-
-                self._classification_cache[cache_key] = result_tuple
-
-                # 성능 메트릭 업데이트
-                if self.stats:
-                    self.stats['llm_complexity_classifications'] = self.stats.get('llm_complexity_classifications', 0) + 1
-                    current_avg = self.stats.get('avg_complexity_classification_time', 0.0)
-                    count = self.stats.get('llm_complexity_classifications', 1)
-                    self.stats['avg_complexity_classification_time'] = (current_avg * (count - 1) + elapsed_time) / count
-
-                return result_tuple
-            else:
-                # 파싱 실패 시 폴백
-                self.logger.warning("Unified classification parsing failed, using fallback")
                 if self.stats:
                     self.stats['complexity_fallback_count'] = self.stats.get('complexity_fallback_count', 0) + 1
+                    # 폴백 원인 분류
+                    if 'fallback_reasons' not in self.stats:
+                        self.stats['fallback_reasons'] = {}
+                    self.stats['fallback_reasons'][fallback_reason] = self.stats['fallback_reasons'].get(fallback_reason, 0) + 1
                 question_type, confidence = self.fallback_classification(query)
                 complexity, needs_search = self.fallback_complexity_classification(query)
                 return (question_type, confidence, complexity, needs_search)
-
-        except Exception as e:
-            self.logger.warning(f"Unified classification failed: {e}, using fallback")
-            if self.stats:
-                self.stats['complexity_fallback_count'] = self.stats.get('complexity_fallback_count', 0) + 1
-            question_type, confidence = self.fallback_classification(query)
-            complexity, needs_search = self.fallback_complexity_classification(query)
-            return (question_type, confidence, complexity, needs_search)
+        
+        # 모든 재시도 실패
+        if last_exception:
+            error_type = type(last_exception).__name__
+            error_message = str(last_exception)
+            self.logger.error(
+                f"Unified classification failed after {max_retries + 1} attempts: "
+                f"{error_type}: {error_message}, using fallback"
+            )
+        question_type, confidence = self.fallback_classification(query)
+        complexity, needs_search = self.fallback_complexity_classification(query)
+        return (question_type, confidence, complexity, needs_search)
