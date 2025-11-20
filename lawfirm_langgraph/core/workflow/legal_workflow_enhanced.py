@@ -3445,6 +3445,34 @@ class EnhancedLegalQuestionWorkflow(
             retrieved_docs = self._restore_retrieved_docs(state)
             
             query = self._get_state_value(state, "query", "")
+            
+            # 🔥 개선 2: 검색 결과가 0개일 때 빠른 응답 생성 (timeout 방지)
+            if not retrieved_docs or len(retrieved_docs) == 0:
+                self.logger.warning(
+                    f"⚠️ [NO SEARCH RESULTS] retrieved_docs is empty. "
+                    f"Generating quick response without document references to avoid timeout. "
+                    f"Query: '{query[:50]}...'"
+                )
+                # 빠른 응답 생성 (LLM 호출 없음 - 타임아웃 방지)
+                quick_answer = (
+                    f"죄송합니다. '{query[:50]}...'에 대한 관련 법률 문서를 데이터베이스에서 찾지 못했습니다.\n\n"
+                    f"일반적인 법률 정보를 바탕으로 답변을 드리면, 해당 질문에 대한 구체적인 조문이나 판례를 "
+                    f"인용할 수 없어 정확한 답변을 제공하기 어렵습니다.\n\n"
+                    f"더 정확한 답변을 위해 질문을 구체화하시거나, 다른 키워드로 검색해 주시기 바랍니다."
+                )
+                self._set_answer_safely(state, quick_answer)
+                self._set_state_value(state, "retrieved_docs", [])
+                self._set_state_value(state, "sources", [])
+                self._set_state_value(state, "confidence", 0.3)  # 낮은 신뢰도 표시
+                self._update_processing_time(state, start_time)
+                
+                elapsed_time = time.time() - start_time
+                self.logger.info(
+                    f"✅ [QUICK RESPONSE] Generated quick response without LLM call "
+                    f"(retrieved_docs empty, {elapsed_time:.2f}초)"
+                )
+                return state
+            
             question_type, domain = WorkflowUtils.get_question_type_and_domain(query_type, query, self.logger)
             model_type = ModelType.GEMINI
             extracted_keywords = self._get_state_value(state, "extracted_keywords", [])
@@ -7060,6 +7088,30 @@ class EnhancedLegalQuestionWorkflow(
             query_type_str = search_inputs["query_type_str"]
             search_params = search_inputs["search_params"]
             extracted_keywords = search_inputs["extracted_keywords"]
+
+            # 🔥 개선 1: 검색 결과가 0개일 때 즉시 Early Exit (timeout 방지)
+            if (semantic_count == 0 and keyword_count == 0) or (len(semantic_results) == 0 and len(keyword_results) == 0):
+                self.logger.warning(
+                    f"⚠️ [EARLY EXIT] 검색 결과가 없습니다. "
+                    f"빠른 응답 생성을 위해 처리 중단: "
+                    f"semantic={semantic_count}, keyword={keyword_count}, "
+                    f"query='{query[:50]}...'"
+                )
+                
+                # 빈 결과를 state에 저장하고 즉시 반환
+                self._set_state_value(state, "retrieved_docs", [])
+                self._set_state_value(state, "sources", [])
+                self._set_state_value(state, "search_quality_evaluation", {
+                    "overall_quality": 0.0,
+                    "needs_retry": False,
+                    "early_exit": True,
+                    "reason": "no_search_results"
+                })
+                self._update_processing_time(state, start_time)
+                
+                elapsed_time = time.time() - start_time
+                self.logger.info(f"✅ [EARLY EXIT] 빈 검색 결과 처리 완료 ({elapsed_time:.2f}초)")
+                return state
 
             quality_evaluation = self._evaluate_search_quality_internal(
                 semantic_results=semantic_results,
