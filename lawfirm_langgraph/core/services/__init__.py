@@ -106,11 +106,16 @@ except ImportError:
     ConversationFlowTracker = None
 
 try:
-    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+    # 새로운 경로 우선 시도
+    from core.services.prompts import UnifiedPromptManager, LegalDomain, ModelType
 except ImportError:
-    UnifiedPromptManager = None
-    LegalDomain = None
-    ModelType = None
+    try:
+        # 호환성을 위한 fallback
+        from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+    except ImportError:
+        UnifiedPromptManager = None
+        LegalDomain = None
+        ModelType = None
 
 try:
     from core.processing.integration.term_integration_system import TermIntegrator
