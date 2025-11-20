@@ -64,7 +64,7 @@ class TestEnhancedLegalQuestionWorkflow:
     def test_classify_complexity(self, workflow, sample_state):
         """복잡도 분류 테스트"""
         with patch.object(workflow, '_classify_complexity_with_llm') as mock_complexity:
-            from core.agents.legal_workflow_enhanced import QueryComplexity
+            from core.workflow.state.workflow_types import QueryComplexity
             mock_complexity.return_value = (QueryComplexity.MODERATE, True)
             
             result = workflow.classify_complexity(sample_state)
@@ -308,7 +308,7 @@ class TestQueryComplexity:
 
     def test_query_complexity_values(self):
         """QueryComplexity 값 테스트"""
-        from core.agents.legal_workflow_enhanced import QueryComplexity
+        from core.workflow.state.workflow_types import QueryComplexity
         
         assert QueryComplexity.SIMPLE == "simple"
         assert QueryComplexity.MODERATE == "moderate"
@@ -324,7 +324,7 @@ class TestRetryCounterManager:
         """RetryCounterManager 인스턴스"""
         import logging
         logger = logging.getLogger(__name__)
-        from core.agents.legal_workflow_enhanced import RetryCounterManager
+        from core.workflow.state.workflow_types import RetryCounterManager
         return RetryCounterManager(logger)
 
     @pytest.fixture

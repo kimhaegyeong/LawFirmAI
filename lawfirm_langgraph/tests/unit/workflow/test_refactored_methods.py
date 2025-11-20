@@ -19,8 +19,8 @@ if str(project_root) not in sys.path:
 if str(lawfirm_langgraph_dir) not in sys.path:
     sys.path.insert(0, str(lawfirm_langgraph_dir))
 
-from core.agents.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-from core.agents.state_definitions import LegalWorkflowState
+from core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
+from core.workflow.state.state_definitions import LegalWorkflowState
 from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
 
 

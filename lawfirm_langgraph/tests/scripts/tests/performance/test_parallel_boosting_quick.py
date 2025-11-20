@@ -42,7 +42,7 @@ def test_parallel_boosting():
     
     try:
         from lawfirm_langgraph.core.workflow.legal_workflow_enhanced import EnhancedLegalQuestionWorkflow
-        from lawfirm_langgraph.langgraph_core.config.langgraph_config import LangGraphConfig
+        from lawfirm_langgraph.config.langgraph_config import LangGraphConfig
         
         config = LangGraphConfig()
         workflow = EnhancedLegalQuestionWorkflow(config)
