@@ -176,7 +176,10 @@ class QueryEnhancer:
             keyword_queries.extend(llm_variants[:3])  # 최대 3개만
 
         # 개선 #5: Citation 포함 쿼리 추가 생성 (1개 → 3-5개로 확대)
+        # 우선순위 1: 법령 조문 쿼리 특화 강화
         citation_queries = []
+        statute_enhancement = self.enhance_statute_query(base_query)
+        
         if query_type in ["law_inquiry", "precedent_inquiry"]:
             import re
             # 법령 조문 검색을 위한 쿼리 생성
@@ -196,6 +199,11 @@ class QueryEnhancer:
                 for precedent in precedent_matches[:2]:
                     if precedent not in citation_queries:
                         citation_queries.append(precedent)
+        
+        # 법령 조문 특화 쿼리 추가
+        if statute_enhancement.get("statute_specific"):
+            if statute_enhancement["statute_specific"] not in citation_queries:
+                citation_queries.insert(0, statute_enhancement["statute_specific"])  # 최우선 배치
             
             # extracted_keywords에서 법령 조문 추출
             if extracted_keywords:
@@ -1158,6 +1166,32 @@ class QueryEnhancer:
                 break
         
         return min(1.0, complexity)
+    
+    def enhance_statute_query(self, query: str) -> Dict[str, Any]:
+        """법령 조문 쿼리 특화 강화"""
+        import re
+        
+        # 법령명과 조문번호 추출 강화
+        law_pattern = re.compile(r'([가-힣]+법)\s*제\s*(\d+)\s*조')
+        match = law_pattern.search(query)
+        
+        if match:
+            law_name = match.group(1)
+            article_no = match.group(2)
+            
+            # 법령 조문 특화 쿼리 생성
+            enhanced_query = {
+                "original": query,
+                "statute_specific": f"{law_name} 제{article_no}조",
+                "law_name": law_name,
+                "article_no": article_no,
+                "keywords": [law_name, f"제{article_no}조", "조문"],
+                "boost_statute_articles": True  # statute_article 타입 부스팅
+            }
+            self.logger.debug(f"Enhanced statute query: {enhanced_query}")
+            return enhanced_query
+        
+        return {"original": query}
     
     def _is_direct_law_inquiry(self, query: str) -> bool:
         """

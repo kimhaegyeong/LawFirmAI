@@ -8,7 +8,7 @@ from .legal_text_preprocessor import LegalTextPreprocessor
 from .multi_method_term_extractor import MultiMethodTermExtractor
 from .gemini_validation_pipeline import GeminiValidationPipeline
 from .term_integration_system import TermIntegrationSystem
-from .performance_evaluator import PerformanceEvaluator
+from core.shared.monitoring.performance_evaluator import PerformanceEvaluator
 from .domain_specific_extractor import DomainSpecificExtractor, LegalDomain
 from .gemini_client import GeminiClient
 

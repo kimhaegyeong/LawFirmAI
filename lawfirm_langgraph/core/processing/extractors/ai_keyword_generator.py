@@ -33,11 +33,12 @@ class AIKeywordGenerator:
             
             api_key = os.getenv('GOOGLE_API_KEY')
             if api_key:
+                # 성능 최적화: 더 빠른 모델 사용 및 타임아웃 단축
                 self.gemini_client = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash-exp",
-                    temperature=0.3,
-                    max_output_tokens=1000,
-                    timeout=30,
+                    model="gemini-2.0-flash-exp",  # 빠른 모델 유지
+                    temperature=0.2,  # 0.3 → 0.2 (더 빠른 응답)
+                    max_output_tokens=500,  # 1000 → 500 (응답 시간 단축)
+                    timeout=2.5,  # 30 → 2.5초 (타임아웃 단축)
                     api_key=api_key
                 )
                 self.logger.info("Gemini API 클라이언트 초기화 완료")
@@ -178,145 +179,25 @@ class AIKeywordGenerator:
             }
             type_specific_guidance = type_guidance_map.get(query_type, "")
         
-        return f"""
-당신은 한국 법률 분야의 전문가입니다. 주어진 {domain} 분야의 기본 키워드들을 바탕으로 검색에 유용한 관련 키워드를 확장해주세요.
+        # 성능 최적화: 프롬프트 단순화 (응답 시간 단축)
+        return f"""한국 법률 전문가로서 {domain} 분야 키워드를 확장하세요.
 {query_context}
 **기본 키워드**: {', '.join(validated_keywords[:10])}
 
-**Phase 5: 고급 키워드 매칭 기법 적용**
-
-**1. 다층 키워드 매칭 시스템** (가중치 우선순위):
-
-**1.1 계층적 키워드 매칭**:
-- Level 1: 직접 문자열 매칭 (100% 가중치)
-  - 정확한 키워드 문자열 그대로 매칭
-  - 예: "손해배상" → "손해배상" (정확 일치)
-  
-- Level 2: 형태소 분석 기반 매칭 (80% 가중치)
-  - 어간/어미 분리하여 매칭
-  - 예: "손해배상" → "손해", "배상", "손해배상하다", "손해배상한"
-  
-- Level 3: 의미 기반 매칭 (70% 가중치)
-  - 동의어/유의어 매칭
-  - 예: "손해배상" → "손해 배상", "손해보상", "배상책임", "손해전보", "손해보상청구"
-  
-- Level 4: 확장 키워드 매칭 (60% 가중치)
-  - 관련 용어 및 상위/하위 개념
-  - 예: "손해배상" → "불법행위", "과실", "인과관계", "손해액"
-
-**1.2 키워드 그룹 매칭**:
-- 관련 키워드를 그룹으로 묶어 매칭
-- 그룹 내 일부 키워드 매칭 시 부분 점수 부여
-- 예: "계약" 그룹 → ["계약서", "계약관계", "계약당사자", "계약조건", "계약체결", "계약해지"]
-- 예: "손해배상" 그룹 → ["손해배상청구", "손해배상책임", "손해배상소송", "손해배상액"]
-
-**1.3 동적 키워드 가중치** (문서 유형별):
-- 법령 조문: 법령명/조문번호 가중치 증가 (예: "민법 제750조" → 가중치 1.0)
-- 판례: 사건명/법원 가중치 증가 (예: "대법원 2020다12345" → 가중치 1.0)
-- 계약서: 계약 관련 용어 가중치 증가 (예: "계약서", "계약조건" → 가중치 0.9)
-
-**2. 컨텍스트 기반 키워드 매칭**:
-
-**2.1 문서 컨텍스트 분석**:
-- 문서의 주제와 키워드의 관련성 분석
-- 컨텍스트 일치 시 가중치 증가
-- 예: "임대차 계약서" 컨텍스트에서 "임대인", "임차인", "보증금" 키워드 가중치 증가
-
-**2.2 쿼리-문서 의미적 유사도 통합**:
-- 쿼리 전체와 문서의 의미적 유사도 계산
-- 키워드 매칭과 의미적 유사도 결합
-- 예: "임대차 계약서 작성" 쿼리 → "임대차", "계약서", "작성" 키워드 + 의미적 유사도
-
-**2.3 문서 구조 기반 매칭**:
-- 법령 조문: 조문 번호 우선 매칭 (예: "제750조" 우선)
-- 판례: 사건명/법원 우선 매칭 (예: "대법원", "사건번호" 우선)
-- 계약서: 계약 당사자/조건 우선 매칭
-
-**3. 고급 키워드 확장 기법**:
-
-**3.1 도메인 특화 키워드 확장**:
-- 법률 분야별 전문 사전 활용
-- 판례 키워드 데이터베이스 구축
-- 예: "민사법" → "계약", "불법행위", "소유권", "채권", "채무"
-- 예: "형사법" → "살인죄", "상해죄", "절도죄", "사기죄"
-
-**3.2 계층적 키워드 확장**:
-- 상위 개념 → 하위 개념 확장
-- 예: "계약" → "매매계약", "임대차계약", "고용계약", "도급계약"
-- 예: "불법행위" → "고의 불법행위", "과실 불법행위", "공동 불법행위"
-
-**3.3 역방향 키워드 확장**:
-- 검색 결과에서 자주 나타나는 키워드 역추적
-- 관련 키워드 사전 구축
-- 예: "손해배상" 검색 결과에서 자주 나타나는 "인과관계", "과실", "손해액" 역추적
-
-**기본 확장 원칙** (우선순위 순):
-1. **동의어 및 유사어 확장** (최우선)
-   - 의미가 동일하거나 매우 유사한 다른 표현
-   - 예: "손해배상" → "손해 배상", "손해보상", "배상책임", "손해전보", "손해보상청구"
-   - 예: "불법행위" → "불법", "위법행위", "불법적 행위", "불법행위책임", "불법행위로 인한 손해"
-
-2. **복합어 분리 및 확장**
-   - 복합어를 구성하는 개별 단어들
-   - 예: "불법행위" → "불법", "행위", "불법 행위"
-   - 예: "손해배상청구권" → "손해배상", "청구권", "손해배상청구", "배상청구권"
-
-3. **직접 관련 법률 용어**
-   - 기본 키워드와 직접적으로 관련된 법률 용어
-   - 예: "계약" → "계약서", "계약관계", "계약당사자", "계약조건", "계약체결", "계약해지"
-
-4. **관련 법령 및 조문**
-   - 관련 법령명과 조문 번호
-   - 예: "손해배상" → "민법 제750조", "민법 제751조", "불법행위", "손해배상청구"
-   - 예: "계약" → "민법 제105조", "계약법", "계약의 성립", "계약의 효력"
-
-5. **판례 검색 강화 키워드**
-   - 판례에서 자주 사용되는 표현
-   - 예: "손해배상 판례", "대법원 손해배상 판결", "손해배상 사건", "손해배상 참고판례"
-
-6. **실무 용어 및 구체적 표현**
-   - 법률 실무에서 자주 사용되는 용어
-   - 예: "계약서 검토", "계약 해지", "계약 위반", "계약 불이행", "계약 해제"
+**확장 원칙** (우선순위):
+1. 동의어/유의어: "손해배상" → "손해 배상", "손해보상", "배상책임"
+2. 관련 법률 용어: "계약" → "계약서", "계약관계", "계약조건"
+3. 관련 법령: "손해배상" → "민법 제750조", "불법행위"
+4. 판례 키워드: "손해배상 판례", "대법원 판결"
 
 {type_specific_guidance}
 
 **출력 형식** (JSON만):
 {{
-    "expanded_keywords": [
-        "키워드1",
-        "키워드2",
-        "키워드3"
-    ],
-    "synonyms": ["동의어1", "동의어2", "동의어3"],
-    "related_terms": ["관련용어1", "관련용어2"],
-    "legal_references": ["법령1", "법령2"],
-    "precedent_keywords": ["판례키워드1", "판례키워드2"],
-    "keyword_groups": {{
-        "그룹명1": ["키워드1", "키워드2", "키워드3"],
-        "그룹명2": ["키워드4", "키워드5"]
-    }},
-    "hierarchical_keywords": {{
-        "상위개념": ["하위개념1", "하위개념2", "하위개념3"]
-    }},
-    "weighted_keywords": {{
-        "키워드1": 1.0,
-        "키워드2": 0.8,
-        "키워드3": 0.7,
-        "키워드4": 0.6
-    }},
-    "contextual_keywords": {{
-        "문서유형": ["해당유형의특화키워드1", "해당유형의특화키워드2"]
-    }}
+    "expanded_keywords": ["키워드1", "키워드2", ...]
 }}
 
-**주의사항**:
-- 최대 {target_count}개의 키워드를 생성하되, 품질을 우선시하세요.
-- 다층 매칭 시스템을 활용하여 다양한 레벨의 키워드를 생성하세요.
-- 키워드 그룹을 활용하여 관련 키워드를 묶어주세요.
-- 문서 유형에 따라 동적 가중치를 적용하세요.
-- 계층적 확장을 통해 상위/하위 개념을 포함하세요.
-- 원본 질문의 맥락을 고려하여 관련성 높은 키워드만 생성하세요.
-- 각 키워드는 2글자 이상이어야 합니다.
+**주의**: 최대 {target_count}개, 2글자 이상, 관련성 높은 키워드만.
 """
     
     async def _call_gemini_api(self, prompt: str) -> str:
@@ -332,18 +213,108 @@ class AIKeywordGenerator:
             raise
     
     def _parse_gemini_response(self, response: str) -> List[str]:
-        """Gemini 응답 파싱 (개선: 새로운 JSON 형식 지원)"""
+        """Gemini 응답 파싱 (개선: 새로운 JSON 형식 지원 및 강화된 파싱)"""
         try:
-            # JSON 부분 추출
-            start_idx = response.find('{')
-            end_idx = response.rfind('}') + 1
+            import re
             
-            if start_idx == -1 or end_idx == 0:
-                self.logger.warning("JSON 형식 응답을 찾을 수 없음")
-                return []
+            # 방법 1: 코드 블록 내부 JSON 추출
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # 방법 2: 코드 블록 없이 JSON만 있는 경우
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                else:
+                    # 방법 3: 첫 번째 { 부터 마지막 } 까지 추출
+                    start_idx = response.find('{')
+                    end_idx = response.rfind('}') + 1
+                    
+                    if start_idx == -1 or end_idx == 0:
+                        self.logger.warning("JSON 형식 응답을 찾을 수 없음. 응답 내용: " + response[:200])
+                        # 방법 4: JSON이 아닌 경우에도 키워드 추출 시도 (줄바꿈으로 구분된 리스트)
+                        lines = [line.strip() for line in response.split('\n') if line.strip() and not line.strip().startswith('#')]
+                        if lines:
+                            self.logger.info(f"JSON 형식이 아니지만 {len(lines)}개의 키워드를 추출 시도")
+                            return lines[:20]  # 최대 20개
+                        return []
+                    
+                    json_str = response[start_idx:end_idx]
             
-            json_str = response[start_idx:end_idx]
-            data = json.loads(json_str)
+            # JSON 파싱 시도 (강화된 복구 로직)
+            data = None
+            json_str_cleaned = json_str
+            
+            # 1차 시도: 원본 JSON 파싱
+            try:
+                data = json.loads(json_str_cleaned)
+            except json.JSONDecodeError as e:
+                error_pos = getattr(e, 'pos', None)
+                error_msg = str(e)
+                self.logger.debug(f"JSON 파싱 실패 (1차 시도): {error_msg}")
+                if error_pos is not None and error_pos < len(json_str_cleaned):
+                    context_start = max(0, error_pos - 50)
+                    context_end = min(len(json_str_cleaned), error_pos + 50)
+                    context = json_str_cleaned[context_start:context_end]
+                    self.logger.debug(f"   오류 위치 주변 컨텍스트: ...{context}... (위치: {error_pos})")
+                self.logger.warning(f"JSON 파싱 실패, 정리 후 재시도: {error_msg}")
+                
+                # 2차 시도: 기본 정리 (제어 문자 제거, trailing comma 제거)
+                json_str_cleaned = re.sub(r'[^\x20-\x7E\n\r\t]', '', json_str)  # 제어 문자 제거
+                json_str_cleaned = re.sub(r',\s*}', '}', json_str_cleaned)  # trailing comma 제거
+                json_str_cleaned = re.sub(r',\s*]', ']', json_str_cleaned)  # trailing comma in array
+                try:
+                    data = json.loads(json_str_cleaned)
+                except json.JSONDecodeError:
+                    # 3차 시도: 더 강력한 정리 (주석 제거, 잘못된 이스케이프 수정)
+                    json_str_cleaned = re.sub(r'//.*?$', '', json_str_cleaned, flags=re.MULTILINE)  # 주석 제거
+                    json_str_cleaned = re.sub(r'/\*.*?\*/', '', json_str_cleaned, flags=re.DOTALL)  # 블록 주석 제거
+                    json_str_cleaned = re.sub(r'\\"', '"', json_str_cleaned)  # 잘못된 이스케이프 수정
+                    json_str_cleaned = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str_cleaned)  # 따옴표 없는 키 추가
+                    try:
+                        data = json.loads(json_str_cleaned)
+                    except json.JSONDecodeError:
+                        # 4차 시도: 부분 JSON 추출 (첫 번째 유효한 JSON 객체만)
+                        try:
+                            # 중괄호 매칭으로 첫 번째 완전한 JSON 객체 추출
+                            brace_count = 0
+                            start_pos = -1
+                            for i, char in enumerate(json_str):
+                                if char == '{':
+                                    if start_pos == -1:
+                                        start_pos = i
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0 and start_pos != -1:
+                                        partial_json = json_str[start_pos:i+1]
+                                        data = json.loads(partial_json)
+                                        self.logger.info(f"부분 JSON 추출 성공 (위치: {start_pos}-{i+1})")
+                                        break
+                        except (json.JSONDecodeError, ValueError) as e4:
+                            error_pos = getattr(e4, 'pos', None) if isinstance(e4, json.JSONDecodeError) else None
+                            error_msg = str(e4)
+                            self.logger.error(f"JSON 파싱 모든 시도 실패: {error_msg}")
+                            if error_pos is not None:
+                                self.logger.error(f"   최종 오류 위치: {error_pos}, JSON 길이: {len(json_str)}")
+                            self.logger.debug(f"   실패한 JSON 문자열 (처음 500자): {json_str[:500]}")
+                            # 최후의 수단: 키워드를 직접 추출
+                            keywords = re.findall(r'"([^"]+)"', json_str)
+                            # 배열 형식도 시도
+                            if not keywords:
+                                keywords = re.findall(r'["\']([^"\']+)["\']', json_str)
+                            # 줄바꿈으로 구분된 리스트도 시도
+                            if not keywords:
+                                lines = [line.strip() for line in json_str.split('\n') 
+                                        if line.strip() and not line.strip().startswith('#') 
+                                        and not line.strip().startswith('//')]
+                                keywords = [line for line in lines if len(line) > 1 and not line.startswith('{') and not line.startswith('}')]
+                            
+                            if keywords:
+                                self.logger.info(f"JSON 파싱 실패했지만 {len(keywords)}개의 키워드를 텍스트에서 추출")
+                                return keywords[:20]
+                            return []
             
             # 모든 키워드 수집 (새로운 형식 우선, 기존 형식도 지원)
             all_keywords = set()

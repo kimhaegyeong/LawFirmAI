@@ -309,7 +309,30 @@ class LegalKeywordMapper:
         max_score = 0.0
         
         for level, keywords in weighted_keywords.items():
-            matched_count = sum(1 for kw in keywords if kw.lower() in answer_lower)
+            # 개선: 부분 매칭 및 유사 키워드 지원
+            matched_count = 0.0
+            for kw in keywords:
+                if not kw:
+                    continue
+                kw_lower = kw.lower().strip()
+                # 정확한 매칭
+                if kw_lower in answer_lower:
+                    matched_count += 1.0
+                else:
+                    # 단어 단위 매칭
+                    kw_words = kw_lower.split()
+                    if len(kw_words) > 1:
+                        answer_words = set(answer_lower.split())
+                        matched_words = sum(1 for word in kw_words if word in answer_words)
+                        if matched_words >= len(kw_words) * 0.7:  # 70% 이상 단어 매칭
+                            matched_count += 0.8  # 부분 매칭
+                    elif len(kw_lower) >= 3:
+                        # 부분 문자열 매칭
+                        for i in range(len(kw_lower) - 2):
+                            if kw_lower[i:i+3] in answer_lower:
+                                matched_count += 0.5  # 부분 매칭
+                                break
+            
             level_coverage = matched_count / len(keywords) if keywords else 0.0
             
             coverage_results[f"{level}_coverage"] = level_coverage
@@ -390,18 +413,47 @@ class LegalKeywordMapper:
     
     @classmethod
     def calculate_keyword_coverage(cls, answer: str, required_keywords: List[str]) -> float:
-        """답변에서 필수 키워드 포함 비율 계산 (기존 호환성 유지)"""
+        """답변에서 필수 키워드 포함 비율 계산 (개선: 부분 매칭 및 유사 키워드 지원)"""
         if not required_keywords:
             return 1.0
         
+        if not answer:
+            return 0.0
+        
         answer_lower = answer.lower()
+        answer_words = set(answer_lower.split())
         matched_keywords = 0
         
         for keyword in required_keywords:
-            if keyword.lower() in answer_lower:
+            if not keyword:
+                continue
+            
+            keyword_lower = keyword.lower().strip()
+            
+            # 방법 1: 정확한 매칭
+            if keyword_lower in answer_lower:
                 matched_keywords += 1
+                continue
+            
+            # 방법 2: 단어 단위 매칭 (키워드가 여러 단어로 구성된 경우)
+            keyword_words = keyword_lower.split()
+            if len(keyword_words) > 1:
+                # 키워드의 모든 단어가 답변에 포함되어 있는지 확인
+                matched_words = sum(1 for word in keyword_words if word in answer_words)
+                if matched_words >= len(keyword_words) * 0.7:  # 70% 이상 단어 매칭
+                    matched_keywords += 0.8  # 부분 매칭은 0.8점
+                    continue
+            
+            # 방법 3: 부분 문자열 매칭 (키워드의 일부가 포함되어 있는지)
+            if len(keyword_lower) >= 3:
+                # 키워드의 주요 부분(최소 3자)이 답변에 포함되어 있는지 확인
+                for i in range(len(keyword_lower) - 2):
+                    substring = keyword_lower[i:i+3]
+                    if substring in answer_lower:
+                        matched_keywords += 0.5  # 부분 매칭은 0.5점
+                        break
         
-        return matched_keywords / len(required_keywords)
+        return matched_keywords / len(required_keywords) if required_keywords else 0.0
     
     @classmethod
     def get_keyword_analysis_report(cls, answer: str, query_type: str, question: str = "") -> Dict[str, any]:

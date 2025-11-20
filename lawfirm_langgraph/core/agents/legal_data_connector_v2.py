@@ -530,8 +530,30 @@ class LegalDataConnectorV2:
                 # 일반 단어만 있으면 OR 조건
                 sanitized = " OR ".join(clean_words[:3])
         
-        # 10단계: SQL injection 방지
-        sanitized = sanitized.replace("'", "''")
+        # 10단계: FTS5 쿼리 정제 (개선: "OR OR" 오류 방지)
+        # 빈 문자열 제거 및 중복 OR 제거
+        sanitized = sanitized.strip()
+        if sanitized:
+            # "OR OR" 패턴 제거
+            while " OR OR " in sanitized or sanitized.startswith("OR ") or sanitized.endswith(" OR"):
+                sanitized = sanitized.replace(" OR OR ", " OR ")
+                sanitized = sanitized.replace(" OR  OR ", " OR ")
+                if sanitized.startswith("OR "):
+                    sanitized = sanitized[3:].strip()
+                if sanitized.endswith(" OR"):
+                    sanitized = sanitized[:-3].strip()
+            
+            # 빈 문자열이면 원본 쿼리에서 첫 단어 사용
+            if not sanitized or sanitized == "OR":
+                first_word = re.findall(r'[가-힣a-zA-Z0-9]+', query)
+                if first_word:
+                    sanitized = first_word[0]
+                else:
+                    sanitized = ""
+        
+        # 11단계: SQL injection 방지
+        if sanitized:
+            sanitized = sanitized.replace("'", "''")
         
         self.logger.debug(f"FTS5 query sanitized: '{query[:100]}' -> '{sanitized}'")
         return sanitized
@@ -674,8 +696,9 @@ class LegalDataConnectorV2:
         seen_ids = set()
         
         try:
-            # 법령명 추출 (민법, 형법, 상법 등)
-            law_pattern = re.compile(r'(민법|형법|상법|행정법|헌법|노동법|가족법|민사소송법|형사소송법|상사법|공법|사법)')
+            # 개선 1: 법령명 추출 패턴 확장 (민사법 위주)
+            # 민사법 관련 법령명: 민법, 민사소송법, 계약법, 채권법, 물권법, 가족법, 상법, 상사법 등
+            law_pattern = re.compile(r'([가-힣]+법|민법|형법|상법|행정법|헌법|노동법|가족법|민사소송법|형사소송법|상사법|공법|사법|계약법|채권법|물권법|가사소송법|가사법|호적법|부동산등기법|임대차보호법|집행법|강제집행법)')
             law_match = law_pattern.search(query)
             
             # 조문번호 추출 (제750조, 제 750 조 등)
@@ -694,15 +717,38 @@ class LegalDataConnectorV2:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # 법령명으로 statute_id 찾기
+            # 개선 2: 법령명 매칭 로직 강화 (유사도 매칭)
+            # 전략 1: 정확한 이름 매칭
             cursor.execute("""
                 SELECT id, name, abbrv 
                 FROM statutes 
-                WHERE name LIKE ? OR abbrv LIKE ? OR name = ?
+                WHERE name = ? OR abbrv = ?
                 LIMIT 1
-            """, (f"%{law_name}%", f"%{law_name}%", law_name))
+            """, (law_name, law_name))
             
             statute_row = cursor.fetchone()
+            
+            # 전략 2: LIKE 검색 (정확한 매칭 실패 시)
+            if not statute_row:
+                cursor.execute("""
+                    SELECT id, name, abbrv 
+                    FROM statutes 
+                    WHERE name LIKE ? OR abbrv LIKE ? OR name LIKE ? OR abbrv LIKE ?
+                    LIMIT 5
+                """, (
+                    f"%{law_name}%", 
+                    f"%{law_name}%", 
+                    f"{law_name}%", 
+                    f"{law_name}%"
+                ))
+                
+                candidates = cursor.fetchall()
+                if candidates:
+                    # 가장 유사한 법령명 선택 (길이가 가장 가까운 것)
+                    best_match = min(candidates, key=lambda x: abs(len(x['name']) - len(law_name)))
+                    statute_row = best_match
+                    self.logger.info(f"법령명 유사도 매칭 성공: '{law_name}' -> '{statute_row['name']}'")
+            
             if not statute_row:
                 self.logger.warning(f"법령을 찾을 수 없음: {law_name}")
                 conn.close()
@@ -1309,67 +1355,82 @@ class LegalDataConnectorV2:
         try:
             # 전략 1: 핵심 키워드만으로 검색 (KoreanStopwordProcessor 사용)
             if words:
-                keywords = [w for w in words[:3] if len(w) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w))]
+                keywords = [w.strip() for w in words[:3] if w.strip() and len(w.strip()) >= 2 and (not self.stopword_processor or not self.stopword_processor.is_stopword(w.strip()))]
                 if keywords:
+                    # 빈 문자열 제거 및 중복 제거
+                    keywords = list(dict.fromkeys(keywords))  # 순서 유지하면서 중복 제거
                     keyword_query = " OR ".join(keywords)
-                    self.logger.info(f"Fallback interpretation search: Using keywords: '{keyword_query}'")
+                    # "OR OR" 오류 방지
+                    keyword_query = keyword_query.replace(" OR OR ", " OR ").strip()
+                    if keyword_query and not keyword_query.startswith("OR") and not keyword_query.endswith("OR") and keyword_query != "OR":
+                        self.logger.info(f"Fallback interpretation search: Using keywords: '{keyword_query}'")
+                        
+                        conn = self._get_connection()
+                        cursor = conn.cursor()
+                        
+                        try:
+                            cursor.execute("""
+                                SELECT
+                                    ip.id,
+                                    ip.interpretation_id,
+                                    ip.para_index,
+                                    ip.text,
+                                    i.org,
+                                    i.doc_id,
+                                    i.title,
+                                    i.response_date,
+                                    bm25(interpretation_paragraphs_fts) as rank_score
+                                FROM interpretation_paragraphs_fts
+                                JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
+                                JOIN interpretations i ON ip.interpretation_id = i.id
+                                WHERE interpretation_paragraphs_fts MATCH ?
+                                ORDER BY rank_score
+                                LIMIT ?
+                            """, (keyword_query, limit))
+                        except Exception as e:
+                            self.logger.warning(f"FTS query error in fallback interpretation search: {e}, query: '{keyword_query}'")
+                            conn.close()
+                            keywords = []
+                    else:
+                        self.logger.warning(f"Fallback interpretation search: Invalid keyword query: '{keyword_query}', skipping")
+                        keywords = []
                     
-                    conn = self._get_connection()
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT
-                            ip.id,
-                            ip.interpretation_id,
-                            ip.para_index,
-                            ip.text,
-                            i.org,
-                            i.doc_id,
-                            i.title,
-                            i.response_date,
-                            bm25(interpretation_paragraphs_fts) as rank_score
-                        FROM interpretation_paragraphs_fts
-                        JOIN interpretation_paragraphs ip ON interpretation_paragraphs_fts.rowid = ip.id
-                        JOIN interpretations i ON ip.interpretation_id = i.id
-                        WHERE interpretation_paragraphs_fts MATCH ?
-                        ORDER BY rank_score
-                        LIMIT ?
-                    """, (keyword_query, limit))
-                    
-                    for row in cursor.fetchall():
-                        if row['id'] not in seen_ids:
-                            seen_ids.add(row['id'])
-                            text_content = row['text'] if row['text'] else ""
-                            # relevance_score 계산 개선
-                            if row['rank_score']:
-                                relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
-                            else:
-                                relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
-                            
-                            fallback_results.append({
-                                "id": f"interpretation_para_{row['id']}",
-                                "type": "interpretation",
-                                "content": text_content,
-                                "text": text_content,
-                                "source": f"{row['org']} {row['title']}",
-                                "metadata": {
-                                    "interpretation_id": row['interpretation_id'],
-                                    "org": row['org'],
-                                    "doc_id": row['doc_id'],
-                                    "title": row['title'],
-                                    "response_date": row['response_date'],
-                                    "para_index": row['para_index'],
-                                },
-                                "relevance_score": relevance_score,
-                                "search_type": "keyword",
-                                "fallback_strategy": "keyword_only"
-                            })
-                    
-                    conn.close()
-                    
-                    if fallback_results:
-                        self.logger.info(f"Fallback interpretation search found {len(fallback_results)} results")
-                        return fallback_results[:limit]
+                    if keywords:  # keywords가 있을 때만 fetchall 실행
+                        try:
+                            for row in cursor.fetchall():
+                                if row['id'] not in seen_ids:
+                                    seen_ids.add(row['id'])
+                                    text_content = row['text'] if row['text'] else ""
+                                    # relevance_score 계산 개선
+                                    if row['rank_score']:
+                                        relevance_score = max(0.0, min(1.0, abs(row['rank_score']) / 100.0))
+                                    else:
+                                        relevance_score = 0.2  # 폴백 전략은 더 낮은 점수
+                                    
+                                    fallback_results.append({
+                                        "id": f"interpretation_para_{row['id']}",
+                                        "type": "interpretation",
+                                        "content": text_content,
+                                        "text": text_content,
+                                        "source": f"{row['org']} {row['title']}",
+                                        "metadata": {
+                                            "interpretation_id": row['interpretation_id'],
+                                            "org": row['org'],
+                                            "doc_id": row['doc_id'],
+                                            "title": row['title'],
+                                            "response_date": row['response_date'],
+                                            "para_index": row['para_index'],
+                                        },
+                                        "relevance_score": relevance_score,
+                                        "search_type": "keyword",
+                                        "fallback_strategy": "keyword_only"
+                                    })
+                        finally:
+                            conn.close()
+                        
+                        if fallback_results:
+                            self.logger.info(f"Fallback interpretation search found {len(fallback_results)} results")
+                            return fallback_results[:limit]
             
             return fallback_results[:limit]
             
@@ -1444,9 +1505,11 @@ class LegalDataConnectorV2:
                     article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
                     
                     if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
-                        relevance_score = min(1.0, relevance_score * 1.5)
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
+                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                        boosted_score = relevance_score * 3.0
+                        relevance_score = max(0.7, min(1.0, boosted_score))
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
                 
                 results.append({
                     "id": f"case_para_{row['id']}",
@@ -1555,9 +1618,11 @@ class LegalDataConnectorV2:
                     article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
                     
                     if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
-                        relevance_score = min(1.0, relevance_score * 1.5)
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
+                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                        boosted_score = relevance_score * 3.0
+                        relevance_score = max(0.7, min(1.0, boosted_score))
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
                 
                 results.append({
                     "id": f"decision_para_{row['id']}",
@@ -1665,9 +1730,11 @@ class LegalDataConnectorV2:
                     article_in_text = f"제{query_article_no}조" in text_content or f"제 {query_article_no} 조" in text_content
                     
                     if law_in_text and article_in_text:
-                        # 법령명과 조문번호가 모두 일치하면 점수 가중치 부여
-                        relevance_score = min(1.0, relevance_score * 1.5)
-                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조")
+                        # 법령명과 조문번호가 모두 일치하면 강력한 점수 가중치 부여
+                        # 가중치를 3.0배로 증가하고, 최소 점수 0.7 보장
+                        boosted_score = relevance_score * 3.0
+                        relevance_score = max(0.7, min(1.0, boosted_score))
+                        self.logger.debug(f"Score boosted for law+article match: {query_law_name} 제{query_article_no}조 (original: {relevance_score / 3.0:.4f} -> boosted: {relevance_score:.4f})")
                 
                 results.append({
                     "id": f"interpretation_para_{row['id']}",
@@ -1830,7 +1897,39 @@ class LegalDataConnectorV2:
         
         results.sort(key=sort_key, reverse=True)
         
-        # 점수 필터링: 0.7 이하는 제외 (단, direct_match와 법령명+조문번호 일치는 예외)
+        # 개선 3: 타입별 다양성 확보 (점수 필터링 전에 적용)
+        # 타입별 최소 보장을 위해 먼저 타입별로 분류
+        type_counts = {}
+        type_docs = {}
+        for doc in results:
+            doc_type = doc.get("type") or doc.get("source_type", "unknown")
+            if doc_type not in type_docs:
+                type_docs[doc_type] = []
+            type_docs[doc_type].append(doc)
+            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+        
+        # 타입별 최소 보장 (statute_article: 1개, case: 2개, decision: 1개, interpretation: 1개)
+        min_counts = {
+            "statute_article": 1,
+            "case": 2,
+            "decision": 1,
+            "interpretation": 1
+        }
+        
+        # 타입별 최소 보장을 위한 결과 (점수와 무관하게 포함)
+        diverse_results = []
+        seen_diverse_ids = set()
+        
+        # 1단계: 각 타입별 최소 개수 보장 (점수와 무관하게)
+        for doc_type, min_count in min_counts.items():
+            if doc_type in type_docs:
+                for doc in type_docs[doc_type][:min_count]:
+                    doc_id = doc.get("id") or doc.get("doc_id")
+                    if doc_id and doc_id not in seen_diverse_ids:
+                        diverse_results.append(doc)
+                        seen_diverse_ids.add(doc_id)
+        
+        # 점수 필터링: 0.7 이하는 제외 (단, direct_match와 법령명+조문번호 일치, 타입별 최소 보장은 예외)
         min_score_threshold = 0.7
         original_count = len(results)
         filtered_results = []
@@ -1845,6 +1944,11 @@ class LegalDataConnectorV2:
         query_article_no = article_match.group(1) if article_match else None
         
         for doc in results:
+            doc_id = doc.get("id") or doc.get("doc_id")
+            # 이미 타입별 최소 보장으로 포함된 것은 제외
+            if doc_id and doc_id in seen_diverse_ids:
+                continue
+                
             score = doc.get("relevance_score", 0.0)
             # direct_match는 점수와 무관하게 포함
             if doc.get("direct_match", False):
@@ -1863,15 +1967,35 @@ class LegalDataConnectorV2:
             elif score > min_score_threshold:
                 filtered_results.append(doc)
         
-        results = filtered_results
+        # 타입별 최소 보장 결과 + 점수 필터링 결과 병합
+        diverse_results.extend(filtered_results)
+        results = diverse_results
         filtered_count = len(results)
+        
+        # 개선 4: FTS 검색 결과 포함 로직 개선
+        # 직접 검색 실패 시 FTS 검색 결과 우선 포함
+        if not direct_statute_results:
+            # FTS 검색 결과 중 statute_article 타입이 있으면 우선 포함
+            fts_statute_results = [doc for doc in results if doc.get("type") == "statute_article" and not doc.get("direct_match", False)]
+            if fts_statute_results:
+                # FTS 결과를 앞쪽에 배치 (점수는 낮지만 관련성 있음)
+                for doc in fts_statute_results[:3]:  # 최대 3개
+                    doc_id = doc.get("id") or doc.get("doc_id")
+                    if doc_id and doc_id not in seen_diverse_ids:
+                        diverse_results.insert(min(5, len(diverse_results)), doc)
+                        seen_diverse_ids.add(doc_id)
+                results = diverse_results
+        
+        final_count = len(results)
         
         # 성능 로깅
         elapsed_time = time.time() - start_time
+        type_distribution = {k: v for k, v in type_counts.items()}
         self.logger.info(
-            f"Parallel FTS search completed: {filtered_count} total results "
+            f"Parallel FTS search completed: {final_count} total results "
             f"(filtered from {original_count} results, min_score={min_score_threshold}) "
-            f"from 4 tables in {elapsed_time:.3f}s for query: '{query[:50]}...'"
+            f"from 4 tables in {elapsed_time:.3f}s for query: '{query[:50]}...' "
+            f"(type distribution: {type_distribution})"
         )
         
         return results[:limit]
