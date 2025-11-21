@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import logging
 import json
 import re
+import ast
 
 logger = logging.getLogger(__name__)
 
@@ -1403,11 +1404,15 @@ class SourcesExtractor:
                         if meta.get("url") or meta.get("detail_url"):
                             detail_dict["url"] = meta.get("url") or meta.get("detail_url")
                 
-                content = doc.get("content") or doc.get("text") or ""
+                # content 필드 정리
+                content = self._normalize_content(doc.get("content") or doc.get("text"))
                 if content:
                     detail_dict["content"] = content
                 
-                sources_detail.append(detail_dict)
+                # 불필요한 필드 제거 및 정리
+                cleaned_dict = self._clean_source_for_client(detail_dict)
+                if cleaned_dict:
+                    sources_detail.append(cleaned_dict)
             
             return sources_detail
         except Exception as e:
@@ -1749,13 +1754,371 @@ class SourcesExtractor:
                 if response_date:
                     detail_dict["response_date"] = response_date
             
-            content = doc.get("content") or doc.get("text") or ""
+            # content 필드 정리
+            content = self._normalize_content(doc.get("content") or doc.get("text"))
             if content:
                 detail_dict["content"] = content
             
-            sources_detail.append(detail_dict)
+            # 불필요한 필드 제거 및 정리
+            cleaned_dict = self._clean_source_for_client(detail_dict)
+            if cleaned_dict:
+                sources_detail.append(cleaned_dict)
         
         return sources_detail
+    
+    def _normalize_content(self, content: Any) -> Optional[str]:
+        """content 필드를 문자열로 정리"""
+        try:
+            if not content:
+                return None
+            
+            # 이미 문자열인 경우
+            if isinstance(content, str):
+                content = content.strip()
+                if not content:
+                    return None
+                # JSON 문자열인 경우 파싱 시도
+                if content.startswith('{') or content.startswith('['):
+                    # 먼저 JSON 파싱 시도
+                    try:
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict):
+                            result = parsed.get("text") or parsed.get("content")
+                            if result:
+                                return str(result).strip() if str(result).strip() else None
+                        elif isinstance(parsed, str):
+                            result = parsed if parsed.strip() else None
+                            if result:
+                                # \\n을 실제 줄바꿈으로 변환
+                                result = result.replace('\\n', '\n')
+                            return result
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        # JSON 파싱 실패 시 Python 딕셔너리 문자열 표현 시도
+                        try:
+                            parsed = ast.literal_eval(content)
+                            if isinstance(parsed, dict):
+                                result = parsed.get("text") or parsed.get("content")
+                                if result:
+                                    result_str = str(result).strip()
+                                    if result_str:
+                                        # \\n을 실제 줄바꿈으로 변환
+                                        result_str = result_str.replace('\\n', '\n')
+                                    return result_str if result_str else None
+                            elif isinstance(parsed, str):
+                                result = parsed if parsed.strip() else None
+                                if result:
+                                    # \\n을 실제 줄바꿈으로 변환
+                                    result = result.replace('\\n', '\n')
+                                return result
+                        except (ValueError, SyntaxError, TypeError):
+                            # Python 딕셔너리 파싱도 실패 시 원본 문자열 반환
+                            pass
+                # \\n을 실제 줄바꿈으로 변환
+                content = content.replace('\\n', '\n')
+                return content
+            
+            # 딕셔너리인 경우
+            if isinstance(content, dict):
+                result = content.get("text") or content.get("content")
+                if result:
+                    result_str = str(result).strip()
+                    if result_str:
+                        # \\n을 실제 줄바꿈으로 변환
+                        result_str = result_str.replace('\\n', '\n')
+                    return result_str if result_str else None
+                return None
+            
+            # 기타 타입은 문자열로 변환
+            result = str(content).strip()
+            if result:
+                # \\n을 실제 줄바꿈으로 변환
+                result = result.replace('\\n', '\n')
+            return result if result else None
+        except Exception as e:
+            logger.debug(f"[_normalize_content] Error normalizing content: {e}")
+            # 예외 발생 시 안전하게 문자열로 변환 시도
+            try:
+                result = str(content).strip() if content else None
+                if result:
+                    # \\n을 실제 줄바꿈으로 변환
+                    result = result.replace('\\n', '\n')
+                return result
+            except Exception:
+                return None
+    
+    def _remove_empty_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """빈 문자열 필드 제거"""
+        cleaned = {}
+        for key, value in data.items():
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, dict) and not value:
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            cleaned[key] = value
+        return cleaned
+    
+    def _clean_source_for_client(self, source_item: Dict[str, Any]) -> Dict[str, Any]:
+        """클라이언트 전송용 source 항목 정리"""
+        try:
+            if not isinstance(source_item, dict):
+                return {}
+            
+            # 제거할 필드 목록
+            fields_to_remove = {
+                # 점수 필드 (relevance_score만 유지)
+                "score", "similarity", "cross_encoder_score", "original_score", 
+                "keyword_match_score", "combined_relevance_score",
+                # 내부 메타데이터
+                "chunk_id", "embedding_version_id", "chunk_size_category", 
+                "chunk_group_id", "chunking_strategy", "source_type_weight",
+                # 쿼리 정보
+                "query",
+                # 중복 필드
+                "text", "source", "source_type",
+                # 내부 식별자
+                "id", "chunk_id", "source_id"
+            }
+            
+            cleaned = {}
+            
+            # 필수 필드 복사
+            if "type" in source_item:
+                cleaned["type"] = source_item["type"]
+            
+            # name 필드 처리 (타입별로 다르게 처리)
+            source_type = source_item.get("type", "")
+            if source_type == "case_paragraph":
+                # 판례의 경우: case_number 또는 doc_id를 name으로 사용
+                # 최상위 레벨에서 먼저 확인 (이미 _normalize_sources_detail에서 이동됨)
+                case_number = source_item.get("case_number")
+                if not case_number:
+                    # metadata에서 확인
+                    metadata = source_item.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        case_number = metadata.get("doc_id") or metadata.get("case_id")
+                
+                if case_number:
+                    cleaned["name"] = str(case_number).strip()
+                elif "name" in source_item:
+                    name = source_item["name"]
+                    # "판례"가 아닌 경우에만 사용
+                    if name and isinstance(name, str) and name.strip() and name.strip() != "판례":
+                        cleaned["name"] = name.strip()
+                    else:
+                        # name이 "판례"이거나 비어있으면 빈 문자열로 설정 (나중에 업데이트됨)
+                        cleaned["name"] = ""
+            elif source_type == "statute_article":
+                # 법령의 경우: statute_name을 name으로 사용
+                statute_name = source_item.get("statute_name")
+                if not statute_name:
+                    # metadata에서 확인
+                    metadata = source_item.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        statute_name = metadata.get("statute_name") or metadata.get("law_name")
+                
+                if statute_name:
+                    cleaned["name"] = str(statute_name).strip()
+                elif "name" in source_item:
+                    name = source_item["name"]
+                    # "법령"이 아닌 경우에만 사용
+                    if name and isinstance(name, str) and name.strip() and name.strip() != "법령":
+                        cleaned["name"] = name.strip()
+                    else:
+                        # name이 "법령"이거나 비어있으면 빈 문자열로 설정 (나중에 업데이트됨)
+                        cleaned["name"] = ""
+            elif source_type == "interpretation_paragraph":
+                # 해석례의 경우: interpretation_number 또는 doc_id를 name으로 사용
+                interpretation_number = source_item.get("interpretation_number")
+                if not interpretation_number:
+                    # metadata에서 확인
+                    metadata = source_item.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        interpretation_number = metadata.get("doc_id") or metadata.get("interpretation_id")
+                
+                if interpretation_number:
+                    cleaned["name"] = str(interpretation_number).strip()
+                elif "name" in source_item:
+                    name = source_item["name"]
+                    # 기본값이 아닌 경우에만 사용
+                    if name and isinstance(name, str) and name.strip():
+                        cleaned["name"] = name.strip()
+            else:
+                # 다른 타입은 기존 name 유지
+                if "name" in source_item:
+                    name = source_item["name"]
+                    if name and isinstance(name, str) and name.strip():
+                        cleaned["name"] = name.strip()
+            
+            # content 필드 정리
+            if "content" in source_item:
+                try:
+                    normalized_content = self._normalize_content(source_item["content"])
+                    if normalized_content:
+                        cleaned["content"] = normalized_content
+                except Exception as e:
+                    logger.debug(f"[_clean_source_for_client] Failed to normalize content: {e}")
+                    # content 정규화 실패 시 원본 사용 (문자열인 경우만)
+                    if isinstance(source_item["content"], str):
+                        cleaned["content"] = source_item["content"]
+            
+            # url 필드 처리
+            if "url" in source_item:
+                url = source_item["url"]
+                if url and isinstance(url, str) and url.strip():
+                    cleaned["url"] = url.strip()
+            
+            # 타입별 필드 복사 (빈 값 제외)
+            type_specific_fields = {
+                "statute_article": ["statute_name", "article_no", "clause_no", "item_no"],
+                "case_paragraph": ["case_number", "case_name", "court", "decision_date"],
+                "decision_paragraph": ["decision_number", "org", "decision_date", "result"],
+                "interpretation_paragraph": ["interpretation_number", "title", "org", "response_date"],
+                "regulation_paragraph": ["title", "doc_id"]
+            }
+            
+            if source_type in type_specific_fields:
+                for field in type_specific_fields[source_type]:
+                    # 최상위 레벨에서 먼저 확인
+                    if field in source_item:
+                        value = source_item[field]
+                        if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned[field] = value
+                    # 최상위에 없으면 metadata에서 확인
+                    elif "metadata" in source_item and isinstance(source_item["metadata"], dict):
+                        metadata = source_item["metadata"]
+                        if field in metadata:
+                            value = metadata[field]
+                            if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                                cleaned[field] = value
+                
+                # 타입별로 필드 복사 후 name 업데이트
+                if source_type == "case_paragraph" and "case_number" in cleaned and cleaned["case_number"]:
+                    cleaned["name"] = cleaned["case_number"]
+                elif source_type == "statute_article" and "statute_name" in cleaned and cleaned["statute_name"]:
+                    cleaned["name"] = cleaned["statute_name"]
+                elif source_type == "interpretation_paragraph" and "interpretation_number" in cleaned and cleaned["interpretation_number"]:
+                    cleaned["name"] = cleaned["interpretation_number"]
+            
+            # relevance_score만 유지
+            if "relevance_score" in source_item:
+                relevance_score = source_item["relevance_score"]
+                if relevance_score is not None:
+                    try:
+                        cleaned["relevance_score"] = float(relevance_score)
+                    except (ValueError, TypeError):
+                        pass
+            
+            # metadata에서 필요한 필드만 추출 (하위 호환성)
+            metadata = source_item.get("metadata", {})
+            if isinstance(metadata, dict):
+                # metadata에서 불필요한 필드 제거
+                cleaned_metadata = {}
+                for key, value in metadata.items():
+                    if key in fields_to_remove:
+                        continue
+                    # 타입별 필요한 필드만 포함
+                    if source_type == "case_paragraph" and key in ["doc_id", "case_id", "announce_date", "decision_date", "court", "casenames", "case_name"]:
+                        if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned_metadata[key] = value
+                    elif source_type == "statute_article" and key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no"]:
+                        if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned_metadata[key] = value
+                    elif source_type == "decision_paragraph" and key in ["doc_id", "decision_id", "org", "decision_date", "result"]:
+                        if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned_metadata[key] = value
+                    elif source_type == "interpretation_paragraph" and key in ["doc_id", "interpretation_id", "interpretation_number", "org", "title", "response_date"]:
+                        if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
+                            cleaned_metadata[key] = value
+                
+                # metadata에서 타입별 필드 추출 (이미 최상위에 없을 경우)
+                if source_type == "case_paragraph":
+                    if "case_number" not in cleaned and "doc_id" in cleaned_metadata:
+                        cleaned["case_number"] = cleaned_metadata["doc_id"]
+                    if "case_name" not in cleaned and "casenames" in cleaned_metadata:
+                        cleaned["case_name"] = cleaned_metadata["casenames"]
+                    elif "case_name" not in cleaned and "case_name" in cleaned_metadata:
+                        cleaned["case_name"] = cleaned_metadata["case_name"]
+                    if "court" not in cleaned and "court" in cleaned_metadata:
+                        cleaned["court"] = cleaned_metadata["court"]
+                    if "decision_date" not in cleaned and "announce_date" in cleaned_metadata:
+                        cleaned["decision_date"] = str(cleaned_metadata["announce_date"])
+                    
+                    # name을 case_number(doc_id)로 업데이트 (판례 일련번호 표시)
+                    # 우선순위: case_number > doc_id (metadata) > 기존 name (단, "판례"가 아닌 경우만)
+                    if "case_number" in cleaned and cleaned["case_number"]:
+                        cleaned["name"] = cleaned["case_number"]
+                    elif "doc_id" in cleaned_metadata and cleaned_metadata["doc_id"]:
+                        cleaned["name"] = cleaned_metadata["doc_id"]
+                    elif not cleaned.get("name") or cleaned.get("name") == "판례":
+                        # name이 없거나 "판례"인 경우, 최상위 레벨에서 다시 확인
+                        case_number = source_item.get("case_number")
+                        if case_number:
+                            cleaned["name"] = str(case_number).strip()
+                        else:
+                            # 모든 방법이 실패하면 빈 문자열로 설정
+                            cleaned["name"] = ""
+                elif source_type == "statute_article":
+                    if "statute_name" not in cleaned and "statute_name" in cleaned_metadata:
+                        cleaned["statute_name"] = cleaned_metadata["statute_name"]
+                    elif "statute_name" not in cleaned and "law_name" in cleaned_metadata:
+                        cleaned["statute_name"] = cleaned_metadata["law_name"]
+                    
+                    # name을 statute_name으로 업데이트 (법령명 표시)
+                    if "statute_name" in cleaned and cleaned["statute_name"]:
+                        cleaned["name"] = cleaned["statute_name"]
+                    elif not cleaned.get("name") or cleaned.get("name") == "법령":
+                        # name이 없거나 "법령"인 경우, 최상위 레벨에서 다시 확인
+                        statute_name = source_item.get("statute_name")
+                        if statute_name:
+                            cleaned["name"] = str(statute_name).strip()
+                        else:
+                            # 모든 방법이 실패하면 빈 문자열로 설정
+                            cleaned["name"] = ""
+                elif source_type == "interpretation_paragraph":
+                    if "interpretation_number" not in cleaned and "doc_id" in cleaned_metadata:
+                        cleaned["interpretation_number"] = cleaned_metadata["doc_id"]
+                    elif "interpretation_number" not in cleaned and "interpretation_id" in cleaned_metadata:
+                        cleaned["interpretation_number"] = cleaned_metadata["interpretation_id"]
+                    
+                    # name을 interpretation_number(doc_id)로 업데이트 (해석례 일련번호 표시)
+                    if "interpretation_number" in cleaned and cleaned["interpretation_number"]:
+                        cleaned["name"] = cleaned["interpretation_number"]
+                    elif "doc_id" in cleaned_metadata and cleaned_metadata["doc_id"]:
+                        cleaned["name"] = cleaned_metadata["doc_id"]
+                    elif not cleaned.get("name"):
+                        # name이 없는 경우, 최상위 레벨에서 다시 확인
+                        interpretation_number = source_item.get("interpretation_number")
+                        if interpretation_number:
+                            cleaned["name"] = str(interpretation_number).strip()
+                        else:
+                            # 모든 방법이 실패하면 빈 문자열로 설정
+                            cleaned["name"] = ""
+                
+                # 정리된 metadata가 있으면 포함 (하위 호환성)
+                if cleaned_metadata:
+                    cleaned["metadata"] = cleaned_metadata
+            
+            # 빈 필드 제거
+            try:
+                cleaned = self._remove_empty_fields(cleaned)
+            except Exception as e:
+                logger.debug(f"[_clean_source_for_client] Failed to remove empty fields: {e}")
+                # 빈 필드 제거 실패 시 그대로 반환
+            
+            return cleaned
+        except Exception as e:
+            logger.warning(f"[_clean_source_for_client] Error cleaning source item: {e}", exc_info=True)
+            # 예외 발생 시 최소한의 필드만 반환
+            if isinstance(source_item, dict):
+                return {
+                    "type": source_item.get("type", "unknown"),
+                    "name": source_item.get("name", "")
+                }
+            return {}
     
     def _normalize_sources_detail(self, sources_detail: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """sources_detail을 타입별로 정규화하여 metadata 중첩 구조를 최상위 레벨로 이동"""
@@ -1772,62 +2135,60 @@ class SourcesExtractor:
             if not isinstance(metadata, dict):
                 metadata = {}
             
+            # content 필드 정리
+            content = self._normalize_content(detail.get("content") or detail.get("text"))
+            
             normalized_detail = {
                 "type": source_type,
                 "name": detail.get("name", ""),
                 "url": detail.get("url", ""),
-                "content": detail.get("content", "")
             }
             
+            if content:
+                normalized_detail["content"] = content
+            
+            # relevance_score 보존
+            if "relevance_score" in detail:
+                relevance_score = detail.get("relevance_score")
+                if relevance_score is not None:
+                    try:
+                        normalized_detail["relevance_score"] = float(relevance_score)
+                    except (ValueError, TypeError):
+                        pass
+            
             if source_type == "statute_article":
-                normalized_detail["statute_name"] = (
-                    detail.get("statute_name") or 
-                    metadata.get("statute_name") or 
-                    metadata.get("law_name") or 
-                    ""
-                )
-                normalized_detail["article_no"] = (
-                    detail.get("article_no") or 
-                    metadata.get("article_no") or 
-                    metadata.get("article_number") or 
-                    ""
-                )
+                statute_name = detail.get("statute_name") or metadata.get("statute_name") or metadata.get("law_name")
+                if statute_name:
+                    normalized_detail["statute_name"] = statute_name
+                    # name을 statute_name으로 업데이트 (법령명 표시)
+                    normalized_detail["name"] = str(statute_name).strip()
+                article_no = detail.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
+                if article_no:
+                    normalized_detail["article_no"] = article_no
                 if detail.get("clause_no") or metadata.get("clause_no"):
                     normalized_detail["clause_no"] = detail.get("clause_no") or metadata.get("clause_no")
                 if detail.get("item_no") or metadata.get("item_no"):
                     normalized_detail["item_no"] = detail.get("item_no") or metadata.get("item_no")
             
             elif source_type == "case_paragraph":
-                normalized_detail["case_number"] = (
-                    detail.get("case_number") or 
-                    metadata.get("doc_id") or 
-                    metadata.get("case_id") or 
-                    ""
-                )
-                if detail.get("case_name") or metadata.get("casenames") or metadata.get("case_name"):
-                    normalized_detail["case_name"] = (
-                        detail.get("case_name") or 
-                        metadata.get("casenames") or 
-                        metadata.get("case_name") or 
-                        ""
-                    )
+                case_number = detail.get("case_number") or metadata.get("doc_id") or metadata.get("case_id")
+                if case_number:
+                    normalized_detail["case_number"] = case_number
+                    # name을 case_number로 업데이트 (판례 일련번호 표시)
+                    normalized_detail["name"] = str(case_number).strip()
+                case_name = detail.get("case_name") or metadata.get("casenames") or metadata.get("case_name")
+                if case_name:
+                    normalized_detail["case_name"] = case_name
                 if detail.get("court") or metadata.get("court"):
                     normalized_detail["court"] = detail.get("court") or metadata.get("court")
-                if detail.get("decision_date") or metadata.get("announce_date") or metadata.get("decision_date"):
-                    normalized_detail["decision_date"] = (
-                        detail.get("decision_date") or 
-                        metadata.get("announce_date") or 
-                        metadata.get("decision_date") or 
-                        ""
-                    )
+                decision_date = detail.get("decision_date") or metadata.get("announce_date") or metadata.get("decision_date")
+                if decision_date:
+                    normalized_detail["decision_date"] = str(decision_date)
             
             elif source_type == "decision_paragraph":
-                normalized_detail["decision_number"] = (
-                    detail.get("decision_number") or 
-                    metadata.get("doc_id") or 
-                    metadata.get("decision_id") or 
-                    ""
-                )
+                decision_number = detail.get("decision_number") or metadata.get("doc_id") or metadata.get("decision_id")
+                if decision_number:
+                    normalized_detail["decision_number"] = decision_number
                 if detail.get("org") or metadata.get("org"):
                     normalized_detail["org"] = detail.get("org") or metadata.get("org")
                 if detail.get("decision_date") or metadata.get("decision_date"):
@@ -1836,12 +2197,11 @@ class SourcesExtractor:
                     normalized_detail["result"] = detail.get("result") or metadata.get("result")
             
             elif source_type == "interpretation_paragraph":
-                normalized_detail["interpretation_number"] = (
-                    detail.get("interpretation_number") or 
-                    metadata.get("doc_id") or 
-                    metadata.get("interpretation_id") or 
-                    ""
-                )
+                interpretation_number = detail.get("interpretation_number") or metadata.get("doc_id") or metadata.get("interpretation_id")
+                if interpretation_number:
+                    normalized_detail["interpretation_number"] = interpretation_number
+                    # name을 interpretation_number로 업데이트 (해석례 일련번호 표시)
+                    normalized_detail["name"] = str(interpretation_number).strip()
                 if detail.get("title") or metadata.get("title"):
                     normalized_detail["title"] = detail.get("title") or metadata.get("title")
                 if detail.get("org") or metadata.get("org"):
@@ -1849,6 +2209,8 @@ class SourcesExtractor:
                 if detail.get("response_date") or metadata.get("response_date"):
                     normalized_detail["response_date"] = detail.get("response_date") or metadata.get("response_date")
             
+            # 빈 필드 제거
+            normalized_detail = self._remove_empty_fields(normalized_detail)
             normalized.append(normalized_detail)
         
         return normalized
@@ -1858,6 +2220,9 @@ class SourcesExtractor:
         sources_detail: List[Dict[str, Any]]
     ) -> Dict[str, List[Dict[str, Any]]]:
         """sources_detail을 타입별로 그룹화"""
+        # 먼저 정규화
+        normalized = self._normalize_sources_detail(sources_detail)
+        
         grouped = {
             "statute_article": [],
             "case_paragraph": [],
@@ -1866,13 +2231,16 @@ class SourcesExtractor:
             "regulation_paragraph": []
         }
         
-        for detail in sources_detail:
+        for detail in normalized:
             if not isinstance(detail, dict):
                 continue
             
             source_type = detail.get("type", "")
             if source_type in grouped:
-                grouped[source_type].append(detail)
+                # 클라이언트용으로 정리
+                cleaned = self._clean_source_for_client(detail)
+                if cleaned:
+                    grouped[source_type].append(cleaned)
         
         return grouped
     

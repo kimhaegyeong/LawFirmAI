@@ -69,17 +69,12 @@ if not root_logger.handlers:
     root_logger.setLevel(log_level)
     root_logger.disabled = False
 
-# 테스트 로그 출력 (모듈 import 시점)
-logger.info("✅ ChatService logger initialized and enabled")
-logger.debug("✅ ChatService logger debug level enabled")
-
 
 class ChatService:
     """채팅 서비스"""
     
     def __init__(self):
         """초기화"""
-        logger.info("🚀 ChatService.__init__() called - Initializing ChatService...")
         self.workflow_service: Optional[LangGraphWorkflowService] = None
         self._initialize_workflow()
         
@@ -178,7 +173,7 @@ class ChatService:
             logger.error(error_msg)
             
             return {
-                "answer": f"죄송합니다. 서비스 초기화에 실패했습니다.\n\n원인:\n" + "\n".join(f"- {detail}" for detail in error_details) + "\n\nAPI 서버 로그를 확인하거나 환경 변수를 설정해주세요.",
+                "answer": "죄송합니다. 서비스 초기화에 실패했습니다.\n\n원인:\n" + "\n".join(f"- {detail}" for detail in error_details) + "\n\nAPI 서버 로그를 확인하거나 환경 변수를 설정해주세요.",
                 "sources": [],
                 "confidence": 0.0,
                 "legal_references": [],
@@ -197,6 +192,23 @@ class ChatService:
                 enable_checkpoint=enable_checkpoint
             )
             return result
+        except asyncio.CancelledError:
+            logger.warning(f"⚠️ [process_message] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+            import os
+            debug_mode = os.getenv("DEBUG", "false").lower() == "true"
+            error_detail = "작업이 취소되었습니다" if not debug_mode else "CancelledError: 작업이 취소되었습니다"
+            return {
+                "answer": "죄송합니다. 작업이 취소되었습니다. 다시 시도해주세요.",
+                "sources": [],
+                "confidence": 0.0,
+                "legal_references": [],
+                "processing_steps": [f"오류: {error_detail}"],
+                "session_id": session_id or "error",
+                "processing_time": 0.0,
+                "query_type": "error",
+                "metadata": {"error": error_detail, "cancelled": True} if debug_mode else {"error": True, "cancelled": True},
+                "errors": [error_detail]
+            }
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
             import os
@@ -234,12 +246,9 @@ class ChatService:
         # 이벤트 프로세서 초기화
         self.event_processor.reset()
         
-        has_yielded = False  # 최소한 하나의 yield가 있었는지 추적
-        
         if not self.workflow_service:
             error_event = self._create_error_event("[오류] 서비스 초기화에 실패했습니다.")
             yield json.dumps(error_event, ensure_ascii=False) + "\n"
-            has_yielded = True
             return
         
         try:
@@ -283,31 +292,40 @@ class ChatService:
                 # 메모리 최적화: 이벤트 히스토리 크기 제한
                 MAX_EVENT_HISTORY = self.stream_config.max_event_history
                 
-                async for event in self._get_stream_events(initial_state, config):
-                    event_count += 1
-                    # 이벤트 타입 확인
-                    event_type = event.get("event", "")
-                    event_name = event.get("name", "")
-                    
-                    # 관련 없는 이벤트는 즉시 건너뛰기 (성능 최적화 - 조기 종료)
-                    if event_type not in RELEVANT_EVENT_TYPES:
-                        continue
-                    
-                    # 디버깅 모드에서만 이벤트 추적 (메모리 최적화: 제한적 추적)
-                    if DEBUG_STREAM and event_count <= MAX_EVENT_HISTORY:
-                        event_types_seen.add(event_type)
-                        if event_name:
-                            node_names_seen.add(event_name)
-                        if event_count <= 20:
-                            logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
-                    
-                    # StreamEventProcessor를 사용하여 이벤트 처리
-                    stream_event = self.event_processor.process_stream_event(event)
-                    if stream_event:
-                        yield json.dumps(stream_event, ensure_ascii=False) + "\n"
-                        has_yielded = True
-                        if stream_event.get("type") == "stream":
-                            llm_stream_count += 1
+                try:
+                    async for event in self._get_stream_events(initial_state, config):
+                        event_count += 1
+                        # 이벤트 타입 확인
+                        event_type = event.get("event", "")
+                        event_name = event.get("name", "")
+                        
+                        # 관련 없는 이벤트는 즉시 건너뛰기 (성능 최적화 - 조기 종료)
+                        if event_type not in RELEVANT_EVENT_TYPES:
+                            continue
+                        
+                        # 디버깅 모드에서만 이벤트 추적 (메모리 최적화: 제한적 추적)
+                        if DEBUG_STREAM and event_count <= MAX_EVENT_HISTORY:
+                            event_types_seen.add(event_type)
+                            if event_name:
+                                node_names_seen.add(event_name)
+                            if event_count <= 20:
+                                logger.debug(f"처리할 이벤트 #{event_count}: type={event_type}, name={event_name}")
+                        
+                        # StreamEventProcessor를 사용하여 이벤트 처리
+                        stream_event = self.event_processor.process_stream_event(event)
+                        if stream_event:
+                            yield json.dumps(stream_event, ensure_ascii=False) + "\n"
+                            if stream_event.get("type") == "stream":
+                                llm_stream_count += 1
+                except asyncio.CancelledError:
+                    logger.warning("⚠️ [stream_message] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
+                    # 취소된 경우 에러 이벤트 전송
+                    error_event = self._create_error_event(
+                        "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
+                        error_type="cancelled"
+                    )
+                    yield json.dumps(error_event, ensure_ascii=False) + "\n"
+                    return
                 
                 # event_processor에서 상태 가져오기
                 full_answer = self.event_processor.full_answer
@@ -329,7 +347,6 @@ class ChatService:
                     missing_event = await self._handle_missing_answer(message, session_id, full_answer)
                     if missing_event:
                         yield json.dumps(missing_event, ensure_ascii=False) + "\n"
-                        has_yielded = True
                         if missing_event.get("type") == "stream":
                             self.event_processor.answer_found = True
             
@@ -378,7 +395,6 @@ class ChatService:
             tokens_received = self.event_processor.tokens_received
             
             if full_answer:
-                has_yielded = True
                 
                 # 토큰 제한 확인
                 MAX_OUTPUT_TOKENS = self.stream_config.max_output_tokens
@@ -428,7 +444,6 @@ class ChatService:
                     error_event = self._create_error_event("[오류] 답변을 생성할 수 없습니다. 다시 시도해주세요.")
                     error_event["metadata"]["tokens_received"] = tokens_received
                     yield json.dumps(error_event, ensure_ascii=False) + "\n"
-                    has_yielded = True
             
         except Exception as e:
             logger.error(f"Error in stream_message: {e}", exc_info=True)
@@ -438,13 +453,11 @@ class ChatService:
                     error_type=type(e).__name__
                 )
                 yield json.dumps(error_event, ensure_ascii=False) + "\n"
-                has_yielded = True
             except Exception as yield_error:
                 logger.error(f"Error yielding error message: {yield_error}")
                 try:
                     fallback_event = self._create_error_event("[오류] 스트리밍 처리 중 오류가 발생했습니다.")
                     yield json.dumps(fallback_event, ensure_ascii=False) + "\n"
-                    has_yielded = True
                 except Exception:
                     pass
         # finally 블록 제거: finally에서 yield를 하면 제너레이터가 제대로 종료되지 않아
@@ -484,12 +497,23 @@ class ChatService:
         LangGraph의 astream_events()를 사용하여 
         generate_and_validate_answer 노드의 LLM 응답만 스트림 형태로 전달
         """
-        async for chunk in self.stream_handler.stream_final_answer(
-            message=message,
-            session_id=session_id,
-            validate_and_augment_state_fn=self._validate_and_augment_state
-        ):
-            yield chunk
+        try:
+            async for chunk in self.stream_handler.stream_final_answer(
+                message=message,
+                session_id=session_id,
+                validate_and_augment_state_fn=self._validate_and_augment_state
+            ):
+                yield chunk
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [stream_final_answer] 스트리밍이 취소되었습니다 (CancelledError)")
+            # 에러 이벤트 생성 및 전송
+            error_event = self._create_error_event(
+                "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
+                error_type="cancelled"
+            )
+            error_chunk = f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            yield error_chunk
+            raise  # 상위로 전파
     
     
     def _create_error_event(self, content: str, error_type: Optional[str] = None) -> Dict[str, Any]:
@@ -569,11 +593,15 @@ class ChatService:
             logger.debug(f"astream_events에서 version 파라미터 미지원: {ve}, 기본 버전 사용")
             if DEBUG_STREAM:
                 logger.info("스트리밍 시작: astream_events() 사용 (기본 버전)")
-            async for event in self.workflow_service.app.astream_events(
-                initial_state, 
-                config
-            ):
-                yield event
+            try:
+                async for event in self.workflow_service.app.astream_events(
+                    initial_state, 
+                    config
+                ):
+                    yield event
+            except asyncio.CancelledError:
+                logger.warning("⚠️ [_get_stream_events] astream_events가 취소되었습니다 (CancelledError)")
+                raise  # 상위로 전파
     
     async def _extract_sources_from_state(self, session_id: str, timeout: float = 2.0) -> Dict[str, Any]:
         """State에서 sources 추출"""
@@ -833,13 +861,7 @@ def get_chat_service() -> ChatService:
     global chat_service
     if chat_service is None:
         try:
-            logger.info("Initializing ChatService...")
             chat_service = ChatService()
-            if chat_service.is_available():
-                logger.info("✅ ChatService initialized successfully with workflow service")
-            else:
-                logger.warning("⚠️  ChatService initialized but workflow service is not available")
-                logger.warning("   Check API server logs for initialization errors")
         except Exception as e:
             logger.error(f"Failed to initialize ChatService: {e}", exc_info=True)
             import traceback

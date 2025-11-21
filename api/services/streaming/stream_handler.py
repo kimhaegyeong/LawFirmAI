@@ -89,12 +89,11 @@ class StreamHandler:
             ):
                 yield chunk
                 
-        except asyncio.CancelledError:
-            logger.debug("[stream_final_answer] Stream cancelled (client disconnected)")
+        except (GeneratorExit, asyncio.CancelledError) as cancel_error:
+            # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
+            logger.debug(f"[stream_final_answer] Stream cancelled or client disconnected: {cancel_error}")
+            # GeneratorExit와 CancelledError는 상위로 전파하여 제너레이터 종료
             raise
-        except GeneratorExit:
-            logger.debug("[stream_final_answer] Client disconnected, closing stream")
-            return
         except Exception as e:
             logger.error(f"Stream error: {e}", exc_info=True)
             try:
@@ -103,13 +102,16 @@ class StreamHandler:
                     type(e).__name__
                 )
                 yield format_sse_event(error_event)
+                
+                # 에러 발생 시에도 done 이벤트 전송하여 스트림 종료를 명확히 함
+                done_event = self.event_builder.create_done_event("", {})
+                yield format_sse_event(done_event)
             except (GeneratorExit, asyncio.CancelledError):
                 logger.debug("[stream_final_answer] Client disconnected or cancelled during error handling")
-                return
+                raise
             except Exception as yield_error:
                 logger.error(f"Failed to yield error event: {yield_error}")
-            # finally 블록에서 yield를 하면 제너레이터가 제대로 종료되지 않을 수 있으므로 제거
-            # done 이벤트는 정상 종료 시에만 전송됨 (373줄)
+                # 최종 폴백: 스트림 종료를 보장하기 위해 아무것도 yield하지 않고 종료
     
     async def _setup_callback_handler(self, session_id: str):
         """콜백 핸들러 설정"""
@@ -366,14 +368,14 @@ class StreamHandler:
                         )
                         yield format_sse_event(validation_event)
                     
-                    final_event = self.event_builder.create_final_event("", final_metadata)
+                    # 개선: final_event의 content에 full_answer를 포함하여 클라이언트가 답변을 받을 수 있도록 함
+                    final_event = self.event_builder.create_final_event(full_answer, final_metadata)
                     yield format_sse_event(final_event)
                     
+                    # done_event는 스트림 종료를 알리는 용도로만 사용 (선택적)
                     done_event = self.event_builder.create_done_event(full_answer, final_metadata)
                     yield format_sse_event(done_event)
                     
-                    # 스트림 종료를 명확히 하기 위해 제너레이터 종료
-                    # break 후 제너레이터가 정상적으로 종료되면 FastAPI가 자동으로 연결을 닫음
                     logger.debug("[stream_final_answer] Stream completed, generator will exit")
                     break
         
@@ -424,20 +426,32 @@ class StreamHandler:
                     f"full_answer_length={len(full_answer)}"
                 )
                 
+                # sources 추출 강화 (여러 위치에서 확인, 우선순위 적용)
                 sources_from_top = state_values.get("sources", [])
                 sources_from_common = (state_values.get("common", {}).get("sources") if isinstance(state_values.get("common"), dict) else None) or []
                 sources_from_metadata = (state_values.get("metadata", {}).get("sources") if isinstance(state_values.get("metadata"), dict) else None) or []
-                sources = sources_from_top or sources_from_common or sources_from_metadata or []
+                # 우선순위: top > common > metadata
+                sources = sources_from_top if sources_from_top else (sources_from_common if sources_from_common else sources_from_metadata)
+                if not sources:
+                    sources = []
                 
+                # legal_references 추출 강화 (여러 위치에서 확인, 우선순위 적용)
                 legal_refs_from_top = state_values.get("legal_references", [])
                 legal_refs_from_common = (state_values.get("common", {}).get("legal_references") if isinstance(state_values.get("common"), dict) else None) or []
                 legal_refs_from_metadata = (state_values.get("metadata", {}).get("legal_references") if isinstance(state_values.get("metadata"), dict) else None) or []
-                legal_references = legal_refs_from_top or legal_refs_from_common or legal_refs_from_metadata or []
+                # 우선순위: top > common > metadata
+                legal_references = legal_refs_from_top if legal_refs_from_top else (legal_refs_from_common if legal_refs_from_common else legal_refs_from_metadata)
+                if not legal_references:
+                    legal_references = []
                 
+                # sources_detail 추출 강화 (여러 위치에서 확인, 우선순위 적용)
                 sources_detail_from_top = state_values.get("sources_detail", [])
                 sources_detail_from_common = (state_values.get("common", {}).get("sources_detail") if isinstance(state_values.get("common"), dict) else None) or []
                 sources_detail_from_metadata = (state_values.get("metadata", {}).get("sources_detail") if isinstance(state_values.get("metadata"), dict) else None) or []
-                sources_detail = sources_detail_from_top or sources_detail_from_common or sources_detail_from_metadata or []
+                # 우선순위: top > common > metadata
+                sources_detail = sources_detail_from_top if sources_detail_from_top else (sources_detail_from_common if sources_detail_from_common else sources_detail_from_metadata)
+                if not sources_detail:
+                    sources_detail = []
                 
                 sources_source = "top" if sources_from_top else ("common" if sources_from_common else ("metadata" if sources_from_metadata else "none"))
                 sources_detail_source = "top" if sources_detail_from_top else ("common" if sources_detail_from_common else ("metadata" if sources_detail_from_metadata else "none"))
@@ -654,34 +668,44 @@ class StreamHandler:
                         f"sources_extractor={self.sources_extractor is not None}"
                     )
                     
+                    # 개선: sources, legal_references, sources_detail이 없으면 retrieved_docs에서 추출 시도
                     if retrieved_docs and self.sources_extractor:
                         try:
                             # retrieved_docs를 state_values에 임시로 추가하여 추출 함수가 사용할 수 있게 함
                             temp_state = {**state_values, "retrieved_docs": retrieved_docs}
                             
                             # sources 추출 시 예외가 발생해도 스트리밍이 중단되지 않도록 각각 try-except 처리
-                            try:
-                                sources_data = self.sources_extractor._extract_sources(temp_state)
-                                if sources_data:
-                                    sources = sources_data
-                                    state_values["sources"] = sources_data
-                            except Exception as e:
-                                logger.warning(f"[stream_final_answer] Failed to extract sources: {e}", exc_info=True)
+                            # sources가 없을 때만 추출 시도
+                            if not sources:
+                                try:
+                                    sources_data = self.sources_extractor._extract_sources(temp_state)
+                                    if sources_data:
+                                        sources = sources_data
+                                        state_values["sources"] = sources_data
+                                        logger.info(f"[stream_final_answer] ✅ Extracted {len(sources)} sources from retrieved_docs")
+                                except Exception as e:
+                                    logger.warning(f"[stream_final_answer] Failed to extract sources: {e}", exc_info=True)
                             
-                            try:
-                                legal_references_data = self.sources_extractor._extract_legal_references(temp_state)
-                                if legal_references_data:
-                                    legal_references = legal_references_data
-                            except Exception as e:
-                                logger.warning(f"[stream_final_answer] Failed to extract legal_references: {e}", exc_info=True)
+                            # legal_references가 없을 때만 추출 시도
+                            if not legal_references:
+                                try:
+                                    legal_references_data = self.sources_extractor._extract_legal_references(temp_state)
+                                    if legal_references_data:
+                                        legal_references = legal_references_data
+                                        logger.info(f"[stream_final_answer] ✅ Extracted {len(legal_references)} legal_references from retrieved_docs")
+                                except Exception as e:
+                                    logger.warning(f"[stream_final_answer] Failed to extract legal_references: {e}", exc_info=True)
                             
-                            try:
-                                sources_detail_data = self.sources_extractor._extract_sources_detail(temp_state)
-                                if sources_detail_data:
-                                    sources_detail = sources_detail_data
-                                    state_values["sources_detail"] = sources_detail_data
-                            except Exception as e:
-                                logger.warning(f"[stream_final_answer] Failed to extract sources_detail: {e}", exc_info=True)
+                            # sources_detail이 없을 때만 추출 시도
+                            if not sources_detail:
+                                try:
+                                    sources_detail_data = self.sources_extractor._extract_sources_detail(temp_state)
+                                    if sources_detail_data:
+                                        sources_detail = sources_detail_data
+                                        state_values["sources_detail"] = sources_detail_data
+                                        logger.info(f"[stream_final_answer] ✅ Extracted {len(sources_detail)} sources_detail from retrieved_docs")
+                                except Exception as e:
+                                    logger.warning(f"[stream_final_answer] Failed to extract sources_detail: {e}", exc_info=True)
                             
                             logger.debug(
                                 f"[stream_final_answer] Sources extraction result: "
@@ -733,13 +757,31 @@ class StreamHandler:
                             except Exception as e:
                                 logger.warning(f"[stream_final_answer] Failed to extract sources from session: {e}", exc_info=True)
                 
-                related_questions = []
-                if self.extract_related_questions_fn:
-                    related_questions = await self.extract_related_questions_fn(
-                        state_values, initial_state, message, full_answer, session_id
-                    )
+                # related_questions 추출 강화
+                related_questions = (
+                    (state_values.get("metadata", {}).get("related_questions") if isinstance(state_values.get("metadata"), dict) else None) or
+                    []
+                )
+                if not related_questions and self.extract_related_questions_fn:
+                    try:
+                        related_questions = await self.extract_related_questions_fn(
+                            state_values, initial_state, message, full_answer, session_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"[stream_final_answer] Failed to extract related_questions: {e}", exc_info=True)
+                        related_questions = []
                 
-                llm_validation_result = state_values.get("metadata", {}).get("llm_validation_result", {})
+                # llm_validation_result 추출 강화
+                llm_validation_result = (
+                    (state_values.get("metadata", {}).get("llm_validation_result", {}) if isinstance(state_values.get("metadata"), dict) else {}) or
+                    {}
+                )
+                
+                # message_id 추출 (프론트엔드에서 메시지 매칭에 사용)
+                message_id = (
+                    (state_values.get("metadata", {}).get("message_id") if isinstance(state_values.get("metadata"), dict) else None) or
+                    None
+                )
                 
                 # 타입별 그룹화 (새로운 기능) - 판례의 참조 법령 포함
                 sources_by_type = self._generate_sources_by_type(sources_detail)
@@ -748,18 +790,20 @@ class StreamHandler:
                     "sources_by_type": sources_by_type,  # 유일한 필요한 필드
                     "related_questions": related_questions,
                     "llm_validation": llm_validation_result if llm_validation_result else None,
+                    "message_id": message_id,  # 프론트엔드에서 메시지 매칭에 사용
                     # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
                     "sources": sources,  # deprecated: sources_by_type에서 재구성 가능
                     "legal_references": legal_references,  # deprecated: sources_by_type에서 재구성 가능
                     "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
                 }
                 
-                logger.debug(
-                    f"[stream_final_answer] Final metadata: "
+                logger.info(
+                    f"[stream_final_answer] ✅ Final metadata extracted: "
                     f"sources={len(final_metadata['sources'])}, "
                     f"legal_references={len(final_metadata['legal_references'])}, "
                     f"sources_detail={len(final_metadata['sources_detail'])}, "
-                    f"related_questions={len(final_metadata['related_questions'])}"
+                    f"related_questions={len(final_metadata['related_questions'])}, "
+                    f"sources_by_type={bool(final_metadata.get('sources_by_type'))}"
                 )
                 
                 return final_metadata

@@ -236,7 +236,8 @@ class SessionService:
     def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> bool:
         """세션 업데이트"""
         try:
@@ -249,6 +250,10 @@ class SessionService:
             if title is not None:
                 updates.append("title = ?")
                 params.append(title)
+            
+            if user_id is not None:
+                updates.append("user_id = ?")
+                params.append(user_id)
             
             if not updates:
                 conn.close()
@@ -263,7 +268,7 @@ class SessionService:
             
             conn.commit()
             conn.close()
-            logger.info(f"Session updated: {session_id}")
+            logger.info(f"Session updated: {session_id}, title={title is not None}, user_id={user_id is not None}")
             return True
         except Exception as e:
             logger.error(f"Failed to update session: {e}")
@@ -535,8 +540,10 @@ class SessionService:
                     return []
                 
                 session_user_id = session.get("user_id")
-                if session_user_id != user_id:
+                # session_user_id가 None이거나 user_id와 다르면 빈 결과 반환
+                if session_user_id is None or session_user_id != user_id:
                     # 소유권이 없으면 빈 결과 반환
+                    logger.debug(f"Session ownership mismatch: session_user_id={session_user_id}, user_id={user_id}")
                     return []
             
             conn = sqlite3.connect(self.db_path)

@@ -208,7 +208,6 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
         sources_by_type = metadata.get("sources_by_type")
         if not sources_by_type and sources_detail:
             try:
-                from api.services.sources_extractor import SourcesExtractor
                 from api.services.chat_service import get_chat_service
                 chat_service = get_chat_service()
                 if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
@@ -234,7 +233,6 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
         # sources_by_type이 이미 있는 경우에도 참조 법령 추가 (중복 체크)
         elif sources_by_type and sources_detail:
             try:
-                from api.services.sources_extractor import SourcesExtractor
                 from api.services.chat_service import get_chat_service
                 chat_service = get_chat_service()
                 if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
@@ -259,15 +257,60 @@ def _create_sources_event(metadata: dict, message_id: Optional[str] = None) -> d
                 logger.warning(f"[_create_sources_event] Failed to add reference statutes to existing sources_by_type: {e}", exc_info=True)
                 # 예외 발생 시 기존 sources_by_type 유지 (참조 법령 추가 실패해도 계속 진행)
         
+        # sources_by_type의 각 항목 정리 (클라이언트용)
+        cleaned_sources_by_type = None
+        if sources_by_type and isinstance(sources_by_type, dict):
+            try:
+                from api.services.chat_service import get_chat_service
+                chat_service = get_chat_service()
+                if chat_service and hasattr(chat_service, 'sources_extractor') and chat_service.sources_extractor:
+                    cleaned_sources_by_type = {
+                        "statute_article": [],
+                        "case_paragraph": [],
+                        "decision_paragraph": [],
+                        "interpretation_paragraph": [],
+                        "regulation_paragraph": []
+                    }
+                    
+                    for source_type, items in sources_by_type.items():
+                        if source_type in cleaned_sources_by_type and isinstance(items, list):
+                            for item in items:
+                                if isinstance(item, dict):
+                                    try:
+                                        cleaned = chat_service.sources_extractor._clean_source_for_client(item)
+                                        if cleaned and isinstance(cleaned, dict):
+                                            cleaned_sources_by_type[source_type].append(cleaned)
+                                    except Exception as item_error:
+                                        logger.debug(f"[_create_sources_event] Failed to clean item: {item_error}")
+                                        # 개별 항목 정리 실패해도 계속 진행
+                                        continue
+                else:
+                    cleaned_sources_by_type = sources_by_type
+            except Exception as e:
+                logger.warning(f"[_create_sources_event] Failed to clean sources_by_type: {e}", exc_info=True)
+                cleaned_sources_by_type = sources_by_type
+        else:
+            cleaned_sources_by_type = sources_by_type
+        
+        # cleaned_sources_by_type이 None이면 빈 구조로 설정
+        if cleaned_sources_by_type is None:
+            cleaned_sources_by_type = {
+                "statute_article": [],
+                "case_paragraph": [],
+                "decision_paragraph": [],
+                "interpretation_paragraph": [],
+                "regulation_paragraph": []
+            }
+        
         return {
             "type": "sources",
             "metadata": {
                 "message_id": message_id or metadata.get("message_id"),
-                "sources_by_type": sources_by_type,  # 유일한 필요한 필드
+                "sources_by_type": cleaned_sources_by_type,  # 유일한 필요한 필드 (정리됨)
                 # 하위 호환성을 위해 deprecated 필드도 포함 (점진적 제거)
-                "sources": metadata.get("sources", []),  # deprecated: sources_by_type에서 재구성 가능
-                "legal_references": metadata.get("legal_references", []),  # deprecated: sources_by_type에서 재구성 가능
-                "sources_detail": sources_detail,  # deprecated: sources_by_type에서 재구성 가능
+                "sources": [],  # deprecated: sources_by_type에서 재구성 가능
+                "legal_references": [],  # deprecated: sources_by_type에서 재구성 가능
+                "sources_detail": [],  # deprecated: sources_by_type에서 재구성 가능
             },
             "timestamp": datetime.now().isoformat()
         }
@@ -330,24 +373,39 @@ async def _generate_stream_response(
     """스트리밍 응답 생성 - chunk 단위로 실시간 전달"""
     full_answer = ""
     final_metadata = None
+    stream_completed = False
     
     try:
         # stream_final_answer를 직접 호출하여 chunk 단위 스트리밍
-        async for chunk in chat_service.stream_final_answer(
-            message=message,
-            session_id=session_id
-        ):
-            if chunk:
-                # chunk는 이미 "data: {...}\n\n" 형식이므로 그대로 yield
-                try:
-                    yield chunk
-                except (GeneratorExit, asyncio.CancelledError):
-                    # 클라이언트가 연결을 끊은 경우
-                    logger.debug(f"[_generate_stream_response] Client disconnected, stopping stream")
-                    break
-                except Exception as yield_error:
-                    logger.warning(f"[_generate_stream_response] Error yielding chunk: {yield_error}")
-                    # yield 오류는 무시하고 계속 진행
+        try:
+            async for chunk in chat_service.stream_final_answer(
+                message=message,
+                session_id=session_id
+            ):
+                if chunk:
+                    # chunk는 이미 "data: {...}\n\n" 형식이므로 그대로 yield
+                    try:
+                        yield chunk
+                    except (GeneratorExit, asyncio.CancelledError) as cancel_error:
+                        # 클라이언트가 연결을 끊은 경우
+                        logger.debug(f"[_generate_stream_response] Client disconnected, stopping stream: {cancel_error}")
+                        stream_completed = True
+                        raise  # 상위로 전파하여 제너레이터 종료
+                    except Exception as yield_error:
+                        logger.warning(f"[_generate_stream_response] Error yielding chunk: {yield_error}")
+                        # yield 오류는 무시하고 계속 진행
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [_generate_stream_response] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
+            # 에러 이벤트 전송
+            error_event = {
+                "type": "error",
+                "content": "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
+                "metadata": {"error": True, "cancelled": True},
+                "timestamp": datetime.now().isoformat()
+            }
+            yield format_sse_event(error_event)
+            stream_completed = True
+            raise  # 상위로 전파
                 
                 # final 이벤트에서 메타데이터 추출
                 try:
@@ -457,22 +515,34 @@ async def _generate_stream_response(
             
             _maybe_generate_session_title(session_id)
         
-        # 스트림 종료를 명확히 하기 위해 빈 줄 전송 (선택사항)
-        # FastAPI의 StreamingResponse는 제너레이터가 종료되면 자동으로 연결을 닫지만,
-        # 명시적으로 종료 신호를 보내면 더 안전함
-        try:
-            # 제너레이터가 정상적으로 종료되면 자동으로 연결이 닫힘
-            # 추가 종료 신호는 필요 없음 (FastAPI가 자동 처리)
-            pass
-        except (GeneratorExit, asyncio.CancelledError):
-            logger.debug("[_generate_stream_response] Generator exit or cancelled during cleanup")
-            raise
-    
-    except (GeneratorExit, asyncio.CancelledError):
-        logger.debug("[_generate_stream_response] Client disconnected or cancelled, closing stream")
-        return
+        # 정상 종료 시 done 이벤트 전송 (stream_handler에서 보내지 않았을 수 있으므로)
+        # ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지하기 위해 반드시 done 이벤트 전송
+        if not stream_completed:
+            try:
+                done_event = {
+                    "type": "done",
+                    "content": full_answer if full_answer else "",
+                    "metadata": final_metadata if final_metadata else {},
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield format_sse_event(done_event)
+                stream_completed = True
+            except (GeneratorExit, asyncio.CancelledError):
+                logger.debug("[_generate_stream_response] Client disconnected while sending done event")
+                stream_completed = True
+                raise
+            except Exception as done_error:
+                logger.warning(f"Error sending done event: {done_error}")
+                stream_completed = True
+        
+    except (GeneratorExit, asyncio.CancelledError) as cancel_error:
+        # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
+        logger.debug(f"[_generate_stream_response] Client disconnected or cancelled: {cancel_error}")
+        stream_completed = True
+        # GeneratorExit와 CancelledError는 상위로 전파하여 제너레이터 종료
+        raise
     except Exception as e:
-        logger.error(f"Error in stream_message: {e}", exc_info=True)
+        logger.error(f"Error in _generate_stream_response: {e}", exc_info=True)
         error_msg = f"[오류] {str(e)}"
         try:
             error_event = {
@@ -492,12 +562,27 @@ async def _generate_stream_response(
                 "timestamp": datetime.now().isoformat()
             }
             yield format_sse_event(done_event)
+            stream_completed = True
         except (GeneratorExit, asyncio.CancelledError):
-            logger.debug("[chat_stream] Client disconnected or cancelled during error handling")
-            return
+            logger.debug("[_generate_stream_response] Client disconnected or cancelled during error handling")
+            stream_completed = True
+            raise
         except Exception as yield_error:
             logger.error(f"Error yielding error message: {yield_error}")
-    # stream_handler에서 이미 done 이벤트를 보내므로 여기서는 보낼 필요 없음
+            stream_completed = True
+            # 최종 폴백: 스트림 종료를 보장하기 위해 아무것도 yield하지 않고 종료
+    finally:
+        # Generator 종료 시 로그만 남기고 yield는 하지 않음
+        # finally 블록에서 yield를 사용하면 제너레이터가 이미 종료된 후에 실행될 수 있어 문제가 발생할 수 있음
+        # done 이벤트는 정상 종료 경로와 예외 처리 경로에서 이미 전송되므로 finally에서는 로그만 남김
+        try:
+            if not stream_completed:
+                logger.warning("[_generate_stream_response] Stream not properly completed (done event may not have been sent)")
+            else:
+                logger.debug("[_generate_stream_response] Generator completed successfully")
+        except Exception as final_error:
+            # finally 블록에서 발생한 오류는 로그만 남기고 무시
+            logger.debug(f"[_generate_stream_response] Error in finally block (ignored): {final_error}")
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -508,13 +593,24 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         # ChatService 가져오기 (지연 초기화)
         chat_service = get_chat_service()
         
+        # 사용자 정보 가져오기
+        user_id, client_ip = get_user_info(request, current_user)
+        
         # 세션이 없으면 생성
         if not chat_request.session_id:
-            user_id, client_ip = get_user_info(request, current_user)
             chat_request.session_id = session_service.create_session(
                 user_id=user_id,
                 ip_address=client_ip
             )
+        else:
+            # 기존 세션의 user_id 확인 및 업데이트 (user_id가 None인 경우에만)
+            session = session_service.get_session(chat_request.session_id)
+            if session:
+                session_user_id = session.get("user_id")
+                if session_user_id is None and user_id:
+                    # 세션의 user_id가 없고 현재 user_id가 있으면 업데이트
+                    session_service.update_session(chat_request.session_id, user_id=user_id)
+                    logger.info(f"Updated session {chat_request.session_id} with user_id: {user_id}")
         
         # 이미지 또는 파일 처리
         final_message = _process_file_and_image(
@@ -532,11 +628,18 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         )
         
         # AI 답변 생성
-        result = await chat_service.process_message(
-            message=final_message,
-            session_id=chat_request.session_id,
-            enable_checkpoint=chat_request.enable_checkpoint
-        )
+        try:
+            result = await chat_service.process_message(
+                message=final_message,
+                session_id=chat_request.session_id,
+                enable_checkpoint=chat_request.enable_checkpoint
+            )
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [chat] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+            raise HTTPException(
+                status_code=500,
+                detail="작업이 취소되었습니다. 다시 시도해주세요."
+            )
         
         # AI 답변 저장
         session_service.add_message(
@@ -552,6 +655,8 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         # 익명 사용자의 경우 응답 헤더에 남은 질의 횟수 추가
         response = ChatResponse(**result)
         return _add_quota_headers(response, current_user)
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.warning(f"Validation error in chat endpoint: {e}")
         raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
@@ -602,13 +707,24 @@ async def chat_stream(
                     f"has_metadata={bool(cached_response.get('metadata'))}"
                 )
                 
+                # 사용자 정보 가져오기
+                user_id, client_ip = get_user_info(request, current_user)
+                
                 # 세션이 없으면 생성
                 if not stream_request.session_id:
-                    user_id, client_ip = get_user_info(request, current_user)
                     stream_request.session_id = session_service.create_session(
                         user_id=user_id,
                         ip_address=client_ip
                     )
+                else:
+                    # 기존 세션의 user_id 확인 및 업데이트 (user_id가 None인 경우에만)
+                    session = session_service.get_session(stream_request.session_id)
+                    if session:
+                        session_user_id = session.get("user_id")
+                        if session_user_id is None and user_id:
+                            # 세션의 user_id가 없고 현재 user_id가 있으면 업데이트
+                            session_service.update_session(stream_request.session_id, user_id=user_id)
+                            logger.info(f"Updated session {stream_request.session_id} with user_id: {user_id}")
                 
                 # 사용자 메시지 저장
                 session_service.add_message(
@@ -717,6 +833,7 @@ async def chat_stream(
                         "Content-Type": "text/event-stream; charset=utf-8",
                         "X-Content-Type-Options": "nosniff",
                         "X-Cache": "HIT",
+                        "X-Stream-Status": "active",  # 스트림 상태 추적용 (디버깅)
                     }
                 )
             else:
@@ -727,13 +844,24 @@ async def chat_stream(
         # ChatService 가져오기 (지연 초기화)
         chat_service = get_chat_service()
         
+        # 사용자 정보 가져오기
+        user_id, client_ip = get_user_info(request, current_user)
+        
         # 세션이 없으면 생성
         if not stream_request.session_id:
-            user_id, client_ip = get_user_info(request, current_user)
             stream_request.session_id = session_service.create_session(
                 user_id=user_id,
                 ip_address=client_ip
             )
+        else:
+            # 기존 세션의 user_id 확인 및 업데이트 (user_id가 None인 경우에만)
+            session = session_service.get_session(stream_request.session_id)
+            if session:
+                session_user_id = session.get("user_id")
+                if session_user_id is None and user_id:
+                    # 세션의 user_id가 없고 현재 user_id가 있으면 업데이트
+                    session_service.update_session(stream_request.session_id, user_id=user_id)
+                    logger.info(f"Updated session {stream_request.session_id} with user_id: {user_id}")
         
         # 사용자 메시지 저장 (파일/이미지 처리 결과 포함)
         session_service.add_message(
@@ -742,24 +870,54 @@ async def chat_stream(
             content=final_message
         )
         
-        return StreamingResponse(
-            _generate_stream_response(
-                chat_service=chat_service,
-                message=final_message,
-                session_id=stream_request.session_id
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Nginx 버퍼링 비활성화
-                "Content-Type": "text/event-stream; charset=utf-8",
-                # Transfer-Encoding: chunked는 FastAPI가 자동으로 처리하므로 명시하지 않음
-                # 명시하면 ERR_INCOMPLETE_CHUNKED_ENCODING 오류가 발생할 수 있음
-                "X-Content-Type-Options": "nosniff",
-                "X-Cache": "MISS",
-            }
-        )
+        try:
+            return StreamingResponse(
+                _generate_stream_response(
+                    chat_service=chat_service,
+                    message=final_message,
+                    session_id=stream_request.session_id
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Nginx 버퍼링 비활성화
+                    "Content-Type": "text/event-stream; charset=utf-8",
+                    # Transfer-Encoding: chunked는 FastAPI가 자동으로 처리하므로 명시하지 않음
+                    # 명시하면 ERR_INCOMPLETE_CHUNKED_ENCODING 오류가 발생할 수 있음
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Cache": "MISS",
+                    "X-Stream-Status": "active",  # 스트림 상태 추적용 (디버깅)
+                }
+            )
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [chat_stream] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
+            # 에러 응답 생성
+            async def error_stream():
+                error_event = {
+                    "type": "error",
+                    "content": "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
+                    "metadata": {"error": True, "cancelled": True},
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield format_sse_event(error_event)
+                done_event = {
+                    "type": "done",
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield format_sse_event(done_event)
+            
+            return StreamingResponse(
+                error_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/event-stream; charset=utf-8",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Stream-Status": "cancelled",
+                }
+            )
     except (GeneratorExit, asyncio.CancelledError):
         logger.debug("[chat_stream] Client disconnected or cancelled")
         return
@@ -843,11 +1001,18 @@ async def continue_answer(
             )
         
         # 워크플로우에서 이어서 답변 생성
-        result = await chat_service.workflow_service.continue_answer(
-            session_id=continue_request.session_id,
-            message_id=continue_request.message_id,
-            chunk_index=continue_request.chunk_index
-        )
+        try:
+            result = await chat_service.workflow_service.continue_answer(
+                session_id=continue_request.session_id,
+                message_id=continue_request.message_id,
+                chunk_index=continue_request.chunk_index
+            )
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [continue_answer] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+            raise HTTPException(
+                status_code=500,
+                detail="작업이 취소되었습니다. 다시 시도해주세요."
+            )
         
         if result:
             return ContinueAnswerResponse(
