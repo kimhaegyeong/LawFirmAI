@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 import pytest
 
 # 프로젝트 경로 설정
-project_root = Path(__file__).parent.parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent.parent
 lawfirm_langgraph_dir = project_root / "lawfirm_langgraph"
 
 if str(project_root) not in sys.path:

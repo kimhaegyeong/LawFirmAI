@@ -11,16 +11,20 @@ from unittest.mock import Mock, MagicMock, patch
 from typing import Dict, Any, List
 
 # 프로젝트 루트를 sys.path에 추가
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # lawfirm_langgraph 디렉토리를 sys.path에 추가
-lawfirm_langgraph_path = Path(__file__).parent.parent
+lawfirm_langgraph_path = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(lawfirm_langgraph_path))
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TestContextExpansionImprovements:

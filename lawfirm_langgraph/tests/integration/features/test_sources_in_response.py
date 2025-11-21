@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 
 # 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent.parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # lawfirm_langgraph 경로 추가
