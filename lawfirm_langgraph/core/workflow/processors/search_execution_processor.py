@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_helpers import ensure_state_group, get_retrieved_docs, set_retrieved_docs
+from core.workflow.state.state_helpers import ensure_state_group, set_retrieved_docs
 from core.workflow.utils.workflow_constants import WorkflowConstants
 from core.workflow.utils.query_diversifier import QueryDiversifier
 from core.workflow.utils.search_result_balancer import SearchResultBalancer
@@ -58,6 +58,9 @@ class SearchExecutionProcessor:
         # State 접근 캐싱 (성능 최적화)
         self._state_cache = {}
         self._state_cache_key = None
+        
+        # 검색 쿼리 중복 방지 캐시
+        self._executed_queries = set()  # 실행된 쿼리 추적
 
     def get_search_params(self, state: LegalWorkflowState) -> Dict[str, Any]:
         """검색에 필요한 모든 파라미터를 한 번에 가져오기 (State 접근 최적화)"""
@@ -87,55 +90,55 @@ class SearchExecutionProcessor:
         # search와 common 그룹의 구조도 확인
         if "search" in state and isinstance(state["search"], dict):
             search_keys = list(state["search"].keys())
-            print(f"[MULTI-QUERY] search group keys={search_keys}", flush=True, file=sys.stdout)
+            self.logger.debug(f"[MULTI-QUERY] search group keys={search_keys}")
         if "common" in state and isinstance(state.get("common"), dict):
             common_keys = list(state["common"].keys())
-            print(f"[MULTI-QUERY] common group keys={common_keys}", flush=True, file=sys.stdout)
+            self.logger.debug(f"[MULTI-QUERY] common group keys={common_keys}")
             if "search" in state["common"] and isinstance(state["common"]["search"], dict):
                 common_search_keys = list(state["common"]["search"].keys())
-                print(f"[MULTI-QUERY] common.search keys={common_search_keys}", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] common.search keys={common_search_keys}")
         
         # 1. top-level state에서 직접 확인 (가장 우선)
         if "optimized_queries" in state and isinstance(state["optimized_queries"], dict) and len(state["optimized_queries"]) > 0:
             optimized_queries = state["optimized_queries"]
-            print(f"[MULTI-QUERY] Found optimized_queries in top-level state (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+            self.logger.debug(f"[MULTI-QUERY] Found optimized_queries in top-level state (keys: {list(optimized_queries.keys())})")
             self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in top-level state (keys: {list(optimized_queries.keys())})")
         
         # 2. search group에서 확인 (top-level에 없으면)
         if (not optimized_queries or (isinstance(optimized_queries, dict) and len(optimized_queries) == 0)) and "search" in state and isinstance(state["search"], dict):
             search_group = state["search"]
             search_optimized = search_group.get("optimized_queries")
-            print(f"[MULTI-QUERY] Checking search group: optimized_queries type={type(search_optimized)}, value={search_optimized}", flush=True, file=sys.stdout)
+            self.logger.debug(f"[MULTI-QUERY] Checking search group: optimized_queries type={type(search_optimized)}, value={search_optimized}")
             if search_optimized and isinstance(search_optimized, dict):
                 if len(search_optimized) > 0:
                     optimized_queries = search_optimized
-                    print(f"[MULTI-QUERY] Found optimized_queries in search group (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                    self.logger.debug(f"[MULTI-QUERY] Found optimized_queries in search group (keys: {list(optimized_queries.keys())})")
                     self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in search group (keys: {list(optimized_queries.keys())})")
                 else:
-                    print(f"[MULTI-QUERY] search group optimized_queries is empty dict", flush=True, file=sys.stdout)
+                    self.logger.debug("[MULTI-QUERY] search group optimized_queries is empty dict")
             else:
-                print(f"[MULTI-QUERY] search group optimized_queries is not a dict or None: {search_optimized}", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] search group optimized_queries is not a dict or None: {search_optimized}")
         
         # 3. common.search에서 확인 (위에서 찾지 못했으면)
         if (not optimized_queries or len(optimized_queries) == 0) and "common" in state and isinstance(state.get("common"), dict):
             common_search = state["common"].get("search", {})
             if isinstance(common_search, dict) and common_search.get("optimized_queries"):
                 optimized_queries = common_search["optimized_queries"]
-                print(f"[MULTI-QUERY] Found optimized_queries in common.search (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] Found optimized_queries in common.search (keys: {list(optimized_queries.keys())})")
                 self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in common.search (keys: {list(optimized_queries.keys())})")
         # 4. _get_state_value로 확인 (fallback)
         if not optimized_queries or len(optimized_queries) == 0:
             optimized_queries = self._get_state_value(state, "optimized_queries", {})
             if optimized_queries and len(optimized_queries) > 0:
-                print(f"[MULTI-QUERY] Found optimized_queries via _get_state_value (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] Found optimized_queries via _get_state_value (keys: {list(optimized_queries.keys())})")
                 self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries via _get_state_value (keys: {list(optimized_queries.keys())})")
             else:
-                print(f"[MULTI-QUERY] _get_state_value returned: {optimized_queries}", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] _get_state_value returned: {optimized_queries}")
         
         # optimized_queries가 None이면 빈 딕셔너리로 초기화
         if optimized_queries is None:
             optimized_queries = {}
-            print(f"[MULTI-QUERY] optimized_queries was None, initialized to empty dict", flush=True, file=sys.stdout)
+            self.logger.debug("[MULTI-QUERY] optimized_queries was None, initialized to empty dict")
         
         # 5. Global cache에서 확인 (state reduction 대응)
         if (not optimized_queries or len(optimized_queries) == 0):
@@ -146,7 +149,7 @@ class SearchExecutionProcessor:
                         cached_optimized = _global_search_results_cache["search"].get("optimized_queries")
                         if cached_optimized and isinstance(cached_optimized, dict) and len(cached_optimized) > 0:
                             optimized_queries = cached_optimized.copy()
-                            print(f"[MULTI-QUERY] Found optimized_queries in global cache (keys: {list(optimized_queries.keys())})", flush=True, file=sys.stdout)
+                            self.logger.debug(f"[MULTI-QUERY] Found optimized_queries in global cache (keys: {list(optimized_queries.keys())})")
                             self.logger.info(f"🔍 [MULTI-QUERY] Found optimized_queries in global cache (keys: {list(optimized_queries.keys())})")
             except Exception as e:
                 self.logger.debug(f"Failed to get optimized_queries from global cache: {e}")
@@ -232,7 +235,7 @@ class SearchExecutionProcessor:
         # Multi-Query 확인 로그 (항상 출력)
         has_multi = optimized_queries and "multi_queries" in optimized_queries
         keys_str = list(optimized_queries.keys()) if optimized_queries else "None"
-        print(f"[MULTI-QUERY] get_search_params: optimized_queries keys={keys_str}, has_multi_queries={has_multi}", flush=True, file=sys.stdout)
+        self.logger.debug(f"[MULTI-QUERY] get_search_params: optimized_queries keys={keys_str}, has_multi_queries={has_multi}")
         if has_multi:
             self.logger.info(f"🔍 [MULTI-QUERY] get_search_params: Found multi_queries with {len(optimized_queries.get('multi_queries', []))} queries")
         elif optimized_queries:
@@ -530,7 +533,7 @@ class SearchExecutionProcessor:
             if not keyword_queries_value or len(keyword_queries_value) == 0:
                 if original_query:
                     if debug_mode:
-                        self.logger.warning(f"keyword_queries is empty in execute_searches_parallel, using base query")
+                        self.logger.warning("keyword_queries is empty in execute_searches_parallel, using base query")
                     optimized_queries["keyword_queries"] = [original_query]
                     keyword_queries_value = [original_query]
 
@@ -552,7 +555,7 @@ class SearchExecutionProcessor:
                 self.logger.debug(f"Validation: {validation_info}")
 
             if not search_params or not isinstance(search_params, dict) or len(search_params) == 0:
-                self.logger.warning(f"🔍 [SEARCH] search_params is empty, setting default values")
+                self.logger.warning("🔍 [SEARCH] search_params is empty, setting default values")
                 search_params = self._determine_search_parameters(
                     query_type=query_type_str,
                     query_complexity=len(original_query) if original_query else 0,
@@ -599,10 +602,10 @@ class SearchExecutionProcessor:
             # Multi-Query 확인 로그 (로깅 최적화)
             multi_queries = optimized_queries.get("multi_queries", [])
             if multi_queries and debug_mode:
-                print(f"[MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries in optimized_queries", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries in optimized_queries")
                 self.logger.debug(f"🔍 [MULTI-QUERY] execute_searches_parallel: Found {len(multi_queries)} multi-queries")
             elif not multi_queries and debug_mode:
-                self.logger.debug(f"⚠️ [MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries")
+                self.logger.debug("⚠️ [MULTI-QUERY] execute_searches_parallel: No multi_queries in optimized_queries")
             
             if debug_mode:
                 self.logger.debug(f"PARALLEL SEARCH START: semantic_query={optimized_queries.get('semantic_query', 'N/A')[:50]}, keyword_queries={len(optimized_queries.get('keyword_queries', []))}, multi_queries={len(multi_queries) if multi_queries else 0}, original_query={original_query[:50] if original_query else 'N/A'}...")
@@ -657,7 +660,7 @@ class SearchExecutionProcessor:
                 if cache_key:
                     cached_results = self._get_cached_search_results(cache_key)
                     if cached_results:
-                        self.logger.info(f"✅ [SEARCH CACHE HIT] Using cached search results")
+                        self.logger.info("✅ [SEARCH CACHE HIT] Using cached search results")
                         return self._apply_cached_results(state, cached_results)
             
             min_required_results = semantic_k + keyword_k
@@ -702,6 +705,17 @@ class SearchExecutionProcessor:
             # 2단계 우선순위 검색: Phase 1 (핵심 검색) 먼저 실행
             phase1_sufficient = False
             
+            # 검색 쿼리 중복 방지: 동일한 쿼리로 이미 검색했는지 확인
+            import hashlib
+            query_hash = hashlib.md5(
+                f"{original_query}:{str(optimized_queries.get('semantic_query', ''))}".encode('utf-8')
+            ).hexdigest()
+            
+            if query_hash in self._executed_queries:
+                self.logger.info(f"⚠️ [DUPLICATE SEARCH] 동일한 쿼리로 이미 검색됨: {query_hash[:16]}... (스킵)")
+            else:
+                self._executed_queries.add(query_hash)
+            
             # Phase 1: 핵심 검색 작업만 먼저 실행 (semantic + keyword)
             with ThreadPoolExecutor(max_workers=2) as executor:
                 semantic_future = executor.submit(
@@ -723,9 +737,9 @@ class SearchExecutionProcessor:
                 )
                 
                 # Phase 1 완료 대기 (동적 타임아웃 조정 - 추가 개선)
-                # 동적 k 값에 따라 타임아웃 조정: 최소 15초, 최대 25초, k 값에 따라 조정
-                # 검색 작업이 오래 걸리는 경우를 고려하여 타임아웃 증가
-                phase1_timeout = max(15, min(25, 10 + (semantic_k + keyword_k) // 4))
+                # 동적 k 값에 따라 타임아웃 조정: 최소 20초, 최대 35초, k 값에 따라 조정
+                # 검색 작업이 오래 걸리는 경우를 고려하여 타임아웃 증가 (15-25초 -> 20-35초)
+                phase1_timeout = max(20, min(35, 15 + (semantic_k + keyword_k) // 3))
                 
                 try:
                     for future in as_completed([semantic_future, keyword_future], timeout=phase1_timeout):
@@ -750,7 +764,7 @@ class SearchExecutionProcessor:
                                     if not remaining_future.running():
                                         remaining_future.cancel()
                                         if self.logger.isEnabledFor(logging.DEBUG):
-                                            self.logger.debug(f"Cancelled remaining search (early exit)")
+                                            self.logger.debug("Cancelled remaining search (early exit)")
                                 
                                 self.logger.info(
                                     f"⚡ [PRIORITY SEARCH] Phase 1 sufficient "
@@ -829,7 +843,7 @@ class SearchExecutionProcessor:
                     if needs_direct_statute:
                         def _search_direct_statute():
                             try:
-                                from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                                from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
                                 data_connector = LegalDataConnectorV2()
                                 return data_connector.search_statute_article_direct(original_query, limit=5)
                             except Exception as e:
@@ -1119,7 +1133,7 @@ class SearchExecutionProcessor:
                             f"⚠️ [TYPE DIVERSITY] 단일 타입만 검색됨: {single_type} ({type_distribution[single_type]}개)"
                         )
                     elif len(non_zero_types) == 0:
-                        self.logger.warning(f"⚠️ [TYPE DIVERSITY] 검색 결과가 없습니다")
+                        self.logger.warning("⚠️ [TYPE DIVERSITY] 검색 결과가 없습니다")
                     elif debug_mode:
                         # 타입 다양성 점수 계산 (디버그 모드에서만)
                         total_docs = sum(type_distribution.values())
@@ -1258,8 +1272,8 @@ class SearchExecutionProcessor:
             # 🔥 개선 3: 검색 결과가 0개일 때 즉시 반환 (timeout 방지)
             if semantic_count == 0 and keyword_count == 0:
                 self.logger.warning(
-                    f"⚠️ [SEARCH TIMEOUT PREVENTION] 검색 결과가 0개입니다. "
-                    f"타임아웃 방지를 위해 즉시 반환합니다."
+                    "⚠️ [SEARCH TIMEOUT PREVENTION] 검색 결과가 0개입니다. "
+                    "타임아웃 방지를 위해 즉시 반환합니다."
                 )
                 ensure_state_group(state, "search")
                 state["search"]["semantic_results"] = []
@@ -1320,7 +1334,7 @@ class SearchExecutionProcessor:
                 self.logger.debug(f"[DEBUG] execute_searches_parallel: Returning state with search group - semantic_results={final_semantic}, keyword_results={final_keyword}")
                 self.logger.debug(f"[DEBUG] execute_searches_parallel: Returning state keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
             else:
-                self.logger.debug(f"[DEBUG] execute_searches_parallel: WARNING - Returning state WITHOUT search group!")
+                self.logger.debug("[DEBUG] execute_searches_parallel: WARNING - Returning state WITHOUT search group!")
                 self.logger.debug(f"[DEBUG] execute_searches_parallel: Returning state keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
 
         return state
@@ -1377,7 +1391,7 @@ class SearchExecutionProcessor:
         
         # 개선: textToSQL 라우팅 확인 및 적용 (우선순위 1)
         if original_query and original_query.strip():
-            from core.agents.legal_data_connector_v2 import route_query, LegalDataConnectorV2
+            from core.search.connectors.legal_data_connector_v2 import route_query, LegalDataConnectorV2
             route = route_query(original_query)
             self.logger.info(f"🔍 [TEXT2SQL SEMANTIC] route_query result: '{route}' for query: '{original_query[:50]}...'")
             if route == "text2sql":
@@ -1390,7 +1404,7 @@ class SearchExecutionProcessor:
                         semantic_count += len(text2sql_results)
                         self.logger.info(f"✅ [TEXT2SQL SEMANTIC] {len(text2sql_results)}개 결과 검색 성공 (semantic_results에 추가)")
                     else:
-                        self.logger.warning(f"⚠️ [TEXT2SQL SEMANTIC] 검색 결과 없음")
+                        self.logger.warning("⚠️ [TEXT2SQL SEMANTIC] 검색 결과 없음")
                 except Exception as e:
                     self.logger.warning(f"⚠️ [TEXT2SQL SEMANTIC] 검색 실패: {e}")
 
@@ -1442,7 +1456,7 @@ class SearchExecutionProcessor:
                         f"query='{semantic_query[:80]}...'"
                     )
             else:
-                self.logger.debug(f"🔍 [QUERY ENHANCEMENT] No core keywords extracted from extracted_keywords")
+                self.logger.debug("🔍 [QUERY ENHANCEMENT] No core keywords extracted from extracted_keywords")
         else:
             self.logger.info(
                 f"🔍 [QUERY ENHANCEMENT] Using original semantic_query (no extracted_keywords): "
@@ -1494,8 +1508,8 @@ class SearchExecutionProcessor:
                 if semantic_query_normalized == original_query_normalized:
                     if self.logger.isEnabledFor(logging.DEBUG):
                         self.logger.debug(
-                            f"⏭️ [SKIP DUPLICATE] semantic_query와 original_query가 동일하여 "
-                            f"original_query 검색 스킵"
+                            "⏭️ [SKIP DUPLICATE] semantic_query와 original_query가 동일하여 "
+                            "original_query 검색 스킵"
                         )
                 else:
                     original_semantic, original_count = self.search_handler.semantic_search(
@@ -1545,7 +1559,7 @@ class SearchExecutionProcessor:
                 multi_queries_to_process = multi_queries_to_process[:max_multi_queries]
             
             if multi_queries_to_process:
-                print(f"[MULTI-QUERY] Found {len(multi_queries)} queries, processing {len(multi_queries_to_process)} in parallel...", flush=True, file=sys.stdout)
+                self.logger.debug(f"[MULTI-QUERY] Found {len(multi_queries)} queries, processing {len(multi_queries_to_process)} in parallel...")
                 self.logger.info(f"🔍 [MULTI-QUERY] Found {len(multi_queries)} queries, processing {len(multi_queries_to_process)} in parallel...")
                 
                 # 중복 제거를 위한 seen_ids 및 내용 유사도 추적
@@ -1843,7 +1857,7 @@ class SearchExecutionProcessor:
             # semantic_search_engine 확인 (여러 방법 시도)
             semantic_engine = None
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"🔍 [TYPE DIVERSITY] semantic_search_engine 확인 시작")
+            self.logger.debug("🔍 [TYPE DIVERSITY] semantic_search_engine 확인 시작")
         self.logger.info(f"🔍 [TYPE DIVERSITY] self.semantic_search_engine: {self.semantic_search_engine is not None}")
         
         # SemanticSearchEngineV2 인스턴스인지 확인하는 헬퍼 함수
@@ -1876,14 +1890,14 @@ class SearchExecutionProcessor:
             candidate = self.search_handler.semantic_search
             # semantic_search가 함수인지 확인
             if callable(candidate) and not is_semantic_search_engine(candidate):
-                self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search is a function, not an engine instance")
+                self.logger.warning("⚠️ [TYPE DIVERSITY] search_handler.semantic_search is a function, not an engine instance")
             elif is_semantic_search_engine(candidate):
                 semantic_engine = candidate
                 self.logger.info(f"✅ [TYPE DIVERSITY] semantic_search_engine from search_handler.semantic_search: {type(semantic_engine).__name__}")
             else:
                 self.logger.warning(f"⚠️ [TYPE DIVERSITY] search_handler.semantic_search is not a valid engine: {type(candidate).__name__}")
         else:
-            self.logger.warning(f"⚠️ [TYPE DIVERSITY] semantic_search_engine not found")
+            self.logger.warning("⚠️ [TYPE DIVERSITY] semantic_search_engine not found")
             self.logger.warning(f"   - self.semantic_search_engine: {self.semantic_search_engine} ({type(self.semantic_search_engine).__name__ if self.semantic_search_engine else 'None'})")
             self.logger.warning(f"   - search_handler.semantic_search_engine: {getattr(self.search_handler, 'semantic_search_engine', 'N/A')}")
             self.logger.warning(f"   - search_handler.semantic_search: {getattr(self.search_handler, 'semantic_search', 'N/A')}")
@@ -2122,10 +2136,10 @@ class SearchExecutionProcessor:
         )
 
         # 개선: textToSQL 라우팅 확인 및 적용
-        from core.agents.legal_data_connector_v2 import route_query, LegalDataConnectorV2
+        from core.search.connectors.legal_data_connector_v2 import route_query, LegalDataConnectorV2
         
         # original_query에 대해 라우팅 확인
-        print(f"[TEXT2SQL DEBUG] original_query='{original_query[:50] if original_query else 'EMPTY'}...', has_query={bool(original_query and original_query.strip())}", flush=True, file=sys.stdout)
+        self.logger.debug(f"[TEXT2SQL DEBUG] original_query='{original_query[:50] if original_query else 'EMPTY'}...', has_query={bool(original_query and original_query.strip())}")
         self.logger.info(f"🔍 [TEXT2SQL DEBUG] original_query='{original_query[:50] if original_query else 'EMPTY'}...', has_query={bool(original_query and original_query.strip())}")
         if original_query and original_query.strip():
             route = route_query(original_query)
@@ -2145,7 +2159,7 @@ class SearchExecutionProcessor:
                             self.logger.debug(f"✅ [TEXT2SQL] {len(text2sql_results)}개 결과 검색 성공")
                     else:
                         if self.logger.isEnabledFor(logging.DEBUG):
-                            self.logger.debug(f"⚠️ [TEXT2SQL] 검색 결과 없음")
+                            self.logger.debug("⚠️ [TEXT2SQL] 검색 결과 없음")
                 except Exception as e:
                     if self.logger.isEnabledFor(logging.DEBUG):
                         self.logger.debug(f"⚠️ [TEXT2SQL] 검색 실패: {e}")

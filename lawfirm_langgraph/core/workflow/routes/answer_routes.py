@@ -5,18 +5,22 @@ Answer Routes
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Optional
 
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_utils import WorkflowUtils
-from core.agents.workflow_constants import (
+from core.workflow.utils.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_constants import (
     QualityThresholds,
     RetryConfig,
     WorkflowConstants,
 )
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AnswerRoutes:

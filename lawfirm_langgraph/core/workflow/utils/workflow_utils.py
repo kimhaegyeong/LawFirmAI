@@ -35,6 +35,7 @@ class WorkflowUtils:
 
         state_helpers의 get_field를 사용하여 일관된 접근 제공
         개선: query_type 전용 검색 로직 추가
+        개선: answer 전용 처리 로직 추가 (딕셔너리 형태 처리)
 
         Args:
             state: State 객체 (flat 또는 nested)
@@ -49,6 +50,18 @@ class WorkflowUtils:
             return WorkflowUtils._get_query_type_enhanced(state, default)
         
         result = get_field(state, key)
+        
+        # answer 전용 처리: 딕셔너리 형태인 경우 실제 답변 문자열 추출
+        if key == "answer" and isinstance(result, dict):
+            # 딕셔너리에서 실제 답변 추출 시도
+            answer_str = result.get("answer", "") or result.get("content", "") or result.get("text", "")
+            if answer_str and isinstance(answer_str, str) and len(answer_str.strip()) >= 10:
+                return answer_str
+            # 딕셔너리 안의 answer가 비어있거나 너무 짧으면, 딕셔너리 자체를 반환하지 않고 default 반환
+            # (이렇게 하면 상위에서 다시 시도할 수 있음)
+            if not answer_str or (isinstance(answer_str, str) and len(answer_str.strip()) < 10):
+                return default
+        
         return result if result is not None else default
     
     @staticmethod

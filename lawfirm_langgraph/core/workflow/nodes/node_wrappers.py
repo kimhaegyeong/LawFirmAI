@@ -5,6 +5,10 @@ State Reduction과 Adapter를 자동으로 적용하는 데코레이터 및 헬�
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
@@ -32,11 +36,27 @@ except ImportError:
     )
     from core.agents.state_reduction import StateReducer
 
-logger = logging.getLogger(__name__)
+# validate_node_input import
+try:
+    from core.workflow.node_input_output_spec import validate_node_input
+except ImportError:
+    try:
+        from ..node_input_output_spec import validate_node_input
+    except ImportError:
+        # Fallback: validate_node_input이 없어도 동작하도록
+        def validate_node_input(node_name: str, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+            """Fallback: 항상 검증 통과"""
+            return True, None
+
+logger = get_logger(__name__)
 
 # 전역 검색 결과 캐시 (LangGraph reducer 손실 대비)
 # node_wrappers에서 저장하고, 이후 노드에서 복원
 _global_search_results_cache: Optional[Dict[str, Any]] = None
+
+# 전역 캐시 크기 제한 상수
+MAX_GLOBAL_CACHE_PROCESSING_STEPS = 1000  # processing_steps 최대 개수
+MAX_GLOBAL_CACHE_SEARCH_RESULTS = 500  # 검색 결과 최대 개수
 
 
 def with_state_optimization(node_name: str, enable_reduction: bool = True):
@@ -152,7 +172,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 "optimized_queries", "search_params", "merged_documents", "keyword_weights"
                             ]
                         )
-                        print(f"[DEBUG] node_wrappers ({node_name}): Checking flat state for search data - has_search_data={has_search_data}, state keys={list(state.keys())[:10] if isinstance(state, dict) else 'N/A'}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): Checking flat state for search data - has_search_data={has_search_data}, state keys={list(state.keys())[:10] if isinstance(state, dict) else 'N/A'}")
                         if has_search_data:
                             # search 그룹 생성
                             if "search" not in state:
@@ -161,10 +181,10 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             # flat 구조의 데이터를 search 그룹으로 복사
                             if "semantic_results" in state and not search_group.get("semantic_results"):
                                 search_group["semantic_results"] = state.get("semantic_results", [])
-                                print(f"[DEBUG] node_wrappers ({node_name}): Copied semantic_results from flat state: {len(search_group['semantic_results'])}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Copied semantic_results from flat state: {len(search_group['semantic_results'])}")
                             if "keyword_results" in state and not search_group.get("keyword_results"):
                                 search_group["keyword_results"] = state.get("keyword_results", [])
-                                print(f"[DEBUG] node_wrappers ({node_name}): Copied keyword_results from flat state: {len(search_group['keyword_results'])}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Copied keyword_results from flat state: {len(search_group['keyword_results'])}")
                             if "semantic_count" in state and not search_group.get("semantic_count"):
                                 search_group["semantic_count"] = state.get("semantic_count", 0)
                             if "keyword_count" in state and not search_group.get("keyword_count"):
@@ -184,16 +204,15 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 merged_docs = state.get("merged_documents", [])
                                 if merged_docs:
                                     search_group["merged_documents"] = merged_docs
-                            logger.info(f"Restored search group from flat state for node {node_name}")
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restored search group - semantic_results={len(search_group.get('semantic_results', []))}, keyword_results={len(search_group.get('keyword_results', []))}, retrieved_docs={len(search_group.get('retrieved_docs', []))}")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restored search group - semantic_results={len(search_group.get('semantic_results', []))}, keyword_results={len(search_group.get('keyword_results', []))}, retrieved_docs={len(search_group.get('retrieved_docs', []))}")
 
                 # 디버깅: state 구조 확인
                 if node_name in ["classify_query", "prepare_search_query", "merge_and_rerank_with_keyword_weights"]:
-                    print(f"[DEBUG] node_wrappers ({node_name}): State keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
-                    print(f"[DEBUG] node_wrappers ({node_name}): state_has_input={state_has_input}, state_has_query={state_has_query}")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): State keys={list(state.keys()) if isinstance(state, dict) else 'N/A'}")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): state_has_input={state_has_input}, state_has_query={state_has_query}")
                     if node_name == "merge_and_rerank_with_keyword_weights":
                         search_group = state.get("search", {}) if isinstance(state.get("search"), dict) else {}
-                        print(f"[DEBUG] node_wrappers ({node_name}): search group exists={bool(search_group)}, semantic_results={len(search_group.get('semantic_results', []))}, keyword_results={len(search_group.get('keyword_results', []))}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): search group exists={bool(search_group)}, semantic_results={len(search_group.get('semantic_results', []))}, keyword_results={len(search_group.get('keyword_results', []))}")
 
                 if not state_has_input or not state_has_query:
                     # state에 input이 없거나 query가 없으면 최상위 레벨에서 찾기
@@ -208,7 +227,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             state["input"]["session_id"] = session_id_from_top
                         logger.info(f"Restored input group from top-level for node {node_name}: query length={len(query_from_top)}")
                         if node_name in ["classify_query", "prepare_search_query"]:
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restored query from top-level: '{query_from_top[:50]}...'")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restored query from top-level: '{query_from_top[:50]}...'")
                     else:
                         # 다른 그룹에서 찾기
                         found_query = None
@@ -224,15 +243,15 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             state["input"]["query"] = found_query
                             logger.info(f"Restored input group from search.search_query for node {node_name}: query length={len(found_query)}")
                             if node_name in ["classify_query", "prepare_search_query"]:
-                                print(f"[DEBUG] node_wrappers ({node_name}): Restored query from search.search_query: '{found_query[:50]}...'")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restored query from search.search_query: '{found_query[:50]}...'")
                         elif node_name in ["classify_query", "prepare_search_query"]:
-                            print(f"[DEBUG] node_wrappers ({node_name}): WARNING - No query found anywhere in state!")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): WARNING - No query found anywhere in state!")
 
                 # 1. Input 검증 및 자동 변환
                 # 디버깅: 원본 state의 query 확인
                 original_query_before = state.get("query") or (state.get("input") and isinstance(state.get("input"), dict) and state["input"].get("query"))
                 if node_name == "classify_query":
-                    print(f"[DEBUG] node_wrappers.classify_query: original state query='{original_query_before[:50] if original_query_before else 'EMPTY'}...'")
+                    logger.debug(f"[DEBUG] node_wrappers.classify_query: original state query='{original_query_before[:50] if original_query_before else 'EMPTY'}...'")
 
                 is_valid, error, converted_state = validate_state_for_node(
                     state,
@@ -378,14 +397,14 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 # search_dependent 노드들에 대해 working_state에 검색 결과 추가
                 # is_search_dependent 변수는 위에서 정의됨
                 if is_search_dependent:
-                    print(f"[DEBUG] node_wrappers ({node_name}): After reduction - Checking global cache - cache exists={_global_search_results_cache is not None}")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): After reduction - Checking global cache - cache exists={_global_search_results_cache is not None}")
                     if _global_search_results_cache:
                         working_search = working_state.get("search", {}) if isinstance(working_state.get("search"), dict) else {}
                         has_results = len(working_search.get("semantic_results", [])) > 0 or len(working_search.get("keyword_results", [])) > 0
-                        print(f"[DEBUG] node_wrappers ({node_name}): After reduction - working_state has results={has_results}, semantic={len(working_search.get('semantic_results', []))}, keyword={len(working_search.get('keyword_results', []))}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): After reduction - working_state has results={has_results}, semantic={len(working_search.get('semantic_results', []))}, keyword={len(working_search.get('keyword_results', []))}")
 
                         if not has_results:
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restoring search results to working_state AFTER reduction")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restoring search results to working_state AFTER reduction")
                             if "search" not in working_state:
                                 working_state["search"] = {}
                             working_state["search"].update(_global_search_results_cache)
@@ -396,7 +415,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 working_state["keyword_results"] = _global_search_results_cache.get("keyword_results", [])
                             restored_semantic = len(working_state["search"].get("semantic_results", []))
                             restored_keyword = len(working_state["search"].get("keyword_results", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): Restored to working_state AFTER reduction - semantic={restored_semantic}, keyword={restored_keyword}")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restored to working_state AFTER reduction - semantic={restored_semantic}, keyword={restored_keyword}")
 
                 # 3. 원본 함수 호출
                 # 중요: working_state에 query가 있는지 확인하고 없으면 원본 state에서 복원
@@ -444,8 +463,8 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 # 디버깅: working_state의 query 확인
                 if node_name in ["prepare_search_query"]:
                     working_query = working_state.get("query") or (working_state.get("input") and isinstance(working_state.get("input"), dict) and working_state["input"].get("query", ""))
-                    print(f"[DEBUG] node_wrappers ({node_name}): working_state before function call - query='{working_query[:50] if working_query else 'EMPTY'}...'")
-                    print(f"[DEBUG] node_wrappers ({node_name}): working_state keys={list(working_state.keys()) if isinstance(working_state, dict) else 'N/A'}")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): working_state before function call - query='{working_query[:50] if working_query else 'EMPTY'}...'")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): working_state keys={list(working_state.keys()) if isinstance(working_state, dict) else 'N/A'}")
 
                 if len(args) > 1:
                     # self가 있는 경우
@@ -458,7 +477,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                 if node_name in ["prepare_search_query"]:
                     result_query = result.get("query") if isinstance(result, dict) else None
                     result_input_query = result.get("input", {}).get("query", "") if isinstance(result, dict) and result.get("input") else None
-                    print(f"[DEBUG] node_wrappers ({node_name}): result after function call - query='{result_query[:50] if result_query else 'N/A'}...', input.query='{result_input_query[:50] if result_input_query else 'N/A'}...'")
+                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): result after function call - query='{result_query[:50] if result_query else 'N/A'}...', input.query='{result_input_query[:50] if result_input_query else 'N/A'}...'")
 
                 # 4. 결과를 원본 State에 병합
                 # 중요: result에 query가 없으면 원본 state의 query를 보존
@@ -546,7 +565,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             has_results = len(result_search.get("semantic_results", [])) > 0 or len(result_search.get("keyword_results", [])) > 0
 
                             if not has_results:
-                                print(f"[DEBUG] node_wrappers ({node_name}): Restoring search results from global cache")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restoring search results from global cache")
                                 if "search" not in result:
                                     result["search"] = {}
                                 result["search"].update(_global_search_results_cache)
@@ -557,7 +576,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     result["keyword_results"] = _global_search_results_cache.get("keyword_results", [])
                                 restored_semantic = len(result["search"].get("semantic_results", []))
                                 restored_keyword = len(result["search"].get("keyword_results", []))
-                                print(f"[DEBUG] node_wrappers ({node_name}): Restored from cache - semantic={restored_semantic}, keyword={restored_keyword}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Restored from cache - semantic={restored_semantic}, keyword={restored_keyword}")
 
                     # 중요: execute_searches_parallel의 경우 search 그룹 보존
                     # LangGraph는 TypedDict를 병합할 때 SearchState에 없는 필드가 손실될 수 있음
@@ -570,7 +589,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                         if result_search:
                             semantic_count = len(result_search.get("semantic_results", []))
                             keyword_count = len(result_search.get("keyword_results", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): result has search group - semantic_results={semantic_count}, keyword_results={keyword_count}")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): result has search group - semantic_results={semantic_count}, keyword_results={keyword_count}")
                             # result에 명시적으로 보존 (LangGraph 병합 보장)
                             if "search" not in result or not isinstance(result.get("search"), dict):
                                 result["search"] = {}
@@ -580,7 +599,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             result["search"]["keyword_count"] = result_search.get("keyword_count", keyword_count)
                         elif state_search:
                             # state에 search 그룹이 있으면 result에도 복사
-                            print(f"[DEBUG] node_wrappers ({node_name}): Copying search group from state to result")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): Copying search group from state to result")
                             result["search"] = state_search.copy()
 
                     # processing_steps 전역 캐시에 저장 (state reduction 손실 방지)
@@ -599,6 +618,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 for step in result_steps:
                                     if isinstance(step, str) and step not in _global_search_results_cache["processing_steps"]:
                                         _global_search_results_cache["processing_steps"].append(step)
+                                
+                                # 크기 제한: 최대 개수 초과 시 오래된 항목 제거
+                                if len(_global_search_results_cache["processing_steps"]) > MAX_GLOBAL_CACHE_PROCESSING_STEPS:
+                                    _global_search_results_cache["processing_steps"] = _global_search_results_cache["processing_steps"][-MAX_GLOBAL_CACHE_PROCESSING_STEPS:]
+                                    logger.debug(f"[MEMORY] Trimmed processing_steps cache to {MAX_GLOBAL_CACHE_PROCESSING_STEPS} items")
 
                         # 최상위 레벨에서도 확인
                         result_top_steps = result.get("processing_steps", [])
@@ -612,6 +636,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             for step in result_top_steps:
                                 if isinstance(step, str) and step not in _global_search_results_cache["processing_steps"]:
                                     _global_search_results_cache["processing_steps"].append(step)
+                            
+                            # 크기 제한: 최대 개수 초과 시 오래된 항목 제거
+                            if len(_global_search_results_cache["processing_steps"]) > MAX_GLOBAL_CACHE_PROCESSING_STEPS:
+                                _global_search_results_cache["processing_steps"] = _global_search_results_cache["processing_steps"][-MAX_GLOBAL_CACHE_PROCESSING_STEPS:]
+                                logger.debug(f"[MEMORY] Trimmed processing_steps cache to {MAX_GLOBAL_CACHE_PROCESSING_STEPS} items")
 
                     # 5. Nested 구조면 그대로 반환, Flat 구조면 병합
                     # 중요: LangGraph reducer가 TypedDict 필드만 보존하므로,
@@ -622,7 +651,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                         if "search" not in result or not isinstance(result.get("search"), dict):
                             if "search" in state and isinstance(state.get("search"), dict):
                                 result["search"] = state["search"].copy()
-                                print(f"[DEBUG] node_wrappers ({node_name}): Copied search group from state to result before return")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Copied search group from state to result before return")
 
                         # result의 search 그룹에 모든 필수 필드 포함 확인
                         if "search" in result and isinstance(result.get("search"), dict):
@@ -655,7 +684,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     if preserved_needs_search is not None:
                                         _global_search_results_cache["needs_search"] = preserved_needs_search
 
-                                print(f"[DEBUG] node_wrappers ({node_name}): Saved to global cache - semantic={semantic_count}, keyword={keyword_count}, complexity={preserved_complexity}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Saved to global cache - semantic={semantic_count}, keyword={keyword_count}, complexity={preserved_complexity}")
 
                     # 중요: merge_and_rerank_with_keyword_weights의 경우 retrieved_docs 캐시 보존
                     if node_name == "merge_and_rerank_with_keyword_weights":
@@ -667,8 +696,8 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                         top_retrieved_docs = result.get("retrieved_docs", [])
                         top_merged_docs = result.get("merged_documents", [])
 
-                        print(f"[DEBUG] node_wrappers ({node_name}): result - search_group retrieved_docs={len(retrieved_docs) if isinstance(retrieved_docs, list) else 0}, merged_documents={len(merged_documents) if isinstance(merged_documents, list) else 0}, top_retrieved_docs={len(top_retrieved_docs) if isinstance(top_retrieved_docs, list) else 0}, top_merged_docs={len(top_merged_docs) if isinstance(top_merged_docs, list) else 0}")
-                        print(f"[DEBUG] node_wrappers ({node_name}): result - retrieved_docs type={type(retrieved_docs).__name__}, is_list={isinstance(retrieved_docs, list)}, has_length={len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): result - search_group retrieved_docs={len(retrieved_docs) if isinstance(retrieved_docs, list) else 0}, merged_documents={len(merged_documents) if isinstance(merged_documents, list) else 0}, top_retrieved_docs={len(top_retrieved_docs) if isinstance(top_retrieved_docs, list) else 0}, top_merged_docs={len(top_merged_docs) if isinstance(top_merged_docs, list) else 0}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): result - retrieved_docs type={type(retrieved_docs).__name__}, is_list={isinstance(retrieved_docs, list)}, has_length={len(retrieved_docs) if isinstance(retrieved_docs, list) else 'N/A'}")
 
                         # retrieved_docs 또는 merged_documents가 있으면 전역 캐시에 저장
                         final_retrieved_docs = (retrieved_docs if isinstance(retrieved_docs, list) and len(retrieved_docs) > 0 else
@@ -676,16 +705,16 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                                merged_documents if isinstance(merged_documents, list) and len(merged_documents) > 0 else
                                                top_merged_docs if isinstance(top_merged_docs, list) and len(top_merged_docs) > 0 else [])
 
-                        print(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}, is_list={isinstance(final_retrieved_docs, list)}, has_length={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 'N/A'}")
+                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}, is_list={isinstance(final_retrieved_docs, list)}, has_length={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 'N/A'}")
 
                         # 개선 2.1: process_search_results_combined 실행 후 retrieved_docs 전역 캐시 저장 확인
                         if node_name == "process_search_results_combined":
-                            print(f"[DEBUG] node_wrappers ({node_name}): process_search_results_combined 실행 완료 - result 구조 분석 중...", flush=True)
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): process_search_results_combined 실행 완료 - result 구조 분석 중...")
 
                             # result 전체 구조 출력
                             if isinstance(result, dict):
                                 result_keys = list(result.keys())
-                                print(f"[DEBUG] node_wrappers ({node_name}): result keys: {result_keys}", flush=True)
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): result keys: {result_keys}")
 
                                 # retrieved_docs 찾기 시도 (모든 가능한 경로 확인)
                                 possible_paths = {
@@ -703,24 +732,24 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     if docs and isinstance(docs, list) and len(docs) > 0:
                                         found_path = path_name
                                         found_docs = docs
-                                        print(f"[DEBUG] node_wrappers ({node_name}): ✅ retrieved_docs를 {path_name}에서 찾음 - 개수: {len(docs)}", flush=True)
+                                        logger.debug(f"[DEBUG] node_wrappers ({node_name}): ✅ retrieved_docs를 {path_name}에서 찾음 - 개수: {len(docs)}")
                                         break
 
                                 if found_docs:
                                     final_retrieved_docs = found_docs
                                 else:
-                                    print(f"[DEBUG] node_wrappers ({node_name}): ❌ retrieved_docs를 찾을 수 없음 - 모든 경로 확인 완료", flush=True)
+                                    logger.debug(f"[DEBUG] node_wrappers ({node_name}): ❌ retrieved_docs를 찾을 수 없음 - 모든 경로 확인 완료")
                                     # 각 경로의 상세 정보 출력
                                     for path_name, docs in possible_paths.items():
                                         docs_type = type(docs).__name__
                                         docs_len = len(docs) if isinstance(docs, list) else 'N/A'
                                         docs_sample = docs[:1] if isinstance(docs, list) and len(docs) > 0 else None
-                                        print(f"[DEBUG] node_wrappers ({node_name}):   - {path_name}: type={docs_type}, len={docs_len}, sample={docs_sample}", flush=True)
+                                        logger.debug(f"[DEBUG] node_wrappers ({node_name}):   - {path_name}: type={docs_type}, len={docs_len}, sample={docs_sample}")
                             else:
-                                print(f"[DEBUG] node_wrappers ({node_name}): ⚠️ result가 dict가 아님 - type: {type(result).__name__}", flush=True)
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): ⚠️ result가 dict가 아님 - type: {type(result).__name__}")
 
                             # final_retrieved_docs 현재 상태 확인
-                            print(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}", flush=True)
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): final_retrieved_docs={len(final_retrieved_docs) if isinstance(final_retrieved_docs, list) else 0}, type={type(final_retrieved_docs).__name__}")
 
                         if isinstance(final_retrieved_docs, list) and len(final_retrieved_docs) > 0:
                             # global 선언은 wrapper 함수 시작 부분에 이미 있음
@@ -749,15 +778,15 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 _global_search_results_cache["search"]["retrieved_docs"] = final_retrieved_docs
                                 _global_search_results_cache["search"]["merged_documents"] = final_retrieved_docs
 
-                            print(f"[DEBUG] node_wrappers ({node_name}): ✅ Saved retrieved_docs to global cache - count={len(final_retrieved_docs)}, cache has search group={bool(_global_search_results_cache.get('search'))}")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): ✅ Saved retrieved_docs to global cache - count={len(final_retrieved_docs)}, cache has search group={bool(_global_search_results_cache.get('search'))}")
                             # 개선 3: 저장 후 검증
                             cached_count = len(_global_search_results_cache.get("retrieved_docs", []))
                             cached_search_count = len(_global_search_results_cache.get("search", {}).get("retrieved_docs", []))
-                            print(f"[DEBUG] node_wrappers ({node_name}): 전역 캐시 검증 - 최상위: {cached_count}, search 그룹: {cached_search_count}")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): 전역 캐시 검증 - 최상위: {cached_count}, search 그룹: {cached_search_count}")
                         else:
-                            print(f"[DEBUG] node_wrappers ({node_name}): ⚠️ WARNING - result has no retrieved_docs or merged_documents in search group or top level")
+                            logger.debug(f"[DEBUG] node_wrappers ({node_name}): ⚠️ WARNING - result has no retrieved_docs or merged_documents in search group or top level")
                             if node_name == "process_search_results_combined":
-                                print(f"[DEBUG] node_wrappers ({node_name}): ❌ process_search_results_combined에서 retrieved_docs가 저장되지 않았습니다!")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): ❌ process_search_results_combined에서 retrieved_docs가 저장되지 않았습니다!")
 
                     # execute_searches_parallel의 result 처리 (이전 코드 유지)
                     if node_name == "execute_searches_parallel":
@@ -768,8 +797,8 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             if semantic_results or keyword_results:
                                 semantic_count = len(semantic_results)
                                 keyword_count = len(keyword_results)
-                                print(f"[DEBUG] node_wrappers ({node_name}): Result has search group with data before return - semantic={semantic_count}, keyword={keyword_count}")
-                                print(f"[DEBUG] node_wrappers ({node_name}): Result keys before return: {list(result.keys())}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Result has search group with data before return - semantic={semantic_count}, keyword={keyword_count}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Result keys before return: {list(result.keys())}")
 
                                 # LangGraph reducer 손실 대비: result의 모든 필드를 명시적으로 포함
                                 # 특히 search 그룹의 모든 필드를 최상위 레벨에도 포함 (Flat 구조 호환)
@@ -781,7 +810,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     result["semantic_count"] = semantic_count
                                 if "keyword_count" not in result:
                                     result["keyword_count"] = keyword_count
-                                print(f"[DEBUG] node_wrappers ({node_name}): Added search fields to top level - semantic_results={len(result.get('semantic_results', []))}, keyword_results={len(result.get('keyword_results', []))}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Added search fields to top level - semantic_results={len(result.get('semantic_results', []))}, keyword_results={len(result.get('keyword_results', []))}")
 
                                 # 전역 캐시에 저장 (LangGraph reducer 손실 대비)
                                 # 중요: query_complexity와 needs_search 보존 (classify_complexity에서 저장한 값)
@@ -796,7 +825,7 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                     if preserved_needs_search is not None:
                                         _global_search_results_cache["needs_search"] = preserved_needs_search
 
-                                print(f"[DEBUG] node_wrappers ({node_name}): Saved to global cache - semantic={semantic_count}, keyword={keyword_count}, complexity={preserved_complexity}")
+                                logger.debug(f"[DEBUG] node_wrappers ({node_name}): Saved to global cache - semantic={semantic_count}, keyword={keyword_count}, complexity={preserved_complexity}")
 
                     if "input" in state and isinstance(state.get("input"), dict):
                         # Nested 구조면 그대로 반환하되, 모든 필수 그룹 포함 확인

@@ -5,6 +5,10 @@ Classification Edges
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Optional
 
 from langgraph.graph import StateGraph
@@ -12,7 +16,7 @@ from langgraph.graph import StateGraph
 from core.workflow.state.state_definitions import LegalWorkflowState
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ClassificationEdges:

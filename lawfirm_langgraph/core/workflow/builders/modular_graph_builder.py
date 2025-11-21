@@ -5,6 +5,10 @@ Modular Graph Builder
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 from typing import Optional
 
@@ -19,7 +23,7 @@ from core.workflow.edges.answer_edges import AnswerEdges
 from core.workflow.edges.agentic_edges import AgenticEdges
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ModularGraphBuilder:
@@ -87,7 +91,7 @@ class ModularGraphBuilder:
         for node_name, node_func in nodes.items():
             if node_func:
                 workflow.add_node(node_name, node_func)
-                self.logger.info(f"노드 등록됨: {node_name}")
+                self.logger.trace(f"노드 등록됨: {node_name}")
             else:
                 self.logger.warning(f"노드 함수가 None입니다: {node_name}")
     
@@ -96,7 +100,6 @@ class ModularGraphBuilder:
         subgraphs = self.subgraph_registry.get_all_subgraphs()
         for subgraph_name, subgraph in subgraphs.items():
             workflow.add_node(subgraph_name, subgraph)
-            self.logger.info(f"서브그래프 등록됨: {subgraph_name}")
     
     def _add_edges(self, workflow: StateGraph) -> None:
         """엣지 추가"""

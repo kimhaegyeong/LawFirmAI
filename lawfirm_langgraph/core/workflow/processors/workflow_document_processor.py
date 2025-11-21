@@ -5,11 +5,15 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 import sys
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class WorkflowDocumentProcessor:
@@ -113,9 +117,11 @@ class WorkflowDocumentProcessor:
         legal_field: str,
         select_balanced_documents_func=None,
         extract_query_relevant_sentences_func=None,
-        generate_document_based_instructions_func=None
+        generate_document_based_instructions_func=None,
+        max_context_length: int = 4000,  # 성능 최적화: 기본값 4000자로 제한
+        min_docs_by_query_type: Dict[str, int] = None  # 질문 유형별 최소 문서 수 (기본값: None)
     ) -> Dict[str, Any]:
-        """프롬프트에 최대한 반영되도록 최적화된 컨텍스트 구축"""
+        """프롬프트에 최대한 반영되도록 최적화된 컨텍스트 구축 (성능 최적화)"""
         try:
             if not retrieved_docs:
                 self.logger.warning("build_prompt_optimized_context: retrieved_docs is empty")
@@ -130,8 +136,8 @@ class WorkflowDocumentProcessor:
             invalid_docs_count = 0
             
             # 질의와 검색된 문서의 relevance_score 로깅 (모든 문서)
-            self.logger.info(f"📊 [RELEVANCE SCORES] 질의: '{query}'")
-            self.logger.info(f"📊 [RELEVANCE SCORES] 검색된 문서 수: {len(retrieved_docs)}개")
+            self.logger.debug(f"📊 [RELEVANCE SCORES] 질의: '{query}'")
+            self.logger.debug(f"📊 [RELEVANCE SCORES] 검색된 문서 수: {len(retrieved_docs)}개")
             
             # 개선: 동적 임계값 조정 (검색 결과 점수 분포 분석) - 개선 버전
             scores = [doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0) 
@@ -158,15 +164,15 @@ class WorkflowDocumentProcessor:
                 max_score = max(scores_only)
                 min_score = min(scores_only)
                 median_score = sorted(scores_only)[len(scores_only) // 2]
-                self.logger.info(
+                self.logger.debug(
                     f"📊 [SCORE STATS] 평균={avg_score:.3f}, 최대={max_score:.3f}, 최소={min_score:.3f}, 중앙값={median_score:.3f}"
                 )
                 
                 # 모든 문서의 점수 상세 로깅 (정렬된 순서)
                 doc_scores_sorted = sorted(doc_scores, key=lambda x: x[0], reverse=True)
-                self.logger.info(f"📊 [ALL DOCS SCORES] 모든 {len(doc_scores_sorted)}개 문서의 relevance_score:")
+                self.logger.debug(f"📊 [ALL DOCS SCORES] 모든 {len(doc_scores_sorted)}개 문서의 relevance_score:")
                 for i, (score, similarity, keyword_score, doc_id, doc_type, source, content_preview, doc) in enumerate(doc_scores_sorted, 1):
-                    self.logger.info(
+                    self.logger.debug(
                         f"   {i}. final_score={score:.3f}, similarity={similarity:.3f}, keyword={keyword_score:.3f}, "
                         f"type={doc_type}, id={doc_id[:50]}, source={source}, "
                         f"content_preview={content_preview}"
@@ -211,31 +217,31 @@ class WorkflowDocumentProcessor:
                     # 검색 결과가 충분하면 조정 없음
                     threshold_adjustment = 0.0
                 
-                # 점수 분포에 따라 동적 임계값 계산 (개선된 로직)
+                # 점수 분포에 따라 동적 임계값 계산 (개선된 로직 - 더 완화)
                 # 실제 점수 범위를 고려하여 threshold를 더 낮게 설정
                 # avg_score가 낮으면(0.2 미만) 임계값을 더 낮춤
                 if avg_score < 0.20:
                     # 평균 점수가 매우 낮으면 최소값 기준으로 매우 낮게 설정
-                    # 최소값의 95% 이상을 포함하도록 (거의 모든 문서 포함)
-                    dynamic_threshold = max(0.10, min_score * 0.95 + threshold_adjustment)
-                    self.logger.info(f"📊 [LOW SCORE] Average score is very low ({avg_score:.3f}), using minimum-based threshold: {dynamic_threshold:.3f}")
+                    # 최소값의 85% 이상을 포함하도록 (더 많은 문서 포함)
+                    dynamic_threshold = max(0.05, min_score * 0.85 + threshold_adjustment)
+                    self.logger.debug(f"📊 [LOW SCORE] Average score is very low ({avg_score:.3f}), using minimum-based threshold: {dynamic_threshold:.3f}")
                 elif score_range < 0.15:
-                    # 점수가 매우 비슷하면 최소값 기준으로 낮춤 (최소값의 90% 이상)
-                    dynamic_threshold = max(0.12, min_score * 0.90 + threshold_adjustment)
+                    # 점수가 매우 비슷하면 최소값 기준으로 낮춤 (최소값의 85% 이상)
+                    dynamic_threshold = max(0.08, min_score * 0.85 + threshold_adjustment)
                 elif score_range < 0.25:
                     # 점수가 비슷하면 25% 분위수 기준 (더 낮게)
-                    dynamic_threshold = max(0.15, q25 - 0.05 + threshold_adjustment)
+                    dynamic_threshold = max(0.10, q25 - 0.08 + threshold_adjustment)
                 elif score_range < 0.4:
                     # 점수 차이가 중간이면 평균 기준 (표준편차 고려, 더 낮게)
                     if std_dev > 0.1:
-                        # 분산이 크면 평균 - 표준편차 * 1.5 (더 완화)
-                        dynamic_threshold = max(0.15, avg_score - std_dev * 1.5 + threshold_adjustment)
+                        # 분산이 크면 평균 - 표준편차 * 2.0 (더 완화)
+                        dynamic_threshold = max(0.10, avg_score - std_dev * 2.0 + threshold_adjustment)
                     else:
-                        # 분산이 작으면 평균 - 0.10 (더 완화)
-                        dynamic_threshold = max(0.15, avg_score - 0.10 + threshold_adjustment)
+                        # 분산이 작으면 평균 - 0.15 (더 완화)
+                        dynamic_threshold = max(0.10, avg_score - 0.15 + threshold_adjustment)
                 else:
                     # 점수 차이가 크면 중위수 기준 (이상치 영향 최소화, 더 낮게)
-                    dynamic_threshold = max(0.20, q50 - 0.05 + threshold_adjustment)
+                    dynamic_threshold = max(0.15, q50 - 0.10 + threshold_adjustment)
                 
                 threshold_msg = (
                     f"📊 [DYNAMIC THRESHOLD] avg={avg_score:.3f}, "
@@ -244,7 +250,7 @@ class WorkflowDocumentProcessor:
                     f"num_results={num_results}, threshold={dynamic_threshold:.3f}"
                 )
                 print(threshold_msg, flush=True, file=sys.stdout)
-                self.logger.info(threshold_msg)
+                self.logger.debug(threshold_msg)
             else:
                 dynamic_threshold = 0.35
             
@@ -252,20 +258,20 @@ class WorkflowDocumentProcessor:
             # 실제 점수 범위를 고려하여 더 완화된 기준 적용
             # avg_score가 낮으면(0.2 미만) 모든 타입의 기준을 더 낮춤
             if avg_score < 0.20:
-                # 평균 점수가 낮으면 모든 타입의 기준을 매우 낮게 설정
-                min_relevance_score_semantic = max(0.10, dynamic_threshold - 0.05)
-                min_relevance_score_keyword = max(0.10, dynamic_threshold - 0.05)
-                min_relevance_score_statute_article = max(0.08, dynamic_threshold - 0.12)
-                min_relevance_score_precedent = max(0.10, dynamic_threshold - 0.05)
-                min_relevance_score_general = max(0.12, dynamic_threshold - 0.08)
-                self.logger.info(f"📊 [LOW SCORE FILTER] Using relaxed thresholds due to low average score ({avg_score:.3f})")
+                # 평균 점수가 낮으면 모든 타입의 기준을 매우 낮게 설정 (더 완화)
+                min_relevance_score_semantic = max(0.05, dynamic_threshold - 0.08)
+                min_relevance_score_keyword = max(0.05, dynamic_threshold - 0.08)
+                min_relevance_score_statute_article = max(0.03, dynamic_threshold - 0.15)
+                min_relevance_score_precedent = max(0.05, dynamic_threshold - 0.08)
+                min_relevance_score_general = max(0.08, dynamic_threshold - 0.12)
+                self.logger.debug(f"📊 [LOW SCORE FILTER] Using relaxed thresholds due to low average score ({avg_score:.3f})")
             else:
-                # 평균 점수가 정상이면 기존 로직 사용
-                min_relevance_score_semantic = max(0.15, dynamic_threshold - 0.05)
-                min_relevance_score_keyword = max(0.15, dynamic_threshold - 0.05)
-                min_relevance_score_statute_article = max(0.10, dynamic_threshold - 0.10)
-                min_relevance_score_precedent = max(0.15, dynamic_threshold - 0.05)
-                min_relevance_score_general = max(0.20, dynamic_threshold)
+                # 평균 점수가 정상이면 기존 로직 사용 (더 완화)
+                min_relevance_score_semantic = max(0.10, dynamic_threshold - 0.08)
+                min_relevance_score_keyword = max(0.10, dynamic_threshold - 0.08)
+                min_relevance_score_statute_article = max(0.05, dynamic_threshold - 0.15)
+                min_relevance_score_precedent = max(0.10, dynamic_threshold - 0.08)
+                min_relevance_score_general = max(0.15, dynamic_threshold - 0.05)
             
             # 개선 7: 질문 핵심 키워드 추출 (간단한 버전)
             query_lower = query.lower()
@@ -300,18 +306,36 @@ class WorkflowDocumentProcessor:
             
             # 유효한 문서가 없으면 경고 및 폴백
             if not valid_docs_for_prompt:
-                self.logger.error(
-                    f"❌ [PROMPT BUILD] 유효한 문서 없음: "
+                self.logger.warning(
+                    f"⚠️ [PROMPT BUILD] 유효한 문서 없음: "
                     f"retrieved_docs={len(retrieved_docs)}, "
-                    f"valid_docs=0"
+                    f"valid_docs=0, "
+                    f"invalid_docs={invalid_docs_count}"
                 )
                 # 폴백: 원본 문서에서 최소한의 내용이라도 추출
-                for doc in retrieved_docs[:5]:  # 최대 5개만 시도
+                # 최소 길이 기준을 완화하고 다양한 필드에서 내용 추출 시도
+                for doc in retrieved_docs[:10]:  # 최대 10개로 증가
                     if not isinstance(doc, dict):
                         continue
-                    content = str(doc.get("content", "")) + str(doc.get("text", ""))
-                    if len(content.strip()) >= 5:  # 최소 길이 완화
+                    
+                    # 다양한 필드에서 내용 추출 시도
+                    content = (
+                        str(doc.get("content", "")) or
+                        str(doc.get("text", "")) or
+                        str(doc.get("content_text", "")) or
+                        str(doc.get("summary", "")) or
+                        str(doc.get("title", "")) or
+                        ""
+                    )
+                    
+                    # 최소 길이 완화 (5자 -> 3자)
+                    if len(content.strip()) >= 3:
                         valid_docs_for_prompt.append({**doc, "content": content})
+                        self.logger.debug(
+                            f"✅ [PROMPT BUILD] 폴백으로 문서 포함: "
+                            f"doc_id={doc.get('id', 'unknown')}, "
+                            f"content_len={len(content)}"
+                        )
             
             if not valid_docs_for_prompt:
                 self.logger.error(
@@ -447,6 +471,117 @@ class WorkflowDocumentProcessor:
                     f"(no content, content too short, or relevance < threshold). Valid docs: {len(valid_docs)}"
                 )
             
+            # 질문 유형별 최소 문서 수 설정
+            if min_docs_by_query_type is None:
+                min_docs_by_query_type = {
+                    "law_inquiry": 5,        # 법령 조회: 더 많은 문서 필요
+                    "case_inquiry": 5,       # 판례 조회: 더 많은 문서 필요
+                    "complex_question": 5,   # 복잡한 질문: 더 많은 문서 필요
+                    "general": 3,            # 일반 질문: 기본값
+                    "simple_question": 2,    # 간단한 질문: 적은 문서로 충분
+                    "greeting": 0            # 인사: 문서 불필요
+                }
+            
+            # 질문 유형에 따른 최소 문서 수 결정
+            MIN_DOCS_REQUIRED = min_docs_by_query_type.get(query_type, 3)  # 기본값: 3개
+            if len(valid_docs) < MIN_DOCS_REQUIRED and retrieved_docs:
+                self.logger.warning(
+                    f"⚠️ [MIN DOCS] 유효한 문서가 {len(valid_docs)}개로 부족합니다. "
+                    f"최소 {MIN_DOCS_REQUIRED}개 보장을 위해 필터링 기준을 완화합니다. "
+                    f"(total retrieved: {len(retrieved_docs)})"
+                )
+                
+                # relevance_score 분포 분석
+                relevance_scores = []
+                for doc in retrieved_docs:
+                    if isinstance(doc, dict):
+                        score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                        relevance_scores.append(score)
+                
+                if relevance_scores:
+                    min_rel_score = min(relevance_scores)
+                    max_rel_score = max(relevance_scores)
+                    avg_rel_score = sum(relevance_scores) / len(relevance_scores)
+                    
+                    # 분포에 따라 동적으로 relaxed_min_score 설정 (더 완화)
+                    if avg_rel_score < 0.20:
+                        # 평균이 매우 낮으면 최소값 기준으로 설정 (더 완화)
+                        relaxed_min_score = max(0.03, min_rel_score * 0.85)
+                    elif avg_rel_score < 0.30:
+                        # 평균이 낮으면 평균의 70% 기준 (더 완화)
+                        relaxed_min_score = max(0.05, avg_rel_score * 0.70)
+                    else:
+                        # 평균이 정상이면 더 완화된 기준
+                        relaxed_min_score = 0.08
+                    
+                    self.logger.info(
+                        f"📊 [RELAXED FILTER] Score distribution - min={min_rel_score:.3f}, "
+                        f"max={max_rel_score:.3f}, avg={avg_rel_score:.3f}, "
+                        f"relaxed_threshold={relaxed_min_score:.3f}"
+                    )
+                else:
+                    relaxed_min_score = 0.05  # 더 완화
+                
+                # 이미 포함된 문서 ID 추적
+                existing_doc_ids = set()
+                for doc in valid_docs:
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
+                    existing_doc_ids.add(doc_id)
+                
+                # 필터링 기준을 매우 완화하여 추가 문서 포함
+                for doc in retrieved_docs:
+                    if not isinstance(doc, dict):
+                        continue
+                    
+                    # 중복 체크
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
+                    if doc_id in existing_doc_ids:
+                        continue
+                    
+                    content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                    if not content or len(content.strip()) < 3:  # 최소 길이도 완화 (5 → 3)
+                        continue
+                    
+                    relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                    if relevance_score >= relaxed_min_score:
+                        valid_docs.append(doc)
+                        existing_doc_ids.add(doc_id)
+                        if len(valid_docs) >= MIN_DOCS_REQUIRED:
+                            break
+                
+                # 여전히 부족하면 더 완화
+                if len(valid_docs) < MIN_DOCS_REQUIRED:
+                    self.logger.warning(
+                        f"⚠️ [MIN DOCS] 여전히 부족 ({len(valid_docs)}개). "
+                        f"임계값을 더 완화하여 추가 문서 포함 시도..."
+                    )
+                    relaxed_min_score = max(0.01, relaxed_min_score * 0.5)  # 임계값을 절반으로
+                    
+                    for doc in retrieved_docs:
+                        if not isinstance(doc, dict):
+                            continue
+                        
+                        doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
+                        if doc_id in existing_doc_ids:
+                            continue
+                        
+                        content = doc.get("content") or doc.get("text") or doc.get("content_text", "")
+                        if not content or len(content.strip()) < 3:
+                            continue
+                        
+                        relevance_score = doc.get("relevance_score", 0.0) or doc.get("final_weighted_score", 0.0)
+                        if relevance_score >= relaxed_min_score:
+                            valid_docs.append(doc)
+                            existing_doc_ids.add(doc_id)
+                            if len(valid_docs) >= MIN_DOCS_REQUIRED:
+                                break
+                
+                if valid_docs:
+                    self.logger.info(
+                        f"✅ [MIN DOCS] 최소 문서 수 보장 완료: {len(valid_docs)}개 "
+                        f"(relaxed_threshold={relaxed_min_score:.3f})"
+                    )
+            
             # 검색 결과가 적을 때 필터링 기준 완화하여 최소 문서 수 보장 (검색 품질 개선)
             if not valid_docs and retrieved_docs:
                 self.logger.warning(
@@ -579,9 +714,22 @@ class WorkflowDocumentProcessor:
             # 우선순위 7: 성능 최적화 - 점수 계산 캐싱
             if vector_docs:
                 # 점수 계산을 한 번만 수행하여 재사용
+                # 개선: 검색 시점 점수(relevance_score)를 우선 사용
+                # final_weighted_score가 검색 점수보다 낮을 수 있으므로 두 점수 중 높은 것을 사용
                 doc_scores = []
                 for doc in vector_docs:
-                    score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
+                    relevance_score = doc.get("relevance_score", 0.0)
+                    final_weighted_score = doc.get("final_weighted_score", 0.0)
+                    
+                    # 검색 시점 점수를 우선 사용하되, final_weighted_score가 더 높으면 사용
+                    # 검색 점수가 높다는 것은 문서가 질의와 매우 관련이 높다는 의미
+                    if final_weighted_score > 0:
+                        # 두 점수 중 높은 것을 사용 (검색 점수 보호)
+                        score = max(relevance_score, final_weighted_score)
+                    else:
+                        # final_weighted_score가 없으면 검색 점수 사용
+                        score = relevance_score
+                    
                     doc_scores.append((doc, score))
                 
                 scores = [score for _, score in doc_scores]
@@ -589,22 +737,32 @@ class WorkflowDocumentProcessor:
                 max_score = max(scores) if scores else 0.0
                 min_score = min(scores) if scores else 0.0
                 
-                # 동적 임계값 계산: 평균 점수의 80% 또는 최소 0.60
-                dynamic_threshold = max(0.60, min(0.75, avg_score * 0.8))
+                # 동적 임계값 계산: 평균 점수의 80% 또는 최소 0.50
+                # 개선: 검색 시점 점수를 우선 사용하므로 임계값을 원래대로 복원
+                # 검색 점수가 높으면 (0.8 이상) 더 높은 임계값 사용 가능
+                if avg_score >= 0.80:
+                    # 검색 점수가 매우 높으면 높은 임계값 사용
+                    dynamic_threshold = max(0.60, min(0.75, avg_score * 0.8))
+                elif avg_score >= 0.60:
+                    # 검색 점수가 높으면 중간 임계값 사용
+                    dynamic_threshold = max(0.50, min(0.70, avg_score * 0.75))
+                else:
+                    # 검색 점수가 낮으면 낮은 임계값 사용
+                    dynamic_threshold = max(0.40, avg_score * 0.7)
                 
-                # 점수 분포가 낮으면 임계값 완화
-                if avg_score < 0.70:
-                    dynamic_threshold = max(0.50, avg_score * 0.7)
+                # 점수 분포가 낮으면 임계값 더 완화
+                if avg_score < 0.60:
+                    dynamic_threshold = max(0.30, avg_score * 0.6)
                 
                 # statute_article 타입은 더 낮은 임계값 적용
                 statute_docs = [d for d in vector_docs if (d.get("type") == "statute_article" or d.get("source_type") == "statute_article")]
                 if statute_docs:
-                    statute_threshold = max(0.40, dynamic_threshold * 0.8)
+                    statute_threshold = max(0.25, dynamic_threshold * 0.7)
                 else:
                     statute_threshold = dynamic_threshold
             else:
-                dynamic_threshold = 0.75
-                statute_threshold = 0.60
+                dynamic_threshold = 0.60  # 검색 점수 우선 사용하므로 원래대로 복원
+                statute_threshold = 0.50  # 검색 점수 우선 사용하므로 원래대로 복원
             
             # 우선순위 6: 성능 최적화 - 검증 결과 캐싱 및 배치 처리
             filtered_vector_docs = []
@@ -647,11 +805,11 @@ class WorkflowDocumentProcessor:
                     validation_cache[doc_id] = True
                     filtered_vector_docs.append(doc)
             
-            # 결과가 부족하면 임계값을 점진적으로 낮춤
-            min_docs_needed = 3
+            # 결과가 부족하면 임계값을 점진적으로 낮춤 (강화)
+            min_docs_needed = 5  # 증가: 3 → 5
             if len(filtered_vector_docs) < min_docs_needed and len(vector_docs) >= min_docs_needed:
-                # 임계값을 0.1씩 낮춰가며 재시도
-                for relaxed_threshold in [dynamic_threshold - 0.1, dynamic_threshold - 0.2, 0.30]:
+                # 임계값을 더 낮춰가며 재시도 (검증 완화)
+                for relaxed_threshold in [dynamic_threshold - 0.1, dynamic_threshold - 0.2, 0.20, 0.10]:
                     if len(filtered_vector_docs) >= min_docs_needed:
                         break
                     for doc in vector_docs:
@@ -659,12 +817,27 @@ class WorkflowDocumentProcessor:
                             continue
                         score = doc.get("final_weighted_score", doc.get("relevance_score", 0.0))
                         if score >= relaxed_threshold:
-                            # 검증은 완화된 기준으로 수행
+                            # 검증은 완화된 기준으로 수행 (최소 길이만 확인)
                             content = doc.get("content") or doc.get("text", "")
-                            if content and len(content.strip()) >= 5:  # 최소 길이만 확인
+                            if content and len(content.strip()) >= 3:  # 최소 길이 완화: 5 → 3
                                 filtered_vector_docs.append(doc)
                                 if len(filtered_vector_docs) >= min_docs_needed:
                                     break
+                
+                # 여전히 부족하면 검증 없이 포함
+                if len(filtered_vector_docs) < min_docs_needed:
+                    self.logger.warning(
+                        f"⚠️ [VECTOR FILTER] 최소 문서 수 미달: {len(filtered_vector_docs)}개 (목표: {min_docs_needed}개). "
+                        f"검증 없이 추가 문서 포함 시도..."
+                    )
+                    for doc in vector_docs:
+                        if len(filtered_vector_docs) >= min_docs_needed:
+                            break
+                        if doc not in filtered_vector_docs:
+                            content = doc.get("content") or doc.get("text", "")
+                            if content and len(content.strip()) >= 3:
+                                filtered_vector_docs.append(doc)
+                
                 if len(filtered_vector_docs) < min_docs_needed:
                     self.logger.warning(
                         f"⚠️ [VECTOR FILTER] 최소 문서 수 미달: {len(filtered_vector_docs)}개 (목표: {min_docs_needed}개)"
@@ -784,6 +957,34 @@ class WorkflowDocumentProcessor:
                         f"⚠️ [DOCUMENT LOSS] select_balanced_documents: {lost_count} documents lost "
                         f"({len(valid_docs)} → {len(sorted_docs)}, max_docs={max_docs_for_prompt})"
                     )
+            
+            # 최소 문서 수 보장 (필터링 후에도 최소 3개 보장)
+            MIN_DOCS_AFTER_FILTER = 3
+            if len(sorted_docs) < MIN_DOCS_AFTER_FILTER and valid_docs:
+                self.logger.warning(
+                    f"⚠️ [MIN DOCS AFTER FILTER] 필터링 후 문서가 {len(sorted_docs)}개로 부족합니다. "
+                    f"최소 {MIN_DOCS_AFTER_FILTER}개 보장을 위해 추가 문서 포함..."
+                )
+                
+                # 이미 포함된 문서 ID 추적
+                existing_doc_ids = set()
+                for doc in sorted_docs:
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
+                    existing_doc_ids.add(doc_id)
+                
+                # valid_docs에서 추가 문서 선택
+                for doc in valid_docs:
+                    if len(sorted_docs) >= MIN_DOCS_AFTER_FILTER:
+                        break
+                    
+                    doc_id = doc.get("id") or doc.get("doc_id") or doc.get("document_id") or str(doc.get("source", ""))
+                    if doc_id not in existing_doc_ids:
+                        sorted_docs.append(doc)
+                        existing_doc_ids.add(doc_id)
+                
+                self.logger.info(
+                    f"✅ [MIN DOCS AFTER FILTER] 최소 문서 수 보장 완료: {len(sorted_docs)}개"
+                )
             
             # 우선순위 1 개선: 빈 문서 처리 - 원본 retrieved_docs에서 상위 문서 선택
             if not sorted_docs:
@@ -965,11 +1166,15 @@ class WorkflowDocumentProcessor:
                         content_validation["total_content_length"] += len(content)
                         content_validation["documents_with_content"] += 1
             
+            # 프롬프트 검증 강화: 최소 문서 수 및 최소 길이 확인
+            MIN_PROMPT_LENGTH = 500  # 최소 프롬프트 길이
+            MIN_DOCS_IN_PROMPT = 2  # 프롬프트에 포함될 최소 문서 수
+            
             # 프롬프트 길이 검증
-            if len(prompt_section.strip()) < 100:
-                self.logger.error(
-                    f"❌ [PROMPT BUILD] 프롬프트가 너무 짧음: "
-                    f"length={len(prompt_section)}, "
+            if len(prompt_section.strip()) < MIN_PROMPT_LENGTH:
+                self.logger.warning(
+                    f"⚠️ [PROMPT VALIDATION] 프롬프트가 너무 짧음: "
+                    f"length={len(prompt_section)} < {MIN_PROMPT_LENGTH}, "
                     f"valid_docs={len(sorted_docs)}"
                 )
             
@@ -978,6 +1183,13 @@ class WorkflowDocumentProcessor:
                 len(self._extract_doc_content(doc).strip()) >= 10 
                 for doc in sorted_docs
             )
+            
+            # 문서 수 검증
+            if len(sorted_docs) < MIN_DOCS_IN_PROMPT:
+                self.logger.warning(
+                    f"⚠️ [PROMPT VALIDATION] 프롬프트에 포함된 문서 수가 부족: "
+                    f"{len(sorted_docs)} < {MIN_DOCS_IN_PROMPT}"
+                )
             
             # 문서 내용이 없을 때 재구성 시도
             if not content_validation["has_document_content"] and len(sorted_docs) > 0:
@@ -1418,8 +1630,16 @@ class WorkflowDocumentProcessor:
         if not sorted_docs:
             return []
         
+        # 최소 문서 수 보장 (최소 3개)
+        MIN_DOCS_REQUIRED = 3
+        
         # 개선: 문서 수가 max_docs보다 적으면 모든 문서 반환 (손실 방지)
         if len(sorted_docs) <= max_docs:
+            # 최소 문서 수 보장 확인
+            if len(sorted_docs) < MIN_DOCS_REQUIRED:
+                self.logger.warning(
+                    f"⚠️ [MIN DOCS] 문서 수가 최소 요구사항({MIN_DOCS_REQUIRED}개)보다 적습니다: {len(sorted_docs)}개"
+                )
             self.logger.debug(
                 f"✅ [DOCUMENT SELECTION] 모든 문서 선택 (문서 수={len(sorted_docs)} <= max_docs={max_docs})"
             )
@@ -1502,6 +1722,43 @@ class WorkflowDocumentProcessor:
         )
         
         result = selected_docs[:max_docs]
+        
+        # 최소 문서 수 보장 (최소 3개)
+        MIN_DOCS_REQUIRED = 3
+        if len(result) < MIN_DOCS_REQUIRED and len(sorted_docs) >= MIN_DOCS_REQUIRED:
+            self.logger.warning(
+                f"⚠️ [MIN DOCS] 선택된 문서가 최소 요구사항({MIN_DOCS_REQUIRED}개)보다 적습니다: {len(result)}개. "
+                f"추가 문서 포함 중..."
+            )
+            # 이미 포함된 문서 ID 추적
+            existing_doc_ids = set()
+            for doc in result:
+                doc_id = (
+                    doc.get("id") or 
+                    doc.get("doc_id") or 
+                    doc.get("document_id") or 
+                    id(doc)
+                )
+                existing_doc_ids.add(doc_id)
+            
+            # 추가 문서 포함
+            for doc in sorted_docs:
+                if len(result) >= MIN_DOCS_REQUIRED:
+                    break
+                
+                doc_id = (
+                    doc.get("id") or 
+                    doc.get("doc_id") or 
+                    doc.get("document_id") or 
+                    id(doc)
+                )
+                if doc_id not in existing_doc_ids:
+                    result.append(doc)
+                    existing_doc_ids.add(doc_id)
+            
+            self.logger.info(
+                f"✅ [MIN DOCS] 최소 문서 수 보장 완료: {len(result)}개"
+            )
         
         # 문서 손실 확인 및 로깅
         if len(result) < len(sorted_docs):

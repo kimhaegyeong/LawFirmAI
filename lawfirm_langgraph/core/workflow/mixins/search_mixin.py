@@ -4,23 +4,14 @@ Search Mixin
 검색 관련 노드 및 메서드들을 제공하는 Mixin 클래스
 """
 
+import asyncio
 import re
-import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants, RetryConfig
-from core.workflow.state.workflow_types import QueryComplexity
+from core.workflow.utils.workflow_constants import RetryConfig
 from core.shared.wrappers.node_wrappers import with_state_optimization
-from core.generation.validators.quality_validators import SearchValidator
-from core.workflow.state.state_utils import prune_retrieved_docs, MAX_RETRIEVED_DOCS, MAX_DOCUMENT_CONTENT_LENGTH
-
-# Mock observe decorator (Langfuse 제거됨)
-def observe(**kwargs):
-    def decorator(func):
-        return func
-    return decorator
 
 # 성능 최적화: 정규식 패턴 컴파일 (모듈 레벨)
 LAW_PATTERN = re.compile(r'[가-힣]+법\s*제?\s*\d+\s*조')
@@ -201,7 +192,6 @@ class SearchMixin:
             "keyword_queries_created": keyword_queries_created
         }
     
-    @observe(name="prepare_search_query")
     @with_state_optimization("prepare_search_query", enable_reduction=False)
     def prepare_search_query(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """검색 쿼리 준비 및 최적화 전용 노드 (Part 2)"""
@@ -221,13 +211,17 @@ class SearchMixin:
                 state["common"]["metadata"] = {}
             state["common"]["metadata"]["_last_executed_node"] = "prepare_search_query"
 
-            self._ensure_input_group(state)
-            query_value, session_id_value = self._restore_query_from_state(state)
-            if query_value:
-                query_value = self._normalize_query_encoding(query_value)
-                state["input"]["query"] = query_value
-                if session_id_value:
-                    state["input"]["session_id"] = session_id_value
+            try:
+                self._ensure_input_group(state)
+                query_value, session_id_value = self._restore_query_from_state(state)
+                if query_value:
+                    query_value = self._normalize_query_encoding(query_value)
+                    state["input"]["query"] = query_value
+                    if session_id_value:
+                        state["input"]["session_id"] = session_id_value
+            except asyncio.CancelledError:
+                self.logger.warning("⚠️ [PREPARE SEARCH QUERY] Input restoration was cancelled. Preserving state.")
+                # 상태 보존을 위해 계속 진행
 
             # 재시도 카운터 관리
             metadata = state.get("metadata", {}) if isinstance(state.get("metadata"), dict) else {}
@@ -264,88 +258,124 @@ class SearchMixin:
                         f"죄송합니다. 질문 '{query}'에 대한 답변을 생성하는데 어려움이 있습니다.")
                 return state
 
-            query_info = self._get_query_info_for_optimization(state)
-            if not query_info["query"]:
-                self._set_answer_safely(state, "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
-                return state
-            
-            query = query_info["query"]
-            search_query = query_info["search_query"]
-            query_type_str = query_info["query_type_str"]
-            extracted_keywords = query_info["extracted_keywords"]
-            legal_field = query_info["legal_field"]
+            try:
+                query_info = self._get_query_info_for_optimization(state)
+                if not query_info["query"]:
+                    self._set_answer_safely(state, "죄송합니다. 질문을 이해하지 못했습니다. 다시 질문해주세요.")
+                    return state
+                
+                query = query_info["query"]
+                search_query = query_info["search_query"]
+                query_type_str = query_info["query_type_str"]
+                extracted_keywords = query_info["extracted_keywords"]
+                legal_field = query_info["legal_field"]
 
-            is_retry = (last_executed_node == "validate_answer_quality")
+                is_retry = (last_executed_node == "validate_answer_quality")
 
-            optimized_queries, cache_hit_optimization = self._optimize_query_with_cache(
-                search_query=search_query,
-                query_type_str=query_type_str,
-                extracted_keywords=extracted_keywords,
-                legal_field=legal_field,
-                is_retry=is_retry
-            )
-
-            if is_retry:
-                quality_feedback = self.answer_generator.get_quality_feedback_for_retry(state)
-                improved_query = self._improve_search_query_for_retry(
-                    optimized_queries["semantic_query"],
-                    quality_feedback,
-                    state
+                optimized_queries, cache_hit_optimization = self._optimize_query_with_cache(
+                    search_query=search_query,
+                    query_type_str=query_type_str,
+                    extracted_keywords=extracted_keywords,
+                    legal_field=legal_field,
+                    is_retry=is_retry
                 )
-                if improved_query != optimized_queries["semantic_query"]:
+
+                if is_retry:
+                    try:
+                        quality_feedback = self.answer_generator.get_quality_feedback_for_retry(state)
+                        improved_query = self._improve_search_query_for_retry(
+                            optimized_queries["semantic_query"],
+                            quality_feedback,
+                            state
+                        )
+                        if improved_query != optimized_queries["semantic_query"]:
+                            self.logger.info(
+                                f"🔍 [SEARCH RETRY] Improved query: '{optimized_queries['semantic_query']}' → '{improved_query}'"
+                            )
+                            optimized_queries["semantic_query"] = improved_query
+                            optimized_queries["keyword_queries"][0] = improved_query
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [PREPARE SEARCH QUERY] Query improvement was cancelled. Using original query.")
+                        # 원본 쿼리 사용
+
+                search_params = self._determine_search_parameters(
+                    query_type=query_type_str,
+                    query_complexity=len(query),
+                    keyword_count=len(extracted_keywords),
+                    is_retry=is_retry
+                )
+
+                self._set_state_value(state, "optimized_queries", optimized_queries)
+                self._set_state_value(state, "search_params", search_params)
+                self._set_state_value(state, "is_retry_search", is_retry)
+                self._set_state_value(state, "search_start_time", start_time)
+
+                validated_queries = self._validate_and_fix_optimized_queries(state, optimized_queries, query)
+                optimized_queries = validated_queries["optimized_queries"]
+                semantic_query_created = validated_queries["semantic_query_created"]
+                keyword_queries_created = validated_queries["keyword_queries_created"]
+
+                self._set_state_value(state, "search_query", semantic_query_created)
+
+                # 캐시 확인 (재시도 시에는 캐시 우회)
+                cache_hit = False
+                if not is_retry:
+                    try:
+                        cached_documents = self.performance_optimizer.cache.get_cached_documents(
+                            optimized_queries["semantic_query"],
+                            query_type_str
+                        )
+                        if cached_documents:
+                            self._set_state_value(state, "retrieved_docs", cached_documents)
+                            self._set_state_value(state, "search_cache_hit", True)
+                            cache_hit = True
+                            self._add_step(state, "캐시 히트", f"캐시 히트: {len(cached_documents)}개 문서")
+                    except asyncio.CancelledError:
+                        self.logger.warning("⚠️ [PREPARE SEARCH QUERY] Cache check was cancelled. Continuing without cache.")
+                        cache_hit = False
+
+                self._set_state_value(state, "search_cache_hit", cache_hit)
+                self._save_metadata_safely(state, "_last_executed_node", "prepare_search_query")
+                self._update_processing_time(state, start_time)
+                self._add_step(state, "검색 쿼리 준비", f"검색 쿼리 준비 완료: {semantic_query_created[:50]}...")
+
+                if cache_hit:
+                    self.logger.info(f"✅ [CACHE HIT] 캐시 히트: {len(cached_documents)}개 문서, 검색 스킵")
+                else:
                     self.logger.info(
-                        f"🔍 [SEARCH RETRY] Improved query: '{optimized_queries['semantic_query']}' → '{improved_query}'"
+                        f"✅ [PREPARE SEARCH QUERY] "
+                        f"semantic_query: '{semantic_query_created[:50]}...', "
+                        f"keyword_queries: {len(keyword_queries_created)}개, "
+                        f"search_params: k={search_params.get('semantic_k', 'N/A')}"
                     )
-                    optimized_queries["semantic_query"] = improved_query
-                    optimized_queries["keyword_queries"][0] = improved_query
+            except asyncio.CancelledError:
+                self.logger.warning("⚠️ [PREPARE SEARCH QUERY] Query optimization was cancelled. Preserving existing state.")
+                # 기존 상태 보존
+                existing_queries = self._get_state_value(state, "optimized_queries")
+                if not existing_queries:
+                    # 최소한의 쿼리 정보라도 설정
+                    query = self._get_state_value(state, "query", "")
+                    if query:
+                        self._set_state_value(state, "search_query", query)
+                        self._set_state_value(state, "optimized_queries", {
+                            "semantic_query": query,
+                            "keyword_queries": [query]
+                        })
 
-            search_params = self._determine_search_parameters(
-                query_type=query_type_str,
-                query_complexity=len(query),
-                keyword_count=len(extracted_keywords),
-                is_retry=is_retry
-            )
-
-            self._set_state_value(state, "optimized_queries", optimized_queries)
-            self._set_state_value(state, "search_params", search_params)
-            self._set_state_value(state, "is_retry_search", is_retry)
-            self._set_state_value(state, "search_start_time", start_time)
-
-            validated_queries = self._validate_and_fix_optimized_queries(state, optimized_queries, query)
-            optimized_queries = validated_queries["optimized_queries"]
-            semantic_query_created = validated_queries["semantic_query_created"]
-            keyword_queries_created = validated_queries["keyword_queries_created"]
-
-            self._set_state_value(state, "search_query", semantic_query_created)
-
-            # 캐시 확인 (재시도 시에는 캐시 우회)
-            cache_hit = False
-            if not is_retry:
-                cached_documents = self.performance_optimizer.cache.get_cached_documents(
-                    optimized_queries["semantic_query"],
-                    query_type_str
-                )
-                if cached_documents:
-                    self._set_state_value(state, "retrieved_docs", cached_documents)
-                    self._set_state_value(state, "search_cache_hit", True)
-                    cache_hit = True
-                    self._add_step(state, "캐시 히트", f"캐시 히트: {len(cached_documents)}개 문서")
-
-            self._set_state_value(state, "search_cache_hit", cache_hit)
-            self._save_metadata_safely(state, "_last_executed_node", "prepare_search_query")
-            self._update_processing_time(state, start_time)
-            self._add_step(state, "검색 쿼리 준비", f"검색 쿼리 준비 완료: {semantic_query_created[:50]}...")
-
-            if cache_hit:
-                self.logger.info(f"✅ [CACHE HIT] 캐시 히트: {len(cached_documents)}개 문서, 검색 스킵")
-            else:
-                self.logger.info(
-                    f"✅ [PREPARE SEARCH QUERY] "
-                    f"semantic_query: '{semantic_query_created[:50]}...', "
-                    f"keyword_queries: {len(keyword_queries_created)}개, "
-                    f"search_params: k={search_params.get('semantic_k', 'N/A')}"
-                )
-
+        except asyncio.CancelledError:
+            # 최상위 CancelledError 처리
+            self.logger.warning("⚠️ [PREPARE SEARCH QUERY] Operation was cancelled. Preserving existing state.")
+            # 기존 상태 보존
+            existing_queries = self._get_state_value(state, "optimized_queries")
+            if not existing_queries:
+                query = self._get_state_value(state, "query", "")
+                if query:
+                    self._set_state_value(state, "search_query", query)
+                    self._set_state_value(state, "optimized_queries", {
+                        "semantic_query": query,
+                        "keyword_queries": [query]
+                    })
+            # CancelledError는 다시 발생시키지 않고 상태를 보존한 채로 반환
         except Exception as e:
             self._handle_error(state, str(e), "검색 쿼리 준비 중 오류 발생")
 

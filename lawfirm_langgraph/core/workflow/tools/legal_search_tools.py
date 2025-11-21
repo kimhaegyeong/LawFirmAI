@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sys
 import os
 from typing import Optional, Dict, Any, List
@@ -42,7 +46,7 @@ except ImportError:
     HYBRID_SEARCH_AVAILABLE = False
     logging.warning("HybridSearchEngineV2 not available")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 검색 엔진 싱글톤 인스턴스
 _search_engine_instance = None

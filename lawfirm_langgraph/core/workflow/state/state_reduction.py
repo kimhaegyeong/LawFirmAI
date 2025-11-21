@@ -10,13 +10,17 @@ State Reduction 시스템
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional, Set
 
-from core.agents.node_input_output_spec import (
+from core.workflow.node_input_output_spec import (
     get_node_spec,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StateReducer:
@@ -30,7 +34,7 @@ class StateReducer:
             aggressive_reduction: 공격적인 감소 모드 (더 많은 최적화)
         """
         self.aggressive_reduction = aggressive_reduction
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def reduce_state_for_node(
         self,
@@ -389,14 +393,54 @@ class StateReducer:
         # answer 그룹
         if "answer" in required_groups:
             # answer 필드 안전하게 처리 (dict나 slice 객체일 수 있음)
+            # 여러 위치에서 answer 검색 시도 (answer 그룹, 최상위 레벨)
             answer_raw = state.get("answer", "")
+            
+            # answer_raw가 없으면 빈 문자열로 초기화
+            if answer_raw is None:
+                answer_raw = ""
+            
+            # 디버그 로깅 (DEBUG 레벨)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    f"[STATE REDUCTION] answer_raw type: {type(answer_raw).__name__}, "
+                    f"is_dict: {isinstance(answer_raw, dict)}, "
+                    f"is_str: {isinstance(answer_raw, str)}, "
+                    f"value_preview: {str(answer_raw)[:200] if answer_raw else 'None'}"
+                )
+                if isinstance(answer_raw, dict):
+                    self.logger.debug(
+                        f"[STATE REDUCTION] answer_raw dict keys: {list(answer_raw.keys())}, "
+                        f"answer key value length: {len(str(answer_raw.get('answer', '')))}"
+                    )
+            
+            # answer 추출 로직 개선
             if isinstance(answer_raw, dict):
-                answer = answer_raw.get("content", answer_raw.get("answer", str(answer_raw)))
+                # 딕셔너리인 경우 여러 키에서 답변 추출 시도
+                answer = (
+                    answer_raw.get("answer", "") or
+                    answer_raw.get("content", "") or
+                    answer_raw.get("text", "") or
+                    ""
+                )
+                # 딕셔너리 안의 answer가 비어있으면, 딕셔너리 자체를 문자열로 변환하지 않고 빈 문자열 유지
+                if not answer or (isinstance(answer, str) and len(answer.strip()) < 10):
+                    answer = ""
+            elif isinstance(answer_raw, str):
+                # 문자열인 경우 그대로 사용
+                answer = answer_raw if answer_raw else ""
             elif hasattr(answer_raw, '__iter__') and not isinstance(answer_raw, (str, bytes)):
                 # slice 객체나 다른 iterable이면 문자열로 변환
                 answer = str(answer_raw) if answer_raw else ""
             else:
                 answer = str(answer_raw) if answer_raw else ""
+            
+            # 디버그 로깅 (최종 answer)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    f"[STATE REDUCTION] Final answer length: {len(answer) if isinstance(answer, str) else 0}, "
+                    f"answer preview: {answer[:200] if isinstance(answer, str) and answer else 'Empty'}"
+                )
 
             # sources 안전하게 처리 (슬라이스 객체 등 unhashable 타입 방지)
             sources_raw = state.get("sources", [])

@@ -5,6 +5,10 @@ LLM 초기화 로직을 처리하는 초기화기
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 from typing import Any, Optional
 
@@ -12,7 +16,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from core.workflow.utils.workflow_constants import WorkflowConstants
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLMInitializer:

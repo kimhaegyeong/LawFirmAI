@@ -109,8 +109,34 @@ class StateUtilsMixin:
                 f"(length: {len(normalized_answer)})"
             )
 
+        # 로깅: 저장 전 상태 확인 (INFO 레벨로 변경)
+        existing_answer = state.get("answer", "")
+        existing_type = type(existing_answer).__name__
+        existing_length = len(str(existing_answer)) if existing_answer else 0
+        self.logger.info(
+            f"[SET ANSWER SAFELY] Before save: existing_answer type={existing_type}, "
+            f"existing_length={existing_length}, new_answer length={len(normalized_answer)}"
+        )
+
         # answer 저장
         self._set_state_value(state, "answer", normalized_answer)
+
+        # 로깅: 저장 후 상태 확인 (INFO 레벨로 변경)
+        saved_answer = state.get("answer", "")
+        saved_type = type(saved_answer).__name__
+        if isinstance(saved_answer, dict):
+            saved_length = len(str(saved_answer.get("answer", "")))
+            self.logger.info(
+                f"[SET ANSWER SAFELY] After save: saved_answer type={saved_type}, "
+                f"saved_length={saved_length}, dict_keys={list(saved_answer.keys()) if isinstance(saved_answer, dict) else []}, "
+                f"dict_answer_value_length={len(str(saved_answer.get('answer', ''))) if isinstance(saved_answer, dict) else 0}"
+            )
+        else:
+            saved_length = len(str(saved_answer)) if saved_answer else 0
+            self.logger.info(
+                f"[SET ANSWER SAFELY] After save: saved_answer type={saved_type}, "
+                f"saved_length={saved_length}"
+            )
 
         # answer 길이 로깅 (너무 짧은 경우 경고)
         if len(normalized_answer) < 10:

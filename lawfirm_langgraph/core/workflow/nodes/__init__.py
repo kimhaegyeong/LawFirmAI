@@ -15,7 +15,7 @@ try:
         QueryEnhancementChainBuilder,
     )
     from core.shared.wrappers.node_wrappers import with_state_optimization
-    from core.agents.node_input_output_spec import NodeIOSpec, NodeCategory
+    from core.workflow.node_input_output_spec import NodeIOSpec, NodeCategory
     from core.workflow.builders.prompt_builders import PromptBuilder, QueryBuilder
 except ImportError:
     # Fallback: 기존 경로 (호환성 유지)

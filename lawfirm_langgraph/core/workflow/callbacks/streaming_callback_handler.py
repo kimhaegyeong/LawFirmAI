@@ -6,6 +6,10 @@ LangGraph 스트리밍 콜백 핸들러 구현
 
 import asyncio
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
 try:
@@ -13,16 +17,11 @@ try:
     from langchain_core.outputs import LLMResult
     LANCHAIN_CALLBACKS_AVAILABLE = True
 except ImportError:
-    try:
-        from langchain.callbacks.base import BaseCallbackHandler
-        from langchain.schema import LLMResult
-        LANCHAIN_CALLBACKS_AVAILABLE = True
-    except ImportError:
-        LANCHAIN_CALLBACKS_AVAILABLE = False
-        BaseCallbackHandler = object
-        LLMResult = None
+    LANCHAIN_CALLBACKS_AVAILABLE = False
+    BaseCallbackHandler = object
+    LLMResult = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StreamingCallbackHandler(BaseCallbackHandler):

@@ -8,12 +8,16 @@ State Adapter Layer
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
 from .modular_states import LegalWorkflowState
-from core.agents.node_input_output_spec import validate_node_input
+from core.workflow.node_input_output_spec import validate_node_input
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _extract_analysis_state(state: Dict[str, Any]) -> Dict[str, Any]:

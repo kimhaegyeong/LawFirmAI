@@ -14,6 +14,10 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List
 
 from .modular_states import (
@@ -29,7 +33,7 @@ from .modular_states import (
     ValidationState,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================
@@ -270,7 +274,7 @@ def set_answer(state: LegalWorkflowState, data: Dict[str, Any]):
         answer_text = state["answer"]
         from .modular_states import create_default_answer
         state["answer"] = create_default_answer()
-        state["answer"]["content"] = answer_text  # type: ignore
+        state["answer"]["answer"] = answer_text  # type: ignore
     
     if state.get("answer") is None:
         from .modular_states import create_default_answer
