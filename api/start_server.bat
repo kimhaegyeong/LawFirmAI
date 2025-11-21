@@ -69,7 +69,8 @@ echo.
 REM Windows에서 reload 사용 시 안정성을 위해 추가 옵션 설정
 REM --reload-delay: Windows에서 안정성을 위해 지연 시간 추가
 REM --loop asyncio: Windows에서 안정적인 이벤트 루프 사용
-python -m uvicorn api.main:app --host %API_HOST% --port %API_PORT% --reload --log-level %LOG_LEVEL% --reload-delay 0.25 --loop asyncio
+@REM python -m uvicorn api.main:app --host %API_HOST% --port %API_PORT% --reload --log-level %LOG_LEVEL% --reload-delay 0.25 --loop asyncio
+python -m uvicorn api.main:app --host %API_HOST% --port %API_PORT% --log-level %LOG_LEVEL% --loop asyncio
 
 if errorlevel 1 (
     echo [ERROR] Server failed to start
