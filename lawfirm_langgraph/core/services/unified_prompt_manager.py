@@ -5,6 +5,7 @@
 """
 
 import json
+import re
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
 except ImportError:
@@ -94,6 +95,10 @@ class UnifiedPromptManager:
         self._question_type_templates = None
         self._model_optimizations = None
         self._prompts_loaded = False
+        
+        # 요약 에이전트 지연 초기화
+        self._summary_agent = None
+        self.llm_fast = None  # LLM 인스턴스 (나중에 설정 가능)
 
         try:
             logger.debug("UnifiedPromptManager initialized (lazy loading enabled)")
@@ -899,23 +904,31 @@ class UnifiedPromptManager:
         structured_docs = context.get("structured_documents", {})
         document_count = context.get("document_count", 0)
 
-        # 문서 정규화 및 최적화
+        # 문서 정규화 및 최적화 (개선: 중복 제거 강화)
         normalized_docs = []
+        seen_doc_ids = set()  # 중복 체크용
+        
         if isinstance(structured_docs, dict):
             raw_documents = structured_docs.get("documents", [])
             doc_count = len(raw_documents) if raw_documents else 0
 
-            # 문서 정규화
+            # 문서 정규화 및 중복 제거
             for doc in raw_documents:
                 normalized = self._normalize_document_fields(doc)
                 if normalized:
-                    normalized_docs.append(normalized)
+                    # 문서 ID 생성 (중복 체크용)
+                    doc_id = self._generate_document_id(normalized)
+                    if doc_id not in seen_doc_ids:
+                        seen_doc_ids.add(doc_id)
+                        normalized_docs.append(normalized)
+                    else:
+                        logger.debug(f"⚠️ [FINAL PROMPT] Duplicate document removed: {doc_id}")
 
             # 문서 최적화 (중복 제거 및 정렬)
             normalized_docs = self._optimize_documents_for_prompt(normalized_docs, query)
 
             logger.info(
-                f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={len(normalized_docs)}"
+                f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={len(normalized_docs)} (duplicates removed)"
             )
         else:
             logger.warning(f"⚠️ [FINAL PROMPT] structured_documents is not a dict: {type(structured_docs)}")
@@ -1450,6 +1463,7 @@ class UnifiedPromptManager:
                 logger.debug(f"✅ [DOC NORMALIZE] Created minimal content from law info: {content[:50]}")
         
         # 정규화된 문서 생성 (불필요한 메타데이터 제외)
+        # EXCLUDED_METADATA_FIELDS에 있는 필드는 제외
         normalized = {
             "content": str(content).strip(),
             "title": doc_title,
@@ -1477,98 +1491,30 @@ class UnifiedPromptManager:
         
         # None 값 및 빈 문자열 제거
         normalized = {k: v for k, v in normalized.items() if v}
+        
+        # EXCLUDED_METADATA_FIELDS에 있는 필드 제거 (추가 필터링)
+        normalized = {k: v for k, v in normalized.items() if k not in self.EXCLUDED_METADATA_FIELDS}
 
         return normalized
 
     def _format_document_for_prompt(self, doc: Dict[str, Any], idx: int, is_high_priority: bool = False) -> str:
-        """문서를 프롬프트 형식으로 포맷팅 (중복 제거 및 최적화)"""
+        """문서를 프롬프트 형식으로 포맷팅 (개선: 간소화, 불필요한 섹션 제거)"""
         content = doc.get("content", "")
-        source = doc.get("source", "Unknown")
-        score = doc.get("relevance_score", 0.0)
+        score = float(doc.get("relevance_score", 0.0) or doc.get("score", 0.0) or 0.0)
 
-        # 법률 정보 추출
-        law_name = doc.get("law_name", "")
-        article_no = doc.get("article_no", "")
-        clause_no = doc.get("clause_no", "")
-        item_no = doc.get("item_no", "")
-        heading = doc.get("heading", "")
+        # 문서 제목 생성 (간소화)
+        doc_title, _ = self._get_document_title_and_max_length(doc, idx)
 
-        # 판례 정보 추출
-        court = doc.get("court", "")
-        case_number = doc.get("case_number", "")
-        case_name = doc.get("case_name", "")
-        announce_date = doc.get("announce_date", "")
-        case_type = doc.get("case_type", "")
+        # 간결한 형식으로 변경 (불필요한 섹션 제거)
+        formatted = f"**[문서 {idx}]** {doc_title} (관련도: {score:.2f})\n\n"
 
-        # 판례 본문 정보 추출
-        case_summary = doc.get("case_summary", "")
-        case_holding = doc.get("case_holding", "")
-        case_reasoning = doc.get("case_reasoning", "")
-
-        # 법령/판례 근거 구성
-        legal_reference = ""
-        if law_name:
-            legal_reference = law_name
-            if article_no:
-                if article_no.isdigit():
-                    legal_reference += f" 제{article_no}조"
-                else:
-                    legal_reference += f" {article_no}"
-                if clause_no:
-                    legal_reference += f" 제{clause_no}항"
-                if item_no:
-                    legal_reference += f" 제{item_no}호"
-            if heading:
-                legal_reference += f" ({heading})"
-        elif court and case_number:
-            legal_reference = f"{court} {case_number}"
-        elif case_number:
-            legal_reference = case_number
-        elif court and case_name:
-            legal_reference = f"{court} {case_name}"
-        elif case_name:
-            legal_reference = case_name
-
-        # 더 간결한 형식으로 변경
-        if law_name and article_no:
-            formatted = f"**문서 {idx}**: {law_name} 제{article_no}조"
-            if heading:
-                formatted += f" - {heading}"
-            formatted += f" (관련도: {score:.2f})\n\n"
-        elif legal_reference:
-            formatted = f"**문서 {idx}**: {legal_reference} (관련도: {score:.2f})\n\n"
-        else:
-            formatted = f"**문서 {idx}**: {source} (관련도: {score:.2f})\n\n"
-
-        # 법령 근거 표시
-        if law_name and article_no:
-            formatted += f"**법령 근거**: {legal_reference}\n\n"
-
-        # 판례 정보 및 본문 표시
-        elif court or case_number:
-            formatted += f"**판례 근거**: {legal_reference}\n\n"
-            if court:
-                formatted += f"**법원**: {court}\n\n"
-            if case_type:
-                formatted += f"**사건 종류**: {case_type}\n\n"
-            if announce_date:
-                formatted += f"**선고일**: {announce_date}\n\n"
-            # 판례 본문 정보
-            if case_holding:
-                formatted += f"**판시사항**: {case_holding[:300]}{'...' if len(case_holding) > 300 else ''}\n\n"
-            if case_reasoning:
-                formatted += f"**판결요지**: {case_reasoning[:300]}{'...' if len(case_reasoning) > 300 else ''}\n\n"
-            if case_summary:
-                formatted += f"**사건 개요**: {case_summary[:300]}{'...' if len(case_summary) > 300 else ''}\n\n"
-
-        # 🔴 개선: 내용 길이 최적화 (2000자 → 800자, 1500자 → 500자)
+        # 내용 길이 최적화
         if is_high_priority:
             content_preview = content[:800] if len(content) > 800 else content
         else:
             content_preview = content[:500] if len(content) > 500 else content
 
         formatted += f"{content_preview}{'...' if len(content) > len(content_preview) else ''}\n\n"
-        formatted += "---\n\n"
 
         return formatted
 
@@ -1725,21 +1671,15 @@ class UnifiedPromptManager:
 
                     if high_relevance:
                         structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        for idx, doc in enumerate(high_relevance[:5], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=True)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
+                        )
 
                     if medium_relevance:
                         structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        for idx, doc in enumerate(medium_relevance[:3], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=False)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
+                        )
 
                     structured_parts.append("")
 
@@ -1768,11 +1708,7 @@ class UnifiedPromptManager:
                 # 법률 조문 중심 구조
                 if legal_references:
                     structured_parts.append("## 관련 법률 조문\n")
-                    for ref in legal_references[:5]:
-                        if isinstance(ref, str):
-                            structured_parts.append(f"- {ref}")
-                        else:
-                            structured_parts.append(f"- {ref.get('text', '') if isinstance(ref, dict) else str(ref)}")
+                    structured_parts.extend(self._format_legal_references(legal_references[:5]))
                     structured_parts.append("")
 
                 if citations:
@@ -1789,21 +1725,15 @@ class UnifiedPromptManager:
 
                     if high_relevance:
                         structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        for idx, doc in enumerate(high_relevance[:5], 1):
-                            # 관련도 점수를 relevance_score로 변환 (score → relevance_score)
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=True)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
+                        )
 
                     if medium_relevance:
                         structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        for idx, doc in enumerate(medium_relevance[:3], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=False)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
+                        )
 
                     structured_parts.append("")
 
@@ -1815,11 +1745,7 @@ class UnifiedPromptManager:
                 # 법령 + 판례 + 실무 조언 균형 배치
                 if legal_references:
                     structured_parts.append("## 관련 법령\n")
-                    for ref in legal_references[:3]:
-                        if isinstance(ref, str):
-                            structured_parts.append(f"- {ref}")
-                        else:
-                            structured_parts.append(f"- {ref.get('text', '') if isinstance(ref, dict) else str(ref)}")
+                    structured_parts.extend(self._format_legal_references(legal_references[:3]))
                     structured_parts.append("")
 
                 if citations:
@@ -1836,21 +1762,15 @@ class UnifiedPromptManager:
 
                     if high_relevance:
                         structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        for idx, doc in enumerate(high_relevance[:5], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=True)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
+                        )
 
                     if medium_relevance:
                         structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        for idx, doc in enumerate(medium_relevance[:3], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=False)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
+                        )
 
                     structured_parts.append("")
 
@@ -1870,31 +1790,21 @@ class UnifiedPromptManager:
 
                     if high_relevance:
                         structured_parts.append("### 🔴 최우선 문서 (관련도 0.65 이상)\n")
-                        for idx, doc in enumerate(high_relevance[:5], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=True)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(high_relevance[:5], is_high_priority=True)
+                        )
 
                     if medium_relevance:
                         structured_parts.append("### 🟡 중요 문서 (관련도 0.35~0.65)\n")
-                        for idx, doc in enumerate(medium_relevance[:3], 1):
-                            # 관련도 점수를 relevance_score로 변환
-                            doc_for_format = doc.copy()
-                            doc_for_format["relevance_score"] = doc.get("score", 0.0)
-                            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=False)
-                            structured_parts.append(formatted_doc)
+                        structured_parts.extend(
+                            self._format_documents_for_context(medium_relevance[:3], is_high_priority=False)
+                        )
 
                     structured_parts.append("")
 
                 if legal_references:
                     structured_parts.append("## 관련 법령\n")
-                    for ref in legal_references[:5]:
-                        if isinstance(ref, str):
-                            structured_parts.append(f"- {ref}")
-                        else:
-                            structured_parts.append(f"- {ref.get('text', '') if isinstance(ref, dict) else str(ref)}")
+                    structured_parts.extend(self._format_legal_references(legal_references[:5]))
                     structured_parts.append("")
 
                 # 🔴 개선: "추가 관련 정보" 섹션 제거 (중복 방지)
@@ -2698,36 +2608,60 @@ class UnifiedPromptManager:
         return int(estimated_tokens)
     
     def _clean_content(self, content: str) -> str:
-        """content에서 불필요한 메타데이터 제거"""
+        """content에서 불필요한 메타데이터 제거 (강화)"""
         import re
         
         if not content:
             return ""
         
-        # JSON 형태의 메타데이터 제거
+        # 중첩된 딕셔너리 패턴 제거 (강화)
+        # {'key': 'value'} 또는 {"key": "value"} 형태 제거
         content = re.sub(r"\{'[^']+':\s*[^}]+\}", "", content)
         content = re.sub(r'\{"[^"]+":\s*[^}]+\}', "", content)
+        # 중첩된 딕셔너리 (여러 레벨)
+        while re.search(r"\{'[^']+':\s*[^}]+\}", content) or re.search(r'\{"[^"]+":\s*[^}]+\}', content):
+            content = re.sub(r"\{'[^']+':\s*[^}]+\}", "", content)
+            content = re.sub(r'\{"[^"]+":\s*[^}]+\}', "", content)
         
-        # 검색 쿼리 정보 제거
-        content = re.sub(r"'query':\s*'[^']+'", "", content)
-        content = re.sub(r'"query":\s*"[^"]+"', "", content)
+        # 검색 쿼리 정보 제거 (강화)
+        # 'query': '...' 또는 "query": "..." 형태
+        content = re.sub(r"'query':\s*'[^']*'", "", content)
+        content = re.sub(r'"query":\s*"[^"]*"', "", content)
+        # query=... 형태
+        content = re.sub(r"query\s*=\s*'[^']*'", "", content)
+        content = re.sub(r'query\s*=\s*"[^"]*"', "", content)
+        # , 'query': ... 형태
+        content = re.sub(r",\s*'query':\s*'[^']*'", "", content)
+        content = re.sub(r',\s*"query":\s*"[^"]*"', "", content)
         
-        # 점수 정보 제거
+        # 점수 정보 제거 (강화)
         score_patterns = [
-            r"'(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight)':\s*[\d.]+",
-            r'"(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight)":\s*[\d.]+',
+            r"'(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight|final_weighted_score|similarity_score|similarity)':\s*[\d.]+",
+            r'"(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight|final_weighted_score|similarity_score|similarity)":\s*[\d.]+',
+            r"(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight|final_weighted_score|similarity_score|similarity)\s*[:=]\s*[\d.]+",
         ]
         for pattern in score_patterns:
             content = re.sub(pattern, "", content)
         
-        # 메타데이터 키 제거
+        # 메타데이터 키 제거 (강화)
         metadata_keys = [
             "'strategy'", "'id'", "'doc_id'", "'announce_date'", "'response_date'",
             "'cross_encoder'", "'embedding'", "'vector'", "'metadata_keys'",
-            "'keyword_match_score'", "'source_type'"
+            "'keyword_match_score'", "'source_type'", "'source_type_weight'",
+            "'text'", "'content'", "'metadata'", "'score'", "'relevance_score'"
         ]
         for key in metadata_keys:
+            # 다양한 패턴 처리
             content = re.sub(rf"{key}:\s*[^,}}\]]+", "", content)
+            content = re.sub(rf"{key}\s*=\s*[^,}}\]]+", "", content)
+            content = re.sub(rf",\s*{key}:\s*[^,}}\]]+", "", content)
+            content = re.sub(rf",\s*{key}\s*=\s*[^,}}\]]+", "", content)
+        
+        # 딕셔너리 키 패턴 제거 (예: 'text': '...', 'content': '...')
+        content = re.sub(r"'text':\s*'[^']*'", "", content)
+        content = re.sub(r'"text":\s*"[^"]*"', "", content)
+        content = re.sub(r"'content':\s*'[^']*'", "", content)
+        content = re.sub(r'"content":\s*"[^"]*"', "", content)
         
         # 불필요한 공백 정리
         content = re.sub(r'\s+', ' ', content).strip()
@@ -2736,6 +2670,10 @@ class UnifiedPromptManager:
         content = re.sub(r'\(\s*\)', '', content)
         content = re.sub(r'\{\s*\}', '', content)
         content = re.sub(r'\[\s*\]', '', content)
+        
+        # 연속된 쉼표나 콜론 제거
+        content = re.sub(r',\s*,+', ',', content)
+        content = re.sub(r':\s*:+\s*', ':', content)
         
         return content
     
@@ -2895,40 +2833,447 @@ class UnifiedPromptManager:
                 return str(value).strip()
         return ""
     
+    def _generate_document_id(self, doc: Dict[str, Any]) -> str:
+        """문서 고유 ID 생성 (중복 체크용)"""
+        # 법령 조문: law_name + article_no
+        law_name = doc.get("law_name", "")
+        article_no = doc.get("article_no", "")
+        if law_name and article_no:
+            return f"law_{law_name}_{article_no}"
+        
+        # 판례: court + case_number 또는 case_name
+        court = doc.get("court", "")
+        case_number = doc.get("case_number", "")
+        case_name = doc.get("case_name", "")
+        if case_number:
+            return f"case_{court}_{case_number}" if court else f"case_{case_number}"
+        elif case_name:
+            return f"case_{court}_{case_name}" if court else f"case_{case_name}"
+        
+        # 기타: content의 처음 100자 해시
+        content = doc.get("content", "")
+        if content:
+            import hashlib
+            content_hash = hashlib.md5(content[:100].encode('utf-8')).hexdigest()[:8]
+            return f"doc_{content_hash}"
+        
+        # 최후의 수단: source
+        source = doc.get("source", "")
+        if source:
+            return f"source_{source[:50]}"
+        
+        return "unknown"
+    
+    def _get_summary_agent(self):
+        """요약 에이전트 가져오기 (지연 초기화)"""
+        if self._summary_agent is None:
+            try:
+                # 직접 파일 경로로 로드
+                import sys
+                import importlib.util
+                from pathlib import Path
+                
+                # 현재 파일 경로 기준으로 상대 경로 계산
+                current_file = Path(__file__).resolve()
+                # lawfirm_langgraph/core/services/unified_prompt_manager.py
+                # -> lawfirm_langgraph/core/agents/handlers/document_summary_agent.py
+                agent_file = current_file.parent.parent / "agents" / "handlers" / "document_summary_agent.py"
+                
+                if agent_file.exists():
+                    # 파일이 존재하면 직접 로드
+                    spec = importlib.util.spec_from_file_location("document_summary_agent", agent_file)
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        # sys.modules에 등록하여 중복 로드 방지
+                        sys.modules["document_summary_agent"] = module
+                        spec.loader.exec_module(module)
+                        DocumentSummaryAgent = module.DocumentSummaryAgent
+                    else:
+                        raise ImportError(f"Cannot load module from {agent_file}")
+                else:
+                    # 파일이 없으면 일반 import 시도
+                    from lawfirm_langgraph.core.agents.handlers.document_summary_agent import DocumentSummaryAgent
+                
+                self._summary_agent = DocumentSummaryAgent(
+                    llm=None,  # 필요시 주입
+                    llm_fast=self.llm_fast,  # UnifiedPromptManager의 llm_fast 사용
+                    logger=logger
+                )
+            except Exception as e:
+                logger.warning(f"DocumentSummaryAgent를 가져올 수 없습니다. 요약 기능이 비활성화됩니다: {e}")
+                return None
+        return self._summary_agent
+    
     def _build_documents_section(self, sorted_docs: List[Dict[str, Any]], query: str) -> str:
-        """문서 섹션 생성 (중복 코드 제거)"""
+        """문서 섹션 생성 (Summary-First 방식, 에이전트 사용)"""
+        if not sorted_docs:
+            return "\n\n## 검색된 법률 문서\n\n검색된 문서가 없습니다.\n"
+        
+        # 1. 문서 분류 (요약 필요 vs 전체 포함)
+        docs_for_summary = []
+        docs_for_full = []
+        
+        for doc in sorted_docs:
+            if self._should_use_summary(doc):
+                docs_for_summary.append(doc)
+            else:
+                docs_for_full.append(doc)
+        
+        # 2. 요약 생성 (에이전트 사용)
+        summaries = []
+        summary_agent = self._get_summary_agent()
+        if summary_agent and docs_for_summary:
+            try:
+                logger.info(f"[UnifiedPromptManager] 요약 생성 시작: 문서 수={len(docs_for_summary)}, use_llm=True, llm_fast={self.llm_fast is not None}")
+                summaries = summary_agent.summarize_batch(
+                    docs_for_summary,
+                    query,
+                    max_summary_length=self.MAX_SUMMARY_LENGTH,
+                    use_llm=True  # LLM 기반 요약 사용 (gemini-2.5-flash-lite)
+                )
+                logger.info(f"[UnifiedPromptManager] 요약 생성 완료: 요약 수={len(summaries)}")
+            except Exception as e:
+                logger.warning(f"요약 생성 실패: {e}, 전체 문서 사용")
+                docs_for_full.extend(docs_for_summary)
+                docs_for_summary = []
+                summaries = []
+        
+        # 3. Summary 섹션 생성
+        summary_section = self._build_summary_section(summaries, docs_for_summary, sorted_docs, query)
+        
+        # 4. Detailed Extracts 섹션 생성 (상위 문서만)
+        detailed_section = self._build_detailed_section(
+            docs_for_summary[:self.MAX_DETAILED_EXTRACTS],
+            sorted_docs,
+            query
+        )
+        
+        # 5. 전체 문서 섹션 (요약 불필요한 문서)
+        full_docs_section = self._build_full_docs_section(docs_for_full, sorted_docs, query)
+        
+        # 6. 통합
         documents_section = "\n\n## 검색된 법률 문서\n\n"
         documents_section += "위 문서들을 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
         
-        for idx, doc in enumerate(sorted_docs, 1):
-            # 문서 유형 판단 및 제목 생성
-            doc_title, max_length = self._get_document_title_and_max_length(doc, idx)
-            
-            # 내용 추출 및 축약
-            content = doc.get("content", "").strip()
-            if len(content) > max_length:
-                content = self._smart_truncate_document(content, max_length, query)
-            
-            # 간결한 형식으로 추가
-            documents_section += f"**[문서 {idx}]** {doc_title}\n{content}\n\n"
+        if summary_section:
+            documents_section += summary_section
+        
+        if detailed_section:
+            documents_section += detailed_section
+        
+        if full_docs_section:
+            documents_section += full_docs_section
         
         return documents_section
     
     def _get_document_title_and_max_length(self, doc: Dict[str, Any], idx: int) -> tuple[str, int]:
-        """문서 제목과 최대 길이 반환"""
+        """문서 제목과 최대 길이 반환 (개선: 출처 정보 명확화)"""
         law_name = doc.get("law_name", "")
         article_no = doc.get("article_no", "")
+        clause_no = doc.get("clause_no", "")
         case_name = doc.get("case_name", "")
         court = doc.get("court", "")
+        case_number = doc.get("case_number", "")
+        source = doc.get("source", "")
         
         if law_name and article_no:
+            # 법령 조문: "민법 제543조" 형식
             doc_title = f"{law_name} 제{article_no}조"
+            if clause_no:
+                doc_title += f" 제{clause_no}항"
             max_length = self.MAX_DOC_LENGTH_LAW
         elif case_name or court:
-            doc_title = f"{court} {case_name}".strip() if court else case_name
+            # 판례: "대법원 판례명" 또는 "서울고등법원 판례명" 형식
+            if court and case_name:
+                doc_title = f"{court} {case_name}".strip()
+            elif court:
+                doc_title = court
+            elif case_name:
+                doc_title = case_name
+            else:
+                doc_title = source or f"판례 {idx}"
+            if case_number:
+                doc_title += f" ({case_number})"
             max_length = self.MAX_DOC_LENGTH_CASE
         else:
-            doc_title = doc.get("title", f"문서 {idx}")
+            # 기타 문서: source 필드 우선 사용
+            doc_title = source or doc.get("title", "") or f"문서 {idx}"
             max_length = self.MAX_DOC_LENGTH_COMMENTARY
         
         return doc_title, max_length
+    
+    def _format_documents_for_context(
+        self, 
+        documents: List[Dict[str, Any]], 
+        is_high_priority: bool = True
+    ) -> List[str]:
+        """문서 목록을 컨텍스트 형식으로 포맷팅 (중복 코드 제거)"""
+        formatted_docs = []
+        for idx, doc in enumerate(documents, 1):
+            # 관련도 점수를 relevance_score로 변환
+            doc_for_format = doc.copy()
+            doc_for_format["relevance_score"] = doc.get("score", 0.0)
+            formatted_doc = self._format_document_for_prompt(doc_for_format, idx, is_high_priority=is_high_priority)
+            formatted_docs.append(formatted_doc)
+        return formatted_docs
+    
+    def _format_legal_references(self, legal_references: List[Any]) -> List[str]:
+        """법령 참조 목록을 포맷팅 (중복 코드 제거)"""
+        formatted_refs = []
+        for ref in legal_references:
+            if isinstance(ref, str):
+                formatted_refs.append(f"- {ref}")
+            else:
+                formatted_refs.append(f"- {ref.get('text', '') if isinstance(ref, dict) else str(ref)}")
+        return formatted_refs
+    
+    def _should_use_summary(self, doc: Dict[str, Any]) -> bool:
+        """문서가 요약이 필요한지 판단"""
+        content = doc.get("content", "").strip()
+        if not content:
+            return False
+        
+        doc_type = self._get_document_type(doc)
+        
+        thresholds = {
+            'law': self.SUMMARY_THRESHOLD_LAW,
+            'case': self.SUMMARY_THRESHOLD_CASE,
+            'commentary': self.SUMMARY_THRESHOLD_COMMENTARY
+        }
+        
+        threshold = thresholds.get(doc_type, 500)
+        return len(content) > threshold
+    
+    def _get_document_type(self, doc: Dict[str, Any]) -> str:
+        """문서 유형 판단"""
+        if doc.get("law_name") and doc.get("article_no"):
+            return 'law'
+        elif doc.get("court") or doc.get("case_name") or doc.get("case_number"):
+            return 'case'
+        elif doc.get("type") == "commentary" or "해설" in str(doc.get("title", "")):
+            return 'commentary'
+        else:
+            return 'general'
+    
+    def _build_summary_section(
+        self, 
+        summaries: List[Dict[str, Any]], 
+        original_docs: List[Dict[str, Any]],
+        all_docs: List[Dict[str, Any]],
+        query: str
+    ) -> str:
+        """Summary 섹션 생성"""
+        if not summaries or not original_docs:
+            return ""
+        
+        section = "### [Context Summary]\n\n"
+        section += "다음은 검색된 문서들의 요약입니다. 각 문서의 핵심 내용을 파악하세요.\n\n"
+        
+        for summary, doc in zip(summaries, original_docs):
+            # 전체 문서 리스트에서의 인덱스 찾기
+            try:
+                doc_idx = all_docs.index(doc) + 1
+            except ValueError:
+                doc_idx = len(all_docs) + 1
+            
+            doc_title, _ = self._get_document_title_and_max_length(doc, doc_idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n"
+            
+            # 요약 내용
+            summary_text = summary.get('summary', '')
+            if summary_text:
+                section += f"- 요약: {summary_text}\n"
+            
+            # 핵심 포인트
+            key_points = summary.get('key_points', [])
+            if key_points:
+                section += "- 핵심 쟁점:\n"
+                for point in key_points[:3]:  # 최대 3개
+                    if isinstance(point, str) and point.strip():
+                        section += f"  • {point[:150]}\n"
+            
+            # 연관성
+            relevance_notes = summary.get('relevance_notes', '')
+            if relevance_notes:
+                section += f"- 질문 연관성: {relevance_notes}\n"
+            
+            section += "\n"
+        
+        return section
+    
+    def _build_detailed_section(
+        self, 
+        docs: List[Dict[str, Any]], 
+        all_docs: List[Dict[str, Any]],
+        query: str,
+        max_docs: int = 3
+    ) -> str:
+        """Detailed Extracts 섹션 생성"""
+        if not docs:
+            return ""
+        
+        section = "### [Detailed Extracts]\n\n"
+        section += "다음은 질문과 직접 관련된 문서의 상세 내용입니다.\n\n"
+        
+        for doc in docs[:max_docs]:
+            # 전체 문서 리스트에서의 인덱스 찾기
+            try:
+                doc_idx = all_docs.index(doc) + 1
+            except ValueError:
+                doc_idx = len(all_docs) + 1
+            
+            doc_title, _ = self._get_document_title_and_max_length(doc, doc_idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f}) 상세 내용:\n"
+            
+            # 질문과 관련된 부분만 추출
+            detailed_content = self._extract_detailed_relevant_parts(
+                doc, query, self.MAX_DETAILED_EXTRACT_LENGTH
+            )
+            
+            if detailed_content:
+                section += f"{detailed_content}\n\n"
+            else:
+                # 폴백: 스마트 축약
+                content = doc.get("content", "").strip()
+                if content:
+                    max_length = min(self.MAX_DETAILED_EXTRACT_LENGTH, len(content))
+                    content = self._smart_truncate_document(content, max_length, query)
+                    section += f"{content}\n\n"
+        
+        return section
+    
+    def _build_full_docs_section(
+        self, 
+        docs: List[Dict[str, Any]], 
+        all_docs: List[Dict[str, Any]],
+        query: str
+    ) -> str:
+        """전체 문서 섹션 생성 (요약 불필요한 짧은 문서)"""
+        if not docs:
+            return ""
+        
+        section = "### [전체 문서]\n\n"
+        section += "다음은 요약이 필요하지 않은 짧은 문서들입니다.\n\n"
+        
+        for doc in docs:
+            # 전체 문서 리스트에서의 인덱스 찾기
+            try:
+                doc_idx = all_docs.index(doc) + 1
+            except ValueError:
+                doc_idx = len(all_docs) + 1
+            
+            doc_title, max_length = self._get_document_title_and_max_length(doc, doc_idx)
+            
+            # 관련도 점수 추출
+            relevance_score = float(
+                doc.get("relevance_score", 0.0) or
+                doc.get("score", 0.0) or
+                doc.get("final_weighted_score", 0.0) or
+                0.0
+            )
+            
+            content = doc.get("content", "").strip()
+            if len(content) > max_length:
+                content = self._smart_truncate_document(content, max_length, query)
+            
+            section += f"**[문서 {doc_idx}]** {doc_title} (관련도: {relevance_score:.2f})\n{content}\n\n"
+        
+        return section
+    
+    def _extract_detailed_relevant_parts(
+        self,
+        doc: Dict[str, Any],
+        query: str,
+        max_extract_length: int = 500
+    ) -> str:
+        """
+        질문과 직접 관련된 부분만 상세 추출
+        
+        전략:
+        1. 질문 키워드 포함 문장 우선
+        2. 관련 문맥 포함 (전후 2-3문장)
+        3. 최대 길이 제한
+        """
+        content = doc.get("content", "").strip()
+        if not content or not query:
+            return content[:max_extract_length] if content else ""
+        
+        # 질문 키워드 추출
+        query_keywords = set(query.split())
+        
+        # 문장 분리
+        sentences = re.split(r'[。\.\n]+', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # 키워드 매칭 점수 계산
+        scored_sentences = []
+        for i, sentence in enumerate(sentences):
+            score = 0
+            sentence_lower = sentence.lower()
+            for keyword in query_keywords:
+                if keyword.lower() in sentence_lower:
+                    score += 1
+            
+            # 법률 용어 가중치
+            legal_terms = ['법', '조', '항', '호', '판결', '판례', '손해배상', '계약', '소송']
+            for term in legal_terms:
+                if term in sentence:
+                    score += 0.5
+            
+            if score > 0:
+                scored_sentences.append((score, i, sentence))
+        
+        # 점수 순 정렬
+        scored_sentences.sort(key=lambda x: x[0], reverse=True)
+        
+        # 상위 문장과 주변 문맥 추출
+        selected_indices = set()
+        result_parts = []
+        current_length = 0
+        
+        for score, idx, sentence in scored_sentences[:5]:  # 상위 5개 문장
+            if current_length + len(sentence) > max_extract_length:
+                break
+            
+            # 주변 문맥 포함 (전후 2문장)
+            context_start = max(0, idx - 2)
+            context_end = min(len(sentences), idx + 3)
+            
+            for i in range(context_start, context_end):
+                if i not in selected_indices:
+                    selected_indices.add(i)
+                    sent = sentences[i]
+                    if current_length + len(sent) <= max_extract_length:
+                        result_parts.append((i, sent))
+                        current_length += len(sent)
+                    else:
+                        break
+        
+        # 인덱스 순 정렬
+        result_parts.sort(key=lambda x: x[0])
+        
+        # 결과 조합
+        if result_parts:
+            result = ' '.join([sent for _, sent in result_parts])
+            return result[:max_extract_length]
+        else:
+            # 매칭 문장이 없으면 앞부분 반환
+            return content[:max_extract_length]
