@@ -5,7 +5,10 @@
 """
 
 import json
-import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sys
 from enum import Enum
 from pathlib import Path
@@ -32,7 +35,7 @@ except ImportError:
                 DOCUMENT_ANALYSIS = "document_analysis"
                 LEGAL_ADVICE = "legal_advice"
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LegalDomain(Enum):
@@ -59,6 +62,25 @@ class ModelType(Enum):
 
 class UnifiedPromptManager:
     """통합 프롬프트 관리 시스템"""
+    
+    # 상수 정의
+    MAX_INPUT_TOKENS = 1_048_576  # Gemini 2.5 Flash 최대 입력 토큰
+    SAFE_MARGIN = 0.1  # 10% 안전 마진
+    MAX_DOCUMENTS = 8  # 최대 문서 수
+    MAX_LAW_DOCS = 3  # 최대 법률 조문 수
+    MIN_CONTENT_LENGTH = 10  # 최소 content 길이
+    MIN_CONTENT_LENGTH_WITH_LAW_INFO = 3  # 법률 정보가 있을 때 최소 content 길이
+    MAX_DOC_LENGTH_LAW = 1500  # 법률 조문 최대 길이
+    MAX_DOC_LENGTH_CASE = 800  # 판례 최대 길이
+    MAX_DOC_LENGTH_COMMENTARY = 500  # 해설 최대 길이
+    
+    # 메타데이터 제외 필드 목록
+    EXCLUDED_METADATA_FIELDS = {
+        'query', 'cross_encoder_score', 'original_score', 'keyword_bonus',
+        'keyword_match_score', 'combined_relevance_score', 'source_type_weight',
+        'strategy', 'id', 'doc_id', 'announce_date', 'response_date',
+        'cross_encoder', 'embedding', 'vector', 'metadata_keys'
+    }
 
     def __init__(self, prompts_dir: str = "streamlit/prompts"):
         """통합 프롬프트 매니저 초기화"""
@@ -374,17 +396,16 @@ class UnifiedPromptManager:
 
             # 7. 토큰 수 최종 검증
             final_tokens = self._estimate_tokens(final_prompt)
-            MAX_INPUT_TOKENS = 1_048_576
             
-            if final_tokens > MAX_INPUT_TOKENS:
+            if final_tokens > self.MAX_INPUT_TOKENS:
                 logger.error(
                     f"❌ [TOKEN LIMIT EXCEEDED] Final prompt exceeds maximum: "
-                    f"{final_tokens:,} tokens (max: {MAX_INPUT_TOKENS:,})"
+                    f"{final_tokens:,} tokens (max: {self.MAX_INPUT_TOKENS:,})"
                 )
                 # 긴급 축약
                 final_prompt = self._emergency_truncate_prompt(
                     final_prompt, 
-                    MAX_INPUT_TOKENS, 
+                    self.MAX_INPUT_TOKENS, 
                     base_prompt, 
                     query
                 )
@@ -395,7 +416,7 @@ class UnifiedPromptManager:
             
             logger.info(
                 f"✅ [PROMPT TOKENS] Final prompt: {final_tokens:,} tokens "
-                f"({final_tokens/MAX_INPUT_TOKENS*100:.1f}% of max)"
+                f"({final_tokens/self.MAX_INPUT_TOKENS*100:.1f}% of max)"
             )
 
             # 8. 프롬프트 검증: 문서 내용이 포함되었는지 확인 (강화된 검증)
@@ -856,10 +877,8 @@ class UnifiedPromptManager:
     def _build_final_prompt(self, base_prompt: str, query: str, context: Dict[str, Any], question_type: QuestionType) -> str:
         """최종 프롬프트 구성 - 토큰 제한 적용"""
         
-        # Gemini 2.5 Flash 최대 입력 토큰
-        MAX_INPUT_TOKENS = 1_048_576
-        SAFE_MARGIN = 0.1  # 10% 안전 마진
-        MAX_SAFE_TOKENS = int(MAX_INPUT_TOKENS * (1 - SAFE_MARGIN))  # 약 943,718 토큰
+        # 토큰 제한 계산
+        MAX_SAFE_TOKENS = int(self.MAX_INPUT_TOKENS * (1 - self.SAFE_MARGIN))  # 약 943,718 토큰
         
         # 1단계: 기본 프롬프트 + 질문 토큰 수 계산
         base_tokens = self._estimate_tokens(base_prompt)
@@ -873,22 +892,27 @@ class UnifiedPromptManager:
             f"📊 [TOKEN BUDGET] Base: {base_tokens:,}, Query: {query_tokens:,}, "
             f"Available for docs: {available_doc_tokens:,} tokens (max: {MAX_SAFE_TOKENS:,})"
         )
+        
+        # MAX_SAFE_TOKENS를 지역 변수로 사용
+        max_safe_tokens = MAX_SAFE_TOKENS
 
         structured_docs = context.get("structured_documents", {})
         document_count = context.get("document_count", 0)
 
-        # 문서 정규화 (간단 버전)
+        # 문서 정규화 및 최적화
         normalized_docs = []
         if isinstance(structured_docs, dict):
             raw_documents = structured_docs.get("documents", [])
             doc_count = len(raw_documents) if raw_documents else 0
 
+            # 문서 정규화
             for doc in raw_documents:
                 normalized = self._normalize_document_fields(doc)
                 if normalized:
-                    # 개선: 이중 필터링 제거 (_normalize_document_fields에서 이미 필터링)
-                    # content 체크는 _normalize_document_fields 내부에서 수행되므로 여기서는 추가 체크 불필요
                     normalized_docs.append(normalized)
+
+            # 문서 최적화 (중복 제거 및 정렬)
+            normalized_docs = self._optimize_documents_for_prompt(normalized_docs, query)
 
             logger.info(
                 f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={len(normalized_docs)}"
@@ -951,8 +975,8 @@ class UnifiedPromptManager:
             selected_docs = []
             current_doc_tokens = 0
             
-            # 법률 조문 우선 선택 (최대 3개)
-            for doc in sorted_law_docs[:3]:
+            # 법률 조문 우선 선택
+            for doc in sorted_law_docs[:self.MAX_LAW_DOCS]:
                 doc_content = doc.get("content", "")
                 doc_tokens = self._estimate_tokens(doc_content)
                 
@@ -981,9 +1005,9 @@ class UnifiedPromptManager:
                         selected_docs.append(doc)
                     break
             
-            # 일반 문서 선택 (최대 8개까지)
+            # 일반 문서 선택
             for doc in sorted_other_docs:
-                if len(selected_docs) >= 8:  # 최대 8개
+                if len(selected_docs) >= self.MAX_DOCUMENTS:
                     break
                 
                 doc_content = doc.get("content", "")
@@ -1014,40 +1038,7 @@ class UnifiedPromptManager:
             sorted_docs = selected_docs
 
             if sorted_docs:
-                documents_section = "\n\n## 검색된 법률 문서\n\n"
-                documents_section += "위 문서들을 인용할 때는 반드시 `[문서 N]` 형식을 사용하세요. 예: '민법 제543조에 따르면...' [문서 1] 또는 '대법원 판결에 의하면...' [문서 2]\n\n"
-                
-                for idx, doc in enumerate(sorted_docs, 1):
-                    # 개선: 문서 유형에 따라 내용 길이 조정
-                    law_name = doc.get("law_name", "")
-                    article_no = doc.get("article_no", "")
-                    case_name = doc.get("case_name", "")
-                    case_number = doc.get("case_number", "")
-                    
-                    doc_type = ""
-                    if law_name and article_no:
-                        doc_type = "법률 전문"
-                        # 법률 조문은 전체 포함 (600자 제한 완화)
-                        content = doc.get("content", "")
-                        max_length = 2000 if doc_type == "법률 전문" else 600
-                        if len(content) > max_length:
-                            content = content[:max_length] + "..."
-                    elif case_name or case_number:
-                        doc_type = "판례 요약"
-                        content = doc.get("content", "")[:1000]  # 판례는 1000자
-                        if len(doc.get("content", "")) > 1000:
-                            content += "..."
-                    else:
-                        doc_type = "해설"
-                        content = doc.get("content", "")[:600]  # 해설은 600자
-                        if len(doc.get("content", "")) > 600:
-                            content += "..."
-                    
-                    title = doc.get("title", f"[문서 {idx}]")
-                    relevance = doc.get("relevance_score", 0.0)
-                    
-                    # 일관된 형식으로 표시 (문서 유형 구분 추가, [문서 N] 형식 통일)
-                    documents_section += f"**[문서 {idx}]**: {title} (유형: {doc_type}, 관련성: {relevance:.2f})\n{content}\n\n"
+                documents_section = self._build_documents_section(sorted_docs, query)
 
                 logger.info(
                     f"✅ [FINAL PROMPT] Added {len(sorted_docs)} documents "
@@ -1067,24 +1058,7 @@ class UnifiedPromptManager:
                 )[:5]
                 
                 if sorted_docs:
-                    documents_section = "\n\n## 검색된 법률 문서\n\n"
-                    documents_section += "위 문서들을 인용할 때는 법원명과 판결일을 직접 언급하여 자연스럽게 표기하세요. 예: '서울고등법원 2018. 5. 15. 선고 2017나2046429 판결에 따르면...' '[문서 N]' 형식은 사용하지 마세요.\n\n"
-                    
-                    for idx, doc in enumerate(sorted_docs, 1):
-                        law_name = doc.get("law_name", "")
-                        article_no = doc.get("article_no", "")
-                        case_name = doc.get("case_name", "")
-                        case_number = doc.get("case_number", "")
-                        
-                        doc_type = "법률 전문" if (law_name and article_no) else ("판례 요약" if (case_name or case_number) else "해설")
-                        content = doc.get("content", "")
-                        max_length = 2000 if doc_type == "법률 전문" else (1000 if doc_type == "판례 요약" else 600)
-                        if len(content) > max_length:
-                            content = content[:max_length] + "..."
-                        
-                        title = doc.get("title", f"[문서 {idx}]")
-                        relevance = doc.get("relevance_score", 0.0)
-                        documents_section += f"**[문서 {idx}]**: {title} (유형: {doc_type}, 관련성: {relevance:.2f})\n{content}\n\n"
+                    documents_section = self._build_documents_section(sorted_docs, query)
                     
                     logger.info(f"✅ [FINAL PROMPT] Created documents_section from normalized_docs ({len(sorted_docs)} docs)")
             
@@ -1125,19 +1099,19 @@ class UnifiedPromptManager:
         
         # 최종 토큰 수 검증
         final_tokens = self._estimate_tokens(final_prompt)
-        if final_tokens > MAX_SAFE_TOKENS:
+        if final_tokens > max_safe_tokens:
             logger.warning(
                 f"⚠️ [TOKEN LIMIT] Final prompt exceeds safe limit: "
-                f"{final_tokens:,} tokens (max: {MAX_SAFE_TOKENS:,}). "
+                f"{final_tokens:,} tokens (max: {max_safe_tokens:,}). "
                 f"Applying emergency truncation..."
             )
             # 긴급 축약: 문서 섹션만 축약
-            final_prompt = self._emergency_truncate_prompt(final_prompt, MAX_SAFE_TOKENS, simplified_base, query)
+            final_prompt = self._emergency_truncate_prompt(final_prompt, max_safe_tokens, simplified_base, query)
             final_tokens = self._estimate_tokens(final_prompt)
         
         logger.info(
             f"✅ [TOKEN COUNT] Final prompt: {final_tokens:,} tokens "
-            f"({final_tokens/MAX_INPUT_TOKENS*100:.1f}% of max, "
+            f"({final_tokens/self.MAX_INPUT_TOKENS*100:.1f}% of max, "
             f"base: {base_tokens:,}, query: {query_tokens:,}, "
             f"docs: {current_doc_tokens if 'current_doc_tokens' in locals() else 0:,})"
         )
@@ -1150,82 +1124,23 @@ class UnifiedPromptManager:
                 reverse=True
             )[:5]
 
-            # 예시 기반 학습 방식 적용 (방식 2)
+            # 예시 기반 학습 방식 적용 (간소화)
             instruction_section = """
-## 📚 답변 예시 (반드시 참고하세요)
+## 📚 답변 형식 가이드
 
-아래 예시를 참고하여 사용자 질문에 동일한 형식으로 답변하세요.
+답변 시 다음 형식을 참고하세요:
 
-### 예시: 계약 해지 관련 질문
+**출처 인용**: "민법 제543조에 따르면..." [문서 1]
 
-**질문**: 계약 해지 사유에 대해 알려주세요
+**문서별 근거 비교 표** (최소 3개 문서 포함):
+| 문서 번호 | 출처 | 핵심 근거 |
+|-----------|------|----------|
+| [문서 1] | 민법 제543조 | 해지권 발생 원인 |
+| [문서 2] | 대법원 판결 | 이행지체 해제 |
 
-**검색된 문서**:
-- [문서 1]: 민법 제543조 (해지권 발생)
-- [문서 2]: 대법원 판결 (이행지체 해제)
-- [문서 3]: 계약법 해설 (해지 효과)
+**답변 구조**: 직접 답변 → 문서별 근거 비교 → 결론 → 실무 조언
 
-**답변**:
-
-계약 해지의 권리는 계약 또는 법률의 규정에 따라 발생합니다. 민법 제543조에 따르면, 당사자 일방이나 쌍방이 해지 또는 해제의 권리가 있을 때 그 의사표시는 철회할 수 없습니다 [문서 1].
-
-주요한 계약 해지 사유 중 하나는 채무자의 이행지체입니다. 이행지체를 이유로 계약을 해제하려면, 채권자가 채무자에게 이행의 최고를 해야 합니다 [문서 2]. 채권자가 채무자의 채무불이행 사정을 들어 계약을 해제하겠다는 통지를 한 경우, 특별히 급부 수령을 거부하는 취지가 포함되어 있지 않다면 이로써 이행의 최고가 있었다고 볼 수 있으며, 그로부터 상당한 기간이 지나도록 이행되지 않았다면 채권자는 계약을 해제할 수 있습니다 [문서 2].
-
-계약이 해지되면 계약은 장래에 대하여 그 효력을 잃게 되지만, 해지 이전의 채권채무 관계는 유효하게 유지됩니다 [문서 3].
-
-## 문서별 근거 비교
-
-| 문서 번호 | 출처 | 핵심 근거 | 관련 내용 |
-|-----------|--------|------------|-------------|
-| [문서 1] | 민법 제543조 | 해지권 발생 원인 및 행사 방법 | 계약 또는 법률의 규정에 의해 해지 또는 해제의 권리가 있는 때에는 상대방에 대한 의사표시로 하며, 이는 철회하지 못함 |
-| [문서 2] | 대법원 판결 | 이행지체를 이유로 한 계약 해제 사유 및 절차 | 이행의 최고는 일정 기간 명시 없이 상당 기간 경과 시 해제권 발생. 채무불이행 통지 시 이행 최고로 볼 수 있음 |
-| [문서 3] | 계약법 해설 | 계약 해지의 효과 및 소멸시효 | 계약이 해지되면 장래에 대하여 효력을 잃고, 해지 이전의 채권채무 관계는 유효함 |
-
-## 관련 법령 및 조항
-
-**민법 제543조 (해지, 해제권)**에 따르면, "①계약 또는 법률의 규정에 의하여 당사자의 일방이나 쌍방이 해지 또는 해제의 권리가 있는 때에는 그 해지 또는 해제는 상대방에 대한 의사표시로 한다. ②전항의 의사표시는 철회하지 못한다." [문서 1] 이 조항은 계약 해지 또는 해제의 권리가 계약 자체의 내용이나 법률의 규정에 의해 발생할 수 있음을 명시하고, 그 행사 방법과 철회 불가를 규정하고 있습니다.
-
-## 판례나 해석례 설명
-
-대법원 판결에 의하면, 채권자가 채무자의 채무불이행 사정을 들어 계약을 해제하겠다는 통지를 한 경우, 특별히 급부의 수령을 거부하는 취지가 포함되어 있지 않다면 그로써 이행의 최고가 있었다고 볼 수 있으며, 그로부터 상당한 기간이 경과하도록 이행되지 않았다면 채권자는 계약을 해제할 수 있습니다 [문서 2]. 이는 이행지체를 이유로 한 계약 해제 시 이행의 최고가 반드시 형식적인 절차를 거쳐야 하는 것은 아님을 보여줍니다.
-
-## 결론
-
-위 표의 내용을 종합하면, 계약 해지 사유는 크게 **계약 자체의 규정**이나 **법률의 규정**에 의해 발생할 수 있습니다 [문서 1]. 특히, **채무자의 이행지체**는 중요한 해지 사유로, 채권자가 이행의 최고를 한 후에도 채무자가 상당한 기간 내에 이행하지 않을 때 해제권이 발생합니다 [문서 2]. 계약이 해지되면 장래에 대한 효력은 상실되지만, 해지 이전의 채권채무 관계는 유효하게 유지됩니다 [문서 3].
-
-## 실무적 의미와 조언
-
-계약을 해지하고자 할 때는 먼저 계약서에 해지 사유와 절차에 대한 특별한 규정이 있는지 확인하는 것이 중요합니다. 만약 이행지체를 이유로 해지하는 경우라면, 상대방에게 이행을 최고하는 서면 통지를 보내고, 상대방이 그 기간 내에 이행하지 않았다는 명확한 증거를 남기는 것이 좋습니다 [문서 2]. 또한, 계약 해지 시 발생할 수 있는 채권의 소멸시효 기간도 유의해야 합니다 [문서 3].
-
----
-
-## ✅ 답변 작성 규칙
-
-위 예시를 참고하여 다음 규칙을 준수하세요:
-
-1. **출처 형식**: 반드시 `[문서 N]` 형식 사용
-   - ✅ 올바른 예: "민법 제543조에 따르면..." [문서 1]
-   - ❌ 잘못된 예: "[출처: 문서 1]", "**출처**: 문서1"
-
-2. **문서별 근거 비교 표** (필수 포함):
-   - 표의 "문서 번호" 열에는 반드시 "[문서 1]", "[문서 2]", "[문서 3]" 형식으로 표시
-   - 최소 3개 이상의 문서를 표에 포함
-   - 표를 작성한 후, 답변의 다른 부분에서도 "[문서 N]" 형식으로 참조
-
-3. **답변 구조**: 예시와 동일한 구조 유지
-   - 직접 답변 (1-2문단)
-   - 문서별 근거 비교 표
-   - 관련 법령 조문
-   - 판례 설명
-   - 결론
-   - 실무 조언
-
-4. **문서 기반**: 검색된 문서에만 근거하여 답변
-   - 문서에 없는 내용은 "문서에는 해당 내용이 명시되어 있지 않습니다"라고 표현
-
-**스타일**: 친근한 존댓말 ("~예요/~해요")
-
-**참고**: 상세한 Citation 요구사항은 위 ⚠️ 필수 요구사항 섹션을 참조하세요.
+**스타일**: 친근한 존댓말, 자연스러운 문단 흐름
 """
         else:
             instruction_section = """
@@ -1296,16 +1211,16 @@ class UnifiedPromptManager:
         
         # 최종 토큰 수 재검증 (지침 추가 후)
         final_tokens_after_instructions = self._estimate_tokens(final_prompt_with_instructions)
-        if final_tokens_after_instructions > MAX_SAFE_TOKENS:
+        if final_tokens_after_instructions > max_safe_tokens:
             logger.warning(
                 f"⚠️ [TOKEN LIMIT] Final prompt with instructions exceeds limit: "
-                f"{final_tokens_after_instructions:,} tokens (max: {MAX_SAFE_TOKENS:,}). "
+                f"{final_tokens_after_instructions:,} tokens (max: {max_safe_tokens:,}). "
                 f"Applying emergency truncation..."
             )
             # 긴급 축약: 문서 섹션만 축약
             final_prompt_with_instructions = self._emergency_truncate_prompt(
                 final_prompt_with_instructions, 
-                MAX_SAFE_TOKENS, 
+                max_safe_tokens, 
                 simplified_base, 
                 query
             )
@@ -1316,7 +1231,7 @@ class UnifiedPromptManager:
         
         logger.info(
             f"✅ [FINAL TOKEN COUNT] Final prompt with instructions: {final_tokens_after_instructions:,} tokens "
-            f"({final_tokens_after_instructions/MAX_INPUT_TOKENS*100:.1f}% of max)"
+            f"({final_tokens_after_instructions/self.MAX_INPUT_TOKENS*100:.1f}% of max)"
         )
         
         return final_prompt_with_instructions
@@ -1415,7 +1330,7 @@ class UnifiedPromptManager:
 
         # content 필드: 여러 가능한 필드명에서 추출 (우선순위: content > text > chunk_text)
         # 개선: content 필드를 우선 확인 (workflow_document_processor에서 content로 저장)
-        content = (
+        raw_content = (
             doc.get("content", "") or
             doc.get("text", "") or
             doc.get("chunk_text", "") or
@@ -1426,7 +1341,10 @@ class UnifiedPromptManager:
             str(doc.get("metadata", {}).get("content", "") if isinstance(doc.get("metadata"), dict) else "") or
             str(doc.get("metadata", {}).get("text", "") if isinstance(doc.get("metadata"), dict) else "") or
             ""
-        ).strip()
+        )
+        
+        # 불필요한 메타데이터 제거
+        content = self._clean_content(raw_content).strip()
         
         # 법률 정보가 있으면 content가 짧아도 포함 (개선: 10자 → 3자로 완화)
         has_law_info = bool(
@@ -1441,7 +1359,7 @@ class UnifiedPromptManager:
             ))
         )
         
-        min_content_length = 3 if has_law_info else 10  # 법률 정보가 있으면 3자 이상
+        min_content_length = self.MIN_CONTENT_LENGTH_WITH_LAW_INFO if has_law_info else self.MIN_CONTENT_LENGTH
         
         if not content or len(content) < min_content_length:
             if has_law_info:
@@ -1466,124 +1384,27 @@ class UnifiedPromptManager:
         if not isinstance(metadata, dict):
             metadata = {}
 
-        # 법률명 추출 (여러 가능한 필드명 지원)
-        law_name = (
-            doc.get("law_name", "") or
-            metadata.get("law_name", "") or
-            metadata.get("statute_name", "") or
-            metadata.get("name", "") or
-            ""
-        )
-
-        # 조문 번호 추출
-        article_no = (
-            doc.get("article_no", "") or
-            doc.get("article_number", "") or
-            doc.get("article_no", "") or
-            metadata.get("article_no", "") or
-            metadata.get("article_number", "") or
-            ""
-        )
-
-        # 항 번호 추출
-        clause_no = (
-            doc.get("clause_no", "") or
-            doc.get("clause_number", "") or
-            metadata.get("clause_no", "") or
-            metadata.get("clause_number", "") or
-            ""
-        )
-
-        # 호 번호 추출
-        item_no = (
-            doc.get("item_no", "") or
-            doc.get("item_number", "") or
-            metadata.get("item_no", "") or
-            metadata.get("item_number", "") or
-            ""
-        )
-
-        # 조문 제목 추출
-        heading = (
-            doc.get("heading", "") or
-            doc.get("article_title", "") or
-            metadata.get("heading", "") or
-            metadata.get("article_title", "") or
-            ""
-        )
-
+        # 필드 추출 (헬퍼 메서드 사용)
+        law_name = self._extract_field(doc, metadata, ["law_name", "statute_name", "name"])
+        article_no = self._extract_field(doc, metadata, ["article_no", "article_number"])
+        clause_no = self._extract_field(doc, metadata, ["clause_no", "clause_number"])
+        item_no = self._extract_field(doc, metadata, ["item_no", "item_number"])
+        heading = self._extract_field(doc, metadata, ["heading", "article_title"])
+        
         # 판례 정보 추출
-        court = (
-            doc.get("court", "") or
-            metadata.get("court", "") or
-            ""
-        )
-
-        case_number = (
-            doc.get("case_number", "") or
-            doc.get("doc_id", "") or
-            doc.get("case_id", "") or
-            metadata.get("case_number", "") or
-            metadata.get("doc_id", "") or
-            ""
-        )
-
-        case_name = (
-            doc.get("case_name", "") or
-            doc.get("casenames", "") or
-            metadata.get("case_name", "") or
-            metadata.get("casenames", "") or
-            ""
-        )
-
-        announce_date = (
-            doc.get("announce_date", "") or
-            doc.get("decision_date", "") or
-            metadata.get("announce_date", "") or
-            metadata.get("decision_date", "") or
-            ""
-        )
-
-        case_type = (
-            doc.get("case_type", "") or
-            metadata.get("case_type", "") or
-            ""
-        )
-
+        court = self._extract_field(doc, metadata, ["court"])
+        case_number = self._extract_field(doc, metadata, ["case_number", "doc_id", "case_id"])
+        case_name = self._extract_field(doc, metadata, ["case_name", "casenames"])
+        announce_date = self._extract_field(doc, metadata, ["announce_date", "decision_date"])
+        case_type = self._extract_field(doc, metadata, ["case_type"])
+        
         # 판례 본문 정보 추출
-        case_summary = (
-            doc.get("summary", "") or
-            doc.get("case_summary", "") or
-            metadata.get("summary", "") or
-            metadata.get("case_summary", "") or
-            ""
-        )
-
-        case_holding = (
-            doc.get("holding", "") or
-            doc.get("case_holding", "") or
-            doc.get("판시사항", "") or
-            metadata.get("holding", "") or
-            metadata.get("case_holding", "") or
-            ""
-        )
-
-        case_reasoning = (
-            doc.get("reasoning", "") or
-            doc.get("case_reasoning", "") or
-            doc.get("판결요지", "") or
-            metadata.get("reasoning", "") or
-            metadata.get("case_reasoning", "") or
-            ""
-        )
-
+        case_summary = self._extract_field(doc, metadata, ["summary", "case_summary"])
+        case_holding = self._extract_field(doc, metadata, ["holding", "case_holding", "판시사항"])
+        case_reasoning = self._extract_field(doc, metadata, ["reasoning", "case_reasoning", "판결요지"])
+        
         # 문서 타입 판단
-        source_type = (
-            doc.get("source_type", "") or
-            metadata.get("source_type", "") or
-            metadata.get("type", "") or
-            ""
-        )
+        source_type = self._extract_field(doc, metadata, ["source_type", "type"])
 
         # 관련성 점수 추출
         relevance_score = float(
@@ -1628,32 +1449,34 @@ class UnifiedPromptManager:
                     content = doc_title or "법률 문서"
                 logger.debug(f"✅ [DOC NORMALIZE] Created minimal content from law info: {content[:50]}")
         
+        # 정규화된 문서 생성 (불필요한 메타데이터 제외)
         normalized = {
             "content": str(content).strip(),
-            "title": doc_title,  # 개선: 문서 제목 추가
+            "title": doc_title,
             "source": str(source).strip() or "Unknown",
             "relevance_score": relevance_score,
-            "document_id": str(doc.get("document_id", "") or doc.get("id", "") or doc.get("chunk_id", "") or "").strip(),
-            "metadata": metadata,
-            # 법률 정보 추가
+            # 법률 정보
             "law_name": str(law_name).strip(),
             "article_no": str(article_no).strip(),
             "clause_no": str(clause_no).strip(),
             "item_no": str(item_no).strip(),
             "heading": str(heading).strip(),
-            # 판례 정보 추가
+            # 판례 정보
             "court": str(court).strip(),
             "case_number": str(case_number).strip(),
             "case_name": str(case_name).strip(),
             "casenames": str(case_name).strip(),  # 호환성
             "announce_date": str(announce_date).strip(),
             "case_type": str(case_type).strip(),
-            # 판례 본문 정보 추가
+            # 판례 본문 정보
             "case_summary": str(case_summary).strip(),
             "case_holding": str(case_holding).strip(),
             "case_reasoning": str(case_reasoning).strip(),
             "source_type": str(source_type).strip()
         }
+        
+        # None 값 및 빈 문자열 제거
+        normalized = {k: v for k, v in normalized.items() if v}
 
         return normalized
 
@@ -1676,7 +1499,6 @@ class UnifiedPromptManager:
         case_name = doc.get("case_name", "")
         announce_date = doc.get("announce_date", "")
         case_type = doc.get("case_type", "")
-        source_type = doc.get("source_type", "")
 
         # 판례 본문 정보 추출
         case_summary = doc.get("case_summary", "")
@@ -2875,6 +2697,48 @@ class UnifiedPromptManager:
         
         return int(estimated_tokens)
     
+    def _clean_content(self, content: str) -> str:
+        """content에서 불필요한 메타데이터 제거"""
+        import re
+        
+        if not content:
+            return ""
+        
+        # JSON 형태의 메타데이터 제거
+        content = re.sub(r"\{'[^']+':\s*[^}]+\}", "", content)
+        content = re.sub(r'\{"[^"]+":\s*[^}]+\}', "", content)
+        
+        # 검색 쿼리 정보 제거
+        content = re.sub(r"'query':\s*'[^']+'", "", content)
+        content = re.sub(r'"query":\s*"[^"]+"', "", content)
+        
+        # 점수 정보 제거
+        score_patterns = [
+            r"'(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight)':\s*[\d.]+",
+            r'"(?:cross_encoder_score|original_score|keyword_bonus|keyword_match_score|combined_relevance_score|source_type_weight)":\s*[\d.]+',
+        ]
+        for pattern in score_patterns:
+            content = re.sub(pattern, "", content)
+        
+        # 메타데이터 키 제거
+        metadata_keys = [
+            "'strategy'", "'id'", "'doc_id'", "'announce_date'", "'response_date'",
+            "'cross_encoder'", "'embedding'", "'vector'", "'metadata_keys'",
+            "'keyword_match_score'", "'source_type'"
+        ]
+        for key in metadata_keys:
+            content = re.sub(rf"{key}:\s*[^,}}\]]+", "", content)
+        
+        # 불필요한 공백 정리
+        content = re.sub(r'\s+', ' ', content).strip()
+        
+        # 빈 괄호나 중괄호 제거
+        content = re.sub(r'\(\s*\)', '', content)
+        content = re.sub(r'\{\s*\}', '', content)
+        content = re.sub(r'\[\s*\]', '', content)
+        
+        return content
+    
     def _smart_truncate_document(self, content: str, max_chars: int, query: str) -> str:
         """
         질문과 관련된 부분을 우선 유지하며 문서 축약
@@ -2991,3 +2855,80 @@ class UnifiedPromptManager:
             return truncated_prompt
         
         return prompt
+    
+    def _optimize_documents_for_prompt(self, docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+        """프롬프트용 문서 최적화 - 중복 제거 및 메타데이터 정리"""
+        if not docs:
+            return []
+        
+        seen_contents = set()
+        optimized_docs = []
+        
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            
+            # content 정리
+            content = doc.get("content", "").strip()
+            if not content or len(content) < self.MIN_CONTENT_LENGTH:
+                continue
+            
+            # 중복 체크 (내용 기반)
+            content_hash = hash(content[:200])  # 처음 200자로 중복 체크
+            if content_hash in seen_contents:
+                continue
+            seen_contents.add(content_hash)
+            
+            optimized_docs.append(doc)
+        
+        # 관련성 점수 기준 정렬
+        optimized_docs.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        
+        # 최대 문서 수만 반환
+        return optimized_docs[:self.MAX_DOCUMENTS]
+    
+    def _extract_field(self, doc: Dict[str, Any], metadata: Dict[str, Any], field_names: List[str]) -> str:
+        """문서와 메타데이터에서 필드 추출 (헬퍼 메서드)"""
+        for field_name in field_names:
+            value = doc.get(field_name, "") or metadata.get(field_name, "")
+            if value:
+                return str(value).strip()
+        return ""
+    
+    def _build_documents_section(self, sorted_docs: List[Dict[str, Any]], query: str) -> str:
+        """문서 섹션 생성 (중복 코드 제거)"""
+        documents_section = "\n\n## 검색된 법률 문서\n\n"
+        documents_section += "위 문서들을 인용할 때는 `[문서 N]` 형식을 사용하세요.\n\n"
+        
+        for idx, doc in enumerate(sorted_docs, 1):
+            # 문서 유형 판단 및 제목 생성
+            doc_title, max_length = self._get_document_title_and_max_length(doc, idx)
+            
+            # 내용 추출 및 축약
+            content = doc.get("content", "").strip()
+            if len(content) > max_length:
+                content = self._smart_truncate_document(content, max_length, query)
+            
+            # 간결한 형식으로 추가
+            documents_section += f"**[문서 {idx}]** {doc_title}\n{content}\n\n"
+        
+        return documents_section
+    
+    def _get_document_title_and_max_length(self, doc: Dict[str, Any], idx: int) -> tuple[str, int]:
+        """문서 제목과 최대 길이 반환"""
+        law_name = doc.get("law_name", "")
+        article_no = doc.get("article_no", "")
+        case_name = doc.get("case_name", "")
+        court = doc.get("court", "")
+        
+        if law_name and article_no:
+            doc_title = f"{law_name} 제{article_no}조"
+            max_length = self.MAX_DOC_LENGTH_LAW
+        elif case_name or court:
+            doc_title = f"{court} {case_name}".strip() if court else case_name
+            max_length = self.MAX_DOC_LENGTH_CASE
+        else:
+            doc_title = doc.get("title", f"문서 {idx}")
+            max_length = self.MAX_DOC_LENGTH_COMMENTARY
+        
+        return doc_title, max_length
