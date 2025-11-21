@@ -1279,7 +1279,7 @@ class AnswerFormatterHandler:
     
     def _generate_fallback_answer(self, state: LegalWorkflowState, current_answer: str) -> str:
         """Fallback 답변 생성"""
-        self.logger.warning(f"[PREPARE_FINAL_RESPONSE_PART] ⚠️ Answer recovery failed, attempting fallback answer generation")
+        self.logger.warning("[PREPARE_FINAL_RESPONSE_PART] ⚠️ Answer recovery failed, attempting fallback answer generation")
         
         try:
             if self.answer_generator:
@@ -1344,7 +1344,7 @@ class AnswerFormatterHandler:
         if not final_sources_list or len(final_sources_list) == 0:
             return []
         
-        self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Attempting to generate sources_detail from sources")
+        self.logger.info("[PREPARE_FINAL_RESPONSE_PART] Attempting to generate sources_detail from sources")
         fallback_sources_detail = []
         
         for source_str in final_sources_list[:MAX_SOURCES_LIMIT]:
@@ -1358,7 +1358,7 @@ class AnswerFormatterHandler:
         if fallback_sources_detail:
             self.logger.info(f"[PREPARE_FINAL_RESPONSE_PART] Generated {len(fallback_sources_detail)} fallback sources_detail from sources")
         else:
-            self.logger.warning(f"[PREPARE_FINAL_RESPONSE_PART] Failed to generate fallback sources_detail")
+            self.logger.warning("[PREPARE_FINAL_RESPONSE_PART] Failed to generate fallback sources_detail")
         
         return fallback_sources_detail
     
@@ -2036,7 +2036,7 @@ class AnswerFormatterHandler:
         
         # sources 데이터 상세 로깅 (개발 모드에서만)
         if os.getenv("DEBUG_SOURCES", "false").lower() == "true" or self.logger.level <= logging.DEBUG:
-            self.logger.info(f"[SOURCES_TEST] ===== Sources Data Analysis =====")
+            self.logger.info("[SOURCES_TEST] ===== Sources Data Analysis =====")
             self.logger.info(f"[SOURCES_TEST] Sources count: {len(normalized_sources_clean)}")
             self.logger.info(f"[SOURCES_TEST] Sources detail count: {len(final_sources_detail_clean)}")
             self.logger.info(f"[SOURCES_TEST] Legal references count: {len(legal_refs[:MAX_LEGAL_REFERENCES_LIMIT])}")
@@ -2079,7 +2079,7 @@ class AnswerFormatterHandler:
             if empty_metadata_count > 0:
                 self.logger.warning(f"[SOURCES_TEST] ⚠️ Total empty metadata count: {empty_metadata_count}")
             
-            self.logger.info(f"[SOURCES_TEST] ===== End Sources Data Analysis =====")
+            self.logger.info("[SOURCES_TEST] ===== End Sources Data Analysis =====")
 
         return normalized_sources_clean, final_sources_detail_clean, legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
 
@@ -2300,7 +2300,6 @@ class AnswerFormatterHandler:
             # Config 및 connector 인스턴스 지연 초기화 (os 변수 오류 방지)
             if not self._config_initialized:
                 try:
-                    import os
                     from core.utils.config import Config
                     from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
                     self._config = Config()
