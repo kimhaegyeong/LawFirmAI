@@ -409,6 +409,11 @@ class EnhancedLegalQuestionWorkflow(
         # 빠른 LLM 초기화 (간단한 질문용)
         self.llm_fast = self._initialize_llm_fast()
         
+        # UnifiedPromptManager에 llm_fast 전달 (요약 에이전트용)
+        if self.unified_prompt_manager:
+            self.unified_prompt_manager.llm_fast = self.llm_fast
+            self.logger.debug("UnifiedPromptManager.llm_fast set for document summary agent")
+        
         # 품질 검증용 LLM 초기화 (별도)
         self.validator_llm = self._initialize_validator_llm()
         
