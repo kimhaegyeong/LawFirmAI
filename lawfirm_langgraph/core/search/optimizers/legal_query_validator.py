@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import numpy as np
 from typing import Any, Dict, List, Optional
 
@@ -15,7 +19,7 @@ except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
     CrossEncoder = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LegalQueryValidator:
@@ -42,7 +46,7 @@ class LegalQueryValidator:
         if SENTENCE_TRANSFORMERS_AVAILABLE:
             try:
                 self.embedding_model = SentenceTransformer(self.embedding_model_name)
-                self.logger.info(f"✅ [HF MODEL] Loaded embedding model: {self.embedding_model_name}")
+                self.logger.trace(f"✅ [HF MODEL] Loaded embedding model: {self.embedding_model_name}")
             except Exception as e:
                 self.logger.warning(f"⚠️ [HF MODEL] Failed to load {self.embedding_model_name}: {e}")
                 try:
