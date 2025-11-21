@@ -4,17 +4,19 @@
 LawFirmAI의 성능을 최적화하고 메모리 사용량을 관리합니다.
 """
 
-import logging
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 import gc
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
-import threading
 import asyncio
-from functools import wraps, lru_cache
-import weakref
+from functools import wraps
 
 # psutil 선택적 import
 try:
@@ -24,7 +26,7 @@ except ImportError:
     PSUTIL_AVAILABLE = False
     psutil = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -60,7 +62,7 @@ class PerformanceMonitor:
         Args:
             max_history: 최대 메트릭 저장 개수
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_history = max_history
         self.metrics_history = deque(maxlen=max_history)
         self.start_time = datetime.now()
@@ -74,7 +76,7 @@ class PerformanceMonitor:
             "db_query_time": 2.0  # DB 쿼리 시간 2초 이상 시 경고
         }
         
-        self.logger.info("PerformanceMonitor initialized")
+        self.logger.trace("PerformanceMonitor initialized")
     
     def record_metrics(self, response_time: float, active_sessions: int, 
                       cache_hit_rate: float = 0.0, db_query_time: float = 0.0):
@@ -265,7 +267,7 @@ class MemoryOptimizer:
         Args:
             max_cache_size: 최대 캐시 크기
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_cache_size = max_cache_size
         
         # 캐시 관리
@@ -278,7 +280,7 @@ class MemoryOptimizer:
         # 가비지 컬렉션 설정
         gc.set_threshold(700, 10, 10)  # 더 적극적인 GC
         
-        self.logger.info("MemoryOptimizer initialized")
+        self.logger.trace("MemoryOptimizer initialized")
     
     def optimize_memory(self) -> Dict[str, Any]:
         """메모리 최적화 수행"""
@@ -443,7 +445,7 @@ class CacheManager:
             max_size: 최대 캐시 크기
             ttl: 캐시 생존 시간 (초)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_size = max_size
         self.ttl = ttl
         
@@ -456,7 +458,7 @@ class CacheManager:
         self.hits = 0
         self.misses = 0
         
-        self.logger.info(f"CacheManager initialized (max_size={max_size}, ttl={ttl})")
+        self.logger.trace(f"CacheManager initialized (max_size={max_size}, ttl={ttl})")
     
     def get(self, key: str) -> Optional[Any]:
         """캐시에서 값 조회"""
@@ -576,7 +578,7 @@ def performance_monitor(func: Callable) -> Callable:
             return result
         finally:
             execution_time = time.time() - start_time
-            logger.info(f"{func.__name__} executed in {execution_time:.3f}s")
+            logger.trace(f"{func.__name__} executed in {execution_time:.3f}s")
     
     @wraps(func)
     def sync_wrapper(*args, **kwargs):
@@ -586,7 +588,7 @@ def performance_monitor(func: Callable) -> Callable:
             return result
         finally:
             execution_time = time.time() - start_time
-            logger.info(f"{func.__name__} executed in {execution_time:.3f}s")
+            logger.trace(f"{func.__name__} executed in {execution_time:.3f}s")
     
     if asyncio.iscoroutinefunction(func):
         return async_wrapper
