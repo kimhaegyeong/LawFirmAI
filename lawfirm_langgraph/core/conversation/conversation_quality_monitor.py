@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import re
 from typing import Dict, List, Any, Optional, Tuple
@@ -16,7 +20,7 @@ import statistics
 from ..data.conversation_store import ConversationStore
 from .conversation_manager import ConversationContext, ConversationTurn
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -52,7 +56,7 @@ class ConversationQualityMonitor:
         Args:
             conversation_store: 대화 저장소 (None이면 새로 생성)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.conversation_store = conversation_store or ConversationStore()
         
         # 품질 평가 기준

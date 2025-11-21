@@ -1,10 +1,14 @@
 ﻿import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class LegalTextPreprocessor:
     """법률 텍스트 전처리기"""

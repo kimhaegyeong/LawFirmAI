@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from core.agents.extractors import DocumentExtractor
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class ContextBuilder:

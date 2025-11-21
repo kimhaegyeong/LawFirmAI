@@ -1,5 +1,9 @@
 ﻿import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
@@ -7,7 +11,7 @@ from collections import defaultdict
 
 from .hybrid_keyword_manager import HybridKeywordManager, ExpansionStrategy
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class LegalDomain(Enum):
     """법률 도메인 열거형"""
@@ -31,7 +35,7 @@ class DomainSpecificExtractor:
                  cache_dir: str = "data/cache",
                  min_keyword_threshold: int = 20,
                  expansion_strategy: ExpansionStrategy = ExpansionStrategy.HYBRID):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.domain_patterns = self._initialize_domain_patterns()
         
         # 하이브리드 키워드 매니저 초기화

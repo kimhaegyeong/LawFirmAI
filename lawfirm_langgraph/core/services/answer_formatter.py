@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -12,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from .confidence_calculator import ConfidenceInfo
 from .question_classifier import QuestionType
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -28,7 +32,7 @@ class AnswerFormatter:
 
     def __init__(self):
         """답변 구조화기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 질문 유형별 템플릿 (개선: 우선순위 섹션 추가)
         self.templates = {

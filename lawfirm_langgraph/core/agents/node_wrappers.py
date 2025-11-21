@@ -5,6 +5,10 @@ State Reduction과 Adapter를 자동으로 적용하는 데코레이터 및 헬�
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
@@ -13,13 +17,26 @@ from .state_adapter import (
     validate_state_for_node,
 )
 from .state_reduction import StateReducer
-from .node_input_output_spec import validate_node_input
+try:
+    from core.workflow.node_input_output_spec import validate_node_input
+except ImportError:
+    try:
+        from ..workflow.node_input_output_spec import validate_node_input
+    except ImportError:
+        # Fallback: validate_node_input이 없어도 동작하도록
+        def validate_node_input(node_name: str, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+            """Fallback: 항상 검증 통과"""
+            return True, None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 전역 검색 결과 캐시 (LangGraph reducer 손실 대비)
 # node_wrappers에서 저장하고, 이후 노드에서 복원
 _global_search_results_cache: Optional[Dict[str, Any]] = None
+
+# 전역 캐시 크기 제한 상수
+MAX_GLOBAL_CACHE_PROCESSING_STEPS = 1000  # processing_steps 최대 개수
+MAX_GLOBAL_CACHE_SEARCH_RESULTS = 500  # 검색 결과 최대 개수
 
 
 def with_state_optimization(node_name: str, enable_reduction: bool = True):
@@ -597,6 +614,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                                 for step in result_steps:
                                     if isinstance(step, str) and step not in _global_search_results_cache["processing_steps"]:
                                         _global_search_results_cache["processing_steps"].append(step)
+                                
+                                # 크기 제한: 최대 개수 초과 시 오래된 항목 제거
+                                if len(_global_search_results_cache["processing_steps"]) > MAX_GLOBAL_CACHE_PROCESSING_STEPS:
+                                    _global_search_results_cache["processing_steps"] = _global_search_results_cache["processing_steps"][-MAX_GLOBAL_CACHE_PROCESSING_STEPS:]
+                                    logger.debug(f"[MEMORY] Trimmed processing_steps cache to {MAX_GLOBAL_CACHE_PROCESSING_STEPS} items")
 
                         # 최상위 레벨에서도 확인
                         result_top_steps = result.get("processing_steps", [])
@@ -610,6 +632,11 @@ def with_state_optimization(node_name: str, enable_reduction: bool = True):
                             for step in result_top_steps:
                                 if isinstance(step, str) and step not in _global_search_results_cache["processing_steps"]:
                                     _global_search_results_cache["processing_steps"].append(step)
+                            
+                            # 크기 제한: 최대 개수 초과 시 오래된 항목 제거
+                            if len(_global_search_results_cache["processing_steps"]) > MAX_GLOBAL_CACHE_PROCESSING_STEPS:
+                                _global_search_results_cache["processing_steps"] = _global_search_results_cache["processing_steps"][-MAX_GLOBAL_CACHE_PROCESSING_STEPS:]
+                                logger.debug(f"[MEMORY] Trimmed processing_steps cache to {MAX_GLOBAL_CACHE_PROCESSING_STEPS} items")
 
                     # 5. Nested 구조면 그대로 반환, Flat 구조면 병합
                     # 중요: LangGraph reducer가 TypedDict 필드만 보존하므로,

@@ -4,13 +4,14 @@
 동의어의 품질을 평가하고 중복을 제거하는 시스템
 """
 
-import re
 import difflib
-from typing import List, Dict, Set, Tuple, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass
 import logging
-from collections import Counter
-import json
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 
 @dataclass
 class QualityMetrics:
@@ -26,7 +27,7 @@ class SynonymQualityManager:
     """동의어 품질 관리 시스템"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.quality_thresholds = {
             "confidence": 0.7,      # 신뢰도 임계값
             "usage_count": 5,        # 최소 사용 횟수
@@ -237,7 +238,7 @@ class SynonymDeduplicator:
     """동의어 중복 제거 및 통합 시스템"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.similarity_threshold = 0.85  # 유사도 임계값
         self.quality_manager = SynonymQualityManager()
     
@@ -344,7 +345,7 @@ class SynonymOptimizer:
     """동의어 최적화 시스템"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.quality_manager = SynonymQualityManager()
         self.deduplicator = SynonymDeduplicator()
     

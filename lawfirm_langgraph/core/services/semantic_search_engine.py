@@ -6,6 +6,10 @@ Semantic Search Engine
 
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,7 +17,7 @@ from typing import Any, Dict, List
 import faiss
 from sentence_transformers import SentenceTransformer
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -38,7 +42,7 @@ class SemanticSearchEngine:
                  index_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.faiss",
                  metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta/ml_enhanced_faiss_index.json"):
         """검색 엔진 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.model_name = model_name
         self.index_path = Path(index_path)
         self.metadata_path = Path(metadata_path)

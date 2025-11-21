@@ -6,6 +6,10 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,7 +25,7 @@ except ImportError:
         ConversationContext = None
         ConversationTurn = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -47,7 +51,7 @@ class ContextCompressor:
             max_tokens: 최대 토큰 수
             compression_threshold: 압축 임계값 (이 비율을 초과하면 압축)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_tokens = max_tokens
         self.compression_threshold = compression_threshold
         

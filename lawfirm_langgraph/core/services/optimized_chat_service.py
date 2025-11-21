@@ -8,6 +8,10 @@ import asyncio
 import time
 from typing import Dict, List, Any, Optional
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 
 # 프로젝트 모듈 임포트
 import sys
@@ -53,7 +57,7 @@ class OptimizedChatService:
     
     def __init__(self, config: Config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 성능 최적화 설정
         self.performance_config = {

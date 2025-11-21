@@ -7,9 +7,13 @@
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -26,7 +30,7 @@ class UnifiedSourceFormatter:
     """통일된 출처 포맷터"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def format_source(self, source_type: str, metadata: Dict[str, Any]) -> SourceInfo:
         """

@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sqlite3
 import json
 from typing import Dict, Any, List, Optional
@@ -12,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 import statistics
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FeedbackCollector:
@@ -20,7 +24,7 @@ class FeedbackCollector:
     
     def __init__(self, feedback_db_path: str = "./data/feedback.db"):
         self.feedback_db_path = feedback_db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._initialize_feedback_db()
     
     def _initialize_feedback_db(self):
@@ -335,7 +339,7 @@ class FeedbackAnalyzer:
     
     def __init__(self):
         self.feedback_collector = FeedbackCollector()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def generate_improvement_suggestions(self) -> List[Dict[str, Any]]:
         """개선 제안 생성"""

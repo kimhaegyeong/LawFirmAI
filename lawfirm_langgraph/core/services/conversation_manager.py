@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
@@ -12,7 +16,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from collections import deque
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -52,7 +56,7 @@ class ConversationManager:
     
     def __init__(self, max_context_turns: int = 10, max_session_age_hours: int = 24):
         """대화 맥락 관리자 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_context_turns = max_context_turns
         self.max_session_age_hours = max_session_age_hours
         

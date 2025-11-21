@@ -7,6 +7,10 @@ Google Gemini API를 사용한 텍스트 생성 클라이언트
 import os
 import time
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,7 +20,7 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -54,7 +58,7 @@ class GeminiClient:
         self.timeout = timeout
         self.request_interval = request_interval
         self.last_request_time = 0
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # API 키 설정
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")

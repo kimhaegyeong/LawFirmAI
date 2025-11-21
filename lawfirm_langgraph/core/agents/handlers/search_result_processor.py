@@ -12,8 +12,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_constants import WorkflowConstants
+from core.workflow.utils.workflow_utils import WorkflowUtils
 from core.agents.tasks.search_result_tasks import SearchResultTasks
 
 

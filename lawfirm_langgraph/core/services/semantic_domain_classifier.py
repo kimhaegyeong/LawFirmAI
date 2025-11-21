@@ -6,6 +6,10 @@
 
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 import re
 from collections import defaultdict
@@ -18,7 +22,7 @@ import numpy as np
 from .question_classifier import QuestionType
 from .unified_prompt_manager import LegalDomain, ModelType
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

@@ -1,11 +1,15 @@
 ﻿import asyncio
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import os
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class KeywordExpansionResult:
@@ -21,7 +25,7 @@ class AIKeywordGenerator:
     """AI 모델을 사용한 키워드 확장 클래스"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.gemini_client = None
         self._initialize_gemini()
     
@@ -34,7 +38,7 @@ class AIKeywordGenerator:
             api_key = os.getenv('GOOGLE_API_KEY')
             if api_key:
                 self.gemini_client = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash-exp",
+                    model="gemini-2.5-flash-lite",
                     temperature=0.3,
                     max_output_tokens=1000,
                     timeout=30,

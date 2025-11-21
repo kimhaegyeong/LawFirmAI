@@ -6,6 +6,10 @@
 
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from typing import Dict, Any, List, Optional, Union
 from datetime import datetime, timedelta
@@ -15,7 +19,7 @@ from pathlib import Path
 import sqlite3
 from contextlib import contextmanager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class FeedbackType(Enum):
     """피드백 유형"""
@@ -59,7 +63,7 @@ class FeedbackCollector:
             db_path: 데이터베이스 경로
         """
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._init_database()
     
     def _init_database(self):
@@ -344,7 +348,7 @@ class FeedbackAnalyzer:
     
     def __init__(self, feedback_collector: FeedbackCollector):
         self.feedback_collector = feedback_collector
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def analyze_sentiment(self, text: str) -> Dict[str, Any]:
         """텍스트 감정 분석 (간단한 키워드 기반)"""

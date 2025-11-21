@@ -5,6 +5,10 @@ ConversationManager와 ConversationStore를 통합하여 메모리와 DB를 동�
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
@@ -13,7 +17,7 @@ from dataclasses import dataclass
 from ..data.conversation_store import ConversationStore
 from .conversation_manager import ConversationManager, ConversationContext, ConversationTurn
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -36,7 +40,7 @@ class IntegratedSessionManager:
             db_path: 데이터베이스 경로
             sync_interval: DB 동기화 간격 (턴 수)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.sync_interval = sync_interval
         
         # 컴포넌트 초기화

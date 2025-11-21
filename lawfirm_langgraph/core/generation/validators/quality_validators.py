@@ -6,6 +6,10 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
 try:
@@ -16,7 +20,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
 _stopword_processor = None
@@ -808,7 +812,7 @@ class AnswerValidator:
             normalized_answer_citations = AnswerValidator._extract_and_normalize_citations_from_answer(answer)
             
             # 디버깅 로그 추가
-            logger.debug(
+            logger.info(
                 f"[CITATION DEBUG] Normalized answer citations: "
                 f"{[c.get('normalized', '') for c in normalized_answer_citations[:5]]}"
             )
@@ -1039,7 +1043,7 @@ class AnswerValidator:
         from difflib import SequenceMatcher
         
         # 검증 시작 로그 (강제 출력)
-        logger.info(f"✅ [GROUNDING START] validate_answer_source_verification called")
+        logger.info("✅ [GROUNDING START] validate_answer_source_verification called")
         logger.info(f"   - Answer length: {len(answer)} characters")
         logger.info(f"   - Retrieved docs count: {len(retrieved_docs) if retrieved_docs else 0}")
         logger.info(f"   - Query: {query[:50]}..." if query else "   - Query: None")
@@ -1118,7 +1122,7 @@ class AnswerValidator:
 
         # 2. 답변을 문장 단위로 분리 (구문 단위로도 분할)
         # 개선: 문장 최소 길이 기준 완화 (20자 → 15자) 및 구문 분할 기준 완화 (100자 → 80자)
-        logger.info(f"✅ [GROUNDING STEP 1] Splitting answer into sentences...")
+        logger.info("✅ [GROUNDING STEP 1] Splitting answer into sentences...")
         answer_sentences = re.split(r'[.!?。！？]\s+', answer)
         answer_sentences = [s.strip() for s in answer_sentences if len(s.strip()) > 15]  # 20 → 15로 완화
         

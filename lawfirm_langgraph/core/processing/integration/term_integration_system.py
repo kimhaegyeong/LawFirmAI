@@ -1,21 +1,22 @@
-﻿import logging
-from typing import List, Dict, Any, Tuple, Optional
-from collections import Counter
+﻿# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+from typing import List, Dict, Any, Tuple
 import json
 from pathlib import Path
 from datetime import datetime
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TermIntegrator:
     """용어 통합 및 중복 제거 시스템"""
     
     def __init__(self, similarity_threshold: float = 0.8):
         self.similarity_threshold = similarity_threshold
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def calculate_similarity(self, term1: str, term2: str) -> float:
         """용어 간 유사도 계산"""
@@ -134,7 +135,7 @@ class QualityFilter:
     def __init__(self, min_quality_score: int = 70, min_confidence: float = 0.7):
         self.min_quality_score = min_quality_score
         self.min_confidence = min_confidence
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def filter_terms(self, validated_terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """품질 기준으로 용어 필터링"""
@@ -181,7 +182,7 @@ class DatabaseUpdater:
     
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.existing_terms = self.load_existing_terms()
     
     def load_existing_terms(self) -> Dict[str, Any]:
@@ -293,7 +294,7 @@ class TermIntegrationSystem:
         self.integrator = TermIntegrator()
         self.quality_filter = QualityFilter()
         self.db_updater = DatabaseUpdater(db_path)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def process_extracted_terms(self, extracted_terms: List[str]) -> List[Dict[str, Any]]:
         """추출된 용어 처리"""

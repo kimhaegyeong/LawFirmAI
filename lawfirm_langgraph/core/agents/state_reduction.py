@@ -10,13 +10,24 @@ State Reduction 시스템
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, Optional, Set
 
-from .node_input_output_spec import (
-    get_node_spec,
-)
+try:
+    from core.workflow.node_input_output_spec import get_node_spec
+except ImportError:
+    try:
+        from ..workflow.node_input_output_spec import get_node_spec
+    except ImportError:
+        # Fallback: get_node_spec이 없어도 동작하도록
+        def get_node_spec(node_name: str):
+            """Fallback: 항상 None 반환"""
+            return None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StateReducer:
@@ -30,7 +41,7 @@ class StateReducer:
             aggressive_reduction: 공격적인 감소 모드 (더 많은 최적화)
         """
         self.aggressive_reduction = aggressive_reduction
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def reduce_state_for_node(
         self,

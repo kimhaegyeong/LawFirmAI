@@ -13,6 +13,10 @@ from typing import List, Dict, Set, Tuple, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 
 # 동의어 데이터베이스 및 품질 관리 시스템 import
 from .synonym_database import SynonymDatabase, SynonymRecord
@@ -59,7 +63,7 @@ class RealGeminiSynonymExpander:
         
         # 로깅 설정
         logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # Gemini 모델 초기화
         self.gemini_model = self._initialize_gemini_model()

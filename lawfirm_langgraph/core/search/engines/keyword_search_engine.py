@@ -5,13 +5,17 @@ Keyword Search Engine
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -39,7 +43,7 @@ class KeywordSearchEngine:
             DeprecationWarning,
             stacklevel=2
         )
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.db_path = Path(db_path)
         self.logger.warning("⚠️ KeywordSearchEngine is deprecated. Migrate to ExactSearchEngineV2.")
         self.logger.info("KeywordSearchEngine initialized")

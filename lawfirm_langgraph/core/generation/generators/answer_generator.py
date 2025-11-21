@@ -5,6 +5,10 @@ Answer Generator
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 import os
 from typing import List, Dict, Any, Optional, Union
@@ -48,7 +52,7 @@ except ImportError:
         def run(self, **kwargs):
             return "Mock response"
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -71,7 +75,7 @@ class AnswerGenerator:
         """답변 생성기 초기화"""
         self.config = config
         self.langfuse_client = langfuse_client
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # LLM 초기화: 전달된 LLM이 있으면 사용, 없으면 자체 초기화
         if llm is not None:

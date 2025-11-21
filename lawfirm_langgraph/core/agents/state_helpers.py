@@ -14,6 +14,10 @@ Flat 및 Modular 구조 모두 지원하는 State 접근 헬퍼 함수들
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List
 
 from .modular_states import (
@@ -29,7 +33,7 @@ from .modular_states import (
     ValidationState,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================

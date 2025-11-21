@@ -9,11 +9,15 @@ LLM 생성 결과의 품질을 검증하고 개선하는 모듈
 import re
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import difflib
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QAQualityValidator:
@@ -21,7 +25,7 @@ class QAQualityValidator:
     
     def __init__(self):
         """품질 검증기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 품질 기준 정의
         self.quality_criteria = {

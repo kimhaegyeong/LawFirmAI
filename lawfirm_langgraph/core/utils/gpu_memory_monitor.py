@@ -9,6 +9,10 @@ import psutil
 import torch
 import time
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Optional
 from datetime import datetime
 import json
@@ -35,7 +39,7 @@ class GPUMemoryMonitor:
                 logging.StreamHandler()
             ]
         )
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def get_system_memory_info(self) -> Dict:
         """시스템 메모리 정보 수집"""

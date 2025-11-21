@@ -6,6 +6,10 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
 try:
@@ -16,7 +20,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 모듈 레벨 KoreanStopwordProcessor 인스턴스 (성능 최적화)
 _stopword_processor = None

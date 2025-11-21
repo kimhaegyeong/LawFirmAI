@@ -7,7 +7,6 @@
 import logging
 import os
 import re
-import math
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -24,20 +23,34 @@ class SearchResultProcessor:
         self.result_merger = result_merger
         self.result_ranker = result_ranker
         
-        # 가중치 설정 (테스트용)
-        self.weight_config = weight_config or {
-            "hybrid_law": {"semantic": 0.3, "keyword": 0.7},
-            "hybrid_case": {"semantic": 0.7, "keyword": 0.3},
-            "hybrid_general": {"semantic": 0.5, "keyword": 0.5},
-            "doc_type_boost": {"statute": 1.2, "case": 1.15},
-            "quality_weight": 0.2,
-            "keyword_adjustment": 1.8
-        }
-        
+        # 가중치 설정 (경험적 추정 기반)
+        # 주의: 이 가중치는 법률 도메인 특성에 대한 일반적인 가정에 기반합니다.
+        # 실제 테스트를 통해 최적화가 필요하며, 검색 점수 기반 동적 가중치가 우선 적용됩니다.
+        # 
+        # 근거:
+        # - 법령 조회: 정확한 조문 번호 매칭이 중요하지만, 의미적 검색도 중요 (추정)
+        # - 판례 검색: 유사 사례 찾기가 중요하므로 의미적 검색 강조 (추정)
+        # - 일반 질문: 균형이 중요 (추정)
+        #
+        # 개선 이력:
+        # - 2024년: 검색 점수 보호를 위해 법령 조회 semantic 가중치 증가 (0.3 → 0.45)
+        # - 검색 점수 >= 0.8일 때는 동적 가중치 사용 (semantic: 0.7-0.85)
+        # - 검색 점수 < 0.6일 때는 이 고정 가중치 사용
+        if weight_config is None:
+            self.weight_config = {
+                "hybrid_law": {"semantic": 0.45, "keyword": 0.55},
+                "hybrid_case": {"semantic": 0.65, "keyword": 0.35},
+                "hybrid_general": {"semantic": 0.5, "keyword": 0.5},
+                "doc_type_boost": {"statute": 1.2, "case": 1.15},
+                "quality_weight": 0.2,
+                "keyword_adjustment": 1.8
+            }
+        else:
+            self.weight_config = weight_config
         # Phase 3: KeywordExtractor 초기화 (형태소 분석용)
         self.keyword_extractor = None
         try:
-            from core.agents.keyword_extractor import KeywordExtractor
+            from core.search.optimizers.keyword_extractor import KeywordExtractor
             self.keyword_extractor = KeywordExtractor(use_morphology=True, logger_instance=self.logger)
         except Exception as e:
             self.logger.debug(f"KeywordExtractor initialization failed: {e}, will use fallback matching")
@@ -160,7 +173,7 @@ class SearchResultProcessor:
                 words = query.split()
                 extracted_keywords = [w.strip() for w in words if len(w.strip()) >= 2][:10]
             
-            self.logger.info(
+            self.logger.debug(
                 f"🔍 [KEYWORD WEIGHTS] extracted_keywords가 비어있어 쿼리에서 추출: "
                 f"{len(extracted_keywords)}개 키워드 (query='{query[:50]}...')"
             )
@@ -479,7 +492,7 @@ class SearchResultProcessor:
         # keyword 점수가 낮은 경우 상세 로깅
         doc_id = document.get("id") or document.get("chunk_id") or document.get("doc_id") or "unknown"
         if keyword_match_score < 0.3 and len(keyword_weights) > 0:
-            self.logger.info(
+            self.logger.debug(
                 f"🔍 [KEYWORD MATCH LOW SCORE] doc_id={doc_id[:50]}, "
                 f"keyword_match_score={keyword_match_score:.3f}, "
                 f"weighted_keyword_score={weighted_keyword_score:.3f}, "
@@ -493,7 +506,7 @@ class SearchResultProcessor:
             # 매칭 실패한 상위 키워드 로깅
             if unmatched_keywords:
                 top_unmatched = sorted(unmatched_keywords, key=lambda x: x[1], reverse=True)[:5]
-                self.logger.info(
+                self.logger.debug(
                     f"🔍 [KEYWORD MATCH] 매칭 실패한 상위 키워드: "
                     f"{[(kw, f'weight={w:.3f}', reason) for kw, w, reason in top_unmatched]}"
                 )
@@ -544,24 +557,60 @@ class SearchResultProcessor:
         )
         
         # 4. 하이브리드 점수 계산 (가중치 설정 사용)
-        if query_type == "law_inquiry" or query_type == "statute":
-            # 법령 질문: 가중치 설정 사용
-            hybrid_score = (
-                self.weight_config["hybrid_law"]["semantic"] * base_relevance + 
-                self.weight_config["hybrid_law"]["keyword"] * keyword_match_normalized
-            )
-        elif query_type == "precedent_search" or query_type == "case":
-            # 판례 질문: 가중치 설정 사용
-            hybrid_score = (
-                self.weight_config["hybrid_case"]["semantic"] * base_relevance + 
-                self.weight_config["hybrid_case"]["keyword"] * keyword_match_normalized
-            )
+        # 개선: 검색 점수가 높으면 키워드 매칭 점수 영향 완화
+        # 검색 점수가 높다는 것은 문서가 질의와 매우 관련이 높다는 의미
+        if base_relevance >= 0.80:
+            # 검색 점수가 매우 높으면 (0.8 이상) 키워드 매칭 점수 영향 감소
+            # 검색 점수에 더 높은 가중치 부여
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    0.7 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.3 → 0.7)
+                    0.3 * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    0.85 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.7 → 0.85)
+                    0.15 * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    0.75 * base_relevance +  # 검색 점수에 더 높은 가중치 (0.5 → 0.75)
+                    0.25 * keyword_match_normalized
+                )
+        elif base_relevance >= 0.60:
+            # 검색 점수가 높으면 (0.6 이상) 키워드 매칭 점수 영향 약간 감소
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    0.5 * base_relevance +  # 중간 가중치
+                    0.5 * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    0.75 * base_relevance +  # 검색 점수에 더 높은 가중치
+                    0.25 * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    0.65 * base_relevance +  # 검색 점수에 더 높은 가중치
+                    0.35 * keyword_match_normalized
+                )
         else:
-            # 일반 질문: 가중치 설정 사용
-            hybrid_score = (
-                self.weight_config["hybrid_general"]["semantic"] * base_relevance + 
-                self.weight_config["hybrid_general"]["keyword"] * keyword_match_normalized
-            )
+            # 검색 점수가 낮으면 기존 가중치 설정 사용
+            if query_type == "law_inquiry" or query_type == "statute":
+                hybrid_score = (
+                    self.weight_config["hybrid_law"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_law"]["keyword"] * keyword_match_normalized
+                )
+            elif query_type == "precedent_search" or query_type == "case":
+                hybrid_score = (
+                    self.weight_config["hybrid_case"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_case"]["keyword"] * keyword_match_normalized
+                )
+            else:
+                hybrid_score = (
+                    self.weight_config["hybrid_general"]["semantic"] * base_relevance + 
+                    self.weight_config["hybrid_general"]["keyword"] * keyword_match_normalized
+                )
         
         # 5. 문서 타입별 부스팅 (가중치 설정 사용)
         is_statute_article = (
@@ -794,7 +843,7 @@ class SearchResultProcessor:
         non_citation.sort(key=lambda x: x.get("final_weighted_score", x.get("relevance_score", 0.0)), reverse=True)
         
         if citation_boosted:
-            self.logger.info(f"🔍 [SEARCH FILTERING] Citation boost applied: {len(citation_boosted)} documents with citations prioritized")
+            self.logger.debug(f"🔍 [SEARCH FILTERING] Citation boost applied: {len(citation_boosted)} documents with citations prioritized")
         
         return citation_boosted + non_citation
     
@@ -845,7 +894,7 @@ class SearchResultProcessor:
             filtered_docs.append(doc)
         
         if debug_mode:
-            self.logger.info(f"📊 [SEARCH RESULTS] Filtering statistics - Weighted: {len(weighted_docs)}, Filtered: {len(filtered_docs)}, Skipped (content): {skipped_content}, Skipped (score): {skipped_score}")
+            self.logger.debug(f"📊 [SEARCH RESULTS] Filtering statistics - Weighted: {len(weighted_docs)}, Filtered: {len(filtered_docs)}, Skipped (content): {skipped_content}, Skipped (score): {skipped_score}")
             
             if skipped_content > 0 and skipped_content_details:
                 self.logger.warning(f"⚠️ [SEARCH RESULTS] Content 필터링 제외 상세 (상위 {len(skipped_content_details)}개): {skipped_content_details}")

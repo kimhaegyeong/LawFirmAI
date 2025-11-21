@@ -5,6 +5,10 @@ Document Processor
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 import re
 from dataclasses import dataclass
@@ -48,7 +52,7 @@ except ImportError:
         def load(self):
             return []
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -67,7 +71,7 @@ class LegalDocumentProcessor:
     def __init__(self, config):
         """문서 처리기 초기화"""
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 텍스트 분할기 설정
         self.text_splitter = self._create_text_splitter()

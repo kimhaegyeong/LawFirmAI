@@ -5,12 +5,16 @@ Multi-Dimensional Quality Scorer
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import re
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,7 +45,7 @@ class MultiDimensionalQualityScorer:
     
     def __init__(self):
         """초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("MultiDimensionalQualityScorer initialized")
     
     def calculate_quality(

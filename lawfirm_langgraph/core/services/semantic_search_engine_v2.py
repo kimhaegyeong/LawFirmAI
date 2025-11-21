@@ -5,6 +5,10 @@ lawfirm_v2.db의 embeddings 테이블을 사용한 벡터 검색 엔진
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sqlite3
 import sys
 import threading
@@ -53,7 +57,7 @@ except ImportError:
             vectors = self.model.encode(texts, batch_size=batch_size, normalize_embeddings=normalize)
             return np.array(vectors, dtype=np.float32)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SemanticSearchEngineV2:
@@ -74,7 +78,7 @@ class SemanticSearchEngineV2:
             config = Config()
             db_path = config.database_path
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 모델명이 제공되지 않으면 데이터베이스에서 자동 감지
         if model_name is None:

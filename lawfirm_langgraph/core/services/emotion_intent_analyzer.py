@@ -6,6 +6,10 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,7 +17,7 @@ from enum import Enum
 
 from .conversation_manager import ConversationContext, ConversationTurn
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmotionType(Enum):
@@ -83,7 +87,7 @@ class EmotionIntentAnalyzer:
     
     def __init__(self):
         """감정 및 의도 분석기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 감정 키워드 패턴
         self.emotion_patterns = {

@@ -6,10 +6,14 @@
 
 import asyncio
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Callable, Any, Optional, TypeVar, Awaitable
 from functools import wraps
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar('T')
 

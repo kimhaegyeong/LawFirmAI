@@ -6,6 +6,10 @@ lawfirm_v2.db의 embeddings 테이블을 사용한 벡터 검색 엔진
 
 import gc
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sqlite3
 import sys
 import threading
@@ -776,7 +780,7 @@ except ImportError:
             vectors = self.model.encode(texts, batch_size=batch_size, normalize_embeddings=normalize)
             return np.array(vectors, dtype=np.float32)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SemanticSearchEngineV2:
@@ -801,7 +805,7 @@ class SemanticSearchEngineV2:
             config = Config()
             db_path = config.database_path
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 연결 풀 초기화
         try:
@@ -1905,13 +1909,20 @@ class SemanticSearchEngineV2:
             self.logger.debug(f"Error calculating similarity: {e}, using default conversion")
             similarity = 1.0 / (1.0 + float(distance))
         
-        # 정규화: 0-1 범위로 제한하되, 높은 점수에 보너스 적용
+        # 정규화: 0-1 범위로 제한하되, 점수 차별화 강화
         similarity = max(0.0, min(1.0, similarity))
         
-        # 점수 향상: 높은 유사도에 추가 보너스 (0.7 이상일 때)
-        if similarity >= 0.7:
-            # 높은 유사도에 작은 보너스 (최대 1.0으로 제한)
-            similarity = min(1.0, similarity * 1.05)
+        # 점수 차별화: 모든 점수가 1.0이 되는 문제 방지
+        # 거리가 매우 작거나 0인 경우에도 점수 차별화 유지
+        if distance == 0.0:
+            # 거리가 0이면 최대 점수이지만, 다른 결과와 차별화를 위해 약간 감소
+            similarity = 0.99
+        elif similarity >= 0.95:
+            # 매우 높은 점수도 약간 차별화 (0.95-0.99 범위)
+            similarity = min(0.99, similarity * 0.98)
+        elif similarity >= 0.7:
+            # 높은 유사도에 작은 보너스 (최대 0.95로 제한)
+            similarity = min(0.95, similarity * 1.03)
         
         return float(similarity)
     
@@ -2592,7 +2603,19 @@ class SemanticSearchEngineV2:
                     self.logger.error(f"❌ {error_msg}")
                     raise ValueError(error_msg)
                 
-                search_k = k * 3  # 여유 있게 검색 (개선: 5배 → 3배로 최적화)
+                # Phase 3 최적화: search_k 동적 조정 (인덱스 타입에 따라)
+                index_type_name = type(self.index).__name__
+                is_indexivfpq = 'IndexIVFPQ' in index_type_name
+                
+                if 'IndexIVFPQ' in index_type_name:
+                    # 압축 인덱스는 더 많은 후보 필요
+                    search_k = k * 4
+                elif 'IndexIVF' in index_type_name:
+                    # 일반 IVF 인덱스
+                    search_k = k * 3
+                else:
+                    # 정확한 인덱스 (Flat 등)
+                    search_k = k * 2
                 
                 # nprobe 설정 (IndexIVF 계열만 지원)
                 if hasattr(self.index, 'nprobe'):
@@ -2601,10 +2624,9 @@ class SemanticSearchEngineV2:
                         self.index.nprobe = optimal_nprobe
                         self.logger.debug(f"Adjusted nprobe to {optimal_nprobe} for k={k}")
                 
-                distances, indices = self.index.search(query_vec_np, search_k)
+                self.logger.debug(f"Using search_k={search_k} (k={k}, index_type={index_type_name})")
                 
-                # IndexIVFPQ 인덱스 감지
-                is_indexivfpq = 'IndexIVFPQ' in type(self.index).__name__
+                distances, indices = self.index.search(query_vec_np, search_k)
                 
                 self.logger.info(f"🔍 FAISS search returned {len(indices[0])} results (index_type={type(self.index).__name__}, filtering with version_id={embedding_version_id})")
                 
@@ -2641,72 +2663,9 @@ class SemanticSearchEngineV2:
                 source_types_relaxed = False
                 original_source_types = source_types.copy() if source_types else None
                 
-                # 필터링 전 타입 분포 샘플링 (성능 최적화: 샘플 크기 감소 및 배치 처리)
-                if source_types and len(indices[0]) > 50:  # 100 → 50으로 감소
-                    sample_size = min(50, len(indices[0]))  # 샘플 크기 감소
-                    sample_types = {}
-                    sample_checked = 0
-                    chunk_ids_to_check = []
-                    
-                    # 먼저 메타데이터 캐시에서 확인
-                    for i, (distance, idx) in enumerate(zip(distances[0][:sample_size], indices[0][:sample_size])):
-                        if idx < 0 or idx >= len(self._chunk_ids):
-                            continue
-                        
-                        chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
-                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
-                        sample_type = chunk_meta.get('source_type')
-                        
-                        if sample_type:
-                            sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
-                            sample_checked += 1
-                        else:
-                            # DB 조회가 필요한 chunk_id 수집
-                            chunk_ids_to_check.append(chunk_id)
-                    
-                    # 배치로 DB 조회 (성능 최적화)
-                    if chunk_ids_to_check:
-                        try:
-                            conn_temp = self._get_connection()
-                            placeholders = ','.join(['?'] * len(chunk_ids_to_check))
-                            cursor_temp = conn_temp.execute(
-                                f"SELECT id, source_type FROM text_chunks WHERE id IN ({placeholders})",
-                                chunk_ids_to_check
-                            )
-                            rows = cursor_temp.fetchall()
-                            conn_temp.close()
-                            
-                            for row in rows:
-                                if row and row.get('source_type'):
-                                    sample_type = row['source_type']
-                                    sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
-                                    sample_checked += 1
-                        except Exception as e:
-                            self.logger.debug(f"Batch source_type lookup failed: {e}")
-                    
-                    # 샘플에서 요청한 타입이 있는지 확인
-                    requested_types_found = sum(1 for st in source_types if sample_types.get(st, 0) > 0)
-                    if requested_types_found == 0 and sample_checked > 0:
-                        self.logger.warning(
-                            f"⚠️  Requested source_types {source_types} not found in sample ({sample_checked} chunks). "
-                            f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
-                        )
-                        source_types = None
-                        source_types_relaxed = True
-                    elif requested_types_found > 0:
-                        requested_ratio = sum(sample_types.get(st, 0) for st in source_types) / sample_checked
-                        # 우선순위 2 개선: 필터 완화 임계값 완화 (5% → 10%)
-                        if requested_ratio < 0.10:  # 10% 미만이면 필터 완화
-                            self.logger.warning(
-                                f"⚠️  Requested source_types {source_types} are very rare in sample ({requested_ratio:.1%}). "
-                                f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
-                            )
-                            source_types = None
-                            source_types_relaxed = True
-                
-                # 배치 조회를 위한 chunk_id 수집
-                chunk_ids_to_fetch = []
-                chunk_id_to_index = {}
+                # Phase 1 최적화: FAISS 검색 직후 모든 후보 chunk_id를 한 번에 수집
+                candidate_chunk_ids = []
+                distance_idx_map = {}  # chunk_id -> (distance, idx) 매핑
                 
                 for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
                     if idx < 0 or idx >= len(self._chunk_ids):
@@ -2722,14 +2681,19 @@ class SemanticSearchEngineV2:
                     else:
                         chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
                     
-                    chunk_id_to_index[chunk_id] = i
-                    
-                    # 메타데이터가 없거나 필요한 필드가 없으면 배치 조회 대상에 추가
+                    candidate_chunk_ids.append(chunk_id)
+                    distance_idx_map[chunk_id] = (distance, idx, i)
+                
+                # Phase 2 최적화: 메타데이터 사전 로딩 - 모든 후보 chunk_id의 메타데이터를 배치로 조회
+                chunk_ids_to_fetch = []
+                for chunk_id in candidate_chunk_ids:
                     if chunk_id not in self._chunk_metadata:
                         chunk_ids_to_fetch.append(chunk_id)
-                    elif source_types:
+                    elif source_types or embedding_version_id is not None:
                         chunk_meta = self._chunk_metadata.get(chunk_id, {})
-                        if not chunk_meta.get('source_type') or 'embedding_version_id' not in chunk_meta:
+                        if source_types and not chunk_meta.get('source_type'):
+                            chunk_ids_to_fetch.append(chunk_id)
+                        if embedding_version_id is not None and 'embedding_version_id' not in chunk_meta:
                             chunk_ids_to_fetch.append(chunk_id)
                 
                 # 배치로 메타데이터 조회
@@ -2755,20 +2719,43 @@ class SemanticSearchEngineV2:
                     except Exception as e:
                         self.logger.debug(f"Batch metadata fetch failed: {e}")
                 
-                # 이제 루프를 다시 돌면서 처리
-                for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
-                    if idx < 0 or idx >= len(self._chunk_ids):
-                        skipped_count += 1
-                        continue
+                # 필터링 전 타입 분포 샘플링 (성능 최적화: 샘플 크기 감소 및 배치 처리)
+                if source_types and len(candidate_chunk_ids) > 50:
+                    sample_size = min(50, len(candidate_chunk_ids))
+                    sample_types = {}
+                    sample_checked = 0
                     
-                    # chunk_id 추출
-                    if self.use_mlflow_index:
-                        if hasattr(self, '_chunk_ids') and self._chunk_ids and idx < len(self._chunk_ids):
-                            chunk_id = self._chunk_ids[idx]
-                        else:
-                            chunk_id = idx
-                    else:
-                        chunk_id = self._chunk_ids[idx] if hasattr(self, '_chunk_ids') and self._chunk_ids else idx
+                    for chunk_id in candidate_chunk_ids[:sample_size]:
+                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                        sample_type = chunk_meta.get('source_type')
+                        
+                        if sample_type:
+                            sample_types[sample_type] = sample_types.get(sample_type, 0) + 1
+                            sample_checked += 1
+                    
+                    # 샘플에서 요청한 타입이 있는지 확인
+                    requested_types_found = sum(1 for st in source_types if sample_types.get(st, 0) > 0)
+                    if requested_types_found == 0 and sample_checked > 0:
+                        self.logger.warning(
+                            f"⚠️  Requested source_types {source_types} not found in sample ({sample_checked} chunks). "
+                            f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
+                        )
+                        source_types = None
+                        source_types_relaxed = True
+                    elif requested_types_found > 0:
+                        requested_ratio = sum(sample_types.get(st, 0) for st in source_types) / sample_checked
+                        # 우선순위 2 개선: 필터 완화 임계값 완화 (5% → 10%)
+                        if requested_ratio < 0.10:  # 10% 미만이면 필터 완화
+                            self.logger.warning(
+                                f"⚠️  Requested source_types {source_types} are very rare in sample ({requested_ratio:.1%}). "
+                                f"Sample distribution: {dict(sample_types)}. Relaxing source_type filter."
+                            )
+                            source_types = None
+                            source_types_relaxed = True
+                
+                # Phase 1 최적화: 단일 루프로 필터링 및 결과 생성 (이중 루프 제거)
+                for chunk_id in candidate_chunk_ids:
+                    distance, idx, original_i = distance_idx_map[chunk_id]
                     
                     # chunk_id가 데이터베이스에 존재하는지 확인 (재임베딩 후 버전 불일치 방지)
                     if chunk_id not in self._chunk_metadata:
@@ -2777,9 +2764,10 @@ class SemanticSearchEngineV2:
                             self.logger.warning(f"⚠️  chunk_id={chunk_id} not found in database (FAISS index may be built with different version)")
                         continue
                     
+                    chunk_meta = self._chunk_metadata.get(chunk_id, {})
+                    
                     # source_types 필터링 (FAISS 인덱스 사용 시 사전 필터링)
                     if source_types:
-                        chunk_meta = self._chunk_metadata.get(chunk_id, {})
                         chunk_source_type = chunk_meta.get('source_type')
                         
                         # source_type이 source_types에 없으면 건너뛰기
@@ -2788,9 +2776,9 @@ class SemanticSearchEngineV2:
                             filtered_by_source += 1
                             
                             # 우선순위 2 개선: 필터링 중간에 비율 확인 및 필터 완화 (더 적극적으로 완화)
-                            processed_count = i + 1 - skipped_count - filtered_by_not_found
+                            processed_count = len(similarities) + filtered_by_source + filtered_by_version + filtered_by_not_found
                             if processed_count > 10 and not source_types_relaxed:  # 20 → 10으로 낮춤 (더 빠른 완화)
-                                current_filter_ratio = filtered_by_source / processed_count
+                                current_filter_ratio = filtered_by_source / processed_count if processed_count > 0 else 0
                                 # 필터링 비율 임계값 완화: 70% → 50%
                                 if current_filter_ratio >= 0.5:  # 50% 이상 필터링 시 완화
                                     self.logger.warning(
@@ -2820,11 +2808,10 @@ class SemanticSearchEngineV2:
                                 continue
                     
                     # 우선순위 2 개선: embedding_version_id 필터링 (더 완화된 로직)
-                    # is_indexivfpq는 이미 위에서 정의됨 (라인 1944)
                     if embedding_version_id is not None:
-                        chunk_version_id = self._chunk_metadata.get(chunk_id, {}).get('embedding_version_id')
+                        chunk_version_id = chunk_meta.get('embedding_version_id')
                         
-                        # _chunk_metadata에 없으면 DB에서 조회
+                        # _chunk_metadata에 없으면 DB에서 조회 (이미 배치 조회했으므로 대부분 캐시에 있음)
                         if chunk_version_id is None:
                             try:
                                 conn_temp = self._get_connection()
@@ -2844,7 +2831,8 @@ class SemanticSearchEngineV2:
                                     if chunk_id not in self._chunk_metadata:
                                         self._chunk_metadata[chunk_id] = {}
                                     self._chunk_metadata[chunk_id]['embedding_version_id'] = chunk_version_id
-                                conn_temp.close()
+                                if not self._connection_pool:
+                                    conn_temp.close()
                             except Exception as e:
                                 self.logger.debug(f"Failed to get embedding_version_id for chunk_id={chunk_id}: {e}")
                                 # 예외 발생 시 활성 버전 사용
@@ -3909,7 +3897,7 @@ class SemanticSearchEngineV2:
                 f"{len(results)}개 결과 반환"
             )
             print(result_msg, flush=True, file=sys.stdout)
-            self.logger.info(result_msg)
+            self.logger.debug(result_msg)
             
             # 상위 결과 상세 로깅 (최대 10개)
             if results:
@@ -5583,6 +5571,13 @@ class SemanticSearchEngineV2:
             index_dimension = self.index.d
             self.logger.info(f"Loaded MLflow FAISS index: {index_type} ({self.index.ntotal:,} vectors, dimension: {index_dimension}) from run {run_id}")
             
+            # Phase 4 최적화: FAISS 스레드 수 설정
+            if FAISS_AVAILABLE:
+                import os
+                num_threads = min(4, os.cpu_count() or 1)
+                faiss.omp_set_num_threads(num_threads)
+                self.logger.info(f"Set FAISS threads to {num_threads} (CPU cores: {os.cpu_count() or 1})")
+            
             # MLflow version_info에서 모델 정보 확인 및 차원 검증
             mlflow_model_name = None
             mlflow_dimension = None
@@ -5880,6 +5875,13 @@ class SemanticSearchEngineV2:
                             index_type = type(self.index).__name__
                             self.logger.info(f"FAISS index loaded from version: {faiss_version_name} ({index_type}, {len(self._chunk_ids)} vectors)")
                             
+                            # Phase 4 최적화: FAISS 스레드 수 설정
+                            if FAISS_AVAILABLE:
+                                import os
+                                num_threads = min(4, os.cpu_count() or 1)
+                                faiss.omp_set_num_threads(num_threads)
+                                self.logger.info(f"Set FAISS threads to {num_threads} (CPU cores: {os.cpu_count() or 1})")
+                            
                             # IndexIVFPQ 감지
                             if 'IndexIVFPQ' in index_type:
                                 self.logger.info(f"✅ IndexIVFPQ detected - using compressed index")
@@ -5913,6 +5915,13 @@ class SemanticSearchEngineV2:
             # 인덱스 타입 감지 및 로깅
             index_type = type(self.index).__name__
             self.logger.info(f"Loaded internal FAISS index: {index_type} ({self.index.ntotal:,} vectors)")
+            
+            # Phase 4 최적화: FAISS 스레드 수 설정
+            if FAISS_AVAILABLE:
+                import os
+                num_threads = min(4, os.cpu_count() or 1)
+                faiss.omp_set_num_threads(num_threads)
+                self.logger.info(f"Set FAISS threads to {num_threads} (CPU cores: {os.cpu_count() or 1})")
             
             # IndexIVF 계열 인덱스 (IndexIVFFlat, IndexIVFPQ 등) 확인
             if hasattr(self.index, 'nprobe'):

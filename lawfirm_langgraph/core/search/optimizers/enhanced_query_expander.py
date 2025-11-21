@@ -5,10 +5,14 @@ Enhanced Query Expander
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -27,7 +31,7 @@ class EnhancedQueryExpander:
     
     def __init__(self):
         """초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._legal_synonyms = self._load_legal_synonyms()
         self.logger.info("EnhancedQueryExpander initialized")
     

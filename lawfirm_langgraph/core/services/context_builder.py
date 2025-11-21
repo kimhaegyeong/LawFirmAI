@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -12,7 +16,7 @@ from enum import Enum
 
 from .question_classifier import QuestionType, QuestionClassification
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ContextPriority(Enum):
@@ -52,7 +56,7 @@ class ContextBuilder:
                  max_precedent_tokens: int = 1500,
                  max_general_tokens: int = 1000):
         """컨텍스트 빌더 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 토큰 제한 설정
         self.max_context_tokens = max_context_tokens

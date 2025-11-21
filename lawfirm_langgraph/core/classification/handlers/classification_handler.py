@@ -14,8 +14,8 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 from core.agents.parsers.response_parsers import ClassificationParser
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_constants import WorkflowConstants
+from core.workflow.utils.workflow_utils import WorkflowUtils
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:

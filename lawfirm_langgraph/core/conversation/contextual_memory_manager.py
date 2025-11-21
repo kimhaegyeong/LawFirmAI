@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import re
 from typing import Dict, List, Any, Optional, Tuple
@@ -16,7 +20,7 @@ import hashlib
 from ..data.conversation_store import ConversationStore
 from .conversation_manager import ConversationContext, ConversationTurn
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MemoryType:
@@ -64,7 +68,7 @@ class ContextualMemoryManager:
         Args:
             conversation_store: 대화 저장소 (None이면 새로 생성)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.conversation_store = conversation_store or ConversationStore()
         
         # 메모리 중요도 계산을 위한 키워드 패턴

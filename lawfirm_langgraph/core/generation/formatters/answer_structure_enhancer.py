@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -20,6 +24,14 @@ except ImportError:
 
 from ..validators.legal_basis_validator import LegalBasisValidator
 from .legal_citation_enhancer import LegalCitationEnhancer
+
+try:
+    from .enhancement.classifiers.question_type_classifier import QuestionTypeClassifier, QuestionType as NewQuestionType  # type: ignore
+    CLASSIFIER_AVAILABLE = True
+except ImportError:
+    CLASSIFIER_AVAILABLE = False
+    QuestionTypeClassifier = None
+    NewQuestionType = None
 
 # 안전한 로깅 유틸리티 import (멀티스레딩 안전)
 # 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
@@ -97,22 +109,26 @@ except NameError:
     safe_log_error = _safe_log_fallback_error
 
 # 로거 설정
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class QuestionType(Enum):
-    """질문 유형 분류"""
-    PRECEDENT_SEARCH = "precedent_search"
-    LAW_INQUIRY = "law_inquiry"
-    LEGAL_ADVICE = "legal_advice"
-    PROCEDURE_GUIDE = "procedure_guide"
-    TERM_EXPLANATION = "term_explanation"
-    GENERAL_QUESTION = "general_question"
-    CONTRACT_REVIEW = "contract_review"
-    DIVORCE_PROCEDURE = "divorce_procedure"
-    INHERITANCE_PROCEDURE = "inheritance_procedure"
-    CRIMINAL_CASE = "criminal_case"
-    LABOR_DISPUTE = "labor_dispute"
+# QuestionType은 새로운 분류기에서 import 시도, 실패 시 기존 정의 사용
+if CLASSIFIER_AVAILABLE and NewQuestionType:
+    QuestionType = NewQuestionType
+else:
+    class QuestionType(Enum):
+        """질문 유형 분류"""
+        PRECEDENT_SEARCH = "precedent_search"
+        LAW_INQUIRY = "law_inquiry"
+        LEGAL_ADVICE = "legal_advice"
+        PROCEDURE_GUIDE = "procedure_guide"
+        TERM_EXPLANATION = "term_explanation"
+        GENERAL_QUESTION = "general_question"
+        CONTRACT_REVIEW = "contract_review"
+        DIVORCE_PROCEDURE = "divorce_procedure"
+        INHERITANCE_PROCEDURE = "inheritance_procedure"
+        CRIMINAL_CASE = "criminal_case"
+        LABOR_DISPUTE = "labor_dispute"
 
 
 class AnswerStructureEnhancer:
@@ -145,13 +161,30 @@ class AnswerStructureEnhancer:
         self.enable_few_shot = enable_few_shot
         self.enable_cot = enable_cot
 
-        # 하드코딩된 템플릿 로드
-        self.structure_templates = self._load_structure_templates()
-        self.quality_indicators = self._load_quality_indicators()
-
-        # Few-Shot 예시 로드 (캐싱 적용)
-        self._few_shot_examples_cache = None
-        self.few_shot_examples = self._load_few_shot_examples() if enable_few_shot else {}
+        try:
+            from core.generation.formatters.enhancement.loaders import (
+                StructureTemplateLoader,
+                QualityIndicatorLoader,
+                FewShotExampleLoader
+            )
+            
+            template_loader = StructureTemplateLoader()
+            quality_loader = QualityIndicatorLoader()
+            few_shot_loader = FewShotExampleLoader()
+            
+            self.structure_templates = template_loader.load()
+            self.quality_indicators = quality_loader.load()
+            self.few_shot_examples = few_shot_loader.load() if enable_few_shot else {}
+            self._few_shot_loader = few_shot_loader  # 나중에 사용하기 위해 저장
+            self._few_shot_examples_cache = None  # 호환성 유지
+        except ImportError:
+            # 폴백: 기존 메서드 사용
+            logger.debug("New loaders not available, using legacy methods")
+            self.structure_templates = self._load_structure_templates()
+            self.quality_indicators = self._load_quality_indicators()
+            self._few_shot_examples_cache = None
+            self.few_shot_examples = self._load_few_shot_examples() if enable_few_shot else {}
+            self._few_shot_loader = None
 
         # 법적 근거 강화 시스템 초기화
         self.citation_enhancer = LegalCitationEnhancer()
@@ -160,6 +193,16 @@ class AnswerStructureEnhancer:
         # LLM 초기화 (LLM 기반 구조화를 위해)
         self.llm = llm or self._initialize_llm()
         self.use_llm = LLM_AVAILABLE and self.llm is not None
+        
+        # 질문 유형 분류기 초기화 (새로운 모듈 사용)
+        if CLASSIFIER_AVAILABLE and QuestionTypeClassifier:
+            try:
+                self.question_classifier = QuestionTypeClassifier()
+            except Exception as e:
+                logger.warning(f"Failed to initialize QuestionTypeClassifier: {e}")
+                self.question_classifier = None
+        else:
+            self.question_classifier = None
 
     def classify_question_type(self, question: str) -> QuestionType:
         """질문 유형 분류 (개선된 키워드 우선순위)"""
@@ -645,24 +688,24 @@ class AnswerStructureEnhancer:
 
     def _get_few_shot_examples(self, question_type: QuestionType, question: str = "") -> List[Dict[str, Any]]:
         """
-        질문 유형별 Few-Shot 예시 반환 (검증 및 유사도 기반 선택 포함)
-
+        질문 유형별 Few-Shot 예시 반환 (리팩토링: 새로운 로더 사용)
+        
         Args:
             question_type: 질문 유형 (QuestionType enum)
             question: 질문 텍스트 (유사도 계산용, 선택적)
-                - 제공되면 질문과 가장 유사한 예시를 우선 선택
-                - 제공되지 않으면 순서대로 반환
-
+            
         Returns:
             List[Dict[str, Any]]: 질문 유형별 Few-Shot 예시 리스트
-                - 검증 통과한 예시만 포함
-                - 최대 개수: max_few_shot_examples 설정값
-                - 질문이 제공된 경우 유사도 순으로 정렬
-
-        Note:
-            - 검증 실패한 예시는 제외되고 경고 로깅
-            - 유사도는 Jaccard 유사도(단어 기반)로 계산
         """
+        # 새로운 로더 사용 시도
+        if hasattr(self, '_few_shot_loader') and self._few_shot_loader is not None:
+            try:
+                max_examples = getattr(self, 'max_few_shot_examples', 2)
+                return self._few_shot_loader.get_examples(question_type, question, max_examples)
+            except Exception as e:
+                logger.warning(f"Failed to get examples from new loader: {e}, falling back to legacy method")
+        
+        # 폴백: 기존 메서드 사용
         if not hasattr(self, 'few_shot_examples') or not self.few_shot_examples:
             return []
 
@@ -944,11 +987,7 @@ class AnswerStructureEnhancer:
         legal_references = legal_references if legal_references is not None else []
         legal_citations = legal_citations if legal_citations is not None else []
 
-        # 템플릿 가져오기 (구조 가이드용)
-        template = self.structure_templates.get(
-            question_type,
-            self.structure_templates[QuestionType.GENERAL_QUESTION]
-        )
+
 
         # 법적 문서 포맷팅
         legal_docs_text = self._format_docs_for_prompt(retrieved_docs)
@@ -979,17 +1018,6 @@ class AnswerStructureEnhancer:
 **개선된 답변**: {example.get('enhanced_answer', '')[:200]}...
 
 **주요 개선 사항**: {', '.join(example.get('improvements', [])[:3])}
-"""
-
-        # 작업 가이드 섹션 (내부 참고용 - 최종 답변에 포함되지 않음)
-        chain_of_thought_section = """**작업 방법** (내부 참고용 - 최종 답변에 포함하지 마세요):
-
-1. 원본 답변을 평가하되, 평가 결과는 최종 답변에 포함하지 마세요.
-2. 원본이 이미 우수하면 최소한의 형식 정리만 수행하세요.
-3. 원본에 개선이 필요하면 핵심 원칙을 적용하여 향상하세요.
-4. 추론 과정, STEP, 평가, 체크리스트는 최종 답변에 포함하지 마세요.
-5. 오직 향상된 답변 내용만 작성하세요.
-
 """
 
         prompt = f"""당신은 법률 답변 포맷팅 전문가입니다. 아래 변환 규칙을 정확히 적용하세요.
@@ -1928,7 +1956,6 @@ class AnswerStructureEnhancer:
             new_lines = []
             in_table = False
             table_start_idx = -1
-            table_title_line = None
             
             i = 0
             while i < len(lines):
@@ -1936,7 +1963,6 @@ class AnswerStructureEnhancer:
                 
                 # 표 제목 감지 ("문서별 근거 비교", "문서별 근거", "근거 비교" 등)
                 if re.search(r'문서별\s*근거\s*비교|근거\s*비교|문서\s*근거', line, re.IGNORECASE):
-                    table_title_line = line
                     table_start_idx = len(new_lines)
                     in_table = True
                     # 표 제목 라인은 제거
@@ -2439,13 +2465,8 @@ class AnswerStructureEnhancer:
             "enhancement_timestamp": datetime.now().isoformat()
         }
 
-    # 사용되지 않는 데이터베이스 기반 메서드들 제거됨
-    # 실제 구현에서는 하드코딩된 키워드 매칭 방식 사용
-
     def _map_question_type_fallback(self, question_type: any, question: str) -> QuestionType:
         """폴백 질문 유형 매핑 (기존 방식)"""
-        question_lower = question.lower()
-
         # question_type을 문자열로 변환
         if isinstance(question_type, QuestionType):
             question_type_str = question_type.value if hasattr(question_type, 'value') else str(question_type)

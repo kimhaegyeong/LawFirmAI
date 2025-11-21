@@ -5,6 +5,10 @@ lawfirm_v2.db 기반 하이브리드 검색 엔진 (FTS5 + 벡터 검색 통합)
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
 from core.utils.config import Config
@@ -13,7 +17,7 @@ from core.classification.classifiers.question_classifier import QuestionClassifi
 from core.search.processors.result_merger import ResultMerger, ResultRanker
 from .semantic_search_engine_v2 import SemanticSearchEngineV2
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class HybridSearchEngineV2:
@@ -42,7 +46,7 @@ class HybridSearchEngineV2:
         
         self.db_path = db_path
         self.model_name = model_name
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # MLflow 인덱스 사용 설정 확인
         config = Config()

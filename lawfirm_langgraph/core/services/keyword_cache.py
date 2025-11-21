@@ -1,12 +1,16 @@
 ﻿import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 from datetime import datetime, timedelta
 import hashlib
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class KeywordCache:
     """키워드 캐싱 시스템"""
@@ -15,7 +19,7 @@ class KeywordCache:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl_hours = ttl_hours
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 메모리 캐시
         self.memory_cache = {}

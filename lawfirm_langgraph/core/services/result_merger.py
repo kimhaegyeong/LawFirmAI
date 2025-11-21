@@ -5,10 +5,14 @@ Result Merger and Ranker
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -25,7 +29,7 @@ class ResultMerger:
     
     def __init__(self):
         """병합기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("ResultMerger initialized")
     
     def merge_results(self, 
@@ -121,7 +125,7 @@ class ResultRanker:
     
     def __init__(self):
         """순위 결정기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("ResultRanker initialized")
     
     def rank_results(self, results: List[MergedResult], top_k: int = 10) -> List[MergedResult]:

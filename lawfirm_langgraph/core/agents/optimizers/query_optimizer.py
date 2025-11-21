@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from collections import Counter
 from typing import Dict, List, Optional, Tuple
@@ -17,7 +21,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QueryOptimizer:

@@ -5,13 +5,17 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -30,7 +34,7 @@ class LegalTermExpander:
     
     def __init__(self, dictionary_path: str = "data/legal_term_dictionary.json"):
         """법률 용어 확장기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.dictionary_path = dictionary_path
         self.term_dict = {}
         self.reverse_dict = {}  # 동의어 -> 원래 용어 매핑

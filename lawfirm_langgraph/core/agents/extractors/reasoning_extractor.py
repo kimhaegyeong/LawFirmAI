@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from core.agents.workflow_constants import AnswerExtractionPatterns
+from core.workflow.utils.workflow_constants import AnswerExtractionPatterns
 
 
 class ReasoningExtractor:

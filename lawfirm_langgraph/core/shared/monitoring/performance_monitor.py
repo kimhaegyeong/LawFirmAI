@@ -5,6 +5,10 @@
 
 import time
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import psutil
 from typing import Dict, Any, List, Optional
@@ -14,7 +18,7 @@ from pathlib import Path
 import threading
 from collections import defaultdict, deque
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class PerformanceMetric:
@@ -46,7 +50,7 @@ class PerformanceMonitor:
                  max_system_stats: int = 1000,
                  monitoring_interval: int = 60):
         """성능 모니터 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 메트릭 저장소
         self.metrics = deque(maxlen=max_metrics)

@@ -5,6 +5,10 @@ FTS5 키워드 검색 + 벡터 의미 검색 지원
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 import re
 import sqlite3
@@ -21,7 +25,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Query routing patterns
@@ -64,7 +68,7 @@ class LegalDataConnectorV2:
         if db_path and not os.path.isabs(db_path):
             db_path = os.path.abspath(db_path)
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         # 데이터베이스 경로 로깅
         self.logger.info(f"LegalDataConnectorV2 initialized with database path: {self.db_path}")
         if not Path(self.db_path).exists():

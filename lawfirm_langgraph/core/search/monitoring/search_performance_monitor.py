@@ -5,13 +5,17 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -47,7 +51,7 @@ class SearchPerformanceMonitor:
             "misses": 0,
             "total": 0
         }
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def record_search(
         self,

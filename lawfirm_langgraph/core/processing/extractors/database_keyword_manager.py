@@ -8,11 +8,15 @@ SQLite를 사용하여 질문 유형별 키워드를 효율적으로 관리
 import sqlite3
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DatabaseKeywordManager:

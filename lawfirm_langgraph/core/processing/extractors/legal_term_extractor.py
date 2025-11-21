@@ -7,6 +7,10 @@ Gemini 2.5 Flash Lite를 활용한 용어 검증
 import os
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import requests
 import time
 from typing import Dict, List, Any, Optional, Tuple
@@ -17,7 +21,7 @@ from datetime import datetime
 
 from .gemini_client import GeminiClient, GeminiResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -39,7 +43,7 @@ class LegalActTermExtractor:
     
     def __init__(self):
         """법령 기반 용어 추출기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 주요 법령별 핵심 용어 정의
         self.legal_acts_terms = {
@@ -207,7 +211,7 @@ class PrecedentTermExtractor:
     
     def __init__(self):
         """판례 기반 용어 추출기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 판례에서 자주 등장하는 용어들
         self.precedent_terms = {
@@ -313,7 +317,7 @@ class GeminiTermValidator:
     def __init__(self):
         """Gemini 용어 검증기 초기화"""
         self.gemini_client = GeminiClient()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def validate_term(self, term: LegalTerm) -> Tuple[bool, float, str]:
         """개별 용어 검증"""
@@ -405,7 +409,7 @@ class LegalTermDatabaseUpdater:
     def __init__(self, database_path: str = "data/legal_terms_database.json"):
         """데이터베이스 업데이터 초기화"""
         self.database_path = Path(database_path)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def update_database(self, new_terms: List[LegalTerm]) -> bool:
         """데이터베이스 업데이트"""
@@ -467,7 +471,7 @@ class LegalTermExtractionPipeline:
     
     def __init__(self):
         """파이프라인 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 컴포넌트 초기화
         self.legal_act_extractor = LegalActTermExtractor()

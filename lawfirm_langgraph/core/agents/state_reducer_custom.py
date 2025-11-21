@@ -9,8 +9,12 @@ LangGraph의 기본 TypedDict reducer는 TypedDict에 정의된 필드만 보존
 
 from typing import Any, Dict
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def custom_state_reducer(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:

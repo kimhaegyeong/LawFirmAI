@@ -12,6 +12,10 @@ from typing import List, Dict, Set, Tuple, Any, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from pathlib import Path
 
 @dataclass
@@ -34,7 +38,7 @@ class SynonymDatabase:
     
     def __init__(self, db_path: str = "data/synonym_database.db"):
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._initialize_database()
     
     def _initialize_database(self):

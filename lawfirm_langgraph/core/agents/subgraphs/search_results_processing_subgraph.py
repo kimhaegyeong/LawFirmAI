@@ -74,7 +74,7 @@ class SearchResultsProcessingSubgraph:
     def evaluate_quality_node(self, state: LegalWorkflowState) -> LegalWorkflowState:
         """품질 평가 노드"""
         # 품질 평가만 수행 (processor의 내부 메서드 활용)
-        from core.agents.workflow_utils import WorkflowUtils
+        from core.workflow.utils.workflow_utils import WorkflowUtils
         import asyncio
         from core.agents.tasks.search_result_tasks import SearchResultTasks
         
@@ -135,7 +135,7 @@ class SearchResultsProcessingSubgraph:
         Returns:
             "retry" 또는 "continue"
         """
-        from core.agents.workflow_utils import WorkflowUtils
+        from core.workflow.utils.workflow_utils import WorkflowUtils
         
         quality_evaluation = WorkflowUtils.get_state_value(state, "search_quality_evaluation", {})
         

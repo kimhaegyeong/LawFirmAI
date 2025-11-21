@@ -5,12 +5,16 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QuestionType(Enum):
@@ -39,7 +43,7 @@ class QuestionClassifier:
 
     def __init__(self):
         """질문 분류기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 질문 유형별 키워드 패턴
         self.question_patterns = {

@@ -8,7 +8,13 @@ import logging
 import re
 from typing import List, Set, Optional
 
-logger = logging.getLogger(__name__)
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class KoreanStopwordProcessor:

@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -15,7 +19,7 @@ import re
 from .conversation_manager import ConversationContext, ConversationTurn
 from .emotion_intent_analyzer import EmotionIntentAnalyzer, IntentType, EmotionType
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -58,7 +62,7 @@ class ConversationFlowTracker:
         Args:
             max_pattern_history: 최대 패턴 이력 수
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.max_pattern_history = max_pattern_history
         
         # 감정/의도 분석기

@@ -9,6 +9,10 @@
 
 import json
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import sys
 from enum import Enum
 from pathlib import Path
@@ -33,7 +37,7 @@ except ImportError:
                 DOCUMENT_ANALYSIS = "document_analysis"
                 LEGAL_ADVICE = "legal_advice"
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LegalDomain(Enum):

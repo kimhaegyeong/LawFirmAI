@@ -5,13 +5,17 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from functools import wraps
 from typing import Any, Callable, Optional
 
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def handle_workflow_errors(

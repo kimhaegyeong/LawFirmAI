@@ -1,5 +1,9 @@
 ﻿import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Tuple, Optional
 from collections import Counter
 import numpy as np
@@ -9,7 +13,7 @@ import jieba
 import konlpy
 from konlpy.tag import Okt, Kkma
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class NERBasedExtractor:
     """개체명 인식 기반 용어 추출기"""
@@ -259,7 +263,7 @@ class MultiMethodTermExtractor:
             "frequency": FrequencyBasedExtractor(),
             "embedding": EmbeddingBasedExtractor()
         }
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def extract_terms(self, text: str) -> Dict[str, List[str]]:
         """다중 방법으로 용어 추출"""

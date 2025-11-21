@@ -5,12 +5,16 @@ MLflow Tracker for Search Quality
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import json
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 try:
     import mlflow
@@ -35,7 +39,7 @@ class SearchQualityTracker:
             experiment_name: MLflow 실험 이름
             tracking_uri: MLflow tracking URI
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.experiment_name = experiment_name
         
         if not MLFLOW_AVAILABLE:

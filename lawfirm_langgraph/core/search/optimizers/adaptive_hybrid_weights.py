@@ -5,9 +5,13 @@ Adaptive Hybrid Weights
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AdaptiveHybridWeights:
@@ -15,7 +19,7 @@ class AdaptiveHybridWeights:
     
     def __init__(self):
         """초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("AdaptiveHybridWeights initialized")
     
     def calculate_weights(

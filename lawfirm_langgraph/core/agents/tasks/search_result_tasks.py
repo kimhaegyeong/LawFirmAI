@@ -6,9 +6,13 @@ LangGraph의 병렬 처리 패턴을 활용한 비동기 작업들
 
 import asyncio
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SearchResultTasks:

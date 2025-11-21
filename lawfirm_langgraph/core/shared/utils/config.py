@@ -148,8 +148,18 @@ class Config(BaseSettings):
 
     def __init__(self, **kwargs):
         """초기화 시 환경변수 파일 로딩"""
-        # 환경변수 파일 로딩
-        self.Settings._load_env_file(".env")
+        # lawfirm_langgraph 디렉토리의 .env 파일 찾기
+        config_file_path = Path(__file__).resolve()
+        # lawfirm_langgraph/core/shared/utils/config.py -> lawfirm_langgraph/
+        lawfirm_langgraph_dir = config_file_path.parent.parent.parent.parent
+        env_file_path = lawfirm_langgraph_dir / ".env"
+        
+        # 환경변수 파일 로딩 (lawfirm_langgraph/.env 우선)
+        if env_file_path.exists():
+            self.Settings._load_env_file(str(env_file_path))
+        else:
+            # 현재 디렉토리의 .env 파일도 시도
+            self.Settings._load_env_file(".env")
         
         # CORS_ORIGINS 환경 변수 처리 (빈 문자열이거나 잘못된 형식인 경우 기본값 사용)
         cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
@@ -183,22 +193,34 @@ class Config(BaseSettings):
         
         super().__init__(**kwargs)
 
-        # 데이터베이스 경로 검증 및 기본값 설정
-        if self.database_path is None:
-            # 환경변수가 없으면 기본값 사용 (하지만 경고 출력)
-            self.database_path = "./data/lawfirm_v2.db"
-            print("⚠️ DATABASE_PATH 환경변수가 설정되지 않았습니다. 기본값을 사용합니다: ./data/lawfirm_v2.db")
-            print("   .env 파일에 DATABASE_PATH를 설정하는 것을 권장합니다.")
-
+        # 데이터베이스 URL/경로 설정 (환경변수 우선 사용, 하드코딩 제거)
+        # 1. DATABASE_URL이 환경변수에 있으면 우선 사용
         if self.database_url is None:
-            # database_path를 기반으로 database_url 생성
+            # 2. DATABASE_PATH가 있으면 그것을 기반으로 DATABASE_URL 생성
             if self.database_path:
                 # 상대 경로를 절대 경로로 변환
                 db_path = self.database_path
                 if not os.path.isabs(db_path):
-                    # 상대 경로인 경우 현재 디렉토리 기준으로 처리
-                    db_path = os.path.abspath(db_path)
+                    # 상대 경로인 경우 lawfirm_langgraph 디렉토리 기준으로 처리
+                    db_path = str(lawfirm_langgraph_dir / db_path.lstrip("./"))
                 self.database_url = f"sqlite:///{db_path}"
             else:
-                self.database_url = "sqlite:///./data/lawfirm_v2.db"
-                print("⚠️ DATABASE_URL 환경변수가 설정되지 않았습니다. 기본값을 사용합니다.")
+                # 3. 둘 다 없으면 경고만 출력 (하드코딩된 기본값 제거)
+                if "DATABASE_URL" not in _warned_env_vars and "DATABASE_PATH" not in _warned_env_vars:
+                    _warned_env_vars.add("DATABASE_URL")
+                    _warned_env_vars.add("DATABASE_PATH")
+                    print("⚠️ DATABASE_URL 또는 DATABASE_PATH 환경변수가 설정되지 않았습니다.")
+                    print(f"   .env 파일 위치: {env_file_path}")
+                    print("   .env 파일에 DATABASE_URL 또는 DATABASE_PATH를 설정해주세요.")
+                    print("   예시: DATABASE_URL=sqlite:///./data/lawfirm_v2.db")
+                    print("   또는: DATABASE_PATH=./data/lawfirm_v2.db")
+        
+        # DATABASE_URL에서 DATABASE_PATH 추출 (DATABASE_PATH가 없고 DATABASE_URL이 있는 경우)
+        if self.database_path is None and self.database_url:
+            # sqlite:/// 경로에서 파일 경로 추출
+            if self.database_url.startswith("sqlite:///"):
+                db_path = self.database_url.replace("sqlite:///", "")
+                # 절대 경로가 아니면 lawfirm_langgraph 디렉토리 기준으로 처리
+                if not os.path.isabs(db_path):
+                    db_path = str(lawfirm_langgraph_dir / db_path.lstrip("./"))
+                self.database_path = db_path

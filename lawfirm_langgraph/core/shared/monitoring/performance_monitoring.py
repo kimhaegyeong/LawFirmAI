@@ -6,6 +6,10 @@
 
 import asyncio
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import time
 from typing import Dict, Any, List, Optional, Callable
@@ -15,7 +19,7 @@ from enum import Enum
 import threading
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AlertLevel(Enum):
     """알림 레벨"""
@@ -59,7 +63,7 @@ class AlertManager:
     """알림 관리 클래스"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.alerts = []
         self.thresholds = self._get_default_thresholds()
         self.alert_callbacks = []
@@ -218,7 +222,7 @@ class PerformanceMonitor:
             check_interval: 체크 간격 (초)
         """
         self.check_interval = check_interval
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.alert_manager = AlertManager()
         self.monitoring = False
         self.monitor_thread = None
@@ -363,7 +367,7 @@ class NotificationService:
     """알림 서비스 클래스"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.notification_methods = []
     
     def add_notification_method(self, method: Callable[[Alert], None]):

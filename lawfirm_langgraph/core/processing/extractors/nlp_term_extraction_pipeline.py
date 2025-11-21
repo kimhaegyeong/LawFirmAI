@@ -12,7 +12,13 @@ from core.shared.monitoring.performance_evaluator import PerformanceEvaluator
 from .domain_specific_extractor import DomainSpecificExtractor, LegalDomain
 from .gemini_client import GeminiClient
 
-logger = logging.getLogger(__name__)
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class NLPTermExtractionPipeline:
     """NLP 기반 법률 용어 추출 통합 파이프라인"""
@@ -31,7 +37,7 @@ class NLPTermExtractionPipeline:
         self.integration_system = TermIntegrationSystem(db_path)
         self.performance_evaluator = PerformanceEvaluator(log_file)
         
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def extract_terms_from_texts(self, texts: List[str]) -> Dict[str, Any]:
         """텍스트에서 용어 추출"""

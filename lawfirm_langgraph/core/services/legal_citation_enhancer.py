@@ -6,11 +6,15 @@
 
 import re
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -32,7 +36,7 @@ class LegalCitationEnhancer:
         """초기화"""
         self.citation_patterns = self._load_citation_patterns()
         self.formatting_templates = self._load_formatting_templates()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
     def _load_citation_patterns(self) -> Dict[str, re.Pattern]:
         """인용 패턴 로드"""

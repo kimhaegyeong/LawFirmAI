@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 # 순환 import 방지를 위해 직접 core.agents에서 import
 try:
-    from core.agents.workflow_constants import AnswerExtractionPatterns
+    from core.workflow.utils.workflow_constants import AnswerExtractionPatterns
 except ImportError:
     # 폴백: core.workflow.utils에서 시도
     try:

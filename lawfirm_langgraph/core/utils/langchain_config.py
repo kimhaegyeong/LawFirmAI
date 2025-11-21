@@ -6,6 +6,10 @@ LangChain 설정 관리 모듈
 
 import os
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from enum import Enum
@@ -14,7 +18,7 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VectorStoreType(Enum):

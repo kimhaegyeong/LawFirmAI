@@ -8,12 +8,12 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from core.agents.prompt_chain_executor import PromptChainExecutor
+from core.generation.builders.prompt_chain_executor import PromptChainExecutor
 from core.agents.validators.quality_validators import AnswerValidator
 from core.agents.parsers.response_parsers import AnswerParser
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_constants import WorkflowConstants
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class AnswerGenerator:
@@ -359,13 +359,36 @@ class AnswerGenerator:
                 f"{chain_summary['failed_steps']} failed, "
                 f"Total time: {chain_summary['total_time']:.2f}s"
             )
+            
+            # 디버깅: final_answer 추출 과정 로깅
+            self.logger.debug(
+                f"🔍 [CHAIN DEBUG] final_output type: {type(final_output).__name__}, "
+                f"final_output value: {str(final_output)[:200] if final_output else 'None'}, "
+                f"chain_history length: {len(chain_history)}, "
+                f"final_answer length: {len(final_answer) if final_answer else 0}"
+            )
 
             # 최종 답변이 비어있으면 폴백
             if not final_answer or len(final_answer.strip()) < 10:
-                self.logger.warning("⚠️ [CHAIN] Final answer is empty, using fallback")
+                self.logger.warning(
+                    f"⚠️ [CHAIN] Final answer is empty (length: {len(final_answer) if final_answer else 0}), using fallback"
+                )
                 # 초기 프롬프트로 단순 생성
                 response = self.call_llm_with_retry(optimized_prompt)
                 final_answer = WorkflowUtils.normalize_answer(response)
+                self.logger.info(
+                    f"✅ [CHAIN FALLBACK] Fallback answer generated: length={len(final_answer) if final_answer else 0}"
+                )
+
+            # 최종 답변 검증 및 로깅
+            if final_answer and len(final_answer.strip()) >= 10:
+                self.logger.info(
+                    f"✅ [CHAIN SUCCESS] Final answer generated: length={len(final_answer)} chars"
+                )
+            else:
+                self.logger.error(
+                    f"❌ [CHAIN FAILURE] Final answer is still empty after fallback: length={len(final_answer) if final_answer else 0}"
+                )
 
             return final_answer
 
@@ -508,10 +531,30 @@ class AnswerGenerator:
                 call_start_time = time.time()
                 
                 # LLM 호출 (스트리밍 지원)
-                # invoke() 호출 시에도 내부적으로 스트리밍이 사용되므로
-                # LangGraph의 astream_events()가 이를 캡처할 수 있습니다.
-                response = self.llm.invoke(prompt)
-                result = WorkflowUtils.extract_response_content(response)
+                # stream()을 사용하여 LangGraph의 astream_events()가 on_llm_stream 이벤트를 발생시킬 수 있도록 함
+                # invoke()는 스트리밍 이벤트를 발생시키지 않을 수 있으므로 stream() 우선 사용
+                if hasattr(self.llm, 'stream'):
+                    try:
+                        full_response = ""
+                        for chunk in self.llm.stream(prompt):
+                            if hasattr(chunk, 'content'):
+                                full_response += chunk.content
+                            elif isinstance(chunk, str):
+                                full_response += chunk
+                            else:
+                                full_response += str(chunk)
+                        result = WorkflowUtils.normalize_answer(full_response)
+                        self.logger.debug("✅ [LLM STREAM] stream() 사용 성공 - 스트리밍 이벤트 발생 가능")
+                    except Exception as stream_error:
+                        # stream() 실패 시 invoke()로 폴백
+                        self.logger.warning(f"⚠️ [LLM STREAM] stream() 호출 실패, invoke()로 폴백: {stream_error}")
+                        response = self.llm.invoke(prompt)
+                        result = WorkflowUtils.extract_response_content(response)
+                else:
+                    # stream()이 없으면 invoke() 사용
+                    self.logger.debug("ℹ️ [LLM STREAM] stream() 미지원, invoke() 사용")
+                    response = self.llm.invoke(prompt)
+                    result = WorkflowUtils.extract_response_content(response)
                 
                 call_duration = time.time() - call_start_time
                 
@@ -527,6 +570,21 @@ class AnswerGenerator:
                         continue
                     else:
                         raise TimeoutError(f"LLM 호출 타임아웃 ({llm_timeout}초 초과)")
+                
+                # 빈 응답 검증
+                if not result or not isinstance(result, str) or len(result.strip()) < 10:
+                    self.logger.warning(
+                        f"⚠️ [LLM EMPTY RESPONSE] LLM 응답이 비어있거나 너무 짧음 "
+                        f"(길이: {len(result) if result else 0}, 시도 {attempt + 1}/{max_retries})"
+                    )
+                    if attempt < max_retries - 1:
+                        self.logger.info(f"재시도 중... (시도 {attempt + 1}/{max_retries})")
+                        time.sleep(WorkflowConstants.RETRY_DELAY)
+                        continue
+                    else:
+                        # 모든 재시도 실패 시에도 빈 문자열 반환하지 않고 기본 메시지 반환
+                        self.logger.error("❌ [LLM EMPTY RESPONSE] 모든 재시도 후에도 빈 응답 반환")
+                        return "죄송합니다. 답변 생성 중 문제가 발생했습니다. 다시 시도해주세요."
                 
                 # 성능 모니터링: 느린 호출 경고
                 if call_duration > llm_timeout * 0.8:

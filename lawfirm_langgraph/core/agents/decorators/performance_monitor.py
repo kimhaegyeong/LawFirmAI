@@ -5,11 +5,15 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def measure_performance(metric_name: Optional[str] = None):

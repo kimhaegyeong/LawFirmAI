@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
@@ -13,7 +17,7 @@ from enum import Enum
 
 from ..data.conversation_store import ConversationStore
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ExpertiseLevel(Enum):
@@ -62,7 +66,7 @@ class UserProfileManager:
         Args:
             conversation_store: 대화 저장소 (None이면 새로 생성)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.conversation_store = conversation_store or ConversationStore()
         
         # 전문성 수준별 키워드 패턴

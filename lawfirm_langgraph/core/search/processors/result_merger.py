@@ -5,6 +5,10 @@ Result Merger and Ranker
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import math
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -15,7 +19,7 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -32,7 +36,7 @@ class ResultMerger:
     
     def __init__(self):
         """병합기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.logger.info("ResultMerger initialized")
     
     def merge_results(self, 
@@ -142,7 +146,7 @@ class ResultRanker:
     
     def __init__(self, use_cross_encoder: bool = True, rerank_original_weight: float = None, rerank_cross_encoder_weight: float = None):
         """순위 결정기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.use_cross_encoder = use_cross_encoder
         self.cross_encoder = None
         

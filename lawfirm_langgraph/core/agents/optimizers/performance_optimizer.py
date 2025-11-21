@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 import hashlib
 import json
@@ -13,7 +17,7 @@ from functools import lru_cache
 import sqlite3
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PerformanceCache:
@@ -21,7 +25,7 @@ class PerformanceCache:
     
     def __init__(self, cache_db_path: str = "./data/cache.db"):
         self.cache_db_path = cache_db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         # 연결 풀 초기화
         try:
             from core.data.connection_pool import get_connection_pool
@@ -442,7 +446,7 @@ class PerformanceOptimizer:
     
     def __init__(self):
         self.cache = PerformanceCache()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def optimize_query_processing(self, query: str, query_type: str) -> Dict[str, Any]:
         """쿼리 처리 최적화"""

@@ -5,6 +5,10 @@ Multi-Query 생성만 LLM 사용, 나머지는 HuggingFace 모델 사용
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.search.optimizers.legal_query_analyzer import LegalQueryAnalyzer
@@ -12,7 +16,7 @@ from core.search.optimizers.legal_keyword_expander import LegalKeywordExpander
 from core.search.optimizers.legal_query_optimizer import LegalQueryOptimizer
 from core.search.optimizers.legal_query_validator import LegalQueryValidator
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class HybridQueryProcessor:

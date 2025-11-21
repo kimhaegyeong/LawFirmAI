@@ -5,10 +5,14 @@ Advanced Reranker
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -45,7 +49,7 @@ class AdvancedReranker:
             ensemble_models: 앙상블에 사용할 추가 모델 목록
             use_ensemble: 앙상블 사용 여부
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.primary_model = primary_model
         self.ensemble_models = ensemble_models or []
         self.use_ensemble = use_ensemble and len(self.ensemble_models) > 0

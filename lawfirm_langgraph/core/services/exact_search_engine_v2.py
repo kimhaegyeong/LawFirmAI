@@ -5,12 +5,16 @@ lawfirm_v2.db의 FTS5 기반 키워드 검색 엔진
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Any, Dict, List, Optional
 
 from ..utils.config import Config
 from .langgraph.legal_data_connector_v2 import LegalDataConnectorV2
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ExactSearchEngineV2:
@@ -27,7 +31,7 @@ class ExactSearchEngineV2:
             config = Config()
             db_path = config.database_path
         self.db_path = db_path
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.connector = LegalDataConnectorV2(db_path)
         self.logger.info("ExactSearchEngineV2 initialized")
 

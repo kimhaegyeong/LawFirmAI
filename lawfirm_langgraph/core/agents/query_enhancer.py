@@ -9,12 +9,12 @@ import re
 from typing import Any, Dict, List, Optional
 
 from core.agents.extractors import DocumentExtractor
-from core.agents.prompt_builders import QueryBuilder
-from core.agents.prompt_chain_executor import PromptChainExecutor
+from core.generation.builders.prompt_builders import QueryBuilder
+from core.generation.builders.prompt_chain_executor import PromptChainExecutor
 from core.agents.parsers.response_parsers import QueryParser
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_constants import WorkflowConstants
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_constants import WorkflowConstants
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class QueryEnhancer:

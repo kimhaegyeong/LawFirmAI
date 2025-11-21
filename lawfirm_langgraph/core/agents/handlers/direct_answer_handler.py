@@ -7,9 +7,9 @@
 import logging
 from typing import Any, Dict, Optional
 
-from core.agents.prompt_chain_executor import PromptChainExecutor
+from core.generation.builders.prompt_chain_executor import PromptChainExecutor
 from core.agents.parsers.response_parsers import AnswerParser, ClassificationParser
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class DirectAnswerHandler:

@@ -74,6 +74,10 @@ if sys.platform == "win32":
     os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 
+# 환경 변수 경고 메시지 중복 출력 방지
+_warned_env_vars = set()
+
+
 class Config(BaseSettings):
     """설정 관리 클래스"""
     
@@ -239,22 +243,74 @@ class Config(BaseSettings):
         
         super().__init__(**kwargs)
 
-        # 데이터베이스 경로 검증 및 기본값 설정
-        if self.database_path is None:
-            # 환경변수가 없으면 기본값 사용 (하지만 경고 출력)
-            self.database_path = "./data/lawfirm_v2.db"
-            print("⚠️ DATABASE_PATH 환경변수가 설정되지 않았습니다. 기본값을 사용합니다: ./data/lawfirm_v2.db")
-            print("   .env 파일에 DATABASE_PATH를 설정하는 것을 권장합니다.")
-
+        # 데이터베이스 URL/경로 설정 (환경변수 우선 사용, 하드코딩 제거)
+        # lawfirm_langgraph 디렉토리 경로 가져오기
+        try:
+            config_file_dir = Path(__file__).parent
+            core_dir = config_file_dir.parent
+            langgraph_dir = core_dir.parent
+        except Exception:
+            # 경로 찾기 실패 시 현재 디렉토리 사용
+            langgraph_dir = Path.cwd()
+        
+        # 1. DATABASE_URL이 환경변수에 있으면 우선 사용
         if self.database_url is None:
-            # database_path를 기반으로 database_url 생성
+            # 2. DATABASE_PATH가 있으면 그것을 기반으로 DATABASE_URL 생성
             if self.database_path:
                 # 상대 경로를 절대 경로로 변환
                 db_path = self.database_path
                 if not os.path.isabs(db_path):
-                    # 상대 경로인 경우 현재 디렉토리 기준으로 처리
-                    db_path = os.path.abspath(db_path)
+                    # 상대 경로인 경우 lawfirm_langgraph 디렉토리 기준으로 처리
+                    db_path = str(langgraph_dir / db_path.lstrip("./"))
                 self.database_url = f"sqlite:///{db_path}"
             else:
-                self.database_url = "sqlite:///./data/lawfirm_v2.db"
-                print("⚠️ DATABASE_URL 환경변수가 설정되지 않았습니다. 기본값을 사용합니다.")
+                # 3. 둘 다 없으면 경고만 출력 (하드코딩된 기본값 제거)
+                if "DATABASE_URL" not in _warned_env_vars and "DATABASE_PATH" not in _warned_env_vars:
+                    _warned_env_vars.add("DATABASE_URL")
+                    _warned_env_vars.add("DATABASE_PATH")
+                    env_file_path = langgraph_dir / ".env"
+                    print("⚠️ DATABASE_URL 또는 DATABASE_PATH 환경변수가 설정되지 않았습니다.")
+                    print(f"   .env 파일 위치: {env_file_path}")
+                    print("   .env 파일에 DATABASE_URL 또는 DATABASE_PATH를 설정해주세요.")
+                    print("   예시: DATABASE_URL=sqlite:///./data/lawfirm_v2.db")
+                    print("   또는: DATABASE_PATH=./data/lawfirm_v2.db")
+        
+        # DATABASE_URL에서 DATABASE_PATH 추출 (DATABASE_PATH가 없고 DATABASE_URL이 있는 경우)
+        if self.database_path is None and self.database_url:
+            # sqlite:/// 경로에서 파일 경로 추출
+            if self.database_url.startswith("sqlite:///"):
+                db_path = self.database_url.replace("sqlite:///", "")
+                # 절대 경로가 아니면 lawfirm_langgraph 디렉토리 기준으로 처리
+                if not os.path.isabs(db_path):
+                    db_path = str(langgraph_dir / db_path.lstrip("./"))
+                self.database_path = db_path
+    
+    def configure_logging(self) -> None:
+        """
+        Config의 log_level을 사용하여 전역 로깅 설정
+        
+        이 메서드는 Config 인스턴스의 log_level 속성을 사용하여
+        전역 로깅 레벨을 설정합니다.
+        
+        사용 예시:
+            config = Config()
+            config.configure_logging()  # config.log_level 사용
+        """
+        try:
+            from .logger import configure_global_logging
+            configure_global_logging(self.log_level)
+        except ImportError:
+            # logger 모듈이 없으면 기본 설정
+            import logging
+            log_level_map = {
+                "CRITICAL": logging.CRITICAL,
+                "ERROR": logging.ERROR,
+                "WARNING": logging.WARNING,
+                "INFO": logging.INFO,
+                "DEBUG": logging.DEBUG,
+            }
+            log_level = log_level_map.get(self.log_level.upper(), logging.INFO)
+            logging.basicConfig(
+                level=log_level,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )

@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
@@ -19,7 +23,7 @@ from .question_classifier import QuestionType, QuestionClassification
 from .answer_formatter import AnswerFormatter, FormattedAnswer
 from .context_builder import ContextBuilder, ContextWindow
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -47,7 +51,7 @@ class ImprovedAnswerGenerator:
                  unified_prompt_manager: Optional[UnifiedPromptManager] = None,
                  prompt_optimizer: Optional[PromptOptimizer] = None):
         """답변 생성기 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 컴포넌트 초기화
         self.gemini_client = gemini_client or GeminiClient()

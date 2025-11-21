@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -22,7 +26,7 @@ from .legal_basis_validator import LegalBasisValidator
 from .legal_citation_enhancer import LegalCitationEnhancer
 
 # 로거 설정
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QuestionType(Enum):

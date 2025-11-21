@@ -7,13 +7,19 @@ import numpy as np
 from collections import Counter
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
-logger = logging.getLogger(__name__)
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class ExtractionEvaluator:
     """추출 성능 평가 시스템"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def calculate_precision(self, extracted_terms: List[str], ground_truth: List[str]) -> float:
         """정밀도 계산"""
@@ -75,7 +81,7 @@ class ClassificationMonitor:
         self.log_file = Path(log_file)
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
         self.performance_history = self.load_performance_history()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def load_performance_history(self) -> List[Dict[str, Any]]:
         """성능 이력 로드"""
@@ -201,7 +207,7 @@ class TermQualityAnalyzer:
     """용어 품질 분석기"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def analyze_term_quality(self, terms_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """용어 품질 분석"""
@@ -298,7 +304,7 @@ class PerformanceEvaluator:
         self.extraction_evaluator = ExtractionEvaluator()
         self.classification_monitor = ClassificationMonitor(log_file)
         self.term_quality_analyzer = TermQualityAnalyzer()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def evaluate_full_pipeline(self, 
                              extracted_terms: List[str],
