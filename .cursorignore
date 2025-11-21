@@ -25,13 +25,19 @@ credentials/
 # ============================================================================
 # Log Files
 # ============================================================================
-logs/
-*.log
-*.log.*
+# First, ignore all logs directories and log files
+# logs/**
+# *.log
+# *.log.*
 *.out
-!lawfirm_langgraph/logs/
+# Then, explicitly allow specific log directories (exceptions must come after general patterns)
 !logs/test/
 !logs/test/**
+!logs/test/**/*.log
+!logs/test/**/*.log.*
+!lawfirm_langgraph/logs/
+!lawfirm_langgraph/logs/**
+!lawfirm_langgraph/logs/**/*.log
 
 # ============================================================================
 # Python Cache & Compiled Files

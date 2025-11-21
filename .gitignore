@@ -69,8 +69,14 @@ model_cache/
 *.onnx
 
 # Logs
-logs/
+# Allow specific log directories first (exceptions must come before general patterns)
+!logs/test/
+!logs/test/**
+!logs/test/**/*.log
+# Ignore all other log files
 *.log
+# Ignore logs directories except the allowed ones (use logs/** not logs/ to allow exceptions)
+logs/**
 api/logs/
 data/performance_logs/
 *.metrics.json
