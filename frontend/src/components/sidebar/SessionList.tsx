@@ -157,9 +157,9 @@ export function SessionList({
   onDelete,
   refreshTrigger,
 }: SessionListProps) {
-  // 초기에는 최근 2개 그룹 자동 펼치기
+  // 초기에는 '오늘'만 펼치기
   const [expandedGroups, setExpandedGroups] = useState<Set<DateGroup>>(
-    new Set(['오늘', '어제'])
+    new Set(['오늘'])
   );
   
   // 그룹별 데이터 상태
@@ -231,12 +231,11 @@ export function SessionList({
 
   // 초기 로딩 및 검색어 변경 처리
   useEffect(() => {
-    // 초기 마운트 시: searchQuery가 없을 때 최근 2개 그룹 동시 로드
+    // 초기 마운트 시: searchQuery가 없을 때 '오늘' 그룹만 로드
     if (isInitialMount.current) {
       isInitialMount.current = false;
       if (!searchQuery) {
         loadGroupSessions('오늘', 1, false);
-        loadGroupSessions('어제', 1, false);
       }
       prevSearchQuery.current = searchQuery;
       return;
@@ -424,9 +423,7 @@ export function SessionList({
                       {searchQuery ? (
                         `"${searchQuery}"에 대한 대화를 찾을 수 없습니다`
                       ) : (
-                        group === '오늘' 
-                          ? '대화가 없습니다'
-                          : '이 기간에는 대화가 없습니다'
+                        '대화 히스토리가 없습니다'
                       )}
                     </div>
                   ) : (
@@ -451,16 +448,6 @@ export function SessionList({
                         onLoadMore={() => loadGroupSessions(group, data.page + 1, true)}
                         rootElement={mainScrollRef.current}
                       />
-                      
-                      {!data.hasMore && data.sessions.length > 0 && (
-                        <div className="flex items-center justify-center py-3 border-t border-slate-100 mt-1">
-                          <div className="flex items-center gap-2 text-xs text-slate-400">
-                            <div className="w-1 h-1 rounded-full bg-slate-300" />
-                            <span>모든 대화를 불러왔습니다</span>
-                            <div className="w-1 h-1 rounded-full bg-slate-300" />
-                          </div>
-                        </div>
-                      )}
                     </>
                   )}
                 </div>
@@ -469,8 +456,9 @@ export function SessionList({
           );
         })}
 
-        {/* 전체 빈 상태 - 모든 그룹이 비어있을 때 */}
-        {visibleGroups.length > 0 && 
+        {/* 전체 빈 상태 - 펼쳐진 그룹이 없고 모든 그룹이 비어있을 때만 표시 */}
+        {expandedGroups.size === 0 && 
+         visibleGroups.length > 0 && 
          !visibleGroups.some(group => {
            const data = getGroupData(groupData, group);
            return data.sessions.length > 0 || data.isLoading;
