@@ -5,6 +5,10 @@ RAG 검색 성능 개선 테스트
 
 import pytest
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any
 
 from lawfirm_langgraph.core.search.engines.semantic_search_engine_v2 import SemanticSearchEngineV2
@@ -12,7 +16,7 @@ from lawfirm_langgraph.core.search.engines.hybrid_search_engine_v2 import Hybrid
 from lawfirm_langgraph.core.workflow.processors.workflow_document_processor import WorkflowDocumentProcessor
 from lawfirm_langgraph.core.search.processors.result_merger import ResultRanker
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TestRAGPerformanceImprovements:

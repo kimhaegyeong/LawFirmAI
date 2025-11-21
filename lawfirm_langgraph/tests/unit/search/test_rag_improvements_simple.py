@@ -17,10 +17,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import hashlib
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def test_hash_based_query_cache():

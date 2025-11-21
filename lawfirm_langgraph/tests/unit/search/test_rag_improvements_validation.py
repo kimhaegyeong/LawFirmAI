@@ -18,6 +18,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import hashlib
 import sys
 from typing import List, Dict, Any
@@ -30,7 +34,7 @@ logging.basicConfig(
     force=True
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TestRAGImprovementsValidation:

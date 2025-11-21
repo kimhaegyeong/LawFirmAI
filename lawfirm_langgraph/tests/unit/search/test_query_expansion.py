@@ -18,6 +18,10 @@ lawfirm_langgraph_path = Path(__file__).parent.parent
 sys.path.insert(0, str(lawfirm_langgraph_path))
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import List, Dict, Any
 
 # 로깅 설정
@@ -25,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def test_semantic_search_engine_query_expansion():
