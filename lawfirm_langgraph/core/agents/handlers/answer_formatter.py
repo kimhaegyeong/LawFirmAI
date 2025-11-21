@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from core.agents.state_definitions import LegalWorkflowState
-from core.agents.workflow_utils import WorkflowUtils
+from core.workflow.utils.workflow_utils import WorkflowUtils
 from core.agents.validators.quality_validators import AnswerValidator
 
 from .config.formatter_config import AnswerLengthConfig, ConfidenceConfig
@@ -621,8 +621,8 @@ class AnswerFormatterHandler:
 
                 # 통일된 포맷터 및 검증기 초기화
                 try:
-                    from ...services.unified_source_formatter import UnifiedSourceFormatter
-                    from ...services.source_validator import SourceValidator
+                    from ...generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+                    from ...generation.validators.source_validator import SourceValidator
                     formatter = UnifiedSourceFormatter()
                     validator = SourceValidator()
                 except ImportError:
@@ -1190,7 +1190,7 @@ class AnswerFormatterHandler:
 
             state["sources"] = final_sources_list[:MAX_SOURCES_LIMIT]
             state["sources_detail"] = final_sources_detail[:MAX_SOURCES_LIMIT]
-            state["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT]
+            state["legal_references"] = legal_refs[:MAX_LEGAL_REFERENCES_LIMIT] if isinstance(legal_refs, list) else legal_refs
             
             final_sources_detail = self._generate_fallback_sources_detail_if_needed(
                 final_sources_detail, final_sources_list, retrieved_docs, answer_value
@@ -1200,6 +1200,9 @@ class AnswerFormatterHandler:
             self._extract_and_store_related_questions(state)
 
             self.set_metadata(state, answer_value, keyword_coverage)
+            
+            # 메모리 최적화: 중간 데이터 정리
+            self._cleanup_intermediate_data(state)
         except Exception as e:
             self.logger.error(f"[PREPARE_FINAL_RESPONSE_PART] Error in prepare_final_response_part: {e}", exc_info=True)
             # 에러 발생 시에도 최소한의 상태는 유지
@@ -1211,6 +1214,31 @@ class AnswerFormatterHandler:
                 state["legal_references"] = []
             if "sources_detail" not in state:
                 state["sources_detail"] = []
+    
+    def _cleanup_intermediate_data(self, state: LegalWorkflowState) -> None:
+        """메모리 최적화: 중간 데이터 정리"""
+        try:
+            # retrieved_docs는 이미 sources로 변환되었으므로 크기 제한
+            if "retrieved_docs" in state and isinstance(state["retrieved_docs"], list):
+                if len(state["retrieved_docs"]) > MAX_SOURCES_LIMIT:
+                    state["retrieved_docs"] = state["retrieved_docs"][:MAX_SOURCES_LIMIT]
+            
+            # processing_steps는 이미 제한되어 있지만, 추가로 확인
+            if "processing_steps" in state and isinstance(state["processing_steps"], list):
+                if len(state["processing_steps"]) > MAX_PROCESSING_STEPS:
+                    state["processing_steps"] = prune_processing_steps(
+                        state["processing_steps"],
+                        max_items=MAX_PROCESSING_STEPS
+                    )
+            
+            # errors 리스트 크기 제한
+            if "errors" in state and isinstance(state["errors"], list):
+                if len(state["errors"]) > 10:
+                    state["errors"] = state["errors"][-10:]
+            
+            self.logger.debug("[PREPARE_FINAL_RESPONSE_PART] Cleaned up intermediate data")
+        except Exception as e:
+            self.logger.warning(f"[PREPARE_FINAL_RESPONSE_PART] Error during cleanup: {e}")
     
     def _recover_and_validate_answer(self, state: LegalWorkflowState) -> str:
         """답변 복구 및 검증"""
@@ -1570,8 +1598,8 @@ class AnswerFormatterHandler:
         seen_legal_refs = set()
 
         try:
-            from ...services.unified_source_formatter import UnifiedSourceFormatter
-            from ...services.source_validator import SourceValidator
+            from ...generation.formatters.unified_source_formatter import UnifiedSourceFormatter
+            from ...generation.validators.source_validator import SourceValidator
             formatter = UnifiedSourceFormatter()
             validator = SourceValidator()
         except ImportError:
@@ -2274,7 +2302,7 @@ class AnswerFormatterHandler:
                 try:
                     import os
                     from core.utils.config import Config
-                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
                     self._config = Config()
                     self._connector = LegalDataConnectorV2(self._config.database_path)
                     self._config_initialized = True
@@ -2295,10 +2323,14 @@ class AnswerFormatterHandler:
                 if source_type == "case_paragraph":
                     doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
                     if doc_id:
+                        # cases 테이블에는 full_text 컬럼이 없으므로 case_paragraphs에서 텍스트를 가져옴
                         cursor.execute("""
-                            SELECT COALESCE(full_text, searchable_text) as full_text
-                            FROM cases
-                            WHERE doc_id = ?
+                            SELECT GROUP_CONCAT(cp.text, '\n\n') as full_text
+                            FROM cases c
+                            JOIN case_paragraphs cp ON cp.case_id = c.id
+                            WHERE c.doc_id = ?
+                            GROUP BY c.doc_id
+                            ORDER BY cp.para_index
                         """, (doc_id,))
                         row = cursor.fetchone()
                         if row and row[0]:
@@ -2382,7 +2414,7 @@ class AnswerFormatterHandler:
             if not self._config_initialized:
                 try:
                     from core.utils.config import Config
-                    from core.agents.legal_data_connector_v2 import LegalDataConnectorV2
+                    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
                     self._config = Config()
                     self._connector = LegalDataConnectorV2(self._config.database_path)
                     self._config_initialized = True
@@ -2426,10 +2458,14 @@ class AnswerFormatterHandler:
                     doc_ids = [doc_id for doc_id, _ in cases]
                     if doc_ids:
                         placeholders = ','.join(['?'] * len(doc_ids))
+                        # cases 테이블에는 full_text 컬럼이 없으므로 case_paragraphs에서 텍스트를 가져옴
                         cursor.execute(f"""
-                            SELECT doc_id, COALESCE(full_text, searchable_text) as full_text
-                            FROM cases
-                            WHERE doc_id IN ({placeholders})
+                            SELECT c.doc_id, GROUP_CONCAT(cp.text, '\n\n') as full_text
+                            FROM cases c
+                            JOIN case_paragraphs cp ON cp.case_id = c.id
+                            WHERE c.doc_id IN ({placeholders})
+                            GROUP BY c.doc_id
+                            ORDER BY c.doc_id, cp.para_index
                         """, doc_ids)
                         for row in cursor.fetchall():
                             if row[0] and row[1]:
