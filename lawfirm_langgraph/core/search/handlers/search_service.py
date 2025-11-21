@@ -5,6 +5,10 @@ Search Service (ML Enhanced)
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 import asyncio
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
@@ -12,7 +16,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..models.model_manager import LegalModelManager
 
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from ..data.vector_store import LegalVectorStore as VectorStore
 from ..utils.config import Config
 from ..services.ai_keyword_generator import AIKeywordGenerator
@@ -25,7 +29,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MLEnhancedSearchService:
@@ -38,7 +42,7 @@ class MLEnhancedSearchService:
         self.database = database
         self.vector_store = vector_store
         self.model_manager = model_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # LLM 기반 키워드 확장기 초기화
         self.ai_keyword_generator = AIKeywordGenerator()

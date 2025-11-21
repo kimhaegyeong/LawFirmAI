@@ -5,27 +5,31 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from .answer_structure_enhancer import AnswerStructureEnhancer, QuestionType
 from .legal_citation_enhancer import LegalCitationEnhancer
 from .legal_basis_validator import LegalBasisValidator
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LegalBasisIntegrationService:
     """법적 근거 통합 서비스"""
     
-    def __init__(self, db_manager: Optional[DatabaseManager] = None):
+    def __init__(self, db_manager: Optional[LegalDataConnectorV2] = None):
         """초기화"""
-        self.db_manager = db_manager or DatabaseManager()
+        self.db_manager = db_manager or LegalDataConnectorV2()
         self.structure_enhancer = AnswerStructureEnhancer()
         self.citation_enhancer = LegalCitationEnhancer()
         self.basis_validator = LegalBasisValidator(self.db_manager)
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def process_query_with_legal_basis(self, query: str, answer: str, 
                                      question_type: Optional[QuestionType] = None) -> Dict[str, Any]:

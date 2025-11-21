@@ -24,7 +24,7 @@ from typing import Dict, List, Any, Optional, Tuple
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 
 # Import quality modules for duplicate checking
 try:
@@ -344,7 +344,7 @@ class AssemblyLawImporter:
                 
                 # Insert articles
                 articles = law_data.get('articles', [])
-                actual_law_id = enhanced_law_record[0]  # _prepare_law_record?ì„œ ?ì„±??law_id ?¬ìš©
+                actual_law_id = enhanced_law_record[0]  # _prepare_law_record?ì„œ ?ì„±??law_id ?¬ìš©
                 for article in articles:
                     article_record = self._prepare_article_record(actual_law_id, article)
                     cursor.execute('''
@@ -370,7 +370,7 @@ class AssemblyLawImporter:
         
         # law_name??ê¸°ë°˜?¼ë¡œ ID ?ì„±
         law_name = law_data.get('law_name', 'unknown')
-        # ê³µë°±???¸ë”?¤ì½”?´ë¡œ ë³€ê²½í•˜ê³??¹ìˆ˜ë¬¸ì ?œê±°
+        # ê³µë°±???¸ë”?¤ì½”?´ë¡œ ë³€ê²½í•˜ê³??¹ìˆ˜ë¬¸ì ?œê±°
         clean_name = law_name.replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
         return f"ml_enhanced_{clean_name}"
 
@@ -396,11 +396,11 @@ class AssemblyLawImporter:
                 existing_law = cursor.fetchone()
                 
                 if existing_law:
-                    # ê¸°ì¡´ ë²•ë¥ ê³?ë¹„êµ?˜ì—¬ ?…ë°?´íŠ¸ ?„ìš” ?¬ë? ?•ì¸
+                    # ê¸°ì¡´ ë²•ë¥ ê³?ë¹„êµ?˜ì—¬ ?…ë°?´íŠ¸ ?„ìš” ?¬ë? ?•ì¸
                     needs_update = self._check_if_update_needed(cursor, law_id, law_data)
                     
                     if needs_update:
-                        # ?…ë°?´íŠ¸ ?˜í–‰
+                        # ?…ë°?´íŠ¸ ?˜í–‰
                         success = self._update_existing_law(cursor, law_id, law_data)
                         if success:
                             conn.commit()
@@ -408,7 +408,7 @@ class AssemblyLawImporter:
                         else:
                             return {'action': 'failed', 'law_id': law_id, 'error': 'Update failed'}
                     else:
-                        # ?…ë°?´íŠ¸ ë¶ˆí•„??(?¤í‚µ)
+                        # ?…ë°?´íŠ¸ ë¶ˆí•„??(?¤í‚µ)
                         return {'action': 'skipped', 'law_id': law_id, 'reason': 'No changes needed'}
                 else:
                     # ?ˆë¡œ??ë²•ë¥  ?½ì…
@@ -425,14 +425,14 @@ class AssemblyLawImporter:
     
     def _extract_full_text(self, law_data: Dict[str, Any]) -> str:
         """Extract full text from law data"""
-        # ?¬ëŸ¬ ?„ë“œ?ì„œ ?ìŠ¤??ì¶”ì¶œ ?œë„
+        # ?¬ëŸ¬ ?„ë“œ?ì„œ ?ìŠ¤??ì¶”ì¶œ ?œë„
         full_text = law_data.get('full_text', '')
         if not full_text:
             full_text = law_data.get('full_content', '')
         if not full_text:
             full_text = law_data.get('cleaned_content', '')
         if not full_text:
-            # articles?ì„œ ?ìŠ¤??ì¡°í•©
+            # articles?ì„œ ?ìŠ¤??ì¡°í•©
             articles = law_data.get('articles', [])
             if articles:
                 full_text = '\n'.join([article.get('article_content', '') for article in articles])
@@ -441,7 +441,7 @@ class AssemblyLawImporter:
 
     def _check_if_update_needed(self, cursor, law_id: str, law_data: Dict[str, Any]) -> bool:
         """
-        ê¸°ì¡´ ë²•ë¥ ê³????°ì´?°ë? ë¹„êµ?˜ì—¬ ?…ë°?´íŠ¸ ?„ìš” ?¬ë? ?•ì¸
+        ê¸°ì¡´ ë²•ë¥ ê³????°ì´?°ë? ë¹„êµ?˜ì—¬ ?…ë°?´íŠ¸ ?„ìš” ?¬ë? ?•ì¸
         
         Args:
             cursor: ?°ì´?°ë² ?´ìŠ¤ ì»¤ì„œ
@@ -449,7 +449,7 @@ class AssemblyLawImporter:
             law_data: ?ˆë¡œ??ë²•ë¥  ?°ì´??
         
         Returns:
-            bool: ?…ë°?´íŠ¸ ?„ìš” ?¬ë?
+            bool: ?…ë°?´íŠ¸ ?„ìš” ?¬ë?
         """
         try:
             # ê¸°ì¡´ ë²•ë¥  ?°ì´??ì¡°íšŒ
@@ -463,7 +463,7 @@ class AssemblyLawImporter:
             if not existing:
                 return True  # ì¡´ì¬?˜ì? ?Šìœ¼ë©??½ì… ?„ìš”
             
-            # ì£¼ìš” ?„ë“œ ë¹„êµ
+            # ì£¼ìš” ?„ë“œ ë¹„êµ
             new_law_name = law_data.get('law_name', '')
             new_full_text = self._extract_full_text(law_data)
             
@@ -471,7 +471,7 @@ class AssemblyLawImporter:
                 existing[1] != new_full_text):
                 return True
             
-            # ì²˜ë¦¬ ë²„ì „ ë¹„êµ (?ˆë¡œ??ë²„ì „?´ë©´ ?…ë°?´íŠ¸)
+            # ì²˜ë¦¬ ë²„ì „ ë¹„êµ (?ˆë¡œ??ë²„ì „?´ë©´ ?…ë°?´íŠ¸)
             new_version = law_data.get('processing_version', '1.0')
             if existing[3] != new_version:
                 return True
@@ -480,11 +480,11 @@ class AssemblyLawImporter:
             
         except Exception as e:
             logger.error(f"Error checking update need: {e}")
-            return True  # ?ëŸ¬ ???…ë°?´íŠ¸ ?˜í–‰
+            return True  # ?ëŸ¬ ???…ë°?´íŠ¸ ?˜í–‰
     
     def _update_existing_law(self, cursor, law_id: str, law_data: Dict[str, Any]) -> bool:
         """
-        ê¸°ì¡´ ë²•ë¥  ?…ë°?´íŠ¸
+        ê¸°ì¡´ ë²•ë¥  ?…ë°?´íŠ¸
         
         Args:
             cursor: ?°ì´?°ë² ?´ìŠ¤ ì»¤ì„œ
@@ -492,13 +492,13 @@ class AssemblyLawImporter:
             law_data: ?ˆë¡œ??ë²•ë¥  ?°ì´??
         
         Returns:
-            bool: ?…ë°?´íŠ¸ ?±ê³µ ?¬ë?
+            bool: ?…ë°?´íŠ¸ ?±ê³µ ?¬ë?
         """
         try:
             # ë²•ë¥  ?ˆì½”??ì¤€ë¹?
             law_record = self._prepare_law_record(law_data)
             
-            # ê¸°ì¡´ ë²•ë¥  ?…ë°?´íŠ¸
+            # ê¸°ì¡´ ë²•ë¥  ?…ë°?´íŠ¸
             cursor.execute('''
                 UPDATE assembly_laws SET
                     source = ?, law_name = ?, law_type = ?, category = ?, row_number = ?,
@@ -511,7 +511,7 @@ class AssemblyLawImporter:
                     ml_enhanced = ?, parsing_quality_score = ?, article_count = ?, supplementary_count = ?, control_characters_removed = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE law_id = ?
-            ''', law_record[1:] + (law_id,))  # law_id ?œì™¸?˜ê³  ?…ë°?´íŠ¸
+            ''', law_record[1:] + (law_id,))  # law_id ?œì™¸?˜ê³  ?…ë°?´íŠ¸
             
             # ê¸°ì¡´ ì¡°ë¬¸ ?? œ
             cursor.execute('DELETE FROM assembly_articles WHERE law_id = ?', (law_id,))

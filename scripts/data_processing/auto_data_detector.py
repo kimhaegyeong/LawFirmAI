@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-?ë™ ?°ì´??ê°ì? ?œìŠ¤??
+?ë™ ?°ì´??ê°ì? ?œìŠ¤??
 
-?ˆë¡œ???°ì´???ŒìŠ¤ë¥??ë™?¼ë¡œ ê°ì??˜ê³  ë¶„ë¥˜?˜ëŠ” ?œìŠ¤?œì…?ˆë‹¤.
-? ì§œë³??´ë”?€ ?Œì¼ ?¨í„´??ë¶„ì„?˜ì—¬ ì²˜ë¦¬???°ì´?°ë? ?ë³„?©ë‹ˆ??
+?ˆë¡œ???°ì´???ŒìŠ¤ë¥??ë™?¼ë¡œ ê°ì??˜ê³  ë¶„ë¥˜?˜ëŠ” ?œìŠ¤?œì…?ˆë‹¤.
+? ì§œë³??´ë”?€ ?Œì¼ ?¨í„´??ë¶„ì„?˜ì—¬ ì²˜ë¦¬???°ì´?°ë? ?ë³„?©ë‹ˆ??
 """
 
 import os
@@ -22,21 +22,21 @@ from collections import defaultdict
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 
 class AutoDataDetector:
-    """?ë™ ?°ì´??ê°ì? ?´ë˜??""
+    """?ë™ ?°ì´??ê°ì? ?´ë˜??""
     
     def __init__(self, raw_data_base_path: str = "data/raw/assembly", db_manager: DatabaseManager = None):
         """
-        ?ë™ ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
+        ?ë™ ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
         
         Args:
-            raw_data_base_path: ?ë³¸ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
-            db_manager: ?°ì´?°ë² ?´ìŠ¤ ê´€ë¦¬ì (? íƒ?¬í•­)
+            raw_data_base_path: ?ë³¸ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
+            db_manager: ?°ì´?°ë² ?´ìŠ¤ ê´€ë¦¬ì (? íƒ?¬í•­)
         """
         self.raw_data_base_path = Path(raw_data_base_path)
         self.db_manager = db_manager or DatabaseManager()
@@ -116,7 +116,7 @@ class AutoDataDetector:
     
     def detect_new_data_sources(self, base_path: str, data_type: str = None) -> Dict[str, List[Path]]:
         """
-        ?ˆë¡œ???°ì´???ŒìŠ¤ ê°ì?
+        ?ˆë¡œ???°ì´???ŒìŠ¤ ê°ì?
         
         Args:
             base_path: ê²€?‰í•  ê¸°ë³¸ ê²½ë¡œ
@@ -134,18 +134,18 @@ class AutoDataDetector:
             logger.warning(f"Base path does not exist: {base_path}")
             return dict(detected_files)
         
-        # ? ì§œë³??´ë” ?¤ìº”
+        # ? ì§œë³??´ë” ?¤ìº”
         for date_folder in base_path_obj.iterdir():
             if not date_folder.is_dir():
                 continue
             
-            # ? ì§œ ?´ë” ?¨í„´ ?•ì¸ (YYYYMMDD)
+            # ? ì§œ ?´ë” ?¨í„´ ?•ì¸ (YYYYMMDD)
             if not self._is_date_folder(date_folder.name):
                 continue
             
             logger.info(f"Scanning date folder: {date_folder.name}")
             
-            # ?´ë” ???Œì¼ ?¤ìº” (ì§ì ‘ ?Œì¼ ?ëŠ” ì¹´í…Œê³ ë¦¬ ?˜ìœ„ ?´ë”)
+            # ?´ë” ???Œì¼ ?¤ìº” (ì§ì ‘ ?Œì¼ ?ëŠ” ì¹´í…Œê³ ë¦¬ ?˜ìœ„ ?´ë”)
             self._scan_folder_for_files(date_folder, detected_files, data_type)
         
         # ê²°ê³¼ ?”ì•½
@@ -158,14 +158,14 @@ class AutoDataDetector:
     
     def _scan_folder_for_files(self, folder: Path, detected_files: Dict[str, List[Path]], data_type: str = None):
         """
-        ?´ë” ???Œì¼?¤ì„ ?¤ìº”?˜ì—¬ ê°ì????Œì¼ ëª©ë¡??ì¶”ê?
+        ?´ë” ???Œì¼?¤ì„ ?¤ìº”?˜ì—¬ ê°ì????Œì¼ ëª©ë¡??ì¶”ê?
         
         Args:
-            folder: ?¤ìº”???´ë”
-            detected_files: ê°ì????Œì¼?¤ì„ ?€?¥í•  ?•ì…”?ˆë¦¬
+            folder: ?¤ìº”???´ë”
+            detected_files: ê°ì????Œì¼?¤ì„ ?€?¥í•  ?•ì…”?ˆë¦¬
             data_type: ?¹ì • ?°ì´??? í˜• ?„í„°
         """
-        # ì§ì ‘ ?Œì¼ ?¤ìº”
+        # ì§ì ‘ ?Œì¼ ?¤ìº”
         for file_path in folder.glob("*.json"):
             if not file_path.is_file():
                 continue
@@ -181,7 +181,7 @@ class AutoDataDetector:
                 else:
                     logger.debug(f"File already processed: {file_path}")
         
-        # ?˜ìœ„ ì¹´í…Œê³ ë¦¬ ?´ë” ?¤ìº” (precedent??ê²½ìš° civil, criminal, family, tax ??
+        # ?˜ìœ„ ì¹´í…Œê³ ë¦¬ ?´ë” ?¤ìº” (precedent??ê²½ìš° civil, criminal, family, tax ??
         for subfolder in folder.iterdir():
             if subfolder.is_dir() and subfolder.name in ['civil', 'criminal', 'family', 'tax']:
                 logger.debug(f"Scanning category subfolder: {subfolder.name}")
@@ -204,7 +204,7 @@ class AutoDataDetector:
             file_path: ë¶„ë¥˜???Œì¼ ê²½ë¡œ
         
         Returns:
-            Optional[str]: ?°ì´??? í˜• ?ëŠ” None
+            Optional[str]: ?°ì´??? í˜• ?ëŠ” None
         """
         try:
             # ?Œì¼ ?¬ê¸° ?•ì¸ (?ˆë¬´ ???Œì¼?€ ?¤í‚µ)
@@ -216,7 +216,7 @@ class AutoDataDetector:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # ë©”í??°ì´?°ì—???°ì´??? í˜• ?•ì¸
+            # ë©”í??°ì´?°ì—???°ì´??? í˜• ?•ì¸
             if isinstance(data, dict) and 'metadata' in data:
                 metadata = data['metadata']
                 data_type = metadata.get('data_type')
@@ -247,9 +247,9 @@ class AutoDataDetector:
                         # law_name???ˆìœ¼ë©?ë²•ë¥  ?°ì´?°ë¡œ ë¶„ë¥˜
                         if 'law_name' in first_item and 'law_content' in first_item:
                             return 'law_only'
-                        # case_numberê°€ ?ˆìœ¼ë©??ë? ?°ì´?°ë¡œ ë¶„ë¥˜
+                        # case_numberê°€ ?ˆìœ¼ë©??ë? ?°ì´?°ë¡œ ë¶„ë¥˜
                         elif 'case_number' in first_item:
-                            # ì¹´í…Œê³ ë¦¬ ?•ë³´ê°€ ?ˆìœ¼ë©?êµ¬ì²´?ì¸ precedent ?€??ë°˜í™˜
+                            # ì¹´í…Œê³ ë¦¬ ?•ë³´ê°€ ?ˆìœ¼ë©?êµ¬ì²´?ì¸ precedent ?€??ë°˜í™˜
                             if 'field' in first_item:
                                 field = first_item['field']
                                 if field == 'ë¯¼ì‚¬':
@@ -307,7 +307,7 @@ class AutoDataDetector:
             if self._is_date_folder(date_folder):
                 dates.append(date_folder)
             
-            # ?ˆìƒ ?ˆì½”????ì¶”ì •
+            # ?ˆìƒ ?ˆì½”????ì¶”ì •
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -359,10 +359,10 @@ class AutoDataDetector:
     
     def _is_date_folder(self, folder_name: str) -> bool:
         """
-        ?´ë”ëª…ì´ ? ì§œ ?•ì‹?¸ì? ?•ì¸
+        ?´ë”ëª…ì´ ? ì§œ ?•ì‹?¸ì? ?•ì¸
         
         Args:
-            folder_name: ?•ì¸???´ë”ëª?
+            folder_name: ?•ì¸???´ë”ëª?
         
         Returns:
             bool: ? ì§œ ?•ì‹ ?¬ë?
@@ -391,13 +391,13 @@ class AutoDataDetector:
     
     def generate_detection_report(self, detected_files: Dict[str, List[Path]]) -> Dict[str, Any]:
         """
-        ê°ì? ê²°ê³¼ ë¦¬í¬???ì„±
+        ê°ì? ê²°ê³¼ ë¦¬í¬???ì„±
         
         Args:
-            detected_files: ê°ì????Œì¼ ëª©ë¡
+            detected_files: ê°ì????Œì¼ ëª©ë¡
         
         Returns:
-            Dict[str, Any]: ê°ì? ë¦¬í¬??
+            Dict[str, Any]: ê°ì? ë¦¬í¬??
         """
         report = {
             'detection_time': datetime.now().isoformat(),
@@ -416,13 +416,13 @@ class AutoDataDetector:
 
 def main():
     """ë©”ì¸ ?¨ìˆ˜"""
-    parser = argparse.ArgumentParser(description='?ë™ ?°ì´??ê°ì? ?œìŠ¤??)
+    parser = argparse.ArgumentParser(description='?ë™ ?°ì´??ê°ì? ?œìŠ¤??)
     parser.add_argument('--base-path', default='data/raw/assembly/law_only',
                        help='ê²€?‰í•  ê¸°ë³¸ ê²½ë¡œ')
     parser.add_argument('--data-type', choices=['law_only', 'precedents', 'constitutional'],
                        help='?¹ì • ?°ì´??? í˜•ë§?ê²€??)
-    parser.add_argument('--output-report', help='ê°ì? ë¦¬í¬?¸ë? ?€?¥í•  ?Œì¼ ê²½ë¡œ')
-    parser.add_argument('--verbose', '-v', action='store_true', help='?ì„¸ ë¡œê·¸ ì¶œë ¥')
+    parser.add_argument('--output-report', help='ê°ì? ë¦¬í¬?¸ë? ?€?¥í•  ?Œì¼ ê²½ë¡œ')
+    parser.add_argument('--verbose', '-v', action='store_true', help='?ì„¸ ë¡œê·¸ ì¶œë ¥')
     
     args = parser.parse_args()
     
@@ -434,10 +434,10 @@ def main():
     )
     
     try:
-        # ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
+        # ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
         detector = AutoDataDetector()
         
-        # ?°ì´??ê°ì? ?¤í–‰
+        # ?°ì´??ê°ì? ?¤í–‰
         logger.info("Starting data detection...")
         detected_files = detector.detect_new_data_sources(args.base_path, args.data_type)
         
@@ -455,7 +455,7 @@ def main():
         else:
             logger.info("No new files detected")
         
-        # ë¦¬í¬???ì„± ë°??€??
+        # ë¦¬í¬???ì„± ë°??€??
         if args.output_report:
             report = detector.generate_detection_report(detected_files)
             report_path = Path(args.output_report)

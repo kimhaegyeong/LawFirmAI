@@ -7,6 +7,32 @@ LawFirm LangGraph Package
 
 __version__ = "1.0.0"
 
+# 전역 로깅 초기화 (패키지 import 시 자동 설정)
+# 환경 변수 LOG_LEVEL을 읽어서 루트 로거 레벨 설정
+try:
+    from .core.utils.logger import configure_global_logging
+    configure_global_logging()  # 환경 변수 LOG_LEVEL 자동 읽기
+except ImportError:
+    # logger 모듈이 없으면 기본 설정
+    import logging
+    import os
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level_map = {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "INFO": logging.INFO,
+        "DEBUG": logging.DEBUG,
+    }
+    log_level = log_level_map.get(log_level_str, logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+except Exception:
+    # 로깅 초기화 실패 시 무시 (안전한 실패)
+    pass
+
 # 지연 로딩 유틸리티 사용
 try:
     from .core.utils.lazy_imports import lazy_import, lazy_getattr
@@ -69,10 +95,8 @@ ChatService = lazy_getattr(
 _config_module_core = lazy_import("config.app_config", "core.utils.config", default=None)
 Config = lazy_getattr(_config_module_core, "Config") if _config_module_core else None
 
-DatabaseManager = lazy_getattr(
-    lazy_import("core.data.database", default=None),
-    "DatabaseManager"
-)
+# DatabaseManager는 deprecated되었습니다. LegalDataConnectorV2를 사용하세요.
+# from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
 VectorStore = lazy_getattr(
     lazy_import("core.data.vector_store", default=None),
@@ -87,7 +111,6 @@ __all__ = [
     "CheckpointStorageType",
     "ChatService",
     "Config",
-    "DatabaseManager",
     "VectorStore",
 ]
 

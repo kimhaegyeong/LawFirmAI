@@ -22,7 +22,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from source.data.vector_store import LegalVectorStore
-from source.data.database import DatabaseManager # ?�일 처리 ?�력 추젝??
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager # ?�일 처리 ?�력 추젝??
 from scripts.data_processing.auto_data_detector import AutoDataDetector
 from scripts.ml_training.vector_embedding.version_manager import VectorStoreVersionManager # ?�일 ?�시 ?�성??
 

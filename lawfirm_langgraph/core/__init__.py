@@ -19,10 +19,8 @@ except ImportError:
     ChatService = None
 
 try:
-    from .data.database import DatabaseManager
     from .data.vector_store import VectorStore
 except ImportError:
-    DatabaseManager = None
     VectorStore = None
 
 try:
@@ -48,7 +46,6 @@ __all__ = [
     "LegalModelManager",
     "LegalModelFineTuner",
     "ChatService", 
-    "DatabaseManager",
     "VectorStore",
     "Config",
     "SemanticSearchEngine", 

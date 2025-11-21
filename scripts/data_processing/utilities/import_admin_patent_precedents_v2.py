@@ -23,11 +23,11 @@ current_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(current_dir))
 
 try:
-    from source.data.database import DatabaseManager
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 except ImportError:
     # 직접 import ?�도
     sys.path.append('source')
-    from data.database import DatabaseManager
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 
 logger = logging.getLogger(__name__)
 

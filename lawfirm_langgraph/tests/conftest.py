@@ -175,7 +175,7 @@ def mock_chat_service():
 
 @pytest.fixture
 def mock_database():
-    """Mock DatabaseManager 픽스처"""
+    """Mock LegalDataConnectorV2 픽스처 (DatabaseManager 호환)"""
     db = MagicMock()
     db.execute_query = Mock(return_value=[])
     db.execute_update = Mock(return_value=1)

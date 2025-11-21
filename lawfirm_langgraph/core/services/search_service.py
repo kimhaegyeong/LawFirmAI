@@ -5,9 +5,13 @@ Search Service (ML Enhanced)
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from ..data.vector_store import LegalVectorStore as VectorStore
 from ..models.model_manager import LegalModelManager
 from ..utils.config import Config
@@ -20,20 +24,20 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MLEnhancedSearchService:
     """ML 강화 검색 서비스 클래스"""
     
-    def __init__(self, config: Config, database: DatabaseManager, 
+    def __init__(self, config: Config, database: LegalDataConnectorV2, 
                  vector_store: VectorStore, model_manager: LegalModelManager):
         """ML 강화 검색 서비스 초기화"""
         self.config = config
         self.database = database
         self.vector_store = vector_store
         self.model_manager = model_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
         self.stopword_processor = None
@@ -457,7 +461,7 @@ class MLEnhancedSearchService:
 class SearchService(MLEnhancedSearchService):
     """레거시 호환성을 위한 검색 서비스 클래스"""
     
-    def __init__(self, config: Config, database: DatabaseManager, 
+    def __init__(self, config: Config, database: LegalDataConnectorV2, 
                  vector_store: VectorStore, model_manager: LegalModelManager):
         """레거시 검색 서비스 초기화"""
         super().__init__(config, database, vector_store, model_manager)

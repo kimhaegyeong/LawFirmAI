@@ -29,7 +29,7 @@ sys.path.append(str(project_root))
 
 # Import database manager
 try:
-    from source.data.database import DatabaseManager
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
     DATABASE_MANAGER_AVAILABLE = True
 except ImportError:
     DATABASE_MANAGER_AVAILABLE = False

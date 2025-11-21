@@ -18,7 +18,7 @@ sys.modules['lawfirm_langgraph.core.models.model_manager'] = MagicMock()
 sys.modules['lawfirm_langgraph.core.models.model_manager'].LegalModelManager = mock_model_manager
 
 from lawfirm_langgraph.core.services.search_service import MLEnhancedSearchService
-from lawfirm_langgraph.core.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from lawfirm_langgraph.core.data.vector_store import LegalVectorStore
 from lawfirm_langgraph.core.utils.config import Config
 
@@ -35,7 +35,7 @@ class TestMLEnhancedSearchService:
     
     @pytest.fixture
     def mock_database(self):
-        """Mock DatabaseManager"""
+        """Mock LegalDataConnectorV2"""
         db = MagicMock()
         db.execute_query = Mock(return_value=[])
         return db

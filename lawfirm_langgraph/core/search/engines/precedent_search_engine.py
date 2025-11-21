@@ -5,6 +5,10 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import sqlite3
 import asyncio
@@ -12,7 +16,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.data.database import DatabaseManager
+from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from core.data.vector_store import LegalVectorStore
 from core.utils.config import Config
 from core.processing.extractors.ai_keyword_generator import AIKeywordGenerator
@@ -25,7 +29,7 @@ except ImportError:
     except ImportError:
         KoreanStopwordProcessor = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -53,7 +57,7 @@ class PrecedentSearchEngine:
                  vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
                  vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
         """판례 검색 엔진 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         if db_path is None:
             config = Config()
@@ -69,7 +73,7 @@ class PrecedentSearchEngine:
                 self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
 
         # 데이터베이스 연결
-        self.db_manager = DatabaseManager(db_path)
+        self.db_manager = LegalDataConnectorV2(db_path)
 
         # 벡터 저장소 초기화
         self.vector_store = None

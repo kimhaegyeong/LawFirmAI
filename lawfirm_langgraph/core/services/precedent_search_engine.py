@@ -5,17 +5,21 @@
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import json
 import sqlite3
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..data.database import DatabaseManager
+from ..search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 from ..data.vector_store import LegalVectorStore
 from ..utils.config import Config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -43,14 +47,14 @@ class PrecedentSearchEngine:
                  vector_index_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents",
                  vector_metadata_path: str = "data/embeddings/ml_enhanced_ko_sroberta_precedents.json"):
         """판례 검색 엔진 초기화"""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         if db_path is None:
             config = Config()
             db_path = config.database_path
 
         # 데이터베이스 연결
-        self.db_manager = DatabaseManager(db_path)
+        self.db_manager = LegalDataConnectorV2(db_path)
 
         # 벡터 저장소 초기화
         self.vector_store = None

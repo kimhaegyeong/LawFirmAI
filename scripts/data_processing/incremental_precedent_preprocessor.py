@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ
+ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ
 
-ë¯¸ì²˜ë¦??ë? ?Œì¼ë§?? ë³„?˜ì—¬ ?„ì²˜ë¦¬í•˜??ì¦ë¶„ ì²˜ë¦¬ ?œìŠ¤?œì…?ˆë‹¤.
-ê¸°ì¡´ PrecedentPreprocessorë¥??¬ì‚¬?©í•˜ê³?ì²´í¬?¬ì¸???œìŠ¤?œì„ ?µí•©?©ë‹ˆ??
+ë¯¸ì²˜ë¦??ë? ?Œì¼ë§?? ë³„?˜ì—¬ ?„ì²˜ë¦¬í•˜??ì¦ë¶„ ì²˜ë¦¬ ?œìŠ¤?œì…?ˆë‹¤.
+ê¸°ì¡´ PrecedentPreprocessorë¥??¬ì‚¬?©í•˜ê³?ì²´í¬?¬ì¸???œìŠ¤?œì„ ?µí•©?©ë‹ˆ??
 """
 
 import os
@@ -24,7 +24,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from scripts.data_processing.precedent_preprocessor import PrecedentPreprocessor
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 from scripts.data_collection.common.checkpoint_manager import CheckpointManager
 from scripts.data_processing.auto_data_detector import AutoDataDetector
 
@@ -41,7 +41,7 @@ class ProcessingResult:
 
 
 class IncrementalPrecedentPreprocessor:
-    """ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ?´ë˜??""
+    """ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ?´ë˜??""
     
     def __init__(self, 
                  raw_data_base_path: str = "data/raw/assembly",
@@ -52,14 +52,14 @@ class IncrementalPrecedentPreprocessor:
                  enable_term_normalization: bool = True,
                  batch_size: int = 100):
         """
-        ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ì´ˆê¸°??
+        ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ì´ˆê¸°??
         
         Args:
-            raw_data_base_path: ?ë³¸ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
-            processed_data_base_path: ?„ì²˜ë¦¬ëœ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
+            raw_data_base_path: ?ë³¸ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
+            processed_data_base_path: ?„ì²˜ë¦¬ëœ ?°ì´??ê¸°ë³¸ ê²½ë¡œ
             processing_version: ì²˜ë¦¬ ë²„ì „
-            checkpoint_manager: ì²´í¬?¬ì¸??ê´€ë¦¬ì
-            db_manager: ?°ì´?°ë² ?´ìŠ¤ ê´€ë¦¬ì
+            checkpoint_manager: ì²´í¬?¬ì¸??ê´€ë¦¬ì
+            db_manager: ?°ì´?°ë² ?´ìŠ¤ ê´€ë¦¬ì
             enable_term_normalization: ë²•ë¥  ?©ì–´ ?•ê·œ???œì„±??
             batch_size: ë°°ì¹˜ ì²˜ë¦¬ ?¬ê¸°
         """
@@ -72,10 +72,10 @@ class IncrementalPrecedentPreprocessor:
         self.batch_size = batch_size
         self.processing_version = processing_version
         
-        # ?ë? ?„ì²˜ë¦¬ê¸° ì´ˆê¸°??
+        # ?ë? ?„ì²˜ë¦¬ê¸° ì´ˆê¸°??
         self.preprocessor = PrecedentPreprocessor(enable_term_normalization)
         
-        # ?ë™ ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
+        # ?ë™ ?°ì´??ê°ì?ê¸?ì´ˆê¸°??
         self.auto_detector = AutoDataDetector(raw_data_base_path)
         
         # ì¶œë ¥ ?”ë ‰? ë¦¬ ?¤ì •
@@ -99,7 +99,7 @@ class IncrementalPrecedentPreprocessor:
     
     def process_new_data_only(self, category: str = "civil") -> Dict[str, Any]:
         """
-        ?ˆë¡œ ì¶”ê????ë? ?°ì´?°ë§Œ ê°ì??˜ì—¬ ?„ì²˜ë¦?
+        ?ˆë¡œ ì¶”ê????ë? ?°ì´?°ë§Œ ê°ì??˜ì—¬ ?„ì²˜ë¦?
         
         Args:
             category: ì²˜ë¦¬???¹ì • ì¹´í…Œê³ ë¦¬ (civil, criminal, family)
@@ -113,7 +113,7 @@ class IncrementalPrecedentPreprocessor:
         # ?°ì´???€??ê²°ì •
         data_type = f"precedent_{category}"
         
-        # ?ˆë¡œ???Œì¼ ê°ì?
+        # ?ˆë¡œ???Œì¼ ê°ì?
         new_files_by_type = self.auto_detector.detect_new_data_sources(
             str(self.raw_data_base_path / "precedent"), 
             data_type
@@ -136,7 +136,7 @@ class IncrementalPrecedentPreprocessor:
             raw_file_path_str = str(file_path)
             file_hash = self.auto_detector.get_file_hash(file_path)
             
-            # ?´ë? ì²˜ë¦¬???Œì¼?¸ì? ?¤ì‹œ ?•ì¸ (ê²½ìŸ ì¡°ê±´ ë°©ì?)
+            # ?´ë? ì²˜ë¦¬???Œì¼?¸ì? ?¤ì‹œ ?•ì¸ (ê²½ìŸ ì¡°ê±´ ë°©ì?)
             if self.db_manager.is_file_processed(raw_file_path_str):
                 self.stats['skipped_already_processed'] += 1
                 self.logger.info(f"Skipping already processed file: {file_path}")
@@ -147,7 +147,7 @@ class IncrementalPrecedentPreprocessor:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     raw_data = json.load(f)
                 
-                # ?„ì²˜ë¦??˜í–‰ - ?ë? ?°ì´??êµ¬ì¡°??ë§ê²Œ ë³€??
+                # ?„ì²˜ë¦??˜í–‰ - ?ë? ?°ì´??êµ¬ì¡°??ë§ê²Œ ë³€??
                 processed_data = self._process_assembly_precedent_data(raw_data, category)
                 
                 # ì¶œë ¥ ê²½ë¡œ ?¤ì • (?? data/processed/assembly/precedent/civil/20251016/ml_enhanced_...)
@@ -188,14 +188,14 @@ class IncrementalPrecedentPreprocessor:
     
     def _process_assembly_precedent_data(self, raw_data: Dict[str, Any], category: str) -> Dict[str, Any]:
         """
-        êµ?šŒ ?ë? ?°ì´??êµ¬ì¡°??ë§ê²Œ ?„ì²˜ë¦?
+        êµ?šŒ ?ë? ?°ì´??êµ¬ì¡°??ë§ê²Œ ?„ì²˜ë¦?
         
         Args:
-            raw_data: ?ë³¸ ?°ì´??(metadata, items êµ¬ì¡°)
-            category: ?ë? ì¹´í…Œê³ ë¦¬
+            raw_data: ?ë³¸ ?°ì´??(metadata, items êµ¬ì¡°)
+            category: ?ë? ì¹´í…Œê³ ë¦¬
             
         Returns:
-            Dict[str, Any]: ?„ì²˜ë¦¬ëœ ?°ì´??
+            Dict[str, Any]: ?„ì²˜ë¦¬ëœ ?°ì´??
         """
         try:
             # PrecedentPreprocessorë¥??¬ìš©?˜ì—¬ ì²˜ë¦¬
@@ -218,7 +218,7 @@ class IncrementalPrecedentPreprocessor:
         
         Args:
             files: ì²˜ë¦¬???Œì¼ ëª©ë¡
-            category: ?ë? ì¹´í…Œê³ ë¦¬
+            category: ?ë? ì¹´í…Œê³ ë¦¬
         
         Returns:
             ProcessingResult: ì²˜ë¦¬ ê²°ê³¼
@@ -231,7 +231,7 @@ class IncrementalPrecedentPreprocessor:
         total_records = 0
         error_messages = []
         
-        # ì²´í¬?¬ì¸?¸ì—???¬ê°œ?????ˆëŠ”ì§€ ?•ì¸
+        # ì²´í¬?¬ì¸?¸ì—???¬ê°œ?????ˆëŠ”ì§€ ?•ì¸
         checkpoint_data = self._load_checkpoint()
         if checkpoint_data:
             self.logger.info("Resuming from checkpoint...")
@@ -275,7 +275,7 @@ class IncrementalPrecedentPreprocessor:
                         processing_version=self.processing_version
                     )
                 
-                # ì²´í¬?¬ì¸???€??
+                # ì²´í¬?¬ì¸???€??
                 self._save_checkpoint(i + start_index + 1, processed_files, failed_files)
                 
             except Exception as e:
@@ -312,10 +312,10 @@ class IncrementalPrecedentPreprocessor:
         
         Args:
             file_path: ì²˜ë¦¬???Œì¼ ê²½ë¡œ
-            category: ?ë? ì¹´í…Œê³ ë¦¬
+            category: ?ë? ì¹´í…Œê³ ë¦¬
         
         Returns:
-            Dict[str, Any]: ì²˜ë¦¬ ê²°ê³¼ (?±ê³µ ?¬ë?, ?ˆì½”???? ?ëŸ¬ ë©”ì‹œì§€)
+            Dict[str, Any]: ì²˜ë¦¬ ê²°ê³¼ (?±ê³µ ?¬ë?, ?ˆì½”???? ?ëŸ¬ ë©”ì‹œì§€)
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -323,7 +323,7 @@ class IncrementalPrecedentPreprocessor:
             
             processed_data = self._process_assembly_precedent_data(raw_data, category)
             
-            # ì²˜ë¦¬???°ì´?°ë? ?„ì‹œ ?Œì¼ë¡??€?¥í•˜ê±°ë‚˜, ë©”ëª¨ë¦¬ì—???¤ìŒ ?¨ê³„ë¡??„ë‹¬
+            # ì²˜ë¦¬???°ì´?°ë? ?„ì‹œ ?Œì¼ë¡??€?¥í•˜ê±°ë‚˜, ë©”ëª¨ë¦¬ì—???¤ìŒ ?¨ê³„ë¡??„ë‹¬
             record_count = len(processed_data.get('cases', [])) if isinstance(processed_data, dict) else 1
             
             return {'success': True, 'record_count': record_count, 'error': None}
@@ -342,7 +342,7 @@ class IncrementalPrecedentPreprocessor:
                          processed_files: List[Path], 
                          failed_files: List[Path]):
         """
-        ?„ì¬ ì²˜ë¦¬ ?íƒœë¥?ì²´í¬?¬ì¸?¸ë¡œ ?€??
+        ?„ì¬ ì²˜ë¦¬ ?íƒœë¥?ì²´í¬?¬ì¸?¸ë¡œ ?€??
         """
         if self.checkpoint_manager:
             checkpoint_data = {
@@ -356,7 +356,7 @@ class IncrementalPrecedentPreprocessor:
 
     def _load_checkpoint(self) -> Optional[Dict[str, Any]]:
         """
-        ì²´í¬?¬ì¸??ë¡œë“œ
+        ì²´í¬?¬ì¸??ë¡œë“œ
         """
         if self.checkpoint_manager:
             return self.checkpoint_manager.load_checkpoint('incremental_precedent_preprocessing')
@@ -364,20 +364,20 @@ class IncrementalPrecedentPreprocessor:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ì¦ë¶„ ?ë? ?°ì´???„ì²˜ë¦??„ë¡œ?¸ì„œ")
+    parser = argparse.ArgumentParser(description="ì¦ë¶„ ?ë? ?°ì´???„ì²˜ë¦??„ë¡œ?¸ì„œ")
     parser.add_argument('--input-files', nargs='*', type=Path,
                         help='ì²˜ë¦¬???Œì¼ ëª©ë¡')
     parser.add_argument('--category', default='civil',
                         choices=['civil', 'criminal', 'family'],
-                        help='?ë? ì¹´í…Œê³ ë¦¬')
+                        help='?ë? ì¹´í…Œê³ ë¦¬')
     parser.add_argument('--batch-size', type=int, default=100,
                         help='ë°°ì¹˜ ì²˜ë¦¬ ?¬ê¸°')
     parser.add_argument('--checkpoint-dir', default='data/checkpoints',
-                        help='ì²´í¬?¬ì¸???”ë ‰? ë¦¬')
+                        help='ì²´í¬?¬ì¸???”ë ‰? ë¦¬')
     parser.add_argument('--resume', action='store_true',
-                        help='ì²´í¬?¬ì¸?¸ì—???¬ê°œ')
+                        help='ì²´í¬?¬ì¸?¸ì—???¬ê°œ')
     parser.add_argument('--verbose', '-v', action='store_true',
-                        help='?ì„¸ ë¡œê·¸ ì¶œë ¥')
+                        help='?ì„¸ ë¡œê·¸ ì¶œë ¥')
     
     args = parser.parse_args()
     
@@ -389,10 +389,10 @@ def main():
     )
     
     try:
-        # ì²´í¬?¬ì¸??ê´€ë¦¬ì ì´ˆê¸°??
+        # ì²´í¬?¬ì¸??ê´€ë¦¬ì ì´ˆê¸°??
         checkpoint_manager = CheckpointManager(args.checkpoint_dir)
         
-        # ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ì´ˆê¸°??
+        # ì¦ë¶„ ?ë? ?„ì²˜ë¦??„ë¡œ?¸ì„œ ì´ˆê¸°??
         preprocessor = IncrementalPrecedentPreprocessor(
             checkpoint_manager=checkpoint_manager,
             batch_size=args.batch_size
@@ -415,7 +415,7 @@ def main():
             
             return result.success
         else:
-            # ?ë™?¼ë¡œ ???Œì¼ ê°ì??˜ì—¬ ì²˜ë¦¬
+            # ?ë™?¼ë¡œ ???Œì¼ ê°ì??˜ì—¬ ì²˜ë¦¬
             stats = preprocessor.process_new_data_only(args.category)
             
             # ê²°ê³¼ ì¶œë ¥

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from source.data.database import DatabaseManager
+from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2 as DatabaseManager
 from source.utils.config import Config
 
 # Windows ì½˜ì†”?ì„œ UTF-8 ?¸ì½”???¤ì •
