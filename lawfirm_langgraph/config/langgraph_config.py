@@ -5,6 +5,10 @@ LangGraph 설정 관리 모듈
 """
 
 import logging
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
 import os
 from dataclasses import dataclass
 from enum import Enum
@@ -30,9 +34,7 @@ try:
         # 프로젝트 루트 .env 파일 명시적으로 로드
         ensure_env_loaded(_project_root)
         loaded_files = load_all_env_files(_project_root)
-        # logger는 아직 정의되지 않았으므로 print 사용
-        if loaded_files:
-            print(f"✅ LangGraph Config: 환경 변수 로드 완료 ({len(loaded_files)}개 .env 파일)")
+        # 환경 변수 로드 완료 메시지는 출력하지 않음 (run_query_test.py에서 불필요한 메시지 방지)
     except ImportError:
         # 공통 로더가 없으면 직접 로드 (프로젝트 루트 .env 우선)
         root_env = _project_root / ".env"
@@ -66,7 +68,7 @@ except Exception as e:
         except Exception:
             pass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CheckpointStorageType(Enum):

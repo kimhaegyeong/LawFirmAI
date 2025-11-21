@@ -51,7 +51,7 @@ class LegalTermBatchExpander:
     """법률 ?�어 배치 ?�장�?""
     
     def __init__(self, 
-                 model_name: str = "gemini-2.0-flash-exp",
+                 model_name: str = "gemini-2.5-flash-lite",
                  temperature: float = 0.7,
                  max_tokens: int = 1000,
                  batch_size: int = 10,
