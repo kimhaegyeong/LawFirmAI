@@ -2,8 +2,8 @@
  * 컴팩트 참고자료 배지 컴포넌트
  * 하이브리드 방식: 인라인 미리보기 + 확장 섹션 + 사이드바
  */
-import { FileText, ChevronDown, ChevronUp, Scale, Bookmark } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import { FileText, Scale, Bookmark } from 'lucide-react';
+import { useMemo } from 'react';
 
 import type { SourceInfo } from '../../types/chat';
 import { getSourcesDetailFromSourcesByType, extractLegalReferencesFromSourcesDetail, type SourcesByType } from '../../utils/sourcesParser';
@@ -29,7 +29,6 @@ export function CompactReferencesBadge({
   onOpenSidebar,
   onReferenceClick,
 }: CompactReferencesBadgeProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
 
   // sources_by_type을 직접 사용하여 참고자료 표시 (sources 이벤트 데이터와 일치)
   const effectiveSourcesDetail = useMemo(() => {
@@ -268,7 +267,6 @@ export function CompactReferencesBadge({
 
   // 첫 3개만 미리보기
   const previewReferences = parsedReferences.slice(0, 3);
-  const remainingCount = totalCount - previewReferences.length;
 
   const handleReferenceClick = (ref: typeof parsedReferences[0]) => {
     if (onReferenceClick) {
@@ -285,34 +283,9 @@ export function CompactReferencesBadge({
 
   return (
     <>
-      <div className="mt-4 pt-4 border-t border-slate-200">
-        {/* 헤더 */}
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-slate-500" />
-            <span className="text-sm font-medium text-slate-700">참고자료</span>
-            <span className="text-xs text-slate-500">({totalCount}개)</span>
-          </div>
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1"
-          >
-            {isExpanded ? (
-              <>
-                <ChevronUp className="w-3 h-3" />
-                <span>접기</span>
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3 h-3" />
-                <span>펼치기</span>
-              </>
-            )}
-          </button>
-        </div>
-
+      <div>
         {/* 타입별 배지 (항상 표시, 클릭 가능) */}
-        <div className="flex flex-wrap gap-2 mb-2">
+        <div className="flex flex-wrap gap-2 mb-3">
           {counts.law > 0 && (
             <button
               onClick={() => onOpenSidebar?.('law')}
@@ -357,7 +330,7 @@ export function CompactReferencesBadge({
 
         {/* 인라인 미리보기 (첫 3개) - 개선된 형식 */}
         {previewReferences.length > 0 && (
-          <div className="space-y-1.5 mb-2">
+          <div className="space-y-2 mb-3">
             {previewReferences.map((ref) => (
               <div
                 key={ref.id}
@@ -387,8 +360,8 @@ export function CompactReferencesBadge({
         )}
 
         {/* 확장 섹션 - 개선된 형식 */}
-        {isExpanded && parsedReferences.length > 3 && (
-          <div className="space-y-1.5 mb-2 max-h-60 overflow-y-auto">
+        {parsedReferences.length > 3 && (
+          <div className="space-y-2 mb-3 max-h-60 overflow-y-auto">
             {parsedReferences.slice(3).map((ref) => (
               <div
                 key={ref.id}
@@ -418,18 +391,10 @@ export function CompactReferencesBadge({
         )}
 
         {/* 전체 보기 버튼 */}
-        {remainingCount > 0 && !isExpanded && (
+        {totalCount > 0 && (
           <button
             onClick={() => onOpenSidebar?.('all')}
-            className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium"
-          >
-            +{remainingCount}개 더 보기 →
-          </button>
-        )}
-        {isExpanded && (
-          <button
-            onClick={() => onOpenSidebar?.('all')}
-            className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium"
+            className="text-xs text-blue-600 hover:text-blue-700 mt-1 mb-3 font-medium"
           >
             전체 상세 보기 →
           </button>

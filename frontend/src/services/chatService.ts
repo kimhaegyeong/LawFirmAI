@@ -108,17 +108,30 @@ export async function* sendStreamingChatMessage(
       // 하지만 fetch 단계에서 발생하면 response 객체가 없으므로 처리 불가
       if (fetchError instanceof TypeError) {
         const errorMessage = fetchError.message || '';
+        const errorName = (fetchError as any).name || '';
+        
+        // ERR_INCOMPLETE_CHUNKED_ENCODING 오류는 스트림이 완전히 종료되지 않았다고 브라우저가 판단할 때 발생
+        // 서버에서 done 이벤트를 보내지 않았거나 연결이 중간에 끊겼을 때 발생할 수 있음
+        // 이 경우 경고만 로깅하고 실제 오류로 처리하지 않음 (데이터는 이미 처리되었을 수 있음)
         if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
             errorMessage.includes('incomplete') ||
-            errorMessage.includes('chunked')) {
+            errorMessage.includes('chunked') ||
+            errorName.includes('ERR_INCOMPLETE')) {
+          logger.warn('[Stream] ERR_INCOMPLETE_CHUNKED_ENCODING detected, but data may have been processed correctly');
+          // 이 오류는 브라우저 콘솔에만 경고로 표시되고 실제 동작에는 문제가 없을 수 있음
+          // 하지만 서버에서 done 이벤트를 보내도록 수정했으므로 이 오류가 발생하지 않아야 함
           // 불완전한 스트림 오류는 경고로 처리
           // 실제로는 데이터가 정상적으로 처리되었을 수 있음
-          // 브라우저 콘솔에만 경고가 표시되고 실제 동작에는 문제가 없을 수 있음
           if (import.meta.env.DEV) {
-            logger.debug('[SSE] Fetch error (incomplete chunked encoding, but data may be processed):', fetchError);
+            logger.debug('[SSE] Fetch error (incomplete chunked encoding, but data may be processed):', {
+              error: fetchError,
+              message: errorMessage,
+              name: errorName
+            });
           }
           // 조용히 처리하고 사용자에게는 성공으로 표시
-          return; // 빈 제너레이터 반환 (이미 처리된 데이터가 있을 수 있음)
+          // 빈 제너레이터 반환 (이미 처리된 데이터가 있을 수 있음)
+          return;
         }
       }
       throw fetchError;
@@ -382,13 +395,18 @@ export async function* sendStreamingChatMessage(
                 }
                 jsonBuffer = '';
                 inDataLine = false;
-                // 리더 정상적으로 닫기
+                // 리더 정상적으로 닫기 (ERR_INCOMPLETE_CHUNKED_ENCODING 오류 방지)
                 if (!readerClosed && reader) {
                   try {
                     readerClosed = true;
+                    // done 이벤트를 받았으므로 스트림을 정상적으로 종료
+                    // releaseLock()만 호출하여 리더를 해제 (cancel()은 호출하지 않음)
                     reader.releaseLock();
                   } catch (e) {
                     // 이미 닫혔거나 닫을 수 없는 경우 무시
+                    if (import.meta.env.DEV) {
+                      logger.debug('[SSE] Error closing reader after done event:', e);
+                    }
                   }
                 }
                 // 정상 종료를 위해 플래그 설정
@@ -421,13 +439,20 @@ export async function* sendStreamingChatMessage(
                   }
                   jsonBuffer = '';
                   inDataLine = false;
-                  // 리더 정상적으로 닫기
+                  // 리더 정상적으로 닫기 (ERR_INCOMPLETE_CHUNKED_ENCODING 오류 방지)
                   if (!readerClosed && reader) {
                     try {
                       readerClosed = true;
+                      // done 이벤트를 받았으므로 스트림을 정상적으로 종료
+                      await reader.cancel().catch(() => {
+                        // cancel 실패는 무시 (이미 종료되었을 수 있음)
+                      });
                       reader.releaseLock();
                     } catch (e) {
                       // 이미 닫혔거나 닫을 수 없는 경우 무시
+                      if (import.meta.env.DEV) {
+                        logger.debug('[SSE] Error closing reader after done event:', e);
+                      }
                     }
                   }
                   // 정상 종료를 위해 플래그 설정
@@ -469,13 +494,20 @@ export async function* sendStreamingChatMessage(
                 }
                 jsonBuffer = '';
                 inDataLine = false;
-                // 리더 정상적으로 닫기
+                // 리더 정상적으로 닫기 (ERR_INCOMPLETE_CHUNKED_ENCODING 오류 방지)
                 if (!readerClosed && reader) {
                   try {
                     readerClosed = true;
+                    // done 이벤트를 받았으므로 스트림을 정상적으로 종료
+                    await reader.cancel().catch(() => {
+                      // cancel 실패는 무시 (이미 종료되었을 수 있음)
+                    });
                     reader.releaseLock();
                   } catch (e) {
                     // 이미 닫혔거나 닫을 수 없는 경우 무시
+                    if (import.meta.env.DEV) {
+                      logger.debug('[SSE] Error closing reader after done event:', e);
+                    }
                   }
                 }
                 // 정상 종료를 위해 플래그 설정

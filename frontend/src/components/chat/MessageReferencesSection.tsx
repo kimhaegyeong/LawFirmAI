@@ -196,19 +196,21 @@ export function MessageReferencesSection({
         </button>
       </div>
 
-      {isExpanded && (
-        <div className="animate-fadeIn">
-          <CompactReferencesBadge
-            references={references}
-            legalReferences={allLegalRefs}  // 병합된 legalReferences 사용
-            sources={sources}
-            sourcesDetail={effectiveSourcesDetail}
-            sourcesByType={propSourcesByType}
-            onOpenSidebar={onOpenSidebar}
-            onReferenceClick={onReferenceClick}
-          />
-        </div>
-      )}
+      <div className={`overflow-hidden transition-all duration-300 ${isExpanded ? 'max-h-[5000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+        {isExpanded && (
+          <div className="animate-fadeIn">
+            <CompactReferencesBadge
+              references={references}
+              legalReferences={allLegalRefs}  // 병합된 legalReferences 사용
+              sources={sources}
+              sourcesDetail={effectiveSourcesDetail}
+              sourcesByType={propSourcesByType}
+              onOpenSidebar={onOpenSidebar}
+              onReferenceClick={onReferenceClick}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

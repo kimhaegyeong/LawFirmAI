@@ -11,6 +11,7 @@ import logger from '../utils/logger';
 import type { AxiosError } from 'axios';
 import type { ChatMessage, FileAttachment } from '../types/chat';
 import type { StreamError } from '../types/error';
+import { ErrorType } from '../types/error';
 
 interface MessageSearchResult {
   messageIndex: number;
@@ -856,6 +857,98 @@ export function useStreamingMessage(options: UseStreamingMessageOptions) {
                   return prev;
                 });
               }
+            } else if (parsed.type === 'error') {
+              // Error 이벤트 처리 (CancelledError 등)
+              isFinalReceived = true; // 에러 발생 시 스트리밍 종료
+              
+              if (streamingMessageId === assistantMessageId) {
+                setStreamingId(null);
+                if (import.meta.env.DEV) {
+                  logger.debug('[Stream] Error event: stopping typing effect');
+                }
+              }
+              
+              // 에러 메시지로 답변 업데이트
+              const errorContent = parsed.content || '작업이 취소되었습니다. 다시 시도해주세요.';
+              const isCancelled = parsed.metadata?.cancelled || false;
+              
+              // 에러 상태로 메시지 업데이트
+              updateMessages((prev) => {
+                const messageIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+                
+                if (messageIndex !== -1) {
+                  const updated = [...prev];
+                  const existingMsg = updated[messageIndex];
+                  if (existingMsg) {
+                    // 에러 메시지로 교체하되, 원래 질문은 보존
+                    updated[messageIndex] = {
+                      ...existingMsg,
+                      content: errorContent,
+                      metadata: {
+                        ...existingMsg.metadata,
+                        error: true,
+                        cancelled: isCancelled,
+                        error_type: parsed.metadata?.error_type || 'unknown',
+                        // 원래 질문 정보 보존 (재시도 시 사용)
+                        original_question: existingMsg.metadata?.original_question || 
+                                          (messageIndex > 0 ? prev[messageIndex - 1]?.content : undefined),
+                      },
+                    };
+                  }
+                  return updated;
+                } else {
+                  // 메시지가 없으면 에러 메시지로 생성
+                  return [...prev, {
+                    ...assistantMessage,
+                    content: errorContent,
+                    metadata: {
+                      error: true,
+                      cancelled: isCancelled,
+                      error_type: parsed.metadata?.error_type || 'unknown',
+                    },
+                  }];
+                }
+              });
+              
+              // StreamError 추가 (재시도 버튼 표시용)
+              const streamError: StreamError = {
+                type: isCancelled ? ErrorType.ABORTED : ErrorType.SERVER,
+                message: errorContent,
+                canRetry: true, // 재시도 가능
+              };
+              addError(assistantMessageId, streamError);
+              
+              // 토스트 알림 표시
+              showToast({
+                message: errorContent,
+                type: 'error',
+                action: {
+                  label: '다시 시도',
+                  onClick: () => {
+                    // 재시도 로직은 onRetryMessage 핸들러에서 처리
+                    if (import.meta.env.DEV) {
+                      logger.debug('[Stream] Retry requested after error');
+                    }
+                  }
+                },
+              });
+              
+              // 스트림 정리
+              tokenBufferRef.current.delete(assistantMessageId);
+              if (tokenBufferTimeoutRef.current.has(assistantMessageId)) {
+                clearTimeout(tokenBufferTimeoutRef.current.get(assistantMessageId)!);
+                tokenBufferTimeoutRef.current.delete(assistantMessageId);
+              }
+              
+              if (import.meta.env.DEV) {
+                logger.warn('[Stream] Error event received:', {
+                  content: errorContent,
+                  metadata: parsed.metadata,
+                  isCancelled,
+                });
+              }
+              
+              return; // 에러 발생 시 더 이상 처리하지 않음
             } else if (parsed.type === 'final') {
               isFinalReceived = true;
 

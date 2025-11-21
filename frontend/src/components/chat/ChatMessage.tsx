@@ -468,11 +468,11 @@ export function ChatMessage({
           </div>
         )}
         <div
-          className={`max-w-[80%] rounded-xl p-5 shadow-sm border ${
+          className={`w-full max-w-[80%] rounded-xl p-5 shadow-sm border ${
             isUser
               ? 'bg-blue-50 border-blue-200'
               : 'bg-white border-slate-200'
-          }`}
+          } ${!isUser ? 'min-h-[100px]' : ''}`}
         >
         {safeMessage.attachments && safeMessage.attachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
@@ -609,7 +609,7 @@ export function ChatMessage({
           {!isUser && (
             <div className="w-8 h-8 flex-shrink-0" />
           )}
-          <div className="max-w-[80%] rounded-xl p-5 shadow-sm border bg-white border-slate-200">
+          <div className="w-full max-w-[80%] flex-shrink-0 rounded-xl p-5 shadow-sm border bg-white border-slate-200 min-h-[80px]">
             {hasReferences && (
               <MessageReferencesSection
                 references={sourcesArray}

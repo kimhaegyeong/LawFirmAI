@@ -471,10 +471,26 @@ function App() {
               const message = messages.find(m => m.id === messageId);
               if (message && message.role === 'assistant') {
                 const messageIndex = messages.findIndex(m => m.id === messageId);
+                
+                // 에러 메시지 제거
+                updateMessages((prev) => prev.filter(m => m.id !== messageId));
+                
+                // 에러 상태 제거
+                removeError(messageId);
+                
                 if (messageIndex > 0) {
                   const userMessage = messages[messageIndex - 1];
                   if (userMessage && userMessage.role === 'user') {
-                    handleStreamingMessage(userMessage.content, currentSession.session_id, userMessage.attachments, undefined, undefined, undefined, true);
+                    // 원래 질문으로 재실행
+                    handleStreamingMessage(
+                      userMessage.content, 
+                      currentSession.session_id, 
+                      userMessage.attachments, 
+                      undefined, 
+                      undefined, 
+                      undefined, 
+                      true // skipUserMessage: true
+                    );
                   }
                 }
               }
