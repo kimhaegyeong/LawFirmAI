@@ -4,7 +4,6 @@ LLM Initializer
 LLM 초기화 로직을 처리하는 초기화기
 """
 
-import logging
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
 except ImportError:
@@ -42,8 +41,8 @@ class LLMInitializer:
         Args:
             timeout: 타임아웃 시간 (초). None이면 WorkflowConstants.TIMEOUT_RAG_QA 사용
         """
-        # 최종 답변용 모델 설정 (환경 변수 우선, 없으면 gemini-2.5-flash 기본값)
-        answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash")
+        # 최종 답변용 모델 설정 (환경 변수 우선, 없으면 gemini-2.5-flash-lite 기본값)
+        answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash-lite")
         
         if timeout is None:
             timeout = WorkflowConstants.TIMEOUT_RAG_QA
@@ -60,7 +59,7 @@ class LLMInitializer:
     
     def initialize_gemini_long_text(self) -> ChatGoogleGenerativeAI:
         """Google Gemini LLM 초기화 (긴 글/코드 생성용 - 30~60초 timeout)"""
-        answer_model = os.getenv("ANSWER_LLM_MODEL", "gemini-2.5-flash")
+        answer_model = os.getenv("LONG_TEXT_ANSWER_LLM_MODEL", "gemini-2.5-flash")
         
         gemini_llm = ChatGoogleGenerativeAI(
             model=answer_model,
@@ -84,10 +83,12 @@ class LLMInitializer:
         return MockLLM()
 
     def initialize_llm_fast(self) -> Any:
-        """빠른 LLM 초기화 (간단한 질문용 - Gemini Flash 또는 작은 모델)"""
+        """빠른 LLM 초기화 (간단한 질문용 - Gemini 2.5 Flash Lite)"""
         if self.config.llm_provider == "google":
             try:
-                flash_model = "gemini-1.5-flash"
+                # gemini-2.5-flash-lite를 기본값으로 사용
+                flash_model = "gemini-2.5-flash-lite"
+                # 환경 변수나 config에서 모델명이 지정되어 있으면 사용
                 if self.config.google_model and "flash" in self.config.google_model.lower():
                     flash_model = self.config.google_model
 
@@ -114,7 +115,7 @@ class LLMInitializer:
         if validator_provider == "google":
             try:
                 if not validator_model:
-                    validator_model = "gemini-1.5-flash"
+                    validator_model = "gemini-2.5-flash-lite"
                     if self.config.google_model and "flash" in self.config.google_model.lower():
                         validator_model = self.config.google_model
 
