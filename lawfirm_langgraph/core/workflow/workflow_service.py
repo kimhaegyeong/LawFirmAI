@@ -15,6 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Global logger 사용
+try:
+    from lawfirm_langgraph.core.utils.logger import get_logger
+except ImportError:
+    from core.utils.logger import get_logger
+from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
+
 # 프로젝트 루트를 sys.path에 추가 (lawfirm_langgraph 구조에 맞게 수정)
 # lawfirm_langgraph/langgraph_core/services/ 에서 프로젝트 루트까지의 경로
 project_root = Path(__file__).parent.parent.parent.parent
@@ -76,7 +83,7 @@ except ImportError:
     except ImportError:
         from core.utils.langgraph_config import LangGraphConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 안전한 로깅 유틸리티 import (멀티스레딩 안전)
 # 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
@@ -155,21 +162,10 @@ except NameError:
 
 # CheckpointManager import
 try:
-    from core.agents.checkpoint_manager import CheckpointManager
+    from core.workflow.checkpoint_manager import CheckpointManager
 except ImportError:
     CheckpointManager = None
     safe_log_warning(logger, "CheckpointManager not available")
-
-# state_definitions import (상대 import 사용 - 같은 패키지 내부)
-try:
-    from ..state.state_definitions import create_initial_legal_state
-except ImportError:
-    # Fallback: 프로젝트 루트 기준 import
-    try:
-        from lawfirm_langgraph.core.workflow.state.state_definitions import create_initial_legal_state
-    except ImportError:
-        # Fallback: 프로젝트 루트 기준 import
-        from core.workflow.state.state_definitions import create_initial_legal_state
 
 
 class LangGraphWorkflowService:
@@ -200,7 +196,7 @@ class LangGraphWorkflowService:
             config: LangGraph 설정 객체
         """
         self.config = config or LangGraphConfig.from_env()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # 성능 임계값 설정 (config에서 가져오기)
         self.slow_node_threshold = self.config.slow_node_threshold
@@ -212,6 +208,10 @@ class LangGraphWorkflowService:
 
         # 검색 결과 보존을 위한 캐시 (LangGraph reducer 문제 우회)
         self._search_results_cache: Optional[Dict[str, Any]] = None
+
+        # 메모리 관리: 요청 카운터 및 정리 주기
+        self._request_count = 0
+        self._memory_cleanup_interval = int(os.getenv("MEMORY_CLEANUP_INTERVAL", "10"))  # 기본 10회마다 정리
 
         # ConversationFlowTracker 초기화 (추천 질문 생성용)
         self.conversation_flow_tracker = None
@@ -273,9 +273,6 @@ class LangGraphWorkflowService:
                 checkpointer = None
                 if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                     checkpointer = self.checkpoint_manager.get_checkpointer()
-                    safe_log_info(self.logger, f"Using checkpoint: {self.config.checkpoint_storage.value}")
-                else:
-                    safe_log_info(self.logger, "Compiling workflow without checkpoint")
                 
                 # 워크플로우 컴파일
                 self.app = self.legal_workflow.graph.compile(
@@ -339,24 +336,10 @@ class LangGraphWorkflowService:
                 interrupt_after=None,
                 debug=False,
             )
-            checkpoint_info = f" with checkpoint({self.config.checkpoint_storage.value})" if checkpointer else " without checkpoint"
-            safe_log_info(self.logger, f"워크플로우가 LangSmith 추적으로 컴파일되었습니다{checkpoint_info} (State Reduction 적용됨)")
-
+            
         if self.app is None:
             safe_log_error(self.logger, "Failed to compile workflow")
             raise RuntimeError("워크플로우 컴파일에 실패했습니다")
-
-        # A/B 테스트 관리자 초기화
-        self.ab_test_manager = None
-        enable_ab_testing = os.environ.get("ENABLE_AB_TESTING", "false").lower() == "true"
-        if enable_ab_testing:
-            try:
-                from lawfirm_langgraph.core.services.ab_test_manager import ABTestManager
-                self.ab_test_manager = ABTestManager()
-                safe_log_info(self.logger, "ABTestManager initialized")
-            except Exception as e:
-                safe_log_warning(self.logger, f"Failed to initialize ABTestManager: {e}")
-                self.ab_test_manager = None
 
         # 스트리밍 콜백 핸들러 초기화 (스트리밍 모드 활성화 시)
         self.streaming_callback_handler = None
@@ -442,6 +425,30 @@ class LangGraphWorkflowService:
         try:
             start_time = time.time()
 
+            # 메모리 관리: 주기적 정리
+            self._request_count += 1
+            if self._request_count % self._memory_cleanup_interval == 0:
+                try:
+                    # 가비지 컬렉션 실행
+                    collected = gc.collect()
+                    if collected > 0:
+                        self.logger.debug(f"[MEMORY] Periodic cleanup: {collected} objects collected (request #{self._request_count})")
+                    
+                    # 메모리 사용량이 높으면 추가 정리
+                    try:
+                        import psutil
+                        process = psutil.Process()
+                        memory_mb = process.memory_info().rss / 1024 / 1024
+                        if memory_mb > 1024:  # 1GB 이상
+                            self.logger.warning(f"[MEMORY] High memory usage detected: {memory_mb:.1f}MB - performing aggressive cleanup")
+                            # 추가 가비지 컬렉션
+                            for _ in range(2):
+                                gc.collect()
+                    except ImportError:
+                        pass  # psutil이 없으면 무시
+                except Exception as e:
+                    self.logger.debug(f"[MEMORY] Error during periodic cleanup: {e}")
+
             # 세션 ID 생성
             if not session_id:
                 session_id = str(uuid.uuid4())
@@ -449,6 +456,10 @@ class LangGraphWorkflowService:
             # A/B 테스트 변형 할당
             cache_variant = None
             parallel_variant = None
+            
+            # ab_test_manager가 없으면 None으로 초기화 (선택적 기능)
+            if not hasattr(self, 'ab_test_manager'):
+                self.ab_test_manager = None
             
             if self.ab_test_manager:
                 cache_variant = self.ab_test_manager.assign_variant(session_id, "cache_enabled")
@@ -500,7 +511,7 @@ class LangGraphWorkflowService:
                 tracked_processing_steps = []
 
                 self.logger.info("🔄 워크플로우 실행 시작...")
-                print("🔄 워크플로우 실행 시작...", flush=True)
+                self.logger.debug("🔄 워크플로우 실행 시작...")
 
                 # 초기 state 최종 검증
                 if not self._validate_initial_state_before_execution(initial_state, query):
@@ -557,13 +568,13 @@ class LangGraphWorkflowService:
                                     
                                     progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name}"
                                     self.logger.info(progress_msg)
-                                    print(progress_msg, flush=True)
+                                    self.logger.debug(progress_msg)
                                     
                                     node_display_name = self._get_node_display_name(node_name)
                                     if node_display_name != node_name:
                                         detail_msg = f"      → {node_display_name}"
                                         self.logger.info(detail_msg)
-                                        print(detail_msg, flush=True)
+                                        self.logger.debug(detail_msg)
                             
                             elif event_type == "on_chain_end":
                                 node_name = event_name
@@ -652,7 +663,7 @@ class LangGraphWorkflowService:
                                         progress_msg = f"  [{node_count}] 🔄 실행 중: {node_name} (실행 시간: {node_duration:.2f}초)"
 
                                     self.logger.info(progress_msg)
-                                    print(progress_msg, flush=True)
+                                    self.logger.debug(progress_msg)
                                     
                                     # 병목 지점 감지: 느린 노드에 대한 경고
                                     threshold = self._get_node_threshold(node_name)
@@ -667,7 +678,7 @@ class LangGraphWorkflowService:
                                     if node_display_name != node_name:
                                         detail_msg = f"      → {node_display_name}"
                                         self.logger.info(detail_msg)
-                                        print(detail_msg, flush=True)
+                                        self.logger.debug(detail_msg)
 
                                 # 디버깅: node_state의 query 확인
                                 # stream_mode="updates" 사용 시 변경된 필드만 포함되므로 직접 확인 가능
@@ -768,7 +779,7 @@ class LangGraphWorkflowService:
                                     keyword_results_for_cache = node_state["keyword_results"] if isinstance(node_state["keyword_results"], list) else []
                                 
                                 # 캐시에 저장 (이후 노드에서 사용)
-                                print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache={len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0}, keyword_results_for_cache={len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0}")
+                                self.logger.debug(f"[CACHE] execute_searches_parallel: semantic_results_for_cache={len(semantic_results_for_cache) if isinstance(semantic_results_for_cache, list) else 0}, keyword_results_for_cache={len(keyword_results_for_cache) if isinstance(keyword_results_for_cache, list) else 0}")
                                 if semantic_results_for_cache or keyword_results_for_cache:
                                     if not self._search_results_cache:
                                         self._search_results_cache = {}
@@ -776,9 +787,9 @@ class LangGraphWorkflowService:
                                         self._search_results_cache["semantic_results"] = semantic_results_for_cache
                                         # interpretation_paragraph 확인
                                         interpretation_in_cache = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                        print(f"[CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: 총 {len(semantic_results_for_cache)}개, interpretation_paragraph {len(interpretation_in_cache)}개")
+                                        self.logger.debug(f"[CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: 총 {len(semantic_results_for_cache)}개, interpretation_paragraph {len(interpretation_in_cache)}개")
                                         if interpretation_in_cache:
-                                            self.logger.info(f"🔍 [CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: interpretation_paragraph {len(interpretation_in_cache)}개 포함")
+                                            self.logger.debug(f"🔍 [CACHE] execute_searches_parallel에서 semantic_results 캐시 저장: interpretation_paragraph {len(interpretation_in_cache)}개 포함")
                                     if keyword_results_for_cache:
                                         self._search_results_cache["keyword_results"] = keyword_results_for_cache
                                     if search_group_for_cache:
@@ -786,10 +797,10 @@ class LangGraphWorkflowService:
                                             self._search_results_cache["search"] = {}
                                         self._search_results_cache["search"].update(search_group_for_cache)
                                 else:
-                                    print(f"[CACHE] execute_searches_parallel: semantic_results_for_cache와 keyword_results_for_cache가 모두 비어있음")
-                                    print(f"   node_state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
+                                    self.logger.debug("[CACHE] execute_searches_parallel: semantic_results_for_cache와 keyword_results_for_cache가 모두 비어있음")
+                                    self.logger.debug(f"   node_state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'N/A'}")
                                     if isinstance(node_state, dict) and "search" in node_state:
-                                        print(f"   search 그룹 keys: {list(node_state['search'].keys()) if isinstance(node_state['search'], dict) else 'N/A'}")
+                                        self.logger.debug(f"   search 그룹 keys: {list(node_state['search'].keys()) if isinstance(node_state['search'], dict) else 'N/A'}")
 
                                 # semantic_results와 keyword_results를 retrieved_docs로 변환
                                 # 캐시에서 가져오기 (stream_mode="updates"로 인해 node_state에 없을 수 있음)
@@ -806,13 +817,11 @@ class LangGraphWorkflowService:
                                             if _global_search_results_cache:
                                                 semantic_results_for_cache = _global_search_results_cache.get("semantic_results", [])
                                                 if semantic_results_for_cache:
-                                                    print(f"[RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
-                                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
+                                                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 semantic_results 가져옴: {len(semantic_results_for_cache)}개")
                                                     # interpretation_paragraph 확인
                                                     interpretation_in_global = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                                     if interpretation_in_global:
-                                                        print(f"[RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
-                                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
+                                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시에서 interpretation_paragraph {len(interpretation_in_global)}개 발견")
                                         except (ImportError, AttributeError):
                                             pass
                                 
@@ -822,10 +831,10 @@ class LangGraphWorkflowService:
                                     # interpretation_paragraph 확인
                                     interpretation_in_semantic = [d for d in semantic_results_for_cache if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                     if interpretation_in_semantic:
-                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results_for_cache에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] semantic_results_for_cache에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                                         for idx, doc in enumerate(interpretation_in_semantic, 1):
                                             is_sample = doc.get("metadata", {}).get("is_sample", False) or doc.get("search_type") == "type_sample"
-                                            self.logger.info(f"   interpretation #{idx}: id={doc.get('id')}, is_sample={is_sample}, source_type={doc.get('source_type')}")
+                                            self.logger.debug(f"   interpretation #{idx}: id={doc.get('id')}, is_sample={is_sample}, source_type={doc.get('source_type')}")
                                 if isinstance(keyword_results_for_cache, list):
                                     combined_docs.extend(keyword_results_for_cache)
 
@@ -834,9 +843,9 @@ class LangGraphWorkflowService:
                                 unique_docs = []
                                 sample_docs = []  # 샘플링된 문서는 별도로 보관
                                 
-                                print(f"[RETRIEVED_DOCS] combined_docs 총 개수: {len(combined_docs)}")
+                                self.logger.debug(f"[RETRIEVED_DOCS] combined_docs 총 개수: {len(combined_docs)}")
                                 interpretation_in_combined = [d for d in combined_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                print(f"[RETRIEVED_DOCS] combined_docs에 interpretation_paragraph: {len(interpretation_in_combined)}개")
+                                self.logger.debug(f"[RETRIEVED_DOCS] combined_docs에 interpretation_paragraph: {len(interpretation_in_combined)}개")
                                 
                                 for doc in combined_docs:
                                     # 샘플링된 문서는 항상 포함
@@ -844,8 +853,7 @@ class LangGraphWorkflowService:
                                     doc_type = doc.get("type") or doc.get("source_type")
                                     if is_sample:
                                         sample_docs.append(doc)
-                                        print(f"[RETRIEVED_DOCS] 샘플링된 문서 포함: id={doc.get('id')}, type={doc_type}")
-                                        self.logger.info(f"🔍 [RETRIEVED_DOCS] 샘플링된 문서 포함: {doc.get('id')}, type={doc_type}")
+                                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] 샘플링된 문서 포함: {doc.get('id')}, type={doc_type}")
                                         continue
                                     
                                     doc_id = doc.get("id") or doc.get("content_id") or str(doc.get("content", ""))[:100]
@@ -857,19 +865,17 @@ class LangGraphWorkflowService:
                                 unique_docs.extend(sample_docs)
                                 if sample_docs:
                                     interpretation_samples = [d for d in sample_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
-                                    print(f"[RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
-                                    self.logger.info(f"✅ [RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
+                                    self.logger.debug(f"✅ [RETRIEVED_DOCS] 샘플링된 문서 {len(sample_docs)}개 포함됨 (interpretation_paragraph: {len(interpretation_samples)}개)")
                                     if interpretation_samples:
                                         for idx, doc in enumerate(interpretation_samples, 1):
-                                            self.logger.info(f"   interpretation 샘플 #{idx}: id={doc.get('id')}, source_type={doc.get('source_type')}")
+                                            self.logger.debug(f"   interpretation 샘플 #{idx}: id={doc.get('id')}, source_type={doc.get('source_type')}")
 
                                 # retrieved_docs를 캐시에 저장
                                 if unique_docs:
                                     # interpretation_paragraph 확인
                                     interpretation_in_retrieved = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                     if interpretation_in_retrieved:
-                                        print(f"[RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
-                                        self.logger.info(f"✅ [RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
+                                        self.logger.debug(f"✅ [RETRIEVED_DOCS] unique_docs에 interpretation_paragraph {len(interpretation_in_retrieved)}개 포함됨")
                                     
                                     if not self._search_results_cache:
                                         self._search_results_cache = {}
@@ -891,8 +897,7 @@ class LangGraphWorkflowService:
                                         # interpretation_paragraph 확인
                                         interpretation_in_unique = [d for d in unique_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                         if interpretation_in_unique:
-                                            print(f"[RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
-                                            self.logger.info(f"✅ [RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
+                                            self.logger.debug(f"✅ [RETRIEVED_DOCS] 전역 캐시에 retrieved_docs 저장: interpretation_paragraph {len(interpretation_in_unique)}개 포함")
                                     except (ImportError, AttributeError):
                                         pass
                                     
@@ -993,8 +998,7 @@ class LangGraphWorkflowService:
                             if final_retrieved_docs:
                                 interpretation_in_final = [d for d in final_retrieved_docs if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                 if interpretation_in_final:
-                                    print(f"[RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
-                                    self.logger.info(f"🔍 [RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
+                                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] merge_and_rerank의 final_retrieved_docs에 interpretation_paragraph {len(interpretation_in_final)}개 발견")
                             
                             # 전역 캐시에서 확인 (final_retrieved_docs에 interpretation_paragraph가 없는 경우)
                             if not final_retrieved_docs or not any((d.get("type") or d.get("source_type")) == "interpretation_paragraph" for d in final_retrieved_docs):
@@ -1005,8 +1009,7 @@ class LangGraphWorkflowService:
                                         if cached_retrieved:
                                             interpretation_in_cached = [d for d in cached_retrieved if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                             if interpretation_in_cached:
-                                                print(f"[RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
-                                                self.logger.info(f"🔍 [RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                self.logger.debug(f"🔍 [RETRIEVED_DOCS] 전역 캐시의 retrieved_docs로 교체: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
                                                 final_retrieved_docs = cached_retrieved
                                 except (ImportError, AttributeError):
                                     pass
@@ -1061,7 +1064,7 @@ class LangGraphWorkflowService:
                                             # interpretation_paragraph 확인
                                             interpretation_in_cached = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                                             if interpretation_in_cached:
-                                                self.logger.info(f"🔍 [CACHE] {node_name}에서 캐시된 semantic_results 복원: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
+                                                self.logger.debug(f"🔍 [CACHE] {node_name}에서 캐시된 semantic_results 복원: interpretation_paragraph {len(interpretation_in_cached)}개 포함")
                                         if cached_keyword:
                                             node_state["search"]["keyword_results"] = cached_keyword
                                         self.logger.debug(f"astream: Restored search results from cache for {node_name}")
@@ -1164,20 +1167,20 @@ class LangGraphWorkflowService:
                 
                 if total_nodes > 0:
                     self.logger.info(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
-                    print(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)", flush=True)
+                    self.logger.debug(f"✅ 워크플로우 실행 완료 (총 {total_nodes}개 노드 실행, 총 실행 시간: {total_execution_time:.2f}초)")
                     
                     # 성능 요약 출력 (느린 노드 순서대로 정렬)
                     if node_durations:
                         sorted_nodes = sorted(node_durations.items(), key=lambda x: x[1], reverse=True)
                         self.logger.info("📊 [PERFORMANCE] 노드 실행 시간 요약:")
-                        print("📊 [PERFORMANCE] 노드 실행 시간 요약:", flush=True)
+                        self.logger.debug("📊 [PERFORMANCE] 노드 실행 시간 요약:")
                         
                         for node_name, duration in sorted_nodes[:5]:  # 상위 5개만 표시
                             percentage = (duration / total_execution_time * 100) if total_execution_time > 0 else 0
                             node_display_name = self._get_node_display_name(node_name)
                             summary_msg = f"  - {node_display_name}: {duration:.2f}초 ({percentage:.1f}%)"
                             self.logger.info(summary_msg)
-                            print(summary_msg, flush=True)
+                            self.logger.debug(summary_msg)
                         
                         # 가장 느린 노드 경고
                         if sorted_nodes:
@@ -1197,7 +1200,7 @@ class LangGraphWorkflowService:
                         if total_nodes > 5:
                             nodes_list += f" 외 {total_nodes - 5}개"
                         self.logger.info(f"  실행된 노드: {nodes_list}")
-                        print(f"  실행된 노드: {nodes_list}", flush=True)
+                        self.logger.debug(f"  실행된 노드: {nodes_list}")
 
                 # 최종 결과가 없으면 초기 상태 사용
                 if flat_result is None:
@@ -1992,7 +1995,7 @@ class LangGraphWorkflowService:
                     # interpretation_paragraph 확인
                     interpretation_in_semantic = [d for d in cached_semantic if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                     if interpretation_in_semantic:
-                        self.logger.info(f"🔍 [RETRIEVED_DOCS] semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                        self.logger.debug(f"🔍 [RETRIEVED_DOCS] semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                     self.logger.debug(f"Converting semantic_results to retrieved_docs (top level): {len(cached_semantic)}")
                     return cached_semantic
         except (ImportError, AttributeError, TypeError):
@@ -2017,7 +2020,7 @@ class LangGraphWorkflowService:
                 # interpretation_paragraph 확인
                 interpretation_in_semantic = [d for d in semantic_results if (d.get("type") or d.get("source_type")) == "interpretation_paragraph"]
                 if interpretation_in_semantic:
-                    self.logger.info(f"🔍 [RETRIEVED_DOCS] 최상위 레벨의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
+                    self.logger.debug(f"🔍 [RETRIEVED_DOCS] 최상위 레벨의 semantic_results에 interpretation_paragraph {len(interpretation_in_semantic)}개 발견")
                 self.logger.debug(f"Converting semantic_results to retrieved_docs from top level: {len(semantic_results)}")
                 return semantic_results
 
@@ -2091,17 +2094,40 @@ class LangGraphWorkflowService:
                 else:
                     doc_type = "document"
             
-            # 소스 정보 추출
+            # 소스 정보 추출 강화 (여러 위치에서 확인)
+            metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
             source_name = (
                 doc.get("source") or
                 doc.get("title") or
                 doc.get("document_id") or
                 doc.get("law_name") or
+                doc.get("statute_name") or
                 doc.get("case_name") or
                 doc.get("precedent_name") or
                 doc.get("casenames") or  # 판례명
+                metadata.get("source") or
+                metadata.get("title") or
+                metadata.get("statute_name") or
+                metadata.get("law_name") or
+                metadata.get("case_name") or
+                metadata.get("casenames") or
                 ""
             )
+            
+            # 여전히 없으면 content에서 추출 시도
+            if not source_name:
+                content = doc.get("content", "") or doc.get("text", "")
+                if content:
+                    import re
+                    # 법령명 패턴
+                    law_match = re.search(r'([가-힣]+법)', content[:200])
+                    if law_match:
+                        source_name = law_match.group(1)
+                    # 판례명 패턴
+                    elif re.search(r'(대법원|지방법원|고등법원)', content[:200]):
+                        case_match = re.search(r'([가-힣]+(?:지방)?법원.*?\d+[가-힣]+\d+)', content[:200])
+                        if case_match:
+                            source_name = case_match.group(1)
             
             # relevance_score 추출
             relevance_score = (
@@ -2252,9 +2278,6 @@ class LangGraphWorkflowService:
             
             # 이전 상태 가져오기
             try:
-                # LangGraph의 get_state를 사용하여 이전 상태 가져오기
-                from langgraph.checkpoint.memory import MemorySaver
-                
                 # 체크포인터가 있으면 이전 상태 가져오기
                 if self.checkpoint_manager and self.checkpoint_manager.is_enabled():
                     # 이전 상태에서 continue_answer_generation 노드만 실행
@@ -2278,9 +2301,6 @@ class LangGraphWorkflowService:
                     previous_answer = current_state.values.get("answer", "")
                     
                     if not continued_answer or continued_answer == previous_answer:
-                        # 답변이 업데이트되지 않았으면 직접 노드 실행
-                        from langgraph.graph import END
-                        
                         # continue_answer_generation 노드 직접 호출
                         state_dict = dict(current_state.values)
                         state_dict["continue"] = True
