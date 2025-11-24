@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    build:
+      context: .
+      dockerfile: postgres/Dockerfile
+    image: lawfirmai-postgres:18-pgvector
     container_name: lawfirmai-postgres-dev
     restart: unless-stopped
     environment:
@@ -10,8 +13,11 @@ services:
       POSTGRES_USER: lawfirmai
       POSTGRES_PASSWORD: dev_password
       PGDATA: /var/lib/postgresql/data/pgdata
+      # KST 시간대 설정
+      TZ: Asia/Seoul
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
+      - ../scripts/migrations/init_postgres_extensions.sql:/docker-entrypoint-initdb.d/01_init_extensions.sql:ro
     ports:
       - "5432:5432"
     networks:
@@ -21,6 +27,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    command: >
+      postgres
+      -c timezone='Asia/Seoul'
 
   api:
     build:
