@@ -18,6 +18,8 @@ services:
       - postgres_local_data:/var/lib/postgresql/data
       # 한국어 locale 초기화 스크립트
       - ./init-locale.sh:/docker-entrypoint-initdb.d/init-locale.sh:ro
+      # PostgreSQL 확장 설치 스크립트 (한국어 텍스트 검색)
+      - ../../scripts/migrations/init_postgres_extensions.sql:/docker-entrypoint-initdb.d/01_init_extensions.sql:ro
     ports:
       - "5432:5432"
     networks:
