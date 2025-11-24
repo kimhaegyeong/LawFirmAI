@@ -530,8 +530,11 @@ class SourcesExtractor:
                 for statute in extracted_statutes:
                     statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
                     if statute_key not in existing_keys:
-                        existing_statutes.append(statute)
-                        existing_keys.add(statute_key)
+                        # _clean_source_for_client를 통해 정리하여 name과 statute_name이 제대로 설정되도록 함
+                        cleaned_statute = self._clean_source_for_client(statute)
+                        if cleaned_statute:
+                            existing_statutes.append(cleaned_statute)
+                            existing_keys.add(statute_key)
                 
                 sources_by_type["statute_article"] = existing_statutes
                 logger.info(f"Extracted {len(extracted_statutes)} statutes from reference clauses")
@@ -1332,10 +1335,18 @@ class SourcesExtractor:
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                 merged_metadata = {**metadata}
                 
+                # 최상위 레벨 필드도 merged_metadata에 포함
                 for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
-                           "court", "doc_id", "casenames", "org", "title", "announce_date", "decision_date", "response_date"]:
+                           "court", "doc_id", "casenames", "case_name", "org", "title", "announce_date", "decision_date", "response_date"]:
                     if key in doc:
                         merged_metadata[key] = doc[key]
+                
+                # case_paragraph의 경우 casenames가 최상위 레벨에 있을 수 있으므로 확인
+                if source_type == "case_paragraph":
+                    if "casenames" not in merged_metadata and "casenames" in doc:
+                        merged_metadata["casenames"] = doc["casenames"]
+                    if "case_name" not in merged_metadata and "case_name" in doc:
+                        merged_metadata["case_name"] = doc["case_name"]
                 
                 source_info_detail = formatter.format_source(source_type, merged_metadata)
                 
@@ -1353,6 +1364,24 @@ class SourcesExtractor:
                     "metadata": source_info_detail.metadata or {}
                 }
                 
+                # case_paragraph의 경우 doc_id를 최상위 레벨에도 포함 (우선순위 높음)
+                if source_type == "case_paragraph":
+                    doc_id = (
+                        doc.get("doc_id") or
+                        doc.get("case_id") or
+                        merged_metadata.get("doc_id") or 
+                        merged_metadata.get("case_id") or
+                        (source_info_detail.metadata.get("doc_id") if source_info_detail.metadata else None) or
+                        (source_info_detail.metadata.get("case_id") if source_info_detail.metadata else None) or
+                        ""
+                    )
+                    if doc_id:
+                        detail_dict["case_number"] = doc_id
+                        detail_dict["doc_id"] = doc_id  # 최상위 레벨에도 포함
+                        # name도 doc_id로 업데이트 (판례 번호 표시)
+                        if not detail_dict.get("name") or detail_dict.get("name") == "판례":
+                            detail_dict["name"] = doc_id
+                
                 if source_info_detail.metadata:
                     meta = source_info_detail.metadata
                     
@@ -1366,18 +1395,50 @@ class SourcesExtractor:
                         if meta.get("item_no"):
                             detail_dict["item_no"] = meta["item_no"]
                     elif source_type == "case_paragraph":
-                        doc_id = (
-                            meta.get("doc_id") or 
-                            merged_metadata.get("doc_id") or 
-                            doc.get("doc_id") or 
-                            merged_metadata.get("case_id") or
-                            ""
-                        )
-                        detail_dict["case_number"] = doc_id
+                        # doc_id가 아직 설정되지 않았으면 meta에서 확인
+                        if "case_number" not in detail_dict or not detail_dict.get("case_number"):
+                            doc_id = (
+                                meta.get("doc_id") or 
+                                merged_metadata.get("doc_id") or 
+                                doc.get("doc_id") or 
+                                merged_metadata.get("case_id") or
+                                ""
+                            )
+                            if doc_id:
+                                detail_dict["case_number"] = doc_id
+                                detail_dict["doc_id"] = doc_id
+                                # name도 doc_id로 업데이트
+                                if not detail_dict.get("name") or detail_dict.get("name") == "판례":
+                                    detail_dict["name"] = doc_id
                         if meta.get("court"):
                             detail_dict["court"] = meta["court"]
-                        if meta.get("casenames"):
-                            detail_dict["case_name"] = meta["casenames"]
+                        # casenames를 case_name으로 변환 (여러 위치에서 확인, 우선순위 순)
+                        casenames = (
+                            # 1. source_info_detail.metadata에서 확인
+                            meta.get("casenames") or 
+                            meta.get("case_name") or
+                            # 2. merged_metadata에서 확인 (doc의 최상위 레벨 필드 포함)
+                            merged_metadata.get("casenames") or 
+                            merged_metadata.get("case_name") or
+                            # 3. doc의 최상위 레벨에서 직접 확인 (검색 엔진이 최상위에 포함시킬 수 있음)
+                            doc.get("casenames") or
+                            doc.get("case_name")
+                        )
+                        if casenames:
+                            detail_dict["case_name"] = casenames
+                            # metadata에도 포함 (하위 호환성)
+                            if "metadata" not in detail_dict:
+                                detail_dict["metadata"] = {}
+                            if isinstance(detail_dict["metadata"], dict):
+                                detail_dict["metadata"]["casenames"] = casenames
+                                detail_dict["metadata"]["case_name"] = casenames
+                        else:
+                            # casenames가 없으면 로깅 (디버깅용)
+                            logger.debug(
+                                f"[_generate_sources_detail_from_retrieved_docs] case_paragraph에 casenames가 없습니다. "
+                                f"doc keys: {list(doc.keys())}, merged_metadata keys: {list(merged_metadata.keys())}, "
+                                f"meta keys: {list(meta.keys()) if isinstance(meta, dict) else []}"
+                            )
                     elif source_type == "decision_paragraph":
                         if meta.get("doc_id"):
                             detail_dict["decision_number"] = meta["doc_id"]
@@ -1861,6 +1922,278 @@ class SourcesExtractor:
             cleaned[key] = value
         return cleaned
     
+    def _generate_title(self, cleaned: Dict[str, Any], source_type: str) -> str:
+        """프론트엔드 표시용 제목 생성"""
+        if source_type == "statute_article":
+            # 제목: "법령명 제XXX조" 또는 "법령명 제XXX조 제X항"
+            title_parts = []
+            statute_name = cleaned.get("statute_name")
+            if statute_name:
+                title_parts.append(statute_name)
+            
+            article_no = cleaned.get("article_no")
+            if article_no:
+                article_no_str = str(article_no).strip()
+                # 이미 "제XXX조" 형식이면 그대로 사용
+                if article_no_str.startswith("제") and article_no_str.endswith("조"):
+                    # 이미 올바른 형식: "제3조" → 그대로 사용
+                    title_parts.append(article_no_str)
+                elif not article_no_str.startswith("제"):
+                    # "제"가 없으면 추가
+                    if article_no_str.endswith("조"):
+                        article_no_str = f"제{article_no_str}"
+                    else:
+                        article_no_str = f"제{article_no_str}조"
+                    title_parts.append(article_no_str)
+                else:
+                    # "제"로 시작하지만 "조"로 끝나지 않는 경우
+                    if not article_no_str.endswith("조"):
+                        article_no_str = f"{article_no_str}조"
+                    title_parts.append(article_no_str)
+            
+            clause_no = cleaned.get("clause_no")
+            if clause_no:
+                clause_no_str = str(clause_no).strip()
+                # 이미 "제X항" 형식이면 그대로 사용
+                if clause_no_str.startswith("제") and clause_no_str.endswith("항"):
+                    # 이미 올바른 형식: "제1항" → 그대로 사용
+                    title_parts.append(clause_no_str)
+                elif not clause_no_str.startswith("제"):
+                    # "제"가 없으면 추가
+                    if clause_no_str.endswith("항"):
+                        clause_no_str = f"제{clause_no_str}"
+                    else:
+                        clause_no_str = f"제{clause_no_str}항"
+                    title_parts.append(clause_no_str)
+                else:
+                    # "제"로 시작하지만 "항"으로 끝나지 않는 경우
+                    if not clause_no_str.endswith("항"):
+                        clause_no_str = f"{clause_no_str}항"
+                    title_parts.append(clause_no_str)
+            
+            item_no = cleaned.get("item_no")
+            if item_no:
+                item_no_str = str(item_no).strip()
+                # 이미 "제X호" 형식이면 그대로 사용
+                if item_no_str.startswith("제") and item_no_str.endswith("호"):
+                    # 이미 올바른 형식: "제1호" → 그대로 사용
+                    title_parts.append(item_no_str)
+                elif not item_no_str.startswith("제"):
+                    # "제"가 없으면 추가
+                    if item_no_str.endswith("호"):
+                        item_no_str = f"제{item_no_str}"
+                    else:
+                        item_no_str = f"제{item_no_str}호"
+                    title_parts.append(item_no_str)
+                else:
+                    # "제"로 시작하지만 "호"로 끝나지 않는 경우
+                    if not item_no_str.endswith("호"):
+                        item_no_str = f"{item_no_str}호"
+                    title_parts.append(item_no_str)
+            
+            if title_parts:
+                return " ".join(title_parts)
+            return cleaned.get("name", "법령")
+        
+        elif source_type == "case_paragraph":
+            # 제목: "판례번호" 또는 "사건명 (판례번호)"
+            case_number = cleaned.get("case_number") or cleaned.get("doc_id")
+            case_name = cleaned.get("case_name") or cleaned.get("casenames")
+            
+            # case_number가 없으면 content에서 추출 시도
+            if not case_number:
+                content = cleaned.get("content", "")
+                if content and isinstance(content, str):
+                    import re
+                    # 패턴 1: "선고 YYYY다XXXXX 판결" 형식
+                    pattern1 = r'선고\s*(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?\s*판결'
+                    match1 = re.search(pattern1, content[:1000])
+                    if match1:
+                        case_number = match1.group(1).strip()
+                        if ',' in case_number:
+                            case_number = case_number.split(',')[0].strip()
+                    else:
+                        # 패턴 2: "YYYY다XXXXX" 형식 (직접)
+                        pattern2 = r'(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?'
+                        match2 = re.search(pattern2, content[:500])
+                        if match2:
+                            case_number = match2.group(1).strip()
+                            if ',' in case_number:
+                                case_number = case_number.split(',')[0].strip()
+            
+            if case_name and case_number:
+                return f"{case_name} ({case_number})"
+            elif case_number:
+                return str(case_number)
+            elif case_name:
+                return str(case_name)
+            # name이 "판례"가 아닌 경우에만 사용
+            name = cleaned.get("name")
+            if name and name != "판례" and name.strip():
+                return str(name)
+            return "판례"
+        
+        elif source_type == "decision_paragraph":
+            # 제목: "결정번호" 또는 "기관명 결정번호"
+            decision_number = cleaned.get("decision_number") or cleaned.get("doc_id")
+            org = cleaned.get("org")
+            
+            if org and decision_number:
+                return f"{org} {decision_number}"
+            elif decision_number:
+                return str(decision_number)
+            elif org:
+                return f"{org} 결정례"
+            return cleaned.get("name", "결정례")
+        
+        elif source_type == "interpretation_paragraph":
+            # 제목: "해석번호" 또는 "기관명 제목"
+            interpretation_number = cleaned.get("interpretation_number") or cleaned.get("doc_id")
+            title = cleaned.get("title")
+            org = cleaned.get("org")
+            
+            if title and org:
+                return f"{org} {title}"
+            elif title:
+                return str(title)
+            elif org and interpretation_number:
+                return f"{org} {interpretation_number}"
+            elif interpretation_number:
+                return str(interpretation_number)
+            return cleaned.get("name", "해석례")
+        
+        # 기본값: name 필드 사용
+        return cleaned.get("name", "")
+    
+    def _generate_summary(self, content: str, source_type: str) -> str:
+        """내용에서 요약 생성 (최대 200자)"""
+        if not content or not isinstance(content, str):
+            return ""
+        
+        # 앞부분 200자 추출 (문장 단위로 자르기)
+        summary = content[:200].strip()
+        
+        # 마지막 문장이 잘렸으면 제거
+        if len(content) > 200:
+            last_period = summary.rfind('。')
+            last_dot = summary.rfind('.')
+            last_newline = summary.rfind('\n')
+            
+            cut_point = max(last_period, last_dot, last_newline)
+            if cut_point > 100:  # 너무 짧게 자르지 않도록
+                summary = summary[:cut_point + 1]
+            
+            summary += "..."
+        
+        return summary
+    
+    def _generate_detail(
+        self, 
+        cleaned: Dict[str, Any], 
+        source_type: str,
+        source_item: Dict[str, Any],
+        metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """상세 정보 생성 (링크 클릭 시 표시할 정보)"""
+        detail = {}
+        
+        if source_type == "statute_article":
+            detail = {
+                # 기본 정보
+                "statute_name": cleaned.get("statute_name"),
+                "article_no": cleaned.get("article_no"),
+                "clause_no": cleaned.get("clause_no"),
+                "item_no": cleaned.get("item_no"),
+                "heading": cleaned.get("heading") or source_item.get("heading") or metadata.get("heading"),  # 조문 제목
+                
+                # 법령 정보
+                "abbrv": cleaned.get("abbrv") or source_item.get("abbrv") or metadata.get("abbrv"),  # 약칭
+                "statute_type": cleaned.get("statute_type") or source_item.get("statute_type") or metadata.get("statute_type"),  # 법령 유형
+                "category": cleaned.get("category") or source_item.get("category") or metadata.get("category"),  # 분류
+                "proclamation_date": cleaned.get("proclamation_date") or source_item.get("proclamation_date") or metadata.get("proclamation_date"),  # 공포일
+                "effective_date": cleaned.get("effective_date") or source_item.get("effective_date") or metadata.get("effective_date"),  # 시행일
+                
+                # Open Law API 필드
+                "law_id": cleaned.get("law_id") or source_item.get("law_id") or metadata.get("law_id"),
+                "mst": cleaned.get("mst") or source_item.get("mst") or metadata.get("mst"),
+                "proclamation_number": cleaned.get("proclamation_number") or source_item.get("proclamation_number") or metadata.get("proclamation_number"),
+                
+                # 본문
+                "content": cleaned.get("content"),  # 전체 조문 내용
+                "version_effective_date": cleaned.get("version_effective_date") or source_item.get("version_effective_date") or metadata.get("version_effective_date"),  # 버전 시행일
+            }
+        
+        elif source_type == "case_paragraph":
+            # case_name 추출: 여러 위치에서 확인 (우선순위 순)
+            case_name = (
+                cleaned.get("case_name") or 
+                cleaned.get("casenames") or
+                source_item.get("case_name") or
+                source_item.get("casenames") or
+                metadata.get("case_name") or 
+                metadata.get("casenames")
+            )
+            
+            detail = {
+                # 기본 정보
+                "case_number": cleaned.get("case_number") or cleaned.get("doc_id"),
+                "case_name": case_name,
+                "court": cleaned.get("court") or source_item.get("court") or metadata.get("court"),  # 법원명
+                "case_type": cleaned.get("case_type") or source_item.get("case_type") or metadata.get("case_type"),  # 사건 유형
+                "announce_date": cleaned.get("announce_date") or cleaned.get("decision_date") or source_item.get("announce_date") or metadata.get("announce_date"),  # 선고일
+                
+                # Open Law API 필드
+                "precedent_serial_number": cleaned.get("precedent_serial_number") or source_item.get("precedent_serial_number") or metadata.get("precedent_serial_number"),
+                
+                # 참조 정보
+                "reference_statutes": cleaned.get("reference_statutes") or source_item.get("reference_statutes") or metadata.get("reference_statutes"),  # 참조 법령
+                
+                # 본문
+                "content": cleaned.get("content"),  # 전체 판례 내용
+                "para_index": cleaned.get("para_index") or source_item.get("para_index") or metadata.get("para_index"),  # 단락 인덱스
+            }
+        
+        elif source_type == "decision_paragraph":
+            detail = {
+                # 기본 정보
+                "decision_number": cleaned.get("decision_number") or cleaned.get("doc_id"),
+                "org": cleaned.get("org") or source_item.get("org") or metadata.get("org"),  # 기관명
+                "decision_date": cleaned.get("decision_date") or source_item.get("decision_date") or metadata.get("decision_date"),  # 결정일
+                "result": cleaned.get("result") or source_item.get("result") or metadata.get("result"),  # 결정 결과
+                
+                # Open Law API 필드
+                "decision_serial_number": cleaned.get("decision_serial_number") or source_item.get("decision_serial_number") or metadata.get("decision_serial_number"),
+                
+                # 참조 정보
+                "reference_statutes": cleaned.get("reference_statutes") or source_item.get("reference_statutes") or metadata.get("reference_statutes"),  # 참조 법령
+                
+                # 본문
+                "content": cleaned.get("content"),  # 전체 결정 내용
+                "para_index": cleaned.get("para_index") or source_item.get("para_index") or metadata.get("para_index"),  # 단락 인덱스
+            }
+        
+        elif source_type == "interpretation_paragraph":
+            detail = {
+                # 기본 정보
+                "interpretation_number": cleaned.get("interpretation_number") or cleaned.get("doc_id"),
+                "title": cleaned.get("title") or source_item.get("title") or metadata.get("title"),  # 해석 제목
+                "org": cleaned.get("org") or source_item.get("org") or metadata.get("org"),  # 기관명
+                "response_date": cleaned.get("response_date") or source_item.get("response_date") or metadata.get("response_date"),  # 응답일
+                
+                # Open Law API 필드
+                "interpretation_serial_number": cleaned.get("interpretation_serial_number") or source_item.get("interpretation_serial_number") or metadata.get("interpretation_serial_number"),
+                
+                # 참조 정보
+                "reference_statutes": cleaned.get("reference_statutes") or source_item.get("reference_statutes") or metadata.get("reference_statutes"),  # 참조 법령
+                
+                # 본문
+                "content": cleaned.get("content"),  # 전체 해석 내용
+                "para_index": cleaned.get("para_index") or source_item.get("para_index") or metadata.get("para_index"),  # 단락 인덱스
+            }
+        
+        # 빈 필드 제거
+        return self._remove_empty_fields(detail)
+    
     def _clean_source_for_client(self, source_item: Dict[str, Any]) -> Dict[str, Any]:
         """클라이언트 전송용 source 항목 정리"""
         try:
@@ -1895,11 +2228,15 @@ class SourcesExtractor:
                 # 판례의 경우: case_number 또는 doc_id를 name으로 사용
                 # 최상위 레벨에서 먼저 확인 (이미 _normalize_sources_detail에서 이동됨)
                 case_number = source_item.get("case_number")
+                metadata = source_item.get("metadata", {}) if isinstance(source_item.get("metadata"), dict) else {}
+                
                 if not case_number:
                     # metadata에서 확인
-                    metadata = source_item.get("metadata", {})
-                    if isinstance(metadata, dict):
-                        case_number = metadata.get("doc_id") or metadata.get("case_id")
+                    case_number = metadata.get("doc_id") or metadata.get("case_id")
+                
+                # 최상위 레벨에서 직접 확인 (case_number 필드가 없을 수 있음)
+                if not case_number:
+                    case_number = source_item.get("doc_id") or source_item.get("case_id")
                 
                 if case_number:
                     cleaned["name"] = str(case_number).strip()
@@ -1908,27 +2245,77 @@ class SourcesExtractor:
                     # "판례"가 아닌 경우에만 사용
                     if name and isinstance(name, str) and name.strip() and name.strip() != "판례":
                         cleaned["name"] = name.strip()
-                    else:
-                        # name이 "판례"이거나 비어있으면 빈 문자열로 설정 (나중에 업데이트됨)
-                        cleaned["name"] = ""
+                    # name이 "판례"이거나 비어있으면 나중에 업데이트됨 (아직 설정하지 않음)
             elif source_type == "statute_article":
                 # 법령의 경우: statute_name을 name으로 사용
                 statute_name = source_item.get("statute_name")
-                if not statute_name:
-                    # metadata에서 확인
-                    metadata = source_item.get("metadata", {})
-                    if isinstance(metadata, dict):
-                        statute_name = metadata.get("statute_name") or metadata.get("law_name")
+                metadata = source_item.get("metadata", {}) if isinstance(source_item.get("metadata"), dict) else {}
                 
-                if statute_name:
+                # statute_name이 없거나 "법령"인 경우 metadata에서 먼저 확인
+                if not statute_name or (isinstance(statute_name, str) and statute_name.strip() == "법령"):
+                    statute_name = metadata.get("statute_name") or metadata.get("law_name")
+                
+                # 여전히 없거나 "법령"이면 더 많은 필드에서 추출 시도
+                if not statute_name or (isinstance(statute_name, str) and statute_name.strip() == "법령"):
+                    # doc의 최상위 레벨에서 직접 확인
+                    statute_name = (
+                        source_item.get("law_name") or
+                        source_item.get("abbrv") or
+                        source_item.get("statute_abbrv") or
+                        source_item.get("law_abbrv")
+                    )
+                    # 여전히 없으면 metadata에서 추가 필드 확인
+                    if not statute_name or (isinstance(statute_name, str) and statute_name.strip() == "법령"):
+                        statute_name = (
+                            metadata.get("law_name") or
+                            metadata.get("abbrv") or
+                            metadata.get("statute_abbrv") or
+                            metadata.get("law_abbrv")
+                        )
+                
+                # 최종적으로 유효한 statute_name이 있으면 설정
+                if statute_name and isinstance(statute_name, str) and statute_name.strip() and statute_name.strip() != "법령":
                     cleaned["name"] = str(statute_name).strip()
+                    cleaned["statute_name"] = str(statute_name).strip()  # statute_name도 설정
                 elif "name" in source_item:
                     name = source_item["name"]
                     # "법령"이 아닌 경우에만 사용
                     if name and isinstance(name, str) and name.strip() and name.strip() != "법령":
                         cleaned["name"] = name.strip()
+                        if not cleaned.get("statute_name") or cleaned.get("statute_name", "").strip() == "법령":
+                            cleaned["statute_name"] = name.strip()
                     else:
-                        # name이 "법령"이거나 비어있으면 빈 문자열로 설정 (나중에 업데이트됨)
+                        # name이 "법령"이거나 비어있으면 content에서 추출 시도
+                        content = source_item.get("content", "")
+                        if content and isinstance(content, str):
+                            # content에서 법령명 추출 (예: "민법 제750조" -> "민법")
+                            import re
+                            # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등 (대괄호, 괄호 등 앞에 올 수 있음)
+                            pattern1 = r'(?:^|\[|\]|\.|,|\)|\(|「|」|에|의|을|를|이|가|은|는|으로|로|에서|부터|까지|와|과|및|또는|\s)\s*([가-힣]{1,20}법)\s*제\s*\d+\s*조'
+                            match1 = re.search(pattern1, content[:500])  # 처음 500자만 확인
+                            if match1:
+                                extracted_name = match1.group(1).strip()
+                                if extracted_name and extracted_name != "법령":
+                                    cleaned["name"] = extracted_name
+                                    cleaned["statute_name"] = extracted_name
+                                    logger.debug(f"[_clean_source_for_client] Extracted statute_name from content: {extracted_name}")
+                        if not cleaned.get("name"):
+                            cleaned["name"] = ""
+                else:
+                    # name이 없으면 content에서 추출 시도
+                    content = source_item.get("content", "")
+                    if content and isinstance(content, str):
+                        import re
+                        # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등
+                        pattern1 = r'(?:^|\.|,|\)|\(|「|」|에|의|을|를|이|가|은|는|으로|로|에서|부터|까지|와|과|및|또는)\s*([가-힣]{1,20}법)\s*제\s*\d+\s*조'
+                        match1 = re.search(pattern1, content[:500])  # 처음 500자만 확인
+                        if match1:
+                            extracted_name = match1.group(1).strip()
+                            if extracted_name and extracted_name != "법령":
+                                cleaned["name"] = extracted_name
+                                cleaned["statute_name"] = extracted_name
+                                logger.debug(f"[_clean_source_for_client] Extracted statute_name from content: {extracted_name}")
+                    if not cleaned.get("name"):
                         cleaned["name"] = ""
             elif source_type == "interpretation_paragraph":
                 # 해석례의 경우: interpretation_number 또는 doc_id를 name으로 사용
@@ -1941,6 +2328,22 @@ class SourcesExtractor:
                 
                 if interpretation_number:
                     cleaned["name"] = str(interpretation_number).strip()
+                elif "name" in source_item:
+                    name = source_item["name"]
+                    # 기본값이 아닌 경우에만 사용
+                    if name and isinstance(name, str) and name.strip():
+                        cleaned["name"] = name.strip()
+            elif source_type == "decision_paragraph":
+                # 결정례의 경우: decision_number 또는 doc_id를 name으로 사용
+                decision_number = source_item.get("decision_number")
+                if not decision_number:
+                    # metadata에서 확인
+                    metadata = source_item.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        decision_number = metadata.get("doc_id") or metadata.get("decision_id")
+                
+                if decision_number:
+                    cleaned["name"] = str(decision_number).strip()
                 elif "name" in source_item:
                     name = source_item["name"]
                     # 기본값이 아닌 경우에만 사용
@@ -1995,13 +2398,70 @@ class SourcesExtractor:
                             if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                                 cleaned[field] = value
                 
-                # 타입별로 필드 복사 후 name 업데이트
-                if source_type == "case_paragraph" and "case_number" in cleaned and cleaned["case_number"]:
-                    cleaned["name"] = cleaned["case_number"]
+                # 타입별로 필드 복사 후 name 업데이트 (개선)
+                if source_type == "case_paragraph":
+                    # case_number가 있으면 name으로 설정
+                    if "case_number" in cleaned and cleaned["case_number"]:
+                        cleaned["name"] = cleaned["case_number"]
+                    # case_number가 없으면 metadata에서 doc_id를 가져와서 설정
+                    elif "metadata" in source_item and isinstance(source_item["metadata"], dict):
+                        metadata = source_item["metadata"]
+                        doc_id = metadata.get("doc_id") or metadata.get("case_id")
+                        if doc_id:
+                            cleaned["name"] = str(doc_id).strip()
+                            cleaned["case_number"] = str(doc_id).strip()
+                    # case_number가 여전히 없으면 content에서 추출 시도
+                    if "case_number" not in cleaned or not cleaned.get("case_number"):
+                        content = cleaned.get("content") or source_item.get("content", "")
+                        if content and isinstance(content, str):
+                            import re
+                            # 패턴 1: "선고 YYYY다XXXXX 판결" 또는 "선고 YY다카XXXX 판결" 형식
+                            pattern1 = r'선고\s*(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?\s*판결'
+                            match1 = re.search(pattern1, content[:1000])
+                            if match1:
+                                extracted_case_number = match1.group(1).strip()
+                                if ',' in extracted_case_number:
+                                    extracted_case_number = extracted_case_number.split(',')[0].strip()
+                                cleaned["case_number"] = extracted_case_number
+                                cleaned["name"] = extracted_case_number
+                                logger.debug(f"[_clean_source_for_client] Extracted case_number from content: {extracted_case_number}")
+                            else:
+                                # 패턴 2: "YYYY다XXXXX" 또는 "YY다카XXXX" 형식 (직접, "선고" 없이)
+                                pattern2 = r'(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?'
+                                match2 = re.search(pattern2, content[:500])
+                                if match2:
+                                    extracted_case_number = match2.group(1).strip()
+                                    if ',' in extracted_case_number:
+                                        extracted_case_number = extracted_case_number.split(',')[0].strip()
+                                    cleaned["case_number"] = extracted_case_number
+                                    cleaned["name"] = extracted_case_number
+                                    logger.debug(f"[_clean_source_for_client] Extracted case_number from content (pattern2): {extracted_case_number}")
                 elif source_type == "statute_article" and "statute_name" in cleaned and cleaned["statute_name"]:
-                    cleaned["name"] = cleaned["statute_name"]
+                    # name에 조문과 항 번호 포함 (예: "민법 제750조" 또는 "민법 제750조 제1항")
+                    name_parts = [cleaned["statute_name"]]
+                    if "article_no" in cleaned and cleaned["article_no"]:
+                        article_no = cleaned["article_no"]
+                        # "제750조" 형식이 아니면 "제" 추가
+                        if not article_no.startswith("제"):
+                            article_no = f"제{article_no}조" if not article_no.endswith("조") else f"제{article_no}"
+                        name_parts.append(article_no)
+                    if "clause_no" in cleaned and cleaned["clause_no"]:
+                        clause_no = cleaned["clause_no"]
+                        # "제1항" 형식이 아니면 "제" 추가
+                        if not clause_no.startswith("제"):
+                            clause_no = f"제{clause_no}항" if not clause_no.endswith("항") else f"제{clause_no}"
+                        name_parts.append(clause_no)
+                    if "item_no" in cleaned and cleaned["item_no"]:
+                        item_no = cleaned["item_no"]
+                        # "제1호" 형식이 아니면 "제" 추가
+                        if not item_no.startswith("제"):
+                            item_no = f"제{item_no}호" if not item_no.endswith("호") else f"제{item_no}"
+                        name_parts.append(item_no)
+                    cleaned["name"] = " ".join(name_parts)
                 elif source_type == "interpretation_paragraph" and "interpretation_number" in cleaned and cleaned["interpretation_number"]:
                     cleaned["name"] = cleaned["interpretation_number"]
+                elif source_type == "decision_paragraph" and "decision_number" in cleaned and cleaned["decision_number"]:
+                    cleaned["name"] = cleaned["decision_number"]
             
             # relevance_score만 유지
             if "relevance_score" in source_item:
@@ -2038,46 +2498,173 @@ class SourcesExtractor:
                 if source_type == "case_paragraph":
                     if "case_number" not in cleaned and "doc_id" in cleaned_metadata:
                         cleaned["case_number"] = cleaned_metadata["doc_id"]
-                    if "case_name" not in cleaned and "casenames" in cleaned_metadata:
-                        cleaned["case_name"] = cleaned_metadata["casenames"]
-                    elif "case_name" not in cleaned and "case_name" in cleaned_metadata:
-                        cleaned["case_name"] = cleaned_metadata["case_name"]
+                    # case_name 추출: 여러 위치에서 확인 (우선순위 순)
+                    if "case_name" not in cleaned:
+                        # 1. 최상위 레벨에서 casenames 확인
+                        casenames_top = source_item.get("casenames")
+                        if casenames_top:
+                            cleaned["case_name"] = casenames_top
+                        # 2. 최상위 레벨에서 case_name 확인
+                        elif source_item.get("case_name"):
+                            cleaned["case_name"] = source_item.get("case_name")
+                        # 3. metadata에서 casenames 확인
+                        elif "casenames" in cleaned_metadata:
+                            cleaned["case_name"] = cleaned_metadata["casenames"]
+                        # 4. metadata에서 case_name 확인
+                        elif "case_name" in cleaned_metadata:
+                            cleaned["case_name"] = cleaned_metadata["case_name"]
                     if "court" not in cleaned and "court" in cleaned_metadata:
                         cleaned["court"] = cleaned_metadata["court"]
                     if "decision_date" not in cleaned and "announce_date" in cleaned_metadata:
                         cleaned["decision_date"] = str(cleaned_metadata["announce_date"])
                     
                     # name을 case_number(doc_id)로 업데이트 (판례 일련번호 표시)
-                    # 우선순위: case_number > doc_id (metadata) > 기존 name (단, "판례"가 아닌 경우만)
+                    # 우선순위: case_number > doc_id (metadata) > doc_id (최상위) > 기존 name (단, "판례"가 아닌 경우만)
                     if "case_number" in cleaned and cleaned["case_number"]:
                         cleaned["name"] = cleaned["case_number"]
                     elif "doc_id" in cleaned_metadata and cleaned_metadata["doc_id"]:
                         cleaned["name"] = cleaned_metadata["doc_id"]
                     elif not cleaned.get("name") or cleaned.get("name") == "판례":
                         # name이 없거나 "판례"인 경우, 최상위 레벨에서 다시 확인
-                        case_number = source_item.get("case_number")
+                        case_number = (
+                            source_item.get("case_number") or
+                            source_item.get("doc_id") or
+                            source_item.get("case_id")
+                        )
                         if case_number:
                             cleaned["name"] = str(case_number).strip()
+                            # case_number도 설정 (아직 없으면)
+                            if "case_number" not in cleaned:
+                                cleaned["case_number"] = str(case_number).strip()
                         else:
-                            # 모든 방법이 실패하면 빈 문자열로 설정
-                            cleaned["name"] = ""
+                            # 모든 방법이 실패하면 빈 문자열로 설정 (하지만 로그 남김)
+                            if not cleaned.get("name"):
+                                logger.warning(f"[_clean_source_for_client] case_paragraph에 case_number/doc_id가 없습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else []}")
+                                # name이 없으면 빈 문자열로 설정 (하지만 최소한 필드는 존재하도록)
+                                cleaned["name"] = ""
+                    
+                    # 최종 확인: name이 여전히 없거나 빈 문자열이면 content에서 판례 번호 추출 시도
+                    if not cleaned.get("name") or cleaned.get("name").strip() == "":
+                        # content에서 판례 번호 추출 시도
+                        content = cleaned.get("content") or source_item.get("content", "")
+                        if content and isinstance(content, str):
+                            import re
+                            # 패턴 1: "선고 YYYY다XXXXX 판결" 또는 "선고 YY다카XXXX 판결" 형식
+                            # "다", "다카", "다나", "다라", "다마" 등 모두 처리 (한글 1글자 이상)
+                            # "85다카733, 734" 같은 경우 첫 번째 번호만 추출 (쉼표 앞까지)
+                            pattern1 = r'선고\s*(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?\s*판결'
+                            match1 = re.search(pattern1, content[:1000])
+                            if match1:
+                                extracted_case_number = match1.group(1).strip()
+                                # 쉼표가 포함되어 있으면 제거
+                                if ',' in extracted_case_number:
+                                    extracted_case_number = extracted_case_number.split(',')[0].strip()
+                                cleaned["name"] = extracted_case_number
+                                cleaned["case_number"] = extracted_case_number
+                                logger.debug(f"[_clean_source_for_client] Extracted case_number from content: {extracted_case_number}")
+                            else:
+                                # 패턴 2: "YYYY다XXXXX" 또는 "YY다카XXXX" 형식 (직접, "선고" 없이)
+                                # "85다카733, 734" 같은 경우 첫 번째 번호만 추출
+                                pattern2 = r'(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?'
+                                match2 = re.search(pattern2, content[:500])
+                                if match2:
+                                    extracted_case_number = match2.group(1).strip()
+                                    # 쉼표가 포함되어 있으면 제거
+                                    if ',' in extracted_case_number:
+                                        extracted_case_number = extracted_case_number.split(',')[0].strip()
+                                    cleaned["name"] = extracted_case_number
+                                    cleaned["case_number"] = extracted_case_number
+                                    logger.debug(f"[_clean_source_for_client] Extracted case_number from content (pattern2): {extracted_case_number}")
+                        
+                        # 여전히 없으면 최종 확인: source_item의 최상위 레벨에서 직접 확인
+                        if not cleaned.get("name") or cleaned.get("name").strip() == "":
+                            # source_item의 최상위 레벨에서 doc_id, case_id 확인
+                            doc_id = source_item.get("doc_id") or source_item.get("case_id")
+                            if doc_id:
+                                cleaned["name"] = str(doc_id).strip()
+                                cleaned["case_number"] = str(doc_id).strip()
+                                logger.debug(f"[_clean_source_for_client] case_paragraph의 name을 source_item의 doc_id로 설정: {doc_id}")
+                            else:
+                                # 모든 방법이 실패하면 "판례"로 설정
+                                cleaned["name"] = "판례"
+                                logger.warning(f"[_clean_source_for_client] case_paragraph의 name이 없어서 '판례'로 설정했습니다. source_item keys: {list(source_item.keys())}, metadata keys: {list(source_item.get('metadata', {}).keys()) if isinstance(source_item.get('metadata'), dict) else []}")
                 elif source_type == "statute_article":
-                    if "statute_name" not in cleaned and "statute_name" in cleaned_metadata:
-                        cleaned["statute_name"] = cleaned_metadata["statute_name"]
-                    elif "statute_name" not in cleaned and "law_name" in cleaned_metadata:
-                        cleaned["statute_name"] = cleaned_metadata["law_name"]
+                    # statute_name이 아직 설정되지 않았거나 "법령"인 경우에만 metadata에서 추출
+                    current_statute_name = cleaned.get("statute_name", "")
+                    if not current_statute_name or (isinstance(current_statute_name, str) and current_statute_name.strip() == "법령"):
+                        if "statute_name" in cleaned_metadata:
+                            cleaned["statute_name"] = cleaned_metadata["statute_name"]
+                        elif "law_name" in cleaned_metadata:
+                            cleaned["statute_name"] = cleaned_metadata["law_name"]
+                        # 여전히 없거나 "법령"인 경우 추가 필드에서 추출
+                        if not cleaned.get("statute_name") or (isinstance(cleaned.get("statute_name"), str) and cleaned.get("statute_name", "").strip() == "법령"):
+                            if "abbrv" in cleaned_metadata:
+                                cleaned["statute_name"] = cleaned_metadata["abbrv"]
+                            elif "statute_abbrv" in cleaned_metadata:
+                                cleaned["statute_name"] = cleaned_metadata["statute_abbrv"]
+                            elif "law_abbrv" in cleaned_metadata:
+                                cleaned["statute_name"] = cleaned_metadata["law_abbrv"]
+                    
+                    # article_no가 없으면 content에서 추출 시도
+                    if "article_no" not in cleaned or not cleaned.get("article_no"):
+                        content = cleaned.get("content") or source_item.get("content", "")
+                        if content and isinstance(content, str):
+                            import re
+                            # 패턴: "법령명 제XXX조" 또는 "법령명 제XXX조의X" 형식
+                            statute_name_for_pattern = cleaned.get("statute_name", "")
+                            if statute_name_for_pattern:
+                                # 특정 법령명으로 검색
+                                pattern = re.escape(statute_name_for_pattern) + r'\s*제\s*(\d+)(?:의\s*\d+)?\s*조'
+                            else:
+                                # 일반 패턴
+                                pattern = r'([가-힣]{1,20}법)\s*제\s*(\d+)(?:의\s*\d+)?\s*조'
+                            
+                            match = re.search(pattern, content[:1000])
+                            if match:
+                                if statute_name_for_pattern:
+                                    article_no = match.group(1)
+                                else:
+                                    cleaned["statute_name"] = match.group(1)
+                                    article_no = match.group(2)
+                                
+                                # "제XXX조" 형식으로 변환
+                                if not article_no.startswith("제"):
+                                    article_no = f"제{article_no}조"
+                                cleaned["article_no"] = article_no
+                                logger.debug(f"[_clean_source_for_client] Extracted article_no from content: {article_no}")
                     
                     # name을 statute_name으로 업데이트 (법령명 표시)
-                    if "statute_name" in cleaned and cleaned["statute_name"]:
-                        cleaned["name"] = cleaned["statute_name"]
+                    final_statute_name = cleaned.get("statute_name", "")
+                    if final_statute_name and isinstance(final_statute_name, str) and final_statute_name.strip() and final_statute_name.strip() != "법령":
+                        cleaned["name"] = final_statute_name.strip()
                     elif not cleaned.get("name") or cleaned.get("name") == "법령":
                         # name이 없거나 "법령"인 경우, 최상위 레벨에서 다시 확인
-                        statute_name = source_item.get("statute_name")
-                        if statute_name:
+                        statute_name = (
+                            source_item.get("statute_name") or
+                            source_item.get("law_name") or
+                            source_item.get("abbrv") or
+                            source_item.get("statute_abbrv") or
+                            source_item.get("law_abbrv")
+                        )
+                        if statute_name and isinstance(statute_name, str) and statute_name.strip() and statute_name.strip() != "법령":
                             cleaned["name"] = str(statute_name).strip()
+                            cleaned["statute_name"] = str(statute_name).strip()
                         else:
-                            # 모든 방법이 실패하면 빈 문자열로 설정
-                            cleaned["name"] = ""
+                            # 모든 방법이 실패하면 content에서 추출 시도
+                            content = source_item.get("content", "")
+                            if content and isinstance(content, str):
+                                import re
+                                # 패턴 1: "민법 제XXX조", "형법 제XXX조" 등 (대괄호, 괄호 등 앞에 올 수 있음)
+                                pattern1 = r'(?:^|\[|\]|\.|,|\)|\(|「|」|에|의|을|를|이|가|은|는|으로|로|에서|부터|까지|와|과|및|또는|\s)\s*([가-힣]{1,20}법)\s*제\s*\d+\s*조'
+                                match1 = re.search(pattern1, content[:500])  # 처음 500자만 확인
+                                if match1:
+                                    extracted_name = match1.group(1).strip()
+                                    if extracted_name and extracted_name != "법령":
+                                        cleaned["name"] = extracted_name
+                                        cleaned["statute_name"] = extracted_name
+                                        logger.debug(f"[_clean_source_for_client] Extracted statute_name from content (final): {extracted_name}")
+                            if not cleaned.get("name") or cleaned.get("name") == "법령":
+                                cleaned["name"] = ""
                 elif source_type == "interpretation_paragraph":
                     if "interpretation_number" not in cleaned and "doc_id" in cleaned_metadata:
                         cleaned["interpretation_number"] = cleaned_metadata["doc_id"]
@@ -2097,10 +2684,55 @@ class SourcesExtractor:
                         else:
                             # 모든 방법이 실패하면 빈 문자열로 설정
                             cleaned["name"] = ""
+                elif source_type == "decision_paragraph":
+                    if "decision_number" not in cleaned and "doc_id" in cleaned_metadata:
+                        cleaned["decision_number"] = cleaned_metadata["doc_id"]
+                    elif "decision_number" not in cleaned and "decision_id" in cleaned_metadata:
+                        cleaned["decision_number"] = cleaned_metadata["decision_id"]
+                    
+                    # name을 decision_number(doc_id)로 업데이트 (결정례 일련번호 표시)
+                    if "decision_number" in cleaned and cleaned["decision_number"]:
+                        cleaned["name"] = cleaned["decision_number"]
+                    elif "doc_id" in cleaned_metadata and cleaned_metadata["doc_id"]:
+                        cleaned["name"] = cleaned_metadata["doc_id"]
+                    elif not cleaned.get("name"):
+                        # name이 없는 경우, 최상위 레벨에서 다시 확인
+                        decision_number = source_item.get("decision_number")
+                        if decision_number:
+                            cleaned["name"] = str(decision_number).strip()
+                        else:
+                            # 모든 방법이 실패하면 빈 문자열로 설정
+                            cleaned["name"] = ""
                 
                 # 정리된 metadata가 있으면 포함 (하위 호환성)
                 if cleaned_metadata:
                     cleaned["metadata"] = cleaned_metadata
+            
+            # 프론트엔드 표시용 필드 생성
+            # 1. 제목 (title) 생성
+            try:
+                cleaned["title"] = self._generate_title(cleaned, source_type)
+            except Exception as title_error:
+                logger.warning(f"Failed to generate title for {source_type}: {title_error}", exc_info=True)
+                # title 생성 실패 시 name 필드 사용
+                cleaned["title"] = cleaned.get("name", "")
+            
+            # 2. 요약 (summary) 생성
+            if cleaned.get("content"):
+                try:
+                    cleaned["summary"] = self._generate_summary(cleaned["content"], source_type)
+                except Exception as summary_error:
+                    logger.warning(f"Failed to generate summary for {source_type}: {summary_error}", exc_info=True)
+                    # summary 생성 실패 시 빈 문자열
+                    cleaned["summary"] = ""
+            
+            # 3. 상세 정보 (detail) 생성
+            try:
+                cleaned["detail"] = self._generate_detail(cleaned, source_type, source_item, metadata)
+            except Exception as detail_error:
+                logger.warning(f"Failed to generate detail for {source_type}: {detail_error}", exc_info=True)
+                # detail 생성 실패 시 기본 구조
+                cleaned["detail"] = {"content": cleaned.get("content", "")}
             
             # 빈 필드 제거
             try:
@@ -2160,25 +2792,148 @@ class SourcesExtractor:
                 statute_name = detail.get("statute_name") or metadata.get("statute_name") or metadata.get("law_name")
                 if statute_name:
                     normalized_detail["statute_name"] = statute_name
-                    # name을 statute_name으로 업데이트 (법령명 표시)
-                    normalized_detail["name"] = str(statute_name).strip()
                 article_no = detail.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
+                
+                # article_no가 없으면 content에서 추출 시도
+                if not article_no:
+                    content = normalized_detail.get("content") or detail.get("content", "")
+                    if content and isinstance(content, str):
+                        import re
+                        # 패턴: "법령명 제XXX조" 또는 "법령명 제XXX조의X" 형식
+                        if statute_name:
+                            # 특정 법령명으로 검색
+                            pattern = re.escape(statute_name) + r'\s*제\s*(\d+)(?:의\s*\d+)?\s*조'
+                        else:
+                            # 일반 패턴
+                            pattern = r'([가-힣]{1,20}법)\s*제\s*(\d+)(?:의\s*\d+)?\s*조'
+                        
+                        match = re.search(pattern, content[:1000])
+                        if match:
+                            if statute_name:
+                                article_no = match.group(1)
+                            else:
+                                normalized_detail["statute_name"] = match.group(1)
+                                article_no = match.group(2)
+                            
+                            # "제XXX조" 형식으로 변환
+                            if article_no and not article_no.startswith("제"):
+                                article_no = f"제{article_no}조"
+                            logger.debug(f"[_normalize_sources_detail] Extracted article_no from content: {article_no}")
+                
                 if article_no:
                     normalized_detail["article_no"] = article_no
-                if detail.get("clause_no") or metadata.get("clause_no"):
-                    normalized_detail["clause_no"] = detail.get("clause_no") or metadata.get("clause_no")
-                if detail.get("item_no") or metadata.get("item_no"):
-                    normalized_detail["item_no"] = detail.get("item_no") or metadata.get("item_no")
+                clause_no = detail.get("clause_no") or metadata.get("clause_no")
+                if clause_no:
+                    normalized_detail["clause_no"] = clause_no
+                item_no = detail.get("item_no") or metadata.get("item_no")
+                if item_no:
+                    normalized_detail["item_no"] = item_no
+                
+                # name에 조문과 항 번호 포함 (예: "민법 제750조" 또는 "민법 제750조 제1항")
+                name_parts = [str(statute_name).strip()] if statute_name else []
+                if article_no:
+                    article_no_str = str(article_no).strip()
+                    # "제750조" 형식이 아니면 "제" 추가
+                    if not article_no_str.startswith("제"):
+                        article_no_str = f"제{article_no_str}조" if not article_no_str.endswith("조") else f"제{article_no_str}"
+                    name_parts.append(article_no_str)
+                if clause_no:
+                    clause_no_str = str(clause_no).strip()
+                    # "제1항" 형식이 아니면 "제" 추가
+                    if not clause_no_str.startswith("제"):
+                        clause_no_str = f"제{clause_no_str}항" if not clause_no_str.endswith("항") else f"제{clause_no_str}"
+                    name_parts.append(clause_no_str)
+                if item_no:
+                    item_no_str = str(item_no).strip()
+                    # "제1호" 형식이 아니면 "제" 추가
+                    if not item_no_str.startswith("제"):
+                        item_no_str = f"제{item_no_str}호" if not item_no_str.endswith("호") else f"제{item_no_str}"
+                    name_parts.append(item_no_str)
+                
+                if name_parts:
+                    normalized_detail["name"] = " ".join(name_parts)
+                elif statute_name:
+                    normalized_detail["name"] = str(statute_name).strip()
             
             elif source_type == "case_paragraph":
-                case_number = detail.get("case_number") or metadata.get("doc_id") or metadata.get("case_id")
+                # case_number 추출: 여러 위치에서 확인 (우선순위 순)
+                case_number = (
+                    detail.get("case_number") or 
+                    detail.get("doc_id") or
+                    detail.get("case_id") or
+                    metadata.get("doc_id") or 
+                    metadata.get("case_id") or
+                    detail.get("id") or
+                    metadata.get("id") or
+                    ""
+                )
                 if case_number:
                     normalized_detail["case_number"] = case_number
                     # name을 case_number로 업데이트 (판례 일련번호 표시)
                     normalized_detail["name"] = str(case_number).strip()
-                case_name = detail.get("case_name") or metadata.get("casenames") or metadata.get("case_name")
+                else:
+                    # case_number가 없으면 content에서 추출 시도
+                    content = normalized_detail.get("content") or detail.get("content", "")
+                    if content and isinstance(content, str):
+                        import re
+                        # 패턴 1: "선고 YYYY다XXXXX 판결" 또는 "선고 YY다카XXXX 판결" 형식
+                        # "다", "다카", "다나", "다라", "다마" 등 모두 처리 (한글 1글자 이상)
+                        # "85다카733, 734" 같은 경우 첫 번째 번호만 추출 (쉼표 앞까지)
+                        pattern1 = r'선고\s*(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?\s*판결'
+                        match1 = re.search(pattern1, content[:1000])
+                        if match1:
+                            extracted_case_number = match1.group(1).strip()
+                            # 쉼표가 포함되어 있으면 제거
+                            if ',' in extracted_case_number:
+                                extracted_case_number = extracted_case_number.split(',')[0].strip()
+                            normalized_detail["case_number"] = extracted_case_number
+                            normalized_detail["name"] = extracted_case_number
+                            logger.debug(f"[_normalize_sources_detail] Extracted case_number from content: {extracted_case_number}")
+                        else:
+                            # 패턴 2: "YYYY다XXXXX" 또는 "YY다카XXXX" 형식 (직접, "선고" 없이)
+                            # "85다카733, 734" 같은 경우 첫 번째 번호만 추출
+                            pattern2 = r'(\d{2,4}[다나마라바사아자차카타파하]+\d+)(?:[,\s]+\d+)?'
+                            match2 = re.search(pattern2, content[:500])
+                            if match2:
+                                extracted_case_number = match2.group(1).strip()
+                                # 쉼표가 포함되어 있으면 제거
+                                if ',' in extracted_case_number:
+                                    extracted_case_number = extracted_case_number.split(',')[0].strip()
+                                normalized_detail["case_number"] = extracted_case_number
+                                normalized_detail["name"] = extracted_case_number
+                                logger.debug(f"[_normalize_sources_detail] Extracted case_number from content (pattern2): {extracted_case_number}")
+                    
+                    # 여전히 없으면 로깅 및 "판례"로 설정
+                    if not normalized_detail.get("case_number"):
+                        logger.warning(
+                            f"[_normalize_sources_detail] case_paragraph에 case_number/doc_id가 없습니다. "
+                            f"detail keys: {list(detail.keys())}, metadata keys: {list(metadata.keys())}, "
+                            f"content length: {len(content) if content else 0}"
+                        )
+                        # name이 없거나 "판례"인 경우에만 "판례"로 설정
+                        if not normalized_detail.get("name") or normalized_detail.get("name") == "판례":
+                            normalized_detail["name"] = "판례"
+                # case_name 추출: 여러 위치에서 확인 (우선순위 순)
+                # 1. detail의 최상위 레벨에서 확인 (가장 우선)
+                case_name = (
+                    detail.get("case_name") or 
+                    detail.get("casenames")
+                )
+                # 2. metadata에서 확인
+                if not case_name:
+                    case_name = (
+                        metadata.get("case_name") or 
+                        metadata.get("casenames")
+                    )
+                # 3. normalized_detail에 이미 설정된 경우 확인 (이전 단계에서 설정되었을 수 있음)
+                if not case_name and "case_name" in normalized_detail:
+                    case_name = normalized_detail["case_name"]
+                
                 if case_name:
                     normalized_detail["case_name"] = case_name
+                    logger.debug(f"[_normalize_sources_detail] Extracted case_name: {case_name}")
+                else:
+                    logger.debug(f"[_normalize_sources_detail] case_name not found. detail keys: {list(detail.keys())}, metadata keys: {list(metadata.keys())}")
                 if detail.get("court") or metadata.get("court"):
                     normalized_detail["court"] = detail.get("court") or metadata.get("court")
                 decision_date = detail.get("decision_date") or metadata.get("announce_date") or metadata.get("decision_date")
@@ -2274,8 +3029,11 @@ class SourcesExtractor:
                         for statute in extracted_statutes:
                             statute_key = f"{statute.get('statute_name', '')}_{statute.get('article_no', '')}_{statute.get('clause_no', '')}_{statute.get('item_no', '')}"
                             if statute_key not in existing_keys:
-                                existing_statutes.append(statute)
-                                existing_keys.add(statute_key)
+                                # _clean_source_for_client를 통해 정리하여 name과 statute_name이 제대로 설정되도록 함
+                                cleaned_statute = self._clean_source_for_client(statute)
+                                if cleaned_statute:
+                                    existing_statutes.append(cleaned_statute)
+                                    existing_keys.add(statute_key)
                         
                         sources_by_type["statute_article"] = existing_statutes
                 except Exception as extract_error:

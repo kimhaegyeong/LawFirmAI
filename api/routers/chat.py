@@ -374,6 +374,7 @@ async def _generate_stream_response(
     full_answer = ""
     final_metadata = None
     stream_completed = False
+    done_event_sent = False  # stream_final_answer가 이미 done 이벤트를 보냈는지 추적
     
     try:
         # stream_final_answer를 직접 호출하여 chunk 단위 스트리밍
@@ -383,8 +384,47 @@ async def _generate_stream_response(
                 session_id=session_id
             ):
                 if chunk:
-                    # chunk는 이미 "data: {...}\n\n" 형식이므로 그대로 yield
+                    # chunk는 이미 "data: {...}\n\n" 형식이므로 파싱하여 내용 추출
                     try:
+                        # SSE 형식에서 JSON 추출
+                        if chunk.startswith("data: "):
+                            json_str = chunk[6:].strip()  # "data: " 제거
+                            if json_str:
+                                try:
+                                    event_data = json.loads(json_str)
+                                    event_type = event_data.get("type", "")
+                                    
+                                    # stream 이벤트에서 content 추출하여 full_answer 업데이트
+                                    if event_type == "stream":
+                                        content = event_data.get("content", "")
+                                        if content:
+                                            full_answer += content
+                                    
+                                    # final 이벤트에서 content와 metadata 추출
+                                    elif event_type == "final":
+                                        final_content = event_data.get("content", "")
+                                        if final_content:
+                                            full_answer = final_content
+                                        final_metadata = event_data.get("metadata", {})
+                                    
+                                    # done 이벤트 처리
+                                    elif event_type == "done":
+                                        # done 이벤트의 content가 있으면 사용
+                                        done_content = event_data.get("content", "")
+                                        if done_content:
+                                            full_answer = done_content
+                                        done_metadata = event_data.get("metadata", {})
+                                        if done_metadata:
+                                            final_metadata = done_metadata
+                                        # done 이벤트가 이미 전송되었음을 표시
+                                        done_event_sent = True
+                                        stream_completed = True
+                                        logger.debug("[_generate_stream_response] Done event received from stream_final_answer")
+                                    
+                                except json.JSONDecodeError as json_error:
+                                    logger.debug(f"[_generate_stream_response] Failed to parse chunk JSON: {json_error}, chunk: {chunk[:100]}")
+                        
+                        # chunk를 그대로 yield (클라이언트로 전송)
                         yield chunk
                     except (GeneratorExit, asyncio.CancelledError) as cancel_error:
                         # 클라이언트가 연결을 끊은 경우
@@ -397,63 +437,39 @@ async def _generate_stream_response(
         except asyncio.CancelledError:
             logger.warning("⚠️ [_generate_stream_response] 워크플로우 스트리밍이 취소되었습니다 (CancelledError)")
             # 에러 이벤트 전송
-            error_event = {
-                "type": "error",
-                "content": "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
-                "metadata": {"error": True, "cancelled": True},
-                "timestamp": datetime.now().isoformat()
-            }
-            yield format_sse_event(error_event)
-            stream_completed = True
-            raise  # 상위로 전파
+            try:
+                error_event = {
+                    "type": "error",
+                    "content": "[오류] 작업이 취소되었습니다. 다시 시도해주세요.",
+                    "metadata": {"error": True, "cancelled": True},
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield format_sse_event(error_event)
                 
-                # final 이벤트에서 메타데이터 추출
-                try:
-                    # "data: " 접두사 제거
-                    if chunk.startswith("data: "):
-                        json_str = chunk[6:].strip()
-                        event_data = json.loads(json_str)
-                        event_type = event_data.get("type", "")
-                        
-                        if event_type == "stream":
-                            content = event_data.get("content", "")
-                            if content:
-                                full_answer += content
-                        
-                        elif event_type == "final":
-                            content = event_data.get("content", "")
-                            if content and not content.startswith("[오류]"):
-                                full_answer = content
-                            final_metadata = event_data.get("metadata", {})
-                            
-                            logger.debug(
-                                f"[_generate_stream_response] Final event received: "
-                                f"sources={len(final_metadata.get('sources', []))}, "
-                                f"legal_references={len(final_metadata.get('legal_references', []))}, "
-                                f"sources_detail={len(final_metadata.get('sources_detail', []))}, "
-                                f"related_questions={len(final_metadata.get('related_questions', []))}, "
-                                f"has_sources_data={_has_sources_data(final_metadata)}"
-                            )
-                        
-                        elif event_type == "done":
-                            # done 이벤트에서도 최종 내용 확인
-                            content = event_data.get("content", "")
-                            if content and not content.startswith("[오류]"):
-                                # done 이벤트의 content가 더 길면 사용
-                                if len(content) > len(full_answer):
-                                    full_answer = content
-                            # done 이벤트에 metadata가 있고 아직 final_metadata가 없으면 사용
-                            if not final_metadata and event_data.get("metadata"):
-                                final_metadata = event_data.get("metadata", {})
-                            
-                except (json.JSONDecodeError, ValueError) as e:
-                    # JSON 파싱 실패는 무시 (일부 청크는 JSON이 아닐 수 있음)
-                    if '[스트리밍 완료]' not in chunk and '[완료]' not in chunk:
-                        logger.debug(f"Failed to parse chunk as JSON: {e}")
+                # ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 done 이벤트도 전송
+                if not done_event_sent:
+                    done_event = {
+                        "type": "done",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield format_sse_event(done_event)
+                    done_event_sent = True
+                stream_completed = True
+            except (GeneratorExit, asyncio.CancelledError):
+                # 이미 연결이 끊어진 경우 무시
+                stream_completed = True
+            except Exception as cancel_error:
+                logger.warning(f"Error sending error/done event after cancellation: {cancel_error}")
+                stream_completed = True
+            raise  # 상위로 전파
         
         # full_answer가 비어있으면 경고 로그
         if not full_answer:
             logger.warning(f"[_generate_stream_response] full_answer is empty for message: {message[:50]}...")
+            logger.debug(f"[_generate_stream_response] Stream completed but no content was accumulated. This may indicate that stream events were not properly processed.")
+        
+        # done_event_sent는 이미 위에서 설정되었으므로 재설정하지 않음
+        # stream_final_answer가 이미 done 이벤트를 보냈는지 확인 (위에서 설정된 값 사용)
         
         if full_answer:
             metadata = final_metadata if final_metadata else {}
@@ -498,6 +514,7 @@ async def _generate_stream_response(
             
             # sources, legal_references, sources_detail 중 하나라도 있으면 sources 이벤트 전송
             # related_questions가 없어도 실제 참고자료가 있으면 전송
+            sources_event_sent = False
             if _has_actual_sources(metadata):
                 try:
                     sources_event = _create_sources_event(metadata, saved_message_id)
@@ -509,15 +526,27 @@ async def _generate_stream_response(
                         f"related_questions={len(metadata.get('related_questions', []))}"
                     )
                     yield format_sse_event(sources_event)
+                    sources_event_sent = True
+                except (GeneratorExit, asyncio.CancelledError):
+                    # 클라이언트가 연결을 끊은 경우
+                    logger.debug("[_generate_stream_response] Client disconnected while sending sources event")
+                    raise
                 except Exception as sources_error:
                     logger.error(f"Failed to create or send sources event: {sources_error}", exc_info=True)
                     # sources 이벤트 생성 실패해도 스트림은 계속 진행
+                    # done 이벤트는 아래에서 반드시 전송됨
             
-            _maybe_generate_session_title(session_id)
+            # 세션 제목 생성 (실패해도 스트림은 계속 진행)
+            try:
+                _maybe_generate_session_title(session_id)
+            except Exception as title_error:
+                logger.debug(f"Failed to generate session title: {title_error}")
+                # 세션 제목 생성 실패해도 스트림은 계속 진행
         
         # 정상 종료 시 done 이벤트 전송 (stream_handler에서 보내지 않았을 수 있으므로)
         # ERR_INCOMPLETE_CHUNKED_ENCODING 오류를 방지하기 위해 반드시 done 이벤트 전송
-        if not stream_completed:
+        # 단, stream_final_answer가 이미 done 이벤트를 보냈다면 중복 전송하지 않음
+        if not done_event_sent:
             try:
                 done_event = {
                     "type": "done",
@@ -526,7 +555,9 @@ async def _generate_stream_response(
                     "timestamp": datetime.now().isoformat()
                 }
                 yield format_sse_event(done_event)
+                done_event_sent = True
                 stream_completed = True
+                logger.debug("[_generate_stream_response] Done event sent at end of stream")
             except (GeneratorExit, asyncio.CancelledError):
                 logger.debug("[_generate_stream_response] Client disconnected while sending done event")
                 stream_completed = True
@@ -534,6 +565,9 @@ async def _generate_stream_response(
             except Exception as done_error:
                 logger.warning(f"Error sending done event: {done_error}")
                 stream_completed = True
+        else:
+            logger.debug("[_generate_stream_response] Done event already sent by stream_final_answer")
+            stream_completed = True
         
     except (GeneratorExit, asyncio.CancelledError) as cancel_error:
         # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
@@ -557,12 +591,25 @@ async def _generate_stream_response(
             yield format_sse_event(error_event)
             
             # 에러 발생 시에도 done 이벤트 전송 (stream_handler에서 보내지 않을 수 있으므로)
-            done_event = {
-                "type": "done",
-                "timestamp": datetime.now().isoformat()
-            }
-            yield format_sse_event(done_event)
-            stream_completed = True
+            # ERR_INCOMPLETE_CHUNKED_ENCODING 방지를 위해 반드시 done 이벤트 전송
+            if not done_event_sent:
+                try:
+                    done_event = {
+                        "type": "done",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    yield format_sse_event(done_event)
+                    done_event_sent = True
+                    stream_completed = True
+                except (GeneratorExit, asyncio.CancelledError):
+                    logger.debug("[_generate_stream_response] Client disconnected while sending error done event")
+                    stream_completed = True
+                    raise
+                except Exception as error_done_error:
+                    logger.warning(f"Error sending done event after error: {error_done_error}")
+                    stream_completed = True
+            else:
+                stream_completed = True
         except (GeneratorExit, asyncio.CancelledError):
             logger.debug("[_generate_stream_response] Client disconnected or cancelled during error handling")
             stream_completed = True
@@ -570,7 +617,9 @@ async def _generate_stream_response(
         except Exception as yield_error:
             logger.error(f"Error yielding error message: {yield_error}")
             stream_completed = True
-            # 최종 폴백: 스트림 종료를 보장하기 위해 아무것도 yield하지 않고 종료
+            # 최종 폴백: 스트림 종료를 보장하기 위해 done 이벤트 전송 시도
+            # 하지만 yield_error가 발생했으므로 제너레이터가 이미 종료되었을 수 있음
+            # 이 경우는 로그만 남기고 종료
     finally:
         # Generator 종료 시 로그만 남기고 yield는 하지 않음
         # finally 블록에서 yield를 사용하면 제너레이터가 이미 종료된 후에 실행될 수 있어 문제가 발생할 수 있음
@@ -627,6 +676,13 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             content=final_message
         )
         
+        # 쿼터 증가 플래그 확인 (익명 사용자이고 쿼터 증가가 필요한 경우)
+        should_increment_quota = (
+            not current_user.get("authenticated") and 
+            current_user.get("_should_increment_quota", False) and
+            anonymous_quota_service.is_enabled()
+        )
+        
         # AI 답변 생성
         try:
             result = await chat_service.process_message(
@@ -634,12 +690,24 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
                 session_id=chat_request.session_id,
                 enable_checkpoint=chat_request.enable_checkpoint
             )
+            
+            # 성공적으로 답변을 받은 경우에만 쿼터 증가
+            if should_increment_quota:
+                remaining = anonymous_quota_service.increment_quota(client_ip)
+                logger.debug(f"[chat] Quota incremented after successful response, ip={client_ip}, remaining={remaining}")
+                # current_user에 업데이트된 쿼터 정보 반영
+                current_user["quota_remaining"] = remaining
         except asyncio.CancelledError:
             logger.warning("⚠️ [chat] 워크플로우 실행이 취소되었습니다 (CancelledError)")
+            # 취소된 경우 쿼터 증가하지 않음
             raise HTTPException(
                 status_code=500,
                 detail="작업이 취소되었습니다. 다시 시도해주세요."
             )
+        except Exception as e:
+            # 에러 발생 시 쿼터 증가하지 않음
+            logger.error(f"[chat] Error processing message, quota not incremented: {e}")
+            raise
         
         # AI 답변 저장
         session_service.add_message(
@@ -870,13 +938,115 @@ async def chat_stream(
             content=final_message
         )
         
+        # 쿼터 증가 플래그 확인 (익명 사용자이고 쿼터 증가가 필요한 경우)
+        should_increment_quota = (
+            not current_user.get("authenticated") and 
+            current_user.get("_should_increment_quota", False) and
+            anonymous_quota_service.is_enabled()
+        )
+        
+        # 쿼터 증가 여부를 추적하기 위한 변수
+        quota_incremented = False
+        
         try:
+            # 스트리밍 응답 생성 (성공적으로 완료된 경우에만 쿼터 증가)
+            async def stream_with_quota_management():
+                nonlocal quota_incremented
+                done_event_sent = False
+                last_chunk = None
+                try:
+                    async for chunk in _generate_stream_response(
+                        chat_service=chat_service,
+                        message=final_message,
+                        session_id=stream_request.session_id
+                    ):
+                        yield chunk
+                        last_chunk = chunk
+                        # done 이벤트가 전송되었는지 확인 (SSE 형식: "data: {...}\n\n")
+                        # format_sse_event는 "data: {json}\n\n" 형식이므로 JSON 부분에서 확인
+                        if chunk:
+                            # SSE 형식에서 JSON 부분 추출하여 확인
+                            if chunk.startswith("data: "):
+                                try:
+                                    json_str = chunk[6:].strip()  # "data: " 제거
+                                    if json_str:
+                                        event_data = json.loads(json_str)
+                                        if event_data.get("type") == "done":
+                                            done_event_sent = True
+                                            logger.debug("[stream_with_quota_management] Done event detected in chunk")
+                                except (json.JSONDecodeError, ValueError):
+                                    # JSON 파싱 실패 시 문자열 검색으로 폴백
+                                    if '"type":"done"' in chunk or "'type':'done'" in chunk:
+                                        done_event_sent = True
+                            else:
+                                # SSE 형식이 아닌 경우 문자열 검색
+                                if '"type":"done"' in chunk or "'type':'done'" in chunk:
+                                    done_event_sent = True
+                    
+                    # 스트리밍이 성공적으로 완료된 경우에만 쿼터 증가
+                    if should_increment_quota and not quota_incremented:
+                        remaining = anonymous_quota_service.increment_quota(client_ip)
+                        quota_incremented = True
+                        logger.debug(f"[chat_stream] Quota incremented after successful stream, ip={client_ip}, remaining={remaining}")
+                    
+                    # 🔥 개선: 정상 종료 시에도 done 이벤트가 전송되었는지 확인
+                    # _generate_stream_response가 완전히 소비되었지만 done 이벤트가 없을 수 있음
+                    if not done_event_sent:
+                        try:
+                            done_event = {
+                                "type": "done",
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            yield format_sse_event(done_event)
+                            done_event_sent = True
+                            logger.debug("[stream_with_quota_management] Sent done event after stream completion")
+                        except (GeneratorExit, asyncio.CancelledError):
+                            # 이미 연결이 끊어진 경우 무시
+                            pass
+                        except Exception as done_error:
+                            logger.warning(f"[stream_with_quota_management] Failed to send done event after completion: {done_error}")
+                            
+                except (GeneratorExit, asyncio.CancelledError):
+                    # 클라이언트가 연결을 끊은 경우 - 정상적인 종료
+                    logger.debug("[stream_with_quota_management] Client disconnected or cancelled")
+                    # GeneratorExit나 CancelledError는 제너레이터가 이미 종료된 상태이므로 yield 불가
+                    # done 이벤트는 전송하지 않음 (이미 연결이 끊어짐)
+                    raise
+                except Exception as e:
+                    # 에러 발생 시 쿼터 증가하지 않음
+                    logger.warning(f"[chat_stream] Stream error occurred, quota not incremented: {e}", exc_info=True)
+                    # 에러 발생 시에도 done 이벤트 전송 (ERR_INCOMPLETE_CHUNKED_ENCODING 방지)
+                    if not done_event_sent:
+                        try:
+                            error_event = {
+                                "type": "error",
+                                "content": f"[오류] {str(e)}",
+                                "metadata": {
+                                    "error": True,
+                                    "error_type": type(e).__name__
+                                },
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            yield format_sse_event(error_event)
+                            
+                            done_event = {
+                                "type": "done",
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            yield format_sse_event(done_event)
+                            done_event_sent = True
+                        except (GeneratorExit, asyncio.CancelledError):
+                            # 이미 연결이 끊어진 경우 무시
+                            pass
+                        except Exception as yield_error:
+                            logger.error(f"[stream_with_quota_management] Failed to send error/done event: {yield_error}")
+                    raise
+            
+            # 초기 쿼터 정보 가져오기 (성공 시 업데이트됨)
+            initial_remaining = current_user.get("quota_remaining", anonymous_quota_service.get_remaining_quota(client_ip))
+            
             return StreamingResponse(
-                _generate_stream_response(
-                    chat_service=chat_service,
-                    message=final_message,
-                    session_id=stream_request.session_id
-                ),
+                stream_with_quota_management(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache, no-transform",
@@ -888,6 +1058,9 @@ async def chat_stream(
                     "X-Content-Type-Options": "nosniff",
                     "X-Cache": "MISS",
                     "X-Stream-Status": "active",  # 스트림 상태 추적용 (디버깅)
+                    # 쿼터 정보 (성공 시 업데이트됨)
+                    "X-Quota-Remaining": str(initial_remaining),
+                    "X-Quota-Limit": str(anonymous_quota_service.quota_limit),
                 }
             )
         except asyncio.CancelledError:
@@ -918,14 +1091,17 @@ async def chat_stream(
                     "X-Stream-Status": "cancelled",
                 }
             )
-    except (GeneratorExit, asyncio.CancelledError):
-        logger.debug("[chat_stream] Client disconnected or cancelled")
-        return
+        except (GeneratorExit, asyncio.CancelledError):
+            logger.debug("[chat_stream] Client disconnected or cancelled")
+            # 취소된 경우 쿼터 증가하지 않음
+            return
     except ValueError as e:
         logger.warning(f"Validation error in chat_stream endpoint: {e}")
+        # 검증 오류 시 쿼터 증가하지 않음
         raise HTTPException(status_code=400, detail="입력 데이터가 올바르지 않습니다")
     except Exception as e:
         logger.error(f"Error in chat_stream endpoint: {e}", exc_info=True)
+        # 에러 발생 시 쿼터 증가하지 않음
         from api.config import api_config
         if api_config.debug:
             detail = f"스트리밍 처리 중 오류가 발생했습니다: {str(e)}"

@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: lawfirmai-postgres-local
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lawfirmai_local}
+      POSTGRES_USER: ${POSTGRES_USER:-lawfirmai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # 한국어 locale 설정
+      POSTGRES_INITDB_ARGS: "--locale=ko_KR.UTF-8 --encoding=UTF8"
+      LC_ALL: ko_KR.UTF-8
+      LANG: ko_KR.UTF-8
+    volumes:
+      - postgres_local_data:/var/lib/postgresql/data
+      # 한국어 locale 초기화 스크립트
+      - ./init-locale.sh:/docker-entrypoint-initdb.d/init-locale.sh:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - lawfirm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lawfirmai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c lc_messages=ko_KR.UTF-8
+      -c lc_monetary=ko_KR.UTF-8
+      -c lc_numeric=ko_KR.UTF-8
+      -c lc_time=ko_KR.UTF-8
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: lawfirmai-pgadmin-local
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@lawfirmai.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+      # 한국어 locale 설정
+      LC_ALL: ko_KR.UTF-8
+      LANG: ko_KR.UTF-8
+    volumes:
+      - pgadmin_local_data:/var/lib/pgadmin
+      # pgAdmin 서버 설정 (한국어 지원)
+      - ./pgadmin-config.json:/pgadmin4/servers.json:ro
+    ports:
+      - "5050:80"
+    networks:
+      - lawfirm-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_local_data:
+    driver: local
+  pgadmin_local_data:
+    driver: local
+
+networks:
+  lawfirm-network:
+    driver: bridge
+
