@@ -8,14 +8,29 @@ import logging
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, CancelledError as FutureCancelledError
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_helpers import ensure_state_group, set_retrieved_docs
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.query_diversifier import QueryDiversifier
-from core.workflow.utils.search_result_balancer import SearchResultBalancer
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_helpers import ensure_state_group, set_retrieved_docs
+except ImportError:
+    from core.workflow.state.state_helpers import ensure_state_group, set_retrieved_docs
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.query_diversifier import QueryDiversifier
+except ImportError:
+    from core.workflow.utils.query_diversifier import QueryDiversifier
+try:
+    from lawfirm_langgraph.core.workflow.utils.search_result_balancer import SearchResultBalancer
+except ImportError:
+    from core.workflow.utils.search_result_balancer import SearchResultBalancer
 
 
 class SearchExecutionProcessor:
@@ -762,9 +777,14 @@ class SearchExecutionProcessor:
                                 remaining_futures = [f for f in [semantic_future, keyword_future] if not f.done()]
                                 for remaining_future in remaining_futures:
                                     if not remaining_future.running():
-                                        remaining_future.cancel()
-                                        if self.logger.isEnabledFor(logging.DEBUG):
-                                            self.logger.debug("Cancelled remaining search (early exit)")
+                                        try:
+                                            remaining_future.cancel()
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug("Cancelled remaining search (early exit)")
+                                        except (FutureCancelledError, Exception) as cancel_error:
+                                            # 취소 중 발생하는 예외는 무시
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug(f"Future cancellation error (ignored): {cancel_error}")
                                 
                                 self.logger.info(
                                     f"⚡ [PRIORITY SEARCH] Phase 1 sufficient "
@@ -775,13 +795,22 @@ class SearchExecutionProcessor:
                                 early_exit_reason = f"Phase 1 sufficient: {phase1_total} results"
                                 break  # 조기 종료
                             
-                        except Exception as e:
-                            if future == semantic_future:
-                                self.logger.error(f"Semantic search failed: {e}")
-                                semantic_results, semantic_count = [], 0
-                            elif future == keyword_future:
-                                self.logger.error(f"Keyword search failed: {e}")
-                                keyword_results, keyword_count = [], 0
+                        except (FutureCancelledError, Exception) as e:
+                            # CancelledError는 정상적인 취소이므로 경고만 로깅
+                            if isinstance(e, FutureCancelledError):
+                                if self.logger.isEnabledFor(logging.DEBUG):
+                                    self.logger.debug(f"Search future cancelled: {future}")
+                                if future == semantic_future:
+                                    semantic_results, semantic_count = [], 0
+                                elif future == keyword_future:
+                                    keyword_results, keyword_count = [], 0
+                            else:
+                                if future == semantic_future:
+                                    self.logger.error(f"Semantic search failed: {e}")
+                                    semantic_results, semantic_count = [], 0
+                                elif future == keyword_future:
+                                    self.logger.error(f"Keyword search failed: {e}")
+                                    keyword_results, keyword_count = [], 0
                     
                     # Phase 1 결과 평가 (조기 종료되지 않은 경우)
                     if not early_exit_triggered:
@@ -801,17 +830,26 @@ class SearchExecutionProcessor:
                             early_exit_triggered = True
                             early_exit_reason = f"Phase 1 sufficient: {phase1_total} results"
                 
-                except TimeoutError:
-                    # Phase 1 타임아웃: 부분 결과라도 사용
-                    self.logger.warning("⚠️ Phase 1 timeout, using partial results")
+                except (TimeoutError, FutureCancelledError) as e:
+                    # Phase 1 타임아웃 또는 취소: 부분 결과라도 사용
+                    if isinstance(e, TimeoutError):
+                        self.logger.warning("⚠️ Phase 1 timeout, using partial results")
+                    else:
+                        self.logger.warning("⚠️ Phase 1 cancelled, using partial results")
                     try:
                         if not semantic_results and semantic_future.done():
-                            semantic_results, semantic_count = semantic_future.result()
+                            try:
+                                semantic_results, semantic_count = semantic_future.result()
+                            except (FutureCancelledError, Exception):
+                                semantic_results, semantic_count = [], 0
                     except Exception:
                         semantic_results, semantic_count = [], 0
                     try:
                         if not keyword_results and keyword_future.done():
-                            keyword_results, keyword_count = keyword_future.result()
+                            try:
+                                keyword_results, keyword_count = keyword_future.result()
+                            except (FutureCancelledError, Exception):
+                                keyword_results, keyword_count = [], 0
                     except Exception:
                         keyword_results, keyword_count = [], 0
             
@@ -972,48 +1010,74 @@ class SearchExecutionProcessor:
                                 for remaining_future in remaining_futures:
                                     remaining_type, _ = futures_map[remaining_future]
                                     if remaining_type == 'multi_query' and not remaining_future.running():
-                                        remaining_future.cancel()
-                                        if self.logger.isEnabledFor(logging.DEBUG):
-                                            self.logger.debug(f"Cancelled {remaining_type} search (early exit)")
+                                        try:
+                                            remaining_future.cancel()
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug(f"Cancelled {remaining_type} search (early exit)")
+                                        except (FutureCancelledError, Exception) as cancel_error:
+                                            # 취소 중 발생하는 예외는 무시
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug(f"Future cancellation error (ignored): {cancel_error}")
                                 
                                 # 다른 futures 취소
                                 for remaining_future in remaining_futures:
                                     remaining_type, _ = futures_map[remaining_future]
                                     if remaining_type != 'multi_query' and not remaining_future.running():
-                                        remaining_future.cancel()
-                                        if self.logger.isEnabledFor(logging.DEBUG):
-                                            self.logger.debug(f"Cancelled {remaining_type} search (early exit)")
+                                        try:
+                                            remaining_future.cancel()
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug(f"Cancelled {remaining_type} search (early exit)")
+                                        except (FutureCancelledError, Exception) as cancel_error:
+                                            # 취소 중 발생하는 예외는 무시
+                                            if self.logger.isEnabledFor(logging.DEBUG):
+                                                self.logger.debug(f"Future cancellation error (ignored): {cancel_error}")
                                 
                                 if self.logger.isEnabledFor(logging.DEBUG):
                                     self.logger.debug(f"⚡ [EARLY EXIT] {early_exit_reason}")
                                 break
                                 
-                        except Exception as e:
-                            if search_type == 'direct_statute':
+                        except (FutureCancelledError, Exception) as e:
+                            # CancelledError는 정상적인 취소이므로 경고만 로깅
+                            if isinstance(e, FutureCancelledError):
                                 if self.logger.isEnabledFor(logging.DEBUG):
-                                    self.logger.debug(f"Direct statute search failed: {e}")
-                                direct_statute_results = []
-                                completed_tasks.append(('direct_statute', 'error', str(e)))
-                            else:
-                                self.logger.error(f"{search_type} search failed: {e}")
-                                if self.logger.isEnabledFor(logging.DEBUG):
-                                    self.logger.debug(f"{search_type} search exception: {e}")
-                                completed_tasks.append((search_type, 'error', str(e)))
-                                if search_type == 'semantic':
+                                    self.logger.debug(f"{search_type} search cancelled: {e}")
+                                if search_type == 'direct_statute':
+                                    direct_statute_results = []
+                                elif search_type == 'semantic':
                                     semantic_results, semantic_count = [], 0
                                 else:
                                     keyword_results, keyword_count = [], 0
+                            else:
+                                if search_type == 'direct_statute':
+                                    if self.logger.isEnabledFor(logging.DEBUG):
+                                        self.logger.debug(f"Direct statute search failed: {e}")
+                                    direct_statute_results = []
+                                    completed_tasks.append(('direct_statute', 'error', str(e)))
+                                else:
+                                    self.logger.error(f"{search_type} search failed: {e}")
+                                    if self.logger.isEnabledFor(logging.DEBUG):
+                                        self.logger.debug(f"{search_type} search exception: {e}")
+                                    completed_tasks.append((search_type, 'error', str(e)))
+                                    if search_type == 'semantic':
+                                        semantic_results, semantic_count = [], 0
+                                    else:
+                                        keyword_results, keyword_count = [], 0
                             completed_count += 1
                     
                     # 로깅 최적화: 완료된 작업 한 번에 로깅
                     if self.logger.isEnabledFor(logging.DEBUG) and completed_tasks:
                         self.logger.debug(f"Completed tasks: {completed_tasks}")
-                except TimeoutError:
-                    # 타임아웃 발생 시 완료되지 않은 future 수집
+                except (TimeoutError, FutureCancelledError) as e:
+                    # 타임아웃 또는 취소 발생 시 완료되지 않은 future 수집
                     unfinished_futures = [f for f in futures_map.keys() if not f.done()]
-                    self.logger.warning(
-                        f"⚠️ 병렬 검색 타임아웃 발생: {len(unfinished_futures)} (of {len(futures_map)}) futures unfinished"
-                    )
+                    if isinstance(e, TimeoutError):
+                        self.logger.warning(
+                            f"⚠️ 병렬 검색 타임아웃 발생: {len(unfinished_futures)} (of {len(futures_map)}) futures unfinished"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ 병렬 검색 취소 발생: {len(unfinished_futures)} (of {len(futures_map)}) futures unfinished"
+                        )
                 
                     # Phase 2 타임아웃 처리 (짧은 타임아웃)
                     phase2_timeout = 8  # 8초
@@ -1059,16 +1123,23 @@ class SearchExecutionProcessor:
                                         keyword_count += len(new_statute_results)
                                         self.logger.info(f"✅ [PHASE 2] Direct statute added {len(new_statute_results)} new results")
                             
-                            except Exception as e:
-                                if search_type == 'direct_statute':
+                            except (FutureCancelledError, Exception) as e:
+                                if isinstance(e, FutureCancelledError):
                                     if self.logger.isEnabledFor(logging.DEBUG):
-                                        self.logger.debug(f"Direct statute search failed: {e}")
-                                    direct_statute_results = []
+                                        self.logger.debug(f"{search_type} search cancelled in Phase 2")
                                 else:
-                                    self.logger.warning(f"Multi-query search failed: {e}")
+                                    if search_type == 'direct_statute':
+                                        if self.logger.isEnabledFor(logging.DEBUG):
+                                            self.logger.debug(f"Direct statute search failed: {e}")
+                                        direct_statute_results = []
+                                    else:
+                                        self.logger.warning(f"Multi-query search failed: {e}")
                     
-                    except TimeoutError:
-                        self.logger.warning("⚠️ Phase 2 timeout, using partial results")
+                    except (TimeoutError, FutureCancelledError) as e:
+                        if isinstance(e, TimeoutError):
+                            self.logger.warning("⚠️ Phase 2 timeout, using partial results")
+                        else:
+                            self.logger.warning("⚠️ Phase 2 cancelled, using partial results")
                 
                 # 조기 종료 로깅
                 if early_exit_triggered:
@@ -1266,8 +1337,12 @@ class SearchExecutionProcessor:
                 else:
                     self.logger.warning("⚠️ [DEBUG] Keyword search returned 0 results")
 
-        except TimeoutError as timeout_err:
-            self.logger.warning(f"⚠️ 병렬 검색 타임아웃 발생: {timeout_err}")
+        except (TimeoutError, FutureCancelledError) as timeout_err:
+            # CancelledError는 정상적인 취소이므로 경고만 로깅
+            if isinstance(timeout_err, FutureCancelledError):
+                self.logger.warning(f"⚠️ 병렬 검색 취소 발생: {timeout_err}")
+            else:
+                self.logger.warning(f"⚠️ 병렬 검색 타임아웃 발생: {timeout_err}")
             
             # 🔥 개선 3: 검색 결과가 0개일 때 즉시 반환 (timeout 방지)
             if semantic_count == 0 and keyword_count == 0:
@@ -1306,7 +1381,20 @@ class SearchExecutionProcessor:
                 state["search"]["semantic_count"] = semantic_count
                 state["search"]["keyword_count"] = keyword_count
                 return state
-        except Exception as e:
+        except (FutureCancelledError, Exception) as e:
+            # CancelledError는 정상적인 취소이므로 경고만 로깅하고 빈 결과 반환
+            if isinstance(e, FutureCancelledError):
+                self.logger.warning(f"⚠️ 병렬 검색 취소 발생: {e}")
+                # 취소된 경우 빈 결과로라도 계속 진행
+                semantic_results, semantic_count = [], 0
+                keyword_results, keyword_count = [], 0
+                ensure_state_group(state, "search")
+                state["search"]["semantic_results"] = semantic_results
+                state["search"]["keyword_results"] = keyword_results
+                state["search"]["semantic_count"] = semantic_count
+                state["search"]["keyword_count"] = keyword_count
+                return state
+            
             self.logger.error(f"❌ 병렬 검색 중 예상치 못한 오류: {e}", exc_info=True)
             self.logger.info("🔄 순차 검색으로 폴백 시도 중...")
             try:
