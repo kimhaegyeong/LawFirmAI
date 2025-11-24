@@ -5,7 +5,6 @@
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
 import { WelcomeScreen } from '../welcome/WelcomeScreen';
-import { QuotaIndicator } from './QuotaIndicator';
 import type { ChatMessage, FileAttachment } from '../../types/chat';
 import type { StreamError } from '../../types/error';
 
@@ -78,16 +77,6 @@ export function ChatContainer({
           />
         )}
       </div>
-      
-      {/* 쿼터 정보 표시 (익명 사용자만) */}
-      {!isAuthenticated && quotaInfo && (
-        <QuotaIndicator
-          remaining={quotaInfo.remaining}
-          limit={quotaInfo.limit}
-          isAuthenticated={isAuthenticated}
-          onLoginClick={onLoginClick}
-        />
-      )}
       
       {/* 입력창 - 하단 고정 */}
       <div className="flex-shrink-0">
