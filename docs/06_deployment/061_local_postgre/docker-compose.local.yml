@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: lawfirmai-postgres:18-pgvector
     container_name: lawfirmai-postgres-local
     restart: unless-stopped
     environment:
@@ -10,15 +10,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-lawfirmai}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_password}
       PGDATA: /var/lib/postgresql/data/pgdata
-      # 한국어 locale 설정
-      POSTGRES_INITDB_ARGS: "--locale=ko_KR.UTF-8 --encoding=UTF8"
-      LC_ALL: ko_KR.UTF-8
-      LANG: ko_KR.UTF-8
+      # KST 시간대 설정
+      TZ: Asia/Seoul
     volumes:
       - postgres_local_data:/var/lib/postgresql/data
-      # 한국어 locale 초기화 스크립트
-      - ./init-locale.sh:/docker-entrypoint-initdb.d/init-locale.sh:ro
-      # PostgreSQL 확장 설치 스크립트 (한국어 텍스트 검색)
+      # PostgreSQL 확장 설치 스크립트 (pg_trgm, pgvector)
       - ../../scripts/migrations/init_postgres_extensions.sql:/docker-entrypoint-initdb.d/01_init_extensions.sql:ro
     ports:
       - "5432:5432"
@@ -31,10 +27,7 @@ services:
       retries: 5
     command: >
       postgres
-      -c lc_messages=ko_KR.UTF-8
-      -c lc_monetary=ko_KR.UTF-8
-      -c lc_numeric=ko_KR.UTF-8
-      -c lc_time=ko_KR.UTF-8
+      -c timezone='Asia/Seoul'
 
   pgadmin:
     image: dpage/pgadmin4:latest

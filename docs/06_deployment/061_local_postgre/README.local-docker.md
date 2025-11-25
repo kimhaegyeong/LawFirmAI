@@ -39,6 +39,22 @@ docker-compose -f docker-compose.local.yml up -d
 postgresql://lawfirmai:local_password@localhost:5432/lawfirmai_local
 ```
 
+## PostgreSQL 확장
+
+이 설정은 다음 PostgreSQL 확장을 자동으로 설치합니다:
+
+### pg_trgm (한국어 텍스트 검색)
+- Trigram 기반 텍스트 검색
+- 유사도 검색 지원
+- GIN 인덱스 지원
+
+### pgvector (벡터 검색)
+- 벡터 유사도 검색
+- FAISS 대안으로 사용 가능
+- 임베딩 벡터 저장 및 검색
+
+확장은 컨테이너 시작 시 자동으로 설치됩니다.
+
 ## 한국어 Locale 설정
 
 이 설정은 PostgreSQL과 pgAdmin에서 한국어 locale을 사용하도록 구성되어 있습니다:
@@ -123,6 +139,18 @@ docker-compose -f docker-compose.local.yml logs -f
 ### PostgreSQL에 직접 접속
 ```bash
 docker exec -it lawfirmai-postgres-local psql -U lawfirmai -d lawfirmai_local
+```
+
+### 확장 확인
+```bash
+# PostgreSQL에 접속 후
+docker exec -it lawfirmai-postgres-local psql -U lawfirmai -d lawfirmai_local
+
+# 확장 목록 확인
+\dx
+
+# 또는 SQL로 확인
+SELECT * FROM pg_extension WHERE extname IN ('pg_trgm', 'vector');
 ```
 
 ### 데이터베이스 백업
