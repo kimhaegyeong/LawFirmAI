@@ -8,11 +8,14 @@ import sys
 import os
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent.parent.parent.parent
+# 프로젝트 루트 경로 추가 (하위 폴더로 이동하여 parent 하나 추가)
+project_root = Path(__file__).parent.parent.parent.parent.parent
 lawfirm_langgraph_dir = project_root / "lawfirm_langgraph"
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(lawfirm_langgraph_dir))
+
+# conftest.py의 project_root 재사용
+from lawfirm_langgraph.tests.unit.search.conftest import project_root as _conftest_project_root
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -46,11 +49,11 @@ class TestRAGImprovementsValidation:
         self._find_database()
     
     def _find_database(self):
-        """데이터베이스 파일 찾기"""
+        """데이터베이스 파일 찾기 (conftest.py 로직 재사용)"""
         possible_db_paths = [
             "data/lawfirm_v2.db",
             "./data/lawfirm_v2.db",
-            str(project_root / "data" / "lawfirm_v2.db")
+            str(_conftest_project_root / "data" / "lawfirm_v2.db")
         ]
         
         for path in possible_db_paths:

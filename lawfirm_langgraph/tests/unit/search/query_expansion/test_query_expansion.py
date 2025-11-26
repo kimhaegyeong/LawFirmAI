@@ -9,12 +9,12 @@ import sys
 import os
 from pathlib import Path
 
-# 프로젝트 루트를 sys.path에 추가
-project_root = Path(__file__).parent.parent.parent
+# 프로젝트 루트를 sys.path에 추가 (하위 폴더로 이동하여 parent 하나 추가)
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # lawfirm_langgraph 디렉토리를 sys.path에 추가
-lawfirm_langgraph_path = Path(__file__).parent.parent
+lawfirm_langgraph_path = project_root / "lawfirm_langgraph"
 sys.path.insert(0, str(lawfirm_langgraph_path))
 
 import logging

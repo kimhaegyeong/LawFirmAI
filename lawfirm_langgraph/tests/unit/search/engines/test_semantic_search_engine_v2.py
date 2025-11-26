@@ -9,10 +9,13 @@ import time
 import sqlite3
 from pathlib import Path
 
-# 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent.parent.parent
+# 프로젝트 루트 경로 추가 (하위 폴더로 이동하여 parent 하나 추가)
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "lawfirm_langgraph"))
+
+# conftest.py에서 db_path 찾기 로직 재사용
+from lawfirm_langgraph.tests.unit.search.conftest import db_path as get_db_path
 
 import warnings
 warnings.filterwarnings('ignore', message='.*python-dotenv.*')
@@ -30,11 +33,13 @@ class TestSemanticSearchEngineV2:
         
     def setup(self):
         """테스트 설정"""
-        # DB 경로 찾기
+        # conftest.py의 db_path 찾기 로직 사용
+        from lawfirm_langgraph.tests.unit.search.conftest import project_root as _project_root
+        
         possible_db_paths = [
             "data/lawfirm_v2.db",
             "./data/lawfirm_v2.db",
-            str(project_root / "data" / "lawfirm_v2.db")
+            str(_project_root / "data" / "lawfirm_v2.db")
         ]
         
         for path in possible_db_paths:
