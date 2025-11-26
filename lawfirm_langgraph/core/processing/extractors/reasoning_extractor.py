@@ -8,7 +8,10 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from core.workflow.utils.workflow_constants import AnswerExtractionPatterns
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import AnswerExtractionPatterns
+except ImportError:
+    from core.workflow.utils.workflow_constants import AnswerExtractionPatterns
 
 
 class ReasoningExtractor:
