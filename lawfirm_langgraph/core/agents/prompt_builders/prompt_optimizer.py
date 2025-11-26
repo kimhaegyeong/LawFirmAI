@@ -20,8 +20,14 @@ import statistics
 from dataclasses import dataclass
 from enum import Enum
 
-from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
-from core.classification.classifiers.question_classifier import QuestionType
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain, ModelType
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
 
 logger = get_logger(__name__)
 

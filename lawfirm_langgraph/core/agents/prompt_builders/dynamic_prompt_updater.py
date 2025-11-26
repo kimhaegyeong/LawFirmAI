@@ -19,7 +19,10 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import hashlib
 
-from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
 
 logger = get_logger(__name__)
 
