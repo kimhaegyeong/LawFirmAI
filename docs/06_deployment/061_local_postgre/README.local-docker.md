@@ -2,6 +2,8 @@
 
 로컬 개발 환경에서 PostgreSQL과 pgAdmin을 사용하기 위한 Docker Compose 설정입니다.
 
+**체크포인트 설정 가이드는 [CHECKPOINT_SETUP.md](./CHECKPOINT_SETUP.md)를 참조하세요.**
+
 ## 시작하기
 
 ### 1. Docker Compose 실행
