@@ -114,17 +114,34 @@ AI 모델의 훈련, 평가, 벡터 임베딩 생성을 담당하는 스크립�
 - `ingest_cases.py` - 판례 데이터 수집 및 저장 (참조조문 자동 추출)
 - `ingest_decisions.py` - 결정례 데이터 수집 및 저장 (참조조문 자동 추출)
 - `ingest_interpretations.py` - 해석례 데이터 수집 및 저장 (참조조문 자동 추출)
+- `ingest_aihub_from_r2.py` - AIHub 데이터 R2에서 다운로드 및 PostgreSQL 적재
+
+### ⚙️ **setup/** - 환경 설정 스크립트
+프로젝트 환경 설정 및 초기화 스크립트들
+
+- `setup_aihub_env.bat` - AIHub 데이터 적재 환경 설정 (Windows)
+- `setup_aihub_env.sh` - AIHub 데이터 적재 환경 설정 (Linux/Mac)
 
 ### 🔧 **utils/** - 유틸리티
 공통 유틸리티 및 헬퍼 함수들
 
 - `reference_statute_extractor.py` - 참조조문 추출기 (판례/결정례/해석례에서 법령 정보 추출)
 
-### 🔄 **migrations/** - 데이터베이스 마이그레이션
-데이터베이스 스키마 변경 및 데이터 마이그레이션 스크립트들
+### 🔄 **migrations/** - 데이터베이스 스키마 초기화 및 검증
+데이터베이스 스키마 초기화, 검증, 유지보수 스크립트들
 
-- `003_add_reference_statutes.sql` - 참조조문 필드 추가 마이그레이션
-- `migrate_reference_statutes.py` - 기존 데이터 참조조문 재추출 마이그레이션
+#### 구조
+- `schema/` - 초기 스키마 SQL 파일들
+- `scripts/init/` - 스키마 초기화 스크립트
+- `scripts/validate/` - 스키마 검증 스크립트
+- `scripts/maintenance/` - 유지보수 스크립트
+- `utils/` - 공통 유틸리티 모듈
+
+#### 주요 스크립트
+- `scripts/init/run_postgresql_migration.py` - PostgreSQL 메인 스키마 초기화
+- `scripts/init/init_open_law_schema.py` - Open Law 스키마 초기화
+- `scripts/validate/validate_postgresql_schema.py` - 스키마 검증
+- `scripts/validate/check_extensions.py` - 확장 확인
 
 ### 📊 **analysis/** - 데이터 분석
 데이터 품질 분석, 모델 성능 분석을 담당하는 스크립트들
@@ -265,6 +282,20 @@ python scripts/ingest/ingest_decisions.py --file data/... --domain "민사법"
 
 # 해석례 수집 (참조조문 자동 추출)
 python scripts/ingest/ingest_interpretations.py --file data/... --domain "민사법"
+
+# AIHub 데이터 적재 (R2에서 다운로드)
+python scripts/ingest/ingest_aihub_from_r2.py --dataset civil --object-key aihub/civil/data.zip
+```
+
+### 환경 설정
+```bash
+# AIHub 데이터 적재 환경 설정
+# Windows
+scripts\setup\setup_aihub_env.bat
+
+# Linux/Mac
+chmod +x scripts/setup/setup_aihub_env.sh
+./scripts/setup/setup_aihub_env.sh
 ```
 
 ### 참조조문 마이그레이션
