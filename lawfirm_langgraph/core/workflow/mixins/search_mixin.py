@@ -9,9 +9,18 @@ import re
 import time
 from typing import Any, Dict, List, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import RetryConfig
-from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import RetryConfig
+except ImportError:
+    from core.workflow.utils.workflow_constants import RetryConfig
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
 
 # 성능 최적화: 정규식 패턴 컴파일 (모듈 레벨)
 LAW_PATTERN = re.compile(r'[가-힣]+법\s*제?\s*\d+\s*조')

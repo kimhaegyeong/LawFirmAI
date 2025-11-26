@@ -7,9 +7,18 @@ Answer Generation Mixin
 import time
 from typing import Any, Dict, List, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
-from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):

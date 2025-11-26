@@ -7,10 +7,22 @@ Classification Mixin
 import time
 from typing import Any, Dict, Tuple
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.workflow_types import QueryComplexity
-from core.shared.wrappers.node_wrappers import with_state_optimization
-from core.workflow.utils.ethical_checker import EthicalChecker
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.workflow_types import QueryComplexity
+except ImportError:
+    from core.workflow.state.workflow_types import QueryComplexity
+try:
+    from lawfirm_langgraph.core.shared.wrappers.node_wrappers import with_state_optimization
+except ImportError:
+    from core.shared.wrappers.node_wrappers import with_state_optimization
+try:
+    from lawfirm_langgraph.core.workflow.utils.ethical_checker import EthicalChecker
+except ImportError:
+    from core.workflow.utils.ethical_checker import EthicalChecker
 
 # Mock observe decorator (Langfuse 제거됨)
 def observe(**kwargs):
