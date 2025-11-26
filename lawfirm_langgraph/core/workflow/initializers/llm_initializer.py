@@ -13,7 +13,10 @@ from typing import Any, Optional
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
 
 logger = get_logger(__name__)
 
