@@ -10,15 +10,41 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.processing.extractors.extractors import ResponseExtractor
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
-from core.workflow.state.state_utils import (
-    MAX_PROCESSING_STEPS,
-    prune_processing_steps,
-)
-from core.classification.classifiers.question_classifier import QuestionType
-from core.services.unified_prompt_manager import LegalDomain
+try:
+    from lawfirm_langgraph.core.processing.extractors.extractors import ResponseExtractor
+except ImportError:
+    from core.processing.extractors.extractors import ResponseExtractor
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
+except ImportError:
+    from core.workflow.state.state_helpers import ensure_state_group, get_field, set_field
+
+try:
+    from lawfirm_langgraph.core.workflow.state.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
+except ImportError:
+    from core.workflow.state.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
+
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
+
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:

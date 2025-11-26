@@ -7,13 +7,26 @@ LangGraph 워크플로우의 조건부 라우팅 로직을 독립 모듈로 분�
 import logging
 from typing import Any, Dict, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import (
-    QualityThresholds,
-    RetryConfig,
-    WorkflowConstants,
-)
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import (
+        QualityThresholds,
+        RetryConfig,
+        WorkflowConstants,
+    )
+except ImportError:
+    from core.workflow.utils.workflow_constants import (
+        QualityThresholds,
+        RetryConfig,
+        WorkflowConstants,
+    )
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class QueryComplexity:

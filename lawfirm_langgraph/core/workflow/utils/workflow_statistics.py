@@ -11,7 +11,10 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Any, Dict, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
 logger = get_logger(__name__)
 
