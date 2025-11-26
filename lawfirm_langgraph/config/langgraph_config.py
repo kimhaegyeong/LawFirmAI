@@ -74,8 +74,7 @@ logger = get_logger(__name__)
 class CheckpointStorageType(Enum):
     """체크포인트 저장소 타입"""
     MEMORY = "memory"  # MemorySaver 사용 (기본값, 개발용)
-    SQLITE = "sqlite"  # SqliteSaver 사용 (프로덕션용)
-    POSTGRES = "postgres"
+    POSTGRES = "postgres"  # PostgresSaver 사용 (프로덕션용)
     REDIS = "redis"
     DISABLED = "disabled"  # 체크포인터 비활성화
 
@@ -86,8 +85,7 @@ class LangGraphConfig:
 
     # 체크포인트 설정
     enable_checkpoint: bool = True  # 체크포인터 활성화 여부
-    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.MEMORY  # 기본값: MemorySaver
-    checkpoint_db_path: str = "./data/checkpoints/langgraph.db"
+    checkpoint_storage: CheckpointStorageType = CheckpointStorageType.POSTGRES  # 기본값: PostgresSaver (로컬/개발/프로덕션 모두 지원)
     checkpoint_ttl: int = 3600  # 1시간
 
     # 워크플로우 설정
@@ -165,11 +163,9 @@ class LangGraphConfig:
         # 체크포인트 설정
         config.enable_checkpoint = os.getenv("ENABLE_CHECKPOINT", "true").lower() == "true"
         
-        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "memory")
+        checkpoint_storage = os.getenv("CHECKPOINT_STORAGE", "postgres")
         if checkpoint_storage == "memory":
             config.checkpoint_storage = CheckpointStorageType.MEMORY
-        elif checkpoint_storage == "sqlite":
-            config.checkpoint_storage = CheckpointStorageType.SQLITE
         elif checkpoint_storage == "postgres":
             config.checkpoint_storage = CheckpointStorageType.POSTGRES
         elif checkpoint_storage == "redis":
@@ -177,8 +173,12 @@ class LangGraphConfig:
         elif checkpoint_storage == "disabled":
             config.checkpoint_storage = CheckpointStorageType.DISABLED
             config.enable_checkpoint = False
+        else:
+            # 알 수 없는 타입은 memory로 폴백
+            logger.warning(f"Unknown checkpoint storage type: {checkpoint_storage}, using memory")
+            config.checkpoint_storage = CheckpointStorageType.MEMORY
 
-        config.checkpoint_db_path = os.getenv("LANGGRAPH_CHECKPOINT_DB", config.checkpoint_db_path)
+        # PostgreSQL은 DATABASE_URL 또는 CHECKPOINT_DATABASE_URL을 사용
         config.checkpoint_ttl = int(os.getenv("CHECKPOINT_TTL", config.checkpoint_ttl))
 
         # 워크플로우 설정
@@ -288,8 +288,8 @@ class LangGraphConfig:
 
         # 필수 설정 검사
         if self.langgraph_enabled:
-            if not self.checkpoint_db_path:
-                errors.append("LANGGRAPH_CHECKPOINT_DB is required when LangGraph is enabled")
+            # PostgreSQL checkpoint는 DATABASE_URL 또는 CHECKPOINT_DATABASE_URL을 사용
+            # checkpoint_db_path는 더 이상 사용하지 않음
 
             if self.checkpoint_ttl <= 0:
                 errors.append("CHECKPOINT_TTL must be positive")
@@ -308,7 +308,6 @@ class LangGraphConfig:
         return {
             "enable_checkpoint": self.enable_checkpoint,
             "checkpoint_storage": self.checkpoint_storage.value,
-            "checkpoint_db_path": self.checkpoint_db_path,
             "checkpoint_ttl": self.checkpoint_ttl,
             "max_iterations": self.max_iterations,
             "recursion_limit": self.recursion_limit,
