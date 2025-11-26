@@ -12,8 +12,14 @@ except ImportError:
 from functools import wraps
 from typing import Any, Callable, Optional
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 logger = get_logger(__name__)
 
