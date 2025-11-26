@@ -1,10 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 """
 LangGraph Checkpoint Manager
-SQLite 기반 체크포인트 관리 모듈
+PostgreSQL 기반 체크포인트 관리 모듈
 """
 
-import sqlite3
 import logging
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
@@ -12,7 +11,6 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pathlib import Path
 
 # 안전한 로깅 유틸리티 import (멀티스레딩 안전)
 # 먼저 폴백 함수를 정의 (항상 사용 가능하도록)
@@ -90,32 +88,72 @@ except NameError:
     safe_log_error = _safe_log_fallback_error
 
 try:
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    LANGGRAPH_AVAILABLE = True
+    from langgraph.checkpoint.postgres import PostgresSaver
+    LANGGRAPH_POSTGRES_AVAILABLE = True
 except ImportError:
-    LANGGRAPH_AVAILABLE = False
+    LANGGRAPH_POSTGRES_AVAILABLE = False
     # 안전한 로깅 사용 (멀티스레딩 안전)
     _temp_logger = logging.getLogger(__name__)
-    safe_log_warning(_temp_logger, "LangGraph checkpoint not available. Please install langgraph-checkpoint-sqlite")
+    safe_log_warning(_temp_logger, "LangGraph PostgreSQL checkpoint not available. Please install langgraph-checkpoint-postgres")
+
+# DatabaseAdapter import
+try:
+    from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+    DATABASE_ADAPTER_AVAILABLE = True
+except ImportError:
+    try:
+        from core.data.db_adapter import DatabaseAdapter
+        DATABASE_ADAPTER_AVAILABLE = True
+    except ImportError:
+        DATABASE_ADAPTER_AVAILABLE = False
+        _temp_logger = logging.getLogger(__name__)
+        safe_log_warning(_temp_logger, "DatabaseAdapter not available")
+
+LANGGRAPH_AVAILABLE = LANGGRAPH_POSTGRES_AVAILABLE
 
 logger = get_logger(__name__)
 
 
 class CheckpointManager:
-    """체크포인트 관리자 (MemorySaver 또는 SqliteSaver 지원)"""
+    """체크포인트 관리자 (PostgreSQL 기반)"""
     
-    def __init__(self, storage_type: str = "memory", db_path: Optional[str] = None):
+    def __init__(self, storage_type: str = "memory", database_url: Optional[str] = None):
         """
         체크포인트 관리자 초기화
         
         Args:
-            storage_type: 저장소 타입 ("memory", "sqlite", "postgres", "redis", "disabled")
-            db_path: 데이터베이스 파일 경로 (SQLite 사용 시 필요)
+            storage_type: 저장소 타입 ("memory", "postgres", "redis", "disabled")
+            database_url: PostgreSQL 데이터베이스 연결 URL (예: "postgresql://user:pass@host:port/dbname")
+                        None인 경우 환경 변수에서 자동으로 가져옴 (DATABASE_URL 또는 CHECKPOINT_DATABASE_URL)
         """
         self.storage_type = storage_type
-        self.db_path = db_path
         self.logger = get_logger(__name__)
         self.saver = None
+        self._db_adapter = None
+        
+        # database_url이 제공되지 않으면 환경 변수에서 가져오기
+        if database_url is None:
+            import os
+            # CHECKPOINT_DATABASE_URL 우선, 없으면 DATABASE_URL 사용
+            database_url = os.getenv("CHECKPOINT_DATABASE_URL") or os.getenv("DATABASE_URL")
+            if database_url:
+                # PostgreSQL URL인지 확인
+                if not database_url.startswith("postgresql://") and not database_url.startswith("postgres://"):
+                    # SQLite URL이면 에러
+                    if database_url.startswith("sqlite://"):
+                        raise ValueError("SQLite is no longer supported for checkpoint storage. Use PostgreSQL instead.")
+                    else:
+                        # 알 수 없는 형식이면 그대로 사용 (PostgresSaver가 처리)
+                        pass
+        
+        self.database_url = database_url
+        
+        # DatabaseAdapter 초기화 (PostgreSQL 지원을 위해)
+        if database_url and DATABASE_ADAPTER_AVAILABLE:
+            try:
+                self._db_adapter = DatabaseAdapter(database_url)
+            except Exception as e:
+                safe_log_warning(self.logger, f"Failed to initialize DatabaseAdapter: {e}")
         
         # disabled인 경우 체크포인터 없음
         if storage_type == "disabled":
@@ -138,9 +176,9 @@ class CheckpointManager:
         # 저장소 타입에 따라 초기화
         if storage_type == "memory":
             self._init_memory_saver()
-        elif storage_type == "sqlite":
-            self._init_sqlite_saver()
-        elif storage_type in ["postgres", "redis"]:
+        elif storage_type == "postgres":
+            self._init_postgres_saver()
+        elif storage_type == "redis":
             safe_log_warning(self.logger, f"{storage_type} checkpoint storage not yet implemented, using MemorySaver")
             self._init_memory_saver()
         else:
@@ -157,26 +195,27 @@ class CheckpointManager:
             safe_log_error(self.logger, f"Failed to initialize MemorySaver: {e}")
             self.saver = None
     
-    def _init_sqlite_saver(self):
-        """SqliteSaver 초기화"""
-        if not self.db_path:
-            safe_log_warning(self.logger, "SQLite requires db_path, falling back to MemorySaver")
+    def _init_postgres_saver(self):
+        """PostgresSaver 초기화"""
+        if not LANGGRAPH_POSTGRES_AVAILABLE:
+            safe_log_warning(self.logger, "LangGraph PostgreSQL checkpoint not available, falling back to MemorySaver")
+            self._init_memory_saver()
+            return
+        
+        if not self.database_url:
+            safe_log_warning(self.logger, "PostgreSQL requires database_url, falling back to MemorySaver")
             self._init_memory_saver()
             return
         
         try:
-            # 디렉토리 생성
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            # PostgreSQL 연결 문자열 형식 확인
+            if not self.database_url.startswith("postgresql://") and not self.database_url.startswith("postgres://"):
+                safe_log_warning(self.logger, f"PostgreSQL connection string should start with 'postgresql://', got: {self.database_url[:20]}...")
             
-            # SQLite 연결 문자열 형식으로 변환
-            db_path_str = self.db_path
-            if not db_path_str.startswith("sqlite:///"):
-                db_path_str = f"sqlite:///{db_path_str}"
-            
-            self.saver = SqliteSaver.from_conn_string(db_path_str)
-            safe_log_info(self.logger, f"Checkpoint manager initialized with SqliteSaver: {db_path_str}")
+            self.saver = PostgresSaver.from_conn_string(self.database_url)
+            safe_log_info(self.logger, "Checkpoint manager initialized with PostgresSaver")
         except Exception as e:
-            safe_log_error(self.logger, f"Failed to initialize SqliteSaver: {e}")
+            safe_log_error(self.logger, f"Failed to initialize PostgresSaver: {e}")
             # 폴백: 메모리 기반 체크포인터 사용
             safe_log_warning(self.logger, "Falling back to MemorySaver")
             self._init_memory_saver()
@@ -224,7 +263,7 @@ class CheckpointManager:
             return False
         
         try:
-            # LangGraph의 SqliteSaver가 자동으로 처리
+            # LangGraph의 PostgresSaver가 자동으로 처리
             # 실제 저장은 워크플로우 실행 시 자동으로 수행됨
             safe_log_debug(self.logger, f"Checkpoint saved for thread: {thread_id}")
             return True
@@ -247,7 +286,7 @@ class CheckpointManager:
             return None
         
         try:
-            # LangGraph의 SqliteSaver가 자동으로 처리
+            # LangGraph의 PostgresSaver가 자동으로 처리
             # 실제 로드는 워크플로우 실행 시 자동으로 수행됨
             safe_log_debug(self.logger, f"Checkpoint loaded for thread: {thread_id}")
             return None  # LangGraph가 자동으로 처리하므로 None 반환
@@ -294,9 +333,8 @@ class CheckpointManager:
             return False
         
         try:
-            config = {"configurable": {"thread_id": thread_id}}
-            # LangGraph의 SqliteSaver는 직접적인 삭제 메서드를 제공하지 않음
-            # 필요시 SQLite 직접 조작 필요
+            # LangGraph의 PostgresSaver는 직접적인 삭제 메서드를 제공하지 않음
+            # 필요시 PostgreSQL 직접 조작 필요
             safe_log_debug(self.logger, f"Checkpoint deletion requested for thread: {thread_id}, checkpoint: {checkpoint_id}")
             return True
         except Exception as e:
@@ -317,31 +355,34 @@ class CheckpointManager:
             self.logger.warning("Checkpoint saver not available")
             return 0
         
+        if not self._db_adapter:
+            safe_log_warning(self.logger, "Cannot cleanup checkpoints: DatabaseAdapter not available")
+            return 0
+        
         try:
-            # SQLite 직접 조작으로 오래된 체크포인트 삭제
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # 오래된 체크포인트 조회 및 삭제
-            cutoff_time = datetime.now().timestamp() - (ttl_hours * 3600)
-            
-            cursor.execute("""
-                SELECT COUNT(*) FROM checkpoints 
-                WHERE created_at < ?
-            """, (cutoff_time,))
-            
-            count = cursor.fetchone()[0]
-            
-            cursor.execute("""
-                DELETE FROM checkpoints 
-                WHERE created_at < ?
-            """, (cutoff_time,))
-            
-            conn.commit()
-            conn.close()
-            
-            self.logger.info(f"Cleaned up {count} old checkpoints")
-            return count
+            # DatabaseAdapter 사용 (PostgreSQL)
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # 오래된 체크포인트 조회 및 삭제
+                cutoff_time = datetime.now().timestamp() - (ttl_hours * 3600)
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM checkpoints 
+                    WHERE created_at < %s
+                """, (cutoff_time,))
+                
+                count = cursor.fetchone()[0]
+                
+                cursor.execute("""
+                    DELETE FROM checkpoints 
+                    WHERE created_at < %s
+                """, (cutoff_time,))
+                
+                conn.commit()
+                
+                self.logger.info(f"Cleaned up {count} old checkpoints")
+                return count
             
         except Exception as e:
             self.logger.error(f"Failed to cleanup old checkpoints: {e}")
@@ -355,45 +396,59 @@ class CheckpointManager:
             Dict[str, Any]: 데이터베이스 정보
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            if not self._db_adapter:
+                return {
+                    "database_url": self.database_url,
+                    "storage_type": self.storage_type,
+                    "error": "DatabaseAdapter not available",
+                    "langgraph_available": LANGGRAPH_AVAILABLE,
+                    "langgraph_postgres_available": LANGGRAPH_POSTGRES_AVAILABLE
+                }
             
-            # 테이블 존재 확인
-            cursor.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='checkpoints'
-            """)
-            
-            table_exists = cursor.fetchone() is not None
-            
-            if table_exists:
-                # 체크포인트 수 조회
-                cursor.execute("SELECT COUNT(*) FROM checkpoints")
-                checkpoint_count = cursor.fetchone()[0]
+            # DatabaseAdapter 사용 (PostgreSQL)
+            with self._db_adapter.get_connection_context() as conn:
+                cursor = conn.cursor()
                 
-                # 최신 체크포인트 시간 조회
+                # 테이블 존재 확인 (PostgreSQL)
                 cursor.execute("""
-                    SELECT MAX(created_at) FROM checkpoints
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'checkpoints'
+                    )
                 """)
-                latest_checkpoint = cursor.fetchone()[0]
-            else:
-                checkpoint_count = 0
-                latest_checkpoint = None
-            
-            conn.close()
-            
-            return {
-                "database_path": self.db_path,
-                "table_exists": table_exists,
-                "checkpoint_count": checkpoint_count,
-                "latest_checkpoint": latest_checkpoint,
-                "langgraph_available": LANGGRAPH_AVAILABLE
-            }
+                table_exists = cursor.fetchone()[0]
+                
+                if table_exists:
+                    # 체크포인트 수 조회
+                    cursor.execute("SELECT COUNT(*) FROM checkpoints")
+                    checkpoint_count = cursor.fetchone()[0]
+                    
+                    # 최신 체크포인트 시간 조회
+                    cursor.execute("""
+                        SELECT MAX(created_at) FROM checkpoints
+                    """)
+                    latest_checkpoint = cursor.fetchone()[0]
+                else:
+                    checkpoint_count = 0
+                    latest_checkpoint = None
+                
+                return {
+                    "database_url": self.database_url,
+                    "storage_type": self.storage_type,
+                    "table_exists": table_exists,
+                    "checkpoint_count": checkpoint_count,
+                    "latest_checkpoint": latest_checkpoint,
+                    "langgraph_available": LANGGRAPH_AVAILABLE,
+                    "langgraph_postgres_available": LANGGRAPH_POSTGRES_AVAILABLE
+                }
             
         except Exception as e:
             self.logger.error(f"Failed to get database info: {e}")
             return {
-                "database_path": self.db_path,
+                "database_url": self.database_url,
+                "storage_type": self.storage_type,
                 "error": str(e),
-                "langgraph_available": LANGGRAPH_AVAILABLE
+                "langgraph_available": LANGGRAPH_AVAILABLE,
+                "langgraph_postgres_available": LANGGRAPH_POSTGRES_AVAILABLE
             }
