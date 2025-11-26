@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from core.conversation.conversation_manager import ConversationContext, ConversationTurn
+try:
+    from lawfirm_langgraph.core.conversation.conversation_manager import ConversationContext, ConversationTurn
+except ImportError:
+    from core.conversation.conversation_manager import ConversationContext, ConversationTurn
 
 logger = get_logger(__name__)
 

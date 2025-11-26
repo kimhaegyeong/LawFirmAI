@@ -12,7 +12,10 @@ except ImportError:
 from enum import Enum
 from typing import Tuple
 
-from core.workflow.state.workflow_types import QueryComplexity
+try:
+    from lawfirm_langgraph.core.workflow.state.workflow_types import QueryComplexity
+except ImportError:
+    from core.workflow.state.workflow_types import QueryComplexity
 
 logger = get_logger(__name__)
 
