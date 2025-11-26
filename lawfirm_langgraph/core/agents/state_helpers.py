@@ -46,7 +46,11 @@ def get_input(state: LegalWorkflowState) -> InputState:
 
 def get_query(state: LegalWorkflowState) -> str:
     """질문만 반환"""
-    return state["input"]["query"]
+    # state에 "input" 키가 없을 수 있으므로 안전하게 접근
+    if "input" in state and isinstance(state.get("input"), dict):
+        return state["input"].get("query", "")
+    # "input"이 없으면 최상위 레벨에서 "query" 확인
+    return state.get("query", "")
 
 
 def get_session_id(state: LegalWorkflowState) -> str:
