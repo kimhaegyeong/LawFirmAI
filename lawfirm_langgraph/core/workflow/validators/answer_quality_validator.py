@@ -9,9 +9,18 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants, QualityThresholds
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class AnswerQualityValidator:
