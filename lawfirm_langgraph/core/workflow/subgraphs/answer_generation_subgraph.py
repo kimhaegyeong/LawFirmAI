@@ -13,7 +13,10 @@ from typing import Optional
 
 from langgraph.graph import END, StateGraph
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
 
 logger = get_logger(__name__)
