@@ -1,495 +1,617 @@
-﻿# LawFirmAI 데이터베이스 스키마
+# PostgreSQL 데이터베이스 스키마
 
 ## 개요
 
-LawFirmAI 프로젝트는 SQLite 데이터베이스를 사용하여 법률 데이터, 벡터 임베딩, 처리 이력 등을 관리합니다. 이 문서는 데이터베이스의 구조와 각 테이블의 상세 정보를 제공합니다.
+LawFirmAI 프로젝트는 PostgreSQL 데이터베이스를 사용하며, pgvector 확장을 통해 벡터 검색을 지원합니다. 본 문서는 현재 사용 중인 PostgreSQL 데이터베이스 스키마를 설명합니다.
 
-## 📊 데이터베이스 구조
+## 확장 프로그램
 
-### 주요 테이블
+### pgvector
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
 
-#### 법률 및 판례 데이터
-- `assembly_laws`: 법률 데이터 저장
-- `assembly_articles`: 법률 조문 데이터 저장
-- `precedent_cases`: 판례 사건 데이터 저장
-- `precedent_sections`: 판례 섹션 데이터 저장 (판시사항, 판결요지 등)
-- `precedent_parties`: 판례 당사자 데이터 저장
+벡터 유사도 검색을 위한 pgvector 확장을 사용합니다.
 
-#### 문서 및 메타데이터
-- `documents`: 법률 문서 저장 (하이브리드 검색용)
-- `law_metadata`: 법령 메타데이터
-- `precedent_metadata`: 판례 메타데이터
-- `constitutional_metadata`: 헌재결정례 메타데이터
-- `interpretation_metadata`: 법령해석례 메타데이터
-- `administrative_rule_metadata`: 행정규칙 메타데이터
-- `local_ordinance_metadata`: 자치법규 메타데이터
+## 테이블 구조
 
-#### 처리 및 품질 관리
-- `processed_files`: 파일 처리 이력 추적
-- `duplicate_groups`: 중복 데이터 그룹 관리
-- `quality_reports`: 품질 보고서
-- `migration_history`: 마이그레이션 히스토리
-- `schema_version`: 스키마 버전 관리
+### 1. 도메인 및 소스 관리
 
-#### 대화 및 로깅
-- `chat_history`: 채팅 기록
-- `conversation_sessions`: 대화 세션
-- `conversation_turns`: 대화 턴
-- `legal_entities`: 법률 엔티티
-- `user_profiles`: 사용자 프로필
-- `contextual_memories`: 맥락적 메모리
-- `quality_metrics`: 품질 메트릭
-- `legal_basis_validation_log`: 법적 근거 검증 로그
-- `legal_basis_processing_log`: 법적 근거 처리 로그
+#### domains (도메인)
+법률 도메인을 관리하는 테이블입니다.
 
-#### 전체 텍스트 검색 (FTS5)
-- `fts_assembly_laws`: 법률 전체 텍스트 검색 인덱스
-- `fts_assembly_articles`: 조문 전체 텍스트 검색 인덱스
-- `fts_precedent_cases`: 판례 사건 전체 텍스트 검색 인덱스
-- `fts_precedent_sections`: 판례 섹션 전체 텍스트 검색 인덱스
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 도메인 ID |
+| name | VARCHAR(255) | NOT NULL, UNIQUE | 도메인 이름 |
 
-## 🗃️ 테이블 상세 정보
+#### sources (소스 추적)
+데이터 소스 정보를 추적하는 테이블입니다.
 
-### assembly_laws 테이블
-법률의 기본 정보와 메타데이터를 저장합니다.
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 소스 ID |
+| source_type | VARCHAR(50) | NOT NULL | 소스 타입 (statute, case, decision, interpretation) |
+| path | TEXT | NOT NULL | 파일 경로 |
+| hash | VARCHAR(64) | | 파일 해시 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+
+**인덱스:**
+- `idx_sources_type`: source_type
+- `idx_sources_path`: path
+
+### 2. 법률 데이터
+
+#### statutes (법률)
+법률 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 법률 ID |
+| domain_id | INTEGER | NOT NULL, FK → domains(id) | 도메인 ID |
+| name | VARCHAR(255) | NOT NULL | 법률명 |
+| abbrv | VARCHAR(100) | | 약칭 |
+| statute_type | VARCHAR(50) | | 법률 유형 |
+| proclamation_date | TEXT | | 공포일 |
+| effective_date | TEXT | | 시행일 |
+| category | VARCHAR(50) | | 카테고리 |
+| | | UNIQUE(domain_id, name) | 도메인별 법률명 유일성 |
+
+**인덱스:**
+- `idx_statutes_domain`: domain_id
+- `idx_statutes_category`: category
+
+#### statute_articles (법률 조문)
+법률 조문을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 조문 ID |
+| statute_id | INTEGER | NOT NULL, FK → statutes(id) | 법률 ID |
+| article_no | VARCHAR(50) | NOT NULL | 조 번호 (제n조) |
+| clause_no | VARCHAR(50) | | 항 번호 |
+| item_no | VARCHAR(50) | | 호 번호 |
+| heading | TEXT | | 조문 제목 |
+| text | TEXT | NOT NULL | 조문 내용 |
+| version_effective_date | TEXT | | 버전 시행일 |
+| text_search_vector | tsvector | | Full-Text Search용 벡터 |
+
+**인덱스:**
+- `idx_statute_articles_keys`: (statute_id, article_no, clause_no, item_no)
+- `idx_statute_articles_fts`: text_search_vector (GIN 인덱스)
+
+**트리거:**
+- `trigger_statute_articles_fts_update`: text 업데이트 시 text_search_vector 자동 갱신
+
+### 3. 판례 데이터
+
+#### cases (판례)
+판례 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 판례 ID |
+| domain_id | INTEGER | NOT NULL, FK → domains(id) | 도메인 ID |
+| doc_id | VARCHAR(255) | NOT NULL, UNIQUE | 문서 ID |
+| court | VARCHAR(100) | | 법원 |
+| case_type | VARCHAR(50) | | 사건 유형 |
+| casenames | TEXT | | 사건명 |
+| announce_date | TEXT | | 선고일 |
+
+**인덱스:**
+- `idx_cases_domain`: domain_id
+- `idx_cases_doc_id`: doc_id
+
+#### case_paragraphs (판례 문단)
+판례 문단을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 문단 ID |
+| case_id | INTEGER | NOT NULL, FK → cases(id) | 판례 ID |
+| para_index | INTEGER | NOT NULL | 문단 인덱스 |
+| text | TEXT | NOT NULL | 문단 내용 |
+| text_search_vector | tsvector | | Full-Text Search용 벡터 |
+| | | UNIQUE(case_id, para_index) | 판례별 문단 인덱스 유일성 |
+
+**인덱스:**
+- `idx_case_paragraphs_case`: (case_id, para_index)
+- `idx_case_paragraphs_fts`: text_search_vector (GIN 인덱스)
+
+**트리거:**
+- `trigger_case_paragraphs_fts_update`: text 업데이트 시 text_search_vector 자동 갱신
+
+### 4. 심결례 데이터
+
+#### decisions (심결례)
+심결례 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 심결례 ID |
+| domain_id | INTEGER | NOT NULL, FK → domains(id) | 도메인 ID |
+| org | VARCHAR(255) | | 기관 |
+| doc_id | VARCHAR(255) | NOT NULL, UNIQUE | 문서 ID |
+| decision_date | TEXT | | 결정일 |
+| result | TEXT | | 결과 |
+
+**인덱스:**
+- `idx_decisions_domain`: domain_id
+- `idx_decisions_doc_id`: doc_id
+
+#### decision_paragraphs (심결례 문단)
+심결례 문단을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 문단 ID |
+| decision_id | INTEGER | NOT NULL, FK → decisions(id) | 심결례 ID |
+| para_index | INTEGER | NOT NULL | 문단 인덱스 |
+| text | TEXT | NOT NULL | 문단 내용 |
+| text_search_vector | tsvector | | Full-Text Search용 벡터 |
+| | | UNIQUE(decision_id, para_index) | 심결례별 문단 인덱스 유일성 |
+
+**인덱스:**
+- `idx_decision_paragraphs_decision`: (decision_id, para_index)
+- `idx_decision_paragraphs_fts`: text_search_vector (GIN 인덱스)
+
+**트리거:**
+- `trigger_decision_paragraphs_fts_update`: text 업데이트 시 text_search_vector 자동 갱신
+
+### 5. 유권해석 데이터
+
+#### interpretations (유권해석)
+유권해석 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 해석 ID |
+| domain_id | INTEGER | NOT NULL, FK → domains(id) | 도메인 ID |
+| org | VARCHAR(255) | | 기관 |
+| doc_id | VARCHAR(255) | NOT NULL, UNIQUE | 문서 ID |
+| title | TEXT | | 제목 |
+| response_date | TEXT | | 회신일 |
+
+**인덱스:**
+- `idx_interpretations_domain`: domain_id
+- `idx_interpretations_doc_id`: doc_id
+
+#### interpretation_paragraphs (해석례 문단)
+해석례 문단을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 문단 ID |
+| interpretation_id | INTEGER | NOT NULL, FK → interpretations(id) | 해석 ID |
+| para_index | INTEGER | NOT NULL | 문단 인덱스 |
+| text | TEXT | NOT NULL | 문단 내용 |
+| text_search_vector | tsvector | | Full-Text Search용 벡터 |
+| | | UNIQUE(interpretation_id, para_index) | 해석별 문단 인덱스 유일성 |
+
+**인덱스:**
+- `idx_interpretation_paragraphs_interp`: (interpretation_id, para_index)
+- `idx_interpretation_paragraphs_fts`: text_search_vector (GIN 인덱스)
+
+**트리거:**
+- `trigger_interpretation_paragraphs_fts_update`: text 업데이트 시 text_search_vector 자동 갱신
+
+### 6. 벡터 검색 관련
+
+#### text_chunks (텍스트 청크)
+RAG를 위한 텍스트 청크를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 청크 ID |
+| source_type | VARCHAR(50) | NOT NULL | 소스 타입 (statute_article, case_paragraph, decision_paragraph, interpretation_paragraph) |
+| source_id | INTEGER | NOT NULL | 소스 ID (해당 테이블의 FK) |
+| level | VARCHAR(50) | | 레벨 (article/clause/item or paragraph) |
+| chunk_index | INTEGER | NOT NULL | 청크 인덱스 |
+| start_char | INTEGER | | 시작 문자 위치 |
+| end_char | INTEGER | | 종료 문자 위치 |
+| overlap_chars | INTEGER | | 겹치는 문자 수 |
+| text | TEXT | NOT NULL | 청크 텍스트 |
+| token_count | INTEGER | | 토큰 수 |
+| embedding_version_id | INTEGER | FK → embedding_versions(id) | 임베딩 버전 ID |
+| chunk_size_category | VARCHAR(20) | | 청크 크기 카테고리 |
+| chunk_group_id | VARCHAR(255) | | 청크 그룹 ID |
+| chunking_strategy | VARCHAR(50) | | 청킹 전략 |
+| meta | JSONB | | 메타데이터 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| | | UNIQUE(source_type, source_id, chunk_index, embedding_version_id) | 소스별 청크 유일성 |
+
+**제약조건:**
+- `chk_text_chunks_source_type`: source_type은 ('statute_article', 'case_paragraph', 'decision_paragraph', 'interpretation_paragraph') 중 하나
+
+**인덱스:**
+- `idx_text_chunks_source`: (source_type, source_id, chunk_index, embedding_version_id)
+- `idx_text_chunks_meta_gin`: meta (GIN 인덱스)
+- `idx_text_chunks_version_type`: (embedding_version_id, source_type)
+
+#### embeddings (임베딩)
+pgvector를 사용한 벡터 임베딩을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 임베딩 ID |
+| chunk_id | INTEGER | NOT NULL, FK → text_chunks(id) | 청크 ID |
+| model | VARCHAR(255) | NOT NULL | 모델명 |
+| dim | INTEGER | NOT NULL | 벡터 차원 |
+| version_id | INTEGER | FK → embedding_versions(id) | 임베딩 버전 ID |
+| vector | VECTOR(768) | NOT NULL | 벡터 데이터 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+
+**인덱스:**
+- `idx_embeddings_chunk`: chunk_id
+- `idx_embeddings_vector`: vector (IVFFlat 인덱스, cosine 연산)
+
+#### embedding_versions (임베딩 버전)
+임베딩 버전 정보를 관리하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 버전 ID |
+| version_name | VARCHAR(255) | NOT NULL, UNIQUE | 버전 이름 |
+| chunking_strategy | VARCHAR(50) | NOT NULL | 청킹 전략 |
+| model_name | VARCHAR(255) | NOT NULL | 모델명 |
+| description | TEXT | | 설명 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| is_active | BOOLEAN | DEFAULT FALSE | 활성 여부 |
+| metadata | JSONB | | 메타데이터 |
+
+**인덱스:**
+- `idx_embedding_versions_active`: id (부분 인덱스, is_active = TRUE인 경우만)
+
+#### retrieval_cache (검색 캐시)
+검색 결과 캐시를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| query_hash | VARCHAR(255) | PRIMARY KEY | 쿼리 해시 |
+| topk_ids | TEXT | | 상위 K개 ID 목록 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+
+### 7. 파일 처리 이력
+
+#### processed_files (처리된 파일)
+데이터 처리 이력을 추적하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 레코드 ID |
+| file_path | TEXT | NOT NULL, UNIQUE | 파일 경로 |
+| file_hash | VARCHAR(64) | NOT NULL | 파일 해시 |
+| data_type | VARCHAR(50) | NOT NULL | 데이터 타입 |
+| processed_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 처리 일시 |
+| processing_status | VARCHAR(50) | DEFAULT 'completed' | 처리 상태 |
+| record_count | INTEGER | DEFAULT 0 | 레코드 수 |
+| processing_version | VARCHAR(50) | DEFAULT '1.0' | 처리 버전 |
+| error_message | TEXT | | 에러 메시지 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+
+**인덱스:**
+- `idx_processed_files_path`: file_path
+- `idx_processed_files_type`: data_type
+- `idx_processed_files_status`: processing_status
+
+### 8. 채팅/세션 관리
+
+#### sessions (세션)
+사용자 세션 정보를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| session_id | VARCHAR(255) | PRIMARY KEY | 세션 ID |
+| title | TEXT | | 세션 제목 |
+| category | TEXT | | 카테고리 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| message_count | INTEGER | DEFAULT 0 | 메시지 수 |
+| user_id | VARCHAR(255) | | 사용자 ID |
+| ip_address | VARCHAR(45) | | IP 주소 |
+| metadata | JSONB | | 메타데이터 |
+
+**인덱스:**
+- `idx_sessions_updated_at`: updated_at
+- `idx_sessions_user_id`: user_id
+
+#### messages (메시지)
+채팅 메시지를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| message_id | VARCHAR(255) | PRIMARY KEY | 메시지 ID |
+| session_id | VARCHAR(255) | NOT NULL, FK → sessions(session_id) | 세션 ID |
+| role | VARCHAR(50) | NOT NULL | 역할 (user, assistant 등) |
+| content | TEXT | NOT NULL | 메시지 내용 |
+| timestamp | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 타임스탬프 |
+| metadata | JSONB | | 메타데이터 |
+
+**인덱스:**
+- `idx_messages_session_id`: session_id
+
+### 9. 키워드 및 패턴 관리
+
+#### keywords (키워드)
+질문 분류를 위한 키워드를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 키워드 ID |
+| question_type | TEXT | NOT NULL | 질문 유형 |
+| keyword | TEXT | NOT NULL | 키워드 |
+| weight_level | TEXT | NOT NULL | 가중치 레벨 (high, medium, low) |
+| weight_value | REAL | NOT NULL, DEFAULT 1.0 | 가중치 값 |
+| category | TEXT | | 카테고리 |
+| description | TEXT | | 설명 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| is_active | BOOLEAN | DEFAULT TRUE | 활성 여부 |
+| | | UNIQUE(question_type, keyword) | 질문 유형별 키워드 유일성 |
+
+#### patterns (패턴)
+질문 분류를 위한 패턴을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 패턴 ID |
+| question_type | TEXT | NOT NULL | 질문 유형 |
+| pattern | TEXT | NOT NULL | 패턴 |
+| pattern_type | TEXT | NOT NULL | 패턴 타입 (regex, keyword, phrase) |
+| priority | INTEGER | DEFAULT 1 | 우선순위 |
+| description | TEXT | | 설명 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| is_active | BOOLEAN | DEFAULT TRUE | 활성 여부 |
+
+#### question_types (질문 유형)
+질문 유형 메타데이터를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 유형 ID |
+| type_name | TEXT | UNIQUE, NOT NULL | 유형 이름 |
+| display_name | TEXT | NOT NULL | 표시 이름 |
+| description | TEXT | | 설명 |
+| parent_type | TEXT | | 부모 유형 |
+| priority | INTEGER | DEFAULT 1 | 우선순위 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+| is_active | BOOLEAN | DEFAULT TRUE | 활성 여부 |
+
+#### keyword_stats (키워드 통계)
+키워드 사용 통계를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 통계 ID |
+| keyword_id | INTEGER | NOT NULL, FK → keywords(id) | 키워드 ID |
+| match_count | INTEGER | DEFAULT 0 | 매칭 횟수 |
+| success_count | INTEGER | DEFAULT 0 | 성공 횟수 |
+| last_matched_at | TIMESTAMP | | 마지막 매칭 일시 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 수정 일시 |
+
+### 10. 동의어 관리
+
+#### synonyms (동의어)
+동의어 매핑을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 동의어 ID |
+| keyword | TEXT | NOT NULL | 키워드 |
+| synonym | TEXT | NOT NULL | 동의어 |
+| domain | TEXT | DEFAULT 'general' | 도메인 |
+| context | TEXT | DEFAULT 'general' | 컨텍스트 |
+| confidence | REAL | DEFAULT 0.0 | 신뢰도 |
+| usage_count | INTEGER | DEFAULT 0 | 사용 횟수 |
+| user_rating | REAL | DEFAULT 0.0 | 사용자 평가 |
+| source | TEXT | DEFAULT 'unknown' | 소스 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 생성 일시 |
+| last_used | TIMESTAMP | | 마지막 사용 일시 |
+| is_active | BOOLEAN | DEFAULT TRUE | 활성 여부 |
+| | | UNIQUE(keyword, synonym, domain, context) | 동의어 유일성 |
+
+**인덱스:**
+- `idx_synonyms_keyword`: keyword
+- `idx_synonyms_domain`: domain
+- `idx_synonyms_usage`: usage_count (DESC)
+- `idx_synonyms_active`: is_active
+- `idx_synonyms_confidence`: confidence (DESC)
+
+#### synonym_usage_stats (동의어 사용 통계)
+동의어 사용 통계를 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 통계 ID |
+| synonym_id | INTEGER | FK → synonyms(id) | 동의어 ID |
+| usage_date | DATE | | 사용 일자 |
+| usage_count | INTEGER | DEFAULT 0 | 사용 횟수 |
+| success_rate | REAL | DEFAULT 0.0 | 성공률 |
+| | | UNIQUE(synonym_id, usage_date) | 동의어별 일자 유일성 |
+
+#### synonym_quality_metrics (동의어 품질 평가)
+동의어 품질 평가 메트릭을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | SERIAL | PRIMARY KEY | 평가 ID |
+| synonym_id | INTEGER | FK → synonyms(id) | 동의어 ID |
+| semantic_similarity | REAL | DEFAULT 0.0 | 의미적 유사도 |
+| context_relevance | REAL | DEFAULT 0.0 | 컨텍스트 관련성 |
+| domain_relevance | REAL | DEFAULT 0.0 | 도메인 관련성 |
+| user_feedback_score | REAL | DEFAULT 0.0 | 사용자 피드백 점수 |
+| overall_score | REAL | DEFAULT 0.0 | 전체 점수 |
+| evaluated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 평가 일시 |
+
+### 11. 피드백 관리
+
+#### feedback (피드백)
+사용자 피드백을 저장하는 테이블입니다.
+
+| 컬럼명 | 타입 | 제약조건 | 설명 |
+|--------|------|----------|------|
+| id | TEXT | PRIMARY KEY | 피드백 ID |
+| timestamp | TEXT | NOT NULL | 타임스탬프 |
+| session_id | TEXT | | 세션 ID |
+| user_id | TEXT | | 사용자 ID |
+| feedback_type | TEXT | NOT NULL | 피드백 타입 |
+| rating | INTEGER | | 평점 |
+| text_content | TEXT | | 텍스트 내용 |
+| question | TEXT | | 질문 |
+| answer | TEXT | | 답변 |
+| context | TEXT | | 컨텍스트 |
+| metadata | TEXT | | 메타데이터 |
+
+**인덱스:**
+- `idx_feedback_timestamp`: timestamp
+- `idx_feedback_type`: feedback_type
+- `idx_feedback_rating`: rating
+- `idx_feedback_session`: session_id
+
+## Full-Text Search (FTS)
+
+PostgreSQL의 Full-Text Search 기능을 사용하여 한국어 텍스트 검색을 지원합니다.
+
+### 트리거 함수
+
+다음 테이블의 텍스트 컬럼은 자동으로 `tsvector`로 변환됩니다:
+- `statute_articles.text` → `text_search_vector`
+- `case_paragraphs.text` → `text_search_vector`
+- `decision_paragraphs.text` → `text_search_vector`
+- `interpretation_paragraphs.text` → `text_search_vector`
+
+각 테이블에는 BEFORE INSERT/UPDATE 트리거가 설정되어 있어, 텍스트가 변경될 때 자동으로 `text_search_vector`가 갱신됩니다.
+
+### FTS 쿼리 예시
 
 ```sql
-CREATE TABLE assembly_laws (
-    law_id TEXT PRIMARY KEY,                    -- 법률 고유 ID
-    source TEXT NOT NULL,                       -- 데이터 소스 (assembly)
-    law_name TEXT NOT NULL,                     -- 법률명
-    law_type TEXT,                              -- 법률 유형
-    category TEXT,                              -- 카테고리
-    row_number TEXT,                            -- 행 번호
-    promulgation_number TEXT,                   -- 공포번호
-    promulgation_date TEXT,                     -- 공포일
-    enforcement_date TEXT,                      -- 시행일
-    amendment_type TEXT,                        -- 개정 유형
-    ministry TEXT,                              -- 소관부처
-    parent_law TEXT,                            -- 상위법
-    related_laws TEXT,                          -- 관련법 (JSON)
-    full_text TEXT,                             -- 전체 텍스트
-    searchable_text TEXT,                       -- 검색용 텍스트
-    keywords TEXT,                              -- 키워드 (JSON)
-    summary TEXT,                               -- 요약
-    html_clean_text TEXT,                       -- HTML 정리된 텍스트
-    main_article_count INTEGER DEFAULT 0,      -- 본칙 조문 수
-    supplementary_article_count INTEGER DEFAULT 0, -- 부칙 조문 수
-    ml_enhanced BOOLEAN DEFAULT FALSE,          -- ML 강화 여부
-    parsing_quality_score REAL DEFAULT 0.0,     -- 파싱 품질 점수
-    processing_version TEXT DEFAULT '1.0',      -- 처리 버전
-    
-    -- 품질 관리 컬럼들
-    law_name_hash TEXT UNIQUE,                 -- 법률명 해시 (중복 검출용)
-    content_hash TEXT UNIQUE,                  -- 내용 해시
-    quality_score REAL DEFAULT 0.0,            -- 품질 점수
-    duplicate_group_id TEXT,                    -- 중복 그룹 ID
-    is_primary_version BOOLEAN DEFAULT TRUE,     -- 주 버전 여부
-    version_number INTEGER DEFAULT 1,          -- 버전 번호
-    parsing_method TEXT DEFAULT 'legacy',       -- 파싱 방법
-    auto_corrected BOOLEAN DEFAULT FALSE,       -- 자동 수정 여부
-    manual_review_required BOOLEAN DEFAULT FALSE, -- 수동 검토 필요 여부
-    migration_timestamp TEXT,                    -- 마이그레이션 타임스탬프
-    
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- 법률 조문 검색
+SELECT id, text, heading
+FROM statute_articles
+WHERE text_search_vector @@ to_tsquery('korean', '계약 & 해지')
+ORDER BY ts_rank(text_search_vector, to_tsquery('korean', '계약 & 해지')) DESC;
 ```
 
-### assembly_articles 테이블
-법률의 개별 조문 정보를 저장합니다.
+## 벡터 검색 (pgvector)
+
+pgvector를 사용하여 벡터 유사도 검색을 수행합니다.
+
+### 벡터 인덱스
+
+`embeddings` 테이블의 `vector` 컬럼에는 IVFFlat 인덱스가 생성되어 있습니다:
+- 인덱스 타입: IVFFlat
+- 연산자: cosine
+- lists: 100
+
+### 벡터 검색 예시
 
 ```sql
-CREATE TABLE assembly_articles (
-    article_id TEXT PRIMARY KEY,                -- 조문 고유 ID
-    law_id TEXT NOT NULL,                      -- 법률 ID (외래키)
-    article_number INTEGER NOT NULL,           -- 조문 번호
-    article_title TEXT,                        -- 조문 제목
-    article_content TEXT NOT NULL,             -- 조문 내용
-    is_supplementary BOOLEAN DEFAULT FALSE,     -- 부칙 여부
-    ml_confidence_score REAL DEFAULT 0.0,      -- ML 신뢰도 점수
-    parsing_method TEXT DEFAULT 'rule_based',   -- 파싱 방법
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (law_id) REFERENCES assembly_laws(law_id)
-);
+-- 코사인 유사도 검색
+SELECT 
+    e.id,
+    tc.text,
+    1 - (e.vector <=> query_vector) as similarity
+FROM embeddings e
+JOIN text_chunks tc ON e.chunk_id = tc.id
+WHERE e.version_id = 1
+ORDER BY e.vector <=> query_vector
+LIMIT 10;
 ```
 
-### precedent_cases 테이블
-판례 사건의 기본 정보를 저장합니다.
+## 외래 키 관계
 
-```sql
-CREATE TABLE precedent_cases (
-    case_id TEXT PRIMARY KEY,                    -- 판례 고유 ID
-    category TEXT NOT NULL,                      -- 카테고리 (civil, criminal, family)
-    case_name TEXT NOT NULL,                     -- 사건명
-    case_number TEXT NOT NULL,                   -- 사건번호
-    decision_date TEXT,                          -- 판결일
-    field TEXT,                                  -- 분야 (민사, 형사, 가사)
-    court TEXT,                                  -- 법원
-    detail_url TEXT,                             -- 상세 URL
-    full_text TEXT,                              -- 전체 텍스트
-    searchable_text TEXT,                        -- 검색용 텍스트
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+### 주요 관계도
+
+```
+domains
+  ├── statutes
+  │     └── statute_articles
+  ├── cases
+  │     └── case_paragraphs
+  ├── decisions
+  │     └── decision_paragraphs
+  └── interpretations
+        └── interpretation_paragraphs
+
+embedding_versions
+  ├── text_chunks
+  └── embeddings
+        └── text_chunks
+
+sessions
+  └── messages
+
+keywords
+  └── keyword_stats
+
+synonyms
+  ├── synonym_usage_stats
+  └── synonym_quality_metrics
 ```
 
-### precedent_sections 테이블
-판례의 각 섹션 정보를 저장합니다 (판시사항, 판결요지 등).
+## 제약조건
 
-```sql
-CREATE TABLE precedent_sections (
-    section_id TEXT PRIMARY KEY,                 -- 섹션 고유 ID
-    case_id TEXT NOT NULL,                       -- 판례 ID (외래키)
-    section_type TEXT NOT NULL,                  -- 섹션 유형 (판시사항, 판결요지 등)
-    section_type_korean TEXT,                    -- 섹션 유형 한글명
-    section_content TEXT NOT NULL,               -- 섹션 내용
-    section_length INTEGER DEFAULT 0,            -- 섹션 길이
-    has_content BOOLEAN DEFAULT FALSE,           -- 내용 존재 여부
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (case_id) REFERENCES precedent_cases(case_id)
-);
-```
+### CHECK 제약조건
 
-### processed_files 테이블
-파일 처리 이력을 추적하여 증분 처리를 지원합니다.
+- `text_chunks.source_type`: 'statute_article', 'case_paragraph', 'decision_paragraph', 'interpretation_paragraph' 중 하나
+- `keywords.weight_level`: 'high', 'medium', 'low' 중 하나
+- `patterns.pattern_type`: 'regex', 'keyword', 'phrase' 중 하나
 
-```sql
-CREATE TABLE processed_files (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,      -- 자동 증가 ID
-    file_path TEXT UNIQUE NOT NULL,            -- 파일 경로
-    file_hash TEXT NOT NULL,                   -- 파일 해시 (SHA256)
-    data_type TEXT NOT NULL,                   -- 데이터 유형
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- 처리 완료 시간
-    processing_status TEXT DEFAULT 'completed', -- 처리 상태
-    record_count INTEGER DEFAULT 0,            -- 처리된 레코드 수
-    processing_version TEXT DEFAULT '1.0',     -- 처리 버전
-    error_message TEXT,                        -- 오류 메시지
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### UNIQUE 제약조건
 
-### 인덱스
-성능 최적화를 위한 인덱스들:
+- `domains.name`
+- `statutes(domain_id, name)`
+- `cases.doc_id`
+- `decisions.doc_id`
+- `interpretations.doc_id`
+- `text_chunks(source_type, source_id, chunk_index, embedding_version_id)`
+- `embedding_versions.version_name`
+- `keywords(question_type, keyword)`
+- `question_types.type_name`
+- `synonyms(keyword, synonym, domain, context)`
+- `processed_files.file_path`
 
-```sql
--- assembly_laws 테이블 인덱스
-CREATE INDEX idx_assembly_laws_source ON assembly_laws(source);
-CREATE INDEX idx_assembly_laws_category ON assembly_laws(category);
-CREATE INDEX idx_assembly_laws_ministry ON assembly_laws(ministry);
-CREATE INDEX idx_assembly_laws_created_at ON assembly_laws(created_at);
+## 인덱스 전략
 
--- assembly_articles 테이블 인덱스
-CREATE INDEX idx_assembly_articles_law_id ON assembly_articles(law_id);
-CREATE INDEX idx_assembly_articles_number ON assembly_articles(article_number);
-CREATE INDEX idx_assembly_articles_supplementary ON assembly_articles(is_supplementary);
+### B-Tree 인덱스
+- 외래 키 컬럼
+- 자주 조회되는 컬럼 (doc_id, domain_id 등)
+- 정렬에 사용되는 컬럼
 
--- processed_files 테이블 인덱스
-CREATE INDEX idx_processed_files_path ON processed_files(file_path);
-CREATE INDEX idx_processed_files_type ON processed_files(data_type);
-CREATE INDEX idx_processed_files_status ON processed_files(processing_status);
+### GIN 인덱스
+- Full-Text Search용 tsvector 컬럼
+- JSONB 메타데이터 컬럼
 
--- precedent_cases 테이블 인덱스
-CREATE INDEX idx_precedent_cases_category ON precedent_cases(category);
-CREATE INDEX idx_precedent_cases_date ON precedent_cases(decision_date);
-CREATE INDEX idx_precedent_cases_court ON precedent_cases(court);
+### IVFFlat 인덱스
+- 벡터 검색용 vector 컬럼
 
--- precedent_sections 테이블 인덱스
-CREATE INDEX idx_precedent_sections_case_id ON precedent_sections(case_id);
-CREATE INDEX idx_precedent_sections_type ON precedent_sections(section_type);
+### 부분 인덱스
+- `embedding_versions`: is_active = TRUE인 경우만 인덱싱
 
--- precedent_parties 테이블 인덱스
-CREATE INDEX idx_precedent_parties_case_id ON precedent_parties(case_id);
-CREATE INDEX idx_precedent_parties_type ON precedent_parties(party_type);
-```
+## 성능 최적화
 
-### 추가 테이블들
+### 인덱스 활용
+- 자주 사용되는 쿼리 패턴에 맞춰 인덱스 설계
+- 복합 인덱스로 다중 컬럼 조회 최적화
+- 부분 인덱스로 불필요한 인덱스 크기 감소
 
-#### chat_history 테이블
-채팅 기록을 저장합니다.
+### 벡터 검색 최적화
+- IVFFlat 인덱스로 빠른 근사 검색
+- lists 파라미터 조정으로 정확도와 성능 균형
 
-```sql
-CREATE TABLE chat_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    user_message TEXT NOT NULL,
-    bot_response TEXT NOT NULL,
-    confidence REAL DEFAULT 0.0,
-    processing_time REAL DEFAULT 0.0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Full-Text Search 최적화
+- GIN 인덱스로 빠른 텍스트 검색
+- 한국어 텍스트 검색 지원
 
-#### documents 테이블
-하이브리드 검색을 위한 문서 저장소입니다.
+## 참고 사항
 
-```sql
-CREATE TABLE documents (
-    id TEXT PRIMARY KEY,
-    document_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    source_url TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+- 모든 TIMESTAMP 컬럼은 UTC 기준입니다.
+- JSONB 타입을 사용하여 유연한 메타데이터 저장이 가능합니다.
+- 외래 키 제약조건으로 데이터 무결성을 보장합니다.
+- CASCADE/SET NULL 정책으로 데이터 일관성을 유지합니다.
 
-#### duplicate_groups 테이블
-중복 데이터 그룹을 관리합니다.
-
-```sql
-CREATE TABLE duplicate_groups (
-    group_id TEXT PRIMARY KEY,
-    group_type TEXT NOT NULL,
-    primary_law_id TEXT NOT NULL,
-    duplicate_law_ids TEXT NOT NULL,
-    resolution_strategy TEXT NOT NULL,
-    confidence_score REAL DEFAULT 0.0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (primary_law_id) REFERENCES assembly_laws(law_id)
-);
-```
-
-#### quality_reports 테이블
-법률 데이터 품질 보고서를 저장합니다.
-
-```sql
-CREATE TABLE quality_reports (
-    report_id TEXT PRIMARY KEY,
-    law_id TEXT NOT NULL,
-    overall_score REAL NOT NULL,
-    article_count_score REAL NOT NULL,
-    title_extraction_score REAL NOT NULL,
-    article_sequence_score REAL NOT NULL,
-    structure_completeness_score REAL NOT NULL,
-    issues TEXT,
-    suggestions TEXT,
-    validation_timestamp TIMESTAMP NOT NULL,
-    FOREIGN KEY (law_id) REFERENCES assembly_laws(law_id)
-);
-```
-
-#### migration_history 테이블
-데이터베이스 마이그레이션 이력을 추적합니다.
-
-```sql
-CREATE TABLE migration_history (
-    migration_id TEXT PRIMARY KEY,
-    migration_version TEXT NOT NULL,
-    migration_timestamp TIMESTAMP NOT NULL,
-    description TEXT,
-    success BOOLEAN NOT NULL,
-    error_message TEXT,
-    records_affected INTEGER DEFAULT 0
-);
-```
-
-#### schema_version 테이블
-스키마 버전을 관리합니다.
-
-```sql
-CREATE TABLE schema_version (
-    version TEXT PRIMARY KEY,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    description TEXT
-);
-```
-
-### 전체 텍스트 검색 (FTS5) 테이블
-SQLite의 FTS5 확장을 사용한 전체 텍스트 검색:
-
-```sql
--- 법률 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_assembly_laws USING fts5(
-    law_id,
-    law_name,
-    full_text,
-    searchable_text,
-    content='assembly_laws',
-    content_rowid='rowid'
-);
-
--- 조문 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_assembly_articles USING fts5(
-    article_id,
-    law_id,
-    article_title,
-    article_content,
-    content='assembly_articles',
-    content_rowid='rowid'
-);
-
--- 판례 사건 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_precedent_cases USING fts5(
-    case_id,
-    case_name,
-    case_number,
-    full_text,
-    searchable_text,
-    content='precedent_cases',
-    content_rowid='rowid'
-);
-
--- 판례 섹션 전체 텍스트 검색
-CREATE VIRTUAL TABLE fts_precedent_sections USING fts5(
-    section_id,
-    case_id,
-    section_content,
-    content='precedent_sections',
-    content_rowid='rowid'
-);
-```
-
-## 🔄 데이터베이스 관리
-
-### 테이블 생성
-```python
-from source.data.database import DatabaseManager
-
-# 데이터베이스 관리자 초기화 (테이블 자동 생성)
-db_manager = DatabaseManager()
-```
-
-### 처리 상태 추적
-```python
-# 파일 처리 완료 표시
-db_manager.mark_file_as_processed(
-    file_path="data/raw/assembly/law_only/20251016/file.json",
-    file_hash="sha256_hash",
-    data_type="law_only",
-    record_count=5,
-    processing_version="1.0"
-)
-
-# 파일 처리 상태 확인
-is_processed = db_manager.is_file_processed("data/raw/assembly/law_only/example_file.json")
-
-# 처리 통계 조회
-stats = db_manager.get_processing_statistics()
-```
-
-### 증분 처리 지원
-```python
-# 특정 데이터 유형의 처리된 파일 조회
-processed_files = db_manager.get_processed_files_by_type("law_only", status="completed")
-
-# 처리 상태 업데이트
-db_manager.update_file_processing_status(
-    file_path="data/raw/assembly/law_only/20251016/file.json",
-    status="embedded"
-)
-```
-
-## 📈 성능 최적화
-
-### FTS 검색 최적화 (v2.0)
-- **쿼리 최적화**: JOIN 제거로 72.3% 성능 향상
-- **인덱스 최적화**: FTS5 인덱스 재구성 및 통계 업데이트
-- **캐싱 시스템**: 메모리 캐싱으로 반복 검색 성능 향상
-- **컬럼 최적화**: 필요한 컬럼만 선택하여 데이터 전송량 감소
-
-### 쿼리 최적화
-- **인덱스 활용**: 자주 사용되는 컬럼에 인덱스 생성
-- **외래키 제약**: 데이터 무결성 보장
-- **배치 처리**: 대량 데이터 처리 시 트랜잭션 활용
-- **FTS 최적화**: 가상 테이블 인덱스 활용
-
-### 메모리 관리
-- **연결 풀링**: 데이터베이스 연결 재사용
-- **컨텍스트 매니저**: 자동 연결 해제
-- **배치 크기 조정**: 메모리 사용량에 따른 배치 크기 조정
-- **캐시 관리**: LRU 기반 캐시 크기 관리
-
-## 🔍 모니터링 및 디버깅
-
-### 데이터베이스 상태 확인
-```python
-# 테이블별 레코드 수 확인
-laws_count = db_manager.execute_query("SELECT COUNT(*) FROM assembly_laws")
-articles_count = db_manager.execute_query("SELECT COUNT(*) FROM assembly_articles")
-processed_count = db_manager.execute_query("SELECT COUNT(*) FROM processed_files")
-
-print(f"법률 수: {laws_count[0]['COUNT(*)']}")
-print(f"조문 수: {articles_count[0]['COUNT(*)']}")
-print(f"처리된 파일 수: {processed_count[0]['COUNT(*)']}")
-```
-
-### FTS 검색 성능 모니터링
-```python
-# FTS 검색 성능 테스트
-import time
-
-def test_fts_performance(query: str, iterations: int = 5):
-    """FTS 검색 성능 테스트"""
-    times = []
-    for i in range(iterations):
-        start_time = time.time()
-        results = search_engine.search_precedents(query, search_type='fts')
-        end_time = time.time()
-        times.append(end_time - start_time)
-    
-    avg_time = sum(times) / len(times)
-    print(f"'{query}' 검색: 평균 {avg_time:.4f}초, {len(results)}개 결과")
-    return avg_time
-
-# 성능 테스트 실행
-test_queries = ["계약", "민사", "이혼", "손해배상", "부동산"]
-for query in test_queries:
-    test_fts_performance(query)
-```
-
-### 처리 통계 조회
-```python
-# 처리 상태별 통계
-stats = db_manager.get_processing_statistics()
-print(f"전체 파일: {stats['total_files']}")
-print(f"완료: {stats['completed']}")
-print(f"실패: {stats['failed']}")
-print(f"임베딩 완료: {stats['embedded']}")
-```
-
-### 오류 파일 조회
-```python
-# 실패한 파일 목록
-failed_files = db_manager.get_processed_files_by_type("law_only", status="failed")
-for file_info in failed_files:
-    print(f"실패 파일: {file_info['file_path']}")
-    print(f"오류: {file_info['error_message']}")
-```
-
-## 🚨 백업 및 복구
-
-### 데이터베이스 백업
-```bash
-# SQLite 데이터베이스 백업
-sqlite3 data/lawfirm.db ".backup data/lawfirm_backup.db"
-```
-
-### 데이터 복구
-```bash
-# 백업에서 복구
-cp data/lawfirm_backup.db data/lawfirm.db
-```
-
-## 🔮 향후 개선 계획
-
-### 단기 계획
-- [ ] 파티셔닝: 날짜별 테이블 분할
-- [ ] 압축: 대용량 텍스트 필드 압축
-- [ ] 캐싱: 자주 조회되는 데이터 캐싱
-
-### 중기 계획
-- [ ] 샤딩: 데이터베이스 수평 분할
-- [ ] 복제: 읽기 전용 복제본 구축
-- [ ] 모니터링: 실시간 성능 모니터링
-
-### 장기 계획
-- [ ] NoSQL 연동: MongoDB/Elasticsearch 연동
-- [ ] 클라우드 DB: PostgreSQL/MySQL 마이그레이션
-- [ ] 분산 처리: 여러 노드 분산 처리
-
----
