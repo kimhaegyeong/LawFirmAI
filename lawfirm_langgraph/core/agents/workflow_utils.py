@@ -10,19 +10,37 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.agents.extractors import ResponseExtractor
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.state_helpers import ensure_state_group, get_field, set_field
-from core.agents.state_utils import (
-    MAX_PROCESSING_STEPS,
-    prune_processing_steps,
-)
+try:
+    from lawfirm_langgraph.core.agents.extractors import ResponseExtractor
+except ImportError:
+    from core.agents.extractors import ResponseExtractor
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.agents.state_helpers import ensure_state_group, get_field, set_field
+except ImportError:
+    from core.agents.state_helpers import ensure_state_group, get_field, set_field
+try:
+    from lawfirm_langgraph.core.agents.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
+except ImportError:
+    from core.agents.state_utils import (
+        MAX_PROCESSING_STEPS,
+        prune_processing_steps,
+    )
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
     # 호환성을 위한 fallback
     from core.services.question_classifier import QuestionType
-from core.services.unified_prompt_manager import LegalDomain
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import LegalDomain
 
 
 class WorkflowUtils:
