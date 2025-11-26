@@ -7,8 +7,15 @@ Workflow Types and Utility Classes
 from enum import Enum
 from typing import Any, Dict
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import RetryConfig
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import RetryConfig
+except ImportError:
+    from core.workflow.utils.workflow_constants import RetryConfig
 
 
 class QueryComplexity(str, Enum):

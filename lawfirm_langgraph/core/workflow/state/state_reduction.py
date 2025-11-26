@@ -16,9 +16,14 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Any, Dict, Optional, Set
 
-from core.workflow.node_input_output_spec import (
-    get_node_spec,
-)
+try:
+    from lawfirm_langgraph.core.workflow.node_input_output_spec import (
+        get_node_spec,
+    )
+except ImportError:
+    from core.workflow.node_input_output_spec import (
+        get_node_spec,
+    )
 
 logger = get_logger(__name__)
 
@@ -187,6 +192,17 @@ class StateReducer:
             # session_id가 없으면 보존된 input에서 복원
             if not reduced["input"].get("session_id") and preserved_input.get("session_id"):
                 reduced["input"]["session_id"] = preserved_input["session_id"]
+        
+        # 🔥 개선: 스트리밍을 위해 _callbacks 보존 (critical_nodes에서만)
+        if node_name in critical_nodes and state.get("_callbacks"):
+            reduced["_callbacks"] = state["_callbacks"]
+            # metadata에도 보존
+            if "metadata" not in reduced:
+                reduced["metadata"] = {}
+            if not isinstance(reduced["metadata"], dict):
+                reduced["metadata"] = {}
+            if state.get("metadata", {}).get("_callbacks"):
+                reduced["metadata"]["_callbacks"] = state["metadata"]["_callbacks"]
 
             if node_name == "classify_query":
                 print(f"[DEBUG] state_reduction: Preserved input after reduction: query='{reduced['input'].get('query', '')[:50] if reduced['input'].get('query') else 'EMPTY'}...'")
@@ -242,6 +258,21 @@ class StateReducer:
                     reduced["common"]["search"] = {}
                 if "retrieved_docs" not in reduced["common"]["search"]:
                     reduced["common"]["search"]["retrieved_docs"] = preserved_retrieved_docs
+            
+            # 🔥 개선: 스트리밍을 위해 _callbacks 보존
+            preserved_callbacks = (
+                state.get("_callbacks") or
+                (state.get("metadata", {}).get("_callbacks") if isinstance(state.get("metadata"), dict) else None)
+            )
+            if preserved_callbacks:
+                if "_callbacks" not in reduced:
+                    reduced["_callbacks"] = preserved_callbacks
+                if "metadata" not in reduced:
+                    reduced["metadata"] = {}
+                if not isinstance(reduced["metadata"], dict):
+                    reduced["metadata"] = {}
+                if "_callbacks" not in reduced["metadata"]:
+                    reduced["metadata"]["_callbacks"] = preserved_callbacks
 
         # 추가 보장: input 그룹이 필요한데 없으면 생성 (이중 체크)
         if "input" in required_groups and not reduced.get("input"):

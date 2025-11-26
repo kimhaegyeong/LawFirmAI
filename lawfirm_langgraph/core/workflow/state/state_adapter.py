@@ -15,7 +15,10 @@ except ImportError:
 from typing import Any, Dict, Optional
 
 from .modular_states import LegalWorkflowState
-from core.workflow.node_input_output_spec import validate_node_input
+try:
+    from lawfirm_langgraph.core.workflow.node_input_output_spec import validate_node_input
+except ImportError:
+    from core.workflow.node_input_output_spec import validate_node_input
 
 logger = get_logger(__name__)
 
