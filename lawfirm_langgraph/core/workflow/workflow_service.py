@@ -228,10 +228,26 @@ class LangGraphWorkflowService:
         if self.config.enable_checkpoint and CheckpointManager is not None:
             try:
                 storage_type = self.config.checkpoint_storage.value
-                db_path = self.config.checkpoint_db_path if storage_type == "sqlite" else None
+                # PostgreSQL만 지원: database_url 사용
+                # CheckpointManager가 자동으로 환경 변수에서 가져오므로 None 전달 가능
+                database_url = None
+                if storage_type == "postgres":
+                    # Config에서 database_url 가져오기 (선택적)
+                    try:
+                        from lawfirm_langgraph.config.app_config import Config as AppConfig
+                        app_config = AppConfig()
+                        database_url = app_config.database_url
+                        # PostgreSQL URL이 아니면 None (CheckpointManager가 환경 변수에서 가져옴)
+                        if database_url and not database_url.startswith("postgresql://") and not database_url.startswith("postgres://"):
+                            database_url = None
+                            safe_log_info(self.logger, "database_url is not PostgreSQL, checkpoint manager will use environment variable")
+                    except Exception as e:
+                        safe_log_info(self.logger, f"Using environment variable for checkpoint database URL: {e}")
+                
+                # database_url=None이면 CheckpointManager가 환경 변수에서 자동으로 가져옴
                 self.checkpoint_manager = CheckpointManager(
                     storage_type=storage_type,
-                    db_path=db_path
+                    database_url=database_url
                 )
                 if self.checkpoint_manager.is_enabled():
                     safe_log_info(self.logger, f"Checkpoint manager initialized with {storage_type} storage")
@@ -547,6 +563,21 @@ class LangGraphWorkflowService:
                 
                 if use_astream_events:
                     # astream_events() 사용 (stream API와 동일한 로직)
+                    # 🔥 개선: 스트리밍을 위해 콜백 설정
+                    callback_queue = asyncio.Queue()
+                    callback_handler = self.create_streaming_callback_handler(queue=callback_queue)
+                    if callback_handler:
+                        enhanced_config = self.get_config_with_callbacks(
+                            session_id=session_id,
+                            callbacks=[callback_handler]
+                        )
+                        # state에 콜백 저장하여 노드에서 사용할 수 있도록 함
+                        initial_state["_callbacks"] = [callback_handler]
+                        if "metadata" not in initial_state:
+                            initial_state["metadata"] = {}
+                        initial_state["metadata"]["_callbacks"] = [callback_handler]
+                        self.logger.debug(f"✅ [STREAMING TEST] 콜백을 state에 저장: {len([callback_handler])}개")
+                    
                     last_node_name = None
                     last_node_output = None
                     accumulated_state = initial_state.copy() if isinstance(initial_state, dict) else {}
@@ -1767,7 +1798,70 @@ class LangGraphWorkflowService:
             metadata_clean = convert_numpy_types(metadata) if metadata else {}
             
             # ConversationManager에 턴 추가 및 conversation_history 업데이트
-            answer = flat_result.get("answer", "") if isinstance(flat_result, dict) else ""
+            # answer 추출: flat_result에서 여러 위치에서 찾기
+            answer = ""
+            if isinstance(flat_result, dict):
+                # 1. 최상위 레벨에서 확인
+                answer_raw = flat_result.get("answer", "")
+                self.logger.debug(f"[ANSWER EXTRACTION] flat_result['answer'] type={type(answer_raw).__name__}, value={str(answer_raw)[:100] if answer_raw else 'None'}")
+                
+                # 2. answer가 dict인 경우 내부 answer 키 확인
+                if isinstance(answer_raw, dict):
+                    answer = answer_raw.get("answer", "") or answer_raw.get("content", "") or ""
+                    self.logger.debug(f"[ANSWER EXTRACTION] Extracted from dict: length={len(str(answer))}")
+                else:
+                    answer = answer_raw
+                
+                # 3. answer가 비어있으면 다른 경로에서 찾기
+                if not answer or len(str(answer).strip()) == 0:
+                    # 3-1. common 그룹에서 확인
+                    if "common" in flat_result:
+                        if isinstance(flat_result["common"], dict):
+                            common_answer = flat_result["common"].get("answer", "")
+                            if isinstance(common_answer, dict):
+                                answer = common_answer.get("answer", "") or common_answer.get("content", "") or ""
+                            else:
+                                answer = common_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in common: length={len(str(answer))}")
+                    
+                    # 3-2. metadata에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "metadata" in flat_result:
+                        if isinstance(flat_result["metadata"], dict):
+                            metadata_answer = flat_result["metadata"].get("answer", "")
+                            if isinstance(metadata_answer, dict):
+                                answer = metadata_answer.get("answer", "") or metadata_answer.get("content", "") or ""
+                            else:
+                                answer = metadata_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in metadata: length={len(str(answer))}")
+                    
+                    # 3-3. output 그룹에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "output" in flat_result:
+                        if isinstance(flat_result["output"], dict):
+                            output_answer = flat_result["output"].get("answer", "")
+                            if isinstance(output_answer, dict):
+                                answer = output_answer.get("answer", "") or output_answer.get("content", "") or ""
+                            else:
+                                answer = output_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in output: length={len(str(answer))}")
+                    
+                    # 3-4. analysis 그룹에서 확인
+                    if (not answer or len(str(answer).strip()) == 0) and "analysis" in flat_result:
+                        if isinstance(flat_result["analysis"], dict):
+                            analysis_answer = flat_result["analysis"].get("answer", "")
+                            if isinstance(analysis_answer, dict):
+                                answer = analysis_answer.get("answer", "") or analysis_answer.get("content", "") or ""
+                            else:
+                                answer = analysis_answer
+                            if answer:
+                                self.logger.debug(f"[ANSWER EXTRACTION] Found in analysis: length={len(str(answer))}")
+            
+            # answer를 문자열로 변환
+            answer = str(answer).strip() if answer else ""
+            self.logger.info(f"[ANSWER EXTRACTION] Final answer length: {len(answer)}")
+            
             query_type = flat_result.get("query_type", "general_question") if isinstance(flat_result, dict) else "general_question"
             
             if session_id and query and answer:
@@ -1824,8 +1918,9 @@ class LangGraphWorkflowService:
                 except Exception as e:
                     self.logger.warning(f"Failed to update conversation history: {e}", exc_info=True)
             
+            # response에 answer 설정 (이미 위에서 추출한 answer 사용)
             response = {
-                "answer": flat_result.get("answer", "") if isinstance(flat_result, dict) else "",
+                "answer": answer,
                 "sources": sources,
                 "sources_detail": sources_detail_clean,
                 "confidence": flat_result.get("confidence", 0.0) if isinstance(flat_result, dict) else 0.0,
