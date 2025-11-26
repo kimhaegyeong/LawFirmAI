@@ -11,9 +11,18 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_utils import WorkflowUtils
-from core.agents.validators.quality_validators import AnswerValidator
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.validators.quality_validators import AnswerValidator
+except ImportError:
+    from core.agents.validators.quality_validators import AnswerValidator
 
 from .config.formatter_config import AnswerLengthConfig, ConfidenceConfig
 from .managers.confidence_manager import ConfidenceManager
@@ -1623,7 +1632,24 @@ class AnswerFormatterHandler:
             source_created = False
             source_type = doc.get("type") or doc.get("source_type") or doc.get("metadata", {}).get("source_type", "")
             metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-            doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id") or metadata.get("decision_id") or metadata.get("id")
+            # doc_id 추출: 여러 위치에서 확인 (우선순위 순)
+            doc_id = (
+                doc.get("doc_id") or 
+                metadata.get("doc_id") or 
+                metadata.get("case_id") or 
+                metadata.get("decision_id") or 
+                metadata.get("interpretation_id") or
+                metadata.get("id") or
+                ""
+            )
+            
+            # 디버깅: case_paragraph인데 doc_id가 없으면 로깅
+            if source_type == "case_paragraph" and not doc_id:
+                self.logger.warning(
+                    f"[SOURCES] ⚠️ case_paragraph에 doc_id가 없습니다 (doc {doc_index}/{total_docs}). "
+                    f"doc keys: {list(doc.keys())}, metadata keys: {list(metadata.keys())}, "
+                    f"doc.get('doc_id'): {doc.get('doc_id')}, metadata.get('doc_id'): {metadata.get('doc_id')}"
+                )
         
             if not source_type:
                 content_for_inference = doc.get("content", "") or doc.get("text", "")
@@ -2319,17 +2345,17 @@ class AnswerFormatterHandler:
             full_text = None
             
             try:
-                if source_type == "case_paragraph":
+                if source_type in ["case_paragraph", "precedent_content"]:  # 🔥 레거시 지원
                     doc_id = doc.get("doc_id") or metadata.get("doc_id") or metadata.get("case_id")
                     if doc_id:
-                        # cases 테이블에는 full_text 컬럼이 없으므로 case_paragraphs에서 텍스트를 가져옴
+                        # precedent_contents에서 텍스트를 가져옴 (PostgreSQL)
+                        # 🔥 레거시: case_paragraphs 테이블은 더 이상 사용하지 않음
                         cursor.execute("""
-                            SELECT GROUP_CONCAT(cp.text, '\n\n') as full_text
-                            FROM cases c
-                            JOIN case_paragraphs cp ON cp.case_id = c.id
-                            WHERE c.doc_id = ?
-                            GROUP BY c.doc_id
-                            ORDER BY cp.para_index
+                            SELECT STRING_AGG(pcc.section_content, E'\\n\\n' ORDER BY pcc.section_index) as full_text
+                            FROM precedents p
+                            JOIN precedent_contents pcc ON pcc.precedent_id = p.id
+                            WHERE p.doc_id = %s
+                            GROUP BY p.doc_id
                         """, (doc_id,))
                         row = cursor.fetchone()
                         if row and row[0]:
@@ -2369,9 +2395,10 @@ class AnswerFormatterHandler:
                     statute_id = doc.get("statute_id") or metadata.get("statute_id")
                     article_no = doc.get("article_no") or metadata.get("article_no") or metadata.get("article_number")
                     if statute_id and article_no:
+                        # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
                         cursor.execute("""
-                            SELECT text
-                            FROM statute_articles
+                            SELECT article_content
+                            FROM statutes_articles
                             WHERE statute_id = ? AND article_no = ?
                         """, (statute_id, article_no))
                         row = cursor.fetchone()
@@ -2456,15 +2483,16 @@ class AnswerFormatterHandler:
                 if cases:
                     doc_ids = [doc_id for doc_id, _ in cases]
                     if doc_ids:
-                        placeholders = ','.join(['?'] * len(doc_ids))
-                        # cases 테이블에는 full_text 컬럼이 없으므로 case_paragraphs에서 텍스트를 가져옴
+                        placeholders = ','.join(['%s'] * len(doc_ids))  # 🔥 PostgreSQL: %s 사용
+                        # precedent_contents에서 텍스트를 가져옴 (PostgreSQL)
+                        # 🔥 레거시: case_paragraphs 테이블은 더 이상 사용하지 않음
                         cursor.execute(f"""
-                            SELECT c.doc_id, GROUP_CONCAT(cp.text, '\n\n') as full_text
-                            FROM cases c
-                            JOIN case_paragraphs cp ON cp.case_id = c.id
-                            WHERE c.doc_id IN ({placeholders})
-                            GROUP BY c.doc_id
-                            ORDER BY c.doc_id, cp.para_index
+                            SELECT p.doc_id, STRING_AGG(pcc.section_content, E'\\n\\n' ORDER BY pcc.section_index) as full_text
+                            FROM precedents p
+                            JOIN precedent_contents pcc ON pcc.precedent_id = p.id
+                            WHERE p.doc_id IN ({placeholders})
+                            GROUP BY p.doc_id
+                            ORDER BY p.doc_id
                         """, doc_ids)
                         for row in cursor.fetchall():
                             if row[0] and row[1]:
@@ -2504,9 +2532,10 @@ class AnswerFormatterHandler:
                 
                 if statutes:
                     for statute_id, article_no, detail in statutes:
+                        # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
                         cursor.execute("""
-                            SELECT text
-                            FROM statute_articles
+                            SELECT article_content
+                            FROM statutes_articles
                             WHERE statute_id = ? AND article_no = ?
                         """, (statute_id, article_no))
                         row = cursor.fetchone()
@@ -2557,14 +2586,21 @@ class AnswerFormatterHandler:
                     if meta.get("article_no"):
                         detail_dict["article_no"] = meta["article_no"]
                 elif source_type == "case_paragraph":
+                    # doc_id 추출: 여러 위치에서 확인 (우선순위 순)
+                    doc_metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                     doc_id = (
                         meta.get("doc_id") or 
                         doc.get("doc_id") or 
+                        doc_metadata.get("doc_id") or
+                        doc_metadata.get("case_id") or
                         metadata.get("doc_id") or 
                         metadata.get("case_id") or
                         ""
                     )
                     detail_dict["case_number"] = doc_id
+                    # doc_id가 없으면 로깅
+                    if not doc_id:
+                        self.logger.warning(f"[_create_source_detail_dict] case_paragraph에 doc_id가 없습니다. doc keys: {list(doc.keys())}, meta keys: {list(meta.keys()) if isinstance(meta, dict) else []}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else []}")
                     if meta.get("court"):
                         detail_dict["court"] = meta["court"]
                     # casenames를 case_name으로 변환
@@ -2609,13 +2645,20 @@ class AnswerFormatterHandler:
                 if article_no:
                     detail_dict["article_no"] = article_no
             elif source_type == "case_paragraph":
+                # doc_id 추출: 여러 위치에서 확인 (우선순위 순)
+                doc_metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
                 doc_id = (
                     doc.get("doc_id") or 
+                    doc_metadata.get("doc_id") or
+                    doc_metadata.get("case_id") or
                     metadata.get("doc_id") or 
                     metadata.get("case_id") or
                     ""
                 )
                 detail_dict["case_number"] = doc_id
+                # doc_id가 없으면 로깅
+                if not doc_id:
+                    self.logger.warning(f"[_create_source_detail_dict] case_paragraph에 doc_id가 없습니다 (source_info_detail 없음). doc keys: {list(doc.keys())}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else []}")
                 if doc.get("court") or metadata.get("court"):
                     detail_dict["court"] = doc.get("court") or metadata.get("court")
                 # casenames를 case_name으로 변환

@@ -8,12 +8,30 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from core.generation.builders.prompt_chain_executor import PromptChainExecutor
-from core.agents.validators.quality_validators import AnswerValidator
-from core.agents.parsers.response_parsers import AnswerParser
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.generation.builders.prompt_chain_executor import PromptChainExecutor
+except ImportError:
+    from core.generation.builders.prompt_chain_executor import PromptChainExecutor
+try:
+    from lawfirm_langgraph.core.agents.validators.quality_validators import AnswerValidator
+except ImportError:
+    from core.agents.validators.quality_validators import AnswerValidator
+try:
+    from lawfirm_langgraph.core.agents.parsers.response_parsers import AnswerParser
+except ImportError:
+    from core.agents.parsers.response_parsers import AnswerParser
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 class AnswerGenerator:
