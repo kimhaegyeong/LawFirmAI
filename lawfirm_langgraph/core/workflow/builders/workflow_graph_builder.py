@@ -10,11 +10,26 @@ from typing import Any, Callable, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
-from core.workflow.state.state_definitions import LegalWorkflowState
-from core.workflow.edges.classification_edges import ClassificationEdges
-from core.workflow.edges.search_edges import SearchEdges
-from core.workflow.edges.answer_edges import AnswerEdges
-from core.workflow.edges.agentic_edges import AgenticEdges
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.edges.classification_edges import ClassificationEdges
+except ImportError:
+    from core.workflow.edges.classification_edges import ClassificationEdges
+try:
+    from lawfirm_langgraph.core.workflow.edges.search_edges import SearchEdges
+except ImportError:
+    from core.workflow.edges.search_edges import SearchEdges
+try:
+    from lawfirm_langgraph.core.workflow.edges.answer_edges import AnswerEdges
+except ImportError:
+    from core.workflow.edges.answer_edges import AnswerEdges
+try:
+    from lawfirm_langgraph.core.workflow.edges.agentic_edges import AgenticEdges
+except ImportError:
+    from core.workflow.edges.agentic_edges import AgenticEdges
 
 
 class WorkflowGraphBuilder:
