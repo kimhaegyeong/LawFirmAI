@@ -8,7 +8,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List
 
 # 프로젝트 루트를 sys.path에 추가
 _CURRENT_FILE = Path(__file__).resolve()
@@ -35,6 +34,7 @@ from lawfirm_langgraph.core.data.connection_pool import get_connection_pool  # n
 
 from scripts.ingest.dlytrm_client import DlytrmClient  # noqa: E402
 from scripts.ingest.dlytrm_collector import DlytrmCollector  # noqa: E402
+from scripts.ingest.utils.keyword_loader import load_keywords  # noqa: E402
 
 # 로거 설정
 logging.basicConfig(
@@ -98,22 +98,6 @@ def _create_table(conn):
     logger.info("테이블 생성 완료")
 
 
-def _load_keywords(keywords_str: str = None, keyword_file: str = None) -> List[str]:
-    """키워드 로드"""
-    keywords = []
-    
-    if keywords_str:
-        keywords.extend([k.strip() for k in keywords_str.split(',') if k.strip()])
-    
-    if keyword_file:
-        file_path = Path(keyword_file)
-        if file_path.exists():
-            with open(file_path, 'r', encoding='utf-8') as f:
-                keywords.extend([line.strip() for line in f if line.strip()])
-        else:
-            logger.warning(f"키워드 파일을 찾을 수 없습니다: {keyword_file}")
-    
-    return list(set(keywords))  # 중복 제거
 
 
 def main():
@@ -161,7 +145,7 @@ def main():
     
     # 수집 실행
     if args.keywords or args.keyword_file:
-        keywords = _load_keywords(args.keywords, args.keyword_file)
+        keywords = load_keywords(args.keywords, args.keyword_file)
         if not keywords:
             logger.error("키워드가 없습니다.")
             return
