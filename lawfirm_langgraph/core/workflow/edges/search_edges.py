@@ -13,7 +13,10 @@ from typing import Optional
 
 from langgraph.graph import StateGraph
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
 
 logger = get_logger(__name__)
@@ -25,6 +28,7 @@ class SearchEdges:
     def __init__(
         self,
         should_skip_search_adaptive_func=None,
+        should_use_multi_query_agent_func=None,
         logger_instance: Optional[logging.Logger] = None
     ):
         """
@@ -32,9 +36,11 @@ class SearchEdges:
         
         Args:
             should_skip_search_adaptive_func: 검색 스킵 여부 결정 함수
+            should_use_multi_query_agent_func: 멀티 질의 에이전트 사용 여부 결정 함수
             logger_instance: 로거 인스턴스
         """
         self.should_skip_search_adaptive_func = should_skip_search_adaptive_func
+        self.should_use_multi_query_agent_func = should_use_multi_query_agent_func
         self.logger = logger_instance or logger
     
     def add_search_edges(
@@ -52,8 +58,24 @@ class SearchEdges:
         # 문서 분석 후 검색으로
         workflow.add_edge("analyze_document", "expand_keywords")
         
-        # 키워드 확장 후 검색 쿼리 준비
-        workflow.add_edge("expand_keywords", "prepare_search_query")
+        # 키워드 확장 후 멀티 질의 에이전트 사용 여부 결정
+        if self.should_use_multi_query_agent_func:
+            workflow.add_conditional_edges(
+                "expand_keywords",
+                self.should_use_multi_query_agent_func,
+                {
+                    "multi_query_agent": "multi_query_search_agent",
+                    "standard_search": "prepare_search_query"
+                }
+            )
+        else:
+            workflow.add_edge("expand_keywords", "prepare_search_query")
+        
+        # 멀티 질의 에이전트 실행 후 문서 준비로 직접 연결
+        # 노드가 존재하는지 확인 (노드 이름 리스트로 확인)
+        workflow_nodes = list(workflow.nodes.keys()) if hasattr(workflow, 'nodes') else []
+        if "multi_query_search_agent" in workflow_nodes:
+            workflow.add_edge("multi_query_search_agent", "prepare_documents_and_terms")
         
         # 검색 쿼리 준비 후 조건부 검색 실행
         if self.should_skip_search_adaptive_func:
