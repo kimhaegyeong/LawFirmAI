@@ -13,9 +13,18 @@ import time
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
-from core.agents.parsers.response_parsers import ClassificationParser
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.parsers.response_parsers import ClassificationParser
+except ImportError:
+    from core.agents.parsers.response_parsers import ClassificationParser
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
