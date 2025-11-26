@@ -140,14 +140,13 @@ class OpenLawClient:
     def get_precedent_info(
         self,
         precedent_id: int,
-        lm: Optional[str] = None,
-        response_type: str = 'JSON'
+        lm: Optional[str] = None
     ) -> Dict[str, Any]:
         """판례 본문 조회 (precInfoGuide)"""
         params = {
             'OC': self.oc,
             'target': 'prec',
-            'type': response_type,
+            'type': 'JSON',
             'ID': precedent_id
         }
         

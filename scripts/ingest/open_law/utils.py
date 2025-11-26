@@ -15,8 +15,7 @@ def build_database_url() -> Optional[str]:
     
     우선순위:
     1. DATABASE_URL 환경 변수가 직접 설정되어 있고 postgresql://로 시작하면 사용
-    2. 개별 POSTGRES_* 환경 변수로부터 구성
-    3. DATABASE_URL이 있으면 사용 (SQLite 등)
+    2. 개별 POSTGRES_* 환경 변수로부터 구성 (SQLite URL 무시)
     
     Returns:
         Optional[str]: PostgreSQL 데이터베이스 URL 또는 None
@@ -26,7 +25,7 @@ def build_database_url() -> Optional[str]:
     if db_url and db_url.startswith('postgresql'):
         return db_url
     
-    # 개별 변수로부터 구성
+    # 개별 변수로부터 구성 (SQLite URL은 무시)
     host = os.getenv('POSTGRES_HOST', 'localhost')
     port = os.getenv('POSTGRES_PORT', '5432')
     db = os.getenv('POSTGRES_DB')
@@ -38,9 +37,6 @@ def build_database_url() -> Optional[str]:
         encoded_password = quote_plus(password)
         return f"postgresql://{user}:{encoded_password}@{host}:{port}/{db}"
     
-    # DATABASE_URL이 있으면 사용 (SQLite 등)
-    if db_url:
-        return db_url
-    
+    # PostgreSQL 환경변수가 없으면 None 반환 (SQLite 사용 안 함)
     return None
 

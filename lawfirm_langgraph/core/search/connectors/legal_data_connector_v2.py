@@ -144,6 +144,26 @@ class LegalDataConnectorV2:
         
         # FTS 테이블 존재 여부 확인
         self._check_fts_tables()
+        
+        # 🔥 수정: KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
+        self.stopword_processor = None
+        if KoreanStopwordProcessor:
+            try:
+                self.stopword_processor = KoreanStopwordProcessor()
+                self.logger.debug("KoreanStopwordProcessor initialized successfully")
+            except Exception as e:
+                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
+        
+        # 🔥 수정: KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
+        self._okt = None
+        try:
+            from konlpy.tag import Okt  # pyright: ignore[reportMissingImports]
+            self._okt = Okt()
+            self.logger.debug("KoNLPy Okt initialized successfully")
+        except ImportError:
+            self.logger.debug("KoNLPy not available, will use fallback method")
+        except Exception as e:
+            self.logger.warning(f"Error initializing KoNLPy: {e}, will use fallback method")
     
     def _mask_url(self, url: str) -> str:
         """URL에서 비밀번호 마스킹"""
@@ -155,26 +175,6 @@ class LegalDataConnectorV2:
         except Exception:
             pass
         return url
-        
-        # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
-        self.stopword_processor = None
-        if KoreanStopwordProcessor:
-            try:
-                self.stopword_processor = KoreanStopwordProcessor()
-                self.logger.debug("KoreanStopwordProcessor initialized successfully")
-            except Exception as e:
-                self.logger.warning(f"Error initializing KoreanStopwordProcessor: {e}")
-        
-        # KoNLPy 형태소 분석기 초기화 (선택적, 기존 호환성 유지)
-        self._okt = None
-        try:
-            from konlpy.tag import Okt  # pyright: ignore[reportMissingImports]
-            self._okt = Okt()
-            self.logger.debug("KoNLPy Okt initialized successfully")
-        except ImportError:
-            self.logger.debug("KoNLPy not available, will use fallback method")
-        except Exception as e:
-            self.logger.warning(f"Error initializing KoNLPy: {e}, will use fallback method")
 
     def _check_fts_tables(self):
         """FTS 테이블 존재 여부 확인 및 초기화 필요 여부 안내"""
@@ -293,11 +293,12 @@ class LegalDataConnectorV2:
             tsvector_expr = f"{table_alias}.{text_vector_column}"
         
         # WHERE 절: plainto_tsquery 사용 (더 유연한 한국어 검색)
-        where_clause = f"{tsvector_expr} @@ plainto_tsquery('korean', %s)"
+        # 🔥 수정: 'korean' 설정이 없을 수 있으므로 'simple' 사용 (한국어도 처리 가능)
+        where_clause = f"{tsvector_expr} @@ plainto_tsquery('simple', %s)"
         
         # ORDER BY 절: ts_rank_cd 사용 (더 정확한 랭킹, 커버 밀도 고려)
         # 또는 ts_rank 사용 (더 빠름)
-        order_clause = f"ts_rank_cd({tsvector_expr}, plainto_tsquery('korean', %s)) DESC"
+        order_clause = f"ts_rank_cd({tsvector_expr}, plainto_tsquery('simple', %s)) DESC"
         
         return where_clause, order_clause, query_clean
     
@@ -372,8 +373,8 @@ class LegalDataConnectorV2:
         Returns:
             최적화된 쿼리
         """
-        # KoNLPy가 사용 가능하면 형태소 분석 사용, 아니면 폴백
-        if self._okt is not None:
+        # 🔥 수정: 안전한 체크 - hasattr 사용
+        if hasattr(self, '_okt') and self._okt is not None:
             try:
                 return self._optimize_fts5_query_morphological(query)
             except Exception as e:
@@ -768,6 +769,7 @@ class LegalDataConnectorV2:
                     
                     # PostgreSQL FTS 쿼리 (plainto_tsquery 사용)
                     # plainto_tsquery는 한국어 형태소 분석을 수행하고 공백으로 구분된 단어를 AND로 처리
+                    # 🔥 수정: where_clause와 order_clause에 이미 %s가 포함되어 있으므로 tsquery를 2번 전달
                     sql_query = f"""
                         SELECT
                             sa.id,
@@ -781,14 +783,15 @@ class LegalDataConnectorV2:
                             s.law_abbrv as statute_abbrv,
                             s.law_type as statute_type,
                             s.domain as category,
-                            ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('korean', %s)) as rank_score
+                            ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
                         FROM statutes_articles sa
                         JOIN statutes s ON sa.statute_id = s.id
                         WHERE {where_clause}
                         ORDER BY {order_clause}
                         LIMIT %s
                     """
-                    cursor.execute(sql_query, (tsquery, tsquery, limit))
+                    # where_clause와 order_clause에 각각 %s가 포함되어 있으므로 tsquery를 2번, limit을 1번 전달
+                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                 else:
                     # SQLite FTS5 (레거시 지원)
                     cursor.execute("""
@@ -926,11 +929,50 @@ class LegalDataConnectorV2:
             
             try:
                 # 개선 2: 법령명 매칭 로직 강화 (유사도 매칭)
-                # 전략 1: 정확한 이름 매칭
+                # 🔥 수정: PostgreSQL은 %s 플레이스홀더 사용
+                # 🔥 수정: Open Law API 스키마는 law_name_kr, law_abbrv 사용
+                # 전략 1: 정확한 이름 매칭 (동적 컬럼명 확인)
+                # 먼저 컬럼 존재 여부 확인
+                # 🔥 수정: RealDictCursor를 사용하므로 딕셔너리로 접근 가능
                 cursor.execute("""
-                    SELECT id, name, abbrv 
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'statutes' 
+                    AND column_name IN ('name', 'law_name_kr', 'law_name')
+                    LIMIT 1
+                """)
+                col_result = cursor.fetchone()
+                # RealDictCursor는 딕셔너리처럼 접근 가능하지만, information_schema는 튜플일 수 있음
+                if col_result:
+                    if isinstance(col_result, dict):
+                        name_col = col_result.get('column_name', 'law_name_kr')
+                    else:
+                        name_col = col_result[0] if len(col_result) > 0 else 'law_name_kr'
+                else:
+                    name_col = 'law_name_kr'  # 기본값
+                
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'statutes' 
+                    AND column_name IN ('abbrv', 'law_abbrv')
+                    LIMIT 1
+                """)
+                abbrv_result = cursor.fetchone()
+                # RealDictCursor는 딕셔너리처럼 접근 가능하지만, information_schema는 튜플일 수 있음
+                if abbrv_result:
+                    if isinstance(abbrv_result, dict):
+                        abbrv_col = abbrv_result.get('column_name', 'law_abbrv')
+                    else:
+                        abbrv_col = abbrv_result[0] if len(abbrv_result) > 0 else 'law_abbrv'
+                else:
+                    abbrv_col = 'law_abbrv'  # 기본값
+                
+                # 동적 쿼리 생성
+                cursor.execute(f"""
+                    SELECT id, {name_col} as name, {abbrv_col} as abbrv 
                     FROM statutes 
-                    WHERE name = ? OR abbrv = ?
+                    WHERE {name_col} = %s OR {abbrv_col} = %s
                     LIMIT 1
                 """, (law_name, law_name))
                 
@@ -938,10 +980,10 @@ class LegalDataConnectorV2:
                 
                 # 전략 2: LIKE 검색 (정확한 매칭 실패 시)
                 if not statute_row:
-                    cursor.execute("""
-                        SELECT id, name, abbrv 
+                    cursor.execute(f"""
+                        SELECT id, {name_col} as name, {abbrv_col} as abbrv 
                         FROM statutes 
-                        WHERE name LIKE ? OR abbrv LIKE ? OR name LIKE ? OR abbrv LIKE ?
+                        WHERE {name_col} LIKE %s OR {abbrv_col} LIKE %s OR {name_col} LIKE %s OR {abbrv_col} LIKE %s
                         LIMIT 5
                     """, (
                         f"%{law_name}%", 
@@ -952,16 +994,42 @@ class LegalDataConnectorV2:
                     
                     candidates = cursor.fetchall()
                     if candidates:
+                        # 🔥 수정: RealDictCursor를 사용하므로 딕셔너리로 접근 가능
                         # 가장 유사한 법령명 선택 (길이가 가장 가까운 것)
-                        best_match = min(candidates, key=lambda x: abs(len(x['name']) - len(law_name)))
+                        def get_name_length(row):
+                            if isinstance(row, dict):
+                                return len(row.get('name', ''))
+                            elif isinstance(row, tuple) and len(row) > 1:
+                                return len(row[1])
+                            return 999
+                        
+                        def get_name(row):
+                            if isinstance(row, dict):
+                                return row.get('name', '')
+                            elif isinstance(row, tuple) and len(row) > 1:
+                                return row[1]
+                            return ''
+                        
+                        best_match = min(candidates, key=lambda x: abs(get_name_length(x) - len(law_name)) if get_name(x) else 999)
                         statute_row = best_match
-                        self.logger.info(f"법령명 유사도 매칭 성공: '{law_name}' -> '{statute_row['name']}'")
+                        statute_name = get_name(best_match)
+                        self.logger.info(f"법령명 유사도 매칭 성공: '{law_name}' -> '{statute_name}'")
                 
                 if not statute_row:
                     self.logger.warning(f"법령을 찾을 수 없음: {law_name}")
                     return []
                 
-                statute_id = statute_row['id']
+                # 🔥 수정: RealDictCursor를 사용하므로 딕셔너리로 접근 가능
+                if isinstance(statute_row, dict):
+                    statute_id = statute_row.get('id')
+                elif isinstance(statute_row, tuple) and len(statute_row) > 0:
+                    statute_id = statute_row[0]
+                else:
+                    statute_id = None
+                
+                if not statute_id:
+                    self.logger.warning(f"법령 ID를 찾을 수 없음: {law_name}")
+                    return []
                 
                 # 해당 조문 직접 조회 (SQLite는 NULLS LAST 미지원, CASE 문 사용)
                 cursor.execute("""
@@ -973,19 +1041,19 @@ class LegalDataConnectorV2:
                         sa.item_no,
                         sa.article_title as heading,
                         sa.article_content as text,
-                        s.name as statute_name,
-                        s.abbrv as statute_abbrv,
-                        s.statute_type,
-                        s.category
+                        s.law_name_kr as statute_name,
+                        s.law_abbrv as statute_abbrv,
+                        s.law_type as statute_type,
+                        s.domain as category
                     FROM statutes_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
-                    WHERE sa.statute_id = ? AND sa.article_no = ?
+                    WHERE sa.statute_id = %s AND sa.article_no = %s
                     ORDER BY 
                         CASE WHEN sa.clause_no IS NULL THEN 1 ELSE 0 END,
                         sa.clause_no,
                         CASE WHEN sa.item_no IS NULL THEN 1 ELSE 0 END,
                         sa.item_no
-                    LIMIT ?
+                    LIMIT %s
                 """, (statute_id, article_no, limit * 2))
                 
                 for row in cursor.fetchall():
@@ -1087,8 +1155,9 @@ class LegalDataConnectorV2:
                 try:
                     # PostgreSQL FTS 검색으로 변환
                     if self._db_adapter and self._db_adapter.db_type == 'postgresql':
+                        # 🔥 수정: text_search_vector 컬럼이 없으므로 text_content_column 사용
                         where_clause, order_clause, tsquery = self._convert_fts5_to_postgresql_fts(
-                            fallback_query, table_alias='sa', text_vector_column='text_search_vector'
+                            fallback_query, table_alias='sa', text_vector_column=None, text_content_column='article_content'
                         )
                         
                         if not tsquery:
@@ -1104,18 +1173,19 @@ class LegalDataConnectorV2:
                                 sa.item_no,
                                 sa.article_title as heading,
                                 sa.article_content as text,
-                                s.name as statute_name,
-                                s.abbrv as statute_abbrv,
-                                s.statute_type,
-                                s.category,
-                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('korean', %s)) as rank_score
+                                s.law_name_kr as statute_name,
+                                s.law_abbrv as statute_abbrv,
+                                s.law_type as statute_type,
+                                s.domain as category,
+                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
                             FROM statutes_articles sa
                             JOIN statutes s ON sa.statute_id = s.id
                             WHERE {where_clause}
                             ORDER BY {order_clause}
                             LIMIT %s
                         """
-                        cursor.execute(sql_query, (tsquery, tsquery, limit))
+                        # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                        cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                     else:
                         # SQLite FTS5 (레거시 지원)
                         cursor.execute("""
@@ -1127,10 +1197,10 @@ class LegalDataConnectorV2:
                                 sa.item_no,
                                 sa.article_title as heading,
                                 sa.article_content as text,
-                                s.name as statute_name,
-                                s.abbrv as statute_abbrv,
-                                s.statute_type,
-                                s.category,
+                                s.law_name_kr as statute_name,
+                                s.law_abbrv as statute_abbrv,
+                                s.law_type as statute_type,
+                                s.domain as category,
                                 bm25(statute_articles_fts) as rank_score
                             FROM statute_articles_fts
                             JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
@@ -1237,18 +1307,19 @@ class LegalDataConnectorV2:
                                 sa.item_no,
                                 sa.article_title as heading,
                                 sa.article_content as text,
-                                s.name as statute_name,
-                                s.abbrv as statute_abbrv,
-                                s.statute_type,
-                                s.category,
-                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('korean', %s)) as rank_score
+                                s.law_name_kr as statute_name,
+                                s.law_abbrv as statute_abbrv,
+                                s.law_type as statute_type,
+                                s.domain as category,
+                                ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
                             FROM statutes_articles sa
                             JOIN statutes s ON sa.statute_id = s.id
                             WHERE {where_clause}
                             ORDER BY {order_clause}
                             LIMIT %s
                         """
-                        cursor.execute(sql_query, (tsquery, tsquery, limit))
+                        # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                        cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                     else:
                         # SQLite FTS5 (레거시 지원)
                         cursor.execute("""
@@ -1260,10 +1331,10 @@ class LegalDataConnectorV2:
                                 sa.item_no,
                                 sa.article_title as heading,
                                 sa.article_content as text,
-                                s.name as statute_name,
-                                s.abbrv as statute_abbrv,
-                                s.statute_type,
-                                s.category,
+                                s.law_name_kr as statute_name,
+                                s.law_abbrv as statute_abbrv,
+                                s.law_type as statute_type,
+                                s.domain as category,
                                 bm25(statute_articles_fts) as rank_score
                             FROM statute_articles_fts
                             JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
@@ -1362,18 +1433,19 @@ class LegalDataConnectorV2:
                                     sa.item_no,
                                     sa.article_title as heading,
                                     sa.article_content as text,
-                                    s.name as statute_name,
-                                    s.abbrv as statute_abbrv,
-                                    s.statute_type,
-                                    s.category,
-                                    ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('korean', %s)) as rank_score
+                                    s.law_name_kr as statute_name,
+                                    s.law_abbrv as statute_abbrv,
+                                    s.law_type as statute_type,
+                                    s.domain as category,
+                                    ts_rank_cd(to_tsvector('simple', sa.article_content), plainto_tsquery('simple', %s)) as rank_score
                                 FROM statutes_articles sa
                                 JOIN statutes s ON sa.statute_id = s.id
                                 WHERE {where_clause}
                                 ORDER BY {order_clause}
                                 LIMIT %s
                             """
-                            cursor.execute(sql_query, (tsquery, tsquery, limit))
+                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                         else:
                             # SQLite FTS5 (레거시 지원) - PostgreSQL에서는 사용하지 않음
                             # 🔥 개선: statutes_articles 테이블만 사용 (statute_articles는 레거시, 삭제됨)
@@ -1386,10 +1458,10 @@ class LegalDataConnectorV2:
                                     sa.item_no,
                                     sa.article_title as heading,
                                     sa.article_content as text,
-                                    s.name as statute_name,
-                                    s.abbrv as statute_abbrv,
-                                    s.statute_type,
-                                    s.category,
+                                    s.law_name_kr as statute_name,
+                                    s.law_abbrv as statute_abbrv,
+                                    s.law_type as statute_type,
+                                    s.domain as category,
                                     bm25(statute_articles_fts) as rank_score
                                 FROM statute_articles_fts
                                 JOIN statutes_articles sa ON statute_articles_fts.rowid = sa.id
@@ -1504,14 +1576,15 @@ class LegalDataConnectorV2:
                                     p.case_type_name as case_type,
                                     p.case_name as casenames,
                                     p.decision_date as announce_date,
-                                    ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('korean', %s)) as rank_score
+                                    ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('simple', %s)) as rank_score
                                 FROM precedent_contents pc
                                 JOIN precedents p ON pc.precedent_id = p.id
                                 WHERE {where_clause}
                                 ORDER BY {order_clause}
                                 LIMIT %s
                             """
-                            cursor.execute(sql_query, (tsquery, tsquery, limit))
+                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                             
                             for row in cursor.fetchall():
                                 if row['id'] not in seen_ids:
@@ -1681,7 +1754,8 @@ class LegalDataConnectorV2:
                                 ORDER BY {order_clause}
                                 LIMIT %s
                             """
-                            cursor.execute(sql_query, (tsquery, tsquery, limit))
+                            # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                            cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                         else:
                             # SQLite FTS5 (레거시 지원)
                             cursor.execute("""
@@ -1791,14 +1865,15 @@ class LegalDataConnectorV2:
                                         i.doc_id,
                                         i.title,
                                         i.response_date,
-                                        ts_rank_cd(to_tsvector('simple', ip.text), plainto_tsquery('korean', %s)) as rank_score
+                                        ts_rank_cd(to_tsvector('simple', ip.text), plainto_tsquery('simple', %s)) as rank_score
                                     FROM interpretation_paragraphs ip
                                     JOIN interpretations i ON ip.interpretation_id = i.id
                                     WHERE {where_clause}
                                     ORDER BY {order_clause}
                                     LIMIT %s
                                 """
-                                cursor.execute(sql_query, (tsquery, tsquery, limit))
+                                # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                                cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                             else:
                                 # SQLite FTS5 (레거시 지원)
                                 cursor.execute("""
@@ -1921,14 +1996,15 @@ class LegalDataConnectorV2:
                             p.case_type_name as case_type,
                             p.case_name as casenames,
                             p.decision_date as announce_date,
-                            ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('korean', %s)) as rank_score
+                            ts_rank_cd(to_tsvector('simple', pc.section_content), plainto_tsquery('simple', %s)) as rank_score
                         FROM precedent_contents pc
                         JOIN precedents p ON pc.precedent_id = p.id
                         WHERE {where_clause}
                         ORDER BY {order_clause}
                         LIMIT %s
                     """
-                    cursor.execute(sql_query, (tsquery, tsquery, limit))
+                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                 else:
                     # 🔥 레거시: case_paragraphs 테이블은 더 이상 사용하지 않음
                     # precedent_contents를 사용하도록 변경 필요
@@ -1981,13 +2057,12 @@ class LegalDataConnectorV2:
                         "text": text_content,
                         "source": f"{row['court']} {row['doc_id']}",
                         "metadata": {
-                            "case_id": row['case_id'],
-                            "doc_id": row['doc_id'],
-                            "court": row['court'],
-                            "case_type": row['case_type'],
-                            "casenames": row['casenames'],
-                            "announce_date": row['announce_date'],
-                            "para_index": row['para_index'],
+                            "precedent_id": row.get('precedent_id'),  # 🔥 수정: case_id -> precedent_id
+                            "doc_id": row.get('doc_id'),
+                            "court": row.get('court'),
+                            "case_type": row.get('case_type'),
+                            "casenames": row.get('casenames'),
+                            "announce_date": row.get('announce_date'),
                         },
                         "relevance_score": relevance_score,
                         "search_type": "keyword"
@@ -2063,14 +2138,15 @@ class LegalDataConnectorV2:
                             d.doc_id,
                             d.decision_date,
                             d.result,
-                            ts_rank_cd(dp.text_search_vector, plainto_tsquery('korean', %s)) as rank_score
+                            ts_rank_cd(dp.text_search_vector, plainto_tsquery('simple', %s)) as rank_score
                         FROM decision_paragraphs dp
                         JOIN decisions d ON dp.decision_id = d.id
                         WHERE {where_clause}
                         ORDER BY {order_clause}
                         LIMIT %s
                     """
-                    cursor.execute(sql_query, (tsquery, tsquery, limit))
+                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                 else:
                     # SQLite FTS5 (레거시 지원)
                     cursor.execute("""
@@ -2218,14 +2294,15 @@ class LegalDataConnectorV2:
                             i.doc_id,
                             i.title,
                             i.response_date,
-                            ts_rank_cd(ip.text_search_vector, plainto_tsquery('korean', %s)) as rank_score
+                            ts_rank_cd(ip.text_search_vector, plainto_tsquery('simple', %s)) as rank_score
                         FROM interpretation_paragraphs ip
                         JOIN interpretations i ON ip.interpretation_id = i.id
                         WHERE {where_clause}
                         ORDER BY {order_clause}
                         LIMIT %s
                     """
-                    cursor.execute(sql_query, (tsquery, tsquery, limit))
+                    # where_clause와 order_clause에 각각 %s가 포함되어 있고, ts_rank_cd에도 %s가 있으므로 총 4개 필요
+                    cursor.execute(sql_query, (tsquery, tsquery, tsquery, limit))
                 else:
                     # SQLite FTS5 (레거시 지원)
                     cursor.execute("""

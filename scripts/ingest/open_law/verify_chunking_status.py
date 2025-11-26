@@ -273,24 +273,18 @@ def verify_chunking_status(db_url: str, domain: Optional[str] = None):
         
         if domain:
             if unchunked_contents == 0 and total_contents > 0:
-                print(f"✅ {domain} 도메인의 청킹이 완료되었습니다!")
-                print(f"   - 총 {total_contents:,}개 내용 모두 청킹 완료")
-                print(f"   - 총 {total_chunks:,}개 청크 생성")
+                print(f"✅ {domain} 청킹 완료! ({total_chunks:,}개 청크 생성)")
             elif unchunked_contents > 0:
-                print(f"⚠️ {domain} 도메인의 청킹이 완료되지 않았습니다.")
-                print(f"   - {unchunked_contents:,}개 내용이 아직 청킹되지 않음")
-                print(f"   - 청킹 완료율: {chunking_rate:.2f}%")
+                print(f"⏳ {domain} 청킹 진행 중: {chunking_rate:.1f}% 완료 ({unchunked_contents:,}개 남음)")
             else:
-                print(f"ℹ️ {domain} 도메인에 데이터가 없습니다.")
+                print(f"ℹ️  {domain} 도메인에 데이터가 없습니다.")
         else:
             if unchunked_contents == 0 and total_contents > 0:
-                print("✅ 모든 도메인의 청킹이 완료되었습니다!")
+                print(f"✅ 전체 청킹 완료! ({total_chunks:,}개 청크 생성)")
             elif unchunked_contents > 0:
-                print(f"⚠️ 일부 데이터가 아직 청킹되지 않았습니다.")
-                print(f"   - {unchunked_contents:,}개 내용이 아직 청킹되지 않음")
-                print(f"   - 청킹 완료율: {chunking_rate:.2f}%")
+                print(f"⏳ 전체 청킹 진행 중: {chunking_rate:.1f}% 완료 ({unchunked_contents:,}개 남음)")
             else:
-                print("ℹ️ 청킹할 데이터가 없습니다.")
+                print("ℹ️  청킹할 데이터가 없습니다.")
         print()
 
 

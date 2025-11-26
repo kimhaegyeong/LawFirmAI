@@ -6,6 +6,7 @@ PostgreSQL 데이터를 읽어 FAISS 인덱스 생성
 """
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -116,6 +117,8 @@ class FaissEmbedder:
         self.mlflow_manager = None
         if self.use_mlflow:
             try:
+                # 프로젝트 루트 기준으로 임포트
+                sys.path.insert(0, str(_PROJECT_ROOT))
                 from scripts.rag.mlflow_manager import MLflowFAISSManager
                 self.mlflow_manager = MLflowFAISSManager(
                     experiment_name=mlflow_experiment_name
@@ -230,6 +233,14 @@ class FaissEmbedder:
                     stats["total_embedded"] += len(items)
                     stats["total_processed"] += len(items)
                     
+                    # 메모리 최적화: 중간 변수 삭제
+                    del embeddings
+                    del texts
+                    del chunk_ids
+                    del metadata
+                    del items
+                    gc.collect()
+                    
                     self.logger.info(
                         f"진행 상황: {stats['total_processed']}개 처리, "
                         f"{stats['total_embedded']}개 임베딩 생성"
@@ -244,6 +255,20 @@ class FaissEmbedder:
                     self.logger.error(f"배치 처리 실패: {e}")
                     stats["total_failed"] += len(items)
                     stats["errors"].append(f"배치 offset={offset}: {e}")
+                    
+                    # 메모리 최적화: 에러 발생 시에도 메모리 정리
+                    if 'embeddings' in locals():
+                        del embeddings
+                    if 'texts' in locals():
+                        del texts
+                    if 'chunk_ids' in locals():
+                        del chunk_ids
+                    if 'metadata' in locals():
+                        del metadata
+                    if 'items' in locals():
+                        del items
+                    gc.collect()
+                    
                     offset += batch_size
                     continue
             
@@ -253,6 +278,9 @@ class FaissEmbedder:
                 self.logger.info(
                     f"임베딩 배열 생성 완료: {all_embeddings.shape}"
                 )
+                # 메모리 최적화: 개별 임베딩 리스트 삭제
+                del self.embeddings
+                gc.collect()
             else:
                 all_embeddings = np.array([])
             
@@ -306,43 +334,42 @@ class FaissEmbedder:
             norms[norms == 0] = 1  # 0으로 나누기 방지
             all_embeddings = all_embeddings / norms
             
-            # IndexIVFFlat 사용 (IVF + Flat - 대용량 데이터에 적합)
-            n_samples = all_embeddings.shape[0]
-            # nlist 계산: sqrt(n_samples) 또는 n_samples / 100, 최소 1, 최대 10000
-            nlist = min(max(int(np.sqrt(n_samples)), 1), 10000)
-            nlist = max(nlist, min(10, n_samples // 10))  # 최소 10개 클러스터 (데이터가 충분한 경우)
-            
-            self.logger.info(f"IndexIVFFlat 생성 중: nlist={nlist}, 벡터 수={n_samples}")
-            
-            # Quantizer: Inner Product (코사인 유사도) 또는 L2
-            # FAISS 클래스를 직접 사용 (hasattr는 런타임에 작동하지 않을 수 있음)
+            # IndexIVFFlat 생성 - faiss_indexer.py 사용
             try:
-                quantizer = faiss.IndexFlatIP(self.dimension)
-            except (AttributeError, TypeError):
-                try:
-                    self.logger.warning("IndexFlatIP를 사용할 수 없어 IndexFlatL2를 사용합니다.")
-                    quantizer = faiss.IndexFlatL2(self.dimension)
-                except (AttributeError, TypeError):
-                    raise RuntimeError("FAISS IndexFlatIP 또는 IndexFlatL2를 사용할 수 없습니다.")
+                from scripts.ingest.open_law.embedding.faiss.faiss_indexer import FaissIndexer
+            except ImportError:
+                sys.path.insert(0, str(_PROJECT_ROOT / "scripts"))
+                from ingest.open_law.embedding.faiss.faiss_indexer import FaissIndexer
             
-            index = faiss.IndexIVFFlat(quantizer, self.dimension, nlist)
+            indexer = FaissIndexer(dimension=self.dimension)
+            n_samples = all_embeddings.shape[0]
             
-            # 인덱스 학습 (IVF 인덱스는 학습이 필요)
-            self.logger.info("IndexIVFFlat 학습 중...")
-            index.train(all_embeddings)
+            self.logger.info(f"IndexIVFFlat 생성 중: 벡터 수={n_samples}")
+            index = indexer.build_index(
+                embeddings=all_embeddings,
+                index_type="ivfflat",
+                nlist=None  # 자동 계산
+            )
             
-            # 벡터 추가
-            index.add(all_embeddings)
-            
-            # nprobe 설정 (검색 시 탐색할 클러스터 수, 기본값: nlist)
-            index.nprobe = min(max(nlist // 10, 1), 100)  # nlist의 10% 또는 최소 1, 최대 100
+            # nprobe 설정
+            if hasattr(index, 'nlist'):
+                nlist = index.nlist
+                index.nprobe = min(max(nlist // 10, 1), 100)
+            else:
+                nlist = None
             
             faiss.write_index(index, str(index_file))
             self.logger.info(
                 f"FAISS 인덱스 저장: {index_file} "
-                f"({index.ntotal}개 벡터, nlist={nlist}, nprobe={index.nprobe}, "
-                f"is_trained={index.is_trained})"
+                f"({index.ntotal}개 벡터, nlist={nlist if nlist else 'N/A'}, "
+                f"nprobe={index.nprobe if hasattr(index, 'nprobe') else 'N/A'}, "
+                f"is_trained={index.is_trained if hasattr(index, 'is_trained') else 'N/A'})"
             )
+            
+            # 메모리 최적화: 인덱스 생성 후 임베딩 배열 삭제
+            del all_embeddings
+            del index
+            gc.collect()
             
             # chunk_ids 저장
             with open(chunk_ids_file, 'w', encoding='utf-8') as f:
