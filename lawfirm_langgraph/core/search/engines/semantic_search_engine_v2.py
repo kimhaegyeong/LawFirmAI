@@ -10,14 +10,43 @@ try:
     from lawfirm_langgraph.core.utils.logger import get_logger
 except ImportError:
     from core.utils.logger import get_logger
-import sqlite3
+# SQLite import 제거 - PostgreSQL만 사용
+# import sqlite3
 import sys
 import threading
 import time
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
+# Database adapter import
+try:
+    from core.data.db_adapter import DatabaseAdapter
+    from core.data.sql_adapter import SQLAdapter
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+        from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+    except ImportError:
+        DatabaseAdapter = None
+        SQLAdapter = None
+
+# Vector search adapter import
+try:
+    from core.search.engines.vector_search_adapter import VectorSearchFactory, PGVECTOR_AVAILABLE
+except ImportError:
+    try:
+        from lawfirm_langgraph.core.search.engines.vector_search_adapter import VectorSearchFactory, PGVECTOR_AVAILABLE
+    except ImportError:
+        VectorSearchFactory = None
+        # pgvector 지원 확인
+        try:
+            from pgvector.psycopg2 import register_vector
+            PGVECTOR_AVAILABLE = True
+        except ImportError:
+            PGVECTOR_AVAILABLE = False
 
 try:
     from lawfirm_langgraph.core.utils.korean_stopword_processor import KoreanStopwordProcessor
@@ -800,26 +829,39 @@ class SemanticSearchEngineV2:
             mlflow_run_id: MLflow run ID (선택, None이면 프로덕션 run 자동 조회)
             use_mlflow_index: MLflow 인덱스 사용 여부 (기본값: True)
         """
+        # Database URL 또는 path 설정
         if db_path is None:
             from core.utils.config import Config
             config = Config()
-            db_path = config.database_path
-        self.db_path = db_path
+            # database_url 우선 사용, 없으면 database_path 사용
+            database_url = getattr(config, 'database_url', None)
+            if database_url:
+                self.database_url = database_url
+                self.db_path = None
+            else:
+                raise ValueError("database_url must be set in config. PostgreSQL is required.")
+        else:
+            # db_path가 제공된 경우 PostgreSQL URL로 변환 시도
+            if db_path and (db_path.startswith('postgresql://') or db_path.startswith('postgres://')):
+                self.database_url = db_path
+                self.db_path = None
+            else:
+                raise ValueError(f"Invalid database path: {db_path}. PostgreSQL URL is required (e.g., postgresql://user:password@host:port/database)")
+        
         self.logger = get_logger(__name__)
         
-        # 연결 풀 초기화
+        # DatabaseAdapter 초기화 (필수)
+        if not DatabaseAdapter:
+            raise ImportError("DatabaseAdapter is required. PostgreSQL support is mandatory.")
+        
         try:
-            from core.data.connection_pool import get_connection_pool
-            self._connection_pool = get_connection_pool(self.db_path)
-            self.logger.debug("Using connection pool for database connections")
-        except ImportError:
-            try:
-                from lawfirm_langgraph.core.data.connection_pool import get_connection_pool
-                self._connection_pool = get_connection_pool(self.db_path)
-                self.logger.debug("Using connection pool for database connections")
-            except ImportError:
-                self._connection_pool = None
-                self.logger.debug("Connection pool not available, using direct connections")
+            self._db_adapter = DatabaseAdapter(self.database_url)
+            self.logger.info(f"DatabaseAdapter initialized: type={self._db_adapter.db_type}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize DatabaseAdapter: {e}") from e
+        
+        # 연결 풀은 DatabaseAdapter가 관리
+        self._connection_pool = None
         
         # KoreanStopwordProcessor 초기화 (KoNLPy 우선 사용)
         self.stopword_processor = None
@@ -885,13 +927,26 @@ class SemanticSearchEngineV2:
         # FAISS 인덱스 관련 속성
         # 기본 경로: data/embeddings/ml_enhanced_ko_sroberta_precedents/ml_enhanced_faiss_index.faiss
         # 여러 경로 시도 (프로젝트 루트 기준)
-        possible_paths = [
-            Path(db_path).parent.parent / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
-            Path("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
-            Path(db_path).parent / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
-        ]
-        
-        legacy_index_path = Path(db_path).parent / f"{Path(db_path).stem}_faiss.index"
+        # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+        if db_path:
+            possible_paths = [
+                Path(db_path).parent.parent / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                Path("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                Path(db_path).parent / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+            ]
+            legacy_index_path = Path(db_path).parent / f"{Path(db_path).stem}_faiss.index"
+        else:
+            # PostgreSQL을 사용하는 경우 프로젝트 루트 기준 경로 사용
+            # 프로젝트 루트 찾기 (semantic_search_engine_v2.py -> engines -> search -> core -> lawfirm_langgraph -> 프로젝트 루트)
+            try:
+                project_root = Path(__file__).parent.parent.parent.parent.parent
+            except Exception:
+                project_root = Path(".")
+            possible_paths = [
+                project_root / "data" / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+                Path("data") / "embeddings" / "ml_enhanced_ko_sroberta_precedents" / "ml_enhanced_faiss_index.faiss",
+            ]
+            legacy_index_path = None
         
         # 새로 빌드된 인덱스를 우선 사용
         default_index_path = None
@@ -903,7 +958,7 @@ class SemanticSearchEngineV2:
         if default_index_path:
             self.index_path = str(default_index_path)
             self.logger.info(f"Using default FAISS index: {self.index_path}")
-        elif legacy_index_path.exists():
+        elif legacy_index_path and legacy_index_path.exists():
             # 레거시 경로 (하위 호환성)
             self.index_path = str(legacy_index_path)
             self.logger.info(f"Using legacy FAISS index: {self.index_path}")
@@ -911,6 +966,40 @@ class SemanticSearchEngineV2:
             # 인덱스가 없으면 기본 경로 설정 (나중에 빌드됨)
             self.index_path = str(possible_paths[0])
             self.logger.info(f"No FAISS index found, will use: {self.index_path}")
+        
+        # 벡터 검색 방법 선택 (pgvector 또는 FAISS)
+        import os
+        vector_search_method = os.getenv("VECTOR_SEARCH_METHOD", "").lower()
+        if not vector_search_method:
+            try:
+                from ..utils.config import Config
+                config = Config()
+                vector_search_method = getattr(config, 'vector_search_method', 'faiss').lower()
+            except Exception:
+                vector_search_method = 'faiss'  # 기본값: FAISS
+        
+        # 유효한 값: 'pgvector', 'faiss', 'hybrid'
+        if vector_search_method not in ['pgvector', 'faiss', 'hybrid']:
+            self.logger.warning(f"Invalid VECTOR_SEARCH_METHOD: {vector_search_method}, using 'faiss'")
+            vector_search_method = 'faiss'
+        
+        self.vector_search_method = vector_search_method
+        self.logger.info(f"🔍 Vector search method: {self.vector_search_method}")
+        
+        # pgvector 어댑터 초기화 (pgvector 또는 hybrid 사용 시)
+        self.pgvector_adapter = None
+        if self.vector_search_method in ['pgvector', 'hybrid']:
+            if not PGVECTOR_AVAILABLE:
+                self.logger.warning("⚠️ pgvector not available, falling back to FAISS")
+                self.vector_search_method = 'faiss'
+            else:
+                try:
+                    # 연결 풀에서 연결 가져오기 (나중에 실제 검색 시 사용)
+                    # 여기서는 어댑터만 초기화하지 않고, 검색 시마다 생성
+                    self.logger.info("✅ pgvector will be used for vector search")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to initialize pgvector adapter: {e}, falling back to FAISS")
+                    self.vector_search_method = 'faiss'
         
         self.index = None
         self._chunk_ids = []  # 인덱스와 chunk_id 매핑
@@ -1087,7 +1176,16 @@ class SemanticSearchEngineV2:
             if scripts_utils_path.exists():
                 sys.path.insert(0, str(scripts_utils_path))
             from version_performance_monitor import VersionPerformanceMonitor
-            performance_log_path = Path(db_path).parent / "performance_logs"
+            # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+            if db_path:
+                performance_log_path = Path(db_path).parent / "performance_logs"
+            else:
+                # 프로젝트 루트 기준 경로 사용
+                try:
+                    project_root = Path(__file__).parent.parent.parent.parent.parent
+                except Exception:
+                    project_root = Path(".")
+                performance_log_path = project_root / "data" / "performance_logs"
             self.performance_monitor = VersionPerformanceMonitor(str(performance_log_path))
             self.enable_performance_monitoring = True
         except ImportError:
@@ -1103,8 +1201,10 @@ class SemanticSearchEngineV2:
         self.dim = None
         self._initialize_embedder(self.model_name)
 
-        if not Path(db_path).exists():
+        if db_path and not Path(db_path).exists():
             self.logger.warning(f"Database {db_path} not found")
+        elif not db_path:
+            self.logger.debug("Using PostgreSQL database (db_path is None)")
 
         # FAISS 인덱스 로드 (MLflow만 사용)
         if FAISS_AVAILABLE and self.embedder:
@@ -1256,19 +1356,22 @@ class SemanticSearchEngineV2:
         Returns:
             사용 가능 여부
         """
-        if not Path(self.db_path).exists():
+        # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+        if self.db_path and not Path(self.db_path).exists():
             return False
+        elif not self.db_path:
+            # PostgreSQL을 사용하는 경우 데이터베이스 연결 확인
+            return self._db_adapter is not None and self._db_adapter.db_type == 'postgresql'
         
         if not self._ensure_embedder_initialized():
             return False
         
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM embeddings LIMIT 1")
-            row = cursor.fetchone()
-            self._safe_close_connection(conn)
-            return row is not None and row[0] > 0
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM embeddings LIMIT 1")
+                row = cursor.fetchone()
+                return row is not None and row[0] > 0
         except Exception as e:
             self.logger.debug(f"Error checking embeddings table: {e}")
             return False
@@ -1293,7 +1396,12 @@ class SemanticSearchEngineV2:
             "recommendations": []
         }
         
-        diagnosis["db_exists"] = Path(self.db_path).exists()
+        # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+        if self.db_path:
+            diagnosis["db_exists"] = Path(self.db_path).exists()
+        else:
+            # PostgreSQL을 사용하는 경우 데이터베이스 연결 확인
+            diagnosis["db_exists"] = self._db_adapter is not None and self._db_adapter.db_type == 'postgresql'
         if not diagnosis["db_exists"]:
             diagnosis["issues"].append(f"Database not found: {self.db_path}")
             diagnosis["recommendations"].append("Check database path configuration")
@@ -1311,12 +1419,11 @@ class SemanticSearchEngineV2:
             diagnosis["recommendations"].append("FAISS index will be built on first search")
         
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM embeddings")
-            row = cursor.fetchone()
-            self._safe_close_connection(conn)
-            diagnosis["embeddings_count"] = row[0] if row else 0
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM embeddings")
+                row = cursor.fetchone()
+                diagnosis["embeddings_count"] = row[0] if row else 0
             
             if diagnosis["embeddings_count"] == 0:
                 diagnosis["issues"].append("No embeddings found in database")
@@ -1351,32 +1458,43 @@ class SemanticSearchEngineV2:
             if hasattr(self, 'use_external_index') and self.use_external_index:
                 self.logger.warning("⚠️  use_external_index=True but external_index_embedding_version_id is not set. Falling back to DB query.")
             
-            if not Path(self.db_path).exists():
+            # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+            if self.db_path and not Path(self.db_path).exists():
                 self.logger.debug(f"Database file not found: {self.db_path}")
                 return None
+            elif not self.db_path:
+                # PostgreSQL을 사용하는 경우 데이터베이스 연결 확인
+                if not (self._db_adapter and self._db_adapter.db_type == 'postgresql'):
+                    return None
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT id, version_name, is_active
-                FROM embedding_versions
-                WHERE is_active = 1
-                ORDER BY created_at DESC
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-            self._safe_close_connection(conn)
+                # 실제 스키마: version (integer), data_type (varchar) 컬럼 사용
+                # 005_add_embedding_version_management_postgresql.sql 스키마 기준
+                cursor.execute("""
+                    SELECT id, version, data_type, is_active
+                    FROM embedding_versions
+                    WHERE is_active = TRUE
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
 
-            if row:
-                version_id = row['id']
-                # sqlite3.Row는 dict처럼 .get()을 사용할 수 없으므로 직접 접근
-                version_name = row['version_name'] if 'version_name' in row.keys() else f'v{version_id}'
-                self.logger.info(f"✅ Active embedding version detected: ID={version_id}, name={version_name}")
-                return version_id
-            else:
-                self.logger.warning("⚠️  No active embedding version found in database")
-                return None
+                if row:
+                    version_id = row['id'] if hasattr(row, 'get') else row[0]
+                    # PostgreSQL Row는 dict-like 또는 tuple로 반환됨
+                    # 실제 스키마: version (integer), data_type (varchar) 컬럼 사용
+                    version_num = row.get('version') if hasattr(row, 'get') else (row[1] if len(row) > 1 else version_id)
+                    data_type = row.get('data_type') if hasattr(row, 'get') else (row[2] if len(row) > 2 else None)
+                    version_name = f'v{version_num}' if version_num else f'v{version_id}'
+                    if data_type:
+                        version_name = f'{version_name}-{data_type}'
+                    self.logger.info(f"✅ Active embedding version detected: ID={version_id}, version={version_num}, data_type={data_type}, name={version_name}")
+                    return version_id
+                else:
+                    self.logger.warning("⚠️  No active embedding version found in database")
+                    return None
 
         except Exception as e:
             if "no such table" in str(e).lower():
@@ -1396,28 +1514,32 @@ class SemanticSearchEngineV2:
             청크 수
         """
         try:
-            if not Path(self.db_path).exists():
+            # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+            if self.db_path and not Path(self.db_path).exists():
                 return 0
+            elif not self.db_path:
+                # PostgreSQL을 사용하는 경우 데이터베이스 연결 확인
+                if not (self._db_adapter and self._db_adapter.db_type == 'postgresql'):
+                    return 0
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT COUNT(*) as count
-                FROM text_chunks
-                WHERE embedding_version_id = ?
-            """, (version_id,))
-            row = cursor.fetchone()
-            self._safe_close_connection(conn)
+                cursor.execute("""
+                    SELECT COUNT(*) as count
+                    FROM precedent_chunks
+                    WHERE embedding_version = %s
+                """, (version_id,))
+                row = cursor.fetchone()
 
-            if row:
-                return row['count']
-            else:
-                return 0
+                if row:
+                    return row['count'] if hasattr(row, 'get') else row[0]
+                else:
+                    return 0
 
         except Exception as e:
             if "no such table" in str(e).lower():
-                self.logger.debug(f"text_chunks table not found: {e}")
+                self.logger.debug(f"precedent_chunks table not found: {e}")
             else:
                 self.logger.debug(f"Error getting version chunk count: {e}")
             return 0
@@ -1431,84 +1553,84 @@ class SemanticSearchEngineV2:
             감지된 모델명 또는 None
         """
         try:
-            if not Path(self.db_path).exists():
+            # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+            if self.db_path and not Path(self.db_path).exists():
                 self.logger.warning(f"Database {self.db_path} not found for model detection")
                 return None
+            elif not self.db_path:
+                # PostgreSQL을 사용하는 경우 데이터베이스 연결 확인
+                if not (self._db_adapter and self._db_adapter.db_type == 'postgresql'):
+                    return None
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            # 먼저 활성 버전의 모델 조회 시도
-            active_version_id = self._get_active_embedding_version_id()
-            if active_version_id:
-                # embedding_versions 테이블에서 직접 모델명 조회 (더 정확함)
+                # 먼저 활성 버전의 모델 조회 시도
+                active_version_id = self._get_active_embedding_version_id()
+                if active_version_id:
+                    # embedding_versions 테이블에서 직접 모델명 조회 (더 정확함)
+                    cursor.execute("""
+                        SELECT model_name
+                        FROM embedding_versions
+                        WHERE id = %s
+                    """, (active_version_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        model_name = row.get('model_name') if hasattr(row, 'get') else (row[0] if len(row) > 0 else None)
+                        if model_name:
+                            detected_model = model_name
+                            # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
+                            if detected_model:
+                                detected_model = detected_model.strip().strip('"').strip("'")
+                            self.logger.info(
+                                f"Detected embedding model from active version (ID={active_version_id}): "
+                                f"{detected_model}"
+                            )
+                            return detected_model
+                    
+                    # embedding_versions에 모델명이 없는 경우, precedent_chunks에서 직접 조회 불가 (embedding_vector만 있음)
+                    # 대신 embedding_versions의 model_name을 사용하거나, 다른 방법 사용
+                    # 현재는 embedding_versions에서만 모델 정보를 가져옴
+                    pass
+                    row = cursor.fetchone()
+                    if row:
+                        detected_model = row.get('model') if hasattr(row, 'get') else row[0]
+                        # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
+                        if detected_model:
+                            detected_model = detected_model.strip().strip('"').strip("'")
+                        count = row.get('count') if hasattr(row, 'get') else (row[1] if len(row) > 1 else 0)
+                        self.logger.info(
+                            f"Detected embedding model from active version embeddings (ID={active_version_id}): "
+                            f"{detected_model} (count: {count})"
+                        )
+                        return detected_model
+
+                # 활성 버전에서 모델을 찾지 못한 경우 전체 데이터베이스에서 가장 많이 사용된 모델 조회
                 cursor.execute("""
-                    SELECT model_name
-                    FROM embedding_versions
-                    WHERE id = ?
-                """, (active_version_id,))
-                row = cursor.fetchone()
-                if row and row['model_name']:
-                    detected_model = row['model_name']
-                    # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
-                    if detected_model:
-                        detected_model = detected_model.strip().strip('"').strip("'")
-                    self.logger.info(
-                        f"Detected embedding model from active version (ID={active_version_id}): "
-                        f"{detected_model}"
-                    )
-                    self._safe_close_connection(conn)
-                    return detected_model
-                
-                # embedding_versions에 모델명이 없는 경우, embeddings 테이블에서 조회
-                cursor.execute("""
-                    SELECT DISTINCT e.model, COUNT(*) as count
-                    FROM embeddings e
-                    JOIN text_chunks tc ON e.chunk_id = tc.id
-                    WHERE tc.embedding_version_id = ?
-                    GROUP BY e.model
+                    SELECT model, COUNT(*) as count
+                    FROM embeddings
+                    GROUP BY model
                     ORDER BY count DESC
                     LIMIT 1
-                """, (active_version_id,))
+                """)
                 row = cursor.fetchone()
+
                 if row:
-                    detected_model = row['model']
+                    detected_model = row.get('model') if hasattr(row, 'get') else row[0]
                     # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
                     if detected_model:
                         detected_model = detected_model.strip().strip('"').strip("'")
-                    self.logger.info(
-                        f"Detected embedding model from active version embeddings (ID={active_version_id}): "
-                        f"{detected_model} (count: {row['count']})"
-                    )
-                    self._safe_close_connection(conn)
+                    count = row.get('count') if hasattr(row, 'get') else (row[1] if len(row) > 1 else 0)
+                    self.logger.info(f"Detected embedding model from database: {detected_model} (count: {count})")
+                    if active_version_id:
+                        self.logger.warning(
+                            f"Active version (ID={active_version_id}) has no embeddings, "
+                            f"using most common model from all versions"
+                        )
                     return detected_model
-
-            # 활성 버전에서 모델을 찾지 못한 경우 전체 데이터베이스에서 가장 많이 사용된 모델 조회
-            cursor.execute("""
-                SELECT model, COUNT(*) as count
-                FROM embeddings
-                GROUP BY model
-                ORDER BY count DESC
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-            self._safe_close_connection(conn)
-
-            if row:
-                detected_model = row['model']
-                # 따옴표 제거 (데이터베이스에서 따옴표가 포함된 경우)
-                if detected_model:
-                    detected_model = detected_model.strip().strip('"').strip("'")
-                self.logger.info(f"Detected embedding model from database: {detected_model} (count: {row['count']})")
-                if active_version_id:
-                    self.logger.warning(
-                        f"Active version (ID={active_version_id}) has no embeddings, "
-                        f"using most common model from all versions"
-                    )
-                return detected_model
-            else:
-                self.logger.warning("No embeddings found in database for model detection")
-                return None
+                else:
+                    self.logger.warning("No embeddings found in database for model detection")
+                    return None
 
         except Exception as e:
             # 데이터베이스 테이블이 없는 경우는 정상적인 상황일 수 있으므로 warning으로 처리
@@ -1523,31 +1645,38 @@ class SemanticSearchEngineV2:
             return None
 
     def _get_connection(self):
-        """Get database connection (using connection pool if available)"""
-        if hasattr(self, '_connection_pool') and self._connection_pool:
-            return self._connection_pool.get_connection()
-        else:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            return conn
+        """Get database connection (PostgreSQL only, using DatabaseAdapter)"""
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required. PostgreSQL database must be configured via DATABASE_URL.")
+        return self._db_adapter.get_connection()
+    
+    def _get_connection_context(self):
+        """Get database connection context manager (PostgreSQL only)"""
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required. PostgreSQL database must be configured via DATABASE_URL.")
+        return self._db_adapter.get_connection_context()
     
     def _safe_close_connection(self, conn):
-        """연결을 안전하게 닫기 (연결 풀 사용 시 닫지 않음)"""
-        if conn and not (hasattr(self, '_connection_pool') and self._connection_pool):
+        """연결을 안전하게 풀에 반환 (DatabaseAdapter 사용 시)"""
+        if not self._db_adapter:
+            raise RuntimeError("DatabaseAdapter is required. PostgreSQL database must be configured via DATABASE_URL.")
+        
+        # PostgreSQL 연결 풀에 반환
+        if conn and hasattr(conn, 'conn'):
             try:
-                conn.close()
-            except Exception:
-                pass
+                self._db_adapter.connection_pool.putconn(conn.conn)
+            except Exception as e:
+                self.logger.warning(f"Error returning connection to pool: {e}")
 
     def _load_chunk_vectors(self,
                            source_types: Optional[List[str]] = None,
                            limit: Optional[int] = None,
                            embedding_version_id: Optional[int] = None) -> Dict[int, np.ndarray]:
         """
-        embeddings 테이블에서 벡터 로드
+        precedent_chunks 테이블에서 벡터 로드 (text_chunks 대신 사용)
 
         Args:
-            source_types: 필터링할 source_type 목록 (None이면 전체)
+            source_types: 필터링할 source_type 목록 (None이면 전체, 현재는 precedent_chunks만 지원)
             limit: 최대 로드 개수 (None이면 전체)
             embedding_version_id: 임베딩 버전 ID 필터 (None이면 활성 버전만)
 
@@ -1555,103 +1684,108 @@ class SemanticSearchEngineV2:
             {chunk_id: vector} 딕셔너리
         """
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            # 기본 쿼리 (청킹 메타데이터 포함)
-            query = """
-                SELECT
-                    e.chunk_id,
-                    e.vector,
-                    e.dim,
-                    tc.source_type,
-                    tc.text,
-                    tc.source_id,
-                    tc.chunk_size_category,
-                    tc.chunk_group_id,
-                    tc.chunking_strategy,
-                    tc.embedding_version_id
-                FROM embeddings e
-                JOIN text_chunks tc ON e.chunk_id = tc.id
-                WHERE 1=1
-            """
-            params = []
-
-            # 모델 필터링 (embedding_version_id가 지정된 경우는 제외)
-            if embedding_version_id is None and self.model_name:
-                query += " AND e.model = ?"
-                params.append(self.model_name)
-
-            if source_types:
-                placeholders = ','.join(['?'] * len(source_types))
-                query += f" AND tc.source_type IN ({placeholders})"
-                params.extend(source_types)
-
-            # 버전 필터링
-            if embedding_version_id is not None:
-                query += " AND tc.embedding_version_id = ?"
-                params.append(embedding_version_id)
-            else:
-                # 활성 버전만 조회
-                query += """
-                    AND tc.embedding_version_id IN (
-                        SELECT id FROM embedding_versions WHERE is_active = 1
-                    )
+                # precedent_chunks에서 직접 벡터 로드 (embedding_vector 컬럼 사용)
+                query = """
+                    SELECT
+                        pc.id,
+                        pc.embedding_vector,
+                        pc.chunk_content,
+                        pc.precedent_content_id,
+                        pc.chunk_index,
+                        pc.metadata,
+                        pc.embedding_version
+                    FROM precedent_chunks pc
+                    WHERE pc.embedding_vector IS NOT NULL
                 """
+                params = []
 
-            if limit:
-                query += " LIMIT ?"
-                params.append(limit)
+                # 버전 필터링
+                if embedding_version_id is not None:
+                    query += " AND pc.embedding_version = %s"
+                    params.append(embedding_version_id)
+                else:
+                    # 활성 버전만 조회
+                    query += """
+                        AND pc.embedding_version IN (
+                            SELECT version FROM embedding_versions WHERE is_active = TRUE AND data_type = 'precedents'
+                        )
+                    """
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
+                if limit:
+                    query += " LIMIT %s"
+                    params.append(limit)
 
-            chunk_vectors = {}
-            chunk_metadata = {}  # 나중에 사용
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
 
-            for row in rows:
-                chunk_id = row['chunk_id']
-                vector_blob = row['vector']
-                dim = row['dim']
+                chunk_vectors = {}
+                chunk_metadata = {}  # 나중에 사용
 
-                # BLOB을 numpy 배열로 변환
-                vector = np.frombuffer(vector_blob, dtype=np.float32).reshape(-1)
+                for row in rows:
+                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                    if hasattr(row, 'keys'):  # dict-like (RealDictRow)
+                        chunk_id = row['id']
+                        embedding_vector = row['embedding_vector']
+                        row_dict = dict(row)
+                    else:  # tuple
+                        chunk_id = row[0]
+                        embedding_vector = row[1]
+                        row_dict = {
+                            'chunk_content': row[2] if len(row) > 2 else None,
+                            'precedent_content_id': row[3] if len(row) > 3 else None,
+                            'chunk_index': row[4] if len(row) > 4 else None,
+                            'metadata': row[5] if len(row) > 5 else None,
+                            'embedding_version': row[6] if len(row) > 6 else None
+                        }
 
-                # 차원 검증
-                if len(vector) != dim:
-                    self.logger.warning(f"Dimension mismatch for chunk {chunk_id}: expected {dim}, got {len(vector)}")
-                    continue
+                    # pgvector VECTOR 타입을 numpy 배열로 변환
+                    if embedding_vector is None:
+                        continue
+                    
+                    # pgvector는 이미 numpy 배열로 반환되거나, array로 변환 필요
+                    if isinstance(embedding_vector, (list, tuple)):
+                        vector = np.array(embedding_vector, dtype=np.float32)
+                    elif hasattr(embedding_vector, 'tolist'):
+                        vector = np.array(embedding_vector.tolist(), dtype=np.float32)
+                    else:
+                        vector = np.array(embedding_vector, dtype=np.float32)
 
-                chunk_vectors[chunk_id] = vector
-                row_dict = dict(row)
-                chunk_metadata[chunk_id] = {
-                    'source_type': row_dict.get('source_type'),
-                    'text': row_dict.get('text'),
-                    'source_id': row_dict.get('source_id'),
-                    'chunk_size_category': row_dict.get('chunk_size_category'),
-                    'chunk_group_id': row_dict.get('chunk_group_id'),
-                    'chunking_strategy': row_dict.get('chunking_strategy'),
-                    'embedding_version_id': row_dict.get('embedding_version_id')  # 버전 정보 추가
-                }
+                    # 차원 검증 (기본 768)
+                    expected_dim = 768
+                    if len(vector) != expected_dim:
+                        self.logger.warning(f"Dimension mismatch for chunk {chunk_id}: expected {expected_dim}, got {len(vector)}")
+                        continue
 
-            self._safe_close_connection(conn)
-            self.logger.info(f"Loaded {len(chunk_vectors)} chunk vectors")
+                    chunk_vectors[chunk_id] = vector
+                    chunk_metadata[chunk_id] = {
+                        'source_type': 'precedent_content',
+                        'text': row_dict.get('chunk_content'),
+                        'source_id': row_dict.get('precedent_content_id'),
+                        'chunk_index': row_dict.get('chunk_index'),
+                        'metadata': row_dict.get('metadata'),
+                        'embedding_version_id': row_dict.get('embedding_version')
+                    }
 
-            # 메타데이터를 인스턴스 변수로 저장
-            self._chunk_metadata = chunk_metadata
+                self.logger.info(f"Loaded {len(chunk_vectors)} chunk vectors from precedent_chunks")
 
-            return chunk_vectors
+                # 메타데이터를 인스턴스 변수로 저장
+                self._chunk_metadata = chunk_metadata
+
+                return chunk_vectors
 
         except Exception as e:
             error_msg = str(e).lower()
-            if "no such table" in error_msg or "embeddings" in error_msg:
+            if "no such table" in error_msg or "precedent_chunks" in error_msg:
                 self.logger.error(
-                    f"❌ Embeddings table not found in database. "
+                    f"❌ precedent_chunks table not found in database. "
                     f"Semantic search will not work. "
-                    f"Please ensure embeddings are generated and stored in the database."
+                    f"Please ensure precedent chunks are generated and stored in the database."
                 )
             else:
-                self.logger.error(f"Error loading chunk vectors: {e}")
+                self.logger.error(f"Error loading chunk vectors from precedent_chunks: {e}")
             return {}
 
     def _normalize_query(self, query: str) -> str:
@@ -1818,41 +1952,46 @@ class SemanticSearchEngineV2:
             {chunk_id: vector} 딕셔너리
         """
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
 
-            chunk_vectors = {}
+                chunk_vectors = {}
 
-            # 배치 단위로 처리
-            for i in range(0, len(chunk_ids), batch_size):
-                batch = chunk_ids[i:i + batch_size]
-                placeholders = ','.join(['?'] * len(batch))
+                # 배치 단위로 처리
+                for i in range(0, len(chunk_ids), batch_size):
+                    batch = chunk_ids[i:i + batch_size]
+                    placeholders = ','.join(['%s'] * len(batch))  # PostgreSQL은 %s 사용
 
-                query = f"""
-                    SELECT
-                        e.chunk_id,
-                        e.vector,
-                        e.dim
-                    FROM embeddings e
-                    WHERE e.model = ? AND e.chunk_id IN ({placeholders})
-                """
-                params = [self.model_name] + batch
+                    query = f"""
+                        SELECT
+                            e.chunk_id,
+                            e.vector,
+                            e.dim
+                        FROM embeddings e
+                        WHERE e.model = %s AND e.chunk_id IN ({placeholders})
+                    """
+                    params = [self.model_name] + batch
 
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
 
-                for row in rows:
-                    chunk_id = row['chunk_id']
-                    vector_blob = row['vector']
-                    dim = row['dim']
+                    for row in rows:
+                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                        if hasattr(row, 'keys'):  # dict-like (RealDictRow)
+                            chunk_id = row['chunk_id']
+                            vector_blob = row['vector']
+                            dim = row['dim']
+                        else:  # tuple
+                            chunk_id = row[0]
+                            vector_blob = row[1]
+                            dim = row[2]
 
-                    # BLOB을 numpy 배열로 변환
-                    vector = np.frombuffer(vector_blob, dtype=np.float32).reshape(-1)
+                        # BLOB을 numpy 배열로 변환
+                        vector = np.frombuffer(vector_blob, dtype=np.float32).reshape(-1)
 
-                    if len(vector) == dim:
-                        chunk_vectors[chunk_id] = vector
+                        if len(vector) == dim:
+                            chunk_vectors[chunk_id] = vector
 
-            self._safe_close_connection(conn)
             self.logger.debug(f"Loaded {len(chunk_vectors)} vectors in batch mode")
             return chunk_vectors
 
@@ -2518,6 +2657,264 @@ class SemanticSearchEngineV2:
             self.logger.error(f"Batch search failed: {e}", exc_info=True)
             return [[] for _ in queries]
     
+    def _get_available_vector_tables(self, source_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        사용 가능한 벡터 테이블 목록 조회 (동적 감지)
+        
+        Args:
+            source_types: 필터링할 source_type 목록 (None이면 전체)
+        
+        Returns:
+            사용 가능한 테이블 설정 리스트
+        """
+        try:
+            from core.config.vector_table_config import VECTOR_TABLE_MAPPING
+        except ImportError:
+            try:
+                from lawfirm_langgraph.config.vector_table_config import VECTOR_TABLE_MAPPING
+            except ImportError:
+                self.logger.warning("⚠️ VECTOR_TABLE_MAPPING not found, using default")
+                # 기본 설정 (하위 호환성)
+                VECTOR_TABLE_MAPPING = {
+                    'precedent_content': {
+                        'table_name': 'precedent_chunks',
+                        'id_column': 'id',
+                        'vector_column': 'embedding_vector',
+                        'version_column': 'embedding_version',
+                        'source_type': 'precedent_content',
+                        'enabled': True,
+                        'priority': 1,
+                        'weight': 1.0,
+                        'min_results': 2,
+                        'max_results': None
+                    }
+                }
+        
+        available_tables = []
+        
+        with self._get_connection_context() as conn:
+            cursor = conn.cursor()
+            
+            for source_type, config in VECTOR_TABLE_MAPPING.items():
+                # enabled 체크
+                if not config.get('enabled', True):
+                    continue
+                
+                # source_types 필터링
+                if source_types and source_type not in source_types:
+                    continue
+                
+                # 테이블 존재 여부 확인
+                table_name = config['table_name']
+                try:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' 
+                            AND table_name = %s
+                        )
+                    """, (table_name,))
+                    row = cursor.fetchone()
+                    exists = row[0] if isinstance(row, tuple) else (row.get('exists', False) if isinstance(row, dict) else False)
+                    
+                    if exists:
+                        # 벡터 컬럼 존재 여부 확인
+                        cursor.execute("""
+                            SELECT EXISTS (
+                                SELECT FROM information_schema.columns 
+                                WHERE table_schema = 'public' 
+                                AND table_name = %s 
+                                AND column_name = %s
+                            )
+                        """, (table_name, config['vector_column']))
+                        row = cursor.fetchone()
+                        has_vector = row[0] if isinstance(row, tuple) else (row.get('exists', False) if isinstance(row, dict) else False)
+                        
+                        if has_vector:
+                            available_tables.append({
+                                **config,
+                                'source_type': source_type
+                            })
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to check table {table_name}: {e}")
+                    continue
+        
+        # priority 기준 정렬
+        available_tables.sort(key=lambda x: x.get('priority', 999))
+        
+        return available_tables
+    
+    def _search_with_pgvector_weighted(
+        self,
+        query_vec: np.ndarray,
+        k: int,
+        source_types: Optional[List[str]] = None,
+        embedding_version_id: Optional[int] = None,
+        similarity_threshold: float = 0.5
+    ) -> List[Tuple[int, float, str]]:
+        """
+        가중치 기반 pgvector 검색 (각 테이블별 개별 검색 후 가중치 적용)
+        
+        Args:
+            query_vec: 쿼리 벡터
+            k: 반환할 최대 결과 수
+            source_types: 필터링할 source_type 목록
+            embedding_version_id: 임베딩 버전 ID
+            similarity_threshold: 최소 유사도 임계값
+        
+        Returns:
+            [(chunk_id, weighted_similarity, source_type), ...]
+        """
+        available_tables = self._get_available_vector_tables(source_types)
+        
+        if not available_tables:
+            self.logger.warning("⚠️ No available vector tables found")
+            return []
+        
+        all_results = []
+        
+        with self._get_connection_context() as conn:
+            # 각 테이블별로 개별 검색
+            for table_config in available_tables:
+                table_name = table_config['table_name']
+                id_column = table_config['id_column']
+                vector_column = table_config['vector_column']
+                source_type = table_config['source_type']
+                weight = table_config.get('weight', 1.0)
+                min_results = table_config.get('min_results', 0)
+                max_results = table_config.get('max_results')
+                
+                try:
+                    # PgVectorAdapter 생성
+                    if VectorSearchFactory:
+                        adapter = VectorSearchFactory.create(
+                            method='pgvector',
+                            connection=conn,
+                            table_name=table_name,
+                            id_column=id_column,
+                            vector_column=vector_column
+                        )
+                    else:
+                        from core.search.engines.vector_search_adapter import PgVectorAdapter
+                        adapter = PgVectorAdapter(
+                            connection=conn,
+                            table_name=table_name,
+                            id_column=id_column,
+                            vector_column=vector_column
+                        )
+                    
+                    # 필터 구성
+                    filters = {}
+                    if embedding_version_id is not None:
+                        version_column = table_config.get('version_column', 'embedding_version')
+                        filters[version_column] = embedding_version_id
+                    
+                    # 각 테이블별 검색 (더 많은 후보 검색)
+                    search_k = (k * 2) if max_results is None else max_results
+                    table_results = adapter.search(
+                        query_vector=query_vec,
+                        limit=search_k,
+                        filters=filters
+                    )
+                    
+                    self.logger.debug(f"🔍 [PGVECTOR] {source_type}: Found {len(table_results)} candidates")
+                    
+                    # 거리를 유사도로 변환하고 가중치 적용
+                    table_weighted_results = []
+                    distances_sample = []
+                    similarities_sample = []
+                    
+                    for chunk_id, distance in table_results:
+                        # 코사인 거리를 유사도로 변환
+                        # pgvector의 <=> 연산자는 코사인 거리 (0~2 범위)
+                        # similarity = 1.0 - distance (0~1 범위로 정규화)
+                        similarity = 1.0 - float(distance)
+                        
+                        # 샘플링 (처음 5개만)
+                        if len(distances_sample) < 5:
+                            distances_sample.append(distance)
+                            similarities_sample.append(similarity)
+                        
+                        if similarity >= similarity_threshold:
+                            # 가중치 적용: weighted_similarity = similarity * weight
+                            weighted_similarity = similarity * weight
+                            table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                    
+                    # 디버깅: 거리와 유사도 샘플 로깅
+                    if distances_sample:
+                        self.logger.debug(
+                            f"📊 [PGVECTOR] {source_type} distance/similarity sample: "
+                            f"distances={[f'{d:.4f}' for d in distances_sample[:3]]}, "
+                            f"similarities={[f'{s:.4f}' for s in similarities_sample[:3]]}, "
+                            f"threshold={similarity_threshold:.3f}"
+                        )
+                    
+                    # 원본 유사도 기준 정렬 (가중치 적용 전)
+                    table_weighted_results.sort(key=lambda x: x[2], reverse=True)
+                    
+                    # 최소 결과 수 보장
+                    if min_results > 0 and len(table_weighted_results) < min_results:
+                        # 임계값을 점진적으로 낮춰서 더 많은 결과 확보
+                        # 1차: 70% 임계값
+                        relaxed_threshold = similarity_threshold * 0.7
+                        for chunk_id, distance in table_results:
+                            similarity = 1.0 - float(distance)
+                            if similarity >= relaxed_threshold:
+                                weighted_similarity = similarity * weight
+                                # 중복 체크
+                                if not any(r[0] == chunk_id for r in table_weighted_results):
+                                    table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                                    if len(table_weighted_results) >= min_results:
+                                        break
+                        
+                        # 2차: 여전히 부족하면 상위 N개 강제 포함 (임계값 무시)
+                        if len(table_weighted_results) < min_results:
+                            self.logger.warning(
+                                f"⚠️ [PGVECTOR] {source_type}: Only {len(table_weighted_results)} results after relaxed threshold, "
+                                f"forcing top {min_results} results (ignoring threshold)"
+                            )
+                            # 상위 min_results개를 강제로 포함 (임계값 무시)
+                            for chunk_id, distance in table_results[:min_results * 2]:  # 더 많은 후보 확인
+                                similarity = 1.0 - float(distance)
+                                weighted_similarity = similarity * weight
+                                # 중복 체크
+                                if not any(r[0] == chunk_id for r in table_weighted_results):
+                                    table_weighted_results.append((chunk_id, weighted_similarity, similarity, source_type))
+                                    if len(table_weighted_results) >= min_results:
+                                        break
+                    
+                    # max_results 제한 적용
+                    if max_results:
+                        table_weighted_results = table_weighted_results[:max_results]
+                    
+                    all_results.extend(table_weighted_results)
+                    self.logger.info(
+                        f"✅ [PGVECTOR] {source_type}: {len(table_weighted_results)} results "
+                        f"(weight={weight}, min={min_results})"
+                    )
+                    
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [PGVECTOR] Failed to search {table_name}: {e}")
+                    continue
+        
+        # 가중 유사도 기준으로 전체 정렬
+        all_results.sort(key=lambda x: x[1], reverse=True)  # weighted_similarity 기준
+        
+        # 상위 k개 선택
+        final_results = all_results[:k]
+        
+        self.logger.info(
+            f"🔍 [PGVECTOR WEIGHTED] Total {len(final_results)} results from {len(available_tables)} tables"
+        )
+        
+        # 타입별 분포 로깅
+        type_counts = {}
+        for _, _, _, source_type in final_results:
+            type_counts[source_type] = type_counts.get(source_type, 0) + 1
+        self.logger.debug(f"📊 [PGVECTOR] Type distribution: {type_counts}")
+        
+        return [(cid, weighted_sim, source_type) for cid, weighted_sim, _, source_type in final_results]
+    
     def _search_with_threshold(self,
                                query: str,
                                k: int,
@@ -2583,9 +2980,46 @@ class SemanticSearchEngineV2:
             else:
                 self.logger.debug(f"⏱️  Query encoding: {step_times['query_encoding']:.3f}s")
 
-            # 2. FAISS 인덱스 사용 또는 전체 벡터 로드
+            # 2. 벡터 검색 방법에 따라 분기 (pgvector 또는 FAISS)
             search_start = time.time()
-            if FAISS_AVAILABLE and self.index is not None:
+            similarities = []
+            
+            # pgvector 검색 (가중치 기반 개별 검색)
+            if self.vector_search_method in ['pgvector', 'hybrid'] and PGVECTOR_AVAILABLE:
+                try:
+                    self.logger.info(f"🔍 [PGVECTOR SEARCH] Using weighted pgvector search")
+                    
+                    # 가중치 기반 검색 실행
+                    pgvector_results = self._search_with_pgvector_weighted(
+                        query_vec=query_vec,
+                        k=k,
+                        source_types=source_types,
+                        embedding_version_id=embedding_version_id,
+                        similarity_threshold=similarity_threshold
+                    )
+                    
+                    # 결과 변환 (가중 유사도 사용)
+                    for chunk_id, weighted_similarity, source_type in pgvector_results:
+                        similarities.append((chunk_id, weighted_similarity))
+                        # source_type은 나중에 메타데이터 조회 시 사용
+                    
+                    step_times['pgvector_search'] = time.time() - search_start
+                    self.logger.info(
+                        f"⏱️  PgVector weighted search: {step_times['pgvector_search']:.3f}s, "
+                        f"{len(similarities)} results"
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ [PGVECTOR] Search error: {e}", exc_info=True)
+                    if self.vector_search_method == 'pgvector':
+                        # pgvector 전용 모드에서 실패하면 빈 결과 반환
+                        return []
+                    # hybrid 모드에서는 FAISS로 폴백
+                    self.logger.warning("⚠️ [PGVECTOR] Falling back to FAISS in hybrid mode")
+                    similarities = []
+            
+            # FAISS 검색 (hybrid 모드에서는 pgvector 결과와 병합)
+            if self.vector_search_method in ['faiss', 'hybrid'] and FAISS_AVAILABLE and self.index is not None:
                 # nprobe 동적 튜닝 (k 값에 따라 조정)
                 # FAISS 인덱스 검색 (빠른 근사 검색)
                 query_vec_np = np.array([query_vec]).astype('float32')
@@ -2635,18 +3069,15 @@ class SemanticSearchEngineV2:
                     self.logger.error(f"❌ _chunk_ids is empty or not loaded! FAISS index has {self.index.ntotal} vectors but _chunk_ids has {len(self._chunk_ids) if hasattr(self, '_chunk_ids') else 0} entries")
                     self.logger.error("Attempting to reload _chunk_ids from database...")
                     try:
-                        # 연결 풀 사용 (이미 최적화됨)
-                        conn = self._get_connection()
-                        try:
-                            cursor = conn.execute(
-                                "SELECT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                        # DatabaseAdapter 사용
+                        with self._get_connection_context() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT chunk_id FROM embeddings WHERE version_id = %s ORDER BY chunk_id",
                                 (embedding_version_id or self._get_active_embedding_version_id(),)
                             )
-                            self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                        finally:
-                            # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
-                            if not self._connection_pool:
-                                self._safe_close_connection(conn)
+                            rows = cursor.fetchall()
+                            self._chunk_ids = [row[0] if isinstance(row, tuple) else row['chunk_id'] for row in rows]
                         self.logger.info(f"✅ Reloaded {len(self._chunk_ids)} chunk_ids from database")
                     except Exception as e:
                         self.logger.error(f"Failed to reload _chunk_ids: {e}")
@@ -2699,23 +3130,20 @@ class SemanticSearchEngineV2:
                 # 배치로 메타데이터 조회
                 if chunk_ids_to_fetch:
                     try:
-                        conn_batch = self._get_connection()
-                        batch_metadata = self._batch_load_chunk_metadata(conn_batch, chunk_ids_to_fetch)
-                        # 연결 풀 사용 시 close() 호출 불필요 (자동 재사용)
-                        if not self._connection_pool:
-                            conn_batch.close()
-                        
-                        # 조회된 메타데이터를 캐시에 저장
-                        for chunk_id, metadata in batch_metadata.items():
-                            if chunk_id not in self._chunk_metadata:
-                                self._chunk_metadata[chunk_id] = {}
-                            self._chunk_metadata[chunk_id].update(metadata)
+                        with self._get_connection_context() as conn_batch:
+                            batch_metadata = self._batch_load_chunk_metadata(conn_batch, chunk_ids_to_fetch)
                             
-                            # embedding_version_id가 None이면 활성 버전 사용
-                            if self._chunk_metadata[chunk_id].get('embedding_version_id') is None:
-                                active_version_id = self._get_active_embedding_version_id()
-                                if active_version_id:
-                                    self._chunk_metadata[chunk_id]['embedding_version_id'] = active_version_id
+                            # 조회된 메타데이터를 캐시에 저장
+                            for chunk_id, metadata in batch_metadata.items():
+                                if chunk_id not in self._chunk_metadata:
+                                    self._chunk_metadata[chunk_id] = {}
+                                self._chunk_metadata[chunk_id].update(metadata)
+                                
+                                # embedding_version_id가 None이면 활성 버전 사용
+                                if self._chunk_metadata[chunk_id].get('embedding_version_id') is None:
+                                    active_version_id = self._get_active_embedding_version_id()
+                                    if active_version_id:
+                                        self._chunk_metadata[chunk_id]['embedding_version_id'] = active_version_id
                     except Exception as e:
                         self.logger.debug(f"Batch metadata fetch failed: {e}")
                 
@@ -2814,25 +3242,24 @@ class SemanticSearchEngineV2:
                         # _chunk_metadata에 없으면 DB에서 조회 (이미 배치 조회했으므로 대부분 캐시에 있음)
                         if chunk_version_id is None:
                             try:
-                                conn_temp = self._get_connection()
-                                cursor_temp = conn_temp.execute(
-                                    "SELECT embedding_version_id FROM text_chunks WHERE id = ?",
-                                    (chunk_id,)
-                                )
-                                row_temp = cursor_temp.fetchone()
-                                if row_temp:
-                                    chunk_version_id = row_temp.get('embedding_version_id')
-                                    # NULL인 경우 활성 버전 사용
-                                    if chunk_version_id is None:
-                                        active_version_id = self._get_active_embedding_version_id()
-                                        if active_version_id:
-                                            chunk_version_id = active_version_id
-                                    # 메타데이터에 저장
-                                    if chunk_id not in self._chunk_metadata:
-                                        self._chunk_metadata[chunk_id] = {}
-                                    self._chunk_metadata[chunk_id]['embedding_version_id'] = chunk_version_id
-                                if not self._connection_pool:
-                                    conn_temp.close()
+                                with self._get_connection_context() as conn_temp:
+                                    cursor_temp = conn_temp.cursor()
+                                    cursor_temp.execute(
+                                        "SELECT embedding_version FROM precedent_chunks WHERE id = %s",
+                                        (chunk_id,)
+                                    )
+                                    row_temp = cursor_temp.fetchone()
+                                    if row_temp:
+                                        chunk_version_id = row_temp.get('embedding_version_id') if hasattr(row_temp, 'get') else (row_temp[0] if len(row_temp) > 0 else None)
+                                        # NULL인 경우 활성 버전 사용
+                                        if chunk_version_id is None:
+                                            active_version_id = self._get_active_embedding_version_id()
+                                            if active_version_id:
+                                                chunk_version_id = active_version_id
+                                        # 메타데이터에 저장
+                                        if chunk_id not in self._chunk_metadata:
+                                            self._chunk_metadata[chunk_id] = {}
+                                        self._chunk_metadata[chunk_id]['embedding_version_id'] = chunk_version_id
                             except Exception as e:
                                 self.logger.debug(f"Failed to get embedding_version_id for chunk_id={chunk_id}: {e}")
                                 # 예외 발생 시 활성 버전 사용
@@ -2889,13 +3316,30 @@ class SemanticSearchEngineV2:
                     similarity = self._calculate_similarity_from_distance(distance)
 
                     if similarity >= similarity_threshold:
-                        similarities.append((chunk_id, similarity))
+                        # hybrid 모드에서는 pgvector 결과와 중복 제거
+                        if self.vector_search_method == 'hybrid':
+                            # 이미 pgvector 결과에 있는지 확인
+                            existing_chunk_ids = {cid for cid, _ in similarities}
+                            if chunk_id not in existing_chunk_ids:
+                                similarities.append((chunk_id, similarity))
+                            else:
+                                # 중복이면 더 높은 유사도로 업데이트
+                                for i, (cid, sim) in enumerate(similarities):
+                                    if cid == chunk_id and similarity > sim:
+                                        similarities[i] = (chunk_id, similarity)
+                                        break
+                        else:
+                            similarities.append((chunk_id, similarity))
                         self.logger.debug(f"Added to similarities: chunk_id={chunk_id}, similarity={similarity:.4f}, version_id={chunk_version_id if embedding_version_id is not None else 'N/A'}")
                     else:
                         filtered_by_threshold += 1
 
                 # 유사도 기준 정렬
                 similarities.sort(key=lambda x: x[1], reverse=True)  # similarity는 인덱스 1
+                
+                # hybrid 모드에서 pgvector와 FAISS 결과 병합
+                if self.vector_search_method == 'hybrid' and len(similarities) > 0:
+                    self.logger.info(f"🔍 [HYBRID] Merged {len(similarities)} results from FAISS with pgvector results")
                 
                 step_times['faiss_search'] = time.time() - search_start
                 
@@ -2989,9 +3433,9 @@ class SemanticSearchEngineV2:
             results = []
             
             # 텍스트 복원을 위해 DB 연결 필요 (외부 인덱스 사용 시에도)
-            conn = self._get_connection()
-
-            self.logger.debug(f"Processing {len(similarities)} similarities, top {k} results")
+            # 컨텍스트 매니저를 사용하여 연결 자동 반환 보장
+            with self._get_connection_context() as conn:
+                self.logger.debug(f"Processing {len(similarities)} similarities, top {k} results")
             
             # 배치 메타데이터 조회를 위한 준비 (최적화: 중복 제거 및 필터링)
             chunk_ids_for_batch = []
@@ -3089,38 +3533,41 @@ class SemanticSearchEngineV2:
                         # source_meta에 모든 메타데이터 포함
                         source_meta = metadata.copy()
                         source_meta['source_type'] = source_type
-                        # source_id 추출: 실제 DB ID를 찾기 위해 text_chunks에서 조회
+                        # source_id 추출: 실제 DB ID를 찾기 위해 precedent_chunks에서 조회
                         # 외부 인덱스 메타데이터에는 case_number, doc_id 등이 있을 수 있지만 실제 DB ID는 다를 수 있음
                         potential_source_id = metadata.get('case_id') or metadata.get('law_id') or metadata.get('doc_id', '')
                         
-                        # DB에서 실제 source_id 찾기 (text_chunks 테이블 사용)
+                        # DB에서 실제 source_id 찾기 (precedent_chunks 테이블 사용)
                         actual_source_id = None
                         if conn and source_type and potential_source_id:
                             try:
-                                # text_chunks에서 source_type과 다른 필드로 조회
+                                # precedent_chunks에서 metadata로 조회
                                 if source_type == 'case_paragraph':
                                     # case_number나 doc_id로 조회
                                     case_number = metadata.get('case_number') or metadata.get('doc_id')
                                     if case_number:
-                                        cursor = conn.execute(
-                                            "SELECT DISTINCT source_id FROM text_chunks WHERE source_type = ? AND (metadata LIKE ? OR metadata LIKE ?) LIMIT 1",
-                                            (source_type, f'%{case_number}%', f'%doc_id%{case_number}%')
+                                        cursor = conn.cursor()
+                                        cursor.execute(
+                                            "SELECT DISTINCT precedent_content_id FROM precedent_chunks WHERE metadata::text LIKE %s OR metadata::text LIKE %s LIMIT 1",
+                                            (f'%{case_number}%', f'%doc_id%{case_number}%')
                                         )
                                         row = cursor.fetchone()
                                         if row:
-                                            actual_source_id = row[0]
+                                            actual_source_id = row[0] if isinstance(row, tuple) else row['source_id']
                                 elif source_type == 'statute_article':
                                     # law_id와 article_number로 조회
                                     law_id = metadata.get('law_id')
                                     article_no = metadata.get('article_number') or metadata.get('article_no')
                                     if law_id and article_no:
-                                        cursor = conn.execute(
-                                            "SELECT DISTINCT source_id FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? LIMIT 1",
-                                            (source_type, f'%law_id%{law_id}%', f'%article_number%{article_no}%')
+                                        cursor = conn.cursor()
+                                        cursor.execute(
+                                            # precedent_chunks는 판례만 저장하므로 statute_article 조회는 지원하지 않음
+                                            # 필요시 별도 로직 구현
+                                            None
                                         )
                                         row = cursor.fetchone()
                                         if row:
-                                            actual_source_id = row[0]
+                                            actual_source_id = row[0] if isinstance(row, tuple) else row['source_id']
                                 
                                 # 조회 실패 시 potential_source_id가 숫자면 그대로 사용
                                 if actual_source_id is None:
@@ -3138,8 +3585,9 @@ class SemanticSearchEngineV2:
                         chunking_meta = {}
                         if conn:
                             try:
-                                cursor = conn.execute(
-                                    "SELECT chunk_size_category, chunk_group_id, chunking_strategy, embedding_version_id FROM text_chunks WHERE id = ?",
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    "SELECT chunk_index, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                                     (chunk_id,)
                                 )
                                 chunk_row = cursor.fetchone()
@@ -3169,19 +3617,33 @@ class SemanticSearchEngineV2:
                             continue
                         
                         try:
-                            cursor = conn.execute(
-                                "SELECT source_type, source_id, text, chunk_size_category, chunk_group_id, chunking_strategy, embedding_version_id FROM text_chunks WHERE id = ?",
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT precedent_content_id, chunk_index, chunk_content, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                                 (chunk_id,)
                             )
                             row = cursor.fetchone()
                             if row:
-                                text = row['text'] or ''
-                                source_type = row['source_type'] or ''
-                                source_id = row['source_id']
+                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                if hasattr(row, 'keys'):
+                                    text = row.get('chunk_content') or ''
+                                    precedent_content_id = row.get('precedent_content_id')
+                                    chunk_index = row.get('chunk_index')
+                                    metadata = row.get('metadata')
+                                    embedding_version = row.get('embedding_version')
+                                else:
+                                    text = row[2] if len(row) > 2 else ''
+                                    precedent_content_id = row[0] if len(row) > 0 else None
+                                    chunk_index = row[1] if len(row) > 1 else None
+                                    metadata = row[3] if len(row) > 3 else None
+                                    embedding_version = row[4] if len(row) > 4 else None
+                                
+                                source_type = 'precedent_content'
+                                source_id = precedent_content_id
                                 self.logger.debug(f"Loaded from DB: chunk_id={chunk_id}, source_type={source_type}")
                                 
                                 # _chunk_metadata에 저장
-                                version_id = dict(row).get('embedding_version_id')
+                                version_id = embedding_version
                                 if version_id is None:
                                     active_version_id = self._get_active_embedding_version_id()
                                     if active_version_id:
@@ -3191,9 +3653,8 @@ class SemanticSearchEngineV2:
                                     'source_type': source_type,
                                     'source_id': source_id,
                                     'text': text,
-                                    'chunk_size_category': dict(row).get('chunk_size_category'),
-                                    'chunk_group_id': dict(row).get('chunk_group_id'),
-                                    'chunking_strategy': dict(row).get('chunking_strategy'),
+                                    'chunk_index': chunk_index,
+                                    'metadata': metadata,
                                     'embedding_version_id': version_id
                                 }
                             else:
@@ -3204,77 +3665,103 @@ class SemanticSearchEngineV2:
                             continue
                 
                 if chunk_id not in self._chunk_metadata:
-                    # 메타데이터가 없으면 DB에서 직접 조회 (전체 텍스트 및 청킹 메타데이터 가져오기)
-                    cursor = conn.execute(
-                        "SELECT source_type, source_id, text, chunk_size_category, chunk_group_id, chunking_strategy, embedding_version_id FROM text_chunks WHERE id = ?",
+                    # 메타데이터가 없으면 DB에서 직접 조회 (precedent_chunks에서 가져오기)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT precedent_content_id, chunk_index, chunk_content, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                         (chunk_id,)
                     )
                     row = cursor.fetchone()
                     if row:
-                        text_content = row['text'] if row['text'] else ""
+                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                        if hasattr(row, 'keys'):
+                            text_content = row.get('chunk_content') or ""
+                            precedent_content_id = row.get('precedent_content_id')
+                            chunk_index = row.get('chunk_index')
+                            metadata = row.get('metadata')
+                            embedding_version = row.get('embedding_version')
+                        else:
+                            text_content = row[2] if len(row) > 2 and row[2] else ""
+                            precedent_content_id = row[0] if len(row) > 0 else None
+                            chunk_index = row[1] if len(row) > 1 else None
+                            metadata = row[3] if len(row) > 3 else None
+                            embedding_version = row[4] if len(row) > 4 else None
+                        
                         # text가 비어있거나 짧으면 원본 테이블에서 복원 시도
                         if not text_content or len(text_content.strip()) < 100:
-                            source_type = row['source_type']
-                            source_id = row['source_id']
-                            restored_text = self._restore_text_from_source(conn, source_type, source_id)
+                            restored_text = self._restore_text_from_precedent_content(conn, precedent_content_id)
                             if restored_text and len(restored_text.strip()) > len(text_content.strip()):
                                 text_content = restored_text
                                 self.logger.info(f"Restored longer text for chunk_id={chunk_id} (length: {len(text_content)} chars)")
                         
-                        # embedding_version_id가 NULL인 경우 활성 버전 사용
-                        version_id = dict(row).get('embedding_version_id')
+                        # embedding_version이 NULL인 경우 활성 버전 사용
+                        version_id = embedding_version
                         if version_id is None:
                             active_version_id = self._get_active_embedding_version_id()
                             if active_version_id:
                                 version_id = active_version_id
-                                self.logger.debug(f"Using active version {version_id} for chunk_id={chunk_id} (text_chunks.embedding_version_id is NULL)")
+                                self.logger.debug(f"Using active version {version_id} for chunk_id={chunk_id} (precedent_chunks.embedding_version is NULL)")
                         
                         self._chunk_metadata[chunk_id] = {
-                            'source_type': row['source_type'],
-                            'source_id': row['source_id'],
+                            'source_type': 'precedent_content',
+                            'source_id': precedent_content_id,
                             'text': text_content,
-                            'chunk_size_category': dict(row).get('chunk_size_category'),
-                            'chunk_group_id': dict(row).get('chunk_group_id'),
-                            'chunking_strategy': dict(row).get('chunking_strategy'),
-                            'embedding_version_id': version_id  # 버전 정보 추가 (NULL인 경우 활성 버전 사용)
+                            'chunk_index': chunk_index,
+                            'metadata': metadata,
+                            'embedding_version_id': version_id
                         }
 
                 chunk_metadata = self._chunk_metadata.get(chunk_id, {})
-                # chunk_metadata가 비어있으면 DB에서 로드
+                # chunk_metadata가 비어있으면 DB에서 로드 (precedent_chunks)
                 if not chunk_metadata and conn:
                     try:
-                        cursor = conn.execute(
-                            "SELECT source_type, source_id, text, chunk_size_category, chunk_group_id, chunking_strategy, embedding_version_id, meta FROM text_chunks WHERE id = ?",
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT precedent_content_id, chunk_index, chunk_content, metadata, embedding_version FROM precedent_chunks WHERE id = %s",
                             (chunk_id,)
                         )
                         row = cursor.fetchone()
                         if row:
-                            version_id = dict(row).get('embedding_version_id')
+                            # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                            if hasattr(row, 'keys'):
+                                version_id = row.get('embedding_version')
+                                metadata_val = row.get('metadata')
+                                precedent_content_id = row.get('precedent_content_id')
+                                chunk_index = row.get('chunk_index')
+                                chunk_content = row.get('chunk_content')
+                            else:
+                                version_id = row[4] if len(row) > 4 else None
+                                metadata_val = row[3] if len(row) > 3 else None
+                                precedent_content_id = row[0] if len(row) > 0 else None
+                                chunk_index = row[1] if len(row) > 1 else None
+                                chunk_content = row[2] if len(row) > 2 else None
+                            
                             if version_id is None:
                                 active_version_id = self._get_active_embedding_version_id()
                                 if active_version_id:
                                     version_id = active_version_id
                             
-                            # text_chunks.meta 컬럼에서 메타데이터 로드
+                            # precedent_chunks.metadata 컬럼에서 메타데이터 로드 (이미 JSONB)
                             chunk_meta_json = None
-                            if row['meta']:
-                                try:
-                                    import json
-                                    chunk_meta_json = json.loads(row['meta'])
-                                except Exception as e:
-                                    self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
+                            if metadata_val:
+                                if isinstance(metadata_val, dict):
+                                    chunk_meta_json = metadata_val
+                                else:
+                                    try:
+                                        import json
+                                        chunk_meta_json = json.loads(metadata_val) if isinstance(metadata_val, str) else metadata_val
+                                    except Exception as e:
+                                        self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
                             
                             chunk_metadata = {
-                                'source_type': row['source_type'],
-                                'source_id': row['source_id'],
-                                'text': row['text'] if row['text'] else '',
-                                'chunk_size_category': dict(row).get('chunk_size_category'),
-                                'chunk_group_id': dict(row).get('chunk_group_id'),
-                                'chunking_strategy': dict(row).get('chunking_strategy'),
+                                'source_type': 'precedent_content',
+                                'source_id': precedent_content_id,
+                                'text': chunk_content if chunk_content else '',
+                                'chunk_index': chunk_index,
                                 'embedding_version_id': version_id
                             }
                             
-                            # text_chunks.meta의 메타데이터를 chunk_metadata에 병합
+                            # precedent_chunks.metadata의 메타데이터를 chunk_metadata에 병합
                             if chunk_meta_json:
                                 chunk_metadata.update(chunk_meta_json)
                             
@@ -3353,7 +3840,7 @@ class SemanticSearchEngineV2:
                             # 배치 조회에 없으면 개별 조회 (폴백)
                             source_meta = self._get_source_metadata(conn, source_type, source_id_for_query)
                     
-                    # text_chunks.meta의 메타데이터를 우선적으로 사용 (소스 테이블 메타데이터와 병합)
+                    # precedent_chunks.metadata의 메타데이터를 우선적으로 사용 (소스 테이블 메타데이터와 병합)
                     if chunk_meta_from_db:
                         # chunk_meta_from_db를 우선, source_meta는 보완용으로 사용
                         merged_meta = {**source_meta, **chunk_meta_from_db}
@@ -3516,8 +4003,9 @@ class SemanticSearchEngineV2:
                 if result_embedding_version_id is None and conn:
                     # 메타데이터에 없으면 DB에서 조회
                     try:
-                        cursor = conn.execute(
-                            "SELECT embedding_version_id FROM text_chunks WHERE id = ?",
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT embedding_version FROM precedent_chunks WHERE id = %s",
                             (chunk_id,)
                         )
                         version_row = cursor.fetchone()
@@ -3528,7 +4016,7 @@ class SemanticSearchEngineV2:
                                 active_version_id = self._get_active_embedding_version_id()
                                 if active_version_id:
                                     result_embedding_version_id = active_version_id
-                                    self.logger.debug(f"Using active version {active_version_id} for chunk_id={chunk_id} (text_chunks.embedding_version_id is NULL)")
+                                    self.logger.debug(f"Using active version {active_version_id} for chunk_id={chunk_id} (precedent_chunks.embedding_version is NULL)")
                             # 메타데이터에 저장 (로컬 및 인스턴스 변수 모두)
                             chunk_metadata['embedding_version_id'] = result_embedding_version_id
                             if chunk_id in self._chunk_metadata:
@@ -3570,19 +4058,27 @@ class SemanticSearchEngineV2:
                             doc_vec = self._chunk_vectors[chunk_id]
                         else:
                             # DB에서 벡터 로드
-                            with sqlite3.connect(self.db_path) as conn:
-                                conn.row_factory = sqlite3.Row
-                                cursor = conn.execute(
-                                    "SELECT embedding FROM embeddings WHERE chunk_id = ? LIMIT 1",
-                                    (chunk_id,)
-                                )
-                                row = cursor.fetchone()
-                                if row:
-                                    import pickle
-                                    doc_vec = pickle.loads(row['embedding'])
-                                    self._chunk_vectors[chunk_id] = doc_vec
-                                else:
-                                    doc_vec = None
+                            # DatabaseAdapter 사용 또는 직접 연결
+                            # DatabaseAdapter 사용 (PostgreSQL)
+                            if self._db_adapter:
+                                with self._db_adapter.get_connection_context() as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute(
+                                        "SELECT vector FROM embeddings WHERE chunk_id = %s LIMIT 1",
+                                        (chunk_id,)
+                                    )
+                                    row = cursor.fetchone()
+                                    if row:
+                                        vector_blob = row[0] if isinstance(row, tuple) else row.get('vector')
+                                        if vector_blob:
+                                            doc_vec = np.frombuffer(vector_blob, dtype=np.float32)
+                                            self._chunk_vectors[chunk_id] = doc_vec
+                                        else:
+                                            doc_vec = None
+                                    else:
+                                        doc_vec = None
+                            else:
+                                raise RuntimeError("DatabaseAdapter is required. PostgreSQL database must be configured via DATABASE_URL.")
                         
                         if doc_vec is not None and query_vec is not None:
                             # 직접 코사인 유사도 계산
@@ -3647,24 +4143,30 @@ class SemanticSearchEngineV2:
                 if not ccourt_value and source_type == "case_paragraph" and source_id and conn:
                     try:
                         # 먼저 case_paragraphs를 통해 조회
-                        cursor_court = conn.execute(
-                            "SELECT c.court FROM case_paragraphs cp JOIN cases c ON cp.case_id = c.id WHERE cp.id = ?",
+                        cursor_court = conn.cursor()
+                        cursor_court.execute(
+                            "SELECT c.court FROM case_paragraphs cp JOIN cases c ON cp.case_id = c.id WHERE cp.id = %s",
                             (source_id,)
                         )
                         row_court = cursor_court.fetchone()
-                        if row_court and row_court.get("court"):
-                            ccourt_value = row_court["court"]
-                            court_value = ccourt_value
+                        if row_court:
+                            court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court")
+                            if court_val:
+                                ccourt_value = court_val
+                                court_value = ccourt_value
                         else:
                             # case_paragraphs 조회 실패 시 cases 테이블에서 직접 조회
-                            cursor_court = conn.execute(
-                                "SELECT court FROM cases WHERE id = ?",
+                            cursor_court = conn.cursor()
+                            cursor_court.execute(
+                                "SELECT court FROM cases WHERE id = %s",
                                 (source_id,)
                             )
                             row_court = cursor_court.fetchone()
-                            if row_court and row_court.get("court"):
-                                ccourt_value = row_court["court"]
-                                court_value = ccourt_value
+                            if row_court:
+                                court_val = row_court[0] if isinstance(row_court, tuple) else row_court.get("court")
+                                if court_val:
+                                    ccourt_value = court_val
+                                    court_value = ccourt_value
                     except Exception as e:
                         self.logger.debug(f"Failed to fetch court for case_paragraph {source_id}: {e}")
                 
@@ -3805,9 +4307,6 @@ class SemanticSearchEngineV2:
                             seen_source_ids[source_key] = result
                     deduplicated_results.append(result)
                 results = deduplicated_results[:k]
-
-            if conn:
-                self._safe_close_connection(conn)
             
             step_times['result_processing'] = time.time() - result_processing_start
             step_times['total'] = time.time() - step_start
@@ -3954,16 +4453,15 @@ class SemanticSearchEngineV2:
                     self.logger.info(f"   ✅ Version {embedding_version_id} has {chunk_count} chunks")
             else:
                 # 전체 버전 확인
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) as count FROM text_chunks")
-                row = cursor.fetchone()
-                total_chunks = row['count'] if row else 0
-                self._safe_close_connection(conn)
-                if total_chunks == 0:
-                    self.logger.warning("   ❌ No chunks found in database")
-                else:
-                    self.logger.info(f"   ✅ Database has {total_chunks} total chunks")
+                with self._get_connection_context() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) as count FROM precedent_chunks")
+                    row = cursor.fetchone()
+                    total_chunks = row.get('count') if hasattr(row, 'get') else (row[0] if row else 0)
+                    if total_chunks == 0:
+                        self.logger.warning("   ❌ No chunks found in database")
+                    else:
+                        self.logger.info(f"   ✅ Database has {total_chunks} total chunks")
             
             # 2. 임계값 확인
             self.logger.info(f"   📊 Similarity threshold: {similarity_threshold:.3f}")
@@ -4109,14 +4607,15 @@ class SemanticSearchEngineV2:
                     elif chunk_id:
                         # 배치 조회에 없으면 개별 조회 시도 (폴백)
                         try:
-                            conn = self._get_connection()
-                            cursor = conn.execute(
-                                "SELECT embedding_version_id FROM text_chunks WHERE id = ?",
-                                (chunk_id,)
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                version_id = row['embedding_version_id']
+                            with self._get_connection_context() as conn:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    "SELECT embedding_version FROM precedent_chunks WHERE id = %s",
+                                    (chunk_id,)
+                                )
+                                row = cursor.fetchone()
+                                if row:
+                                    version_id = row[0] if isinstance(row, tuple) else row.get('embedding_version_id')
                                 # NULL인 경우 활성 버전 사용
                                 if version_id is None:
                                     active_version_id = self._get_active_embedding_version_id()
@@ -4157,7 +4656,7 @@ class SemanticSearchEngineV2:
                         try:
                             conn_temp = self._get_connection()
                             cursor_temp = conn_temp.execute(
-                                "SELECT source_type FROM text_chunks WHERE id = ?",
+                                "SELECT 'precedent_content' as source_type FROM precedent_chunks WHERE id = ?",
                                 (chunk_id,)
                             )
                             row_temp = cursor_temp.fetchone()
@@ -4319,21 +4818,20 @@ class SemanticSearchEngineV2:
                     source_id = result.get('metadata', {}).get('source_id')
                     if chunk_id and source_id:
                         try:
-                            conn = self._get_connection()
-                            restored_text = self._ensure_text_content(
-                                conn, chunk_id, text, source_type, source_id, result.get('metadata', {})
-                            )
-                            if restored_text and len(restored_text.strip()) > text_length:
-                                result['text'] = restored_text
-                                result['content'] = restored_text
-                                if 'metadata' in result:
-                                    result['metadata']['text'] = restored_text
-                                    result['metadata']['content'] = restored_text
-                                self.logger.info(
-                                    f"✅ Restored text for result {i+1} (length: {len(restored_text)} chars)"
+                            with self._get_connection_context() as conn:
+                                restored_text = self._ensure_text_content(
+                                    conn, chunk_id, text, source_type, source_id, result.get('metadata', {})
                                 )
-                                restoration_stats['text_restored'] += 1
-                            self._safe_close_connection(conn)
+                                if restored_text and len(restored_text.strip()) > text_length:
+                                    result['text'] = restored_text
+                                    result['content'] = restored_text
+                                    if 'metadata' in result:
+                                        result['metadata']['text'] = restored_text
+                                        result['metadata']['content'] = restored_text
+                                    self.logger.info(
+                                        f"✅ Restored text for result {i+1} (length: {len(restored_text)} chars)"
+                                    )
+                                    restoration_stats['text_restored'] += 1
                         except Exception as e:
                             self.logger.debug(f"Failed to restore text for result {i+1}: {e}")
                     
@@ -4402,51 +4900,53 @@ class SemanticSearchEngineV2:
             return {}
         
         try:
-            conn = self._get_connection()
-            # row_factory 설정 확인
-            if not hasattr(conn, 'row_factory') or conn.row_factory is None:
-                import sqlite3
-                conn.row_factory = sqlite3.Row
-            
-            # numpy 타입을 Python 정수형으로 변환
-            import numpy as np
-            chunk_ids_python = [int(cid) if isinstance(cid, (np.integer, np.int64, np.int32)) else cid for cid in chunk_ids]
-            placeholders = ",".join(["?"] * len(chunk_ids_python))
-            query = f"SELECT id, embedding_version_id FROM text_chunks WHERE id IN ({placeholders})"
-            self.logger.debug(f"Batch query: {query[:100]}... with {len(chunk_ids_python)} chunk_ids (sample: {chunk_ids_python[:3]})")
-            cursor = conn.execute(query, chunk_ids_python)
-            rows = cursor.fetchall()
-            
-            # 실제로 쿼리가 실행되었는지 확인
-            if len(rows) == 0:
-                # 샘플 chunk_id로 직접 조회 시도
-                sample_id = chunk_ids_python[0] if chunk_ids_python else None
-                if sample_id:
-                    test_cursor = conn.execute("SELECT id, embedding_version_id FROM text_chunks WHERE id = ?", (sample_id,))
-                    test_row = test_cursor.fetchone()
-                    if test_row:
-                        self.logger.debug(f"Direct query for chunk_id={sample_id} succeeded, but batch query failed")
-                    else:
-                        self.logger.debug(f"Direct query for chunk_id={sample_id} also returned no rows - chunk may not exist")
-            
-            self._safe_close_connection(conn)
-            
-            result = {}
-            active_version_id = self._get_active_embedding_version_id()
-            
-            self.logger.debug(f"Batch query returned {len(rows)} rows")
-            for row in rows:
-                version_id = row['embedding_version_id']
-                if version_id is None and active_version_id:
-                    version_id = active_version_id
-                result[row['id']] = version_id
-                self.logger.debug(f"  chunk_id={row['id']}, embedding_version_id={version_id}")
-            
-            if len(result) < len(chunk_ids):
-                missing = set(chunk_ids) - set(result.keys())
-                self.logger.debug(f"Missing chunks in batch result: {list(missing)[:10]}")
-            
-            return result
+            with self._get_connection_context() as conn:
+                cursor = conn.cursor()
+                
+                # numpy 타입을 Python 정수형으로 변환
+                import numpy as np
+                chunk_ids_python = [int(cid) if isinstance(cid, (np.integer, np.int64, np.int32)) else cid for cid in chunk_ids]
+                placeholders = ",".join(["%s"] * len(chunk_ids_python))  # PostgreSQL은 %s 사용
+                query = f"SELECT id, embedding_version FROM precedent_chunks WHERE id IN ({placeholders})"
+                self.logger.debug(f"Batch query: {query[:100]}... with {len(chunk_ids_python)} chunk_ids (sample: {chunk_ids_python[:3]})")
+                cursor.execute(query, chunk_ids_python)
+                rows = cursor.fetchall()
+                
+                # 실제로 쿼리가 실행되었는지 확인
+                if len(rows) == 0:
+                    # 샘플 chunk_id로 직접 조회 시도
+                    sample_id = chunk_ids_python[0] if chunk_ids_python else None
+                    if sample_id:
+                        cursor.execute("SELECT id, embedding_version FROM precedent_chunks WHERE id = %s", (sample_id,))
+                        test_row = cursor.fetchone()
+                        if test_row:
+                            self.logger.debug(f"Direct query for chunk_id={sample_id} succeeded, but batch query failed")
+                        else:
+                            self.logger.debug(f"Direct query for chunk_id={sample_id} also returned no rows - chunk may not exist")
+                
+                result = {}
+                active_version_id = self._get_active_embedding_version_id()
+                
+                self.logger.debug(f"Batch query returned {len(rows)} rows")
+                for row in rows:
+                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                    if hasattr(row, 'keys'):  # dict-like (RealDictRow)
+                        version_id = row['embedding_version_id']
+                        chunk_id = row['id']
+                    else:  # tuple
+                        chunk_id = row[0]
+                        version_id = row[1] if len(row) > 1 else None
+                    
+                    if version_id is None and active_version_id:
+                        version_id = active_version_id
+                    result[chunk_id] = version_id
+                    self.logger.debug(f"  chunk_id={chunk_id}, embedding_version_id={version_id}")
+                
+                if len(result) < len(chunk_ids):
+                    missing = set(chunk_ids) - set(result.keys())
+                    self.logger.debug(f"Missing chunks in batch result: {list(missing)[:10]}")
+                
+                return result
         except Exception as e:
             self.logger.error(f"Failed to batch load embedding_version_ids: {e}", exc_info=True)
             return {}
@@ -4508,53 +5008,58 @@ class SemanticSearchEngineV2:
             
             # source_id가 None인 경우 chunk_id로 조회 (강화)
             if not source_id:
-                conn = self._get_connection()
-                if conn:
-                    try:
-                        cursor = conn.execute(
-                            "SELECT source_id, source_type FROM text_chunks WHERE id = ?",
-                            (chunk_id,)
-                        )
-                        row = cursor.fetchone()
-                        if row and row['source_id']:
-                            source_id = row['source_id']
-                            if not source_type:
-                                source_type = row['source_type'] or source_type
-                            self.logger.debug(f"✅ Restored source_id={source_id} for chunk_id={chunk_id} from text_chunks")
-                        else:
-                            # source_id가 None인 경우에도 계속 진행 (다른 방법으로 복원 시도)
-                            self.logger.debug(f"⚠️  source_id is None for chunk_id={chunk_id}, will try alternative restoration methods")
-                        self._safe_close_connection(conn)
-                    except Exception as e:
-                        self.logger.debug(f"Failed to get source_id from text_chunks for chunk_id={chunk_id}: {e}")
-                        if conn:
-                            self._safe_close_connection(conn)
-                        # source_id가 없어도 계속 진행 (다른 방법으로 복원 시도)
-                        pass
-                else:
-                    # conn이 없어도 계속 진행 (다른 방법으로 복원 시도)
-                    pass
-            
-            # source_id가 여전히 None인 경우에도 복원 시도 (chunk_id로 직접 조회)
-            if not source_id and chunk_id:
-                # chunk_id로 직접 메타데이터 조회 시도
-                conn = self._get_connection()
-                if conn:
-                    try:
-                        # text_chunks에서 직접 조회
-                        cursor = conn.execute(
-                            "SELECT source_id, source_type, text FROM text_chunks WHERE id = ?",
+                try:
+                    with self._get_connection_context() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT precedent_content_id, 'precedent_content' as source_type FROM precedent_chunks WHERE id = %s",
                             (chunk_id,)
                         )
                         row = cursor.fetchone()
                         if row:
-                            if not source_id and row['source_id']:
-                                source_id = row['source_id']
-                            if not source_type and row['source_type']:
-                                source_type = row['source_type']
+                            source_id_val = row[0] if isinstance(row, tuple) else row.get('precedent_content_id')
+                            source_type_val = 'precedent_content'
+                            if source_id_val:
+                                source_id = source_id_val
+                                if not source_type:
+                                    source_type = source_type_val
+                                self.logger.debug(f"✅ Restored source_id={source_id} for chunk_id={chunk_id} from precedent_chunks")
+                            else:
+                                # source_id가 None인 경우에도 계속 진행 (다른 방법으로 복원 시도)
+                                self.logger.debug(f"⚠️  source_id is None for chunk_id={chunk_id}, will try alternative restoration methods")
+                except Exception as e:
+                    self.logger.debug(f"Failed to get source_id from precedent_chunks for chunk_id={chunk_id}: {e}")
+            
+            # source_id가 여전히 None인 경우에도 복원 시도 (chunk_id로 직접 조회)
+            if not source_id and chunk_id:
+                # chunk_id로 직접 메타데이터 조회 시도
+                try:
+                    with self._get_connection_context() as conn:
+                        cursor = conn.cursor()
+                        # precedent_chunks에서 직접 조회
+                        cursor.execute(
+                            "SELECT precedent_content_id, 'precedent_content' as source_type, chunk_content FROM precedent_chunks WHERE id = %s",
+                            (chunk_id,)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                            if hasattr(row, 'keys'):
+                                source_id_val = row.get('source_id')
+                                source_type_val = row.get('source_type')
+                                text_val = row.get('text')
+                            else:
+                                source_id_val = row[0] if len(row) > 0 else None
+                                source_type_val = row[1] if len(row) > 1 else None
+                                text_val = row[2] if len(row) > 2 else None
+                            
+                            if not source_id and source_id_val:
+                                source_id = source_id_val
+                            if not source_type and source_type_val:
+                                source_type = source_type_val
                             # text도 복원 시도 (Empty text content 해결)
-                            if row['text']:
-                                restored_text = row['text']
+                            if text_val:
+                                restored_text = text_val
                                 if len(restored_text.strip()) > 0:
                                     result['text'] = restored_text
                                     result['content'] = restored_text
@@ -4563,361 +5068,428 @@ class SemanticSearchEngineV2:
                                     result['metadata']['text'] = restored_text
                                     result['metadata']['content'] = restored_text
                                     self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks (length: {len(restored_text)} chars)")
-                        self._safe_close_connection(conn)
-                    except Exception as e:
-                        self.logger.debug(f"Failed to get metadata from text_chunks for chunk_id={chunk_id}: {e}")
-                        if conn:
-                            self._safe_close_connection(conn)
+                except Exception as e:
+                    self.logger.debug(f"Failed to get metadata from text_chunks for chunk_id={chunk_id}: {e}")
             
             # source_id가 여전히 None이면 복원 불가능하므로 경고만 출력하고 계속 진행
             if not source_id:
                 self.logger.warning(f"⚠️  source_id is None for chunk_id={chunk_id}, metadata restoration may be incomplete")
                 # source_id가 없어도 기본 메타데이터 복원은 시도
             
-            conn = self._get_connection()
-            if not conn:
-                return
-            
-            # 먼저 text_chunks.meta에서 확인
-            chunk_metadata_json = None
-            if chunk_id:
-                try:
-                    cursor_meta = conn.execute(
-                        "SELECT meta FROM text_chunks WHERE id = ?",
-                        (chunk_id,)
-                    )
-                    meta_row = cursor_meta.fetchone()
-                    if meta_row and meta_row['meta']:
-                        try:
-                            import json
-                            chunk_metadata_json = json.loads(meta_row['meta'])
-                        except Exception as e:
-                            self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
-                except Exception as e:
-                    self.logger.debug(f"Failed to get meta for chunk_id={chunk_id}: {e}")
-            
-            # _get_source_metadata를 사용하여 소스 테이블에서 메타데이터 조회
-            # source_id가 None인 경우에도 복원 시도
-            source_meta = {}
-            if source_id:
-                source_meta = self._get_source_metadata(conn, source_type, source_id)
-            elif chunk_id:
-                # source_id가 None인 경우 chunk_id로 직접 조회 시도
-                try:
-                    # text_chunks에서 source_id 복원 시도
-                    cursor_source = conn.execute(
-                        "SELECT source_id, source_type FROM text_chunks WHERE id = ?",
-                        (chunk_id,)
-                    )
-                    source_row = cursor_source.fetchone()
-                    if source_row and source_row['source_id']:
-                        restored_source_id = source_row['source_id']
-                        if not source_type and source_row['source_type']:
-                            source_type = source_row['source_type']
-                        # 복원된 source_id로 메타데이터 조회
-                        source_meta = self._get_source_metadata(conn, source_type, restored_source_id)
-                        source_id = restored_source_id
-                        self.logger.debug(f"✅ Restored source_id={source_id} for chunk_id={chunk_id} and retrieved metadata")
-                except Exception as e:
-                    self.logger.debug(f"Failed to restore source_id and metadata for chunk_id={chunk_id}: {e}")
-            
-            # source_id가 None인 경우에도 chunk_id로 직접 복원 시도 (우선 처리)
-            if not source_id and chunk_id:
-                try:
-                    # case_paragraph의 경우: doc_id, casenames, court 복원 (강화)
-                    if source_type == 'case_paragraph':
-                        # 먼저 source_id로 조회 시도
-                        cursor_case = None
-                        if source_id:
-                            cursor_case = conn.execute("""
-                                SELECT cp.case_id, c.casenames, c.doc_id, c.court
-                                FROM case_paragraphs cp
-                                JOIN cases c ON cp.case_id = c.id
-                                WHERE cp.id = ?
-                            """, (source_id,))
-                        else:
-                            # source_id가 없으면 chunk_id로 직접 조회
-                            cursor_case = conn.execute("""
-                                SELECT cp.case_id, c.casenames, c.doc_id, c.court
-                                FROM text_chunks tc
-                                JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                JOIN cases c ON cp.case_id = c.id
-                                WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
-                            """, (chunk_id,))
-                        
-                        case_row = cursor_case.fetchone() if cursor_case else None
-                        if case_row:
-                            restored_count = 0
-                            if 'doc_id' in missing_fields and case_row['doc_id']:
-                                result['doc_id'] = case_row['doc_id']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['doc_id'] = case_row['doc_id']
-                                restored_count += 1
-                            if 'casenames' in missing_fields and case_row['casenames']:
-                                result['casenames'] = case_row['casenames']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['casenames'] = case_row['casenames']
-                                restored_count += 1
-                            if 'court' in missing_fields:
-                                if case_row['court']:
-                                    result['court'] = case_row['court']
+            # 컨텍스트 매니저를 사용하여 연결 자동 반환 보장
+            with self._get_connection_context() as conn:
+                # 먼저 precedent_chunks.metadata에서 확인
+                chunk_metadata_json = None
+                if chunk_id:
+                    try:
+                        cursor_meta = conn.cursor()
+                        cursor_meta.execute(
+                            "SELECT metadata FROM precedent_chunks WHERE id = %s",
+                            (chunk_id,)
+                        )
+                        meta_row = cursor_meta.fetchone()
+                        if meta_row:
+                            meta_val = meta_row[0] if isinstance(meta_row, tuple) else meta_row.get('metadata')
+                            if meta_val:
+                                # precedent_chunks.metadata는 이미 JSONB이므로 파싱 불필요
+                                if isinstance(meta_val, dict):
+                                    chunk_metadata_json = meta_val
+                                else:
+                                    try:
+                                        import json
+                                        chunk_metadata_json = json.loads(meta_val) if isinstance(meta_val, str) else meta_val
+                                    except Exception as e:
+                                        self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to get meta for chunk_id={chunk_id}: {e}")
+                
+                # _get_source_metadata를 사용하여 소스 테이블에서 메타데이터 조회
+                # source_id가 None인 경우에도 복원 시도
+                source_meta = {}
+                if source_id:
+                    source_meta = self._get_source_metadata(conn, source_type, source_id)
+                elif chunk_id:
+                    # source_id가 None인 경우 chunk_id로 직접 조회 시도
+                    try:
+                        # precedent_chunks에서 source_id 복원 시도
+                        cursor_source = conn.cursor()
+                        cursor_source.execute(
+                            "SELECT precedent_content_id, 'precedent_content' as source_type FROM precedent_chunks WHERE id = %s",
+                            (chunk_id,)
+                        )
+                        source_row = cursor_source.fetchone()
+                        if source_row:
+                            restored_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
+                            restored_source_type = source_row[1] if isinstance(source_row, tuple) else source_row.get('source_type')
+                            if restored_source_id:
+                                if not source_type and restored_source_type:
+                                    source_type = restored_source_type
+                                # 복원된 source_id로 메타데이터 조회
+                                source_meta = self._get_source_metadata(conn, source_type, restored_source_id)
+                                source_id = restored_source_id
+                                self.logger.debug(f"✅ Restored source_id={source_id} for chunk_id={chunk_id} and retrieved metadata")
+                    except Exception as e:
+                        self.logger.debug(f"Failed to restore source_id and metadata for chunk_id={chunk_id}: {e}")
+                
+                # source_id가 None인 경우에도 chunk_id로 직접 복원 시도 (우선 처리)
+                if not source_id and chunk_id:
+                    try:
+                        # case_paragraph의 경우: doc_id, casenames, court 복원 (강화)
+                        if source_type == 'case_paragraph':
+                            # 먼저 source_id로 조회 시도
+                            cursor_case = conn.cursor()
+                            if source_id:
+                                cursor_case.execute("""
+                                    SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                                    FROM case_paragraphs cp
+                                    JOIN cases c ON cp.case_id = c.id
+                                    WHERE cp.id = %s
+                                """, (source_id,))
+                            else:
+                                # source_id가 없으면 chunk_id로 직접 조회
+                                cursor_case.execute("""
+                                    SELECT cp.case_id, c.casenames, c.doc_id, c.court
+                                    FROM precedent_chunks pc
+                                    JOIN precedent_contents pcon ON pc.precedent_content_id = pcon.id
+                                    JOIN precedents p ON pcon.precedent_id = p.id
+                                    WHERE pc.id = %s
+                                """, (chunk_id,))
+                            
+                            case_row = cursor_case.fetchone()
+                            if case_row:
+                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                if hasattr(case_row, 'keys'):
+                                    case_id = case_row.get('case_id')
+                                    casenames = case_row.get('casenames')
+                                    doc_id = case_row.get('doc_id')
+                                    court = case_row.get('court')
+                                else:
+                                    case_id = case_row[0] if len(case_row) > 0 else None
+                                    casenames = case_row[1] if len(case_row) > 1 else None
+                                    doc_id = case_row[2] if len(case_row) > 2 else None
+                                    court = case_row[3] if len(case_row) > 3 else None
+                                
+                                restored_count = 0
+                                if 'doc_id' in missing_fields and doc_id:
+                                    result['doc_id'] = doc_id
                                     if 'metadata' not in result:
                                         result['metadata'] = {}
-                                    result['metadata']['court'] = case_row['court']
+                                    result['metadata']['doc_id'] = doc_id
                                     restored_count += 1
-                                else:
-                                    # court가 NULL인 경우 기본값 설정
+                                if 'casenames' in missing_fields and casenames:
+                                    result['casenames'] = casenames
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['casenames'] = casenames
+                                    restored_count += 1
+                                if 'court' in missing_fields:
+                                    if court:
+                                        result['court'] = court
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['court'] = court
+                                        restored_count += 1
+                                    else:
+                                        # court가 NULL인 경우 기본값 설정
+                                        result['court'] = "법원명 미상"
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['court'] = "법원명 미상"
+                                        self.logger.debug(f"⚠️  court is NULL for chunk_id={chunk_id}, set default value")
+                                if restored_count > 0:
+                                    self.logger.debug(f"✅ Restored {restored_count} case metadata fields for chunk_id={chunk_id} (doc_id, casenames, court)")
+                            else:
+                                # 조회 실패 시 기본값 설정
+                                if 'court' in missing_fields:
                                     result['court'] = "법원명 미상"
                                     if 'metadata' not in result:
                                         result['metadata'] = {}
                                     result['metadata']['court'] = "법원명 미상"
-                                    self.logger.debug(f"⚠️  court is NULL for chunk_id={chunk_id}, set default value")
-                            if restored_count > 0:
-                                self.logger.debug(f"✅ Restored {restored_count} case metadata fields for chunk_id={chunk_id} (doc_id, casenames, court)")
-                        else:
-                            # 조회 실패 시 기본값 설정
-                            if 'court' in missing_fields:
-                                result['court'] = "법원명 미상"
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['court'] = "법원명 미상"
-                                self.logger.debug(f"⚠️  Could not restore court for chunk_id={chunk_id}, set default value")
-                    
-                    # decision_paragraph의 경우: org, doc_id 복원
-                    elif source_type == 'decision_paragraph':
-                        cursor_decision = conn.execute("""
-                            SELECT dp.decision_id, d.org, d.doc_id
-                            FROM text_chunks tc
-                            JOIN decision_paragraphs dp ON tc.source_id = dp.id
-                            JOIN decisions d ON dp.decision_id = d.id
-                            WHERE tc.id = ? AND tc.source_type = 'decision_paragraph'
-                        """, (chunk_id,))
-                        decision_row = cursor_decision.fetchone()
-                        if decision_row:
-                            if 'org' in missing_fields and decision_row['org']:
-                                result['org'] = decision_row['org']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['org'] = decision_row['org']
-                            if 'doc_id' in missing_fields and decision_row['doc_id']:
-                                result['doc_id'] = decision_row['doc_id']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['doc_id'] = decision_row['doc_id']
-                            self.logger.debug(f"✅ Restored decision metadata for chunk_id={chunk_id} (org, doc_id)")
-                    
-                    # interpretation_paragraph의 경우: interpretation_id, doc_id 복원
-                    elif source_type == 'interpretation_paragraph':
-                        cursor_interp = conn.execute("""
-                            SELECT ip.interpretation_id, i.doc_id
-                            FROM text_chunks tc
-                            JOIN interpretation_paragraphs ip ON tc.source_id = ip.id
-                            JOIN interpretations i ON ip.interpretation_id = i.id
-                            WHERE tc.id = ? AND tc.source_type = 'interpretation_paragraph'
-                        """, (chunk_id,))
-                        interp_row = cursor_interp.fetchone()
-                        if interp_row:
-                            if 'interpretation_id' in missing_fields and interp_row['interpretation_id']:
-                                result['interpretation_id'] = interp_row['interpretation_id']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['interpretation_id'] = interp_row['interpretation_id']
-                            if 'doc_id' in missing_fields and interp_row['doc_id']:
-                                result['doc_id'] = interp_row['doc_id']
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['doc_id'] = interp_row['doc_id']
-                            self.logger.debug(f"✅ Restored interpretation metadata for chunk_id={chunk_id} (interpretation_id, doc_id)")
-                except Exception as e:
-                    self.logger.debug(f"Failed to restore metadata via chunk_id for chunk_id={chunk_id}: {e}")
-            
-            # 누락된 필드 복원 (일반적인 방법)
-            for field in missing_fields:
-                # 이미 복원된 필드는 건너뛰기
-                if result.get(field) or result.get('metadata', {}).get(field):
-                    continue
-                
-                field_value = None
-                restoration_source = None
-                
-                # 1. chunk metadata JSON에서 확인 (우선순위 1)
-                if chunk_metadata_json and field in chunk_metadata_json:
-                    field_value = chunk_metadata_json[field]
-                    restoration_source = 'chunk_meta'
-                
-                # 2. source_meta에서 확인 (우선순위 2)
-                if not field_value and source_meta and field in source_meta:
-                    field_value = source_meta[field]
-                    restoration_source = 'source_table'
-                
-                # 3. 같은 source_id의 다른 청크에서 확인 (대안, source_id가 있는 경우만)
-                if not field_value and source_id:
-                    try:
-                        cursor_alt = conn.execute("""
-                            SELECT meta FROM text_chunks
-                            WHERE source_type = ? AND source_id = ? AND meta IS NOT NULL AND meta != ''
-                            LIMIT 1
-                        """, (source_type, source_id))
-                        alt_row = cursor_alt.fetchone()
-                        if alt_row and alt_row['meta']:
-                            try:
-                                import json
-                                alt_metadata = json.loads(alt_row['meta'])
-                                if field in alt_metadata and alt_metadata[field]:
-                                    field_value = alt_metadata[field]
-                                    restoration_source = 'alternative_chunk'
-                            except Exception as e:
-                                self.logger.debug(f"Failed to parse alternative chunk meta: {e}")
+                                    self.logger.debug(f"⚠️  Could not restore court for chunk_id={chunk_id}, set default value")
+                        
+                        # decision_paragraph의 경우: org, doc_id 복원
+                        elif source_type == 'decision_paragraph':
+                            cursor_decision = conn.cursor()
+                            cursor_decision.execute("""
+                                SELECT dp.decision_id, d.org, d.doc_id
+                                FROM text_chunks tc
+                                JOIN decision_paragraphs dp ON tc.source_id = dp.id
+                                JOIN decisions d ON dp.decision_id = d.id
+                                WHERE tc.id = %s AND tc.source_type = 'decision_paragraph'
+                            """, (chunk_id,))
+                            decision_row = cursor_decision.fetchone()
+                            if decision_row:
+                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                if hasattr(decision_row, 'keys'):
+                                    org_val = decision_row.get('org')
+                                    doc_id_val = decision_row.get('doc_id')
+                                else:
+                                    org_val = decision_row[1] if len(decision_row) > 1 else None
+                                    doc_id_val = decision_row[2] if len(decision_row) > 2 else None
+                                
+                                if 'org' in missing_fields and org_val:
+                                    result['org'] = org_val
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['org'] = org_val
+                                if 'doc_id' in missing_fields and doc_id_val:
+                                    result['doc_id'] = doc_id_val
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['doc_id'] = doc_id_val
+                                self.logger.debug(f"✅ Restored decision metadata for chunk_id={chunk_id} (org, doc_id)")
+                        
+                        # interpretation_paragraph의 경우: interpretation_id, doc_id 복원
+                        elif source_type == 'interpretation_paragraph':
+                            cursor_interp = conn.cursor()
+                            cursor_interp.execute("""
+                                SELECT ip.interpretation_id, i.doc_id
+                                FROM text_chunks tc
+                                JOIN interpretation_paragraphs ip ON tc.source_id = ip.id
+                                JOIN interpretations i ON ip.interpretation_id = i.id
+                                WHERE tc.id = %s AND tc.source_type = 'interpretation_paragraph'
+                            """, (chunk_id,))
+                            interp_row = cursor_interp.fetchone()
+                            if interp_row:
+                                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                    if hasattr(interp_row, 'keys'):
+                                        interpretation_id_val = interp_row.get('interpretation_id')
+                                        doc_id_val = interp_row.get('doc_id')
+                                    else:
+                                        interpretation_id_val = interp_row[0] if len(interp_row) > 0 else None
+                                        doc_id_val = interp_row[1] if len(interp_row) > 1 else None
+                                    
+                                    if 'interpretation_id' in missing_fields and interpretation_id_val:
+                                        result['interpretation_id'] = interpretation_id_val
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['interpretation_id'] = interpretation_id_val
+                                    if 'doc_id' in missing_fields and doc_id_val:
+                                        result['doc_id'] = doc_id_val
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['doc_id'] = doc_id_val
+                                    self.logger.debug(f"✅ Restored interpretation metadata for chunk_id={chunk_id} (interpretation_id, doc_id)")
                     except Exception as e:
-                        self.logger.debug(f"Failed to query alternative chunk for field {field}: {e}")
+                        self.logger.debug(f"Failed to restore metadata via chunk_id for chunk_id={chunk_id}: {e}")
                 
-                # 복원 성공 여부 확인 및 반영
-                if field_value:
-                    result[field] = field_value
-                    if 'metadata' not in result:
-                        result['metadata'] = {}
-                    result['metadata'][field] = field_value
-                    
-                    # 별칭 필드도 설정
-                    if field == 'statute_name':
-                        result['law_name'] = field_value
-                        result['metadata']['law_name'] = field_value
-                    elif field == 'article_no':
-                        result['article_number'] = field_value
-                        result['metadata']['article_number'] = field_value
-                    
-                    self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from {restoration_source}")
-                else:
-                    # statute_article의 경우 추가 시도: source_id로 직접 조회
-                    if source_type == 'statute_article' and field in ['statute_name', 'article_no', 'law_name']:
-                        try:
-                            if field == 'law_name':
-                                # law_name은 statute_name과 동일
-                                if 'statute_name' in result or result.get('metadata', {}).get('statute_name'):
-                                    field_value = result.get('statute_name') or result.get('metadata', {}).get('statute_name')
-                                    if field_value:
-                                        result['law_name'] = field_value
-                                        if 'metadata' not in result:
-                                            result['metadata'] = {}
-                                        result['metadata']['law_name'] = field_value
-                                        self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from statute_name alias")
-                                        continue
+                    # 누락된 필드 복원 (일반적인 방법)
+                    for field in missing_fields:
+                        # 이미 복원된 필드는 건너뛰기
+                        if result.get(field) or result.get('metadata', {}).get(field):
+                            continue
+                        
+                        field_value = None
+                        restoration_source = None
+                        
+                        # 1. chunk metadata JSON에서 확인 (우선순위 1)
+                        if chunk_metadata_json and field in chunk_metadata_json:
+                            field_value = chunk_metadata_json[field]
+                            restoration_source = 'chunk_meta'
+                        
+                        # 2. source_meta에서 확인 (우선순위 2)
+                        if not field_value and source_meta and field in source_meta:
+                            field_value = source_meta[field]
+                            restoration_source = 'source_table'
+                        
+                        # 3. 같은 source_id의 다른 청크에서 확인 (대안, source_id가 있는 경우만)
+                        if not field_value and source_id and conn:
+                            try:
+                                cursor_alt = conn.cursor()
+                                cursor_alt.execute("""
+                                    SELECT meta FROM text_chunks
+                                    WHERE source_type = %s AND source_id = %s AND meta IS NOT NULL AND meta != ''
+                                    LIMIT 1
+                                """, (source_type, source_id))
+                                alt_row = cursor_alt.fetchone()
+                                if alt_row:
+                                    meta_val = alt_row[0] if isinstance(alt_row, tuple) else alt_row.get('meta')
+                                    if meta_val:
+                                        try:
+                                            import json
+                                            alt_metadata = json.loads(meta_val)
+                                            if field in alt_metadata and alt_metadata[field]:
+                                                field_value = alt_metadata[field]
+                                                restoration_source = 'alternative_chunk'
+                                        except Exception as e:
+                                            self.logger.debug(f"Failed to parse alternative chunk meta: {e}")
+                            except Exception as e:
+                                self.logger.debug(f"Failed to query alternative chunk for field {field}: {e}")
+                        
+                        # 복원 성공 여부 확인 및 반영
+                        if field_value:
+                            result[field] = field_value
+                            if 'metadata' not in result:
+                                result['metadata'] = {}
+                            result['metadata'][field] = field_value
                             
-                            # source_id로 직접 조회 시도
-                            cursor_direct = conn.execute("""
-                                SELECT sa.article_no, s.name as statute_name
-                                FROM statute_articles sa
-                                JOIN statutes s ON sa.statute_id = s.id
-                                WHERE sa.id = ?
-                            """, (source_id,))
-                            direct_row = cursor_direct.fetchone()
-                            if direct_row:
-                                if field == 'statute_name' or field == 'law_name':
-                                    field_value = direct_row['statute_name']
-                                    if field_value:
-                                        result['statute_name'] = field_value
-                                        result['law_name'] = field_value
-                                        if 'metadata' not in result:
-                                            result['metadata'] = {}
-                                        result['metadata']['statute_name'] = field_value
-                                        result['metadata']['law_name'] = field_value
-                                        self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct query")
-                                elif field == 'article_no' or field == 'article_number':
-                                    field_value = direct_row['article_no']
-                                    if field_value:
-                                        result['article_no'] = field_value
-                                        result['article_number'] = field_value
-                                        if 'metadata' not in result:
-                                            result['metadata'] = {}
-                                        result['metadata']['article_no'] = field_value
-                                        result['metadata']['article_number'] = field_value
-                                        self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct query")
-                                        # 복원 성공했으므로 다음 필드로
-                                        continue
-                        except Exception as e:
-                            self.logger.debug(f"Failed to restore {field} via direct query for chunk_id={chunk_id}: {e}")
+                            # 별칭 필드도 설정
+                            if field == 'statute_name':
+                                result['law_name'] = field_value
+                                result['metadata']['law_name'] = field_value
+                            elif field == 'article_no':
+                                result['article_number'] = field_value
+                                result['metadata']['article_number'] = field_value
+                            
+                            self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from {restoration_source}")
+                        else:
+                            # statute_article의 경우 추가 시도: source_id로 직접 조회
+                            if source_type == 'statute_article' and field in ['statute_name', 'article_no', 'law_name']:
+                                try:
+                                    if field == 'law_name':
+                                        # law_name은 statute_name과 동일
+                                        if 'statute_name' in result or result.get('metadata', {}).get('statute_name'):
+                                            field_value = result.get('statute_name') or result.get('metadata', {}).get('statute_name')
+                                            if field_value:
+                                                result['law_name'] = field_value
+                                                if 'metadata' not in result:
+                                                    result['metadata'] = {}
+                                                result['metadata']['law_name'] = field_value
+                                                self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from statute_name alias")
+                                                continue
+                                    
+                                    # source_id로 직접 조회 시도
+                                    if conn:
+                                        cursor_direct = conn.cursor()
+                                        cursor_direct.execute("""
+                                            SELECT sa.article_no, s.name as statute_name
+                                            FROM statute_articles sa
+                                            JOIN statutes s ON sa.statute_id = s.id
+                                            WHERE sa.id = %s
+                                        """, (source_id,))
+                                        direct_row = cursor_direct.fetchone()
+                                        if direct_row:
+                                            # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                            if hasattr(direct_row, 'keys'):
+                                                article_no_val = direct_row.get('article_no')
+                                                statute_name_val = direct_row.get('statute_name')
+                                            else:
+                                                article_no_val = direct_row[0] if len(direct_row) > 0 else None
+                                                statute_name_val = direct_row[1] if len(direct_row) > 1 else None
+                                            
+                                            if field == 'statute_name' or field == 'law_name':
+                                                field_value = statute_name_val
+                                                if field_value:
+                                                    result['statute_name'] = field_value
+                                                    result['law_name'] = field_value
+                                                    if 'metadata' not in result:
+                                                        result['metadata'] = {}
+                                                    result['metadata']['statute_name'] = field_value
+                                                    result['metadata']['law_name'] = field_value
+                                                    self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct query")
+                                            elif field == 'article_no' or field == 'article_number':
+                                                field_value = article_no_val
+                                                if field_value:
+                                                    result['article_no'] = field_value
+                                                    result['article_number'] = field_value
+                                                    if 'metadata' not in result:
+                                                        result['metadata'] = {}
+                                                    result['metadata']['article_no'] = field_value
+                                                    result['metadata']['article_number'] = field_value
+                                                    self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct query")
+                                                    # 복원 성공했으므로 다음 필드로
+                                                    continue
+                                except Exception as e:
+                                    self.logger.debug(f"Failed to restore {field} via direct query for chunk_id={chunk_id}: {e}")
                     
                     # case_paragraph의 경우 추가 시도: source_id로 직접 조회
-                    if source_type == 'case_paragraph' and field == 'court' and not field_value:
+                    if source_type == 'case_paragraph' and field == 'court' and not field_value and conn:
                         try:
                             # source_id가 None인 경우, chunk_id로 먼저 조회
                             actual_source_id = source_id
                             if not actual_source_id and chunk_id:
-                                cursor_source = conn.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = ? AND source_type = 'case_paragraph'
+                                cursor_source = conn.cursor()
+                                cursor_source.execute("""
+                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'case_paragraph'
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
-                                if source_row and source_row['source_id']:
-                                    actual_source_id = source_row['source_id']
+                                if source_row:
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
                             
                             court_row = None
                             
                             # 방법 1: cases 테이블에서 직접 조회 (source_id가 cases.id인 경우)
                             if actual_source_id:
-                                cursor_court = conn.execute("""
-                                    SELECT court FROM cases WHERE id = ?
+                                cursor_court = conn.cursor()
+                                cursor_court.execute("""
+                                    SELECT court FROM cases WHERE id = %s
                                 """, (actual_source_id,))
                                 court_row = cursor_court.fetchone()
                             
                             # 방법 2: case_paragraphs를 통한 조회 (source_id가 case_paragraphs.id인 경우)
-                            if (not court_row or not court_row['court']) and actual_source_id:
-                                cursor_court = conn.execute("""
+                            if not court_row and actual_source_id:
+                                cursor_court = conn.cursor()
+                                cursor_court.execute("""
                                     SELECT c.court
                                     FROM case_paragraphs cp
                                     JOIN cases c ON cp.case_id = c.id
-                                    WHERE cp.id = ?
+                                    WHERE cp.id = %s
                                 """, (actual_source_id,))
                                 court_row = cursor_court.fetchone()
                             
                             # 방법 3: text_chunks를 통해 case_id를 찾아서 조회 (source_id가 None이거나 실패한 경우)
-                            if (not court_row or not court_row['court']) and chunk_id:
+                            if not court_row and chunk_id:
                                 try:
                                     # text_chunks -> case_paragraphs -> cases 경로
-                                    cursor_chunk = conn.execute("""
+                                    cursor_chunk = conn.cursor()
+                                    cursor_chunk.execute("""
                                         SELECT cp.case_id
                                         FROM text_chunks tc
                                         JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                        WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
+                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
                                     """, (chunk_id,))
                                     chunk_row = cursor_chunk.fetchone()
-                                    if chunk_row and chunk_row['case_id']:
-                                        case_id = chunk_row['case_id']
-                                        cursor_court = conn.execute("""
-                                            SELECT court FROM cases WHERE id = ?
-                                        """, (case_id,))
-                                        court_row = cursor_court.fetchone()
+                                    if chunk_row:
+                                        case_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('case_id')
+                                        if case_id:
+                                            cursor_court = conn.cursor()
+                                            cursor_court.execute("""
+                                                SELECT court FROM cases WHERE id = %s
+                                            """, (case_id,))
+                                            court_row = cursor_court.fetchone()
                                 except Exception as e:
                                     self.logger.debug(f"Failed to get case_id from text_chunks for chunk_id={chunk_id}: {e}")
                             
                             # 방법 4: chunk_id로 직접 case_paragraphs 조회 (source_id가 없는 경우)
-                            if (not court_row or not court_row['court']) and chunk_id and not actual_source_id:
+                            if not court_row and chunk_id and not actual_source_id:
                                 try:
-                                    cursor_chunk = conn.execute("""
+                                    cursor_chunk = conn.cursor()
+                                    cursor_chunk.execute("""
                                         SELECT cp.case_id
                                         FROM text_chunks tc
                                         JOIN case_paragraphs cp ON tc.source_id = cp.id
-                                        WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
+                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
                                     """, (chunk_id,))
                                     chunk_row = cursor_chunk.fetchone()
-                                    if chunk_row and chunk_row['case_id']:
-                                        case_id = chunk_row['case_id']
-                                        cursor_court = conn.execute("""
-                                            SELECT court FROM cases WHERE id = ?
-                                        """, (case_id,))
-                                        court_row = cursor_court.fetchone()
+                                    if chunk_row:
+                                        case_id = chunk_row[0] if isinstance(chunk_row, tuple) else chunk_row.get('case_id')
+                                        if case_id:
+                                            cursor_court = conn.cursor()
+                                            cursor_court.execute("""
+                                                SELECT court FROM cases WHERE id = %s
+                                            """, (case_id,))
+                                            court_row = cursor_court.fetchone()
                                 except Exception as e:
                                     self.logger.debug(f"Failed to get case_id via chunk_id for chunk_id={chunk_id}: {e}")
                             
-                            if court_row and court_row['court']:
-                                field_value = court_row['court']
-                                restoration_source = 'direct_court_query'
-                                result['court'] = field_value
-                                if 'metadata' not in result:
-                                    result['metadata'] = {}
-                                result['metadata']['court'] = field_value
-                                self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct court query")
+                            if court_row:
+                                court_val = court_row[0] if isinstance(court_row, tuple) else court_row.get('court')
+                                if court_val:
+                                    field_value = court_val
+                                    restoration_source = 'direct_court_query'
+                                    result['court'] = field_value
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['court'] = field_value
+                                    self.logger.debug(f"✅ Restored {field}={field_value} for chunk_id={chunk_id} from direct court query")
+                                else:
+                                    # 모든 방법이 실패한 경우 기본값 설정
+                                    field_value = "알 수 없음"
+                                    result['court'] = field_value
+                                    if 'metadata' not in result:
+                                        result['metadata'] = {}
+                                    result['metadata']['court'] = field_value
+                                    self.logger.debug(f"⚠️  Could not restore {field} for chunk_id={chunk_id}, using default value")
                             else:
                                 # 모든 방법이 실패한 경우 기본값 설정
                                 field_value = "알 수 없음"
@@ -4936,142 +5508,172 @@ class SemanticSearchEngineV2:
                                 result['metadata']['court'] = "알 수 없음"
                     
                     # case_paragraph의 casenames 복원 (source_id=None인 경우도 처리)
-                    if source_type == 'case_paragraph' and field == 'casenames' and not field_value:
+                    if source_type == 'case_paragraph' and field == 'casenames' and not field_value and conn:
                         try:
                             actual_source_id = source_id
                             if not actual_source_id and chunk_id:
-                                cursor_source = conn.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = ? AND source_type = 'case_paragraph'
+                                cursor_source = conn.cursor()
+                                cursor_source.execute("""
+                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'case_paragraph'
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
-                                if source_row and source_row['source_id']:
-                                    actual_source_id = source_row['source_id']
+                                if source_row:
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
                             
                             # source_id가 없으면 chunk_id로 직접 조회
                             if not actual_source_id and chunk_id:
                                 try:
                                     # 방법 1: text_chunks -> case_paragraphs -> cases 경로
-                                    cursor_direct = conn.execute("""
+                                    cursor_direct = conn.cursor()
+                                    cursor_direct.execute("""
                                         SELECT cp.case_id, c.casenames, c.doc_id, c.court
                                         FROM text_chunks tc
                                         JOIN case_paragraphs cp ON tc.source_id = cp.id
                                         JOIN cases c ON cp.case_id = c.id
-                                        WHERE tc.id = ? AND tc.source_type = 'case_paragraph'
+                                        WHERE tc.id = %s AND tc.source_type = 'case_paragraph'
                                     """, (chunk_id,))
                                     direct_row = cursor_direct.fetchone()
                                     if direct_row:
+                                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                        if hasattr(direct_row, 'keys'):
+                                            casenames_val = direct_row.get('casenames')
+                                            doc_id_val = direct_row.get('doc_id')
+                                            court_val = direct_row.get('court')
+                                        else:
+                                            casenames_val = direct_row[1] if len(direct_row) > 1 else None
+                                            doc_id_val = direct_row[2] if len(direct_row) > 2 else None
+                                            court_val = direct_row[3] if len(direct_row) > 3 else None
+                                        
                                         # casenames 복원
-                                        if field == 'casenames' and direct_row['casenames']:
-                                            field_value = direct_row['casenames']
+                                        if field == 'casenames' and casenames_val:
+                                            field_value = casenames_val
                                             result['casenames'] = field_value
                                             if 'metadata' not in result:
                                                 result['metadata'] = {}
                                             result['metadata']['casenames'] = field_value
                                             self.logger.debug(f"✅ Restored casenames={field_value} for chunk_id={chunk_id} (via chunk_id)")
                                         # doc_id 복원
-                                        if 'doc_id' in missing_fields and direct_row['doc_id']:
-                                            result['doc_id'] = direct_row['doc_id']
+                                        if 'doc_id' in missing_fields and doc_id_val:
+                                            result['doc_id'] = doc_id_val
                                             if 'metadata' not in result:
                                                 result['metadata'] = {}
-                                            result['metadata']['doc_id'] = direct_row['doc_id']
-                                            self.logger.debug(f"✅ Restored doc_id={direct_row['doc_id']} for chunk_id={chunk_id} (via chunk_id)")
+                                            result['metadata']['doc_id'] = doc_id_val
+                                            self.logger.debug(f"✅ Restored doc_id={doc_id_val} for chunk_id={chunk_id} (via chunk_id)")
                                         # court 복원
-                                        if 'court' in missing_fields and direct_row['court']:
-                                            result['court'] = direct_row['court']
+                                        if 'court' in missing_fields and court_val:
+                                            result['court'] = court_val
                                             if 'metadata' not in result:
                                                 result['metadata'] = {}
-                                            result['metadata']['court'] = direct_row['court']
-                                            self.logger.debug(f"✅ Restored court={direct_row['court']} for chunk_id={chunk_id} (via chunk_id)")
+                                            result['metadata']['court'] = court_val
+                                            self.logger.debug(f"✅ Restored court={court_val} for chunk_id={chunk_id} (via chunk_id)")
                                 except Exception as e:
                                     self.logger.debug(f"Failed to restore case metadata via chunk_id for chunk_id={chunk_id}: {e}")
                             
                             if actual_source_id:
                                 # case_paragraphs를 통해 cases 조회
-                                cursor_casenames = conn.execute("""
+                                cursor_casenames = conn.cursor()
+                                cursor_casenames.execute("""
                                     SELECT c.casenames
                                     FROM case_paragraphs cp
                                     JOIN cases c ON cp.case_id = c.id
-                                    WHERE cp.id = ?
+                                    WHERE cp.id = %s
                                 """, (actual_source_id,))
                                 casenames_row = cursor_casenames.fetchone()
-                                if not casenames_row or not casenames_row['casenames']:
+                                if not casenames_row:
                                     # cases 테이블에서 직접 조회
-                                    cursor_casenames = conn.execute("""
-                                        SELECT casenames FROM cases WHERE id = ?
+                                    cursor_casenames = conn.cursor()
+                                    cursor_casenames.execute("""
+                                        SELECT casenames FROM cases WHERE id = %s
                                     """, (actual_source_id,))
                                     casenames_row = cursor_casenames.fetchone()
                                 
-                                if casenames_row and casenames_row['casenames']:
-                                    field_value = casenames_row['casenames']
-                                    result['casenames'] = field_value
-                                    if 'metadata' not in result:
-                                        result['metadata'] = {}
-                                    result['metadata']['casenames'] = field_value
-                                    self.logger.debug(f"✅ Restored casenames={field_value} for chunk_id={chunk_id}")
+                                if casenames_row:
+                                    casenames_val = casenames_row[0] if isinstance(casenames_row, tuple) else casenames_row.get('casenames')
+                                    if casenames_val:
+                                        field_value = casenames_val
+                                        result['casenames'] = field_value
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['casenames'] = field_value
+                                        self.logger.debug(f"✅ Restored casenames={field_value} for chunk_id={chunk_id}")
                         except Exception as e:
                             self.logger.debug(f"Failed to restore casenames for chunk_id={chunk_id}: {e}")
                     
                     # decision_paragraph의 org 복원 (source_id=None인 경우도 처리)
-                    if source_type == 'decision_paragraph' and field == 'org' and not field_value:
+                    if source_type == 'decision_paragraph' and field == 'org' and not field_value and conn:
                         try:
                             actual_source_id = source_id
                             if not actual_source_id and chunk_id:
-                                cursor_source = conn.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = ? AND source_type = 'decision_paragraph'
+                                cursor_source = conn.cursor()
+                                cursor_source.execute("""
+                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'decision_paragraph'
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
-                                if source_row and source_row['source_id']:
-                                    actual_source_id = source_row['source_id']
+                                if source_row:
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
                             
                             # source_id가 없으면 chunk_id로 직접 조회
                             if not actual_source_id and chunk_id:
                                 try:
                                     # 방법 1: text_chunks -> decision_paragraphs -> decisions 경로
-                                    cursor_direct = conn.execute("""
+                                    cursor_direct = conn.cursor()
+                                    cursor_direct.execute("""
                                         SELECT dp.decision_id, d.org, d.doc_id
                                         FROM text_chunks tc
                                         JOIN decision_paragraphs dp ON tc.source_id = dp.id
                                         JOIN decisions d ON dp.decision_id = d.id
-                                        WHERE tc.id = ? AND tc.source_type = 'decision_paragraph'
+                                        WHERE tc.id = %s AND tc.source_type = 'decision_paragraph'
                                     """, (chunk_id,))
                                     direct_row = cursor_direct.fetchone()
                                     if direct_row:
+                                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                        if hasattr(direct_row, 'keys'):
+                                            org_val = direct_row.get('org')
+                                            doc_id_val = direct_row.get('doc_id')
+                                        else:
+                                            org_val = direct_row[1] if len(direct_row) > 1 else None
+                                            doc_id_val = direct_row[2] if len(direct_row) > 2 else None
+                                        
                                         # org 복원
-                                        if field == 'org' and direct_row['org']:
-                                            field_value = direct_row['org']
+                                        if field == 'org' and org_val:
+                                            field_value = org_val
                                             result['org'] = field_value
                                             if 'metadata' not in result:
                                                 result['metadata'] = {}
                                             result['metadata']['org'] = field_value
                                             self.logger.debug(f"✅ Restored org={field_value} for chunk_id={chunk_id} (via chunk_id)")
                                         # doc_id 복원
-                                        if 'doc_id' in missing_fields and direct_row['doc_id']:
-                                            result['doc_id'] = direct_row['doc_id']
+                                        if 'doc_id' in missing_fields and doc_id_val:
+                                            result['doc_id'] = doc_id_val
                                             if 'metadata' not in result:
                                                 result['metadata'] = {}
-                                            result['metadata']['doc_id'] = direct_row['doc_id']
-                                            self.logger.debug(f"✅ Restored doc_id={direct_row['doc_id']} for chunk_id={chunk_id} (via chunk_id)")
+                                            result['metadata']['doc_id'] = doc_id_val
+                                            self.logger.debug(f"✅ Restored doc_id={doc_id_val} for chunk_id={chunk_id} (via chunk_id)")
                                 except Exception as e:
                                     self.logger.debug(f"Failed to restore decision metadata via chunk_id for chunk_id={chunk_id}: {e}")
                             
                             if actual_source_id:
                                 # decision_paragraphs를 통해 decisions 조회
-                                cursor_org = conn.execute("""
+                                cursor_org = conn.cursor()
+                                cursor_org.execute("""
                                     SELECT d.org
                                     FROM decision_paragraphs dp
                                     JOIN decisions d ON dp.decision_id = d.id
-                                    WHERE dp.id = ?
+                                    WHERE dp.id = %s
                                 """, (actual_source_id,))
                                 org_row = cursor_org.fetchone()
-                                if not org_row or not org_row['org']:
+                                if not org_row:
                                     # decisions 테이블에서 직접 조회
-                                    cursor_org = conn.execute("""
-                                        SELECT org FROM decisions WHERE id = ?
+                                    cursor_org = conn.cursor()
+                                    cursor_org.execute("""
+                                        SELECT org FROM decisions WHERE id = %s
                                     """, (actual_source_id,))
                                     org_row = cursor_org.fetchone()
                                 
-                                if org_row and org_row['org']:
-                                    field_value = org_row['org']
+                                if org_row:
+                                    org_val = org_row[0] if isinstance(org_row, tuple) else org_row.get('org')
+                                    if org_val:
+                                        field_value = org_val
                                     result['org'] = field_value
                                     if 'metadata' not in result:
                                         result['metadata'] = {}
@@ -5126,39 +5728,46 @@ class SemanticSearchEngineV2:
                     if source_type == 'interpretation_paragraph' and field == 'interpretation_id' and not field_value:
                         try:
                             actual_source_id = source_id
-                            if not actual_source_id and chunk_id:
-                                cursor_source = conn.execute("""
-                                    SELECT source_id FROM text_chunks WHERE id = ? AND source_type = 'interpretation_paragraph'
+                            if not actual_source_id and chunk_id and conn:
+                                cursor_source = conn.cursor()
+                                cursor_source.execute("""
+                                    SELECT source_id FROM text_chunks WHERE id = %s AND source_type = 'interpretation_paragraph'
                                 """, (chunk_id,))
                                 source_row = cursor_source.fetchone()
-                                if source_row and source_row['source_id']:
-                                    actual_source_id = source_row['source_id']
+                                if source_row:
+                                    actual_source_id = source_row[0] if isinstance(source_row, tuple) else source_row.get('source_id')
                             
                             # source_id가 없으면 chunk_id로 직접 조회
-                            if not actual_source_id and chunk_id:
-                                cursor_direct = conn.execute("""
+                            if not actual_source_id and chunk_id and conn:
+                                cursor_direct = conn.cursor()
+                                cursor_direct.execute("""
                                     SELECT ip.interpretation_id
                                     FROM text_chunks tc
                                     JOIN interpretation_paragraphs ip ON tc.source_id = ip.id
-                                    WHERE tc.id = ? AND tc.source_type = 'interpretation_paragraph'
+                                    WHERE tc.id = %s AND tc.source_type = 'interpretation_paragraph'
                                 """, (chunk_id,))
                                 direct_row = cursor_direct.fetchone()
-                                if direct_row and direct_row['interpretation_id']:
-                                    field_value = direct_row['interpretation_id']
-                                    result['interpretation_id'] = field_value
-                                    if 'metadata' not in result:
-                                        result['metadata'] = {}
-                                    result['metadata']['interpretation_id'] = field_value
-                                    self.logger.debug(f"✅ Restored interpretation_id={field_value} for chunk_id={chunk_id} (via chunk_id)")
+                                if direct_row:
+                                    interpretation_id_val = direct_row[0] if isinstance(direct_row, tuple) else direct_row.get('interpretation_id')
+                                    if interpretation_id_val:
+                                        field_value = interpretation_id_val
+                                        result['interpretation_id'] = field_value
+                                        if 'metadata' not in result:
+                                            result['metadata'] = {}
+                                        result['metadata']['interpretation_id'] = field_value
+                                        self.logger.debug(f"✅ Restored interpretation_id={field_value} for chunk_id={chunk_id} (via chunk_id)")
                             
-                            if actual_source_id:
+                            if actual_source_id and conn:
                                 # interpretation_paragraphs에서 interpretation_id 조회
-                                cursor_interp = conn.execute("""
-                                    SELECT interpretation_id FROM interpretation_paragraphs WHERE id = ?
+                                cursor_interp = conn.cursor()
+                                cursor_interp.execute("""
+                                    SELECT interpretation_id FROM interpretation_paragraphs WHERE id = %s
                                 """, (actual_source_id,))
                                 interp_row = cursor_interp.fetchone()
-                                if interp_row and interp_row['interpretation_id']:
-                                    field_value = interp_row['interpretation_id']
+                                if interp_row:
+                                    interpretation_id_val = interp_row[0] if isinstance(interp_row, tuple) else interp_row.get('interpretation_id')
+                                    if interpretation_id_val:
+                                        field_value = interpretation_id_val
                                     result['interpretation_id'] = field_value
                                     if 'metadata' not in result:
                                         result['metadata'] = {}
@@ -5178,7 +5787,7 @@ class SemanticSearchEngineV2:
                     if not final_value:
                         self.logger.warning(f"⚠️  Failed to restore {field} for chunk_id={chunk_id}, source_id={source_id}")
             
-            self._safe_close_connection(conn)
+            # 컨텍스트 매니저가 자동으로 연결을 반환하므로 _safe_close_connection 호출 불필요
             
         except Exception as e:
             self.logger.warning(f"Failed to restore missing metadata for chunk_id={chunk_id}, source_type={source_type}: {e}")
@@ -5219,13 +5828,14 @@ class SemanticSearchEngineV2:
             
             # 4. 데이터베이스 상태
             try:
-                if Path(self.db_path).exists():
+                # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+                if self.db_path and Path(self.db_path).exists():
                     conn = self._get_connection()
                     cursor = conn.cursor()
                     cursor.execute("SELECT COUNT(*) as count FROM embeddings")
                     row = cursor.fetchone()
                     emb_count = row['count'] if row else 0
-                    cursor.execute("SELECT COUNT(*) as count FROM text_chunks")
+                    cursor.execute("SELECT COUNT(*) as count FROM precedent_chunks")
                     row = cursor.fetchone()
                     chunk_count = row['count'] if row else 0
                     self._safe_close_connection(conn)
@@ -5554,13 +6164,14 @@ class SemanticSearchEngineV2:
                 self._chunk_ids = [cid for cid in self._chunk_ids if cid != -1]
             else:
                 # id_mapping이 없으면 embeddings 테이블에서 조회
-                conn = self._get_connection()
-                cursor = conn.execute(
-                    "SELECT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
-                    (self.model_name,)
-                )
-                self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                self._safe_close_connection(conn)
+                with self._get_connection_context() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT chunk_id FROM embeddings WHERE model = %s ORDER BY chunk_id",
+                        (self.model_name,)
+                    )
+                    rows = cursor.fetchall()
+                    self._chunk_ids = [row[0] if isinstance(row, tuple) else row.get('chunk_id') for row in rows]
             
             # 메타데이터 처리
             if metadata:
@@ -5856,13 +6467,14 @@ class SemanticSearchEngineV2:
                             self._chunk_ids = [cid for cid in self._chunk_ids if cid != -1]
                         else:
                             # id_mapping이 없으면 embeddings 테이블에서 조회
-                            conn = self._get_connection()
-                            cursor = conn.execute(
-                                "SELECT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
-                                (self.model_name,)
-                            )
-                            self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                            self._safe_close_connection(conn)
+                            with self._get_connection_context() as conn:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    "SELECT chunk_id FROM embeddings WHERE model = %s ORDER BY chunk_id",
+                                    (self.model_name,)
+                                )
+                                rows = cursor.fetchall()
+                                self._chunk_ids = [row[0] if isinstance(row, tuple) else row.get('chunk_id') for row in rows]
                         
                         metadata = index_data.get('metadata', [])
                         if metadata:
@@ -5953,36 +6565,38 @@ class SemanticSearchEngineV2:
                 except Exception as e:
                     self.logger.warning(f"Failed to load chunk_ids from {chunk_ids_path}: {e}, falling back to DB query")
                     # DB에서 로드 (활성 버전 사용)
-                    conn = self._get_connection()
+                    with self._get_connection_context() as conn:
+                        active_version_id = self._get_active_embedding_version_id()
+                        cursor = conn.cursor()
+                        if active_version_id:
+                            cursor.execute(
+                                "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = %s ORDER BY chunk_id",
+                                (active_version_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "SELECT DISTINCT chunk_id FROM embeddings WHERE model = %s ORDER BY chunk_id",
+                                (self.model_name,)
+                            )
+                        rows = cursor.fetchall()
+                        self._chunk_ids = [row[0] if isinstance(row, tuple) else row.get('chunk_id') for row in rows]
+            else:
+                # chunk_ids.json이 없으면 embeddings 테이블에서 로드 (활성 버전 사용)
+                with self._get_connection_context() as conn:
                     active_version_id = self._get_active_embedding_version_id()
+                    cursor = conn.cursor()
                     if active_version_id:
-                        cursor = conn.execute(
-                            "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
+                        cursor.execute(
+                            "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = %s ORDER BY chunk_id",
                             (active_version_id,)
                         )
                     else:
-                        cursor = conn.execute(
-                            "SELECT DISTINCT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
+                        cursor.execute(
+                            "SELECT DISTINCT chunk_id FROM embeddings WHERE model = %s ORDER BY chunk_id",
                             (self.model_name,)
                         )
-                    self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                    self._safe_close_connection(conn)
-            else:
-                # chunk_ids.json이 없으면 embeddings 테이블에서 로드 (활성 버전 사용)
-                conn = self._get_connection()
-                active_version_id = self._get_active_embedding_version_id()
-                if active_version_id:
-                    cursor = conn.execute(
-                        "SELECT DISTINCT chunk_id FROM embeddings WHERE version_id = ? ORDER BY chunk_id",
-                        (active_version_id,)
-                    )
-                else:
-                    cursor = conn.execute(
-                        "SELECT DISTINCT chunk_id FROM embeddings WHERE model = ? ORDER BY chunk_id",
-                        (self.model_name,)
-                    )
-                self._chunk_ids = [row[0] for row in cursor.fetchall()]
-                self._safe_close_connection(conn)
+                    rows = cursor.fetchall()
+                    self._chunk_ids = [row[0] if isinstance(row, tuple) else row.get('chunk_id') for row in rows]
             
             # FAISS 인덱스 크기와 _chunk_ids 길이 일치 확인
             if self.index and hasattr(self.index, 'ntotal'):
@@ -5999,7 +6613,7 @@ class SemanticSearchEngineV2:
                         try:
                             conn_check = self._get_connection()
                             cursor_check = conn_check.execute(
-                                "SELECT MIN(id) as min_id, MAX(id) as max_id, COUNT(*) as count FROM text_chunks WHERE embedding_version_id = ?",
+                                "SELECT MIN(id) as min_id, MAX(id) as max_id, COUNT(*) as count FROM precedent_chunks WHERE embedding_version = ?",
                                 (active_version_id,)
                             )
                             row_check = cursor_check.fetchone()
@@ -6058,21 +6672,33 @@ class SemanticSearchEngineV2:
             except Exception:
                 pass
 
-    def _column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    def _column_exists(self, conn, table_name: str, column_name: str) -> bool:
         """테이블에 컬럼이 존재하는지 확인"""
         try:
-            cursor = conn.execute(f"PRAGMA table_info({table_name})")
-            columns = [row[1] for row in cursor.fetchall()]
-            return column_name in columns
+            cursor = conn.cursor()
+            # PostgreSQL의 경우 information_schema 사용
+            if self._db_adapter and self._db_adapter.db_type == 'postgresql':
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = %s AND column_name = %s
+                """, (table_name, column_name))
+                row = cursor.fetchone()
+                return row is not None
+            else:
+                # PostgreSQL 사용
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [row[1] for row in cursor.fetchall()]
+                return column_name in columns
         except Exception:
             return False
 
-    def _batch_load_chunk_metadata(self, conn: sqlite3.Connection, chunk_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    def _batch_load_chunk_metadata(self, conn, chunk_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         """
         여러 chunk_id의 text_chunks.meta를 배치로 조회 (캐싱 적용)
         
         Args:
-            conn: 데이터베이스 연결
+            conn: 데이터베이스 연결 (DatabaseAdapter를 통해 가져온 연결)
             chunk_ids: 조회할 chunk_id 리스트
             
         Returns:
@@ -6097,34 +6723,70 @@ class SemanticSearchEngineV2:
         
         # 캐시에 없는 것만 DB에서 조회
         if uncached_ids:
-            # 배치 크기 최적화: SQLite의 최대 변수 수 제한 고려 (999개)
-            batch_size = min(500, len(uncached_ids))
+            # 배치 크기 최적화: PostgreSQL도 충분히 큰 배치 처리 가능
+            batch_size = min(1000, len(uncached_ids))
             for i in range(0, len(uncached_ids), batch_size):
                 batch = uncached_ids[i:i + batch_size]
                 try:
-                    placeholders = ','.join(['?'] * len(batch))
-                    cursor = conn.execute(f"""
-                        SELECT id, meta, source_type, source_id, embedding_version_id
-                        FROM text_chunks
+                    # DatabaseAdapter를 통한 연결은 cursor를 먼저 가져와야 함
+                    cursor = conn.cursor()
+                    placeholders = ','.join(['%s'] * len(batch))  # PostgreSQL은 %s 사용
+                    query = f"""
+                        SELECT id, metadata, 'precedent_content' as source_type, precedent_content_id as source_id, embedding_version
+                        FROM precedent_chunks
                         WHERE id IN ({placeholders})
-                    """, batch)
+                    """
+                    # SQL 변환
+                    if self._db_adapter and SQLAdapter:
+                        query = SQLAdapter.convert_sql(query, self._db_adapter.db_type)
+                    cursor.execute(query, batch)
                     
-                    for row in cursor.fetchall():
-                        chunk_id = row['id']
-                        meta_json = {}
-                        if row['meta']:
-                            try:
-                                import json
-                                meta_json = json.loads(row['meta'])
-                            except Exception as e:
-                                self.logger.debug(f"Failed to parse meta JSON for chunk_id={chunk_id}: {e}")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                        if hasattr(row, 'keys'):  # dict-like (RealDictRow)
+                            chunk_id = row['id']
+                            meta_json = {}
+                            metadata_val = row.get('metadata')
+                            if metadata_val:
+                                # precedent_chunks.metadata는 이미 JSONB이므로 파싱 불필요
+                                if isinstance(metadata_val, dict):
+                                    meta_json = metadata_val
+                                else:
+                                    try:
+                                        import json
+                                        meta_json = json.loads(metadata_val) if isinstance(metadata_val, str) else metadata_val
+                                    except Exception as e:
+                                        self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
+                            
+                            chunk_meta = {
+                                'meta': meta_json,
+                                'source_type': row.get('source_type', 'precedent_content'),
+                                'source_id': row.get('source_id'),
+                                'embedding_version': row.get('embedding_version')
+                            }
+                        else:  # tuple
+                            chunk_id = row[0]
+                            meta_json = {}
+                            metadata_val = row[1] if len(row) > 1 else None
+                            if metadata_val:
+                                # precedent_chunks.metadata는 이미 JSONB이므로 파싱 불필요
+                                if isinstance(metadata_val, dict):
+                                    meta_json = metadata_val
+                                else:
+                                    try:
+                                        import json
+                                        meta_json = json.loads(metadata_val) if isinstance(metadata_val, str) else metadata_val
+                                    except Exception as e:
+                                        self.logger.debug(f"Failed to parse metadata JSON for chunk_id={chunk_id}: {e}")
+                            
+                            chunk_meta = {
+                                'meta': meta_json,
+                                'source_type': row[2] if len(row) > 2 else 'precedent_content',
+                                'source_id': row[3] if len(row) > 3 else None,
+                                'embedding_version': row[4] if len(row) > 4 else None
+                            }
                         
-                        chunk_meta = {
-                            'meta': meta_json,
-                            'source_type': row['source_type'],
-                            'source_id': row['source_id'],
-                            'embedding_version_id': row['embedding_version_id'] if 'embedding_version_id' in row.keys() else None
-                        }
                         metadata_map[chunk_id] = chunk_meta
                         
                         # 캐시에 저장 (TTL 포함)
@@ -6140,7 +6802,7 @@ class SemanticSearchEngineV2:
         
         return metadata_map
     
-    def _batch_load_source_metadata(self, conn: sqlite3.Connection, source_items: List[Tuple[str, int]]) -> Dict[Tuple[str, int], Dict[str, Any]]:
+    def _batch_load_source_metadata(self, conn, source_items: List[Tuple[str, int]]) -> Dict[Tuple[str, int], Dict[str, Any]]:
         """
         여러 (source_type, source_id) 쌍의 소스 메타데이터를 배치로 조회 (캐싱 적용)
         
@@ -6184,36 +6846,99 @@ class SemanticSearchEngineV2:
             if not source_ids:
                 continue
             
-            # 배치 크기 최적화: SQLite의 최대 변수 수 제한 고려 (999개)
+            # 배치 크기 최적화
             batch_size = min(500, len(source_ids))
             for i in range(0, len(source_ids), batch_size):
                 batch = source_ids[i:i + batch_size]
                 try:
-                    placeholders = ','.join(['?'] * len(batch))
+                    placeholders = ','.join(['%s'] * len(batch))  # PostgreSQL은 %s 사용
+                    cursor = conn.cursor()
                     
                     if source_type == "statute_article":
-                        cursor = conn.execute(f"""
+                        cursor.execute(f"""
                             SELECT sa.id, sa.article_no, s.name as statute_name, s.abbrv, s.category, s.statute_type
                             FROM statute_articles sa
                             JOIN statutes s ON sa.statute_id = s.id
                             WHERE sa.id IN ({placeholders})
                         """, batch)
                     elif source_type == "case_paragraph":
-                        # cases 테이블에서 직접 조회
-                        cursor = conn.execute(f"""
-                            SELECT c.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
-                            FROM cases c
-                            WHERE c.id IN ({placeholders})
+                        # text_chunks.source_id가 case_paragraphs.id를 참조하므로
+                        # case_paragraphs를 통해 cases를 조인하여 조회
+                        cursor.execute(f"""
+                            SELECT cp.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
+                            FROM case_paragraphs cp
+                            JOIN cases c ON cp.case_id = c.id
+                            WHERE cp.id IN ({placeholders})
                         """, batch)
+                        
+                        # 조회된 결과의 source_id 추적
+                        found_ids = set()
+                        rows_from_paragraphs = []
+                        for row in cursor.fetchall():
+                            # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                            if hasattr(row, 'keys'):
+                                source_id = row.get('id')
+                                metadata = dict(row)
+                            else:
+                                source_id = row[0] if len(row) > 0 else None
+                                metadata = {
+                                    'id': source_id,
+                                    'doc_id': row[1] if len(row) > 1 else None,
+                                    'court': row[2] if len(row) > 2 else None,
+                                    'case_type': row[3] if len(row) > 3 else None,
+                                    'casenames': row[4] if len(row) > 4 else None,
+                                    'announce_date': row[5] if len(row) > 5 else None
+                                }
+                            
+                            if source_id:
+                                found_ids.add(source_id)
+                                cache_key = (source_type, source_id)
+                                metadata_map[cache_key] = metadata
+                                self._set_to_cache(cache_key, metadata)
+                        
+                        # case_paragraphs를 통해 찾지 못한 ID는 cases 테이블에서 직접 조회 시도
+                        # (text_chunks.source_id가 cases.id를 직접 참조하는 경우)
+                        missing_ids = [sid for sid in batch if sid not in found_ids]
+                        if missing_ids:
+                            missing_placeholders = ','.join(['%s'] * len(missing_ids))
+                            cursor_cases = conn.cursor()
+                            cursor_cases.execute(f"""
+                                SELECT c.id, c.doc_id, c.court, c.case_type, c.casenames, c.announce_date
+                                FROM cases c
+                                WHERE c.id IN ({missing_placeholders})
+                            """, missing_ids)
+                            
+                            for row in cursor_cases.fetchall():
+                                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                                if hasattr(row, 'keys'):
+                                    source_id = row.get('id')
+                                    metadata = dict(row)
+                                else:
+                                    source_id = row[0] if len(row) > 0 else None
+                                    metadata = {
+                                        'id': source_id,
+                                        'doc_id': row[1] if len(row) > 1 else None,
+                                        'court': row[2] if len(row) > 2 else None,
+                                        'case_type': row[3] if len(row) > 3 else None,
+                                        'casenames': row[4] if len(row) > 4 else None,
+                                        'announce_date': row[5] if len(row) > 5 else None
+                                    }
+                                
+                                if source_id:
+                                    cache_key = (source_type, source_id)
+                                    metadata_map[cache_key] = metadata
+                                    self._set_to_cache(cache_key, metadata)
+                        
+                        continue  # 이미 처리했으므로 아래 for 루프 건너뛰기
                     elif source_type == "decision_paragraph":
                         # decisions 테이블에서 직접 조회
-                        cursor = conn.execute(f"""
+                        cursor.execute(f"""
                             SELECT d.id, d.org, d.doc_id, d.decision_date, d.result
                             FROM decisions d
                             WHERE d.id IN ({placeholders})
                         """, batch)
                     elif source_type == "interpretation_paragraph":
-                        cursor = conn.execute(f"""
+                        cursor.execute(f"""
                             SELECT ip.id, i.org, i.doc_id, i.title, i.response_date
                             FROM interpretation_paragraphs ip
                             JOIN interpretations i ON ip.interpretation_id = i.id
@@ -6223,8 +6948,13 @@ class SemanticSearchEngineV2:
                         continue
                     
                     for row in cursor.fetchall():
-                        source_id = row['id']
-                        metadata = dict(row)
+                        # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                        if hasattr(row, 'keys'):
+                            source_id = row.get('id')
+                            metadata = dict(row)
+                        else:
+                            source_id = row[0] if len(row) > 0 else None
+                            metadata = {col: row[i] if len(row) > i else None for i, col in enumerate(['id', 'org', 'doc_id', 'decision_date', 'result'] if source_type == "decision_paragraph" else ['id', 'org', 'doc_id', 'title', 'response_date'])}
                         # statute_article의 경우 별칭 추가
                         if source_type == "statute_article":
                             if "statute_name" in metadata:
@@ -6242,7 +6972,7 @@ class SemanticSearchEngineV2:
         
         return metadata_map
 
-    def _get_source_metadata(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> Dict[str, Any]:
+    def _get_source_metadata(self, conn, source_type: str, source_id: int) -> Dict[str, Any]:
         """
         소스 타입별 상세 메타데이터 조회
         source_id는 text_chunks.source_id로, 각 소스 테이블의 실제 id를 참조
@@ -6266,11 +6996,12 @@ class SemanticSearchEngineV2:
                 if optional_columns:
                     select_clause += ", " + ", ".join(optional_columns)
                 
-                cursor = conn.execute(f"""
+                cursor = conn.cursor()
+                cursor.execute(f"""
                     SELECT {select_clause}
                     FROM statute_articles sa
                     JOIN statutes s ON sa.statute_id = s.id
-                    WHERE sa.id = ?
+                    WHERE sa.id = %s
                 """, (source_id,))
             elif source_type == "case_paragraph":
                 # text_chunks.source_id가 cases.id를 직접 참조할 수 있으므로 두 가지 경우 모두 처리
@@ -6285,25 +7016,26 @@ class SemanticSearchEngineV2:
                     select_clause += ", " + ", ".join(optional_columns)
                 
                 # 먼저 cases 테이블에서 직접 조회 시도 (text_chunks.source_id가 cases.id를 직접 참조하는 경우)
-                cursor = conn.execute(f"""
+                cursor = conn.cursor()
+                cursor.execute(f"""
                     SELECT {select_clause}
                     FROM cases c
-                    WHERE c.id = ?
+                    WHERE c.id = %s
                 """, (source_id,))
                 row = cursor.fetchone()
                 
                 # case_paragraphs를 통한 조회 시도 (text_chunks.source_id가 case_paragraphs.id를 참조하는 경우)
                 if not row:
-                    cursor = conn.execute(f"""
+                    cursor.execute(f"""
                         SELECT {select_clause}
                         FROM case_paragraphs cp
                         JOIN cases c ON cp.case_id = c.id
-                        WHERE cp.id = ?
+                        WHERE cp.id = %s
                     """, (source_id,))
                     row = cursor.fetchone()
                 
                 if row:
-                    return dict(row)
+                    return dict(row) if hasattr(row, 'keys') else {col: row[i] if len(row) > i else None for i, col in enumerate(['doc_id', 'court', 'case_type', 'casenames', 'announce_date'])}
                 return {}
             elif source_type == "decision_paragraph":
                 # text_chunks.source_id가 decisions.id를 직접 참조할 수 있으므로 두 가지 경우 모두 처리
@@ -6318,39 +7050,41 @@ class SemanticSearchEngineV2:
                     select_clause += ", " + ", ".join(optional_columns)
                 
                 # 먼저 decisions 테이블에서 직접 조회 시도 (text_chunks.source_id가 decisions.id를 직접 참조하는 경우)
-                cursor = conn.execute(f"""
+                cursor = conn.cursor()
+                cursor.execute(f"""
                     SELECT {select_clause}
                     FROM decisions d
-                    WHERE d.id = ?
+                    WHERE d.id = %s
                 """, (source_id,))
                 row = cursor.fetchone()
                 
                 # decision_paragraphs를 통한 조회 시도 (text_chunks.source_id가 decision_paragraphs.id를 참조하는 경우)
                 if not row:
-                    cursor = conn.execute(f"""
+                    cursor.execute(f"""
                         SELECT {select_clause}
                         FROM decision_paragraphs dp
                         JOIN decisions d ON dp.decision_id = d.id
-                        WHERE dp.id = ?
+                        WHERE dp.id = %s
                     """, (source_id,))
                     row = cursor.fetchone()
                 
                 if row:
-                    return dict(row)
+                    return dict(row) if hasattr(row, 'keys') else {col: row[i] if len(row) > i else None for i, col in enumerate(['org', 'doc_id', 'decision_date', 'result'])}
                 return {}
             elif source_type == "interpretation_paragraph":
-                cursor = conn.execute("""
+                cursor = conn.cursor()
+                cursor.execute("""
                     SELECT ip.*, i.org, i.doc_id, i.title, i.response_date
                     FROM interpretation_paragraphs ip
                     JOIN interpretations i ON ip.interpretation_id = i.id
-                    WHERE ip.id = ?
+                    WHERE ip.id = %s
                 """, (source_id,))
             else:
                 return {}
 
             row = cursor.fetchone()
             if row:
-                metadata = dict(row)
+                metadata = dict(row) if hasattr(row, 'keys') else {col: row[i] if len(row) > i else None for i, col in enumerate(['org', 'doc_id', 'title', 'response_date'])}
                 # statute_article의 경우 law_name 별칭 추가
                 if source_type == "statute_article" and "statute_name" in metadata:
                     metadata["law_name"] = metadata["statute_name"]
@@ -6365,7 +7099,7 @@ class SemanticSearchEngineV2:
             self.logger.warning(f"Error getting source metadata for {source_type} {source_id}: {e}")
             return {}
 
-    def _restore_text_from_source(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> str:
+    def _restore_text_from_source(self, conn, source_type: str, source_id: int) -> str:
         """
         text_chunks 테이블의 text가 비어있을 때 원본 테이블에서 복원
         
@@ -6378,27 +7112,33 @@ class SemanticSearchEngineV2:
             복원된 text 문자열 (없으면 빈 문자열)
         """
         try:
-            # row_factory를 설정하여 dict 형태로 접근
-            conn.row_factory = sqlite3.Row
+            # PostgreSQL 연결은 cursor를 직접 사용
+            cursor = conn.cursor()
             
             if source_type == "statute_article":
-                cursor = conn.execute(
-                    "SELECT text, article_no FROM statute_articles WHERE id = ?",
+                cursor.execute(
+                    "SELECT text, article_no FROM statute_articles WHERE id = %s",
                     (source_id,)
                 )
             elif source_type == "case_paragraph":
-                cursor = conn.execute(
-                    "SELECT text FROM case_paragraphs WHERE id = ?",
+                cursor.execute(
+                    "SELECT text FROM case_paragraphs WHERE id = %s",
                     (source_id,)
                 )
             elif source_type == "decision_paragraph":
-                cursor = conn.execute(
-                    "SELECT text FROM decision_paragraphs WHERE id = ?",
+                cursor.execute(
+                    "SELECT text FROM decision_paragraphs WHERE id = %s",
                     (source_id,)
                 )
             elif source_type == "interpretation_paragraph":
-                cursor = conn.execute(
-                    "SELECT text FROM interpretation_paragraphs WHERE id = ?",
+                cursor.execute(
+                    "SELECT text FROM interpretation_paragraphs WHERE id = %s",
+                    (source_id,)
+                )
+            elif source_type == "precedent_content":
+                # precedent_contents 테이블에서 조회
+                cursor.execute(
+                    "SELECT section_content FROM precedent_contents WHERE id = %s",
                     (source_id,)
                 )
             else:
@@ -6407,58 +7147,68 @@ class SemanticSearchEngineV2:
             
             row = cursor.fetchone()
             if row:
-                # Row 객체에서 text 필드 접근
-                text = row['text'] if 'text' in row.keys() else None
+                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                if hasattr(row, 'keys'):
+                    text = row.get('text')
+                else:
+                    text = row[0] if len(row) > 0 else None
+                
                 if text and len(str(text).strip()) > 0:
                     self.logger.info(f"Successfully restored text for {source_type} id={source_id} (length: {len(str(text))} chars)")
                     return str(text)
                 else:
                     self.logger.warning(f"Text field is empty or None for {source_type} id={source_id}")
-                    # text가 비어있으면 다른 방법 시도: text_chunks에서 직접 조회
-                    return self._restore_text_from_chunks(conn, source_type, source_id)
+                    # text가 비어있으면 다른 방법 시도: precedent_chunks에서 직접 조회
+                    if source_type == "precedent_content":
+                        return self._restore_text_from_precedent_content(conn, source_id)
+                    return ""
             else:
                 self.logger.warning(f"No row found for {source_type} id={source_id}")
-                # 원본 테이블에 없으면 text_chunks에서 직접 조회
-                return self._restore_text_from_chunks(conn, source_type, source_id)
-            return ""
-        except sqlite3.Error as e:
-            self.logger.error(f"SQLite error restoring text from source table ({source_type}, {source_id}): {e}")
-            # 에러 발생 시 text_chunks에서 직접 조회 시도
-            return self._restore_text_from_chunks(conn, source_type, source_id)
+                # 원본 테이블에 없으면 precedent_chunks에서 직접 조회
+                if source_type == "precedent_content":
+                    return self._restore_text_from_precedent_content(conn, source_id)
+                return ""
         except Exception as e:
             self.logger.error(f"Error restoring text from source table ({source_type}, {source_id}): {e}")
-            # 에러 발생 시 text_chunks에서 직접 조회 시도
-            return self._restore_text_from_chunks(conn, source_type, source_id)
+            # 에러 발생 시 precedent_chunks에서 직접 조회 시도
+            if source_type == "precedent_content":
+                return self._restore_text_from_precedent_content(conn, source_id)
+            return ""
     
-    def _restore_text_from_chunks(self, conn: sqlite3.Connection, source_type: str, source_id: int) -> str:
+    def _restore_text_from_precedent_content(self, conn, precedent_content_id: int) -> str:
         """
-        text_chunks 테이블에서 직접 text 조회 (원본 테이블 조회 실패 시)
+        precedent_chunks 테이블에서 직접 text 조회 (원본 테이블 조회 실패 시)
         """
         try:
-            conn.row_factory = sqlite3.Row
-            # 같은 source_type과 source_id를 가진 다른 chunk에서 text 가져오기
-            cursor = conn.execute(
-                "SELECT text FROM text_chunks WHERE source_type = ? AND source_id = ? AND text IS NOT NULL AND text != '' LIMIT 1",
-                (source_type, source_id)
+            cursor = conn.cursor()
+            # 같은 precedent_content_id를 가진 chunk에서 chunk_content 가져오기
+            cursor.execute(
+                "SELECT chunk_content FROM precedent_chunks WHERE precedent_content_id = %s AND chunk_content IS NOT NULL AND chunk_content != '' ORDER BY chunk_index LIMIT 1",
+                (precedent_content_id,)
             )
             row = cursor.fetchone()
             if row:
-                text = row['text'] if 'text' in row.keys() else None
+                # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                if hasattr(row, 'keys'):
+                    text = row.get('chunk_content')
+                else:
+                    text = row[0] if len(row) > 0 else None
+                
                 if text and len(str(text).strip()) > 0:
-                    self.logger.info(f"Restored text from text_chunks for {source_type} id={source_id} (length: {len(str(text))} chars)")
+                    self.logger.info(f"Restored text from precedent_chunks for precedent_content_id={precedent_content_id} (length: {len(str(text))} chars)")
                     return str(text)
             return ""
         except Exception as e:
-            self.logger.error(f"Error restoring text from text_chunks ({source_type}, {source_id}): {e}")
+            self.logger.error(f"Error restoring text from precedent_chunks (precedent_content_id={precedent_content_id}): {e}")
             return ""
     
-    def _restore_text_from_chunks_by_metadata(self, conn: sqlite3.Connection, source_type: str, metadata: Dict[str, Any]) -> str:
+    def _restore_text_from_chunks_by_metadata(self, conn, source_type: str, metadata: Dict[str, Any]) -> str:
         """
         text_chunks 테이블에서 메타데이터를 사용하여 text 조회 (source_id가 문자열인 경우)
         """
         try:
-            conn.row_factory = sqlite3.Row
             import json
+            cursor = conn.cursor()
             
             # metadata를 JSON 문자열로 변환하여 조회 시도
             metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else ""
@@ -6482,25 +7232,25 @@ class SemanticSearchEngineV2:
                 
                 if case_number:
                     # 방법 1: metadata JSON에 포함된 경우
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{case_number}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by metadata for {source_type} case_number={case_number} (length: {len(str(text))} chars)")
                             return str(text)
                     
                     # 방법 2: text 필드에 포함된 경우
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND text LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{case_number}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by text field for {source_type} case_number={case_number} (length: {len(str(text))} chars)")
                             return str(text)
@@ -6512,26 +7262,26 @@ class SemanticSearchEngineV2:
                 
                 # law_id와 article_no가 있으면 조회
                 if law_id and article_no:
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%law_id%{law_id}%', f'%article_number%{article_no}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by metadata for {source_type} law_id={law_id} article_no={article_no} (length: {len(str(text))} chars)")
                             return str(text)
                 
                 # statute_name과 article_no로 조회 시도
                 if statute_name and article_no:
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{statute_name}%', f'%{article_no}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by statute_name for {source_type} statute_name={statute_name} article_no={article_no} (length: {len(str(text))} chars)")
                             return str(text)
@@ -6542,26 +7292,26 @@ class SemanticSearchEngineV2:
                 
                 if doc_id:
                     # 방법 1: metadata JSON에 포함된 경우
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{doc_id}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} (length: {len(str(text))} chars)")
                             return str(text)
                     
                     # 방법 2: org와 함께 조회
                     if org:
-                        cursor = conn.execute(
-                            "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        cursor.execute(
+                            "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                             (source_type, f'%{doc_id}%', f'%{org}%')
                         )
                         row = cursor.fetchone()
                         if row:
-                            text = row['text'] if 'text' in row.keys() else None
+                            text = row[0] if isinstance(row, tuple) else row.get('text')
                             if text and len(str(text).strip()) > 0:
                                 self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} org={org} (length: {len(str(text))} chars)")
                                 return str(text)
@@ -6572,26 +7322,26 @@ class SemanticSearchEngineV2:
                 org = metadata.get('org')
                 
                 if doc_id:
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{doc_id}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by metadata for {source_type} doc_id={doc_id} (length: {len(str(text))} chars)")
                             return str(text)
                 
                 # title로 조회 시도
                 if title:
-                    cursor = conn.execute(
-                        "SELECT text FROM text_chunks WHERE source_type = ? AND (metadata LIKE ? OR text LIKE ?) AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                    cursor.execute(
+                        "SELECT text FROM text_chunks WHERE source_type = %s AND (meta::text LIKE %s OR text LIKE %s) AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                         (source_type, f'%{title}%', f'%{title}%')
                     )
                     row = cursor.fetchone()
                     if row:
-                        text = row['text'] if 'text' in row.keys() else None
+                        text = row[0] if isinstance(row, tuple) else row.get('text')
                         if text and len(str(text).strip()) > 0:
                             self.logger.info(f"Restored text from text_chunks by title for {source_type} title={title} (length: {len(str(text))} chars)")
                             return str(text)
@@ -6608,13 +7358,13 @@ class SemanticSearchEngineV2:
                     # 가장 긴 검색어부터 시도
                     search_terms.sort(key=len, reverse=True)
                     for term in search_terms[:3]:  # 상위 3개만 시도
-                        cursor = conn.execute(
-                            "SELECT text FROM text_chunks WHERE source_type = ? AND metadata LIKE ? AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
+                        cursor.execute(
+                            "SELECT text FROM text_chunks WHERE source_type = %s AND meta::text LIKE %s AND text IS NOT NULL AND text != '' ORDER BY LENGTH(text) DESC LIMIT 1",
                             (source_type, f'%{term}%')
                         )
                         row = cursor.fetchone()
                         if row:
-                            text = row['text'] if 'text' in row.keys() else None
+                            text = row[0] if isinstance(row, tuple) else row.get('text')
                             if text and len(str(text).strip()) > 0:
                                 self.logger.info(f"Restored text from text_chunks by general metadata search for {source_type} term={term} (length: {len(str(text))} chars)")
                                 return str(text)
@@ -6625,7 +7375,7 @@ class SemanticSearchEngineV2:
             return ""
     
     def _ensure_text_content(self,
-                            conn: sqlite3.Connection,
+                            conn,
                             chunk_id: int,
                             text: str,
                             source_type: str,
@@ -6664,19 +7414,30 @@ class SemanticSearchEngineV2:
         # source_id가 None인 경우 chunk_id로 조회 (강화)
         if not source_id and chunk_id:
             try:
-                cursor = conn.execute(
+                cursor = conn.cursor()
+                cursor.execute(
                     "SELECT source_id, source_type, text FROM text_chunks WHERE id = ?",
                     (chunk_id,)
                 )
                 row = cursor.fetchone()
                 if row:
-                    if not source_id and row['source_id']:
-                        source_id = row['source_id']
-                    if not source_type and row['source_type']:
-                        source_type = row['source_type']
+                    # PostgreSQL의 경우 dict-like row 또는 tuple 반환
+                    if hasattr(row, 'keys'):
+                        source_id_val = row.get('source_id')
+                        source_type_val = row.get('source_type')
+                        text_val = row.get('text')
+                    else:
+                        source_id_val = row[0] if len(row) > 0 else None
+                        source_type_val = row[1] if len(row) > 1 else None
+                        text_val = row[2] if len(row) > 2 else None
+                    
+                    if not source_id and source_id_val:
+                        source_id = source_id_val
+                    if not source_type and source_type_val:
+                        source_type = source_type_val
                     # text도 복원 시도 (text가 비어있거나 짧은 경우)
-                    if row['text'] and (not text or len(text.strip()) < min_length):
-                        restored_text_from_db = row['text']
+                    if text_val and (not text or len(text.strip()) < min_length):
+                        restored_text_from_db = str(text_val)
                         if restored_text_from_db and len(restored_text_from_db.strip()) >= min_length:
                             text = restored_text_from_db
                             self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks (length: {len(text)} chars)")
@@ -6685,17 +7446,18 @@ class SemanticSearchEngineV2:
                 self.logger.debug(f"Failed to get source_id from text_chunks for chunk_id={chunk_id}: {e}")
         
         # source_id가 여전히 None인 경우에도 text_chunks에서 직접 텍스트 복원 시도
-        if (not source_type or not source_id) and chunk_id:
+        if (not source_type or not source_id) and chunk_id and conn:
             try:
-                cursor = conn.execute(
-                    "SELECT text FROM text_chunks WHERE id = ?",
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT text FROM text_chunks WHERE id = %s",
                     (chunk_id,)
                 )
                 row = cursor.fetchone()
-                if row and row['text']:
-                    restored_text_from_db = row['text']
-                    if restored_text_from_db and len(restored_text_from_db.strip()) >= min_length:
-                        text = restored_text_from_db
+                if row:
+                    text_val = row[0] if isinstance(row, tuple) else row.get('text')
+                    if text_val and len(str(text_val).strip()) >= min_length:
+                        text = str(text_val)
                         self.logger.debug(f"✅ Restored text for chunk_id={chunk_id} from text_chunks (direct query, length: {len(text)} chars)")
                         return text
             except Exception as e:
@@ -6750,13 +7512,18 @@ class SemanticSearchEngineV2:
                 # 데이터베이스에서 실제로 존재하는지 확인
                 try:
                     if conn:
-                        cursor = conn.execute(
-                            "SELECT COUNT(*) as cnt FROM text_chunks WHERE id = ? AND (text IS NULL OR text = '')",
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT COUNT(*) as cnt FROM text_chunks WHERE id = %s AND (text IS NULL OR text = '')",
                             (chunk_id,)
                         )
                         row = cursor.fetchone()
-                        if row and row['cnt'] > 0:
-                            self.logger.error(f"  - 원인: text_chunks 테이블에 chunk_id={chunk_id}의 text가 NULL 또는 빈 문자열임")
+                        if row:
+                            cnt = row[0] if isinstance(row, tuple) else row.get('cnt')
+                            if cnt and cnt > 0:
+                                self.logger.error(f"  - 원인: text_chunks 테이블에 chunk_id={chunk_id}의 text가 NULL 또는 빈 문자열임")
+                            else:
+                                self.logger.error(f"  - 원인: text_chunks 테이블에서 chunk_id={chunk_id}를 찾을 수 없음")
                         else:
                             self.logger.error(f"  - 원인: text_chunks 테이블에서 chunk_id={chunk_id}를 찾을 수 없음")
                 except Exception as db_check_err:

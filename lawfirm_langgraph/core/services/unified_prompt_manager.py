@@ -908,12 +908,19 @@ class UnifiedPromptManager:
         normalized_docs = []
         seen_doc_ids = set()  # 중복 체크용
         
+        logger.debug(f"🔍 [DEBUG] structured_docs type: {type(structured_docs)}, value: {structured_docs}")
+        
         if isinstance(structured_docs, dict):
             raw_documents = structured_docs.get("documents", [])
             doc_count = len(raw_documents) if raw_documents else 0
+            
+            logger.info(f"📋 [FINAL PROMPT] Processing {doc_count} raw documents from structured_documents")
 
             # 문서 정규화 및 중복 제거
-            for doc in raw_documents:
+            normalized_count = 0
+            skipped_count = 0
+            for idx, doc in enumerate(raw_documents):
+                logger.debug(f"🔍 [DEBUG] Processing doc {idx+1}/{doc_count}: type={type(doc)}, keys={list(doc.keys()) if isinstance(doc, dict) else 'N/A'}")
                 normalized = self._normalize_document_fields(doc)
                 if normalized:
                     # 문서 ID 생성 (중복 체크용)
@@ -921,38 +928,80 @@ class UnifiedPromptManager:
                     if doc_id not in seen_doc_ids:
                         seen_doc_ids.add(doc_id)
                         normalized_docs.append(normalized)
+                        normalized_count += 1
+                        logger.debug(f"✅ [DEBUG] Doc {idx+1} normalized successfully, has metadata: {bool(normalized.get('metadata'))}")
                     else:
                         logger.debug(f"⚠️ [FINAL PROMPT] Duplicate document removed: {doc_id}")
+                else:
+                    skipped_count += 1
+                    logger.warning(f"⚠️ [DEBUG] Doc {idx+1} normalization returned None (skipped)")
+
+            logger.info(f"📋 [FINAL PROMPT] Normalization: {normalized_count} succeeded, {skipped_count} skipped")
 
             # 문서 최적화 (중복 제거 및 정렬)
+            before_optimize = len(normalized_docs)
             normalized_docs = self._optimize_documents_for_prompt(normalized_docs, query)
+            after_optimize = len(normalized_docs)
 
             logger.info(
-                f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={len(normalized_docs)} (duplicates removed)"
+                f"📋 [FINAL PROMPT] Documents: raw={doc_count}, normalized={before_optimize}, "
+                f"after_optimize={after_optimize} (duplicates removed)"
             )
+            
+            # 멀티 질의 메타데이터 확인 (디버깅)
+            if normalized_docs:
+                multi_query_count = 0
+                for doc in normalized_docs:
+                    if isinstance(doc, dict):
+                        metadata = doc.get("metadata", {})
+                        if isinstance(metadata, dict) and metadata.get("sub_query"):
+                            multi_query_count += 1
+                            logger.debug(f"🔍 [DEBUG] Found multi-query doc: sub_query='{metadata.get('sub_query')[:50]}...'")
+                
+                if multi_query_count > 0:
+                    logger.info(f"✅ [FINAL PROMPT] Found {multi_query_count}/{len(normalized_docs)} documents with multi-query metadata")
+                else:
+                    logger.warning(f"⚠️ [FINAL PROMPT] No multi-query metadata found in {len(normalized_docs)} documents")
+            else:
+                logger.warning(f"⚠️ [FINAL PROMPT] normalized_docs is empty after processing {doc_count} raw documents")
         else:
             logger.warning(f"⚠️ [FINAL PROMPT] structured_documents is not a dict: {type(structured_docs)}")
 
         # base_prompt에 이미 문서가 포함되어 있는지 확인 (개선: 실제 문서 내용 존재 여부 확인)
-        # 패턴 매칭만으로 판단하지 않고, structured_documents가 있으면 항상 문서 섹션 생성
+        # 멀티 질의 검색 결과가 있는 경우 항상 문서 섹션 생성
         has_docs_in_base = False
+        has_multi_query_results = False
+        
+        # 멀티 질의 검색 결과 확인 (metadata에 sub_query가 있는 경우)
         if normalized_docs:
-            # structured_documents에 실제 문서가 있으면 base_prompt에 문서가 있어도 문서 섹션 생성
-            # 단, base_prompt에 실제 문서 내용이 포함되어 있는지 확인
-            base_prompt_has_actual_content = False
-            if normalized_docs:
-                # 첫 번째 문서의 일부 내용이 base_prompt에 있는지 확인
-                first_doc_content = normalized_docs[0].get("content", "")[:100]
-                if first_doc_content and len(first_doc_content) > 10:
-                    base_prompt_has_actual_content = first_doc_content in base_prompt
-            
-            if base_prompt_has_actual_content:
-                # base_prompt에 실제 문서 내용이 있으면 중복 제거만 수행
-                base_prompt = self._remove_duplicate_document_sections(base_prompt)
-                has_docs_in_base = True
-            else:
-                # base_prompt에 실제 문서 내용이 없으면 문서 섹션 생성
+            for doc in normalized_docs:
+                if isinstance(doc, dict) and isinstance(doc.get("metadata"), dict):
+                    if doc.get("metadata", {}).get("sub_query"):
+                        has_multi_query_results = True
+                        break
+        
+        if normalized_docs:
+            # 멀티 질의 검색 결과가 있으면 항상 문서 섹션 생성
+            if has_multi_query_results:
                 has_docs_in_base = False
+                logger.info("✅ [FINAL PROMPT] Multi-query results detected, will create documents section")
+            else:
+                # structured_documents에 실제 문서가 있으면 base_prompt에 문서가 있어도 문서 섹션 생성
+                # 단, base_prompt에 실제 문서 내용이 포함되어 있는지 확인
+                base_prompt_has_actual_content = False
+                if normalized_docs:
+                    # 첫 번째 문서의 일부 내용이 base_prompt에 있는지 확인
+                    first_doc_content = normalized_docs[0].get("content", "")[:100]
+                    if first_doc_content and len(first_doc_content) > 10:
+                        base_prompt_has_actual_content = first_doc_content in base_prompt
+                
+                if base_prompt_has_actual_content:
+                    # base_prompt에 실제 문서 내용이 있으면 중복 제거만 수행
+                    base_prompt = self._remove_duplicate_document_sections(base_prompt)
+                    has_docs_in_base = True
+                else:
+                    # base_prompt에 실제 문서 내용이 없으면 문서 섹션 생성
+                    has_docs_in_base = False
         else:
             # normalized_docs가 없으면 기존 로직 사용
             has_docs_in_base = any(pattern in base_prompt for pattern in [
@@ -964,7 +1013,14 @@ class UnifiedPromptManager:
 
         # 문서 섹션 구성 (토큰 제한 적용)
         documents_section = ""
-        if normalized_docs and not has_docs_in_base:  # base_prompt에 실제 문서가 없을 때만 생성
+        # 멀티 질의 검색 결과가 있거나 normalized_docs가 있고 base_prompt에 실제 문서가 없을 때 생성
+        logger.debug(f"🔍 [DOCUMENTS SECTION] normalized_docs={len(normalized_docs) if normalized_docs else 0}, "
+                    f"has_docs_in_base={has_docs_in_base}, has_multi_query_results={has_multi_query_results}")
+        
+        if normalized_docs and (not has_docs_in_base or has_multi_query_results):
+            logger.info(f"✅ [DOCUMENTS SECTION] Creating documents section: "
+                       f"normalized_docs={len(normalized_docs)}, has_docs_in_base={has_docs_in_base}, "
+                       f"has_multi_query_results={has_multi_query_results}")
             # 관련도 기준 정렬 (개선: 법률 조문 우선 포함, 최소 5개 이상 포함 보장)
             # 법률 조문과 일반 문서를 분리하여 법률 조문을 우선 포함
             law_docs = [doc for doc in normalized_docs if doc.get("law_name") and doc.get("article_no")]
@@ -1018,9 +1074,12 @@ class UnifiedPromptManager:
                         selected_docs.append(doc)
                     break
             
-            # 일반 문서 선택
+            # 일반 문서 선택 (멀티 질의 결과는 더 많이 포함)
+            max_other_docs = self.MAX_DOCUMENTS * 2 if has_multi_query_results else self.MAX_DOCUMENTS
+            logger.debug(f"🔍 [DOCUMENTS SECTION] max_other_docs={max_other_docs} (multi_query={has_multi_query_results})")
+            
             for doc in sorted_other_docs:
-                if len(selected_docs) >= self.MAX_DOCUMENTS:
+                if len(selected_docs) >= max_other_docs:
                     break
                 
                 doc_content = doc.get("content", "")
@@ -1057,10 +1116,14 @@ class UnifiedPromptManager:
                     f"✅ [FINAL PROMPT] Added {len(sorted_docs)} documents "
                     f"(law_docs: {len([d for d in sorted_docs if d.get('law_name')])}, "
                     f"other_docs: {len([d for d in sorted_docs if not d.get('law_name')])}, "
-                    f"tokens: {current_doc_tokens:,}/{available_doc_tokens:,})"
+                    f"tokens: {current_doc_tokens:,}/{available_doc_tokens:,}, "
+                    f"multi_query={has_multi_query_results})"
                 )
+            else:
+                logger.warning(f"⚠️ [DOCUMENTS SECTION] No documents selected from {len(normalized_docs)} normalized docs")
 
         # 폴백 처리: documents_section이 없을 때 (개선: structured_documents 우선 사용)
+        # 멀티 질의 검색 결과가 있는 경우 항상 문서 섹션 생성
         if not documents_section:
             # 우선순위 1: structured_documents에서 직접 생성 시도
             if normalized_docs:
@@ -1074,6 +1137,24 @@ class UnifiedPromptManager:
                     documents_section = self._build_documents_section(sorted_docs, query)
                     
                     logger.info(f"✅ [FINAL PROMPT] Created documents_section from normalized_docs ({len(sorted_docs)} docs)")
+            
+            # 멀티 질의 검색 결과 확인 (metadata에 sub_query가 있는 경우)
+            if not documents_section and normalized_docs:
+                multi_query_docs = [doc for doc in normalized_docs 
+                                  if isinstance(doc, dict) and 
+                                  isinstance(doc.get("metadata"), dict) and 
+                                  doc.get("metadata", {}).get("sub_query")]
+                if multi_query_docs:
+                    # 멀티 질의 결과가 있으면 관련도 순으로 정렬하여 문서 섹션 생성
+                    sorted_multi_docs = sorted(
+                        multi_query_docs,
+                        key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                        reverse=True
+                    )[:5]
+                    
+                    if sorted_multi_docs:
+                        documents_section = self._build_documents_section(sorted_multi_docs, query)
+                        logger.info(f"✅ [FINAL PROMPT] Created documents_section from multi-query results ({len(sorted_multi_docs)} docs)")
             
             # 우선순위 2: prompt_optimized_text 사용
             if not documents_section:
@@ -1374,11 +1455,35 @@ class UnifiedPromptManager:
         
         min_content_length = self.MIN_CONTENT_LENGTH_WITH_LAW_INFO if has_law_info else self.MIN_CONTENT_LENGTH
         
+        # 멀티 질의 메타데이터 확인 (디버깅)
+        has_multi_query_meta = False
+        if isinstance(doc.get("metadata"), dict):
+            has_multi_query_meta = bool(doc.get("metadata", {}).get("sub_query"))
+        elif doc.get("sub_query"):
+            has_multi_query_meta = True
+        
+        logger.debug(f"🔍 [DOC NORMALIZE] content length={len(content) if content else 0}, "
+                    f"min_length={min_content_length}, has_law_info={has_law_info}, "
+                    f"has_multi_query_meta={has_multi_query_meta}")
+        
+        # 멀티 질의 결과는 content가 짧아도 포함 (최소 길이 완화)
+        if has_multi_query_meta and content and len(content) < min_content_length:
+            logger.debug(f"✅ [DOC NORMALIZE] Multi-query result with short content ({len(content)} chars), "
+                        f"will create minimal doc")
+            # 최소 content 생성
+            if not content or len(content.strip()) < 3:
+                content = doc.get("source", "") or "법률 문서"
+        
         if not content or len(content) < min_content_length:
             if has_law_info:
                 # 법률 정보가 있으면 content가 없어도 법률 정보만으로 문서 생성
                 logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) but has law info, creating minimal doc")
+            elif has_multi_query_meta:
+                # 멀티 질의 결과는 최소 content 생성
+                logger.debug(f"✅ [DOC NORMALIZE] Multi-query result, creating minimal doc even with short content")
+                content = doc.get("source", "") or "법률 문서"
             else:
+                logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) and no law info, returning None")
                 return None
 
         # source 필드: 여러 가능한 필드명에서 추출
@@ -1392,10 +1497,13 @@ class UnifiedPromptManager:
             ""
         )
 
-        # 메타데이터에서 법률 정보 추출
-        metadata = doc.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
+        # 메타데이터에서 법률 정보 추출 (원본 메타데이터 보존)
+        original_metadata = doc.get("metadata", {})
+        if not isinstance(original_metadata, dict):
+            original_metadata = {}
+        
+        # 원본 메타데이터를 복사하여 보존 (멀티 질의 메타데이터 포함)
+        metadata = original_metadata.copy() if isinstance(original_metadata, dict) else {}
 
         # 필드 추출 (헬퍼 메서드 사용)
         law_name = self._extract_field(doc, metadata, ["law_name", "statute_name", "name"])
@@ -1486,14 +1594,16 @@ class UnifiedPromptManager:
             "case_summary": str(case_summary).strip(),
             "case_holding": str(case_holding).strip(),
             "case_reasoning": str(case_reasoning).strip(),
-            "source_type": str(source_type).strip()
+            "source_type": str(source_type).strip(),
+            # 원본 메타데이터 보존 (멀티 질의 메타데이터 포함)
+            "metadata": metadata
         }
         
-        # None 값 및 빈 문자열 제거
-        normalized = {k: v for k, v in normalized.items() if v}
+        # None 값 및 빈 문자열 제거 (metadata는 제외)
+        normalized = {k: v for k, v in normalized.items() if k == "metadata" or (v and v != "")}
         
-        # EXCLUDED_METADATA_FIELDS에 있는 필드 제거 (추가 필터링)
-        normalized = {k: v for k, v in normalized.items() if k not in self.EXCLUDED_METADATA_FIELDS}
+        # EXCLUDED_METADATA_FIELDS에 있는 필드 제거 (추가 필터링, metadata는 제외)
+        normalized = {k: v for k, v in normalized.items() if k == "metadata" or k not in self.EXCLUDED_METADATA_FIELDS}
 
         return normalized
 
@@ -2806,10 +2916,30 @@ class UnifiedPromptManager:
             if not isinstance(doc, dict):
                 continue
             
+            # 멀티 질의 메타데이터 확인
+            has_multi_query = (
+                isinstance(doc.get("metadata"), dict) and 
+                doc.get("metadata", {}).get("sub_query")
+            )
+            
             # content 정리
             content = doc.get("content", "").strip()
-            if not content or len(content) < self.MIN_CONTENT_LENGTH:
-                continue
+            
+            # 멀티 질의 결과는 content 길이 체크 완화
+            min_content_length = self.MIN_CONTENT_LENGTH_WITH_LAW_INFO if has_multi_query else self.MIN_CONTENT_LENGTH
+            
+            if not content or len(content) < min_content_length:
+                if has_multi_query:
+                    # 멀티 질의 결과는 source로 content 보완
+                    source = doc.get("source", "") or doc.get("title", "")
+                    if source:
+                        content = source
+                        doc["content"] = content
+                        logger.debug(f"✅ [OPTIMIZE] Multi-query doc: using source as content: {source[:50]}")
+                    else:
+                        continue
+                else:
+                    continue
             
             # 중복 체크 (내용 기반)
             content_hash = hash(content[:200])  # 처음 200자로 중복 체크
@@ -2822,8 +2952,17 @@ class UnifiedPromptManager:
         # 관련성 점수 기준 정렬
         optimized_docs.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
         
-        # 최대 문서 수만 반환
-        return optimized_docs[:self.MAX_DOCUMENTS]
+        # 최대 문서 수만 반환 (멀티 질의 결과는 더 많이 포함)
+        # 멀티 질의 메타데이터 확인
+        has_multi_query = any(
+            isinstance(doc, dict) and 
+            isinstance(doc.get("metadata"), dict) and 
+            doc.get("metadata", {}).get("sub_query")
+            for doc in optimized_docs
+        )
+        max_docs = self.MAX_DOCUMENTS * 2 if has_multi_query else self.MAX_DOCUMENTS
+        logger.debug(f"🔍 [OPTIMIZE] Returning {min(len(optimized_docs), max_docs)}/{len(optimized_docs)} docs (multi_query={has_multi_query})")
+        return optimized_docs[:max_docs]
     
     def _extract_field(self, doc: Dict[str, Any], metadata: Dict[str, Any], field_names: List[str]) -> str:
         """문서와 메타데이터에서 필드 추출 (헬퍼 메서드)"""

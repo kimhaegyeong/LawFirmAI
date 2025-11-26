@@ -64,6 +64,56 @@ class LegalDataConnectorV2:
             from core.utils.config import Config
             config = Config()
             db_path = config.database_path
+        
+        # PostgreSQL을 사용하는 경우 db_path는 None일 수 있음
+        if db_path is None:
+            # PostgreSQL URL 확인 시도
+            database_url = None
+            try:
+                # PostgreSQL 환경 변수 확인
+                from urllib.parse import quote_plus
+                host = os.getenv('POSTGRES_HOST', 'localhost')
+                port = os.getenv('POSTGRES_PORT', '5432')
+                db = os.getenv('POSTGRES_DB')
+                user = os.getenv('POSTGRES_USER')
+                password = os.getenv('POSTGRES_PASSWORD')
+                if db and user and password:
+                    encoded_password = quote_plus(password)
+                    database_url = f"postgresql://{user}:{encoded_password}@{host}:{port}/{db}"
+                
+                # Config에서 database_url 확인
+                if not database_url:
+                    config_url = getattr(config, 'database_url', None)
+                    if config_url and config_url.startswith('postgresql'):
+                        database_url = config_url
+                
+                if database_url:
+                    self.database_url = database_url
+                    self.db_path = None
+                    self.logger = get_logger(__name__)
+                    # URL 마스킹 (비밀번호 숨김)
+                    masked_url = database_url
+                    if "@" in masked_url:
+                        parts = masked_url.split("@")
+                        if len(parts) == 2:
+                            user_pass = parts[0].split("://")[-1] if "://" in parts[0] else parts[0]
+                            if ":" in user_pass:
+                                user = user_pass.split(":")[0]
+                                masked_url = f"{parts[0].split('://')[0]}://{user}:***@{parts[1]}"
+                    self.logger.info(f"LegalDataConnectorV2 initialized with PostgreSQL URL: {masked_url}")
+                    # PostgreSQL을 사용하는 경우 파일 경로 체크는 불필요
+                    return
+            except Exception as e:
+                self.logger = get_logger(__name__)
+                self.logger.warning(f"Failed to initialize PostgreSQL connection: {e}")
+        
+        # SQLite 파일 경로인 경우 (레거시 지원)
+        if db_path is None:
+            self.logger = get_logger(__name__)
+            self.logger.warning("Database path is None. PostgreSQL is recommended. Using legacy SQLite mode is deprecated.")
+            self.db_path = None
+            return
+        
         # 상대 경로를 절대 경로로 변환
         if db_path and not os.path.isabs(db_path):
             db_path = os.path.abspath(db_path)
@@ -155,10 +205,35 @@ class LegalDataConnectorV2:
         """
         Get database connection
         
-        Note: Each thread gets its own connection for thread safety.
-        SQLite connections are not thread-safe, so each parallel search
-        operation uses a separate connection.
+        Note: PostgreSQL을 사용하는 경우 DatabaseAdapter를 사용합니다.
+        SQLite는 레거시 지원용이며, PostgreSQL을 권장합니다.
         """
+        # PostgreSQL을 사용하는 경우
+        if hasattr(self, 'database_url') and self.database_url:
+            try:
+                from core.data.db_adapter import DatabaseAdapter
+                from core.data.sql_adapter import SQLAdapter
+            except ImportError:
+                try:
+                    from lawfirm_langgraph.core.data.db_adapter import DatabaseAdapter
+                    from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+                except ImportError:
+                    DatabaseAdapter = None
+                    SQLAdapter = None
+            
+            if DatabaseAdapter:
+                # DatabaseAdapter를 사용하여 연결 풀에서 연결 가져오기
+                if not hasattr(self, '_db_adapter') or self._db_adapter is None:
+                    self._db_adapter = DatabaseAdapter(self.database_url)
+                return self._db_adapter.get_connection_context().__enter__()
+        
+        # SQLite를 사용하는 경우 (레거시)
+        if self.db_path is None:
+            raise ValueError(
+                "Database path is None. PostgreSQL is required. "
+                "Please set POSTGRES_* environment variables or DATABASE_URL."
+            )
+        
         conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False  # Allow use in different threads (each thread has its own connection)
@@ -526,12 +601,16 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             # LIKE 검색 쿼리 생성 (모든 키워드가 포함된 문서 검색)
+            # PostgreSQL과 SQLite 모두 지원
+            is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+            placeholder = '%s' if is_postgresql else '?'
+            
             like_conditions = []
             params = []
             used_keywords = []  # match_count 계산용
             for word in words[:10]:  # 최대 10개 키워드만 사용
                 if len(word) >= 2:  # 최소 2자 이상
-                    like_conditions.append("sa.text LIKE ?")
+                    like_conditions.append(f"sa.text LIKE {placeholder}")
                     params.append(f"%{word}%")
                     used_keywords.append(word)  # 원본 키워드 저장
             
@@ -550,7 +629,7 @@ class LegalDataConnectorV2:
                 # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
                 case_whens = []
                 for kw in used_keywords:
-                    case_whens.append(f"CASE WHEN sa.text LIKE ? THEN 1 ELSE 0 END")
+                    case_whens.append(f"CASE WHEN sa.text LIKE {placeholder} THEN 1 ELSE 0 END")
                     match_count_params.append(f"%{kw}%")
                 match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
             else:
@@ -563,18 +642,18 @@ class LegalDataConnectorV2:
                     sa.article_no,
                     sa.clause_no,
                     sa.item_no,
-                    sa.heading,
-                    sa.text,
+                    sa.article_title as heading,
+                    sa.article_content as text,
                     s.name as statute_name,
                     s.abbrv as statute_abbrv,
                     s.statute_type,
                     s.category,
                     {match_count_subquery}
-                FROM statute_articles sa
+                FROM statutes_articles sa
                 JOIN statutes s ON sa.statute_id = s.id
                 WHERE {where_clause}
                 ORDER BY match_count DESC, sa.id
-                LIMIT ?
+                LIMIT {placeholder}
             """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
@@ -649,27 +728,59 @@ class LegalDataConnectorV2:
                 conn = self._get_connection()
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT
-                        sa.id,
-                        sa.statute_id,
-                        sa.article_no,
-                        sa.clause_no,
-                        sa.item_no,
-                        sa.heading,
-                        sa.text,
-                        s.name as statute_name,
-                        s.abbrv as statute_abbrv,
-                        s.statute_type,
-                        s.category,
-                        bm25(statute_articles_fts) as rank_score
-                    FROM statute_articles_fts
-                    JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
-                    JOIN statutes s ON sa.statute_id = s.id
-                    WHERE statute_articles_fts MATCH ?
-                    ORDER BY rank_score
-                    LIMIT ?
-                """, (fallback_query, limit))
+                # PostgreSQL과 SQLite 모두 지원
+                is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+                placeholder = '%s' if is_postgresql else '?'
+                
+                if is_postgresql:
+                    # PostgreSQL FTS 사용 (legal_data_connector_v2.py의 로직 참조)
+                    # 간단한 변환: OR 조건을 tsquery로 변환
+                    words = fallback_query.split(' OR ')
+                    tsquery = " | ".join([word.replace("'", "''") for word in words])
+                    
+                    cursor.execute(f"""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.name as statute_name,
+                            s.abbrv as statute_abbrv,
+                            s.statute_type,
+                            s.category,
+                            ts_rank_cd(sa.text_search_vector, plainto_tsquery('korean', {placeholder})) as rank_score
+                        FROM statute_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE sa.text_search_vector @@ plainto_tsquery('korean', {placeholder})
+                        ORDER BY ts_rank_cd(sa.text_search_vector, plainto_tsquery('korean', {placeholder})) DESC
+                        LIMIT {placeholder}
+                    """, (tsquery, tsquery, tsquery, limit))
+                else:
+                    # SQLite FTS5 (레거시 지원)
+                    cursor.execute("""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.name as statute_name,
+                            s.abbrv as statute_abbrv,
+                            s.statute_type,
+                            s.category,
+                            bm25(statute_articles_fts) as rank_score
+                        FROM statute_articles_fts
+                        JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE statute_articles_fts MATCH ?
+                        ORDER BY rank_score
+                        LIMIT ?
+                    """, (fallback_query, limit))
                 
                 for row in cursor.fetchall():
                     if row['id'] not in seen_ids:
@@ -732,27 +843,57 @@ class LegalDataConnectorV2:
                 conn = self._get_connection()
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT
-                        sa.id,
-                        sa.statute_id,
-                        sa.article_no,
-                        sa.clause_no,
-                        sa.item_no,
-                        sa.heading,
-                        sa.text,
-                        s.name as statute_name,
-                        s.abbrv as statute_abbrv,
-                        s.statute_type,
-                        s.category,
-                        bm25(statute_articles_fts) as rank_score
-                    FROM statute_articles_fts
-                    JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
-                    JOIN statutes s ON sa.statute_id = s.id
-                    WHERE statute_articles_fts MATCH ?
-                    ORDER BY rank_score
-                    LIMIT ?
-                """, (keyword_query, limit))
+                # PostgreSQL과 SQLite 모두 지원
+                is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+                placeholder = '%s' if is_postgresql else '?'
+                
+                if is_postgresql:
+                    # PostgreSQL FTS 사용
+                    tsquery = keyword_query.replace("'", "''")
+                    
+                    cursor.execute(f"""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.name as statute_name,
+                            s.abbrv as statute_abbrv,
+                            s.statute_type,
+                            s.category,
+                            ts_rank_cd(sa.text_search_vector, plainto_tsquery('korean', {placeholder})) as rank_score
+                        FROM statute_articles sa
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE sa.text_search_vector @@ plainto_tsquery('korean', {placeholder})
+                        ORDER BY ts_rank_cd(sa.text_search_vector, plainto_tsquery('korean', {placeholder})) DESC
+                        LIMIT {placeholder}
+                    """, (tsquery, tsquery, tsquery, limit))
+                else:
+                    # SQLite FTS5 (레거시 지원)
+                    cursor.execute("""
+                        SELECT
+                            sa.id,
+                            sa.statute_id,
+                            sa.article_no,
+                            sa.clause_no,
+                            sa.item_no,
+                            sa.article_title as heading,
+                            sa.article_content as text,
+                            s.name as statute_name,
+                            s.abbrv as statute_abbrv,
+                            s.statute_type,
+                            s.category,
+                            bm25(statute_articles_fts) as rank_score
+                        FROM statute_articles_fts
+                        JOIN statute_articles sa ON statute_articles_fts.rowid = sa.id
+                        JOIN statutes s ON sa.statute_id = s.id
+                        WHERE statute_articles_fts MATCH ?
+                        ORDER BY rank_score
+                        LIMIT ?
+                    """, (keyword_query, limit))
                 
                 for row in cursor.fetchall():
                     if row['id'] not in seen_ids:
@@ -815,8 +956,8 @@ class LegalDataConnectorV2:
                             sa.article_no,
                             sa.clause_no,
                             sa.item_no,
-                            sa.heading,
-                            sa.text,
+                            sa.article_title as heading,
+                            sa.article_content as text,
                             s.name as statute_name,
                             s.abbrv as statute_abbrv,
                             s.statute_type,
@@ -1215,12 +1356,16 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             # LIKE 검색 쿼리 생성
+            # PostgreSQL과 SQLite 모두 지원
+            is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+            placeholder = '%s' if is_postgresql else '?'
+            
             like_conditions = []
             params = []
             used_keywords = []  # match_count 계산용
             for word in words[:10]:  # 최대 10개 키워드만 사용
                 if len(word) >= 2:  # 최소 2자 이상
-                    like_conditions.append("cp.text LIKE ?")
+                    like_conditions.append(f"cp.text LIKE {placeholder}")
                     params.append(f"%{word}%")
                     used_keywords.append(word)  # 원본 키워드 저장
             
@@ -1229,6 +1374,10 @@ class LegalDataConnectorV2:
                 return []
             
             # LIKE 검색
+            # PostgreSQL과 SQLite 모두 지원
+            is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+            placeholder = '%s' if is_postgresql else '?'
+            
             where_clause = " AND ".join(like_conditions)
             
             # match_count 계산: 실제 사용된 키워드 수만큼만 계산
@@ -1239,7 +1388,7 @@ class LegalDataConnectorV2:
                 # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
                 case_whens = []
                 for kw in used_keywords:
-                    case_whens.append(f"CASE WHEN cp.text LIKE ? THEN 1 ELSE 0 END")
+                    case_whens.append(f"CASE WHEN cp.text LIKE {placeholder} THEN 1 ELSE 0 END")
                     match_count_params.append(f"%{kw}%")
                 match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
             else:
@@ -1247,21 +1396,20 @@ class LegalDataConnectorV2:
             
             cursor.execute(f"""
                 SELECT
-                    cp.id,
-                    cp.case_id,
-                    cp.para_index,
-                    cp.text,
-                    c.doc_id,
-                    c.court,
-                    c.case_type,
-                    c.casenames,
-                    c.announce_date,
+                    pc.id,
+                    pc.precedent_id,
+                    pc.section_content as text,
+                    p.case_number as doc_id,
+                    p.court_name as court,
+                    p.case_type_name as case_type,
+                    p.case_name as casenames,
+                    p.decision_date as announce_date,
                     {match_count_subquery}
-                FROM case_paragraphs cp
-                JOIN cases c ON cp.case_id = c.id
+                FROM precedent_contents pc
+                JOIN precedents p ON pc.precedent_id = p.id
                 WHERE {where_clause}
-                ORDER BY match_count DESC, cp.id
-                LIMIT ?
+                ORDER BY match_count DESC, pc.id
+                LIMIT {placeholder}
             """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
@@ -1321,12 +1469,16 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             # LIKE 검색 쿼리 생성
+            # PostgreSQL과 SQLite 모두 지원
+            is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+            placeholder = '%s' if is_postgresql else '?'
+            
             like_conditions = []
             params = []
             used_keywords = []  # match_count 계산용
             for word in words[:10]:  # 최대 10개 키워드만 사용
                 if len(word) >= 2:  # 최소 2자 이상
-                    like_conditions.append("dp.text LIKE ?")
+                    like_conditions.append(f"dp.text LIKE {placeholder}")
                     params.append(f"%{word}%")
                     used_keywords.append(word)  # 원본 키워드 저장
             
@@ -1345,7 +1497,7 @@ class LegalDataConnectorV2:
                 # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
                 case_whens = []
                 for kw in used_keywords:
-                    case_whens.append(f"CASE WHEN dp.text LIKE ? THEN 1 ELSE 0 END")
+                    case_whens.append(f"CASE WHEN dp.text LIKE {placeholder} THEN 1 ELSE 0 END")
                     match_count_params.append(f"%{kw}%")
                 match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
             else:
@@ -1366,7 +1518,7 @@ class LegalDataConnectorV2:
                 JOIN decisions d ON dp.decision_id = d.id
                 WHERE {where_clause}
                 ORDER BY match_count DESC, dp.id
-                LIMIT ?
+                LIMIT {placeholder}
             """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
@@ -1425,12 +1577,16 @@ class LegalDataConnectorV2:
             cursor = conn.cursor()
             
             # LIKE 검색 쿼리 생성
+            # PostgreSQL과 SQLite 모두 지원
+            is_postgresql = hasattr(self, '_db_adapter') and self._db_adapter and self._db_adapter.db_type == 'postgresql'
+            placeholder = '%s' if is_postgresql else '?'
+            
             like_conditions = []
             params = []
             used_keywords = []  # match_count 계산용
             for word in words[:10]:  # 최대 10개 키워드만 사용
                 if len(word) >= 2:  # 최소 2자 이상
-                    like_conditions.append("ip.text LIKE ?")
+                    like_conditions.append(f"ip.text LIKE {placeholder}")
                     params.append(f"%{word}%")
                     used_keywords.append(word)  # 원본 키워드 저장
             
@@ -1449,7 +1605,7 @@ class LegalDataConnectorV2:
                 # 각 키워드에 대해 CASE WHEN으로 매칭 여부 확인
                 case_whens = []
                 for kw in used_keywords:
-                    case_whens.append(f"CASE WHEN ip.text LIKE ? THEN 1 ELSE 0 END")
+                    case_whens.append(f"CASE WHEN ip.text LIKE {placeholder} THEN 1 ELSE 0 END")
                     match_count_params.append(f"%{kw}%")
                 match_count_subquery = f"({' + '.join(case_whens)}) as match_count"
             else:
@@ -1470,7 +1626,7 @@ class LegalDataConnectorV2:
                 JOIN interpretations i ON ip.interpretation_id = i.id
                 WHERE {where_clause}
                 ORDER BY match_count DESC, ip.id
-                LIMIT ?
+                LIMIT {placeholder}
             """, tuple(params) + tuple(match_count_params) + (limit,))
 
             results = []
@@ -1553,15 +1709,17 @@ class LegalDataConnectorV2:
         results = []
         
         # 병렬 검색 작업 정의
+        # 주의: 해석례(interpretation)와 결정례(decision)는 현재 데이터베이스에 없음
+        # 추후 헌법결정례, 법령해석례가 추가될 수 있으나 현재는 제외
         search_tasks = {
             'statute': (self.search_statutes_fts, query, limit),
             'case': (self.search_cases_fts, query, limit),
-            'decision': (self.search_decisions_fts, query, limit),
-            'interpretation': (self.search_interpretations_fts, query, limit)
+            # 'decision': (self.search_decisions_fts, query, limit),  # 제거: 현재 데이터베이스에 없음
+            # 'interpretation': (self.search_interpretations_fts, query, limit)  # 제거: 현재 데이터베이스에 없음
         }
         
         # ThreadPoolExecutor로 병렬 실행
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="FTS_Search") as executor:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="FTS_Search") as executor:
             # 모든 검색 작업 제출
             future_to_table = {}
             for table_type, (search_func, search_query, search_limit) in search_tasks.items():
@@ -1593,7 +1751,7 @@ class LegalDataConnectorV2:
         elapsed_time = time.time() - start_time
         self.logger.info(
             f"Parallel FTS search completed: {len(results)} total results "
-            f"from 4 tables in {elapsed_time:.3f}s for query: '{query[:50]}...'"
+            f"from 2 tables (statute, case) in {elapsed_time:.3f}s for query: '{query[:50]}...'"
         )
         
         return results[:limit]

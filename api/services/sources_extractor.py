@@ -676,10 +676,8 @@ class SourcesExtractor:
             import sqlite3
             import os
             
-            # 데이터베이스 경로 찾기
+            # 데이터베이스 경로 찾기 (lawfirm_v2.db는 더 이상 사용하지 않음)
             db_paths = [
-                os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'lawfirm_v2.db'),
-                os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'lawfirm_v2.db'),
                 os.getenv('DATABASE_PATH', ''),
             ]
             
@@ -1285,6 +1283,7 @@ class SourcesExtractor:
         retrieved_docs: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """retrieved_docs에서 sources_detail 생성"""
+        logger.info(f"[_generate_sources_detail_from_retrieved_docs] Called with {len(retrieved_docs)} retrieved_docs")
         if not isinstance(retrieved_docs, list) or not retrieved_docs:
             return []
         
@@ -1333,20 +1332,46 @@ class SourcesExtractor:
                         source_type = "regulation_paragraph"
                 
                 metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
-                merged_metadata = {**metadata}
+                # merged_metadata 초기화: metadata를 먼저 복사
+                merged_metadata = {**metadata} if isinstance(metadata, dict) else {}
                 
-                # 최상위 레벨 필드도 merged_metadata에 포함
+                # 최상위 레벨 필드도 merged_metadata에 포함 (metadata보다 우선)
                 for key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no",
                            "court", "doc_id", "casenames", "case_name", "org", "title", "announce_date", "decision_date", "response_date"]:
                     if key in doc:
                         merged_metadata[key] = doc[key]
                 
-                # case_paragraph의 경우 casenames가 최상위 레벨에 있을 수 있으므로 확인
+                # case_paragraph의 경우 casenames를 여러 위치에서 확인 (우선순위: doc 최상위 > metadata)
                 if source_type == "case_paragraph":
-                    if "casenames" not in merged_metadata and "casenames" in doc:
+                    # 1. doc 최상위 레벨에서 확인 (가장 우선)
+                    if "casenames" in doc:
                         merged_metadata["casenames"] = doc["casenames"]
-                    if "case_name" not in merged_metadata and "case_name" in doc:
+                    elif "case_name" in doc:
                         merged_metadata["case_name"] = doc["case_name"]
+                    
+                    # 2. metadata에서 확인 (doc에 없을 경우)
+                    if "casenames" not in merged_metadata and isinstance(metadata, dict):
+                        if "casenames" in metadata:
+                            merged_metadata["casenames"] = metadata["casenames"]
+                        elif "case_name" in metadata:
+                            merged_metadata["case_name"] = metadata["case_name"]
+                    
+                    # 디버깅: casenames가 있는지 확인
+                    if "casenames" in merged_metadata or "case_name" in merged_metadata:
+                        logger.info(
+                            f"[_generate_sources_detail_from_retrieved_docs] ✅ Found casenames/case_name: "
+                            f"casenames={merged_metadata.get('casenames')}, case_name={merged_metadata.get('case_name')}, "
+                            f"doc keys: {list(doc.keys())[:10]}, metadata keys: {list(metadata.keys())[:10] if isinstance(metadata, dict) else []}"
+                        )
+                    else:
+                        logger.warning(
+                            f"[_generate_sources_detail_from_retrieved_docs] ❌ casenames/case_name not found. "
+                            f"doc keys: {list(doc.keys())[:20]}, "
+                            f"doc.metadata type: {type(doc.get('metadata'))}, "
+                            f"metadata keys: {list(metadata.keys())[:20] if isinstance(metadata, dict) else []}, "
+                            f"doc.get('casenames'): {doc.get('casenames')}, "
+                            f"doc.get('case_name'): {doc.get('case_name')}"
+                        )
                 
                 source_info_detail = formatter.format_source(source_type, merged_metadata)
                 
@@ -1434,10 +1459,14 @@ class SourcesExtractor:
                                 detail_dict["metadata"]["case_name"] = casenames
                         else:
                             # casenames가 없으면 로깅 (디버깅용)
-                            logger.debug(
+                            logger.warning(
                                 f"[_generate_sources_detail_from_retrieved_docs] case_paragraph에 casenames가 없습니다. "
-                                f"doc keys: {list(doc.keys())}, merged_metadata keys: {list(merged_metadata.keys())}, "
-                                f"meta keys: {list(meta.keys()) if isinstance(meta, dict) else []}"
+                                f"doc keys: {list(doc.keys())}, "
+                                f"doc.metadata keys: {list(doc.get('metadata', {}).keys()) if isinstance(doc.get('metadata'), dict) else []}, "
+                                f"merged_metadata keys: {list(merged_metadata.keys())}, "
+                                f"merged_metadata.casenames: {merged_metadata.get('casenames')}, "
+                                f"meta keys: {list(meta.keys()) if isinstance(meta, dict) else []}, "
+                                f"meta.casenames: {meta.get('casenames') if isinstance(meta, dict) else None}"
                             )
                     elif source_type == "decision_paragraph":
                         if meta.get("doc_id"):
@@ -2484,6 +2513,18 @@ class SourcesExtractor:
                     if source_type == "case_paragraph" and key in ["doc_id", "case_id", "announce_date", "decision_date", "court", "casenames", "case_name"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
+                
+                # case_paragraph의 경우 metadata에 casenames가 있을 수 있으므로 추가 확인
+                if source_type == "case_paragraph":
+                    # metadata에서 casenames나 case_name이 있으면 cleaned_metadata에 포함 (위 루프에서 누락되었을 수 있음)
+                    if "casenames" in metadata and "casenames" not in cleaned_metadata:
+                        casenames_val = metadata.get("casenames")
+                        if casenames_val and (not isinstance(casenames_val, str) or (isinstance(casenames_val, str) and casenames_val.strip())):
+                            cleaned_metadata["casenames"] = casenames_val
+                    if "case_name" in metadata and "case_name" not in cleaned_metadata:
+                        case_name_val = metadata.get("case_name")
+                        if case_name_val and (not isinstance(case_name_val, str) or (isinstance(case_name_val, str) and case_name_val.strip())):
+                            cleaned_metadata["case_name"] = case_name_val
                     elif source_type == "statute_article" and key in ["statute_name", "law_name", "article_no", "article_number", "clause_no", "item_no"]:
                         if value and (not isinstance(value, str) or (isinstance(value, str) and value.strip())):
                             cleaned_metadata[key] = value
@@ -2504,15 +2545,29 @@ class SourcesExtractor:
                         casenames_top = source_item.get("casenames")
                         if casenames_top:
                             cleaned["case_name"] = casenames_top
+                            logger.info(f"[_clean_source_for_client] ✅ Found casenames in source_item top level: {casenames_top}")
                         # 2. 최상위 레벨에서 case_name 확인
                         elif source_item.get("case_name"):
                             cleaned["case_name"] = source_item.get("case_name")
+                            logger.info(f"[_clean_source_for_client] ✅ Found case_name in source_item top level: {source_item.get('case_name')}")
                         # 3. metadata에서 casenames 확인
                         elif "casenames" in cleaned_metadata:
                             cleaned["case_name"] = cleaned_metadata["casenames"]
+                            logger.info(f"[_clean_source_for_client] ✅ Found casenames in cleaned_metadata: {cleaned_metadata['casenames']}")
                         # 4. metadata에서 case_name 확인
                         elif "case_name" in cleaned_metadata:
                             cleaned["case_name"] = cleaned_metadata["case_name"]
+                            logger.info(f"[_clean_source_for_client] ✅ Found case_name in cleaned_metadata: {cleaned_metadata['case_name']}")
+                        else:
+                            logger.warning(
+                                f"[_clean_source_for_client] ❌ case_name not found. "
+                                f"source_item keys: {list(source_item.keys())[:15]}, "
+                                f"source_item.casenames: {source_item.get('casenames')}, "
+                                f"source_item.case_name: {source_item.get('case_name')}, "
+                                f"cleaned_metadata keys: {list(cleaned_metadata.keys())[:15]}, "
+                                f"cleaned_metadata.casenames: {cleaned_metadata.get('casenames')}, "
+                                f"cleaned_metadata.case_name: {cleaned_metadata.get('case_name')}"
+                            )
                     if "court" not in cleaned and "court" in cleaned_metadata:
                         cleaned["court"] = cleaned_metadata["court"]
                     if "decision_date" not in cleaned and "announce_date" in cleaned_metadata:
@@ -2931,9 +2986,17 @@ class SourcesExtractor:
                 
                 if case_name:
                     normalized_detail["case_name"] = case_name
-                    logger.debug(f"[_normalize_sources_detail] Extracted case_name: {case_name}")
+                    logger.info(f"[_normalize_sources_detail] ✅ Extracted case_name: {case_name}")
                 else:
-                    logger.debug(f"[_normalize_sources_detail] case_name not found. detail keys: {list(detail.keys())}, metadata keys: {list(metadata.keys())}")
+                    logger.warning(
+                        f"[_normalize_sources_detail] ❌ case_name not found. "
+                        f"detail keys: {list(detail.keys())[:15]}, "
+                        f"detail.case_name: {detail.get('case_name')}, "
+                        f"detail.casenames: {detail.get('casenames')}, "
+                        f"metadata keys: {list(metadata.keys())[:15]}, "
+                        f"metadata.case_name: {metadata.get('case_name')}, "
+                        f"metadata.casenames: {metadata.get('casenames')}"
+                    )
                 if detail.get("court") or metadata.get("court"):
                     normalized_detail["court"] = detail.get("court") or metadata.get("court")
                 decision_date = detail.get("decision_date") or metadata.get("announce_date") or metadata.get("decision_date")
@@ -3165,8 +3228,11 @@ class SourcesExtractor:
             if not doc_id:
                 return []
             
-            # 데이터베이스 경로 가져오기
-            db_path = os.getenv("DATABASE_PATH", "./data/lawfirm_v2.db")
+            # 데이터베이스 경로 가져오기 (lawfirm_v2.db는 더 이상 사용하지 않음)
+            db_path = os.getenv("DATABASE_PATH", None)
+            if not db_path:
+                logger.debug("DATABASE_PATH not set, skipping reference statutes extraction")
+                return []
             if not os.path.isabs(db_path):
                 # 상대 경로인 경우 프로젝트 루트 기준으로 변환
                 project_root = Path(__file__).parent.parent.parent
@@ -3230,8 +3296,10 @@ class SourcesExtractor:
             if not statute_name or not article_no:
                 return None
             
-            # 데이터베이스 경로 가져오기
-            db_path = os.getenv("DATABASE_PATH", "./data/lawfirm_v2.db")
+            # 데이터베이스 경로 가져오기 (lawfirm_v2.db는 더 이상 사용하지 않음)
+            db_path = os.getenv("DATABASE_PATH", None)
+            if not db_path:
+                return None
             if not os.path.isabs(db_path):
                 project_root = Path(__file__).parent.parent.parent
                 db_path = str(project_root / db_path)

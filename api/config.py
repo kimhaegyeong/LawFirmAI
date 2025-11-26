@@ -5,6 +5,17 @@ import os
 import logging
 from typing import List, Optional
 from pydantic_settings import BaseSettings
+from pydantic import Field
+
+# 환경 변수 로더를 먼저 로드
+try:
+    from utils.env_loader import ensure_env_loaded
+    from pathlib import Path
+    ensure_env_loaded(Path(__file__).parent.parent)
+except ImportError:
+    pass
+
+from lawfirm_langgraph.core.shared.utils.environment import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -12,19 +23,16 @@ logger = logging.getLogger(__name__)
 class APIConfig(BaseSettings):
     """API 서버 설정"""
     
+    # 환경 설정
+    environment: Environment = Field(
+        default=Environment.DEVELOPMENT,
+        env="ENVIRONMENT"
+    )
+    
     # 서버 설정
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     debug: bool = False
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # 개발 모드 자동 감지: DEBUG 환경 변수 또는 ENVIRONMENT=development
-        if self.debug is False:
-            debug_env = os.getenv("DEBUG", "").lower()
-            environment = os.getenv("ENVIRONMENT", "").lower()
-            if debug_env in ("true", "1", "yes") or environment == "development":
-                self.debug = True
     
     # CORS 설정
     # 개발 환경: "http://localhost:3000,http://127.0.0.1:3000"
@@ -32,16 +40,47 @@ class APIConfig(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     
     # 데이터베이스 설정
-    # 로컬: sqlite:///./data/api_sessions.db
-    # 개발/운영: postgresql://user:password@host:port/dbname
-    database_url: str = "sqlite:///./data/api_sessions.db"
+    # DATABASE_URL이 명시적으로 설정되어 있으면 사용
+    # 없으면 POSTGRES_* 환경변수들을 조합하여 생성
+    database_url: Optional[str] = None
     
-    # PostgreSQL 설정 (PostgreSQL 사용 시)
-    postgres_host: str = "postgres"
+    # PostgreSQL 설정 (DATABASE_URL이 없을 때 사용)
+    postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "lawfirmai"
-    postgres_user: str = "lawfirmai"
-    postgres_password: str = ""
+    postgres_db: str = "lawfirm"
+    postgres_user: str = "lawfirm_user"
+    postgres_password: str = "lawfirm_password"
+    
+    def __init__(self, **kwargs):
+        # ENVIRONMENT 환경 변수에서 자동 설정
+        if "environment" not in kwargs:
+            kwargs["environment"] = Environment.get_current()
+        
+        super().__init__(**kwargs)
+        
+        # database_url이 설정되지 않았으면 환경변수 조합으로 생성
+        if not self.database_url:
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(self.postgres_password)
+            self.database_url = f"postgresql://{self.postgres_user}:{encoded_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        
+        # 환경에 따른 자동 설정
+        if self.environment.is_debug_enabled():
+            self.debug = True
+        elif "DEBUG" in os.environ:
+            # DEBUG 환경 변수가 명시적으로 설정된 경우 우선
+            debug_env = os.getenv("DEBUG", "").lower()
+            if debug_env in ("true", "1", "yes"):
+                self.debug = True
+            elif debug_env in ("false", "0", "no"):
+                self.debug = False
+        
+        # 환경별 기본값 설정
+        if self.environment == Environment.PRODUCTION:
+            # 프로덕션 환경 기본값
+            if not self.cors_origins or self.cors_origins == "*":
+                logger.warning("프로덕션 환경에서 CORS_ORIGINS를 명시적으로 설정해야 합니다.")
+            # 프로덕션에서는 인증 권장 (기본값은 False 유지, 명시적으로 설정 필요)
     
     # lawfirm_langgraph 설정
     langgraph_enabled: bool = True
@@ -115,6 +154,18 @@ class APIConfig(BaseSettings):
         
         # 콤마로 구분된 문자열인 경우 (기본 처리)
         return [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+    
+    def is_local(self) -> bool:
+        """로컬 환경 여부"""
+        return self.environment.is_local()
+    
+    def is_development(self) -> bool:
+        """개발 환경 여부"""
+        return self.environment.is_development()
+    
+    def is_production(self) -> bool:
+        """프로덕션 환경 여부"""
+        return self.environment.is_production()
     
     class Config:
         env_file = ".env"
