@@ -11,8 +11,14 @@ except ImportError:
     from core.utils.logger import get_logger
 from typing import Optional
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
 
 
 logger = get_logger(__name__)
@@ -110,4 +116,46 @@ class SearchRoutes:
             return "expand"
         
         return "skip"
+    
+    def should_use_multi_query_agent(self, state: LegalWorkflowState) -> str:
+        """
+        멀티 질의 검색 에이전트 사용 여부 결정
+        
+        Args:
+            state: 워크플로우 상태
+        
+        Returns:
+            "multi_query_agent" 또는 "standard_search"
+        """
+        query = WorkflowUtils.get_state_value(state, "query", "")
+        complexity = WorkflowUtils.get_state_value(state, "query_complexity", QueryComplexity.MODERATE)
+        needs_search = WorkflowUtils.get_state_value(state, "needs_search", True)
+        
+        # Enum인 경우 값으로 변환
+        if hasattr(complexity, 'value'):
+            complexity = complexity.value
+        
+        # 검색이 필요하지 않으면 표준 검색으로
+        if not needs_search:
+            return "standard_search"
+        
+        # 복잡한 질문인 경우 멀티 질의 에이전트 사용
+        if complexity == QueryComplexity.COMPLEX or complexity == "complex":
+            self.logger.info(f"🔍 [ROUTING] Using multi-query agent for complex query: '{query[:50]}...'")
+            return "multi_query_agent"
+        
+        # 질문 길이가 길거나 여러 키워드가 포함된 경우
+        if query and (len(query) > 25 or len(query.split()) > 4):
+            self.logger.info(f"🔍 [ROUTING] Using multi-query agent for long/multi-keyword query: '{query[:50]}...' (length={len(query)}, words={len(query.split())})")
+            return "multi_query_agent"
+        
+        # 질문에 여러 법률 개념이 포함된 경우 (예: "사유", "절차", "효과", "요건" 등)
+        legal_concepts = ["사유", "절차", "효과", "요건", "조건", "방법", "절차", "기간", "효력", "무효", "취소"]
+        if query and sum(1 for concept in legal_concepts if concept in query) >= 2:
+            self.logger.info(f"🔍 [ROUTING] Using multi-query agent for multi-concept query: '{query[:50]}...'")
+            return "multi_query_agent"
+        
+        # 기본값: 표준 검색
+        self.logger.debug(f"🔍 [ROUTING] Using standard search for query: '{query[:50]}...' (complexity={complexity}, length={len(query) if query else 0})")
+        return "standard_search"
 
