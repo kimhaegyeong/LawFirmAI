@@ -9,8 +9,14 @@ from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.agents.handlers.search_result_processor import SearchResultProcessor
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.agents.handlers.search_result_processor import SearchResultProcessor
+except ImportError:
+    from core.agents.handlers.search_result_processor import SearchResultProcessor
 
 
 class MergeAndRerankSubgraph:
