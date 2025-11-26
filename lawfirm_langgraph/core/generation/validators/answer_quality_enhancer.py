@@ -13,8 +13,14 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 # 개별 품질 향상 모듈들 import
-from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
-from core.classification.classifiers.question_classifier import QuestionType
+try:
+    from lawfirm_langgraph.core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+except ImportError:
+    from core.services.unified_prompt_manager import UnifiedPromptManager, LegalDomain
+try:
+    from lawfirm_langgraph.core.classification.classifiers.question_classifier import QuestionType
+except ImportError:
+    from core.classification.classifiers.question_classifier import QuestionType
 from .confidence_calculator import ConfidenceCalculator
 from .keyword_coverage_enhancer import KeywordCoverageEnhancer
 from .answer_structure_enhancer import AnswerStructureEnhancer, QuestionType as StructureQuestionType

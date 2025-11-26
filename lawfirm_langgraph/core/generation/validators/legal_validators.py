@@ -20,7 +20,10 @@ try:
 except ImportError:
     LegalCitationEnhancer = None
     LegalCitation = None
-from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+try:
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+except ImportError:
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
 logger = get_logger(__name__)
 

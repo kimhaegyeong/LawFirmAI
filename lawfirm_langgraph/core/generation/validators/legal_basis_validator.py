@@ -4,7 +4,6 @@
 법령 인용의 정확성과 신뢰성을 검증하고 데이터베이스와 연동하여 법적 근거를 검증
 """
 
-import sqlite3
 import logging
 try:
     from lawfirm_langgraph.core.utils.logger import get_logger
@@ -20,7 +19,10 @@ try:
 except ImportError:
     LegalCitationEnhancer = None
     LegalCitation = None
-from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+try:
+    from lawfirm_langgraph.core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
+except ImportError:
+    from core.search.connectors.legal_data_connector_v2 import LegalDataConnectorV2
 
 logger = get_logger(__name__)
 
@@ -53,15 +55,15 @@ class LegalBasisValidator:
     
     def __init__(self, db_manager: Optional[LegalDataConnectorV2] = None):
         """초기화"""
-        self.db_manager = db_manager or LegalDataConnectorV2()
+        self._db_manager = db_manager  # 지연 초기화를 위해 private로 저장
         self.citation_enhancer = LegalCitationEnhancer() if LegalCitationEnhancer is not None else None
         self.logger = get_logger(__name__)
         
         # 검증 규칙 로드
         self.validation_rules = self._load_validation_rules()
         
-        # 법령 데이터베이스 초기화 확인
-        self._ensure_legal_database()
+        # 법령 데이터베이스 초기화는 지연 초기화 (필요할 때만)
+        # self._ensure_legal_database()  # 지연 초기화로 변경
     
     def _load_validation_rules(self) -> Dict[str, Any]:
         """검증 규칙 로드"""
@@ -79,59 +81,78 @@ class LegalBasisValidator:
             }
         }
     
+    @property
+    def db_manager(self) -> LegalDataConnectorV2:
+        """데이터베이스 매니저 지연 초기화"""
+        if self._db_manager is None:
+            self._db_manager = LegalDataConnectorV2()
+            # 법령 데이터베이스 초기화 확인
+            self._ensure_legal_database()
+        return self._db_manager
+    
     def _ensure_legal_database(self):
-        """법령 데이터베이스 초기화 확인"""
+        """법령 데이터베이스 초기화 확인 (PostgreSQL)"""
         try:
-            with self.db_manager.get_connection() as conn:
+            from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+            
+            db_type = self.db_manager._db_adapter.db_type if self.db_manager._db_adapter else 'postgresql'
+            
+            with self.db_manager.get_connection_context() as conn:
                 cursor = conn.cursor()
                 
-                # 법령 메타데이터 테이블 확인
-                cursor.execute("""
+                # 법령 메타데이터 테이블 확인 (PostgreSQL)
+                create_law_metadata_sql = SQLAdapter.convert_sql("""
                     CREATE TABLE IF NOT EXISTS law_metadata (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        document_id TEXT NOT NULL,
-                        law_name TEXT,
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(255) NOT NULL,
+                        law_name VARCHAR(255),
                         article_number INTEGER,
-                        promulgation_date TEXT,
-                        enforcement_date TEXT,
-                        department TEXT,
-                        is_active BOOLEAN DEFAULT 1,
+                        promulgation_date DATE,
+                        enforcement_date DATE,
+                        department VARCHAR(255),
+                        is_active BOOLEAN DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (document_id) REFERENCES documents (id)
                     )
-                """)
+                """, db_type)
                 
-                # 판례 메타데이터 테이블 확인
-                cursor.execute("""
+                cursor.execute(create_law_metadata_sql)
+                
+                # 판례 메타데이터 테이블 확인 (PostgreSQL)
+                create_precedent_metadata_sql = SQLAdapter.convert_sql("""
                     CREATE TABLE IF NOT EXISTS precedent_metadata (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        document_id TEXT NOT NULL,
-                        precedent_number TEXT,
-                        case_name TEXT,
-                        court_name TEXT,
-                        decision_date TEXT,
-                        case_type TEXT,
-                        is_active BOOLEAN DEFAULT 1,
+                        id SERIAL PRIMARY KEY,
+                        document_id VARCHAR(255) NOT NULL,
+                        precedent_number VARCHAR(255),
+                        case_name VARCHAR(255),
+                        court_name VARCHAR(255),
+                        decision_date DATE,
+                        case_type VARCHAR(50),
+                        is_active BOOLEAN DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (document_id) REFERENCES documents (id)
                     )
-                """)
+                """, db_type)
                 
-                # 법적 근거 검증 로그 테이블
-                cursor.execute("""
+                cursor.execute(create_precedent_metadata_sql)
+                
+                # 법적 근거 검증 로그 테이블 (PostgreSQL)
+                create_validation_log_sql = SQLAdapter.convert_sql("""
                     CREATE TABLE IF NOT EXISTS legal_basis_validation_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         query_text TEXT NOT NULL,
                         answer_text TEXT NOT NULL,
-                        validation_result TEXT NOT NULL,
+                        validation_result VARCHAR(10) NOT NULL,
                         confidence_score REAL,
                         validation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         citations_found INTEGER DEFAULT 0,
                         valid_citations INTEGER DEFAULT 0
                     )
-                """)
+                """, db_type)
+                
+                cursor.execute(create_validation_log_sql)
                 
                 conn.commit()
                 self.logger.info("Legal database tables ensured")
@@ -251,58 +272,89 @@ class LegalBasisValidator:
     def _find_legal_source(self, citation: LegalCitation) -> Optional[LegalSource]:
         """데이터베이스에서 법적 소스 검색"""
         try:
-            with self.db_manager.get_connection() as conn:
+            with self.db_manager.get_connection_context() as conn:
                 cursor = conn.cursor()
+                
+                from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+                db_type = self.db_manager._db_adapter.db_type if self.db_manager._db_adapter else 'postgresql'
                 
                 if citation.type == 'law_articles':
                     # 법령 조문 검색
                     article_num = citation.metadata.get('article_number')
                     if article_num:
-                        cursor.execute("""
+                        search_law_sql = SQLAdapter.convert_sql("""
                             SELECT d.id, d.title, d.content, d.source_url, lm.law_name, lm.article_number
                             FROM documents d
                             JOIN law_metadata lm ON d.id = lm.document_id
-                            WHERE lm.article_number = ? AND lm.is_active = 1
+                            WHERE lm.article_number = ? AND lm.is_active = TRUE
                             ORDER BY lm.updated_at DESC
                             LIMIT 1
-                        """, (article_num,))
+                        """, db_type)
+                        
+                        cursor.execute(search_law_sql, (article_num,))
                         
                         result = cursor.fetchone()
                         if result:
-                            return LegalSource(
-                                type='law',
-                                identifier=f"제{article_num}조",
-                                title=result[1],
-                                content=result[2],
-                                source_url=result[3],
-                                validity_status='valid',
-                                last_updated=result[5] if len(result) > 5 else None
-                            )
+                            # PostgreSQL RealDictRow 또는 일반 튜플 처리
+                            if hasattr(result, 'keys'):
+                                return LegalSource(
+                                    type='law',
+                                    identifier=f"제{article_num}조",
+                                    title=result.get('title', ''),
+                                    content=result.get('content', ''),
+                                    source_url=result.get('source_url'),
+                                    validity_status='valid',
+                                    last_updated=result.get('updated_at') if 'updated_at' in result else None
+                                )
+                            else:
+                                return LegalSource(
+                                    type='law',
+                                    identifier=f"제{article_num}조",
+                                    title=result[1] if len(result) > 1 else '',
+                                    content=result[2] if len(result) > 2 else '',
+                                    source_url=result[3] if len(result) > 3 else None,
+                                    validity_status='valid',
+                                    last_updated=result[5] if len(result) > 5 else None
+                                )
                 
                 elif citation.type == 'precedent_numbers':
                     # 판례 검색
                     precedent_num = citation.metadata.get('precedent_number')
                     if precedent_num:
-                        cursor.execute("""
+                        search_precedent_sql = SQLAdapter.convert_sql("""
                             SELECT d.id, d.title, d.content, d.source_url, pm.precedent_number, pm.case_name, pm.court_name
                             FROM documents d
                             JOIN precedent_metadata pm ON d.id = pm.document_id
-                            WHERE pm.precedent_number = ? AND pm.is_active = 1
+                            WHERE pm.precedent_number = ? AND pm.is_active = TRUE
                             ORDER BY pm.updated_at DESC
                             LIMIT 1
-                        """, (precedent_num,))
+                        """, db_type)
+                        
+                        cursor.execute(search_precedent_sql, (precedent_num,))
                         
                         result = cursor.fetchone()
                         if result:
-                            return LegalSource(
-                                type='precedent',
-                                identifier=precedent_num,
-                                title=result[1],
-                                content=result[2],
-                                source_url=result[3],
-                                validity_status='valid',
-                                last_updated=None
-                            )
+                            # PostgreSQL RealDictRow 또는 일반 튜플 처리
+                            if hasattr(result, 'keys'):
+                                return LegalSource(
+                                    type='precedent',
+                                    identifier=precedent_num,
+                                    title=result.get('title', ''),
+                                    content=result.get('content', ''),
+                                    source_url=result.get('source_url'),
+                                    validity_status='valid',
+                                    last_updated=result.get('updated_at') if 'updated_at' in result else None
+                                )
+                            else:
+                                return LegalSource(
+                                    type='precedent',
+                                    identifier=precedent_num,
+                                    title=result[1] if len(result) > 1 else '',
+                                    content=result[2] if len(result) > 2 else '',
+                                    source_url=result[3] if len(result) > 3 else None,
+                                    validity_status='valid',
+                                    last_updated=None
+                                )
                 
                 return None
                 
@@ -419,14 +471,20 @@ class LegalBasisValidator:
     def _log_validation(self, query: str, answer: str, validation_result: LegalBasisValidation):
         """검증 로그 저장"""
         try:
-            with self.db_manager.get_connection() as conn:
+            from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+            
+            db_type = self.db_manager._db_adapter.db_type if self.db_manager._db_adapter else 'postgresql'
+            
+            with self.db_manager.get_connection_context() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
+                insert_sql = SQLAdapter.convert_sql("""
                     INSERT INTO legal_basis_validation_log 
                     (query_text, answer_text, validation_result, confidence_score, citations_found, valid_citations)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, db_type)
+                
+                cursor.execute(insert_sql, (
                     query[:500],  # 길이 제한
                     answer[:1000],  # 길이 제한
                     str(validation_result.is_valid),
@@ -443,10 +501,20 @@ class LegalBasisValidator:
     def get_validation_statistics(self, days: int = 30) -> Dict[str, Any]:
         """검증 통계 조회"""
         try:
-            with self.db_manager.get_connection() as conn:
+            from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+            
+            db_type = self.db_manager._db_adapter.db_type if self.db_manager._db_adapter else 'postgresql'
+            
+            with self.db_manager.get_connection_context() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
+                # PostgreSQL 날짜 함수 사용
+                if db_type == 'postgresql':
+                    date_filter = f"validation_timestamp >= CURRENT_TIMESTAMP - INTERVAL '{days} days'"
+                else:
+                    date_filter = f"validation_timestamp >= datetime('now', '-{days} days')"
+                
+                stats_sql = SQLAdapter.convert_sql(f"""
                     SELECT 
                         COUNT(*) as total_validations,
                         AVG(confidence_score) as avg_confidence,
@@ -455,8 +523,10 @@ class LegalBasisValidator:
                         AVG(citations_found) as avg_citations,
                         AVG(valid_citations) as avg_valid_citations
                     FROM legal_basis_validation_log
-                    WHERE validation_timestamp >= datetime('now', '-{} days')
-                """.format(days))
+                    WHERE {date_filter}
+                """, db_type)
+                
+                cursor.execute(stats_sql)
                 
                 result = cursor.fetchone()
                 
@@ -480,44 +550,106 @@ class LegalBasisValidator:
     def add_legal_source(self, legal_source: LegalSource) -> bool:
         """법적 소스 추가"""
         try:
-            with self.db_manager.get_connection() as conn:
+            from lawfirm_langgraph.core.data.sql_adapter import SQLAdapter
+            
+            db_type = self.db_manager._db_adapter.db_type if self.db_manager._db_adapter else 'postgresql'
+            
+            with self.db_manager.get_connection_context() as conn:
                 cursor = conn.cursor()
                 
-                # 문서 먼저 추가
-                cursor.execute("""
-                    INSERT OR REPLACE INTO documents 
-                    (id, document_type, title, content, source_url, updated_at)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (
+                # 문서 먼저 추가 (PostgreSQL UPSERT)
+                if db_type == 'postgresql':
+                    insert_doc_sql = """
+                        INSERT INTO documents 
+                        (id, document_type, title, content, source_url, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (id) DO UPDATE SET
+                            document_type = EXCLUDED.document_type,
+                            title = EXCLUDED.title,
+                            content = EXCLUDED.content,
+                            source_url = EXCLUDED.source_url,
+                            updated_at = CURRENT_TIMESTAMP
+                    """
+                else:
+                    insert_doc_sql = SQLAdapter.convert_sql("""
+                        INSERT OR REPLACE INTO documents 
+                        (id, document_type, title, content, source_url, updated_at)
+                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, db_type)
+                
+                params = (
                     f"{legal_source.type}_{legal_source.identifier}",
                     legal_source.type,
                     legal_source.title,
                     legal_source.content,
                     legal_source.source_url
-                ))
+                )
+                
+                if db_type == 'postgresql':
+                    cursor.execute(insert_doc_sql, params)
+                else:
+                    cursor.execute(insert_doc_sql, params)
                 
                 # 메타데이터 추가
                 if legal_source.type == 'law':
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO law_metadata 
-                        (document_id, law_name, article_number, is_active, updated_at)
-                        VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
-                    """, (
+                    if db_type == 'postgresql':
+                        insert_law_sql = """
+                            INSERT INTO law_metadata 
+                            (document_id, law_name, article_number, is_active, updated_at)
+                            VALUES (%s, %s, %s, TRUE, CURRENT_TIMESTAMP)
+                            ON CONFLICT (document_id) DO UPDATE SET
+                                law_name = EXCLUDED.law_name,
+                                article_number = EXCLUDED.article_number,
+                                is_active = EXCLUDED.is_active,
+                                updated_at = CURRENT_TIMESTAMP
+                        """
+                    else:
+                        insert_law_sql = SQLAdapter.convert_sql("""
+                            INSERT OR REPLACE INTO law_metadata 
+                            (document_id, law_name, article_number, is_active, updated_at)
+                            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                        """, db_type)
+                    
+                    params = (
                         f"{legal_source.type}_{legal_source.identifier}",
                         legal_source.title,
                         int(legal_source.identifier.replace('제', '').replace('조', ''))
-                    ))
+                    )
+                    
+                    if db_type == 'postgresql':
+                        cursor.execute(insert_law_sql, params)
+                    else:
+                        cursor.execute(insert_law_sql, params)
                 
                 elif legal_source.type == 'precedent':
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO precedent_metadata 
-                        (document_id, precedent_number, case_name, is_active, updated_at)
-                        VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
-                    """, (
+                    if db_type == 'postgresql':
+                        insert_precedent_sql = """
+                            INSERT INTO precedent_metadata 
+                            (document_id, precedent_number, case_name, is_active, updated_at)
+                            VALUES (%s, %s, %s, TRUE, CURRENT_TIMESTAMP)
+                            ON CONFLICT (document_id) DO UPDATE SET
+                                precedent_number = EXCLUDED.precedent_number,
+                                case_name = EXCLUDED.case_name,
+                                is_active = EXCLUDED.is_active,
+                                updated_at = CURRENT_TIMESTAMP
+                        """
+                    else:
+                        insert_precedent_sql = SQLAdapter.convert_sql("""
+                            INSERT OR REPLACE INTO precedent_metadata 
+                            (document_id, precedent_number, case_name, is_active, updated_at)
+                            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                        """, db_type)
+                    
+                    params = (
                         f"{legal_source.type}_{legal_source.identifier}",
                         legal_source.identifier,
                         legal_source.title
-                    ))
+                    )
+                    
+                    if db_type == 'postgresql':
+                        cursor.execute(insert_precedent_sql, params)
+                    else:
+                        cursor.execute(insert_precedent_sql, params)
                 
                 conn.commit()
                 self.logger.info(f"Legal source added: {legal_source.type}_{legal_source.identifier}")

@@ -186,9 +186,9 @@ class AnswerStructureEnhancer:
             self.few_shot_examples = self._load_few_shot_examples() if enable_few_shot else {}
             self._few_shot_loader = None
 
-        # 법적 근거 강화 시스템 초기화
-        self.citation_enhancer = LegalCitationEnhancer()
-        self.basis_validator = LegalBasisValidator()
+        # 법적 근거 강화 시스템 초기화 (지연 초기화)
+        self._citation_enhancer = None
+        self._basis_validator = None
 
         # LLM 초기화 (LLM 기반 구조화를 위해)
         self.llm = llm or self._initialize_llm()
@@ -3035,10 +3035,14 @@ class AnswerStructureEnhancer:
         """법적 근거를 포함한 답변 강화"""
         try:
             # 1. 법적 인용 추출 및 강화
-            citation_result = self.citation_enhancer.enhance_text_with_citations(answer)
+            if self._citation_enhancer is None:
+                self._citation_enhancer = LegalCitationEnhancer()
+            citation_result = self._citation_enhancer.enhance_text_with_citations(answer)
 
             # 2. 법적 근거 검증
-            validation_result = self.basis_validator.validate_legal_basis(query, answer)
+            if self._basis_validator is None:
+                self._basis_validator = LegalBasisValidator()
+            validation_result = self._basis_validator.validate_legal_basis(query, answer)
 
             # 3. 구조화된 답변 생성
             structured_answer = self.create_structured_answer(answer, question_type)
@@ -3137,7 +3141,9 @@ class AnswerStructureEnhancer:
     def get_legal_citation_statistics(self, text: str) -> Dict[str, Any]:
         """법적 인용 통계 조회"""
         try:
-            citation_result = self.citation_enhancer.enhance_text_with_citations(text)
+            if self._citation_enhancer is None:
+                self._citation_enhancer = LegalCitationEnhancer()
+            citation_result = self._citation_enhancer.enhance_text_with_citations(text)
 
             return {
                 "total_citations": citation_result.get("citation_count", 0),
@@ -3160,7 +3166,9 @@ class AnswerStructureEnhancer:
     def validate_answer_legal_basis(self, query: str, answer: str) -> Dict[str, Any]:
         """답변의 법적 근거 검증"""
         try:
-            validation_result = self.basis_validator.validate_legal_basis(query, answer)
+            if self._basis_validator is None:
+                self._basis_validator = LegalBasisValidator()
+            validation_result = self._basis_validator.validate_legal_basis(query, answer)
 
             return {
                 "is_valid": validation_result.is_valid,
@@ -3259,5 +3267,24 @@ class AnswerStructureEnhancer:
             return answer
 
 
-# 전역 인스턴스
-answer_structure_enhancer = AnswerStructureEnhancer()
+# 전역 인스턴스 (지연 초기화)
+_answer_structure_enhancer = None
+
+def get_answer_structure_enhancer() -> 'AnswerStructureEnhancer':
+    """AnswerStructureEnhancer 전역 인스턴스 가져오기 (지연 초기화)"""
+    global _answer_structure_enhancer
+    if _answer_structure_enhancer is None:
+        _answer_structure_enhancer = AnswerStructureEnhancer()
+    return _answer_structure_enhancer
+
+# 하위 호환성을 위한 클래스 (지연 초기화를 지원)
+class _LazyAnswerStructureEnhancer:
+    """지연 초기화를 지원하는 AnswerStructureEnhancer 래퍼"""
+    def __getattr__(self, name):
+        return getattr(get_answer_structure_enhancer(), name)
+    
+    def __call__(self, *args, **kwargs):
+        return get_answer_structure_enhancer()(*args, **kwargs)
+
+# 하위 호환성을 위한 별칭 (지연 초기화)
+answer_structure_enhancer = _LazyAnswerStructureEnhancer()
