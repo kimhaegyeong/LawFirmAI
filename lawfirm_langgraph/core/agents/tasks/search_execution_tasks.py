@@ -29,7 +29,7 @@ class SearchExecutionTasks:
         original_query: str,
         execute_semantic_search_func: Optional[Callable] = None,
         execute_keyword_search_func: Optional[Callable] = None,
-        timeout: float = 30.0
+        timeout: float = 15.0
     ) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]], int]:
         """
         의미 검색과 키워드 검색을 병렬로 실행
@@ -123,7 +123,7 @@ class SearchExecutionTasks:
         original_query: str,
         execute_semantic_search_func: Optional[Callable] = None,
         execute_keyword_search_func: Optional[Callable] = None,
-        timeout: float = 30.0
+        timeout: float = 15.0
     ) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]], int]:
         """
         의미 검색과 키워드 검색을 동기적으로 병렬 실행 (ThreadPoolExecutor 사용)
