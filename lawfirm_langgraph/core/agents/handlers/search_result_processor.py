@@ -11,10 +11,22 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core.agents.state_definitions import LegalWorkflowState
-from core.workflow.utils.workflow_constants import WorkflowConstants
-from core.workflow.utils.workflow_utils import WorkflowUtils
-from core.agents.tasks.search_result_tasks import SearchResultTasks
+try:
+    from lawfirm_langgraph.core.agents.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.agents.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_constants import WorkflowConstants
+except ImportError:
+    from core.workflow.utils.workflow_constants import WorkflowConstants
+try:
+    from lawfirm_langgraph.core.workflow.utils.workflow_utils import WorkflowUtils
+except ImportError:
+    from core.workflow.utils.workflow_utils import WorkflowUtils
+try:
+    from lawfirm_langgraph.core.agents.tasks.search_result_tasks import SearchResultTasks
+except ImportError:
+    from core.agents.tasks.search_result_tasks import SearchResultTasks
 
 
 class SearchResultProcessor:
