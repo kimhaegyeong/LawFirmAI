@@ -689,14 +689,12 @@ class SearchExecutionProcessor:
             # 법령 조문 직접 검색도 병렬 실행 (max_workers=3)
             needs_direct_statute = original_query and query_type_str == "law_inquiry"
             
-            # Multi-Query 병렬 처리 최적화: Multi-Query 준비 (개선: 최대 개수 감소)
+            # Multi-Query 병렬 처리 최적화: Multi-Query 준비 (적응형 활용)
             multi_queries = optimized_queries.get("multi_queries", [])
             multi_queries_to_process = []
             if multi_queries and len(multi_queries) > 1:
-                max_semantic_results_before_multi = semantic_k * 2
                 multi_queries_to_process = multi_queries[1:]  # 첫 번째는 이미 처리됨
-                max_multi_queries = min(len(multi_queries_to_process), 1)  # 최대 개수 감소 (2 → 1개)
-                multi_queries_to_process = multi_queries_to_process[:max_multi_queries]
+                # 최대 개수는 Phase 2에서 결과 부족 정도에 따라 동적으로 결정
             
             # 동적 worker 수 계산 (Multi-Query 포함)
             base_workers = 2  # semantic + keyword
@@ -706,12 +704,12 @@ class SearchExecutionProcessor:
                 base_workers += len(multi_queries_to_process)
             max_workers = min(base_workers, 6)  # 최대 6개로 제한
             
-            # 동적 타임아웃 계산: 작업 수와 예상 결과 수에 따라 조정 (개선: 타임아웃 감소)
-            base_timeout = 8  # 기본 타임아웃 8초 (10 → 8초로 감소)
+            # 동적 타임아웃 계산: 작업 수와 예상 결과 수에 따라 조정 (최적화: 타임아웃 감소)
+            base_timeout = 6  # 기본 타임아웃 6초 (8 → 6초로 감소)
             worker_count = base_workers
-            timeout_per_worker = 2  # 작업당 2초 추가 (3 → 2초로 감소)
+            timeout_per_worker = 1.5  # 작업당 1.5초 추가 (2 → 1.5초로 감소)
             dynamic_timeout = base_timeout + (worker_count * timeout_per_worker)
-            dynamic_timeout = min(dynamic_timeout, 20)  # 최대 20초로 제한 (30 → 20초로 감소)
+            dynamic_timeout = min(dynamic_timeout, 15)  # 최대 15초로 제한 (20 → 15초로 감소)
             
             # 조기 종료 플래그
             early_exit_triggered = False
@@ -751,16 +749,31 @@ class SearchExecutionProcessor:
                     original_query
                 )
                 
-                # Phase 1 완료 대기 (동적 타임아웃 조정 - 추가 개선)
-                # 동적 k 값에 따라 타임아웃 조정: 최소 20초, 최대 35초, k 값에 따라 조정
-                # 검색 작업이 오래 걸리는 경우를 고려하여 타임아웃 증가 (15-25초 -> 20-35초)
-                phase1_timeout = max(20, min(35, 15 + (semantic_k + keyword_k) // 3))
+                # Phase 1 완료 대기 (동적 타임아웃 조정 - 최적화: 10-15초로 단축)
+                # 동적 k 값에 따라 타임아웃 조정: 최소 10초, 최대 15초, k 값에 따라 조정
+                # 처리 시간 최적화를 위해 타임아웃 단축 (20-35초 -> 10-15초)
+                phase1_timeout = max(10, min(15, 8 + (semantic_k + keyword_k) // 5))
                 
                 try:
                     for future in as_completed([semantic_future, keyword_future], timeout=phase1_timeout):
                         try:
                             if future == semantic_future:
                                 semantic_results, semantic_count = future.result()
+                                # 🔥 최적화: Semantic 검색이 0개 결과면 즉시 조기 종료
+                                if len(semantic_results) == 0 and semantic_count == 0:
+                                    self.logger.warning(
+                                        "⚠️ [EARLY EXIT] Semantic search returned 0 results, "
+                                        "skipping Phase 2 and retries"
+                                    )
+                                    # Keyword 검색 결과만 기다리고 종료
+                                    if not keyword_future.done():
+                                        try:
+                                            keyword_results, keyword_count = keyword_future.result(timeout=5.0)
+                                        except (TimeoutError, FutureCancelledError, Exception):
+                                            keyword_results, keyword_count = [], 0
+                                    early_exit_triggered = True
+                                    early_exit_reason = "Semantic search returned 0 results"
+                                    break
                             elif future == keyword_future:
                                 keyword_results, keyword_count = future.result()
                             
@@ -814,21 +827,30 @@ class SearchExecutionProcessor:
                     
                     # Phase 1 결과 평가 (조기 종료되지 않은 경우)
                     if not early_exit_triggered:
-                        phase1_total = len(semantic_results) + len(keyword_results)
-                        phase1_sufficient = (
-                            phase1_total >= early_exit_threshold and
-                            len(semantic_results) >= min_semantic_for_early_exit and
-                            len(keyword_results) >= min_keyword_for_early_exit
-                        )
-                        
-                        if phase1_sufficient:
-                            self.logger.info(
-                                f"⚡ [PRIORITY SEARCH] Phase 1 sufficient "
-                                f"(total: {phase1_total}, semantic: {len(semantic_results)}, keyword: {len(keyword_results)}), "
-                                f"skipping Phase 2"
+                        # 🔥 최적화: Semantic 검색이 0개 결과면 즉시 조기 종료
+                        if len(semantic_results) == 0 and semantic_count == 0:
+                            self.logger.warning(
+                                "⚠️ [EARLY EXIT] Semantic search returned 0 results after Phase 1, "
+                                "skipping Phase 2 and retries"
                             )
                             early_exit_triggered = True
-                            early_exit_reason = f"Phase 1 sufficient: {phase1_total} results"
+                            early_exit_reason = "Semantic search returned 0 results"
+                        else:
+                            phase1_total = len(semantic_results) + len(keyword_results)
+                            phase1_sufficient = (
+                                phase1_total >= early_exit_threshold and
+                                len(semantic_results) >= min_semantic_for_early_exit and
+                                len(keyword_results) >= min_keyword_for_early_exit
+                            )
+                            
+                            if phase1_sufficient:
+                                self.logger.info(
+                                    f"⚡ [PRIORITY SEARCH] Phase 1 sufficient "
+                                    f"(total: {phase1_total}, semantic: {len(semantic_results)}, keyword: {len(keyword_results)}), "
+                                    f"skipping Phase 2"
+                                )
+                                early_exit_triggered = True
+                                early_exit_reason = f"Phase 1 sufficient: {phase1_total} results"
                 
                 except (TimeoutError, FutureCancelledError) as e:
                     # Phase 1 타임아웃 또는 취소: 부분 결과라도 사용
@@ -852,14 +874,45 @@ class SearchExecutionProcessor:
                                 keyword_results, keyword_count = [], 0
                     except Exception:
                         keyword_results, keyword_count = [], 0
+                    
+                    # 🔥 최적화: 타임아웃 발생 후에도 Semantic 검색이 0개 결과면 조기 종료
+                    if len(semantic_results) == 0 and semantic_count == 0:
+                        self.logger.warning(
+                            "⚠️ [EARLY EXIT] Phase 1 timeout with 0 semantic results, "
+                            "skipping Phase 2 and retries"
+                        )
+                        early_exit_triggered = True
+                        early_exit_reason = "Phase 1 timeout with 0 semantic results"
+                        phase1_sufficient = False  # Phase 2 스킵을 위해 명시적으로 설정
             
             # Phase 2: 보조 검색 작업 실행 (결과가 부족한 경우만)
-            if not phase1_sufficient:
+            # 🔥 최적화: Semantic 검색이 0개 결과면 Phase 2 스킵
+            if not phase1_sufficient and not (len(semantic_results) == 0 and semantic_count == 0):
+                # 🔥 개선 1: Phase 1 품질 평가 (방안 5)
+                phase1_quality = self._evaluate_search_quality(
+                    semantic_results,
+                    keyword_results,
+                    original_query
+                )
+                
+                if phase1_quality >= 0.7:
+                    # 품질이 충분하면 multi-query 스킵
+                    self.logger.info(
+                        f"✅ [MULTI-QUERY] Phase 1 quality sufficient "
+                        f"(score: {phase1_quality:.2f}), skipping multi-query"
+                    )
+                    multi_queries_to_process = []
+                else:
+                    self.logger.info(
+                        f"🔄 [MULTI-QUERY] Phase 1 quality insufficient "
+                        f"(score: {phase1_quality:.2f}), will execute multi-query"
+                    )
+                
                 self.logger.info(
                     f"🔄 [PRIORITY SEARCH] Phase 1 insufficient "
                     f"(total: {len(semantic_results) + len(keyword_results)}, "
-                    f"semantic: {len(semantic_results)}, keyword: {len(keyword_results)}), "
-                    f"starting Phase 2"
+                    f"semantic: {len(semantic_results)}, keyword: {len(keyword_results)}, "
+                    f"quality: {phase1_quality:.2f}), starting Phase 2"
                 )
                 
                 # 적응형 우선순위 조정
@@ -869,10 +922,40 @@ class SearchExecutionProcessor:
                     query_type=query_type_str
                 )
                 
+                # 🔥 개선 2: 적응형 Multi-Query 개수 결정 (방안 1)
+                current_total = len(semantic_results) + len(keyword_results)
+                missing_results = max(0, early_exit_threshold - current_total)
+                
+                if multi_queries_to_process:
+                    if missing_results > 10:
+                        # 많이 부족하면 최대 3개 사용
+                        multi_queries_to_use = multi_queries_to_process[:3]
+                        self.logger.info(
+                            f"🔄 [MULTI-QUERY] High missing results ({missing_results}), "
+                            f"using {len(multi_queries_to_use)} multi-queries"
+                        )
+                    elif missing_results > 5:
+                        # 중간 정도 부족하면 2개 사용
+                        multi_queries_to_use = multi_queries_to_process[:2]
+                        self.logger.info(
+                            f"🔄 [MULTI-QUERY] Moderate missing results ({missing_results}), "
+                            f"using {len(multi_queries_to_use)} multi-queries"
+                        )
+                    else:
+                        # 조금만 부족하면 1개만 사용
+                        multi_queries_to_use = multi_queries_to_process[:1]
+                        self.logger.info(
+                            f"🔄 [MULTI-QUERY] Low missing results ({missing_results}), "
+                            f"using {len(multi_queries_to_use)} multi-query"
+                        )
+                else:
+                    multi_queries_to_use = []
+                
                 # Phase 2를 위한 ThreadPoolExecutor (우선순위에 따라)
-                phase2_workers = 1  # Multi-Query 1개만 실행
+                phase2_workers = len(multi_queries_to_use)  # Multi-Query 개수에 따라 조정
                 if needs_direct_statute and priorities.get("direct_statute", 2) <= 1:
-                    phase2_workers = 2  # direct_statute + multi_query
+                    phase2_workers += 1  # direct_statute 추가
+                phase2_workers = min(phase2_workers, 6)  # 최대 6개로 제한
                 
                 with ThreadPoolExecutor(max_workers=phase2_workers) as executor:
                     # 법령 조문 직접 검색 (법령 조회인 경우만)
@@ -891,24 +974,28 @@ class SearchExecutionProcessor:
                         
                         direct_statute_future = executor.submit(_search_direct_statute)
 
-                    # Multi-Query 1개만 실행 (결과가 부족한 경우)
+                    # 🔥 개선 3: Multi-Query 병렬 실행 (방안 1)
                     multi_query_futures = {}
-                    if multi_queries_to_process:
-                        mq = multi_queries_to_process[0]  # 첫 번째만
-                        mq_future = executor.submit(
-                            self._execute_semantic_search_single,
-                            mq,
-                            max(3, semantic_k // 4),  # 결과 수 감소
-                            keywords_copy,
-                            None
-                        )
-                        multi_query_futures[mq_future] = ('multi_query', mq[:30])
+                    if multi_queries_to_use:
+                        for idx, mq in enumerate(multi_queries_to_use):
+                            # 부족한 결과 수를 multi-query 개수로 나눠서 각각 할당
+                            k_per_query = max(3, missing_results // len(multi_queries_to_use)) if missing_results > 0 else max(3, semantic_k // 4)
+                            mq_future = executor.submit(
+                                self._execute_semantic_search_single,
+                                mq,
+                                k_per_query,
+                                keywords_copy,
+                                original_query
+                            )
+                            multi_query_futures[mq_future] = ('multi_query', mq[:50], idx)
                     
                     # Phase 2 futures map
                     futures_map = {}
                     if direct_statute_future:
                         futures_map[direct_statute_future] = ('direct_statute', None)
-                    futures_map.update(multi_query_futures)
+                    # Multi-query futures 추가 (튜플 형식으로 저장)
+                    for mq_future, mq_info in multi_query_futures.items():
+                        futures_map[mq_future] = mq_info
                 
                 completed_count = 0
                 direct_statute_results = []
@@ -923,7 +1010,15 @@ class SearchExecutionProcessor:
                 
                 try:
                     for future in as_completed(futures_map.keys(), timeout=dynamic_timeout):
-                        search_type, query_type = futures_map[future]
+                        # futures_map 값이 튜플일 수 있으므로 안전하게 처리
+                        future_info = futures_map[future]
+                        if isinstance(future_info, tuple):
+                            if len(future_info) >= 2:
+                                search_type, query_type = future_info[0], future_info[1:]
+                            else:
+                                search_type, query_type = future_info[0], None
+                        else:
+                            search_type, query_type = future_info, None
                         try:
                             if search_type == 'semantic':
                                 if query_type == 'main':
@@ -939,27 +1034,40 @@ class SearchExecutionProcessor:
                                             content_hash = hash(content[:100])
                                             seen_hashes.add(content_hash)
                                     completed_tasks.append(('semantic', semantic_count))
-                                elif query_type and query_type.startswith('multi_query'):
-                                    # Multi-Query 결과 처리 (최적화된 중복 제거)
-                                    mq_results, mq_count = future.result()
+                            elif search_type == 'multi_query':
+                                # 🔥 개선 4: Multi-Query 결과 처리 (다양성 보장 병합)
+                                mq_results, mq_count = future.result()
+                                # query_type은 튜플 또는 리스트: (mq_query, idx) 또는 [mq_query, idx]
+                                if isinstance(query_type, (tuple, list)) and len(query_type) >= 2:
+                                    mq_query = query_type[0] if query_type[0] else "unknown"
+                                    mq_idx = query_type[1] if len(query_type) > 1 else 0
+                                else:
+                                    mq_query = "unknown"
+                                    mq_idx = 0
+                                    
                                     if mq_results:
-                                        new_results = []
-                                        for doc in mq_results:
+                                        # 다양성 보장 병합
+                                        new_results = self._merge_multi_query_results_single(
+                                            main_results=semantic_results,
+                                            mq_results=mq_results,
+                                            mq_query=mq_query or "unknown",
+                                            original_query=original_query,
+                                            seen_ids=seen_ids,
+                                            seen_hashes=seen_hashes
+                                        )
+                                        
+                                        # seen_ids와 seen_hashes 업데이트
+                                        for doc in new_results:
                                             doc_id = doc.get("id") or doc.get("doc_id")
+                                            if doc_id:
+                                                seen_ids.add(doc_id)
                                             content = doc.get("content", "") or doc.get("text", "")
-                                            content_hash = hash(content[:100]) if content else None
-                                            
-                                            # ID와 content hash 모두 확인하여 중복 제거
-                                            if (not doc_id or doc_id not in seen_ids) and \
-                                               (not content_hash or content_hash not in seen_hashes):
-                                                if doc_id:
-                                                    seen_ids.add(doc_id)
-                                                if content_hash:
-                                                    seen_hashes.add(content_hash)
-                                                new_results.append(doc)
+                                            if content:
+                                                content_hash = hash(content[:100])
+                                                seen_hashes.add(content_hash)
                                         
                                         semantic_results.extend(new_results)
-                                        completed_tasks.append(('multi_query', len(new_results)))
+                                        completed_tasks.append(('multi_query', len(new_results), mq_idx))
                             elif search_type == 'keyword':
                                 keyword_results, keyword_count = future.result()
                                 # seen_ids와 seen_hashes 업데이트 (semantic_results와의 중복 제거를 위해)
@@ -1079,8 +1187,8 @@ class SearchExecutionProcessor:
                             f"⚠️ 병렬 검색 취소 발생: {len(unfinished_futures)} (of {len(futures_map)}) futures unfinished"
                         )
                 
-                    # Phase 2 타임아웃 처리 (짧은 타임아웃)
-                    phase2_timeout = 8  # 8초
+                    # Phase 2 타임아웃 처리 (최적화: 타임아웃 단축)
+                    phase2_timeout = 5  # 5초 (8 → 5초로 감소)
                     
                     try:
                         for future in as_completed(futures_map.keys(), timeout=phase2_timeout):
@@ -2611,4 +2719,153 @@ class SearchExecutionProcessor:
                 if "errors" not in state:
                     state["errors"] = []
                 state["errors"].append(f"{context}: {error_msg}")
+
+    def _evaluate_search_quality(
+        self,
+        semantic_results: List[Dict[str, Any]],
+        keyword_results: List[Dict[str, Any]],
+        original_query: str
+    ) -> float:
+        """검색 결과 품질 평가 (0.0 ~ 1.0)
+        
+        Args:
+            semantic_results: 의미적 검색 결과
+            keyword_results: 키워드 검색 결과
+            original_query: 원본 쿼리
+            
+        Returns:
+            품질 점수 (0.0 ~ 1.0)
+        """
+        try:
+            # 1. 결과 수 기반 점수 (0.0 ~ 0.4)
+            total_results = len(semantic_results) + len(keyword_results)
+            semantic_count = len(semantic_results)
+            keyword_count = len(keyword_results)
+            
+            # 결과 수 점수 계산
+            count_score = min(0.4, (total_results / 20.0) * 0.4)  # 20개 이상이면 0.4점
+            
+            # 2. 결과 다양성 점수 (0.0 ~ 0.3)
+            diversity_score = 0.0
+            if semantic_count > 0 and keyword_count > 0:
+                # 두 타입 모두 있으면 다양성 점수
+                diversity_score = 0.3
+            elif total_results > 0:
+                # 하나라도 있으면 부분 점수
+                diversity_score = 0.15
+            
+            # 3. 관련성 점수 (0.0 ~ 0.3) - 평균 relevance_score 기반
+            relevance_score = 0.0
+            all_scores = []
+            
+            for doc in semantic_results + keyword_results:
+                score = doc.get("relevance_score") or doc.get("score") or 0.0
+                if score > 0:
+                    all_scores.append(score)
+            
+            if all_scores:
+                avg_score = sum(all_scores) / len(all_scores)
+                # 평균 점수가 0.7 이상이면 높은 관련성
+                relevance_score = min(0.3, (avg_score / 0.7) * 0.3)
+            
+            # 최종 품질 점수
+            quality_score = count_score + diversity_score + relevance_score
+            
+            return min(1.0, quality_score)
+            
+        except Exception as e:
+            self.logger.debug(f"Error evaluating search quality: {e}")
+            # 오류 발생 시 기본 점수 반환
+            total_results = len(semantic_results) + len(keyword_results)
+            return min(1.0, total_results / 20.0)
+
+    def _merge_multi_query_results_single(
+        self,
+        main_results: List[Dict[str, Any]],
+        mq_results: List[Dict[str, Any]],
+        mq_query: str,
+        original_query: str,
+        seen_ids: set,
+        seen_hashes: set
+    ) -> List[Dict[str, Any]]:
+        """Multi-Query 결과를 다양성과 관련성을 고려하여 병합 (단일)
+        
+        Args:
+            main_results: 기존 검색 결과
+            mq_results: Multi-Query 검색 결과
+            mq_query: Multi-Query 텍스트
+            original_query: 원본 쿼리
+            seen_ids: 이미 본 문서 ID 집합
+            seen_hashes: 이미 본 콘텐츠 해시 집합
+            
+        Returns:
+            병합된 새로운 결과 리스트
+        """
+        new_results = []
+        
+        for doc in mq_results:
+            doc_id = doc.get("id") or doc.get("doc_id")
+            content = doc.get("content", "") or doc.get("text", "")
+            content_hash = hash(content[:100]) if content else None
+            
+            # 중복 체크
+            if (not doc_id or doc_id not in seen_ids) and \
+               (not content_hash or content_hash not in seen_hashes):
+                # Multi-query 출처 정보 추가
+                doc["multi_query_source"] = mq_query
+                doc["multi_query_boost"] = 0.9  # Multi-query 결과는 약간 낮은 가중치
+                
+                # 원본 쿼리와의 관련성 점수 계산 (간단한 키워드 기반)
+                if content:
+                    similarity = self._calculate_query_similarity(original_query, content)
+                    doc["original_query_similarity"] = similarity
+                    
+                    # 관련성 점수 반영
+                    base_score = doc.get("relevance_score", 0.0) or doc.get("score", 0.0)
+                    if base_score > 0:
+                        # 원본 쿼리와의 관련성을 고려하여 점수 조정
+                        adjusted_score = base_score * (0.7 + 0.3 * similarity)
+                        doc["relevance_score"] = adjusted_score
+                        doc["score"] = adjusted_score
+                
+                new_results.append(doc)
+        
+        return new_results
+
+    def _calculate_query_similarity(self, query1: str, text: str) -> float:
+        """쿼리와 텍스트 간의 유사도 계산 (간단한 키워드 기반)
+        
+        Args:
+            query1: 쿼리 텍스트
+            text: 비교할 텍스트
+            
+        Returns:
+            유사도 점수 (0.0 ~ 1.0)
+        """
+        try:
+            if not query1 or not text:
+                return 0.0
+            
+            # 간단한 키워드 기반 유사도 계산
+            query_words = set(query1.lower().split())
+            text_words = set(text.lower().split())
+            
+            if not query_words or not text_words:
+                return 0.0
+            
+            # Jaccard 유사도
+            intersection = len(query_words & text_words)
+            union = len(query_words | text_words)
+            
+            if union == 0:
+                return 0.0
+            
+            similarity = intersection / union
+            
+            # 정규화 (0.0 ~ 1.0)
+            return min(1.0, similarity)
+            
+        except Exception as e:
+            self.logger.debug(f"Error calculating query similarity: {e}")
+            return 0.5  # 기본값
 

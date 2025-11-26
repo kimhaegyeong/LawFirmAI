@@ -8,7 +8,10 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from core.workflow.state.state_definitions import LegalWorkflowState
+try:
+    from lawfirm_langgraph.core.workflow.state.state_definitions import LegalWorkflowState
+except ImportError:
+    from core.workflow.state.state_definitions import LegalWorkflowState
 
 
 class ContextExpansionProcessor:
