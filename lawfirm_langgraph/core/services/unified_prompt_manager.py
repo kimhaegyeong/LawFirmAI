@@ -10,7 +10,6 @@ try:
     from lawfirm_langgraph.core.utils.logger import get_logger
 except ImportError:
     from core.utils.logger import get_logger
-import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,12 +19,11 @@ try:
     from core.classification.classifiers.question_classifier import QuestionType
 except ImportError:
     try:
-        # 호환성을 위한 fallback
-        from core.services.question_classifier import QuestionType
+        # 호환성을 위한 fallback (더 이상 services에 없음)
+        from core.classification.classifiers.question_classifier import QuestionType
     except ImportError:
-        sys.path.insert(0, str(Path(__file__).parent.parent))
         try:
-            from question_classifier import QuestionType
+            from ..classification.classifiers.question_classifier import QuestionType
         except ImportError:
             # 최종 fallback: enum 직접 정의
             from enum import Enum
@@ -74,6 +72,11 @@ class UnifiedPromptManager:
     MAX_DOC_LENGTH_LAW = 1500  # 법률 조문 최대 길이
     MAX_DOC_LENGTH_CASE = 800  # 판례 최대 길이
     MAX_DOC_LENGTH_COMMENTARY = 500  # 해설 최대 길이
+    SUMMARY_THRESHOLD_LAW = 1000  # 법률 조문 요약 임계값
+    SUMMARY_THRESHOLD_CASE = 800  # 판례 요약 임계값
+    SUMMARY_THRESHOLD_COMMENTARY = 500  # 해설 요약 임계값
+    MAX_DETAILED_EXTRACTS = 5  # 최대 상세 추출 수
+    MAX_SUMMARY_LENGTH = 500  # 최대 요약 길이
     
     # 메타데이터 제외 필드 목록
     EXCLUDED_METADATA_FIELDS = {
@@ -708,43 +711,69 @@ class UnifiedPromptManager:
             if isinstance(sql_schema, str) and len(sql_schema) > 0:
                 context_guidance += f"""
 
-### Text-to-SQL 스키마 요약
+### Text-to-SQL 스키마 요약 (PostgreSQL)
 {sql_schema}
 
 ### SQL 작성 지침
 - SELECT만 사용하세요. DML/DDL은 금지됩니다.
 - WHERE 절에 정확한 필터를 명시하고, 반드시 LIMIT를 포함하세요.
 - 결과는 조문/사건번호/선고일/법원을 기준으로 재현 가능해야 합니다.
+- PostgreSQL 문법을 사용하세요 (예: 문자열 연결은 ||, 날짜 비교는 DATE 타입 사용).
+
+### PostgreSQL 스키마 구조 (PostgreSQL 12+ 기준)
+
+#### 1. 법률 데이터 테이블
+- **statutes** (법률 정보 - Open Law API)
+  - id: SERIAL PRIMARY KEY
+  - law_id: INTEGER NOT NULL, UNIQUE (법령ID)
+  - law_name_kr: TEXT NOT NULL (법령명 한글)
+  - law_name_hanja: TEXT (법령명 한자)
+  - law_name_en: TEXT (법령명 영어)
+  - law_abbrv: TEXT (법령약칭)
+  - law_type: TEXT (법령종류)
+  - law_type_code: TEXT (법종구분코드)
+  - proclamation_date: DATE (공포일자)
+  - effective_date: DATE (시행일자)
+  - ministry_name: TEXT (소관부처명)
+  - domain: TEXT (분야: civil_law, criminal_law)
+
+- **statutes_articles** (법률 조문 - Open Law API)
+  - id: SERIAL PRIMARY KEY
+  - statute_id: INTEGER NOT NULL (FK → statutes(id))
+  - article_no: TEXT NOT NULL (조문번호, 예: "000200" = 제2조, "007500" = 제750조)
+  - article_title: TEXT (조문제목)
+  - article_content: TEXT NOT NULL (조문내용)
+  - clause_no: TEXT (항번호)
+  - clause_content: TEXT (항내용)
+  - item_no: TEXT (호번호)
+  - item_content: TEXT (호내용)
+  - sub_item_no: TEXT (목번호)
+  - sub_item_content: TEXT (목내용)
+  - effective_date: DATE (조문시행일자)
+
+**⚠️ 중요 사항:**
+- `statutes.law_name_kr`은 법령명 한글입니다. 법령명 검색 시 이 컬럼을 사용하세요.
+- `statutes_articles.article_no`는 TEXT 타입이며 6자리 문자열 형식입니다 (예: "007500" = 제750조).
+- 조문번호 변환: "제750조" → "007500", "제2조" → "000200" (6자리, 앞에 0으로 패딩)
+- 날짜 필드는 DATE 타입이므로 날짜 비교 시 DATE 타입을 사용하세요.
+- JOIN 시 외래 키 관계를 정확히 사용하세요: `statutes_articles.statute_id → statutes.id`
 
 ### 법령 조문 검색 규칙 (중요)
 - **법령 조문은 정확한 법령명과 조문번호만 조회하세요.**
-- 법령명은 정확히 일치하거나 LIKE '%법령명%'로 매칭하되, 조문번호는 반드시 정확히 일치해야 합니다.
-- 예: "민법 제750조" → WHERE law_name LIKE '%민법%' AND article_number = 750
+- `statutes` 테이블과 `statutes_articles` 테이블을 JOIN하여 조회하세요.
+- 법령명은 `law_name_kr` 컬럼을 사용하며, LIKE '%법령명%'로 매칭하세요.
+- 조문번호(`article_no`)는 TEXT 타입이며 6자리 문자열 형식입니다. "제750조"는 "007500"으로 변환해야 합니다.
+- 예: "민법 제750조" → JOIN 사용: SELECT s.law_name_kr, sa.article_no, sa.article_content FROM statutes_articles sa JOIN statutes s ON sa.statute_id = s.id WHERE s.law_name_kr LIKE '%민법%' AND sa.article_no = '007500' LIMIT 5;
 
-### 판례/결정례/해석례 검색 규칙 (중요)
-- **판례, 결정례, 해석례에서는 법령명과 조문번호가 모두 일치하는 항목만 조회하세요.**
-- 질의에 법령명과 조문번호가 포함된 경우, 반드시 WHERE 절에 법령명과 조문번호 필터를 추가하세요.
-- 예: "민법 제750조 관련 판례" → WHERE content LIKE '%민법%' AND content LIKE '%제750조%' 또는 WHERE law_name LIKE '%민법%' AND article_number = 750
-
-### 예시(한국어 → SQL)
+### 예시(한국어 → PostgreSQL SQL)
 - 질의: "민법 제750조 조문 보여줘"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%민법%' AND article_number = 750 LIMIT 5;
+  SQL: SELECT s.law_name_kr, sa.article_no, sa.article_content FROM statutes_articles sa JOIN statutes s ON sa.statute_id = s.id WHERE s.law_name_kr LIKE '%민법%' AND sa.article_no = '007500' LIMIT 5;
 - 질의: "형법 제307조 찾아줘"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%형법%' AND article_number = 307 LIMIT 5;
+  SQL: SELECT s.law_name_kr, sa.article_no, sa.article_content FROM statutes_articles sa JOIN statutes s ON sa.statute_id = s.id WHERE s.law_name_kr LIKE '%형법%' AND sa.article_no = '003070' LIMIT 5;
 - 질의: "상법 제24조 전문 보여줘"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%상법%' AND article_number = 24 LIMIT 5;
+  SQL: SELECT s.law_name_kr, sa.article_no, sa.article_content FROM statutes_articles sa JOIN statutes s ON sa.statute_id = s.id WHERE s.law_name_kr LIKE '%상법%' AND sa.article_no = '000240' LIMIT 5;
 - 질의: "근로기준법 제60조 연차 규정"
-  SQL: SELECT law_name, article_number, content FROM articles WHERE law_name LIKE '%근로기준법%' AND article_number = 60 LIMIT 5;
-- 질의: "민법 제750조 관련 판례"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE summary LIKE '%민법%' AND summary LIKE '%제750조%' LIMIT 20;
-- 질의: "형법 제307조 관련 결정례"
-  SQL: SELECT doc_id, org, decision_date, text FROM decision_paragraphs WHERE text LIKE '%형법%' AND text LIKE '%제307조%' LIMIT 20;
-- 질의: "상법 제24조 관련 해석례"
-  SQL: SELECT doc_id, org, title, text FROM interpretation_paragraphs WHERE text LIKE '%상법%' AND text LIKE '%제24조%' LIMIT 20;
-- 질의: "대법원 2021다12345 사건 요지"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE case_number = '2021다12345' LIMIT 5;
-- 질의: "서울고등법원 2022년 이후 판결 요지 10건"
-  SQL: SELECT case_number, court, decision_date, summary FROM cases WHERE court LIKE '%고등법원%' AND decision_date >= '2022-01-01' LIMIT 10;
+  SQL: SELECT s.law_name_kr, sa.article_no, sa.article_content FROM statutes_articles sa JOIN statutes s ON sa.statute_id = s.id WHERE s.law_name_kr LIKE '%근로기준법%' AND sa.article_no = '000600' LIMIT 5;
 """
         except Exception:
             pass
@@ -915,6 +944,9 @@ class UnifiedPromptManager:
             doc_count = len(raw_documents) if raw_documents else 0
             
             logger.info(f"📋 [FINAL PROMPT] Processing {doc_count} raw documents from structured_documents")
+            logger.info(f"📋 [FINAL PROMPT] structured_docs keys: {list(structured_docs.keys()) if isinstance(structured_docs, dict) else 'N/A'}")
+            if doc_count == 0:
+                logger.warning(f"⚠️ [FINAL PROMPT] structured_docs has no documents! structured_docs={structured_docs}")
 
             # 문서 정규화 및 중복 제거
             normalized_count = 0
@@ -966,6 +998,26 @@ class UnifiedPromptManager:
                 logger.warning(f"⚠️ [FINAL PROMPT] normalized_docs is empty after processing {doc_count} raw documents")
         else:
             logger.warning(f"⚠️ [FINAL PROMPT] structured_documents is not a dict: {type(structured_docs)}")
+            logger.warning(f"⚠️ [FINAL PROMPT] structured_docs value: {structured_docs}")
+            logger.warning(f"⚠️ [FINAL PROMPT] context keys: {list(context.keys()) if isinstance(context, dict) else 'N/A'}")
+            # 폴백: context에서 직접 retrieved_docs 사용
+            retrieved_docs = context.get("retrieved_docs", [])
+            if retrieved_docs and len(retrieved_docs) > 0:
+                logger.info(f"🔄 [FALLBACK] Using retrieved_docs directly: {len(retrieved_docs)} docs")
+                # retrieved_docs를 normalized_docs로 변환
+                for idx, doc in enumerate(retrieved_docs[:5], 1):
+                    try:
+                        if isinstance(doc, dict):
+                            normalized = self._normalize_document_fields(doc)
+                            if normalized:
+                                doc_id = self._generate_document_id(normalized)
+                                if doc_id not in seen_doc_ids:
+                                    seen_doc_ids.add(doc_id)
+                                    normalized_docs.append(normalized)
+                                    logger.debug(f"✅ [FALLBACK] Doc {idx} normalized from retrieved_docs")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [FALLBACK] Failed to normalize doc {idx}: {e}")
+                        continue
 
         # base_prompt에 이미 문서가 포함되어 있는지 확인 (개선: 실제 문서 내용 존재 여부 확인)
         # 멀티 질의 검색 결과가 있는 경우 항상 문서 섹션 생성
@@ -1013,11 +1065,13 @@ class UnifiedPromptManager:
 
         # 문서 섹션 구성 (토큰 제한 적용)
         documents_section = ""
-        # 멀티 질의 검색 결과가 있거나 normalized_docs가 있고 base_prompt에 실제 문서가 없을 때 생성
+        # 개선: normalized_docs가 있으면 항상 문서 섹션 생성 (base_prompt에 문서가 있어도)
+        # 단, base_prompt에 실제 문서 내용이 포함되어 있으면 중복 제거만 수행
         logger.debug(f"🔍 [DOCUMENTS SECTION] normalized_docs={len(normalized_docs) if normalized_docs else 0}, "
                     f"has_docs_in_base={has_docs_in_base}, has_multi_query_results={has_multi_query_results}")
         
-        if normalized_docs and (not has_docs_in_base or has_multi_query_results):
+        # 개선: normalized_docs가 있으면 항상 문서 섹션 생성
+        if normalized_docs:
             logger.info(f"✅ [DOCUMENTS SECTION] Creating documents section: "
                        f"normalized_docs={len(normalized_docs)}, has_docs_in_base={has_docs_in_base}, "
                        f"has_multi_query_results={has_multi_query_results}")
@@ -1156,7 +1210,61 @@ class UnifiedPromptManager:
                         documents_section = self._build_documents_section(sorted_multi_docs, query)
                         logger.info(f"✅ [FINAL PROMPT] Created documents_section from multi-query results ({len(sorted_multi_docs)} docs)")
             
-            # 우선순위 2: prompt_optimized_text 사용
+            # 🔥 개선: 우선순위 2: retrieved_docs 직접 사용 (structured_documents가 없을 때)
+            if not documents_section:
+                retrieved_docs = context.get("retrieved_docs", [])
+                structured_docs = context.get("structured_documents", {})
+                
+                # 🔥 개선: 폴백 처리 로깅 강화
+                logger.warning(
+                    f"⚠️ [FALLBACK] documents_section is empty. "
+                    f"Attempting fallback: retrieved_docs={len(retrieved_docs) if retrieved_docs else 0}, "
+                    f"structured_docs={len(structured_docs.get('documents', [])) if isinstance(structured_docs, dict) else 0}"
+                )
+                
+                if retrieved_docs and isinstance(retrieved_docs, list) and len(retrieved_docs) > 0:
+                    # retrieved_docs를 normalized_docs 형식으로 변환
+                    fallback_docs = []
+                    for idx, doc in enumerate(retrieved_docs[:5], 1):  # 최대 5개만 사용
+                        try:
+                            if isinstance(doc, dict):
+                                normalized = self._normalize_document_fields(doc)
+                                if normalized:
+                                    # 🔥 개선: relevance_score 보존 (이중 보장)
+                                    if "relevance_score" not in normalized or normalized.get("relevance_score", 0.0) == 0.0:
+                                        if "relevance_score" in doc:
+                                            normalized["relevance_score"] = doc.get("relevance_score", 0.0)
+                                        elif "score" in doc:
+                                            normalized["relevance_score"] = doc.get("score", 0.0)
+                                        elif "final_weighted_score" in doc:
+                                            normalized["relevance_score"] = doc.get("final_weighted_score", 0.0)
+                                    fallback_docs.append(normalized)
+                        except Exception as e:
+                            logger.warning(
+                                f"⚠️ [FALLBACK] Failed to normalize doc {idx}: {e}. "
+                                f"Skipping this document."
+                            )
+                            continue
+                    
+                    # 🔥 개선: relevance_score 기준으로 정렬
+                    if fallback_docs:
+                        fallback_docs = sorted(
+                            fallback_docs,
+                            key=lambda x: x.get("relevance_score", 0.0) if isinstance(x, dict) else 0.0,
+                            reverse=True
+                        )
+                        documents_section = self._build_documents_section(fallback_docs, query)
+                        logger.info(
+                            f"✅ [FINAL PROMPT] Created documents_section from retrieved_docs fallback "
+                            f"({len(fallback_docs)}/{len(retrieved_docs)} docs processed)"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ [FALLBACK] retrieved_docs fallback failed: "
+                            f"{len(retrieved_docs)} docs but none normalized successfully"
+                        )
+            
+            # 우선순위 3: prompt_optimized_text 사용
             if not documents_section:
                 prompt_optimized_text = context.get("prompt_optimized_text", "")
                 if prompt_optimized_text and len(prompt_optimized_text.strip()) > 100:
@@ -1165,7 +1273,7 @@ class UnifiedPromptManager:
                     documents_section += "\n\n"
                     logger.info("✅ [FINAL PROMPT] Added prompt_optimized_text as fallback")
             
-            # 우선순위 3: context_text 사용
+            # 우선순위 4: context_text 사용
             if not documents_section:
                 context_text = context.get("context", "")
                 if context_text and len(context_text.strip()) > 100 and document_count > 0:
@@ -1174,6 +1282,21 @@ class UnifiedPromptManager:
                     documents_section += "\n\n"
                     logger.info("✅ [FINAL PROMPT] Added context_text as fallback")
 
+        # 🔥 개선: 문서 섹션 생성 실패 시 상세 로깅
+        if not documents_section or len(documents_section.strip()) == 0:
+            structured_docs = context.get("structured_documents", {})
+            retrieved_docs = context.get("retrieved_docs", [])
+            normalized_docs_count = len(normalized_docs) if normalized_docs else 0
+            
+            logger.error(
+                f"❌ [FINAL PROMPT] documents_section is empty after all fallback attempts! "
+                f"Context: normalized_docs={normalized_docs_count}, "
+                f"structured_docs={len(structured_docs.get('documents', [])) if isinstance(structured_docs, dict) else 0}, "
+                f"retrieved_docs={len(retrieved_docs) if retrieved_docs else 0}, "
+                f"prompt_optimized_text={len(context.get('prompt_optimized_text', ''))}, "
+                f"context_text={len(context.get('context', ''))}"
+            )
+        
         # 검색 결과가 없을 때 base_prompt 단순화
         has_no_documents = (
             not documents_section or len(documents_section.strip()) == 0
@@ -1188,8 +1311,22 @@ class UnifiedPromptManager:
             # base_prompt에서 중복된 Citation 요구사항 제거
             simplified_base = self._remove_duplicate_citation_requirements(simplified_base)
 
-        # 최종 프롬프트 구성
-        final_prompt = simplified_base + documents_section + f"\n\n## 질문\n{query}\n\n"
+        # 최종 프롬프트 구성 (개선: documents_section이 없으면 경고 및 폴백)
+        if not documents_section or len(documents_section.strip()) == 0:
+            logger.warning(
+                f"⚠️ [FINAL PROMPT] documents_section is empty! "
+                f"normalized_docs={len(normalized_docs) if normalized_docs else 0}, "
+                f"structured_docs={len(structured_docs.get('documents', [])) if isinstance(structured_docs, dict) else 0}"
+            )
+            # 폴백: 최소한의 문서 섹션 생성
+            if normalized_docs and len(normalized_docs) > 0:
+                logger.info(f"🔄 [FALLBACK] Creating minimal documents section from {len(normalized_docs)} normalized_docs")
+                fallback_docs = normalized_docs[:3]  # 최대 3개만 사용
+                documents_section = self._build_documents_section(fallback_docs, query)
+                if documents_section:
+                    logger.info(f"✅ [FALLBACK] Created fallback documents section ({len(fallback_docs)} docs)")
+        
+        final_prompt = simplified_base + (documents_section if documents_section else "") + f"\n\n## 질문\n{query}\n\n"
         
         # 최종 토큰 수 검증
         final_tokens = self._estimate_tokens(final_prompt)
@@ -1480,7 +1617,7 @@ class UnifiedPromptManager:
                 logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) but has law info, creating minimal doc")
             elif has_multi_query_meta:
                 # 멀티 질의 결과는 최소 content 생성
-                logger.debug(f"✅ [DOC NORMALIZE] Multi-query result, creating minimal doc even with short content")
+                logger.debug("✅ [DOC NORMALIZE] Multi-query result, creating minimal doc even with short content")
                 content = doc.get("source", "") or "법률 문서"
             else:
                 logger.debug(f"⚠️ [DOC NORMALIZE] Content too short ({len(content)} chars) and no law info, returning None")
@@ -1524,16 +1661,59 @@ class UnifiedPromptManager:
         case_holding = self._extract_field(doc, metadata, ["holding", "case_holding", "판시사항"])
         case_reasoning = self._extract_field(doc, metadata, ["reasoning", "case_reasoning", "판결요지"])
         
-        # 문서 타입 판단
+        # 문서 타입 판단 (DocumentType Enum 사용)
         source_type = self._extract_field(doc, metadata, ["source_type", "type"])
+        
+        # DocumentType Enum을 사용하여 타입 추론 (메타데이터 필드 기준)
+        try:
+            from lawfirm_langgraph.core.workflow.constants.document_types import DocumentType
+            
+            # 최상위 필드의 정보를 metadata에 복사 (DocumentType 추론을 위해)
+            if doc.get("statute_name") or doc.get("law_name") or doc.get("article_no"):
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["statute_name"] = doc.get("statute_name") or doc.get("law_name")
+                metadata["law_name"] = doc.get("law_name") or doc.get("statute_name")
+                metadata["article_no"] = doc.get("article_no") or doc.get("article_number")
+            
+            if doc.get("case_id") or doc.get("court") or doc.get("doc_id") or doc.get("casenames"):
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["case_id"] = doc.get("case_id")
+                metadata["court"] = doc.get("court") or doc.get("ccourt")
+                metadata["doc_id"] = doc.get("doc_id")
+                metadata["casenames"] = doc.get("casenames")
+                metadata["precedent_id"] = doc.get("precedent_id")
+            
+            # DocumentType Enum을 사용하여 타입 추출
+            doc_type = DocumentType.from_metadata(doc)
+            doc_type_str = doc_type.value
+            
+            # source_type이 없거나 unknown이면 추론된 타입 사용
+            if not source_type or source_type == "unknown":
+                source_type = doc_type_str
+            
+            # metadata에도 타입 정보 저장
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["type"] = doc_type_str
+            metadata["source_type"] = doc_type_str
+        except Exception as e:
+            logger.debug(f"⚠️ [DOC NORMALIZE] DocumentType 추론 실패: {e}, source_type={source_type}")
 
-        # 관련성 점수 추출
+        # 🔥 개선: 관련성 점수 추출 (메타데이터에서도 추출)
         relevance_score = float(
             doc.get("relevance_score", 0.0) or 
             doc.get("final_weighted_score", 0.0) or
             doc.get("score", 0.0) or 
             doc.get("similarity_score", 0.0) or
-            doc.get("similarity", 0.0) or 
+            doc.get("similarity", 0.0) or
+            (isinstance(doc.get("metadata"), dict) and (
+                doc.get("metadata", {}).get("relevance_score", 0.0) or
+                doc.get("metadata", {}).get("score", 0.0) or
+                doc.get("metadata", {}).get("final_weighted_score", 0.0) or
+                0.0
+            )) or
             0.0
         )
         
@@ -1588,6 +1768,7 @@ class UnifiedPromptManager:
             "case_number": str(case_number).strip(),
             "case_name": str(case_name).strip(),
             "casenames": str(case_name).strip(),  # 호환성
+            "doc_id": str(case_number).strip() or str(metadata.get("doc_id", "")).strip(),  # 판례 ID 추가
             "announce_date": str(announce_date).strip(),
             "case_type": str(case_type).strip(),
             # 판례 본문 정보
@@ -1595,6 +1776,7 @@ class UnifiedPromptManager:
             "case_holding": str(case_holding).strip(),
             "case_reasoning": str(case_reasoning).strip(),
             "source_type": str(source_type).strip(),
+            "type": str(source_type).strip(),  # type 필드 추가 (DocumentType Enum 호환)
             # 원본 메타데이터 보존 (멀티 질의 메타데이터 포함)
             "metadata": metadata
         }
@@ -1628,6 +1810,22 @@ class UnifiedPromptManager:
 
         return formatted
 
+    def _build_documents_section(self, documents: List[Dict[str, Any]], query: str) -> str:
+        """문서 섹션 생성 - 정규화된 문서들을 프롬프트 형식으로 변환"""
+        if not documents or len(documents) == 0:
+            return ""
+
+        documents_section = "\n\n## 🔍 검색된 법률 문서\n\n"
+        documents_section += "다음 문서들은 질문에 대한 답변을 위해 검색된 관련 법률 정보입니다.\n\n"
+
+        for idx, doc in enumerate(documents, 1):
+            formatted_doc = self._format_document_for_prompt(doc, idx, is_high_priority=(idx <= 3))
+            if formatted_doc:
+                documents_section += formatted_doc
+                documents_section += "\n---\n\n"
+
+        return documents_section
+    
     def _build_fallback_documents_section(self, documents: List[Dict[str, Any]]) -> str:
         """폴백 문서 섹션 생성 - 문서 섹션이 생성되지 않았을 때 사용"""
         if not documents or len(documents) == 0:
